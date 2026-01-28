@@ -7,8 +7,11 @@
 import { handleRequest } from "./router";
 import type { Env } from "./types";
 
-// Re-export Durable Object for Cloudflare to discover
+// Re-export Durable Objects for Cloudflare to discover
 export { SessionDO } from "./session/durable-object";
+
+// Re-export Sandbox for Cloudflare containers (only used when SANDBOX_BACKEND=cloudflare)
+export { Sandbox } from "@cloudflare/sandbox";
 
 /**
  * Worker fetch handler.

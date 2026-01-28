@@ -243,8 +243,11 @@ export class SessionDO extends DurableObject<Env> {
 
     // Validate sandbox authentication
     if (isSandbox) {
+      // Support both header-based auth (Modal/Python) and query param auth (Cloudflare/Bun)
+      // Bun's WebSocket doesn't support headers in constructor, so we pass via query params
       const authHeader = request.headers.get("Authorization");
-      const sandboxId = request.headers.get("X-Sandbox-ID");
+      const authToken = url.searchParams.get("token");
+      const sandboxId = request.headers.get("X-Sandbox-ID") || url.searchParams.get("sandboxId");
 
       // Get expected values from DB
       const sandbox = this.getSandbox();
@@ -252,7 +255,7 @@ export class SessionDO extends DurableObject<Env> {
       const expectedSandboxId = sandbox?.modal_sandbox_id;
 
       console.log(
-        `[DO] Sandbox auth check: authHeader=${authHeader ? "present" : "missing"}, sandboxId=${sandboxId}, expectedSandboxId=${expectedSandboxId}, status=${sandbox?.status}`
+        `[DO] Sandbox auth check: authHeader=${authHeader ? "present" : "missing"}, authToken=${authToken ? "present" : "missing"}, sandboxId=${sandboxId}, expectedSandboxId=${expectedSandboxId}, status=${sandbox?.status}`
       );
 
       // Reject connection if sandbox should be stopped (prevents reconnection after inactivity timeout)
@@ -262,7 +265,9 @@ export class SessionDO extends DurableObject<Env> {
       }
 
       // Validate auth token
-      if (!authHeader || authHeader !== `Bearer ${expectedToken}`) {
+      const providedToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : authToken;
+
+      if (!providedToken || providedToken !== expectedToken) {
         console.log("[DO] Sandbox auth failed: token mismatch");
         return new Response("Unauthorized: Invalid auth token", { status: 401 });
       }
