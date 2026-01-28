@@ -11,9 +11,9 @@ import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { generateId, decryptToken, hashToken } from "../auth/crypto";
 import { generateInstallationToken, getGitHubAppConfig } from "../auth/github-app";
-import { createModalClient } from "../sandbox/client";
+import { createSandboxManager, getSandboxBackend } from "../sandbox";
 import { createPullRequest, getRepository } from "../auth/pr";
-import { generateBranchName, generateInternalToken } from "@open-inspect/shared";
+import { generateBranchName } from "@open-inspect/shared";
 import type {
   Env,
   ClientInfo,
@@ -612,8 +612,19 @@ export class SessionDO extends DurableObject<Env> {
    * - Agent execution completes (per Ramp spec)
    * - Pre-timeout warning (approaching 2-hour Modal limit)
    * - Heartbeat timeout (sandbox may be unresponsive)
+   *
+   * Note: Only Modal backend supports snapshots. Cloudflare backend will skip.
    */
   private async triggerSnapshot(reason: string): Promise<void> {
+    // Check if backend supports snapshots
+    const sandboxManager = createSandboxManager(this.env);
+    if (!sandboxManager.supportsSnapshots()) {
+      console.log(
+        `[DO] Snapshot skipped: ${getSandboxBackend(this.env)} backend does not support snapshots`
+      );
+      return;
+    }
+
     const sandbox = this.getSandbox();
     const session = this.getSession();
     if (!sandbox?.modal_object_id || !session) {
@@ -639,66 +650,31 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     try {
-      // Verify Modal configuration
-      const modalApiSecret = this.env.MODAL_API_SECRET;
-      const modalWorkspace = this.env.MODAL_WORKSPACE;
-      if (!modalApiSecret || !modalWorkspace) {
-        console.error(
-          "[DO] MODAL_API_SECRET or MODAL_WORKSPACE not configured, cannot call Modal API"
-        );
-        this.broadcast({
-          type: "sandbox_warning",
-          message: "Snapshot skipped: Modal configuration missing",
-        });
-        return;
-      }
-
-      // Construct Modal API URL from workspace
-      const modalClient = createModalClient(modalApiSecret, modalWorkspace);
-      const modalApiUrl = modalClient.getSnapshotSandboxUrl();
-
-      console.log(
-        `[DO] Triggering snapshot for sandbox ${sandbox.modal_object_id}, reason: ${reason}`
-      );
-
-      // Generate auth token for Modal API
-      const authToken = await generateInternalToken(modalApiSecret);
-
-      // Call Modal endpoint to take snapshot using Modal's internal object ID
-      const response = await fetch(modalApiUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({
-          sandbox_id: sandbox.modal_object_id, // Use Modal's internal object ID
-          session_id: session.session_name || session.id,
-          reason,
-        }),
-      });
-
-      const result = (await response.json()) as {
-        success: boolean;
-        data?: { image_id: string };
-        error?: string;
-      };
-
-      if (result.success && result.data?.image_id) {
-        // Store snapshot image ID for later restoration
-        this.sql.exec(
-          `UPDATE sandbox SET snapshot_image_id = ? WHERE id = ?`,
-          result.data.image_id,
-          sandbox.id
-        );
-        console.log(`[DO] Snapshot saved: ${result.data.image_id}`);
-        this.broadcast({
-          type: "snapshot_saved",
-          imageId: result.data.image_id,
+      // Use sandbox manager for snapshot (only Modal supports this)
+      if (sandboxManager.createSnapshot) {
+        const result = await sandboxManager.createSnapshot({
+          sandboxId: sandbox.modal_sandbox_id || "",
+          modalObjectId: sandbox.modal_object_id,
+          sessionId: session.session_name || session.id,
           reason,
         });
-      } else {
-        console.error("[DO] Snapshot failed:", result.error);
+
+        if (result?.imageId) {
+          // Store snapshot image ID for later restoration
+          this.sql.exec(
+            `UPDATE sandbox SET snapshot_image_id = ? WHERE id = ?`,
+            result.imageId,
+            sandbox.id
+          );
+          console.log(`[DO] Snapshot saved: ${result.imageId}`);
+          this.broadcast({
+            type: "snapshot_saved",
+            imageId: result.imageId,
+            reason,
+          });
+        } else {
+          console.error("[DO] Snapshot failed: no imageId returned");
+        }
       }
     } catch (error) {
       console.error("[DO] Snapshot request failed:", error);
@@ -717,8 +693,26 @@ export class SessionDO extends DurableObject<Env> {
    *
    * Called when resuming a session that has a saved snapshot.
    * Creates a new sandbox from the snapshot Image, skipping git clone.
+   *
+   * Note: Only Modal backend supports snapshot restore. For other backends,
+   * this falls back to spawning a fresh sandbox.
    */
   private async restoreFromSnapshot(snapshotImageId: string): Promise<void> {
+    const sandboxManager = createSandboxManager(this.env);
+
+    // If backend doesn't support snapshots, fall back to fresh spawn
+    if (!sandboxManager.supportsSnapshots() || !sandboxManager.restoreSnapshot) {
+      console.log(
+        `[DO] Snapshot restore not supported by ${getSandboxBackend(this.env)} backend, spawning fresh`
+      );
+      // Clear snapshot ID so spawnSandbox doesn't try to restore again
+      this.sql.exec(
+        `UPDATE sandbox SET snapshot_image_id = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
+      );
+      await this.spawnSandbox();
+      return;
+    }
+
     const session = this.getSession();
     if (!session) {
       console.error("[DO] Cannot restore: no session");
@@ -733,7 +727,7 @@ export class SessionDO extends DurableObject<Env> {
       const sandboxAuthToken = generateId();
       const expectedSandboxId = `sandbox-${session.repo_owner}-${session.repo_name}-${now}`;
 
-      // Store expected sandbox ID and auth token before calling Modal
+      // Store expected sandbox ID and auth token before restoring
       this.sql.exec(
         `UPDATE sandbox SET
            status = 'spawning',
@@ -746,63 +740,38 @@ export class SessionDO extends DurableObject<Env> {
         expectedSandboxId
       );
 
-      // Verify Modal configuration
-      const modalApiSecret = this.env.MODAL_API_SECRET;
-      const modalWorkspace = this.env.MODAL_WORKSPACE;
-      if (!modalApiSecret || !modalWorkspace) {
-        console.error(
-          "[DO] MODAL_API_SECRET or MODAL_WORKSPACE not configured, cannot call Modal API"
-        );
-        this.updateSandboxStatus("failed");
-        this.broadcast({
-          type: "sandbox_error",
-          error: "Modal configuration missing (MODAL_API_SECRET or MODAL_WORKSPACE)",
-        });
-        return;
-      }
-
-      // Construct Modal API URL from workspace
-      const modalClient = createModalClient(modalApiSecret, modalWorkspace);
-      const modalApiUrl = modalClient.getRestoreSandboxUrl();
-
       // Get control plane URL
       const controlPlaneUrl =
         this.env.WORKER_URL ||
         `https://open-inspect-control-plane.${this.env.CF_ACCOUNT_ID || "workers"}.workers.dev`;
 
-      // Generate auth token for Modal API
-      const authToken = await generateInternalToken(modalApiSecret);
+      const { provider, model } = extractProviderAndModel(session.model || DEFAULT_MODEL);
 
       console.log(`[DO] Restoring sandbox from snapshot ${snapshotImageId}`);
 
-      const response = await fetch(modalApiUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({
-          snapshot_image_id: snapshotImageId,
-          session_config: {
-            session_id: session.session_name || session.id,
-            repo_owner: session.repo_owner,
-            repo_name: session.repo_name,
-            ...extractProviderAndModel(session.model || DEFAULT_MODEL),
-          },
-          sandbox_id: expectedSandboxId,
-          control_plane_url: controlPlaneUrl,
-          sandbox_auth_token: sandboxAuthToken,
-        }),
+      const result = await sandboxManager.restoreSnapshot({
+        snapshotImageId,
+        sessionId: session.session_name || session.id,
+        sandboxId: expectedSandboxId,
+        repoOwner: session.repo_owner,
+        repoName: session.repo_name,
+        controlPlaneUrl,
+        sandboxAuthToken,
+        provider,
+        model,
       });
 
-      const result = (await response.json()) as {
-        success: boolean;
-        data?: { sandbox_id: string };
-        error?: string;
-      };
+      if (result) {
+        console.log(`[DO] Sandbox restored: ${result.sandboxId}`);
 
-      if (result.success) {
-        console.log(`[DO] Sandbox restored: ${result.data?.sandbox_id}`);
+        // Store Modal's internal object ID if provided
+        if (result.modalObjectId) {
+          this.sql.exec(
+            `UPDATE sandbox SET modal_object_id = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+            result.modalObjectId
+          );
+        }
+
         this.updateSandboxStatus("connecting");
         this.broadcast({ type: "sandbox_status", status: "connecting" });
         this.broadcast({
@@ -810,11 +779,11 @@ export class SessionDO extends DurableObject<Env> {
           message: "Session restored from snapshot",
         });
       } else {
-        console.error("[DO] Restore from snapshot failed:", result.error);
+        console.error("[DO] Restore from snapshot failed");
         this.updateSandboxStatus("failed");
         this.broadcast({
           type: "sandbox_error",
-          error: result.error || "Failed to restore from snapshot",
+          error: "Failed to restore from snapshot",
         });
       }
     } catch (error) {
@@ -1565,7 +1534,7 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
-   * Spawn a sandbox via Modal.
+   * Spawn a sandbox using the configured backend (Modal or Cloudflare).
    */
   private async spawnSandbox(): Promise<void> {
     // Check persisted status and last spawn time to prevent duplicate spawns
@@ -1592,10 +1561,12 @@ export class SessionDO extends DurableObject<Env> {
       return;
     }
 
-    // Check if we have a snapshot to restore from
+    // Check if we have a snapshot to restore from (only for backends that support it)
     // This implements the Ramp spec: "restore to it later if the sandbox has exited and the user sends a follow up"
+    const sandboxManager = createSandboxManager(this.env);
     if (
       snapshotImageId &&
+      sandboxManager.supportsSnapshots() &&
       (currentStatus === "stopped" || currentStatus === "stale" || currentStatus === "failed")
     ) {
       console.log(`[DO] Found snapshot ${snapshotImageId}, restoring instead of fresh spawn`);
@@ -1649,11 +1620,11 @@ export class SessionDO extends DurableObject<Env> {
       const sessionId = session.session_name || this.ctx.id.toString();
       const sandboxAuthToken = generateId(); // Token for sandbox to authenticate
 
-      // Generate predictable sandbox ID BEFORE calling Modal
+      // Generate predictable sandbox ID
       // This allows us to validate the connecting sandbox
       const expectedSandboxId = `sandbox-${session.repo_owner}-${session.repo_name}-${now}`;
 
-      // Store status, auth token, AND expected sandbox ID BEFORE calling Modal
+      // Store status, auth token, AND expected sandbox ID BEFORE spawning
       // This prevents race conditions where sandbox connects before we've stored expected ID
       this.sql.exec(
         `UPDATE sandbox SET
@@ -1667,8 +1638,10 @@ export class SessionDO extends DurableObject<Env> {
         expectedSandboxId
       );
       this.broadcast({ type: "sandbox_status", status: "spawning" });
+
+      const backend = getSandboxBackend(this.env);
       console.log(
-        `[DO] Creating sandbox via Modal API: ${session.session_name}, expectedId=${expectedSandboxId}`
+        `[DO] Creating sandbox via ${backend}: ${session.session_name}, sandboxId=${expectedSandboxId}`
       );
 
       // Get the control plane URL from env or construct it
@@ -1676,34 +1649,37 @@ export class SessionDO extends DurableObject<Env> {
         this.env.WORKER_URL ||
         `https://open-inspect-control-plane.${this.env.CF_ACCOUNT_ID || "workers"}.workers.dev`;
 
-      // Verify MODAL_API_SECRET and MODAL_WORKSPACE are configured
-      if (!this.env.MODAL_API_SECRET) {
-        throw new Error("MODAL_API_SECRET not configured");
-      }
-      if (!this.env.MODAL_WORKSPACE) {
-        throw new Error("MODAL_WORKSPACE not configured");
+      const { provider, model } = extractProviderAndModel(session.model || DEFAULT_MODEL);
+
+      // Get GitHub App token for repo access (used by Cloudflare backend)
+      let githubAppToken: string | undefined;
+      if (backend === "cloudflare") {
+        try {
+          const appConfig = getGitHubAppConfig(this.env);
+          if (appConfig) {
+            githubAppToken = await generateInstallationToken(appConfig);
+          }
+        } catch (e) {
+          console.log("[DO] GitHub App token not available:", e);
+        }
       }
 
-      // Call Modal to create the sandbox with the expected ID
-      const modalClient = createModalClient(this.env.MODAL_API_SECRET, this.env.MODAL_WORKSPACE);
-      const { provider, model } = extractProviderAndModel(session.model || DEFAULT_MODEL);
-      const result = await modalClient.createSandbox({
+      // Use sandbox manager to start sandbox
+      const result = await sandboxManager.startSandbox({
         sessionId,
-        sandboxId: expectedSandboxId, // Pass expected ID to Modal
+        sandboxId: expectedSandboxId,
         repoOwner: session.repo_owner,
         repoName: session.repo_name,
         controlPlaneUrl,
         sandboxAuthToken,
-        snapshotId: undefined, // Could use snapshot if available
-        gitUserName: undefined, // Could pass user info
-        gitUserEmail: undefined,
         provider,
         model,
+        githubAppToken, // Only used by Cloudflare backend
       });
 
-      console.log("Modal sandbox created:", result);
+      console.log(`${backend} sandbox created:`, result);
 
-      // Store Modal's internal object ID for snapshot API calls
+      // Store Modal's internal object ID for snapshot API calls (Modal-specific)
       if (result.modalObjectId) {
         this.sql.exec(
           `UPDATE sandbox SET modal_object_id = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
