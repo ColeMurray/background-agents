@@ -1,3 +1,4 @@
+/* global console, process, fetch */
 /**
  * Create Pull Request Tool for Open-Inspect.
  *
@@ -65,7 +66,7 @@ export default tool({
         "Target branch to merge into. Defaults to the repository's default branch (usually 'main')."
       ),
   },
-  async execute(args, context) {
+  async execute(args, _context) {
     console.log(`[create-pull-request] execute() called with args:`, JSON.stringify(args));
     const title = args.title || "Changes from OpenCode session";
     const body = args.body || "Automated PR created via create-pull-request tool";
