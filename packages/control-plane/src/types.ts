@@ -2,6 +2,11 @@
  * Type definitions for Open-Inspect Control Plane.
  */
 
+import type { Sandbox } from "@cloudflare/sandbox";
+
+// Sandbox backend type
+export type SandboxBackendType = "modal" | "cloudflare";
+
 // Environment bindings
 export interface Env {
   // Durable Objects
@@ -18,9 +23,6 @@ export interface Env {
   GITHUB_CLIENT_SECRET: string;
   TOKEN_ENCRYPTION_KEY: string;
   ENCRYPTION_KEY: string; // Key for encrypting/decrypting tokens
-  MODAL_TOKEN_ID?: string;
-  MODAL_TOKEN_SECRET?: string;
-  MODAL_API_SECRET?: string; // Shared secret for authenticating with Modal endpoints
   INTERNAL_CALLBACK_SECRET?: string; // For signing callbacks to slack-bot
 
   // GitHub App secrets (for git operations)
@@ -28,12 +30,39 @@ export interface Env {
   GITHUB_APP_PRIVATE_KEY?: string;
   GITHUB_APP_INSTALLATION_ID?: string;
 
-  // Variables
+  // ============================================================================
+  // Sandbox Backend Selection
+  // ============================================================================
+  // Set SANDBOX_BACKEND to choose which container platform to use:
+  // - "modal" (default): Use Modal's container platform
+  // - "cloudflare": Use Cloudflare's container platform
+  SANDBOX_BACKEND?: SandboxBackendType;
+
+  // ============================================================================
+  // Modal Backend Configuration (when SANDBOX_BACKEND="modal" or not set)
+  // ============================================================================
+  MODAL_TOKEN_ID?: string;
+  MODAL_TOKEN_SECRET?: string;
+  MODAL_API_SECRET?: string; // Shared secret for authenticating with Modal endpoints
+  MODAL_WORKSPACE?: string; // Modal workspace name (used in Modal endpoint URLs)
+
+  // ============================================================================
+  // Cloudflare Backend Configuration (when SANDBOX_BACKEND="cloudflare")
+  // ============================================================================
+  // Cloudflare Sandbox binding (required for Cloudflare backend)
+  Sandbox?: DurableObjectNamespace<Sandbox>;
+  // Sleep timeout for Cloudflare containers (default: "1h")
+  SANDBOX_SLEEP_AFTER?: string;
+  // Anthropic API key (passed to sandbox container via environment)
+  ANTHROPIC_API_KEY?: string;
+
+  // ============================================================================
+  // Common Variables
+  // ============================================================================
   DEPLOYMENT_NAME: string;
   WORKER_URL?: string; // Base URL for the worker (for callbacks)
   WEB_APP_URL?: string; // Base URL for the web app (for PR links)
   CF_ACCOUNT_ID?: string; // Cloudflare account ID
-  MODAL_WORKSPACE?: string; // Modal workspace name (used in Modal endpoint URLs)
 
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)

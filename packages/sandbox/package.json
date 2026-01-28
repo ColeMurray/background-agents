@@ -1,0 +1,23 @@
+{
+  "name": "@open-inspect/sandbox",
+  "version": "0.1.0",
+  "description": "Sandbox supervisor and bridge for Open-Inspect on Cloudflare",
+  "type": "module",
+  "main": "dist/supervisor.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

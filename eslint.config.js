@@ -17,8 +17,9 @@ export default tseslint.config(
       "**/coverage/**",
       "opencode-reference/**",
       "**/*.d.ts",
-      // Bundled/generated files
+      // Bundled/generated files and sandbox plugins
       "packages/modal-infra/**/*.js",
+      "packages/sandbox/**/*.js",
     ],
   },
 

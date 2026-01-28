@@ -16,12 +16,12 @@ output "slack_kv_id" {
 # Cloudflare Workers
 output "control_plane_url" {
   description = "Control plane worker URL"
-  value       = module.control_plane_worker.worker_url
+  value       = local.control_plane_url
 }
 
 output "control_plane_worker_name" {
-  description = "Control plane worker name"
-  value       = module.control_plane_worker.worker_name
+  description = "Control plane worker name (Modal backend only)"
+  value       = local.use_modal_backend ? module.control_plane_worker[0].worker_name : "deployed-via-wrangler"
 }
 
 output "slack_bot_worker_name" {
@@ -40,15 +40,21 @@ output "web_app_project_id" {
   value       = module.web_app.project_id
 }
 
-# Modal
+# Modal (only when using Modal backend)
 output "modal_app_name" {
-  description = "Modal app name"
-  value       = module.modal_app.app_name
+  description = "Modal app name (Modal backend only)"
+  value       = local.use_modal_backend ? module.modal_app[0].app_name : "n/a"
 }
 
 output "modal_health_url" {
-  description = "Modal health check endpoint"
-  value       = module.modal_app.api_health_url
+  description = "Modal health check endpoint (Modal backend only)"
+  value       = local.use_modal_backend ? module.modal_app[0].api_health_url : "n/a"
+}
+
+# Sandbox backend info
+output "sandbox_backend" {
+  description = "Active sandbox backend"
+  value       = var.sandbox_backend
 }
 
 # =============================================================================
@@ -60,16 +66,15 @@ output "verification_commands" {
   value       = <<-EOF
 
     # 1. Health check control plane
-    curl ${module.control_plane_worker.worker_url}/health
+    curl ${local.control_plane_url}/health
 
-    # 2. Health check Modal
-    curl ${module.modal_app.api_health_url}
-
-    # 3. Verify Vercel deployment
+    # 2. Verify Vercel deployment
     curl ${module.web_app.production_url}
 
-    # 4. Test authenticated endpoint (should return 401)
-    curl ${module.control_plane_worker.worker_url}/sessions
+    # 3. Test authenticated endpoint (should return 401)
+    curl ${local.control_plane_url}/sessions
+
+    ${local.use_modal_backend ? "# 4. Health check Modal\n    curl ${module.modal_app[0].api_health_url}" : "# 4. Sandbox backend: Cloudflare (no separate health check)"}
 
   EOF
 }

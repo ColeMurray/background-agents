@@ -85,7 +85,7 @@ built for internal use where all employees are trusted and have access to compan
                                  │
                                  ▼
 ┌────────────────────────────────────────────────────────────────────┐
-│                      Data Plane (Modal)                             │
+│                  Data Plane (Modal or Cloudflare)                   │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │                     Session Sandbox                           │  │
 │  │  ┌───────────┐  ┌───────────┐  ┌───────────┐                 │  │
@@ -110,6 +110,35 @@ built for internal use where all employees are trusted and have access to compan
 ## Getting Started
 
 See **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** for deployment instructions.
+
+## Sandbox Backends
+
+Open-Inspect supports two sandbox backends for code execution:
+
+| Feature              | Modal (default) | Cloudflare   |
+| -------------------- | --------------- | ------------ |
+| **Snapshot/Restore** | Yes             | No (planned) |
+| **Cold Start**       | ~10-30s         | ~5-15s       |
+| **Distribution**     | US regions      | Global edge  |
+
+### Configuration
+
+Set the backend in your `terraform.tfvars`:
+
+```hcl
+# Modal (default)
+sandbox_backend = "modal"
+modal_token_id     = "your-token-id"
+modal_token_secret = "your-token-secret"
+modal_workspace    = "your-workspace"
+modal_api_secret   = "generate-with-openssl-rand-hex-32"
+
+# OR Cloudflare
+sandbox_backend   = "cloudflare"
+anthropic_api_key = "your-anthropic-api-key"
+```
+
+Then run `terraform apply`. See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for full setup.
 
 ## Key Features
 

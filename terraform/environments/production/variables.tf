@@ -150,6 +150,19 @@ variable "deployment_name" {
   type        = string
 }
 
+variable "sandbox_backend" {
+  description = "Sandbox backend to use: 'modal' (default) or 'cloudflare'. Note: Cloudflare backend requires additional setup - see docs/SANDBOX_BACKENDS.md"
+  type        = string
+  default     = "modal"
+
+  validation {
+    condition     = contains(["modal", "cloudflare"], var.sandbox_backend)
+    error_message = "sandbox_backend must be either 'modal' or 'cloudflare'"
+  }
+}
+
+
+
 variable "enable_durable_object_bindings" {
   description = "Enable DO bindings. For initial deployment: set to false (applies migrations), then set to true (adds bindings)."
   type        = bool
