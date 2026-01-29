@@ -24,6 +24,7 @@ from typing import Any, ClassVar, NamedTuple
 import httpx
 import websockets
 from websockets import ClientConnection, State
+from websockets.exceptions import InvalidStatus
 
 from .types import GitUser
 
@@ -100,6 +101,17 @@ class SSEConnectionError(Exception):
     pass
 
 
+class SessionTerminatedError(Exception):
+    """Raised when the control plane has terminated the session (HTTP 410).
+
+    This is a non-recoverable error - the bridge should exit gracefully
+    rather than retry. The session can be restored via user action (sending
+    a new prompt), which will trigger snapshot restoration on the control plane.
+    """
+
+    pass
+
+
 class AgentBridge:
     """
     Bridge between sandbox OpenCode instance and control plane.
@@ -150,7 +162,11 @@ class AgentBridge:
         return f"{url}/sessions/{self.session_id}/ws?type=sandbox"
 
     async def run(self) -> None:
-        """Main bridge loop with reconnection handling."""
+        """Main bridge loop with reconnection handling.
+
+        Handles reconnection for transient errors (network issues, etc.) but
+        exits gracefully for terminal errors like HTTP 410 (session terminated).
+        """
         print(f"[bridge] Starting bridge for sandbox {self.sandbox_id}")
 
         self.http_client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0))
@@ -163,9 +179,25 @@ class AgentBridge:
                 try:
                     await self._connect_and_run()
                     reconnect_attempts = 0
+                except SessionTerminatedError as e:
+                    # Non-recoverable: session has been terminated by control plane
+                    print(f"[bridge] {e}")
+                    print(
+                        "[bridge] Session terminated by control plane. "
+                        "User can restore by sending a new prompt."
+                    )
+                    self.shutdown_event.set()
+                    break
                 except websockets.ConnectionClosed as e:
                     print(f"[bridge] Connection closed: {e}")
                 except Exception as e:
+                    error_str = str(e)
+                    # Check for fatal HTTP errors that shouldn't trigger retry
+                    if self._is_fatal_connection_error(error_str):
+                        print(f"[bridge] Fatal connection error: {e}")
+                        print("[bridge] Exiting without retry.")
+                        self.shutdown_event.set()
+                        break
                     print(f"[bridge] Connection error: {e}")
 
                 if self.shutdown_event.is_set():
@@ -183,8 +215,34 @@ class AgentBridge:
             if self.http_client:
                 await self.http_client.aclose()
 
+    def _is_fatal_connection_error(self, error_str: str) -> bool:
+        """Check if a connection error is fatal and shouldn't trigger retry.
+
+        Fatal errors indicate the session is invalid or terminated, not a
+        transient network issue. These include:
+        - HTTP 401 (Unauthorized): Auth token invalid or expired
+        - HTTP 403 (Forbidden): Access denied
+        - HTTP 404 (Not Found): Session doesn't exist
+        - HTTP 410 (Gone): Session terminated, sandbox stopped/stale
+
+        For these errors, retrying is futile - the bridge should exit and
+        allow the control plane to spawn a new sandbox if needed.
+        """
+        fatal_patterns = [
+            "HTTP 401",  # Unauthorized
+            "HTTP 403",  # Forbidden
+            "HTTP 404",  # Session not found
+            "HTTP 410",  # Session terminated (stopped/stale)
+        ]
+        return any(pattern in error_str for pattern in fatal_patterns)
+
     async def _connect_and_run(self) -> None:
-        """Connect to control plane and handle messages."""
+        """Connect to control plane and handle messages.
+
+        Raises:
+            SessionTerminatedError: If the control plane rejects the connection
+                with HTTP 410 (session stopped/stale).
+        """
         print(f"[bridge] Connecting to {self.ws_url}")
 
         additional_headers = {
@@ -192,47 +250,56 @@ class AgentBridge:
             "X-Sandbox-ID": self.sandbox_id,
         }
 
-        async with websockets.connect(
-            self.ws_url,
-            additional_headers=additional_headers,
-            ping_interval=20,
-            ping_timeout=10,
-        ) as ws:
-            self.ws = ws
-            print("[bridge] Connected to control plane")
+        try:
+            async with websockets.connect(
+                self.ws_url,
+                additional_headers=additional_headers,
+                ping_interval=20,
+                ping_timeout=10,
+            ) as ws:
+                self.ws = ws
+                print("[bridge] Connected to control plane")
 
-            await self._send_event(
-                {
-                    "type": "ready",
-                    "sandboxId": self.sandbox_id,
-                    "opencodeSessionId": self.opencode_session_id,
-                }
-            )
+                await self._send_event(
+                    {
+                        "type": "ready",
+                        "sandboxId": self.sandbox_id,
+                        "opencodeSessionId": self.opencode_session_id,
+                    }
+                )
 
-            heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-            background_tasks: set[asyncio.Task[None]] = set()
+                heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+                background_tasks: set[asyncio.Task[None]] = set()
 
-            try:
-                async for message in ws:
-                    if self.shutdown_event.is_set():
-                        break
+                try:
+                    async for message in ws:
+                        if self.shutdown_event.is_set():
+                            break
 
-                    try:
-                        cmd = json.loads(message)
-                        task = await self._handle_command(cmd)
-                        if task:
-                            background_tasks.add(task)
-                            task.add_done_callback(background_tasks.discard)
-                    except json.JSONDecodeError as e:
-                        print(f"[bridge] Invalid message: {e}")
-                    except Exception as e:
-                        print(f"[bridge] Error handling command: {e}")
+                        try:
+                            cmd = json.loads(message)
+                            task = await self._handle_command(cmd)
+                            if task:
+                                background_tasks.add(task)
+                                task.add_done_callback(background_tasks.discard)
+                        except json.JSONDecodeError as e:
+                            print(f"[bridge] Invalid message: {e}")
+                        except Exception as e:
+                            print(f"[bridge] Error handling command: {e}")
 
-            finally:
-                heartbeat_task.cancel()
-                for task in background_tasks:
-                    task.cancel()
-                self.ws = None
+                finally:
+                    heartbeat_task.cancel()
+                    for task in background_tasks:
+                        task.cancel()
+                    self.ws = None
+
+        except InvalidStatus as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status in (401, 403, 404, 410):
+                raise SessionTerminatedError(
+                    f"Session rejected by control plane (HTTP {status})."
+                ) from e
+            raise
 
     async def _heartbeat_loop(self) -> None:
         """Send periodic heartbeat events."""
