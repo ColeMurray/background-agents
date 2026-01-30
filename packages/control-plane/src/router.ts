@@ -670,13 +670,6 @@ async function handleSessionPrompt(
     )
   );
 
-  logger.info("Prompt enqueued via API", {
-    event: "prompt.enqueued",
-    session_id: sessionId,
-    http_status: response.status,
-    request_id: ctx.request_id,
-    trace_id: ctx.trace_id,
-  });
   return response;
 }
 
