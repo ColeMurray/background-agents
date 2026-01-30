@@ -44,6 +44,10 @@ export interface CreateSandboxConfig {
   gitUserName?: string;
   /** Git user email for commits */
   gitUserEmail?: string;
+  /** Trace ID for correlation */
+  traceId?: string;
+  /** Request ID for correlation */
+  requestId?: string;
 }
 
 /**
@@ -82,6 +86,10 @@ export interface RestoreConfig {
   provider: string;
   /** LLM model (e.g., "claude-sonnet-4-5") */
   model: string;
+  /** Trace ID for correlation */
+  traceId?: string;
+  /** Request ID for correlation */
+  requestId?: string;
 }
 
 /**
@@ -108,6 +116,10 @@ export interface SnapshotConfig {
   sessionId: string;
   /** Reason for the snapshot (e.g., "inactivity_timeout", "execution_complete") */
   reason: string;
+  /** Trace ID for correlation */
+  traceId?: string;
+  /** Request ID for correlation */
+  requestId?: string;
 }
 
 /**

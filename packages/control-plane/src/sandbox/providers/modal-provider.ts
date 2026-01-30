@@ -91,12 +91,16 @@ export class ModalSandboxProvider implements SandboxProvider {
       const restoreUrl = this.client.getRestoreSandboxUrl();
       const authToken = await generateInternalToken(this.secret);
 
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      };
+      if (config.traceId) headers["x-trace-id"] = config.traceId;
+      if (config.requestId) headers["x-request-id"] = config.requestId;
+
       const response = await fetch(restoreUrl, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
+        headers,
         body: JSON.stringify({
           snapshot_image_id: config.snapshotImageId,
           session_config: {
@@ -154,12 +158,16 @@ export class ModalSandboxProvider implements SandboxProvider {
       const snapshotUrl = this.client.getSnapshotSandboxUrl();
       const authToken = await generateInternalToken(this.secret);
 
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      };
+      if (config.traceId) headers["x-trace-id"] = config.traceId;
+      if (config.requestId) headers["x-request-id"] = config.requestId;
+
       const response = await fetch(snapshotUrl, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
+        headers,
         body: JSON.stringify({
           sandbox_id: config.providerObjectId, // Modal's internal object ID
           session_id: config.sessionId,

@@ -22,7 +22,7 @@ const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 } as const;
 type LogLevel = keyof typeof LEVELS;
 
 /** Keys that the logger owns — context and data cannot overwrite these. */
-const RESERVED_KEYS = new Set(["level", "component", "msg", "ts"]);
+const RESERVED_KEYS = new Set(["level", "component", "msg", "ts", "service", "event"]);
 
 /** Map log level to the appropriate console method for severity semantics. */
 const CONSOLE_METHOD: Record<LogLevel, "log" | "warn" | "error"> = {
@@ -64,8 +64,13 @@ export function createLogger(
 
     const extra: Record<string, unknown> = data ? stripReserved(data) : {};
     if (extra.error instanceof Error) {
-      extra.errorMessage = extra.error.message;
-      extra.errorStack = extra.error.stack;
+      const err = extra.error;
+      extra.error_message = err.message;
+      extra.error_stack = err.stack;
+      extra.error_type = err.constructor.name;
+      if ("code" in err && typeof (err as Record<string, unknown>).code === "string") {
+        extra.error_code = (err as Record<string, unknown>).code;
+      }
       delete extra.error;
     }
 
@@ -73,6 +78,7 @@ export function createLogger(
       console[CONSOLE_METHOD[level]](
         JSON.stringify({
           level,
+          service: "control-plane",
           component,
           msg,
           ...safeContext,
@@ -86,10 +92,11 @@ export function createLogger(
       console.error(
         JSON.stringify({
           level: "error",
+          service: "control-plane",
           component,
           msg: "LOG_SERIALIZE_FAILURE",
-          originalMsg: msg,
-          originalLevel: level,
+          original_msg: msg,
+          original_level: level,
           ts: Date.now(),
         })
       );
@@ -113,4 +120,15 @@ export function createLogger(
 export function parseLogLevel(value?: string): LogLevel {
   if (value && Object.prototype.hasOwnProperty.call(LEVELS, value)) return value as LogLevel;
   return "info";
+}
+
+/**
+ * Correlation context propagated through request headers.
+ * Used to trace a request across service boundaries.
+ */
+export interface CorrelationContext {
+  /** End-to-end trace ID (UUID), propagated via x-trace-id header */
+  trace_id: string;
+  /** Per-hop request ID (short UUID), propagated via x-request-id header */
+  request_id: string;
 }

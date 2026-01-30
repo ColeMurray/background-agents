@@ -10,6 +10,16 @@ import { createLogger } from "../logger";
 
 const log = createLogger("modal-client");
 
+/**
+ * Optional correlation headers to propagate through Modal API calls.
+ */
+export interface CorrelationHeaders {
+  trace_id?: string;
+  request_id?: string;
+  session_id?: string;
+  sandbox_id?: string;
+}
+
 // Modal app name
 const MODAL_APP_NAME = "open-inspect";
 
@@ -118,141 +128,165 @@ export class ModalClient {
   /**
    * Generate authentication headers for POST/PUT requests (includes Content-Type).
    */
-  private async getPostHeaders(): Promise<Record<string, string>> {
+  private async getPostHeaders(correlation?: CorrelationHeaders): Promise<Record<string, string>> {
     const token = await generateInternalToken(this.secret);
-    return {
+    const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     };
+    if (correlation?.trace_id) headers["x-trace-id"] = correlation.trace_id;
+    if (correlation?.request_id) headers["x-request-id"] = correlation.request_id;
+    if (correlation?.session_id) headers["x-session-id"] = correlation.session_id;
+    if (correlation?.sandbox_id) headers["x-sandbox-id"] = correlation.sandbox_id;
+    return headers;
   }
 
   /**
    * Generate authentication headers for GET requests (no Content-Type).
    */
-  private async getGetHeaders(): Promise<Record<string, string>> {
+  private async getGetHeaders(correlation?: CorrelationHeaders): Promise<Record<string, string>> {
     const token = await generateInternalToken(this.secret);
-    return {
+    const headers: Record<string, string> = {
       Authorization: `Bearer ${token}`,
     };
+    if (correlation?.trace_id) headers["x-trace-id"] = correlation.trace_id;
+    if (correlation?.request_id) headers["x-request-id"] = correlation.request_id;
+    if (correlation?.session_id) headers["x-session-id"] = correlation.session_id;
+    if (correlation?.sandbox_id) headers["x-sandbox-id"] = correlation.sandbox_id;
+    return headers;
   }
 
   /**
    * Create a new sandbox for a session.
    */
-  async createSandbox(request: CreateSandboxRequest): Promise<CreateSandboxResponse> {
+  async createSandbox(
+    request: CreateSandboxRequest,
+    correlation?: CorrelationHeaders
+  ): Promise<CreateSandboxResponse> {
     const startTime = Date.now();
-    log.info("Modal API: create sandbox", {
-      sessionId: request.sessionId,
-      sandboxId: request.sandboxId,
-    });
+    const endpoint = "createSandbox";
+    let httpStatus: number | undefined;
+    let outcome: "success" | "error" = "error";
 
-    const headers = await this.getPostHeaders();
-    const response = await fetch(this.createSandboxUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        session_id: request.sessionId,
-        sandbox_id: request.sandboxId || null, // Use control-plane-generated ID
-        repo_owner: request.repoOwner,
-        repo_name: request.repoName,
-        control_plane_url: request.controlPlaneUrl,
-        sandbox_auth_token: request.sandboxAuthToken,
-        snapshot_id: request.snapshotId || null,
-        opencode_session_id: request.opencodeSessionId || null,
-        git_user_name: request.gitUserName || null,
-        git_user_email: request.gitUserEmail || null,
-        provider: request.provider || "anthropic",
-        model: request.model || "claude-sonnet-4-5",
-      }),
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      log.error("Modal API error", {
-        endpoint: "createSandbox",
-        status: response.status,
-        error: text,
-        durationMs: Date.now() - startTime,
+    try {
+      const headers = await this.getPostHeaders(correlation);
+      const response = await fetch(this.createSandboxUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          session_id: request.sessionId,
+          sandbox_id: request.sandboxId || null, // Use control-plane-generated ID
+          repo_owner: request.repoOwner,
+          repo_name: request.repoName,
+          control_plane_url: request.controlPlaneUrl,
+          sandbox_auth_token: request.sandboxAuthToken,
+          snapshot_id: request.snapshotId || null,
+          opencode_session_id: request.opencodeSessionId || null,
+          git_user_name: request.gitUserName || null,
+          git_user_email: request.gitUserEmail || null,
+          provider: request.provider || "anthropic",
+          model: request.model || "claude-sonnet-4-5",
+        }),
       });
-      throw new Error(`Modal API error: ${response.status} ${text}`);
+
+      httpStatus = response.status;
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Modal API error: ${response.status} ${text}`);
+      }
+
+      const result = (await response.json()) as ModalApiResponse<{
+        sandbox_id: string;
+        modal_object_id?: string;
+        status: string;
+        created_at: number;
+      }>;
+
+      if (!result.success || !result.data) {
+        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
+      }
+
+      outcome = "success";
+      return {
+        sandboxId: result.data.sandbox_id,
+        modalObjectId: result.data.modal_object_id,
+        status: result.data.status,
+        createdAt: result.data.created_at,
+      };
+    } finally {
+      log.info("modal.request", {
+        event: "modal.request",
+        endpoint,
+        session_id: request.sessionId,
+        sandbox_id: request.sandboxId,
+        trace_id: correlation?.trace_id,
+        request_id: correlation?.request_id,
+        http_status: httpStatus,
+        duration_ms: Date.now() - startTime,
+        outcome,
+      });
     }
-
-    const result = (await response.json()) as ModalApiResponse<{
-      sandbox_id: string;
-      modal_object_id?: string;
-      status: string;
-      created_at: number;
-    }>;
-
-    if (!result.success || !result.data) {
-      throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
-    }
-
-    log.info("Modal API: create sandbox complete", {
-      sandboxId: result.data.sandbox_id,
-      durationMs: Date.now() - startTime,
-      status: response.status,
-    });
-
-    return {
-      sandboxId: result.data.sandbox_id,
-      modalObjectId: result.data.modal_object_id,
-      status: result.data.status,
-      createdAt: result.data.created_at,
-    };
   }
 
   /**
    * Pre-warm a sandbox for faster startup.
    */
-  async warmSandbox(request: WarmSandboxRequest): Promise<WarmSandboxResponse> {
+  async warmSandbox(
+    request: WarmSandboxRequest,
+    correlation?: CorrelationHeaders
+  ): Promise<WarmSandboxResponse> {
     const startTime = Date.now();
-    log.info("Modal API: warm sandbox", {
-      repoOwner: request.repoOwner,
-      repoName: request.repoName,
-    });
+    const endpoint = "warmSandbox";
+    let httpStatus: number | undefined;
+    let outcome: "success" | "error" = "error";
 
-    const headers = await this.getPostHeaders();
-    const response = await fetch(this.warmSandboxUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
+    try {
+      const headers = await this.getPostHeaders(correlation);
+      const response = await fetch(this.warmSandboxUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          repo_owner: request.repoOwner,
+          repo_name: request.repoName,
+          control_plane_url: request.controlPlaneUrl || "",
+        }),
+      });
+
+      httpStatus = response.status;
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Modal API error: ${response.status} ${text}`);
+      }
+
+      const result = (await response.json()) as ModalApiResponse<{
+        sandbox_id: string;
+        status: string;
+      }>;
+
+      if (!result.success || !result.data) {
+        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
+      }
+
+      outcome = "success";
+      return {
+        sandboxId: result.data.sandbox_id,
+        status: result.data.status,
+      };
+    } finally {
+      log.info("modal.request", {
+        event: "modal.request",
+        endpoint,
         repo_owner: request.repoOwner,
         repo_name: request.repoName,
-        control_plane_url: request.controlPlaneUrl || "",
-      }),
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      log.error("Modal API error", {
-        endpoint: "warmSandbox",
-        status: response.status,
-        error: text,
-        durationMs: Date.now() - startTime,
+        trace_id: correlation?.trace_id,
+        request_id: correlation?.request_id,
+        http_status: httpStatus,
+        duration_ms: Date.now() - startTime,
+        outcome,
       });
-      throw new Error(`Modal API error: ${response.status} ${text}`);
     }
-
-    const result = (await response.json()) as ModalApiResponse<{
-      sandbox_id: string;
-      status: string;
-    }>;
-
-    if (!result.success || !result.data) {
-      throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
-    }
-
-    log.info("Modal API: warm sandbox complete", {
-      sandboxId: result.data.sandbox_id,
-      durationMs: Date.now() - startTime,
-      status: response.status,
-    });
-
-    return {
-      sandboxId: result.data.sandbox_id,
-      status: result.data.status,
-    };
   }
 
   /**
@@ -281,10 +315,14 @@ export class ModalClient {
   /**
    * Get the latest snapshot for a repository.
    */
-  async getLatestSnapshot(repoOwner: string, repoName: string): Promise<SnapshotInfo | null> {
+  async getLatestSnapshot(
+    repoOwner: string,
+    repoName: string,
+    correlation?: CorrelationHeaders
+  ): Promise<SnapshotInfo | null> {
     const url = `${this.snapshotUrl}?repo_owner=${encodeURIComponent(repoOwner)}&repo_name=${encodeURIComponent(repoName)}`;
 
-    const headers = await this.getGetHeaders();
+    const headers = await this.getGetHeaders(correlation);
     const response = await fetch(url, { headers });
 
     if (!response.ok) {

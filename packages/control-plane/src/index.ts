@@ -39,12 +39,16 @@ async function handleWebSocket(request: Request, env: Env, url: URL): Promise<Re
   const match = url.pathname.match(/^\/sessions\/([^/]+)\/ws$/);
 
   if (!match) {
-    logger.warn("Invalid WebSocket path", { path: url.pathname });
+    logger.warn("Invalid WebSocket path", { event: "ws.invalid_path", http_path: url.pathname });
     return new Response("Invalid WebSocket path", { status: 400 });
   }
 
   const sessionId = match[1];
-  logger.info("WebSocket upgrade", { path: url.pathname, sessionId });
+  logger.info("WebSocket upgrade", {
+    event: "ws.connect",
+    http_path: url.pathname,
+    session_id: sessionId,
+  });
 
   // Get Durable Object and forward WebSocket
   const doId = env.SESSION.idFromName(sessionId);
