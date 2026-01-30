@@ -10,6 +10,10 @@ import hmac
 import os
 import time
 
+from ..log_config import get_logger
+
+log = get_logger("auth")
+
 # Token validity window in seconds (5 minutes)
 TOKEN_VALIDITY_SECONDS = 5 * 60
 
@@ -87,8 +91,10 @@ def verify_internal_token(auth_header: str | None, secret: str | None = None) ->
 
     # Reject tokens outside the validity window
     if abs(now - token_time) > TOKEN_VALIDITY_SECONDS:
-        print(
-            f"[auth] Token expired: age={abs(now - token_time):.1f}s, max={TOKEN_VALIDITY_SECONDS}s"
+        log.debug(
+            "auth.token_expired",
+            age_s=round(abs(now - token_time), 1),
+            max_s=TOKEN_VALIDITY_SECONDS,
         )
         return False
 

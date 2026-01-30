@@ -10,6 +10,10 @@ from urllib.parse import urlparse
 
 import modal
 
+from .log_config import get_logger
+
+log = get_logger("app")
+
 # Main Modal application
 app = modal.App("open-inspect")
 
@@ -93,11 +97,7 @@ def validate_control_plane_url(url: str | None) -> bool:
     if not allowed_hosts:
         # Fail closed: if no allowed hosts configured, reject all URLs
         # This ensures deployments must be properly configured
-        print(
-            "[SECURITY] ALLOWED_CONTROL_PLANE_HOSTS not configured. "
-            "Rejecting control_plane_url for security. "
-            "Set this via Modal secrets or environment variable."
-        )
+        log.warn("security.hosts_not_configured")
         return False
 
     try:
@@ -106,7 +106,7 @@ def validate_control_plane_url(url: str | None) -> bool:
         host = parsed.netloc.lower()
         return host in allowed_hosts
     except Exception as e:
-        print(f"[SECURITY] Failed to parse control_plane_url '{url}': {e}")
+        log.warn("security.url_parse_error", exc=e)
         return False
 
 
