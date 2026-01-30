@@ -1029,7 +1029,7 @@ class AgentBridge:
                 stderr=asyncio.subprocess.PIPE,
             )
 
-            _stdout, stderr = await result.communicate()
+            _stdout, _stderr = await result.communicate()
 
             if result.returncode != 0:
                 self.log.warn("git.push_failed", branch_name=branch_name)
