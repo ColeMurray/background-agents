@@ -37,6 +37,9 @@ export interface Env {
 
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)
+
+  // Logging
+  LOG_LEVEL?: string; // "debug" | "info" | "warn" | "error" (default: "info")
 }
 
 // Session status

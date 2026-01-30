@@ -12,6 +12,14 @@ import type {
   RepoMetadata,
 } from "@open-inspect/shared";
 import { getRepoMetadataKey } from "./utils/repo";
+import { createLogger, parseLogLevel } from "./logger";
+import type { Logger } from "./logger";
+
+// Module-level logger for route handlers. Uses default "info" level since env
+// is not available at module scope. This is fine — route handlers don't emit
+// debug-level logs, and Cloudflare Workers Logs indexes the JSON "level" field
+// for filtering at query time regardless.
+const routerLog = createLogger("router");
 
 /**
  * Route configuration.
@@ -99,7 +107,8 @@ function isSandboxAuthRoute(path: string): boolean {
 async function verifySandboxAuth(
   request: Request,
   env: Env,
-  sessionId: string
+  sessionId: string,
+  log: Logger
 ): Promise<Response | null> {
   const authHeader = request.headers.get("Authorization");
   if (!authHeader?.startsWith("Bearer ")) {
@@ -122,9 +131,11 @@ async function verifySandboxAuth(
 
   if (!verifyResponse.ok) {
     const clientIP = request.headers.get("CF-Connecting-IP") || "unknown";
-    console.warn(
-      `[auth] Sandbox auth failed for ${request.method} /sessions/${sessionId}/pr from ${clientIP}`
-    );
+    log.warn("Auth failed: sandbox", {
+      path: new URL(request.url).pathname,
+      ip: clientIP,
+      sessionId,
+    });
     return error("Unauthorized: Invalid sandbox token", 401);
   }
 
@@ -143,10 +154,11 @@ async function verifySandboxAuth(
 async function requireInternalAuth(
   request: Request,
   env: Env,
-  path: string
+  path: string,
+  log: Logger
 ): Promise<Response | null> {
   if (!env.INTERNAL_CALLBACK_SECRET) {
-    console.error("[auth] INTERNAL_CALLBACK_SECRET not configured - rejecting request");
+    log.error("INTERNAL_CALLBACK_SECRET not configured - rejecting request");
     return error("Internal authentication not configured", 500);
   }
 
@@ -157,7 +169,7 @@ async function requireInternalAuth(
 
   if (!isValid) {
     const clientIP = request.headers.get("CF-Connecting-IP") || "unknown";
-    console.warn(`[auth] Authentication failed for ${request.method} ${path} from ${clientIP}`);
+    log.warn("Auth failed: HMAC", { path, ip: clientIP });
     return error("Unauthorized", 401);
   }
 
@@ -277,6 +289,11 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method;
+  const requestId = crypto.randomUUID().slice(0, 8);
+  const log = createLogger("router", { requestId }, parseLogLevel(env.LOG_LEVEL));
+  const startTime = Date.now();
+
+  log.info("API request", { method, path });
 
   // CORS preflight
   if (method === "OPTIONS") {
@@ -293,7 +310,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
   // Require authentication for non-public routes
   if (!isPublicRoute(path)) {
     // First try HMAC auth (for web app, slack bot, etc.)
-    const hmacAuthError = await requireInternalAuth(request, env, path);
+    const hmacAuthError = await requireInternalAuth(request, env, path, log);
 
     if (hmacAuthError) {
       // HMAC auth failed - check if this route accepts sandbox auth
@@ -302,7 +319,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
         const sessionIdMatch = path.match(/^\/sessions\/([^/]+)\//);
         if (sessionIdMatch) {
           const sessionId = sessionIdMatch[1];
-          const sandboxAuthError = await verifySandboxAuth(request, env, sessionId);
+          const sandboxAuthError = await verifySandboxAuth(request, env, sessionId, log);
           if (!sandboxAuthError) {
             // Sandbox auth passed, continue to route handler
           } else {
@@ -340,13 +357,23 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
         // Create new response with CORS headers (original response may be immutable)
         const corsHeaders = new Headers(response.headers);
         corsHeaders.set("Access-Control-Allow-Origin", "*");
+        log.info("API response", {
+          method,
+          path,
+          status: response.status,
+          durationMs: Date.now() - startTime,
+        });
         return new Response(response.body, {
           status: response.status,
           statusText: response.statusText,
           headers: corsHeaders,
         });
       } catch (e) {
-        console.error("Route handler error:", e);
+        log.error("Request error", {
+          error: e instanceof Error ? e : String(e),
+          status: 500,
+          path,
+        });
         return error("Internal server error", 500);
       }
     }
@@ -423,7 +450,9 @@ async function handleCreateSession(
     try {
       githubTokenEncrypted = await encryptToken(body.githubToken, env.TOKEN_ENCRYPTION_KEY);
     } catch (e) {
-      console.error("Failed to encrypt GitHub token:", e);
+      routerLog.error("Failed to encrypt GitHub token", {
+        error: e instanceof Error ? e : String(e),
+      });
       return error("Failed to process GitHub token", 500);
     }
   }
@@ -525,11 +554,9 @@ async function handleSessionPrompt(
   env: Env,
   match: RegExpMatchArray
 ): Promise<Response> {
-  console.log("handleSessionPrompt: start");
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
 
-  console.log("handleSessionPrompt: sessionId", sessionId);
   const body = (await request.json()) as {
     content: string;
     authorId?: string;
@@ -547,11 +574,9 @@ async function handleSessionPrompt(
     return error("content is required");
   }
 
-  console.log("handleSessionPrompt: getting DO stub");
   const doId = env.SESSION.idFromName(sessionId);
   const stub = env.SESSION.get(doId);
 
-  console.log("handleSessionPrompt: calling DO");
   const response = await stub.fetch(
     new Request("http://internal/internal/prompt", {
       method: "POST",
@@ -566,7 +591,7 @@ async function handleSessionPrompt(
     })
   );
 
-  console.log("handleSessionPrompt: response status", response.status);
+  routerLog.info("Prompt enqueued via API", { sessionId, status: response.status });
   return response;
 }
 
@@ -715,7 +740,9 @@ async function handleSessionWsToken(
     try {
       githubTokenEncrypted = await encryptToken(body.githubToken, env.TOKEN_ENCRYPTION_KEY);
     } catch (e) {
-      console.error("[router] Failed to encrypt GitHub token:", e);
+      routerLog.error("Failed to encrypt GitHub token", {
+        error: e instanceof Error ? e : String(e),
+      });
       // Continue without token - PR creation will fail if this user triggers it
     }
   }
@@ -786,7 +813,7 @@ async function handleArchiveSession(
         })
       );
     } else {
-      console.warn(`Session ${sessionId} not found in KV index during archive`);
+      routerLog.warn("Session not found in KV index during archive", { sessionId });
     }
   }
 
@@ -837,7 +864,7 @@ async function handleUnarchiveSession(
         })
       );
     } else {
-      console.warn(`Session ${sessionId} not found in KV index during unarchive`);
+      routerLog.warn("Session not found in KV index during unarchive", { sessionId });
     }
   }
 
@@ -877,7 +904,7 @@ async function handleListRepos(
       });
     }
   } catch (e) {
-    console.warn("Failed to read repos cache:", e);
+    routerLog.warn("Failed to read repos cache", { error: e instanceof Error ? e : String(e) });
   }
 
   // Get GitHub App config
@@ -891,7 +918,9 @@ async function handleListRepos(
   try {
     repos = await listInstallationRepositories(appConfig);
   } catch (e) {
-    console.error("Failed to list installation repositories:", e);
+    routerLog.error("Failed to list installation repositories", {
+      error: e instanceof Error ? e : String(e),
+    });
     return error("Failed to fetch repositories from GitHub", 500);
   }
 
@@ -911,7 +940,7 @@ async function handleListRepos(
             // Migrate to new key
             await env.SESSION_INDEX.put(newKey, JSON.stringify(metadata));
             await env.SESSION_INDEX.delete(oldKey);
-            console.log(`Migrated metadata from ${oldKey} to ${newKey}`);
+            routerLog.info("Migrated repo metadata key", { oldKey, newKey });
           }
         }
 
@@ -934,7 +963,7 @@ async function handleListRepos(
       expirationTtl: CACHE_TTL,
     });
   } catch (e) {
-    console.warn("Failed to cache repos list:", e);
+    routerLog.warn("Failed to cache repos list", { error: e instanceof Error ? e : String(e) });
   }
 
   return json({
@@ -990,7 +1019,9 @@ async function handleUpdateRepoMetadata(
       metadata,
     });
   } catch (e) {
-    console.error("Failed to update repo metadata:", e);
+    routerLog.error("Failed to update repo metadata", {
+      error: e instanceof Error ? e : String(e),
+    });
     return error("Failed to update metadata", 500);
   }
 }
@@ -1028,7 +1059,7 @@ async function handleGetRepoMetadata(
       metadata,
     });
   } catch (e) {
-    console.error("Failed to get repo metadata:", e);
+    routerLog.error("Failed to get repo metadata", { error: e instanceof Error ? e : String(e) });
     return error("Failed to get metadata", 500);
   }
 }

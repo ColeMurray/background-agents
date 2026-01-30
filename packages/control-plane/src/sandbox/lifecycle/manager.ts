@@ -28,6 +28,7 @@ import {
   type InactivityConfig,
   type HeartbeatConfig,
 } from "./decisions";
+import type { Logger } from "../../logger";
 
 // ==================== Dependency Interfaces ====================
 
@@ -162,7 +163,8 @@ export class SandboxLifecycleManager {
     private readonly wsManager: WebSocketManager,
     private readonly alarmScheduler: AlarmScheduler,
     private readonly idGenerator: IdGenerator,
-    private readonly config: SandboxLifecycleConfig
+    private readonly config: SandboxLifecycleConfig,
+    private readonly log: Logger
   ) {}
 
   /**
@@ -187,14 +189,15 @@ export class SandboxLifecycleManager {
     const cbDecision = evaluateCircuitBreaker(circuitBreakerState, this.config.circuitBreaker, now);
 
     if (cbDecision.shouldReset) {
-      console.log("[Manager] Circuit breaker window passed, resetting failure count");
+      this.log.info("Circuit breaker reset");
       this.storage.resetCircuitBreaker();
     }
 
     if (!cbDecision.shouldProceed) {
-      console.log(
-        `[Manager] Circuit breaker open: ${circuitBreakerState.failureCount} failures, wait ${Math.ceil((cbDecision.waitTimeMs || 0) / 1000)}s`
-      );
+      this.log.warn("Circuit breaker open", {
+        failureCount: circuitBreakerState.failureCount,
+        waitTimeMs: cbDecision.waitTimeMs || 0,
+      });
       this.broadcaster.broadcast({
         type: "sandbox_error",
         error: `Sandbox spawning temporarily disabled after ${circuitBreakerState.failureCount} failures. Try again in ${Math.ceil((cbDecision.waitTimeMs || 0) / 1000)} seconds.`,
@@ -219,15 +222,23 @@ export class SandboxLifecycleManager {
 
     switch (spawnDecision.action) {
       case "skip":
-        console.log(`[Manager] spawnSandbox: ${spawnDecision.reason}`);
+        this.log.info("Spawn decision: skip", {
+          reason: spawnDecision.reason,
+          sandboxStatus: spawnState.status,
+        });
         return;
 
       case "wait":
-        console.log(`[Manager] spawnSandbox: ${spawnDecision.reason}`);
+        this.log.info("Spawn decision: wait", {
+          reason: spawnDecision.reason,
+          sandboxStatus: spawnState.status,
+        });
         return;
 
       case "restore":
-        console.log(`[Manager] Restoring from snapshot: ${spawnDecision.snapshotImageId}`);
+        this.log.info("Spawn decision: restore", {
+          snapshotImageId: spawnDecision.snapshotImageId,
+        });
         await this.restoreFromSnapshot(spawnDecision.snapshotImageId);
         return;
 
@@ -246,7 +257,7 @@ export class SandboxLifecycleManager {
     try {
       const session = this.storage.getSession();
       if (!session) {
-        console.error("[Manager] Cannot spawn sandbox: no session");
+        this.log.error("Cannot spawn sandbox: no session");
         return;
       }
 
@@ -264,7 +275,11 @@ export class SandboxLifecycleManager {
       });
       this.broadcaster.broadcast({ type: "sandbox_status", status: "spawning" });
 
-      console.log(`[Manager] Creating sandbox: ${expectedSandboxId}`);
+      this.log.info("Spawning sandbox", {
+        expectedSandboxId,
+        repoOwner: session.repo_owner,
+        repoName: session.repo_name,
+      });
 
       // Create sandbox via provider
       const createConfig: CreateSandboxConfig = {
@@ -280,12 +295,14 @@ export class SandboxLifecycleManager {
 
       const result = await this.provider.createSandbox(createConfig);
 
-      console.log("[Manager] Sandbox created:", result.sandboxId);
+      this.log.info("Sandbox spawned", {
+        sandboxId: result.sandboxId,
+        providerObjectId: result.providerObjectId,
+      });
 
       // Store provider's internal object ID for snapshot API
       if (result.providerObjectId) {
         this.storage.updateSandboxModalObjectId(result.providerObjectId);
-        console.log(`[Manager] Stored provider object ID: ${result.providerObjectId}`);
       }
 
       this.storage.updateSandboxStatus("connecting");
@@ -294,20 +311,24 @@ export class SandboxLifecycleManager {
       // Reset circuit breaker on successful spawn initiation
       this.storage.resetCircuitBreaker();
     } catch (error) {
-      console.error("[Manager] Failed to spawn sandbox:", error);
+      this.log.error("Sandbox spawn failed", {
+        error: error instanceof Error ? error : String(error),
+      });
 
       // Only increment circuit breaker for permanent errors
       if (error instanceof SandboxProviderError) {
         if (error.errorType === "permanent") {
           this.storage.incrementCircuitBreakerFailure(Date.now());
-          console.log("[Manager] Incremented spawn failure count (permanent error)");
+          this.log.info("Circuit breaker incremented", { errorType: "permanent" });
         } else {
-          console.log("[Manager] Transient error, not incrementing circuit breaker");
+          this.log.info("Transient error, not incrementing circuit breaker", {
+            errorType: error.errorType,
+          });
         }
       } else {
         // Unknown error type - treat as permanent
         this.storage.incrementCircuitBreakerFailure(Date.now());
-        console.log("[Manager] Incremented spawn failure count (unknown error)");
+        this.log.info("Circuit breaker incremented", { errorType: "unknown" });
       }
 
       this.storage.updateSandboxStatus("failed");
@@ -325,7 +346,7 @@ export class SandboxLifecycleManager {
    */
   private async restoreFromSnapshot(snapshotImageId: string): Promise<void> {
     if (!this.provider.restoreFromSnapshot) {
-      console.log("[Manager] Provider does not support restore");
+      this.log.info("Provider does not support restore, falling back to fresh spawn");
       // Fall back to fresh spawn
       await this.doSpawn();
       return;
@@ -336,7 +357,7 @@ export class SandboxLifecycleManager {
     try {
       const session = this.storage.getSession();
       if (!session) {
-        console.error("[Manager] Cannot restore: no session");
+        this.log.error("Cannot restore: no session");
         return;
       }
 
@@ -355,7 +376,7 @@ export class SandboxLifecycleManager {
         modalSandboxId: expectedSandboxId,
       });
 
-      console.log(`[Manager] Restoring sandbox from snapshot: ${snapshotImageId}`);
+      this.log.info("Restoring from snapshot", { snapshotImageId });
 
       const result = await this.provider.restoreFromSnapshot({
         snapshotImageId,
@@ -370,12 +391,14 @@ export class SandboxLifecycleManager {
       });
 
       if (result.success) {
-        console.log(`[Manager] Sandbox restored: ${result.sandboxId}`);
+        this.log.info("Sandbox restored", {
+          sandboxId: result.sandboxId,
+          providerObjectId: result.providerObjectId,
+        });
 
         // Store provider's internal object ID for future snapshots
         if (result.providerObjectId) {
           this.storage.updateSandboxModalObjectId(result.providerObjectId);
-          console.log(`[Manager] Stored provider object ID: ${result.providerObjectId}`);
         }
 
         this.storage.updateSandboxStatus("connecting");
@@ -385,7 +408,7 @@ export class SandboxLifecycleManager {
           message: "Session restored from snapshot",
         });
       } else {
-        console.error("[Manager] Restore failed:", result.error);
+        this.log.error("Snapshot restore failed", { error: result.error, snapshotImageId });
         this.storage.updateSandboxStatus("failed");
         this.broadcaster.broadcast({
           type: "sandbox_error",
@@ -393,7 +416,10 @@ export class SandboxLifecycleManager {
         });
       }
     } catch (error) {
-      console.error("[Manager] Restore request failed:", error);
+      this.log.error("Snapshot restore request failed", {
+        error: error instanceof Error ? error : String(error),
+        snapshotImageId,
+      });
       this.storage.updateSandboxStatus("failed");
       this.broadcaster.broadcast({
         type: "sandbox_error",
@@ -409,7 +435,7 @@ export class SandboxLifecycleManager {
    */
   async triggerSnapshot(reason: string): Promise<void> {
     if (!this.provider.takeSnapshot) {
-      console.log("[Manager] Provider does not support snapshots");
+      this.log.debug("Provider does not support snapshots");
       return;
     }
 
@@ -417,13 +443,13 @@ export class SandboxLifecycleManager {
     const session = this.storage.getSession();
 
     if (!sandbox?.modal_object_id || !session) {
-      console.log("[Manager] Cannot snapshot: no modal_object_id or session");
+      this.log.debug("Cannot snapshot: no modal_object_id or session");
       return;
     }
 
     // Don't snapshot if already snapshotting
     if (sandbox.status === "snapshotting") {
-      console.log("[Manager] Already snapshotting, skipping");
+      this.log.debug("Already snapshotting, skipping");
       return;
     }
 
@@ -438,7 +464,7 @@ export class SandboxLifecycleManager {
     }
 
     try {
-      console.log(`[Manager] Triggering snapshot, reason: ${reason}`);
+      this.log.info("Taking snapshot", { reason, modalObjectId: sandbox.modal_object_id });
 
       const result = await this.provider.takeSnapshot({
         providerObjectId: sandbox.modal_object_id,
@@ -448,17 +474,20 @@ export class SandboxLifecycleManager {
 
       if (result.success && result.imageId) {
         this.storage.updateSandboxSnapshotImageId(sandbox.id, result.imageId);
-        console.log(`[Manager] Snapshot saved: ${result.imageId}`);
+        this.log.info("Snapshot saved", { imageId: result.imageId, reason });
         this.broadcaster.broadcast({
           type: "snapshot_saved",
           imageId: result.imageId,
           reason,
         });
       } else {
-        console.error("[Manager] Snapshot failed:", result.error);
+        this.log.error("Snapshot failed", { error: result.error, reason });
       }
     } catch (error) {
-      console.error("[Manager] Snapshot request failed:", error);
+      this.log.error("Snapshot request failed", {
+        error: error instanceof Error ? error : String(error),
+        reason,
+      });
     }
 
     // Restore previous status if we weren't in a terminal state
@@ -472,23 +501,25 @@ export class SandboxLifecycleManager {
    * Handle alarm for inactivity and heartbeat monitoring.
    */
   async handleAlarm(): Promise<void> {
-    console.log("[Manager] ===== ALARM FIRED =====");
-
     const sandbox = this.storage.getSandbox();
     if (!sandbox) {
-      console.log("[Manager] Alarm: no sandbox found");
+      this.log.debug("Alarm fired: no sandbox found");
       return;
     }
 
     const now = Date.now();
 
-    console.log(
-      `[Manager] Alarm: status=${sandbox.status}, last_activity=${sandbox.last_activity}, last_heartbeat=${sandbox.last_heartbeat}`
-    );
+    this.log.debug("Alarm fired", {
+      sandboxStatus: sandbox.status,
+      lastActivity: sandbox.last_activity,
+      lastHeartbeat: sandbox.last_heartbeat,
+    });
 
     // Skip if sandbox is already in terminal state
     if (sandbox.status === "stopped" || sandbox.status === "failed" || sandbox.status === "stale") {
-      console.log(`[Manager] Alarm: sandbox status is ${sandbox.status}, skipping`);
+      this.log.debug("Alarm: sandbox in terminal state, skipping", {
+        sandboxStatus: sandbox.status,
+      });
       return;
     }
 
@@ -500,12 +531,13 @@ export class SandboxLifecycleManager {
     );
 
     if (heartbeatHealth.isStale) {
-      console.log(
-        `[Manager] Heartbeat timeout: ${(heartbeatHealth.ageMs || 0) / 1000}s since last heartbeat`
-      );
+      this.log.warn("Heartbeat stale", {
+        lastHeartbeatMs: heartbeatHealth.ageMs || 0,
+        thresholdMs: this.config.heartbeat.timeoutMs,
+      });
       // Fire-and-forget snapshot so status broadcast isn't delayed
       this.triggerSnapshot("heartbeat_timeout").catch((e) =>
-        console.error("[Manager] Heartbeat snapshot failed:", e)
+        this.log.error("Heartbeat snapshot failed", { error: e instanceof Error ? e : String(e) })
       );
       this.storage.updateSandboxStatus("stale");
       this.broadcaster.broadcast({ type: "sandbox_status", status: "stale" });
@@ -528,11 +560,13 @@ export class SandboxLifecycleManager {
 
     switch (inactivityDecision.action) {
       case "timeout":
-        console.log("[Manager] Inactivity timeout, triggering stop");
+        this.log.info("Inactivity timeout", {
+          lastActivity: sandbox.last_activity,
+          timeoutMs: this.config.inactivity.timeoutMs,
+        });
         // Set status to stopped FIRST to block reconnection attempts
         this.storage.updateSandboxStatus("stopped");
         this.broadcaster.broadcast({ type: "sandbox_status", status: "stopped" });
-        console.log("[Manager] Status set to stopped, blocking reconnections");
 
         // Take snapshot
         await this.triggerSnapshot("inactivity_timeout");
@@ -548,9 +582,10 @@ export class SandboxLifecycleManager {
         return;
 
       case "extend":
-        console.log(
-          `[Manager] Inactivity timeout but ${connectedClients} clients connected, extending`
-        );
+        this.log.info("Inactivity extended", {
+          connectedClients,
+          extensionMs: inactivityDecision.extensionMs,
+        });
         if (inactivityDecision.shouldWarn) {
           this.broadcaster.broadcast({
             type: "sandbox_warning",
@@ -562,7 +597,7 @@ export class SandboxLifecycleManager {
         return;
 
       case "schedule":
-        console.log(`[Manager] Scheduling next alarm in ${inactivityDecision.nextCheckMs / 1000}s`);
+        this.log.debug("Scheduling next alarm", { nextCheckMs: inactivityDecision.nextCheckMs });
         await this.alarmScheduler.scheduleAlarm(now + inactivityDecision.nextCheckMs);
         return;
     }
@@ -583,11 +618,11 @@ export class SandboxLifecycleManager {
     const warmDecision = evaluateWarmDecision(warmState);
 
     if (warmDecision.action === "skip") {
-      console.log(`[Manager] warmSandbox: ${warmDecision.reason}`);
+      this.log.debug("Warm skipped", { reason: warmDecision.reason });
       return;
     }
 
-    console.log("[Manager] Warming sandbox proactively");
+    this.log.info("Warming sandbox");
     this.broadcaster.broadcast({ type: "sandbox_warming" });
     await this.spawnSandbox();
   }
@@ -604,9 +639,7 @@ export class SandboxLifecycleManager {
    */
   async scheduleInactivityCheck(): Promise<void> {
     const alarmTime = Date.now() + this.config.inactivity.timeoutMs;
-    console.log(
-      `[Manager] Scheduling inactivity check in ${this.config.inactivity.timeoutMs / 1000}s`
-    );
+    this.log.debug("Scheduling inactivity check", { timeoutMs: this.config.inactivity.timeoutMs });
     await this.alarmScheduler.scheduleAlarm(alarmTime);
   }
 

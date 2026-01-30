@@ -27,6 +27,7 @@ import {
 } from "../provider";
 import type { SandboxRow, SessionRow } from "../../session/types";
 import type { SandboxStatus } from "../../types";
+import type { Logger } from "../../logger";
 
 // ==================== Mock Factories ====================
 
@@ -225,6 +226,16 @@ function createTestConfig(): SandboxLifecycleConfig {
   };
 }
 
+function createMockLogger(): Logger {
+  return {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: () => createMockLogger(),
+  };
+}
+
 // ==================== Tests ====================
 
 describe("SandboxLifecycleManager", () => {
@@ -245,7 +256,8 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         alarmScheduler,
         idGenerator,
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       await manager.spawnSandbox();
@@ -277,7 +289,8 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       await manager.spawnSandbox();
@@ -308,7 +321,8 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       await manager.spawnSandbox();
@@ -334,7 +348,8 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       await manager.spawnSandbox();
@@ -366,7 +381,8 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       await manager.spawnSandbox();
@@ -396,7 +412,8 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       // Before spawn, should not be spawning
@@ -433,7 +450,8 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       // Before spawn, should not be spawning
@@ -465,7 +483,8 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       await manager.spawnSandbox();
@@ -494,7 +513,8 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       await manager.spawnSandbox();
@@ -521,7 +541,8 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       await manager.spawnSandbox();
@@ -544,7 +565,8 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       await manager.spawnSandbox();
@@ -567,7 +589,8 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       await manager.triggerSnapshot("test_reason");
@@ -597,7 +620,8 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       await manager.triggerSnapshot("test_reason");
@@ -624,7 +648,8 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       await manager.triggerSnapshot("execution_complete");
@@ -650,7 +675,8 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       // Should not throw
@@ -678,7 +704,8 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       await manager.handleAlarm();
@@ -708,7 +735,8 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       await manager.handleAlarm();
@@ -737,7 +765,8 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         alarmScheduler,
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       await manager.handleAlarm();
@@ -770,7 +799,8 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         alarmScheduler,
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       await manager.handleAlarm();
@@ -798,7 +828,8 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       await manager.handleAlarm();
@@ -822,7 +853,8 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       await manager.warmSandbox();
@@ -844,7 +876,8 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       await manager.warmSandbox();
@@ -866,7 +899,8 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       await manager.warmSandbox();
@@ -890,7 +924,8 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        createMockLogger()
       );
 
       const timestamp = Date.now();
@@ -914,7 +949,8 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         alarmScheduler,
         createMockIdGenerator(),
-        config
+        config,
+        createMockLogger()
       );
 
       const beforeTime = Date.now();

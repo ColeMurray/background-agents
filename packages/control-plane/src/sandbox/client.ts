@@ -6,6 +6,8 @@
  */
 
 import { generateInternalToken } from "@open-inspect/shared";
+import type { Logger } from "../logger";
+import { createLogger } from "../logger";
 
 // Modal app name
 const MODAL_APP_NAME = "open-inspect";
@@ -80,8 +82,9 @@ export class ModalClient {
   private snapshotSandboxUrl: string;
   private restoreSandboxUrl: string;
   private secret: string;
+  private log: Logger;
 
-  constructor(secret: string, workspace: string) {
+  constructor(secret: string, workspace: string, log?: Logger) {
     if (!secret) {
       throw new Error("ModalClient requires MODAL_API_SECRET for authentication");
     }
@@ -89,6 +92,7 @@ export class ModalClient {
       throw new Error("ModalClient requires MODAL_WORKSPACE for URL construction");
     }
     this.secret = secret;
+    this.log = log || createLogger("modal-client");
     const baseUrl = getModalBaseUrl(workspace);
     this.createSandboxUrl = `${baseUrl}-api-create-sandbox.modal.run`;
     this.warmSandboxUrl = `${baseUrl}-api-warm-sandbox.modal.run`;
@@ -137,7 +141,11 @@ export class ModalClient {
    * Create a new sandbox for a session.
    */
   async createSandbox(request: CreateSandboxRequest): Promise<CreateSandboxResponse> {
-    console.log("Creating sandbox via Modal API:", request.sessionId);
+    const startTime = Date.now();
+    this.log.info("Modal API: create sandbox", {
+      sessionId: request.sessionId,
+      sandboxId: request.sandboxId,
+    });
 
     const headers = await this.getPostHeaders();
     const response = await fetch(this.createSandboxUrl, {
@@ -161,6 +169,12 @@ export class ModalClient {
 
     if (!response.ok) {
       const text = await response.text();
+      this.log.error("Modal API error", {
+        endpoint: "createSandbox",
+        status: response.status,
+        error: text,
+        durationMs: Date.now() - startTime,
+      });
       throw new Error(`Modal API error: ${response.status} ${text}`);
     }
 
@@ -175,6 +189,12 @@ export class ModalClient {
       throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
     }
 
+    this.log.info("Modal API: create sandbox complete", {
+      sandboxId: result.data.sandbox_id,
+      durationMs: Date.now() - startTime,
+      status: response.status,
+    });
+
     return {
       sandboxId: result.data.sandbox_id,
       modalObjectId: result.data.modal_object_id,
@@ -187,7 +207,11 @@ export class ModalClient {
    * Pre-warm a sandbox for faster startup.
    */
   async warmSandbox(request: WarmSandboxRequest): Promise<WarmSandboxResponse> {
-    console.log("Warming sandbox via Modal API:", request.repoOwner, request.repoName);
+    const startTime = Date.now();
+    this.log.info("Modal API: warm sandbox", {
+      repoOwner: request.repoOwner,
+      repoName: request.repoName,
+    });
 
     const headers = await this.getPostHeaders();
     const response = await fetch(this.warmSandboxUrl, {
@@ -202,6 +226,12 @@ export class ModalClient {
 
     if (!response.ok) {
       const text = await response.text();
+      this.log.error("Modal API error", {
+        endpoint: "warmSandbox",
+        status: response.status,
+        error: text,
+        durationMs: Date.now() - startTime,
+      });
       throw new Error(`Modal API error: ${response.status} ${text}`);
     }
 
@@ -213,6 +243,12 @@ export class ModalClient {
     if (!result.success || !result.data) {
       throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
     }
+
+    this.log.info("Modal API: warm sandbox complete", {
+      sandboxId: result.data.sandbox_id,
+      durationMs: Date.now() - startTime,
+      status: response.status,
+    });
 
     return {
       sandboxId: result.data.sandbox_id,
@@ -277,12 +313,12 @@ export class ModalClient {
  * @returns A new ModalClient instance
  * @throws Error if secret or workspace is not provided
  */
-export function createModalClient(secret: string, workspace: string): ModalClient {
+export function createModalClient(secret: string, workspace: string, log?: Logger): ModalClient {
   if (!secret) {
     throw new Error("MODAL_API_SECRET is required to create ModalClient");
   }
   if (!workspace) {
     throw new Error("MODAL_WORKSPACE is required to create ModalClient");
   }
-  return new ModalClient(secret, workspace);
+  return new ModalClient(secret, workspace, log);
 }
