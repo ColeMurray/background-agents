@@ -23,8 +23,8 @@ SANDBOX_DIR = Path(__file__).parent.parent / "sandbox"
 OPENCODE_VERSION = "latest"
 
 # Cache buster - change this to force Modal image rebuild
-# v32: Structured error responses for create-pull-request tool
-CACHE_BUSTER = "v32-structured-pr-errors"
+# v33: Fix supervisor unconditionally restarting bridge on graceful exit
+CACHE_BUSTER = "v33-bridge-graceful-shutdown"
 
 # Base image with all development tools
 base_image = (
