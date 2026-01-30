@@ -13,6 +13,8 @@ import { generateId, decryptToken, hashToken } from "../auth/crypto";
 import { generateInstallationToken, getGitHubAppConfig } from "../auth/github-app";
 import { createModalClient } from "../sandbox/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
+import { createLogger, parseLogLevel } from "../logger";
+import type { Logger } from "../logger";
 import {
   SandboxLifecycleManager,
   DEFAULT_LIFECYCLE_CONFIG,
@@ -91,6 +93,7 @@ export class SessionDO extends DurableObject<Env> {
   private clients: Map<WebSocket, ClientInfo>;
   private sandboxWs: WebSocket | null = null;
   private initialized = false;
+  private log: Logger;
   // Track pending push operations by branch name
   private pendingPushResolvers = new Map<
     string,
@@ -143,6 +146,8 @@ export class SessionDO extends DurableObject<Env> {
     this.sql = ctx.storage.sql;
     this.repository = new SessionRepository(this.sql);
     this.clients = new Map();
+    this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
+    // Note: session_id context is set in ensureInitialized() once DB is ready
   }
 
   /**
@@ -236,11 +241,16 @@ export class SessionDO extends DurableObject<Env> {
 
     const { provider: llmProvider, model } = extractProviderAndModel(DEFAULT_MODEL);
 
+    // Resolve sessionId for lifecycle manager logging context
+    const session = this.repository.getSession();
+    const sessionId = session?.session_name || session?.id || this.ctx.id.toString();
+
     const config = {
       ...DEFAULT_LIFECYCLE_CONFIG,
       controlPlaneUrl,
       provider: llmProvider,
       model,
+      sessionId,
       inactivity: {
         ...DEFAULT_LIFECYCLE_CONFIG.inactivity,
         timeoutMs: parseInt(this.env.SANDBOX_INACTIVITY_TIMEOUT_MS || "600000", 10),
@@ -265,14 +275,14 @@ export class SessionDO extends DurableObject<Env> {
   private safeSend(ws: WebSocket, message: string | object): boolean {
     try {
       if (ws.readyState !== WebSocket.OPEN) {
-        console.log(`[DO] Cannot send: WebSocket not open (state=${ws.readyState})`);
+        this.log.debug("Cannot send: WebSocket not open", { ready_state: ws.readyState });
         return false;
       }
       const data = typeof message === "string" ? message : JSON.stringify(message);
       ws.send(data);
       return true;
     } catch (e) {
-      console.log(`[DO] WebSocket send failed: ${e}`);
+      this.log.warn("WebSocket send failed", { error: e instanceof Error ? e : String(e) });
       return false;
     }
   }
@@ -291,6 +301,13 @@ export class SessionDO extends DurableObject<Env> {
     if (this.initialized) return;
     initSchema(this.sql);
     this.initialized = true;
+    const session = this.repository.getSession();
+    const sessionId = session?.session_name || session?.id || this.ctx.id.toString();
+    this.log = createLogger(
+      "session-do",
+      { session_id: sessionId },
+      parseLogLevel(this.env.LOG_LEVEL)
+    );
   }
 
   /**
@@ -298,6 +315,16 @@ export class SessionDO extends DurableObject<Env> {
    */
   async fetch(request: Request): Promise<Response> {
     this.ensureInitialized();
+
+    // Extract correlation headers and create a request-scoped logger
+    const traceId = request.headers.get("x-trace-id");
+    const requestId = request.headers.get("x-request-id");
+    if (traceId || requestId) {
+      const correlationCtx: Record<string, unknown> = {};
+      if (traceId) correlationCtx.trace_id = traceId;
+      if (requestId) correlationCtx.request_id = requestId;
+      this.log = this.log.child(correlationCtx);
+    }
 
     const url = new URL(request.url);
     const path = url.pathname;
@@ -311,7 +338,28 @@ export class SessionDO extends DurableObject<Env> {
     const route = this.routes.find((r) => r.path === path && r.method === request.method);
 
     if (route) {
-      return route.handler(request, url);
+      const routeStart = Date.now();
+      let status = 500;
+      let outcome: "success" | "error" = "error";
+      try {
+        const response = await route.handler(request, url);
+        status = response.status;
+        outcome = status >= 500 ? "error" : "success";
+        return response;
+      } catch (e) {
+        status = 500;
+        outcome = "error";
+        throw e;
+      } finally {
+        this.log.info("do.request", {
+          event: "do.request",
+          http_method: request.method,
+          http_path: path,
+          http_status: status,
+          duration_ms: Date.now() - routeStart,
+          outcome,
+        });
+      }
     }
 
     return new Response("Not Found", { status: 404 });
@@ -321,11 +369,12 @@ export class SessionDO extends DurableObject<Env> {
    * Handle WebSocket upgrade request.
    */
   private async handleWebSocketUpgrade(request: Request, url: URL): Promise<Response> {
-    console.log("DO: handleWebSocketUpgrade called");
+    this.log.debug("WebSocket upgrade requested");
     const isSandbox = url.searchParams.get("type") === "sandbox";
 
     // Validate sandbox authentication
     if (isSandbox) {
+      const wsStartTime = Date.now();
       const authHeader = request.headers.get("Authorization");
       const sandboxId = request.headers.get("X-Sandbox-ID");
 
@@ -334,31 +383,47 @@ export class SessionDO extends DurableObject<Env> {
       const expectedToken = sandbox?.auth_token;
       const expectedSandboxId = sandbox?.modal_sandbox_id;
 
-      console.log(
-        `[DO] Sandbox auth check: authHeader=${authHeader ? "present" : "missing"}, sandboxId=${sandboxId}, expectedSandboxId=${expectedSandboxId}, status=${sandbox?.status}`
-      );
-
       // Reject connection if sandbox should be stopped (prevents reconnection after inactivity timeout)
       if (sandbox?.status === "stopped" || sandbox?.status === "stale") {
-        console.log(`[DO] Rejecting sandbox connection: sandbox is ${sandbox.status}`);
+        this.log.warn("ws.connect", {
+          event: "ws.connect",
+          ws_type: "sandbox",
+          outcome: "rejected",
+          reject_reason: "sandbox_stopped",
+          sandbox_status: sandbox.status,
+          duration_ms: Date.now() - wsStartTime,
+        });
         return new Response("Sandbox is stopped", { status: 410 });
       }
 
       // Validate auth token
       if (!authHeader || authHeader !== `Bearer ${expectedToken}`) {
-        console.log("[DO] Sandbox auth failed: token mismatch");
+        this.log.warn("ws.connect", {
+          event: "ws.connect",
+          ws_type: "sandbox",
+          outcome: "auth_failed",
+          reject_reason: "token_mismatch",
+          duration_ms: Date.now() - wsStartTime,
+        });
         return new Response("Unauthorized: Invalid auth token", { status: 401 });
       }
 
       // Validate sandbox ID (if we expect a specific one)
       if (expectedSandboxId && sandboxId !== expectedSandboxId) {
-        console.log(
-          `[DO] Sandbox auth failed: ID mismatch. Expected ${expectedSandboxId}, got ${sandboxId}`
-        );
+        this.log.warn("ws.connect", {
+          event: "ws.connect",
+          ws_type: "sandbox",
+          outcome: "auth_failed",
+          reject_reason: "sandbox_id_mismatch",
+          expected_sandbox_id: expectedSandboxId,
+          sandbox_id: sandboxId,
+          duration_ms: Date.now() - wsStartTime,
+        });
         return new Response("Forbidden: Wrong sandbox ID", { status: 403 });
       }
 
-      console.log("[DO] Sandbox auth passed");
+      // Auth passed — continue to WebSocket accept below
+      // The success ws.connect event is emitted after the WebSocket is accepted
     }
 
     try {
@@ -379,15 +444,14 @@ export class SessionDO extends DurableObject<Env> {
         tags = [`wsid:${wsId}`];
       }
       this.ctx.acceptWebSocket(server, tags);
-      console.log("DO: WebSocket accepted");
 
       if (isSandbox) {
         // Close any existing sandbox WebSocket to prevent duplicates
         const existingSandboxWs = this.getSandboxWebSocket();
-        if (existingSandboxWs && existingSandboxWs !== server) {
-          console.log("[DO] Closing existing sandbox WebSocket, new one connecting");
+        const replacedExisting = !!(existingSandboxWs && existingSandboxWs !== server);
+        if (replacedExisting) {
           try {
-            existingSandboxWs.close(1000, "New sandbox connecting");
+            existingSandboxWs!.close(1000, "New sandbox connecting");
           } catch {
             // Ignore errors closing old WebSocket
           }
@@ -403,8 +467,16 @@ export class SessionDO extends DurableObject<Env> {
         // IMPORTANT: Must await to ensure alarm is scheduled before returning
         const now = Date.now();
         this.updateLastActivity(now);
-        console.log(`[DO] Sandbox connected, scheduling inactivity check`);
         await this.scheduleInactivityCheck();
+
+        this.log.info("ws.connect", {
+          event: "ws.connect",
+          ws_type: "sandbox",
+          outcome: "success",
+          sandbox_id: sandboxId,
+          replaced_existing: replacedExisting,
+          duration_ms: Date.now() - now,
+        });
 
         // Process any pending messages now that sandbox is connected
         this.processMessageQueue();
@@ -418,7 +490,9 @@ export class SessionDO extends DurableObject<Env> {
 
       return new Response(null, { status: 101, webSocket: client });
     } catch (error) {
-      console.error("DO: WebSocket upgrade error:", error);
+      this.log.error("WebSocket upgrade failed", {
+        error: error instanceof Error ? error : String(error),
+      });
       return new Response("WebSocket upgrade failed", { status: 500 });
     }
   }
@@ -427,7 +501,7 @@ export class SessionDO extends DurableObject<Env> {
    * Handle WebSocket message (with hibernation support).
    */
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    console.log("DO: webSocketMessage received");
+    this.ensureInitialized();
     if (typeof message !== "string") return;
 
     const tags = this.ctx.getTags(ws);
@@ -442,6 +516,7 @@ export class SessionDO extends DurableObject<Env> {
    * Handle WebSocket close.
    */
   async webSocketClose(ws: WebSocket, _code: number, _reason: string): Promise<void> {
+    this.ensureInitialized();
     const tags = this.ctx.getTags(ws);
 
     if (tags.includes("sandbox")) {
@@ -461,7 +536,8 @@ export class SessionDO extends DurableObject<Env> {
    * Handle WebSocket error.
    */
   async webSocketError(ws: WebSocket, error: Error): Promise<void> {
-    console.error("WebSocket error:", error);
+    this.ensureInitialized();
+    this.log.error("WebSocket error", { error });
     ws.close(1011, "Internal error");
   }
 
@@ -507,9 +583,13 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     // Connection is unauthenticated after timeout - close it
-    console.log(
-      `[DO] Closing unauthenticated WebSocket after ${WS_AUTH_TIMEOUT_MS}ms timeout: ${wsId}`
-    );
+    this.log.warn("ws.connect", {
+      event: "ws.connect",
+      ws_type: "client",
+      outcome: "auth_timeout",
+      ws_id: wsId,
+      timeout_ms: WS_AUTH_TIMEOUT_MS,
+    });
     try {
       ws.close(4008, "Authentication timeout");
     } catch {
@@ -564,7 +644,9 @@ export class SessionDO extends DurableObject<Env> {
       const event = JSON.parse(message) as SandboxEvent;
       await this.processSandboxEvent(event);
     } catch (e) {
-      console.error("Error processing sandbox message:", e);
+      this.log.error("Error processing sandbox message", {
+        error: e instanceof Error ? e : String(e),
+      });
     }
   }
 
@@ -601,7 +683,9 @@ export class SessionDO extends DurableObject<Env> {
           break;
       }
     } catch (e) {
-      console.error("Error processing client message:", e);
+      this.log.error("Error processing client message", {
+        error: e instanceof Error ? e : String(e),
+      });
       this.safeSend(ws, {
         type: "error",
         code: "INVALID_MESSAGE",
@@ -619,7 +703,12 @@ export class SessionDO extends DurableObject<Env> {
   ): Promise<void> {
     // Validate the WebSocket auth token
     if (!data.token) {
-      console.log("[DO] WebSocket subscribe rejected: no token provided");
+      this.log.warn("ws.connect", {
+        event: "ws.connect",
+        ws_type: "client",
+        outcome: "auth_failed",
+        reject_reason: "no_token",
+      });
       ws.close(4001, "Authentication required");
       return;
     }
@@ -629,14 +718,24 @@ export class SessionDO extends DurableObject<Env> {
     const participant = this.getParticipantByWsTokenHash(tokenHash);
 
     if (!participant) {
-      console.log("[DO] WebSocket subscribe rejected: invalid token");
+      this.log.warn("ws.connect", {
+        event: "ws.connect",
+        ws_type: "client",
+        outcome: "auth_failed",
+        reject_reason: "invalid_token",
+      });
       ws.close(4001, "Invalid authentication token");
       return;
     }
 
-    console.log(
-      `[DO] WebSocket authenticated: participant=${participant.id}, user=${participant.user_id}`
-    );
+    this.log.info("ws.connect", {
+      event: "ws.connect",
+      ws_type: "client",
+      outcome: "success",
+      participant_id: participant.id,
+      user_id: participant.user_id,
+      client_id: data.clientId,
+    });
 
     // Build client info from participant data
     const clientInfo: ClientInfo = {
@@ -666,7 +765,7 @@ export class SessionDO extends DurableObject<Env> {
         clientId: data.clientId,
         createdAt: now,
       });
-      console.log(`[DO] Stored ws_client_mapping: wsId=${wsId}, participant=${participant.id}`);
+      this.log.debug("Stored ws_client_mapping", { ws_id: wsId, participant_id: participant.id });
     }
 
     // Set auto-response for ping/pong during hibernation
@@ -781,7 +880,7 @@ export class SessionDO extends DurableObject<Env> {
         const mapping = this.repository.getWsClientMapping(wsId);
 
         if (mapping) {
-          console.log(`[DO] Recovered client info from DB: wsId=${wsId}, user=${mapping.user_id}`);
+          this.log.info("Recovered client info from DB", { ws_id: wsId, user_id: mapping.user_id });
           client = {
             participantId: mapping.participant_id,
             userId: mapping.user_id,
@@ -798,7 +897,7 @@ export class SessionDO extends DurableObject<Env> {
       }
 
       // No mapping found - client must reconnect with valid auth
-      console.log("[DO] No client mapping found after hibernation, closing WebSocket");
+      this.log.warn("No client mapping found after hibernation, closing WebSocket");
       ws.close(4002, "Session expired, please reconnect");
       return null;
     }
@@ -842,7 +941,7 @@ export class SessionDO extends DurableObject<Env> {
       if (isValidModel(data.model)) {
         messageModel = data.model;
       } else {
-        console.log(`[DO] Invalid message model "${data.model}", ignoring override`);
+        this.log.warn("Invalid message model, ignoring override", { model: data.model });
       }
     }
 
@@ -860,6 +959,19 @@ export class SessionDO extends DurableObject<Env> {
 
     // Get queue position
     const position = this.repository.getPendingOrProcessingCount();
+
+    this.log.info("prompt.enqueue", {
+      event: "prompt.enqueue",
+      message_id: messageId,
+      source: "web",
+      author_id: participant.id,
+      user_id: client.userId,
+      model: messageModel,
+      content_length: data.content.length,
+      has_attachments: !!data.attachments?.length,
+      attachments_count: data.attachments?.length ?? 0,
+      queue_position: position,
+    });
 
     // Confirm to sender
     this.safeSend(ws, {
@@ -905,7 +1017,13 @@ export class SessionDO extends DurableObject<Env> {
    * Process sandbox event.
    */
   private async processSandboxEvent(event: SandboxEvent): Promise<void> {
-    console.log(`[DO] processSandboxEvent: type=${event.type}`);
+    // Heartbeats and token streams are high-frequency — keep at debug to avoid noise
+    // execution_complete is covered by the prompt.complete wide event below
+    if (event.type === "heartbeat" || event.type === "token") {
+      this.log.debug("Sandbox event", { event_type: event.type });
+    } else if (event.type !== "execution_complete") {
+      this.log.info("Sandbox event", { event_type: event.type });
+    }
     const now = Date.now();
     const eventId = generateId();
 
@@ -934,13 +1052,37 @@ export class SessionDO extends DurableObject<Env> {
       if (completionMessageId) {
         this.repository.updateMessageCompletion(completionMessageId, status, now);
 
+        // Emit prompt.complete wide event with duration metrics
+        const timestamps = this.repository.getMessageTimestamps(completionMessageId);
+        const totalDurationMs = timestamps ? now - timestamps.created_at : undefined;
+        const processingDurationMs =
+          timestamps?.started_at != null ? now - timestamps.started_at : undefined;
+        const queueDurationMs =
+          timestamps?.started_at != null
+            ? timestamps.started_at - timestamps.created_at
+            : undefined;
+
+        this.log.info("prompt.complete", {
+          event: "prompt.complete",
+          message_id: completionMessageId,
+          outcome: event.success ? "success" : "failure",
+          message_status: status,
+          total_duration_ms: totalDurationMs,
+          processing_duration_ms: processingDurationMs,
+          queue_duration_ms: queueDurationMs,
+        });
+
         // Broadcast processing status change (after DB update so getIsProcessing is accurate)
         this.broadcast({ type: "processing_status", isProcessing: this.getIsProcessing() });
 
         // Notify slack-bot of completion (fire-and-forget with retry)
         this.ctx.waitUntil(this.notifySlackBot(completionMessageId, event.success));
       } else {
-        console.error("[DO] execution_complete: no messageId available for status update");
+        this.log.warn("prompt.complete", {
+          event: "prompt.complete",
+          outcome: "error",
+          error_reason: "no_message_id",
+        });
       }
 
       // Take snapshot after execution completes (per Ramp spec)
@@ -995,7 +1137,7 @@ export class SessionDO extends DurableObject<Env> {
 
     if (!sandboxWs) {
       // No sandbox connected - user may have already pushed manually
-      console.log("[DO] No sandbox connected, assuming branch was pushed manually");
+      this.log.info("No sandbox connected, assuming branch was pushed manually");
       return { success: true };
     }
 
@@ -1019,7 +1161,7 @@ export class SessionDO extends DurableObject<Env> {
     // Tell sandbox to push the current branch
     // Pass GitHub App token for authentication (sandbox uses for git push)
     // User's OAuth token is NOT sent to sandbox - only used server-side for PR API
-    console.log(`[DO] Sending push command for branch ${branchName}`);
+    this.log.info("Sending push command", { branch_name: branchName });
     this.safeSend(sandboxWs, {
       type: "push",
       branchName,
@@ -1031,10 +1173,13 @@ export class SessionDO extends DurableObject<Env> {
     // Wait for push_complete or push_error event
     try {
       await pushPromise;
-      console.log(`[DO] Push completed successfully for branch ${branchName}`);
+      this.log.info("Push completed successfully", { branch_name: branchName });
       return { success: true };
     } catch (pushError) {
-      console.error(`[DO] Push failed: ${pushError}`);
+      this.log.error("Push failed", {
+        branch_name: branchName,
+        error: pushError instanceof Error ? pushError : String(pushError),
+      });
       return { success: false, error: `Failed to push branch: ${pushError}` };
     } finally {
       // Clean up timeout to prevent memory leaks
@@ -1063,14 +1208,14 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     if (event.type === "push_complete") {
-      console.log(
-        `[DO] push_complete event: branchName=${branchName}, pendingResolvers=${Array.from(this.pendingPushResolvers.keys()).join(",")}`
-      );
-      console.log(`[DO] Push completed for branch ${branchName}, resolving promise`);
+      this.log.info("Push completed, resolving promise", {
+        branch_name: branchName,
+        pending_resolvers: Array.from(this.pendingPushResolvers.keys()),
+      });
       resolver.resolve();
     } else if (event.type === "push_error") {
       const error = (event as { error?: string }).error || "Push failed";
-      console.log(`[DO] Push failed for branch ${branchName}: ${error}`);
+      this.log.warn("Push failed for branch", { branch_name: branchName, error });
       resolver.reject(new Error(error));
     }
 
@@ -1101,14 +1246,15 @@ export class SessionDO extends DurableObject<Env> {
           if (sidTag) {
             const tagSandboxId = sidTag.replace("sid:", "");
             if (tagSandboxId !== expectedSandboxId) {
-              console.log(
-                `[DO] Skipping WS with wrong sandbox ID: ${tagSandboxId} (expected ${expectedSandboxId})`
-              );
+              this.log.debug("Skipping WS with wrong sandbox ID", {
+                tag_sandbox_id: tagSandboxId,
+                expected_sandbox_id: expectedSandboxId,
+              });
               continue;
             }
           }
         }
-        console.log("[DO] Recovered sandbox WebSocket from hibernation");
+        this.log.info("Recovered sandbox WebSocket from hibernation");
         this.sandboxWs = ws;
         return ws;
       }
@@ -1129,41 +1275,36 @@ export class SessionDO extends DurableObject<Env> {
    * Process message queue.
    */
   private async processMessageQueue(): Promise<void> {
-    console.log("processMessageQueue: start");
-
     // Check if already processing
     if (this.repository.getProcessingMessage()) {
-      console.log("processMessageQueue: already processing, returning");
+      this.log.debug("processMessageQueue: already processing, returning");
       return;
     }
 
     // Get next pending message
     const message = this.repository.getNextPendingMessage();
     if (!message) {
-      console.log("processMessageQueue: no pending messages");
       return;
     }
-    console.log("processMessageQueue: found message", message.id);
     const now = Date.now();
 
     // Check if sandbox is connected (with hibernation recovery)
     const sandboxWs = this.getSandboxWebSocket();
-    console.log("processMessageQueue: checking sandbox", {
-      hasSandboxWs: !!sandboxWs,
-      readyState: sandboxWs?.readyState,
-      OPEN: WebSocket.OPEN,
-    });
     if (!sandboxWs) {
       // No sandbox connected - spawn one if not already spawning
       // spawnSandbox has its own persisted status check
-      console.log("processMessageQueue: no sandbox, attempting spawn");
+      this.log.info("prompt.dispatch", {
+        event: "prompt.dispatch",
+        message_id: message.id,
+        outcome: "deferred",
+        reason: "no_sandbox",
+      });
       this.broadcast({ type: "sandbox_spawning" });
       await this.spawnSandbox();
       // Don't mark as processing yet - wait for sandbox to connect
       return;
     }
 
-    console.log("processMessageQueue: marking as processing");
     // Mark as processing
     this.repository.updateMessageToProcessing(message.id, now);
 
@@ -1174,19 +1315,18 @@ export class SessionDO extends DurableObject<Env> {
     this.updateLastActivity(now);
 
     // Get author info (use toArray since author may not exist in participants table)
-    console.log("processMessageQueue: getting author", message.author_id);
     const author = this.repository.getParticipantById(message.author_id);
-    console.log("processMessageQueue: author found", !!author);
 
     // Get session for default model
     const session = this.getSession();
 
     // Send to sandbox with model (per-message override or session default)
+    const resolvedModel = message.model || session?.model || "claude-haiku-4-5";
     const command: SandboxCommand = {
       type: "prompt",
       messageId: message.id,
       content: message.content,
-      model: message.model || session?.model || "claude-haiku-4-5",
+      model: resolvedModel,
       author: {
         userId: author?.user_id ?? "unknown",
         githubName: author?.github_name ?? null,
@@ -1195,9 +1335,21 @@ export class SessionDO extends DurableObject<Env> {
       attachments: message.attachments ? JSON.parse(message.attachments) : undefined,
     };
 
-    console.log("processMessageQueue: sending to sandbox");
-    this.safeSend(sandboxWs, command);
-    console.log("processMessageQueue: sent");
+    const sent = this.safeSend(sandboxWs, command);
+
+    this.log.info("prompt.dispatch", {
+      event: "prompt.dispatch",
+      message_id: message.id,
+      outcome: sent ? "sent" : "send_failed",
+      model: resolvedModel,
+      author_id: message.author_id,
+      user_id: author?.user_id ?? "unknown",
+      source: message.source,
+      has_sandbox_ws: true,
+      sandbox_ready_state: sandboxWs.readyState,
+      queue_wait_ms: now - message.created_at,
+      has_attachments: !!message.attachments,
+    });
   }
 
   /**
@@ -1317,7 +1469,7 @@ export class SessionDO extends DurableObject<Env> {
 
     const sandbox = this.getSandbox();
     if (!sandbox) {
-      console.log("[DO] Sandbox token verification failed: no sandbox");
+      this.log.warn("Sandbox token verification failed: no sandbox");
       return new Response(JSON.stringify({ valid: false, error: "No sandbox" }), {
         status: 404,
         headers: { "Content-Type": "application/json" },
@@ -1326,7 +1478,9 @@ export class SessionDO extends DurableObject<Env> {
 
     // Check if sandbox is in an active state
     if (sandbox.status === "stopped" || sandbox.status === "stale") {
-      console.log(`[DO] Sandbox token verification failed: sandbox is ${sandbox.status}`);
+      this.log.warn("Sandbox token verification failed: sandbox is stopped/stale", {
+        status: sandbox.status,
+      });
       return new Response(JSON.stringify({ valid: false, error: "Sandbox stopped" }), {
         status: 410,
         headers: { "Content-Type": "application/json" },
@@ -1335,14 +1489,14 @@ export class SessionDO extends DurableObject<Env> {
 
     // Validate the token
     if (body.token !== sandbox.auth_token) {
-      console.log("[DO] Sandbox token verification failed: token mismatch");
+      this.log.warn("Sandbox token verification failed: token mismatch");
       return new Response(JSON.stringify({ valid: false, error: "Invalid token" }), {
         status: 401,
         headers: { "Content-Type": "application/json" },
       });
     }
 
-    console.log("[DO] Sandbox token verified successfully");
+    this.log.info("Sandbox token verified successfully");
     return new Response(JSON.stringify({ valid: true }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
@@ -1417,13 +1571,13 @@ export class SessionDO extends DurableObject<Env> {
     // Safely query for callback context
     const message = this.repository.getMessageCallbackContext(messageId);
     if (!message?.callback_context) {
-      console.log(`[DO] No callback context for message ${messageId}, skipping notification`);
+      this.log.debug("No callback context for message, skipping notification", {
+        message_id: messageId,
+      });
       return;
     }
     if (!this.env.SLACK_BOT || !this.env.INTERNAL_CALLBACK_SECRET) {
-      console.log(
-        "[DO] SLACK_BOT or INTERNAL_CALLBACK_SECRET not configured, skipping notification"
-      );
+      this.log.debug("SLACK_BOT or INTERNAL_CALLBACK_SECRET not configured, skipping notification");
       return;
     }
 
@@ -1457,13 +1611,22 @@ export class SessionDO extends DurableObject<Env> {
         });
 
         if (response.ok) {
-          console.log(`[DO] Slack callback succeeded for message ${messageId}`);
+          this.log.info("Slack callback succeeded", { message_id: messageId });
           return;
         }
 
-        console.error(`[DO] Slack callback failed: ${response.status} ${await response.text()}`);
+        const responseText = await response.text();
+        this.log.error("Slack callback failed", {
+          message_id: messageId,
+          status: response.status,
+          response_text: responseText,
+        });
       } catch (e) {
-        console.error(`[DO] Slack callback attempt ${attempt + 1} failed:`, e);
+        this.log.error("Slack callback attempt failed", {
+          message_id: messageId,
+          attempt: attempt + 1,
+          error: e instanceof Error ? e : String(e),
+        });
       }
 
       // Wait before retry
@@ -1472,7 +1635,7 @@ export class SessionDO extends DurableObject<Env> {
       }
     }
 
-    console.error(`[DO] Failed to notify slack-bot after retries for message ${messageId}`);
+    this.log.error("Failed to notify slack-bot after retries", { message_id: messageId });
   }
 
   /**
@@ -1498,7 +1661,7 @@ export class SessionDO extends DurableObject<Env> {
     const processingMessage = this.repository.getProcessingMessageAuthor();
 
     if (!processingMessage) {
-      console.log("[DO] PR creation failed: no processing message found");
+      this.log.warn("PR creation failed: no processing message found");
       return {
         error: "No active prompt found. PR creation must be triggered by a user prompt.",
         status: 400,
@@ -1511,12 +1674,12 @@ export class SessionDO extends DurableObject<Env> {
     const participant = this.repository.getParticipantById(participantId);
 
     if (!participant) {
-      console.log(`[DO] PR creation failed: participant not found for id=${participantId}`);
+      this.log.warn("PR creation failed: participant not found", { participantId });
       return { error: "User not found. Please re-authenticate.", status: 401 };
     }
 
     if (!participant.github_access_token_encrypted) {
-      console.log(`[DO] PR creation failed: no GitHub token for user_id=${participant.user_id}`);
+      this.log.warn("PR creation failed: no GitHub token", { userId: participant.user_id });
       return {
         error:
           "Your GitHub token is not available for PR creation. Please reconnect to the session to re-authenticate.",
@@ -1525,9 +1688,7 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     if (this.isGitHubTokenExpired(participant)) {
-      console.log(
-        `[DO] PR creation failed: GitHub token expired for user_id=${participant.user_id}`
-      );
+      this.log.warn("PR creation failed: GitHub token expired", { userId: participant.user_id });
       return { error: "Your GitHub token has expired. Please re-authenticate.", status: 401 };
     }
 
@@ -1561,16 +1722,21 @@ export class SessionDO extends DurableObject<Env> {
       try {
         const { encryptToken } = await import("../auth/crypto");
         encryptedToken = await encryptToken(body.githubToken, this.env.TOKEN_ENCRYPTION_KEY);
-        console.log("[DO] Encrypted GitHub token for storage");
+        this.log.debug("Encrypted GitHub token for storage");
       } catch (err) {
-        console.error("[DO] Failed to encrypt GitHub token:", err);
+        this.log.error("Failed to encrypt GitHub token", {
+          error: err instanceof Error ? err : String(err),
+        });
       }
     }
 
     // Validate model name if provided
     const model = body.model && isValidModel(body.model) ? body.model : DEFAULT_MODEL;
     if (body.model && !isValidModel(body.model)) {
-      console.log(`[DO] Invalid model name "${body.model}", using default "${DEFAULT_MODEL}"`);
+      this.log.warn("Invalid model name, using default", {
+        requested_model: body.model,
+        default_model: DEFAULT_MODEL,
+      });
     }
 
     // Create session (store both internal ID and external name)
@@ -1610,7 +1776,7 @@ export class SessionDO extends DurableObject<Env> {
       joinedAt: now,
     });
 
-    console.log("[DO] Triggering sandbox spawn for new session");
+    this.log.info("Triggering sandbox spawn for new session");
     this.ctx.waitUntil(this.warmSandbox());
 
     return Response.json({ sessionId, status: "created" });
@@ -1651,7 +1817,6 @@ export class SessionDO extends DurableObject<Env> {
 
   private async handleEnqueuePrompt(request: Request): Promise<Response> {
     try {
-      console.log("handleEnqueuePrompt: start");
       const body = (await request.json()) as {
         content: string;
         authorId: string;
@@ -1665,30 +1830,16 @@ export class SessionDO extends DurableObject<Env> {
         };
       };
 
-      console.log("handleEnqueuePrompt: parsed body", {
-        content: body.content?.substring(0, 50),
-        authorId: body.authorId,
-        source: body.source,
-        hasCallbackContext: !!body.callbackContext,
-      });
-
       // Get or create participant for the author
       // The authorId here is a user ID (like "anonymous"), not a participant row ID
       let participant = this.getParticipantByUserId(body.authorId);
       if (!participant) {
-        console.log("handleEnqueuePrompt: creating participant for", body.authorId);
         participant = this.createParticipant(body.authorId, body.authorId);
       }
 
       const messageId = generateId();
       const now = Date.now();
 
-      console.log(
-        "handleEnqueuePrompt: inserting message",
-        messageId,
-        "with author",
-        participant.id
-      );
       this.repository.createMessage({
         id: messageId,
         authorId: participant.id, // Use the participant's row ID, not the user ID
@@ -1700,13 +1851,29 @@ export class SessionDO extends DurableObject<Env> {
         createdAt: now,
       });
 
-      console.log("handleEnqueuePrompt: message inserted, processing queue");
+      const queuePosition = this.repository.getPendingOrProcessingCount();
+
+      this.log.info("prompt.enqueue", {
+        event: "prompt.enqueue",
+        message_id: messageId,
+        source: body.source,
+        author_id: participant.id,
+        user_id: body.authorId,
+        model: null,
+        content_length: body.content.length,
+        has_attachments: !!body.attachments?.length,
+        attachments_count: body.attachments?.length ?? 0,
+        has_callback_context: !!body.callbackContext,
+        queue_position: queuePosition,
+      });
+
       await this.processMessageQueue();
 
-      console.log("handleEnqueuePrompt: done");
       return Response.json({ messageId, status: "queued" });
     } catch (error) {
-      console.error("handleEnqueuePrompt error:", error);
+      this.log.error("handleEnqueuePrompt error", {
+        error: error instanceof Error ? error : String(error),
+      });
       throw error;
     }
   }
@@ -1863,7 +2030,7 @@ export class SessionDO extends DurableObject<Env> {
       return Response.json({ error: promptingUser.error }, { status: promptingUser.status });
     }
 
-    console.log(`[DO] Creating PR as user: ${promptingUser.user.user_id}`);
+    this.log.info("Creating PR", { user_id: promptingUser.user.user_id });
 
     const user = promptingUser.user;
 
@@ -1888,9 +2055,11 @@ export class SessionDO extends DurableObject<Env> {
       if (appConfig) {
         try {
           pushToken = await generateInstallationToken(appConfig);
-          console.log("[DO] Generated fresh GitHub App token for push");
+          this.log.info("Generated fresh GitHub App token for push");
         } catch (err) {
-          console.error("[DO] Failed to generate app token, push may fail:", err);
+          this.log.error("Failed to generate app token, push may fail", {
+            error: err instanceof Error ? err : String(err),
+          });
         }
       }
 
@@ -1961,7 +2130,9 @@ export class SessionDO extends DurableObject<Env> {
         state: prResult.state,
       });
     } catch (error) {
-      console.error("[DO] PR creation failed:", error);
+      this.log.error("PR creation failed", {
+        error: error instanceof Error ? error : String(error),
+      });
       return Response.json(
         { error: error instanceof Error ? error.message : "Failed to create PR" },
         { status: 500 }
@@ -2035,7 +2206,7 @@ export class SessionDO extends DurableObject<Env> {
     // Store the hash (invalidates any previous token)
     this.repository.updateParticipantWsToken(participant.id, tokenHash, now);
 
-    console.log(`[DO] Generated WS token for participant ${participant.id} (user: ${body.userId})`);
+    this.log.info("Generated WS token", { participant_id: participant.id, user_id: body.userId });
 
     return Response.json({
       token: plainToken,

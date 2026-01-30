@@ -20,6 +20,10 @@ from pathlib import Path
 
 import httpx
 
+from .log_config import configure_logging, get_logger
+
+configure_logging()
+
 
 class SandboxSupervisor:
     """
@@ -63,6 +67,15 @@ class SandboxSupervisor:
         self.repo_path = self.workspace_path / self.repo_name
         self.session_id_file = Path("/tmp/opencode-session-id")
 
+        # Logger
+        session_id = self.session_config.get("session_id", "")
+        self.log = get_logger(
+            "supervisor",
+            service="sandbox",
+            sandbox_id=self.sandbox_id,
+            session_id=session_id,
+        )
+
     async def perform_git_sync(self) -> bool:
         """
         Clone repository if needed, then synchronize with latest changes.
@@ -70,33 +83,33 @@ class SandboxSupervisor:
         Returns:
             True if sync completed successfully, False otherwise
         """
-        # Debug: Print all relevant environment variables
-        print("[supervisor] Git sync environment:")
-        print(f"[supervisor]   REPO_OWNER={self.repo_owner!r}")
-        print(f"[supervisor]   REPO_NAME={self.repo_name!r}")
-        print(f"[supervisor]   repo_path={self.repo_path}")
-        print(f"[supervisor]   SESSION_CONFIG={os.environ.get('SESSION_CONFIG', 'NOT SET')}")
-        print(
-            f"[supervisor]   GITHUB_APP_TOKEN={'<set>' if self.github_app_token else '<not set>'}"
+        self.log.debug(
+            "git.sync_start",
+            repo_owner=self.repo_owner,
+            repo_name=self.repo_name,
+            repo_path=str(self.repo_path),
+            has_github_token=bool(self.github_app_token),
         )
-        print(f"[supervisor] Starting git sync for {self.repo_owner}/{self.repo_name}")
 
         # Clone the repository if it doesn't exist
         if not self.repo_path.exists():
-            print(f"[supervisor] Repository not found at {self.repo_path}, cloning...")
-
             if not self.repo_owner or not self.repo_name:
-                print("[supervisor] No repository configured, skipping clone")
+                self.log.info("git.skip_clone", reason="no_repo_configured")
                 self.git_sync_complete.set()
                 return True
+
+            self.log.info(
+                "git.clone_start",
+                repo_owner=self.repo_owner,
+                repo_name=self.repo_name,
+                authenticated=bool(self.github_app_token),
+            )
 
             # Use authenticated URL if GitHub App token is available
             if self.github_app_token:
                 clone_url = f"https://x-access-token:{self.github_app_token}@github.com/{self.repo_owner}/{self.repo_name}.git"
-                print("[supervisor] Cloning from authenticated URL (token hidden)")
             else:
                 clone_url = f"https://github.com/{self.repo_owner}/{self.repo_name}.git"
-                print(f"[supervisor] Cloning from {clone_url} (no auth token)")
 
             result = await asyncio.create_subprocess_exec(
                 "git",
@@ -111,11 +124,15 @@ class SandboxSupervisor:
             stdout, stderr = await result.communicate()
 
             if result.returncode != 0:
-                print(f"[supervisor] Git clone failed: {stderr.decode()}")
+                self.log.error(
+                    "git.clone_error",
+                    stderr=stderr.decode(),
+                    exit_code=result.returncode,
+                )
                 self.git_sync_complete.set()
                 return False
 
-            print(f"[supervisor] Repository cloned successfully to {self.repo_path}")
+            self.log.info("git.clone_complete", repo_path=str(self.repo_path))
 
         try:
             # Configure remote URL with auth token if available
@@ -131,7 +148,6 @@ class SandboxSupervisor:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                print("[supervisor] Configured remote with auth token")
 
             # Fetch latest changes
             result = await asyncio.create_subprocess_exec(
@@ -146,7 +162,11 @@ class SandboxSupervisor:
 
             if result.returncode != 0:
                 stderr = await result.stderr.read() if result.stderr else b""
-                print(f"[supervisor] Git fetch failed: {stderr.decode()}")
+                self.log.error(
+                    "git.fetch_error",
+                    stderr=stderr.decode(),
+                    exit_code=result.returncode,
+                )
                 return False
 
             # Get the base branch (default to main)
@@ -176,8 +196,7 @@ class SandboxSupervisor:
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
                     )
-                    print("[supervisor] Git rebase aborted")
-                print("[supervisor] Git rebase failed, continuing with current state")
+                self.log.warn("git.rebase_error", base_branch=base_branch)
 
             # Get current SHA
             result = await asyncio.create_subprocess_exec(
@@ -189,19 +208,19 @@ class SandboxSupervisor:
             )
             stdout, _ = await result.communicate()
             current_sha = stdout.decode().strip()
-            print(f"[supervisor] Git sync complete, HEAD: {current_sha}")
+            self.log.info("git.sync_complete", head_sha=current_sha)
 
             self.git_sync_complete.set()
             return True
 
         except Exception as e:
-            print(f"[supervisor] Git sync error: {e}")
+            self.log.error("git.sync_error", exc=e)
             self.git_sync_complete.set()  # Allow agent to proceed anyway
             return False
 
     async def start_opencode(self) -> None:
         """Start OpenCode server with configuration."""
-        print("[supervisor] Starting OpenCode server...")
+        self.log.info("opencode.start")
 
         # Build OpenCode config from session settings
         # Model format is "provider/model", e.g. "anthropic/claude-sonnet-4-5"
@@ -209,15 +228,17 @@ class SandboxSupervisor:
         model = self.session_config.get("model", "claude-sonnet-4-5")
         opencode_config = {
             "model": f"{provider}/{model}",
+            "permission": {
+                "*": {
+                    "*": "allow",
+                },
+            },
         }
 
         # Determine working directory - use repo path if cloned, otherwise /workspace
         workdir = self.workspace_path
         if self.repo_path.exists() and (self.repo_path / ".git").exists():
             workdir = self.repo_path
-            print(f"[supervisor] Using repo directory as workdir: {workdir}")
-        else:
-            print(f"[supervisor] Repo not found, using workspace: {workdir}")
 
         # Set up .opencode directory for custom tools
         opencode_dir = workdir / ".opencode"
@@ -228,7 +249,6 @@ class SandboxSupervisor:
             # Create .opencode/tool directory
             tool_dest.mkdir(parents=True, exist_ok=True)
             shutil.copy(tool_source, tool_dest / "create-pull-request.js")
-            print("[supervisor] Copied create-pull-request tool")
 
             # Create node_modules symlink to global modules so OpenCode doesn't try to install
             # and so imports resolve correctly via NODE_PATH
@@ -237,9 +257,8 @@ class SandboxSupervisor:
             if not node_modules.exists() and global_modules.exists():
                 try:
                     node_modules.symlink_to(global_modules)
-                    print("[supervisor] Symlinked .opencode/node_modules to global modules")
                 except Exception as e:
-                    print(f"[supervisor] Warning: Could not symlink node_modules: {e}")
+                    self.log.warn("opencode.symlink_error", exc=e)
 
             # Create a minimal package.json so OpenCode sees this as a configured directory
             package_json = opencode_dir / "package.json"
@@ -272,7 +291,7 @@ class SandboxSupervisor:
         # Wait for health check
         await self._wait_for_health()
         self.opencode_ready.set()
-        print("[supervisor] OpenCode server is ready")
+        self.log.info("opencode.ready")
 
     async def _forward_opencode_logs(self) -> None:
         """Forward OpenCode stdout to supervisor stdout."""
@@ -302,7 +321,7 @@ class SandboxSupervisor:
                 except httpx.ConnectError:
                     pass
                 except Exception as e:
-                    print(f"[supervisor] Health check error: {e}")
+                    self.log.debug("opencode.health_check_error", exc=e)
 
                 await asyncio.sleep(0.5)
 
@@ -310,10 +329,10 @@ class SandboxSupervisor:
 
     async def start_bridge(self) -> None:
         """Start the agent bridge process."""
-        print("[supervisor] Starting bridge process...")
+        self.log.info("bridge.start")
 
         if not self.control_plane_url:
-            print("[supervisor] No control plane URL, skipping bridge")
+            self.log.info("bridge.skip", reason="no_control_plane_url")
             return
 
         # Wait for OpenCode to be ready
@@ -322,7 +341,8 @@ class SandboxSupervisor:
         # Get session_id from config (required for WebSocket connection)
         session_id = self.session_config.get("session_id", "")
         if not session_id:
-            print("[supervisor] Warning: No session_id in config, bridge may fail to connect")
+            self.log.info("bridge.skip", reason="no_session_id")
+            return
 
         # Run bridge as a module (works with relative imports)
         self.bridge_process = await asyncio.create_subprocess_exec(
@@ -346,18 +366,22 @@ class SandboxSupervisor:
 
         # Start log forwarder for bridge
         asyncio.create_task(self._forward_bridge_logs())
-        print("[supervisor] Bridge process started")
+        self.log.info("bridge.started")
 
-        # Check if bridge crashed immediately during startup
+        # Check if bridge exited immediately during startup
         await asyncio.sleep(0.5)
         if self.bridge_process.returncode is not None:
+            exit_code = self.bridge_process.returncode
             # Bridge exited immediately - read any error output
             stdout, _ = await self.bridge_process.communicate()
-            print(
-                f"[supervisor] Bridge crashed on startup! Exit code: {self.bridge_process.returncode}"
-            )
-            if stdout:
-                print(f"[supervisor] Bridge output: {stdout.decode()}")
+            if exit_code == 0:
+                self.log.warn("bridge.early_exit", exit_code=exit_code)
+            else:
+                self.log.error(
+                    "bridge.startup_crash",
+                    exit_code=exit_code,
+                    output=stdout.decode() if stdout else "",
+                )
 
     async def _forward_bridge_logs(self) -> None:
         """Forward bridge stdout to supervisor stdout."""
@@ -374,6 +398,7 @@ class SandboxSupervisor:
     async def monitor_processes(self) -> None:
         """Monitor child processes and restart on crash."""
         restart_count = 0
+        bridge_restart_count = 0
 
         while not self.shutdown_event.is_set():
             # Check OpenCode process
@@ -381,12 +406,17 @@ class SandboxSupervisor:
                 exit_code = self.opencode_process.returncode
                 restart_count += 1
 
-                print(
-                    f"[supervisor] OpenCode crashed (exit code: {exit_code}, restart #{restart_count})"
+                self.log.error(
+                    "opencode.crash",
+                    exit_code=exit_code,
+                    restart_count=restart_count,
                 )
 
                 if restart_count > self.MAX_RESTARTS:
-                    print("[supervisor] Max restarts exceeded, shutting down")
+                    self.log.error(
+                        "opencode.max_restarts",
+                        restart_count=restart_count,
+                    )
                     await self._report_fatal_error(
                         f"OpenCode crashed {restart_count} times, giving up"
                     )
@@ -395,7 +425,11 @@ class SandboxSupervisor:
 
                 # Exponential backoff
                 delay = min(self.BACKOFF_BASE**restart_count, self.BACKOFF_MAX)
-                print(f"[supervisor] Restarting OpenCode in {delay:.1f}s...")
+                self.log.info(
+                    "opencode.restart",
+                    delay_s=round(delay, 1),
+                    restart_count=restart_count,
+                )
 
                 await asyncio.sleep(delay)
                 self.opencode_ready.clear()
@@ -404,14 +438,50 @@ class SandboxSupervisor:
             # Check bridge process
             if self.bridge_process and self.bridge_process.returncode is not None:
                 exit_code = self.bridge_process.returncode
-                print(f"[supervisor] Bridge exited (exit code: {exit_code}), restarting...")
-                await self.start_bridge()
+
+                if exit_code == 0:
+                    # Graceful exit: shutdown command, session terminated, or fatal
+                    # connection error. Propagate shutdown rather than restarting.
+                    self.log.info(
+                        "bridge.graceful_exit",
+                        exit_code=exit_code,
+                    )
+                    self.shutdown_event.set()
+                    break
+                else:
+                    # Crash: restart with backoff and retry limit
+                    bridge_restart_count += 1
+                    self.log.error(
+                        "bridge.crash",
+                        exit_code=exit_code,
+                        restart_count=bridge_restart_count,
+                    )
+
+                    if bridge_restart_count > self.MAX_RESTARTS:
+                        self.log.error(
+                            "bridge.max_restarts",
+                            restart_count=bridge_restart_count,
+                        )
+                        await self._report_fatal_error(
+                            f"Bridge crashed {bridge_restart_count} times, giving up"
+                        )
+                        self.shutdown_event.set()
+                        break
+
+                    delay = min(self.BACKOFF_BASE**bridge_restart_count, self.BACKOFF_MAX)
+                    self.log.info(
+                        "bridge.restart",
+                        delay_s=round(delay, 1),
+                        restart_count=bridge_restart_count,
+                    )
+                    await asyncio.sleep(delay)
+                    await self.start_bridge()
 
             await asyncio.sleep(1.0)
 
     async def _report_fatal_error(self, message: str) -> None:
         """Report a fatal error to the control plane."""
-        print(f"[supervisor] FATAL: {message}")
+        self.log.error("supervisor.fatal", message=message)
 
         if not self.control_plane_url:
             return
@@ -425,7 +495,7 @@ class SandboxSupervisor:
                     timeout=5.0,
                 )
         except Exception as e:
-            print(f"[supervisor] Failed to report error: {e}")
+            self.log.error("supervisor.report_error_failed", exc=e)
 
     async def configure_git_identity(self) -> None:
         """Configure git identity from session owner."""
@@ -450,9 +520,13 @@ class SandboxSupervisor:
                 git_user["email"],
                 cwd=self.repo_path,
             )
-            print(f"[supervisor] Git identity configured: {git_user['name']} <{git_user['email']}>")
+            self.log.info(
+                "git.identity_configured",
+                git_name=git_user["name"],
+                git_email=git_user["email"],
+            )
         except Exception as e:
-            print(f"[supervisor] Failed to configure git identity: {e}")
+            self.log.error("git.identity_error", exc=e)
 
     async def _quick_git_fetch(self) -> None:
         """
@@ -462,7 +536,7 @@ class SandboxSupervisor:
         This just checks if the remote has new commits since the snapshot.
         """
         if not self.repo_path.exists():
-            print("[supervisor] No repo path, skipping quick git fetch")
+            self.log.info("git.quick_fetch_skip", reason="no_repo_path")
             return
 
         try:
@@ -479,7 +553,6 @@ class SandboxSupervisor:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                print("[supervisor] Configured remote with auth token for quick fetch")
 
             # Fetch from origin
             result = await asyncio.create_subprocess_exec(
@@ -494,7 +567,11 @@ class SandboxSupervisor:
             stdout, stderr = await result.communicate()
 
             if result.returncode != 0:
-                print(f"[supervisor] Quick git fetch failed: {stderr.decode()}")
+                self.log.warn(
+                    "git.quick_fetch_error",
+                    stderr=stderr.decode(),
+                    exit_code=result.returncode,
+                )
                 return
 
             # Check if we're behind the remote
@@ -525,60 +602,78 @@ class SandboxSupervisor:
 
             if result.returncode == 0:
                 commits_behind = int(stdout.decode().strip() or "0")
-                if commits_behind > 0:
-                    print(
-                        f"[supervisor] Snapshot is {commits_behind} commits behind origin/{current_branch}"
-                    )
-                    print("[supervisor] Note: Not auto-rebasing to preserve snapshot state")
-                else:
-                    print("[supervisor] Snapshot is up to date with remote")
+                self.log.info(
+                    "git.snapshot_status",
+                    commits_behind=commits_behind,
+                    current_branch=current_branch,
+                )
             else:
-                print("[supervisor] Could not check commits behind (may not have upstream)")
+                self.log.debug("git.snapshot_status_unknown", reason="no_upstream")
 
         except Exception as e:
-            print(f"[supervisor] Quick git fetch error: {e}")
+            self.log.error("git.quick_fetch_error", exc=e)
 
     async def run(self) -> None:
         """Main supervisor loop."""
-        print(f"[supervisor] Starting sandbox {self.sandbox_id}")
-        print(f"[supervisor] Repository: {self.repo_owner}/{self.repo_name}")
+        startup_start = time.time()
+
+        self.log.info(
+            "supervisor.start",
+            repo_owner=self.repo_owner,
+            repo_name=self.repo_name,
+        )
 
         # Check if restored from snapshot
         restored_from_snapshot = os.environ.get("RESTORED_FROM_SNAPSHOT") == "true"
         if restored_from_snapshot:
-            print("[supervisor] Restored from snapshot, will skip full git sync")
+            self.log.info("supervisor.restored_from_snapshot")
 
         # Set up signal handlers
         loop = asyncio.get_event_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self._handle_signal(s)))
 
+        git_sync_success = False
+        opencode_ready = False
         try:
             # Phase 1: Git sync
             if restored_from_snapshot:
                 # Restored from snapshot - just do a quick fetch to check for updates
-                print("[supervisor] Restored from snapshot, performing quick git fetch")
                 await self._quick_git_fetch()
                 self.git_sync_complete.set()
+                git_sync_success = True
             else:
                 # Fresh sandbox - full git clone and sync
-                await self.perform_git_sync()
+                git_sync_success = await self.perform_git_sync()
 
             # Phase 2: Configure git identity (if repo was cloned)
             await self.configure_git_identity()
 
             # Phase 3: Start OpenCode server (in repo directory)
             await self.start_opencode()
+            opencode_ready = True
 
             # Phase 4: Start bridge (after OpenCode is ready)
             await self.start_bridge()
 
+            # Emit sandbox.startup wide event
+            duration_ms = int((time.time() - startup_start) * 1000)
+            self.log.info(
+                "sandbox.startup",
+                repo_owner=self.repo_owner,
+                repo_name=self.repo_name,
+                restored_from_snapshot=restored_from_snapshot,
+                git_sync_success=git_sync_success,
+                opencode_ready=opencode_ready,
+                duration_ms=duration_ms,
+                outcome="success",
+            )
+
             # Phase 5: Monitor processes
-            print("[supervisor] Entering monitor_processes loop")
             await self.monitor_processes()
 
         except Exception as e:
-            print(f"[supervisor] Error: {e}")
+            self.log.error("supervisor.error", exc=e)
             await self._report_fatal_error(str(e))
 
         finally:
@@ -586,19 +681,15 @@ class SandboxSupervisor:
 
     async def _handle_signal(self, sig: signal.Signals) -> None:
         """Handle shutdown signal."""
-        import traceback
-
-        print(f"[supervisor] Received signal {sig.name}, shutting down...")
-        print(f"[supervisor] Signal received from: {traceback.format_stack()[-3]}")
+        self.log.info("supervisor.signal", signal_name=sig.name)
         self.shutdown_event.set()
 
     async def shutdown(self) -> None:
         """Graceful shutdown of all processes."""
-        print("[supervisor] Shutting down...")
+        self.log.info("supervisor.shutdown_start")
 
         # Terminate bridge first
         if self.bridge_process and self.bridge_process.returncode is None:
-            print("[supervisor] Terminating bridge...")
             self.bridge_process.terminate()
             try:
                 await asyncio.wait_for(self.bridge_process.wait(), timeout=5.0)
@@ -607,14 +698,13 @@ class SandboxSupervisor:
 
         # Terminate OpenCode
         if self.opencode_process and self.opencode_process.returncode is None:
-            print("[supervisor] Terminating OpenCode...")
             self.opencode_process.terminate()
             try:
                 await asyncio.wait_for(self.opencode_process.wait(), timeout=10.0)
             except TimeoutError:
                 self.opencode_process.kill()
 
-        print("[supervisor] Shutdown complete")
+        self.log.info("supervisor.shutdown_complete")
 
 
 async def main():

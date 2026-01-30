@@ -487,6 +487,17 @@ export class SessionRepository {
     );
   }
 
+  getMessageTimestamps(
+    messageId: string
+  ): { created_at: number; started_at: number | null } | null {
+    const result = this.sql.exec(
+      `SELECT created_at, started_at FROM messages WHERE id = ?`,
+      messageId
+    );
+    const rows = result.toArray() as Array<{ created_at: number; started_at: number | null }>;
+    return rows[0] ?? null;
+  }
+
   listMessages(options: ListMessagesOptions): MessageRow[] {
     // WHERE 1=1 allows appending AND clauses unconditionally
     let query = `SELECT * FROM messages WHERE 1=1`;

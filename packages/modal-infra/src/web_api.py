@@ -12,6 +12,7 @@ The control plane must include an Authorization header with a valid token.
 """
 
 import os
+import time
 
 from fastapi import Header, HTTPException
 from modal import fastapi_endpoint
@@ -25,6 +26,10 @@ from .app import (
     validate_control_plane_url,
 )
 from .auth.internal import AuthConfigurationError, verify_internal_token
+from .log_config import configure_logging, get_logger
+
+configure_logging()
+log = get_logger("web_api")
 
 
 def require_auth(authorization: str | None) -> None:
@@ -77,6 +82,10 @@ def require_valid_control_plane_url(url: str | None) -> None:
 async def api_create_sandbox(
     request: dict,
     authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+    x_session_id: str | None = Header(None),
+    x_sandbox_id: str | None = Header(None),
 ) -> dict:
     """
     HTTP endpoint to create a sandbox.
@@ -98,6 +107,10 @@ async def api_create_sandbox(
         "model": "claude-sonnet-4-5"
     }
     """
+    start_time = time.time()
+    http_status = 200
+    outcome = "success"
+
     require_auth(authorization)
 
     control_plane_url = request.get("control_plane_url")
@@ -124,9 +137,8 @@ async def api_create_sandbox(
                     private_key=private_key,
                     installation_id=installation_id,
                 )
-                print("[web_api] Generated GitHub App token for sandbox")
         except Exception as e:
-            print(f"[web_api] Warning: Failed to generate GitHub App token: {e}")
+            log.warn("github.token_error", exc=e)
 
         # Build session config
         git_user = None
@@ -168,10 +180,25 @@ async def api_create_sandbox(
             },
         }
     except Exception as e:
-        import traceback
-
-        traceback.print_exc()
+        outcome = "error"
+        http_status = 500
+        log.error("api.error", exc=e, endpoint_name="api_create_sandbox")
         return {"success": False, "error": str(e)}
+    finally:
+        duration_ms = int((time.time() - start_time) * 1000)
+        log.info(
+            "modal.http_request",
+            http_method="POST",
+            http_path="/api_create_sandbox",
+            http_status=http_status,
+            duration_ms=duration_ms,
+            outcome=outcome,
+            endpoint_name="api_create_sandbox",
+            trace_id=x_trace_id,
+            request_id=x_request_id,
+            session_id=x_session_id,
+            sandbox_id=x_sandbox_id,
+        )
 
 
 @app.function(
@@ -183,6 +210,10 @@ async def api_create_sandbox(
 async def api_warm_sandbox(
     request: dict,
     authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+    x_session_id: str | None = Header(None),
+    x_sandbox_id: str | None = Header(None),
 ) -> dict:
     """
     HTTP endpoint to warm a sandbox.
@@ -196,6 +227,10 @@ async def api_warm_sandbox(
         "control_plane_url": "..."
     }
     """
+    start_time = time.time()
+    http_status = 200
+    outcome = "success"
+
     require_auth(authorization)
 
     control_plane_url = request.get("control_plane_url", "")
@@ -219,10 +254,25 @@ async def api_warm_sandbox(
             },
         }
     except Exception as e:
-        import traceback
-
-        traceback.print_exc()
+        outcome = "error"
+        http_status = 500
+        log.error("api.error", exc=e, endpoint_name="api_warm_sandbox")
         return {"success": False, "error": str(e)}
+    finally:
+        duration_ms = int((time.time() - start_time) * 1000)
+        log.info(
+            "modal.http_request",
+            http_method="POST",
+            http_path="/api_warm_sandbox",
+            http_status=http_status,
+            duration_ms=duration_ms,
+            outcome=outcome,
+            endpoint_name="api_warm_sandbox",
+            trace_id=x_trace_id,
+            request_id=x_request_id,
+            session_id=x_session_id,
+            sandbox_id=x_sandbox_id,
+        )
 
 
 @app.function(image=function_image)
@@ -242,6 +292,10 @@ def api_snapshot(
     repo_owner: str,
     repo_name: str,
     authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+    x_session_id: str | None = Header(None),
+    x_sandbox_id: str | None = Header(None),
 ) -> dict:
     """
     Get latest snapshot for a repository.
@@ -250,6 +304,10 @@ def api_snapshot(
 
     Query params: ?repo_owner=...&repo_name=...
     """
+    start_time = time.time()
+    http_status = 200
+    outcome = "success"
+
     require_auth(authorization)
 
     try:
@@ -262,10 +320,25 @@ def api_snapshot(
             return {"success": True, "data": snapshot.model_dump()}
         return {"success": True, "data": None}
     except Exception as e:
-        import traceback
-
-        traceback.print_exc()
+        outcome = "error"
+        http_status = 500
+        log.error("api.error", exc=e, endpoint_name="api_snapshot")
         return {"success": False, "error": str(e)}
+    finally:
+        duration_ms = int((time.time() - start_time) * 1000)
+        log.info(
+            "modal.http_request",
+            http_method="GET",
+            http_path="/api_snapshot",
+            http_status=http_status,
+            duration_ms=duration_ms,
+            outcome=outcome,
+            endpoint_name="api_snapshot",
+            trace_id=x_trace_id,
+            request_id=x_request_id,
+            session_id=x_session_id,
+            sandbox_id=x_sandbox_id,
+        )
 
 
 @app.function(image=function_image, secrets=[internal_api_secret])
@@ -273,6 +346,10 @@ def api_snapshot(
 async def api_snapshot_sandbox(
     request: dict,
     authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+    x_session_id: str | None = Header(None),
+    x_sandbox_id: str | None = Header(None),
 ) -> dict:
     """
     Take a filesystem snapshot of a running sandbox using Modal's native API.
@@ -301,6 +378,10 @@ async def api_snapshot_sandbox(
         }
     }
     """
+    start_time = time.time()
+    http_status = 200
+    outcome = "success"
+
     require_auth(authorization)
 
     sandbox_id = request.get("sandbox_id")
@@ -323,8 +404,6 @@ async def api_snapshot_sandbox(
         # Take filesystem snapshot using Modal's native API (sync method)
         image_id = manager.take_snapshot(handle)
 
-        print(f"[web_api] Snapshot taken: sandbox={sandbox_id}, image={image_id}, reason={reason}")
-
         return {
             "success": True,
             "data": {
@@ -334,13 +413,30 @@ async def api_snapshot_sandbox(
                 "reason": reason,
             },
         }
-    except HTTPException:
+    except HTTPException as e:
+        outcome = "error"
+        http_status = e.status_code
         raise
     except Exception as e:
-        import traceback
-
-        traceback.print_exc()
+        outcome = "error"
+        http_status = 500
+        log.error("api.error", exc=e, endpoint_name="api_snapshot_sandbox")
         return {"success": False, "error": str(e)}
+    finally:
+        duration_ms = int((time.time() - start_time) * 1000)
+        log.info(
+            "modal.http_request",
+            http_method="POST",
+            http_path="/api_snapshot_sandbox",
+            http_status=http_status,
+            duration_ms=duration_ms,
+            outcome=outcome,
+            endpoint_name="api_snapshot_sandbox",
+            trace_id=x_trace_id,
+            request_id=x_request_id,
+            session_id=x_session_id,
+            sandbox_id=x_sandbox_id or sandbox_id,
+        )
 
 
 @app.function(image=function_image, secrets=[github_app_secrets, internal_api_secret])
@@ -348,6 +444,10 @@ async def api_snapshot_sandbox(
 async def api_restore_sandbox(
     request: dict,
     authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+    x_session_id: str | None = Header(None),
+    x_sandbox_id: str | None = Header(None),
 ) -> dict:
     """
     Create a new sandbox from a filesystem snapshot.
@@ -382,6 +482,10 @@ async def api_restore_sandbox(
         }
     }
     """
+    start_time = time.time()
+    http_status = 200
+    outcome = "success"
+
     require_auth(authorization)
 
     control_plane_url = request.get("control_plane_url", "")
@@ -409,8 +513,6 @@ async def api_restore_sandbox(
             sandbox_auth_token=sandbox_auth_token,
         )
 
-        print(f"[web_api] Sandbox restored: {handle.sandbox_id} from image {snapshot_image_id}")
-
         return {
             "success": True,
             "data": {
@@ -418,10 +520,27 @@ async def api_restore_sandbox(
                 "status": handle.status.value,
             },
         }
-    except HTTPException:
+    except HTTPException as e:
+        outcome = "error"
+        http_status = e.status_code
         raise
     except Exception as e:
-        import traceback
-
-        traceback.print_exc()
+        outcome = "error"
+        http_status = 500
+        log.error("api.error", exc=e, endpoint_name="api_restore_sandbox")
         return {"success": False, "error": str(e)}
+    finally:
+        duration_ms = int((time.time() - start_time) * 1000)
+        log.info(
+            "modal.http_request",
+            http_method="POST",
+            http_path="/api_restore_sandbox",
+            http_status=http_status,
+            duration_ms=duration_ms,
+            outcome=outcome,
+            endpoint_name="api_restore_sandbox",
+            trace_id=x_trace_id,
+            request_id=x_request_id,
+            session_id=x_session_id,
+            sandbox_id=x_sandbox_id,
+        )
