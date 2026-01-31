@@ -28,6 +28,7 @@ interface SandboxEvent {
   callId?: string;
   result?: string;
   error?: string;
+  success?: boolean;
   status?: string;
   sha?: string;
   timestamp: number;
