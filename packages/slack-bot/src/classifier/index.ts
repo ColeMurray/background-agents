@@ -8,6 +8,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Env, RepoConfig, ThreadContext, ClassificationResult } from "../types";
 import { getAvailableRepos, buildRepoDescriptions, getReposByChannel } from "./repos";
+import { createLogger } from "../logger";
+
+const log = createLogger("classifier");
 
 /**
  * Build the classification prompt for the LLM.
@@ -15,9 +18,10 @@ import { getAvailableRepos, buildRepoDescriptions, getReposByChannel } from "./r
 async function buildClassificationPrompt(
   env: Env,
   message: string,
-  context?: ThreadContext
+  context?: ThreadContext,
+  traceId?: string
 ): Promise<string> {
-  const repoDescriptions = await buildRepoDescriptions(env);
+  const repoDescriptions = await buildRepoDescriptions(env, traceId);
 
   let contextSection = "";
 
@@ -103,9 +107,13 @@ export class RepoClassifier {
   /**
    * Classify which repository a message refers to.
    */
-  async classify(message: string, context?: ThreadContext): Promise<ClassificationResult> {
+  async classify(
+    message: string,
+    context?: ThreadContext,
+    traceId?: string
+  ): Promise<ClassificationResult> {
     // Fetch available repos dynamically
-    const repos = await getAvailableRepos(this.env);
+    const repos = await getAvailableRepos(this.env, traceId);
 
     // If no repos available, return immediately
     if (repos.length === 0) {
@@ -129,7 +137,7 @@ export class RepoClassifier {
 
     // Check for channel-specific repos first
     if (context?.channelId) {
-      const channelRepos = await getReposByChannel(this.env, context.channelId);
+      const channelRepos = await getReposByChannel(this.env, context.channelId, traceId);
       if (channelRepos.length === 1) {
         return {
           repo: channelRepos[0],
@@ -142,7 +150,7 @@ export class RepoClassifier {
 
     // Use LLM for classification
     try {
-      const prompt = await buildClassificationPrompt(this.env, message, context);
+      const prompt = await buildClassificationPrompt(this.env, message, context, traceId);
 
       const response = await this.client.messages.create({
         model: this.env.CLASSIFICATION_MODEL || "claude-haiku-4-5",
@@ -201,7 +209,13 @@ export class RepoClassifier {
           (llmResult.confidence === "medium" && alternatives.length > 0),
       };
     } catch (e) {
-      console.error("Classification error:", e);
+      log.error("classifier.classify", {
+        trace_id: traceId,
+        method: "llm",
+        outcome: "error",
+        error: e instanceof Error ? e : new Error(String(e)),
+        channel_id: context?.channelId,
+      });
 
       // Fallback: try simple keyword matching
       return this.fallbackClassification(message, repos, context);

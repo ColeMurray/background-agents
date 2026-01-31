@@ -11,6 +11,9 @@ import type {
   ArtifactInfo,
 } from "../types";
 import { generateInternalToken } from "../utils/internal";
+import { createLogger } from "../logger";
+
+const log = createLogger("extractor");
 
 /**
  * Tool names to include in summary display.
@@ -29,8 +32,11 @@ const EVENTS_PAGE_LIMIT = 200;
 export async function extractAgentResponse(
   env: Env,
   sessionId: string,
-  messageId: string
+  messageId: string,
+  traceId?: string
 ): Promise<AgentResponse> {
+  const startTime = Date.now();
+  const base = { trace_id: traceId, session_id: sessionId, message_id: messageId };
   try {
     // Build auth headers
     const headers: Record<string, string> = {
@@ -39,6 +45,9 @@ export async function extractAgentResponse(
     if (env.INTERNAL_CALLBACK_SECRET) {
       const authToken = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
       headers["Authorization"] = `Bearer ${authToken}`;
+    }
+    if (traceId) {
+      headers["x-trace-id"] = traceId;
     }
 
     // Fetch all events for this message, paginating if necessary
@@ -56,7 +65,12 @@ export async function extractAgentResponse(
       const response = await env.CONTROL_PLANE.fetch(url.toString(), { headers });
 
       if (!response.ok) {
-        console.error(`Failed to fetch events: ${response.status}`);
+        log.error("control_plane.fetch_events", {
+          ...base,
+          outcome: "error",
+          http_status: response.status,
+          duration_ms: Date.now() - startTime,
+        });
         return { textContent: "", toolCalls: [], artifacts: [], success: false };
       }
 
@@ -94,6 +108,16 @@ export async function extractAgentResponse(
     // Check for completion event to get success status
     const completionEvent = allEvents.find((e) => e.type === "execution_complete");
 
+    log.info("control_plane.fetch_events", {
+      ...base,
+      outcome: "success",
+      event_count: allEvents.length,
+      tool_call_count: toolCalls.length,
+      artifact_count: artifacts.length,
+      has_text: Boolean(textContent),
+      duration_ms: Date.now() - startTime,
+    });
+
     return {
       textContent,
       toolCalls,
@@ -101,7 +125,12 @@ export async function extractAgentResponse(
       success: Boolean(completionEvent?.data.success),
     };
   } catch (error) {
-    console.error("Error extracting agent response:", error);
+    log.error("control_plane.fetch_events", {
+      ...base,
+      outcome: "error",
+      error: error instanceof Error ? error : new Error(String(error)),
+      duration_ms: Date.now() - startTime,
+    });
     return { textContent: "", toolCalls: [], artifacts: [], success: false };
   }
 }
