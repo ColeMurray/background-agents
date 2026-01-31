@@ -28,6 +28,68 @@ from websockets import ClientConnection, State
 from .types import GitUser
 
 
+def _extract_error_message(error: Any) -> str:
+    """Extract a human-readable error message from an OpenCode session.error event.
+
+    OpenCode may send the error in various formats:
+    - None
+    - A string (possibly JSON-encoded)
+    - A dict with "message", "error", "data", or nested "error.message" keys
+    """
+    if error is None:
+        return "Unknown error"
+    if isinstance(error, str):
+        if not error:
+            return "Unknown error"
+        # Try parsing JSON strings to extract a friendlier message
+        try:
+            parsed = json.loads(error)
+            if isinstance(parsed, dict):
+                return _extract_from_dict(parsed)
+        except (json.JSONDecodeError, ValueError):
+            pass
+        return error
+    if isinstance(error, dict):
+        return _extract_from_dict(error)
+    return "Unknown error"
+
+
+def _extract_from_dict(error: dict[str, Any]) -> str:
+    """Extract a human-readable message from an error dict."""
+    # Try common top-level keys
+    for key in ("message", "description"):
+        val = error.get(key)
+        if isinstance(val, str) and val:
+            return val
+
+    # Try nested data.message (OpenCode APIError format: {name, data: {message, statusCode}})
+    data = error.get("data")
+    if isinstance(data, dict):
+        data_msg = data.get("message")
+        if isinstance(data_msg, str) and data_msg:
+            status = data.get("statusCode")
+            name = error.get("name", "")
+            prefix = f"{name} ({status})" if status else name
+            return f"{prefix}: {data_msg}" if prefix else data_msg
+
+    # Try nested error object (e.g. {"error": {"type": "...", "message": "..."}})
+    nested = error.get("error")
+    if isinstance(nested, dict):
+        nested_msg = nested.get("message")
+        if isinstance(nested_msg, str) and nested_msg:
+            error_type = nested.get("type", "")
+            return f"{error_type}: {nested_msg}" if error_type else nested_msg
+        return json.dumps(nested)
+    if isinstance(nested, str) and nested:
+        return nested
+
+    # Fall back to JSON representation
+    serialized = json.dumps(error)
+    if serialized != "{}":
+        return serialized
+    return "Unknown error"
+
+
 class TokenResolution(NamedTuple):
     """Result of GitHub token resolution."""
 
@@ -347,14 +409,18 @@ class AgentBridge:
             await self._create_opencode_session()
 
         try:
+            had_error = False
             async for event in self._stream_opencode_response_sse(message_id, content, model):
+                if event.get("type") == "error":
+                    had_error = True
                 await self._send_event(event)
 
             await self._send_event(
                 {
                     "type": "execution_complete",
                     "messageId": message_id,
-                    "success": True,
+                    "success": not had_error,
+                    "error": "Agent failed to generate a response" if had_error else None,
                 }
             )
 
@@ -543,6 +609,7 @@ class AgentBridge:
         cumulative_text: dict[str, str] = {}
         emitted_tool_states: set[str] = set()
         our_assistant_msg_ids: set[str] = set()
+        our_user_msg_ids: set[str] = set()
 
         max_wait_time = 300.0
         start_time = time.time()
@@ -619,6 +686,10 @@ class AgentBridge:
                                         f"(parentID matched)"
                                     )
 
+                                if role == "user" and oc_msg_id:
+                                    our_user_msg_ids.add(oc_msg_id)
+                                    print(f"[bridge] Tracking user message {oc_msg_id}")
+
                                 if finish and finish not in ("tool-calls", ""):
                                     print(f"[bridge] SSE message finished (finish={finish})")
                             continue
@@ -629,6 +700,10 @@ class AgentBridge:
                             part_type = part.get("type", "")
                             part_id = part.get("id", "")
                             oc_msg_id = part.get("messageID", "")
+
+                            # Always skip parts from user messages
+                            if oc_msg_id in our_user_msg_ids:
+                                continue
 
                             if our_assistant_msg_ids and oc_msg_id not in our_assistant_msg_ids:
                                 continue
@@ -688,6 +763,14 @@ class AgentBridge:
                                     f"[bridge] Tracked {len(our_assistant_msg_ids)} assistant messages: "
                                     f"{our_assistant_msg_ids}"
                                 )
+                                if not our_assistant_msg_ids:
+                                    print("[bridge] WARNING: session.idle with no assistant messages")
+                                    yield {
+                                        "type": "error",
+                                        "error": "Agent failed to generate a response. The LLM API may be unavailable.",
+                                        "messageId": message_id,
+                                    }
+                                    return
                                 async for final_event in self._fetch_final_message_state(
                                     message_id,
                                     opencode_message_id,
@@ -713,6 +796,14 @@ class AgentBridge:
                                     f"[bridge] Tracked {len(our_assistant_msg_ids)} assistant messages: "
                                     f"{our_assistant_msg_ids}"
                                 )
+                                if not our_assistant_msg_ids:
+                                    print("[bridge] WARNING: session.status idle with no assistant messages")
+                                    yield {
+                                        "type": "error",
+                                        "error": "Agent failed to generate a response. The LLM API may be unavailable.",
+                                        "messageId": message_id,
+                                    }
+                                    return
                                 async for final_event in self._fetch_final_message_state(
                                     message_id,
                                     opencode_message_id,
@@ -725,14 +816,13 @@ class AgentBridge:
                         elif event_type == "session.error":
                             error_session_id = props.get("sessionID")
                             if error_session_id == self.opencode_session_id:
-                                error = props.get("error", {})
-                                error_msg = (
-                                    error.get("message") if isinstance(error, dict) else str(error)
-                                )
+                                error = props.get("error")
+                                print(f"[bridge] SSE session.error raw: {error}")
+                                error_msg = _extract_error_message(error)
                                 print(f"[bridge] SSE session.error: {error_msg}")
                                 yield {
                                     "type": "error",
-                                    "error": error_msg or "Unknown error",
+                                    "error": error_msg,
                                     "messageId": message_id,
                                 }
                                 return

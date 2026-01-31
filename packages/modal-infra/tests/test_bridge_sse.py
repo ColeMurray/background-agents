@@ -13,11 +13,11 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.sandbox.bridge import AgentBridge
+from src.sandbox.bridge import AgentBridge, OpenCodeIdentifier, _extract_error_message
 from tests.conftest import MockResponse
 
 
@@ -336,8 +336,21 @@ class TestSSEStreaming:
         """Should complete on session.status with type=idle."""
         http_client = bridge.http_client
 
+        known_msg_id = "msg_test_completion_idle"
+
         http_client.sse_events = [
             create_sse_event("server.connected", {}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": known_msg_id,
+                    }
+                },
+            ),
             create_sse_event(
                 "message.part.updated",
                 {
@@ -357,8 +370,9 @@ class TestSSEStreaming:
         ]
 
         events = []
-        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
-            events.append(event)
+        with patch.object(OpenCodeIdentifier, "ascending", return_value=known_msg_id):
+            async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+                events.append(event)
 
         assert len(events) == 1
         assert events[0]["type"] == "token"
@@ -753,6 +767,74 @@ class TestSSEFollowUpMessageBug:
         assert "Test User" in last_token["content"]
         assert "073d4e7" not in last_token["content"]
         assert last_token["messageId"] == "cp-msg-2"
+
+
+class TestExtractErrorMessage:
+    """Tests for _extract_error_message helper."""
+
+    def test_none_error(self):
+        assert _extract_error_message(None) == "Unknown error"
+
+    def test_empty_string(self):
+        assert _extract_error_message("") == "Unknown error"
+
+    def test_string_error(self):
+        assert _extract_error_message("Something went wrong") == "Something went wrong"
+
+    def test_dict_with_message(self):
+        assert _extract_error_message({"message": "Bad request"}) == "Bad request"
+
+    def test_dict_with_description(self):
+        assert _extract_error_message({"description": "Rate limited"}) == "Rate limited"
+
+    def test_nested_error_object(self):
+        """Anthropic API error format: {"error": {"type": "...", "message": "..."}}"""
+        error = {
+            "type": "error",
+            "error": {"type": "authentication_error", "message": "invalid x-api-key"},
+        }
+        result = _extract_error_message(error)
+        assert "authentication_error" in result
+        assert "invalid x-api-key" in result
+
+    def test_dict_with_no_known_keys(self):
+        error = {"code": 500, "status": "fail"}
+        result = _extract_error_message(error)
+        assert "500" in result  # Falls back to JSON serialization
+
+    def test_empty_dict(self):
+        assert _extract_error_message({}) == "Unknown error"
+
+    def test_json_encoded_api_error(self):
+        """OpenCode sends APIError as a JSON string."""
+        error = json.dumps({
+            "name": "APIError",
+            "data": {
+                "message": "invalid x-api-key",
+                "statusCode": 401,
+                "isRetryable": False,
+            },
+        })
+        result = _extract_error_message(error)
+        assert "invalid x-api-key" in result
+        assert "401" in result
+        assert "APIError" in result
+
+    def test_json_encoded_simple_message(self):
+        """JSON string with just a message field."""
+        error = json.dumps({"message": "rate limit exceeded"})
+        result = _extract_error_message(error)
+        assert result == "rate limit exceeded"
+
+    def test_dict_data_message_format(self):
+        """Direct dict in OpenCode APIError format."""
+        error = {
+            "name": "APIError",
+            "data": {"message": "overloaded", "statusCode": 529},
+        }
+        result = _extract_error_message(error)
+        assert "overloaded" in result
+        assert "529" in result
 
 
 if __name__ == "__main__":

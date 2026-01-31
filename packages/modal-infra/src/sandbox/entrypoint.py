@@ -212,14 +212,14 @@ class SandboxSupervisor:
         }
 
         # Check for user's Anthropic OAuth token (for user-specific API access)
-        # If available, use it instead of the shared ANTHROPIC_API_KEY
+        # OAuth tokens (sk-ant-oat01-...) cannot be used as x-api-key headers.
+        # Instead, write auth.json so OpenCode uses its native OAuth auth flow.
+        # The shared ANTHROPIC_API_KEY remains as a fallback.
         anthropic_oauth_token = os.environ.get("ANTHROPIC_OAUTH_TOKEN")
         if anthropic_oauth_token:
             print("[supervisor] Using user's Anthropic OAuth token for API access")
-            # Set the OAuth token as the API key for OpenCode
-            os.environ["ANTHROPIC_API_KEY"] = anthropic_oauth_token
 
-            # Also write the auth.json file that OpenCode can use
+            # Write the auth.json file for OpenCode's native OAuth auth
             opencode_data_dir = Path.home() / ".local" / "share" / "opencode"
             opencode_data_dir.mkdir(parents=True, exist_ok=True)
             auth_json_path = opencode_data_dir / "auth.json"
@@ -231,6 +231,12 @@ class SandboxSupervisor:
             print(f"[supervisor] Wrote OAuth token to {auth_json_path}")
         else:
             print("[supervisor] No OAuth token, using shared ANTHROPIC_API_KEY")
+
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        print(
+            f"[supervisor] ANTHROPIC_API_KEY is "
+            f"{'set (' + str(len(api_key)) + ' chars)' if api_key else 'NOT SET'}"
+        )
 
         # Determine working directory - use repo path if cloned, otherwise /workspace
         workdir = self.workspace_path

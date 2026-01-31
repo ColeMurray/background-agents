@@ -143,6 +143,7 @@ async def api_create_sandbox(
             provider=request.get("provider", "anthropic"),
             model=request.get("model", "claude-sonnet-4-5"),
             git_user=git_user,
+            anthropic_oauth_token=request.get("anthropic_oauth_token"),
         )
 
         config = SandboxConfig(
