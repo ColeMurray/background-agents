@@ -51,7 +51,13 @@ resource "cloudflare_worker" "this" {
   }
 
   observability = {
-    enabled = true
+    enabled            = true
+    head_sampling_rate = 1
+    logs = {
+      enabled            = true
+      head_sampling_rate = 1
+      invocation_logs    = true
+    }
   }
 }
 

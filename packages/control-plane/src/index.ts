@@ -5,7 +5,10 @@
  */
 
 import { handleRequest } from "./router";
+import { createLogger } from "./logger";
 import type { Env } from "./types";
+
+const logger = createLogger("worker");
 
 // Re-export Durable Object for Cloudflare to discover
 export { SessionDO } from "./session/durable-object";
@@ -23,7 +26,7 @@ export default {
       return handleWebSocket(request, env, url);
     }
 
-    // Regular API request
+    // Regular API request — logged by the router with requestId and timing
     return handleRequest(request, env);
   },
 };
@@ -32,19 +35,20 @@ export default {
  * Handle WebSocket connections.
  */
 async function handleWebSocket(request: Request, env: Env, url: URL): Promise<Response> {
-  console.log("WebSocket upgrade request for path:", url.pathname);
-
   // Extract session ID from path: /sessions/:id/ws
   const match = url.pathname.match(/^\/sessions\/([^/]+)\/ws$/);
 
   if (!match) {
-    console.log("WebSocket path did not match regex");
+    logger.warn("Invalid WebSocket path", { event: "ws.invalid_path", http_path: url.pathname });
     return new Response("Invalid WebSocket path", { status: 400 });
   }
 
-  console.log("WebSocket session ID:", match[1]);
-
   const sessionId = match[1];
+  logger.info("WebSocket upgrade", {
+    event: "ws.connect",
+    http_path: url.pathname,
+    session_id: sessionId,
+  });
 
   // Get Durable Object and forward WebSocket
   const doId = env.SESSION.idFromName(sessionId);

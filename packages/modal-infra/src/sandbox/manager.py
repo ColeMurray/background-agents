@@ -18,7 +18,10 @@ import modal
 
 from ..app import app, llm_secrets
 from ..images.base import base_image
+from .log_config import get_logger
 from .types import SandboxStatus, SessionConfig
+
+log = get_logger("manager")
 
 
 @dataclass
@@ -90,6 +93,8 @@ class SandboxManager:
         Returns:
             SandboxHandle with the running sandbox
         """
+        start_time = time.time()
+
         # Use provided sandbox_id from control plane, or generate one
         if config.sandbox_id:
             sandbox_id = config.sandbox_id
@@ -143,8 +148,15 @@ class SandboxManager:
 
         # Get Modal's internal object ID for API calls (snapshot, etc.)
         modal_object_id = sandbox.object_id
-        print(
-            f"[manager] Created sandbox: sandbox_id={sandbox_id}, modal_object_id={modal_object_id}"
+        duration_ms = int((time.time() - start_time) * 1000)
+        log.info(
+            "sandbox.create",
+            sandbox_id=sandbox_id,
+            modal_object_id=modal_object_id,
+            repo_owner=config.repo_owner,
+            repo_name=config.repo_name,
+            duration_ms=duration_ms,
+            outcome="success",
         )
 
         return SandboxHandle(
@@ -215,6 +227,7 @@ class SandboxManager:
         Returns:
             Image ID that can be used to restore the sandbox later
         """
+        start_time = time.time()
         snapshot_id = f"snap-{handle.sandbox_id}-{int(time.time() * 1000)}"
 
         # Use Modal's native snapshot_filesystem() API
@@ -225,7 +238,15 @@ class SandboxManager:
         # Modal automatically stores the image and it persists indefinitely
         image_id = image.object_id
 
-        print(f"[manager] Snapshot taken: {snapshot_id} -> image_id={image_id}")
+        duration_ms = int((time.time() - start_time) * 1000)
+        log.info(
+            "sandbox.snapshot",
+            sandbox_id=handle.sandbox_id,
+            snapshot_id=snapshot_id,
+            image_id=image_id,
+            duration_ms=duration_ms,
+            outcome="success",
+        )
 
         return image_id
 
@@ -250,7 +271,7 @@ class SandboxManager:
                 created_at=time.time(),
             )
         except Exception as e:
-            print(f"[manager] Failed to get sandbox {sandbox_id}: {e}")
+            log.warn("sandbox.lookup_error", sandbox_id=sandbox_id, exc=e)
             return None
 
     async def restore_from_snapshot(
@@ -260,6 +281,7 @@ class SandboxManager:
         sandbox_id: str | None = None,
         control_plane_url: str = "",
         sandbox_auth_token: str = "",
+        github_app_token: str | None = None,
     ) -> SandboxHandle:
         """
         Create a new sandbox from a filesystem snapshot Image.
@@ -277,6 +299,8 @@ class SandboxManager:
         Returns:
             SandboxHandle for the restored sandbox
         """
+        start_time = time.time()
+
         # Handle both SessionConfig and dict
         if isinstance(session_config, dict):
             repo_owner = session_config.get("repo_owner", "")
@@ -325,6 +349,9 @@ class SandboxManager:
             ),
         }
 
+        if github_app_token:
+            env_vars["GITHUB_APP_TOKEN"] = github_app_token
+
         # Add Anthropic OAuth token if available
         if anthropic_oauth_token:
             env_vars["ANTHROPIC_OAUTH_TOKEN"] = anthropic_oauth_token
@@ -342,7 +369,19 @@ class SandboxManager:
             env=env_vars,
         )
 
-        print(f"[manager] Sandbox restored from snapshot: {sandbox_id} (image={snapshot_image_id})")
+        modal_object_id = sandbox.object_id
+
+        duration_ms = int((time.time() - start_time) * 1000)
+        log.info(
+            "sandbox.restore",
+            sandbox_id=sandbox_id,
+            modal_object_id=modal_object_id,
+            snapshot_image_id=snapshot_image_id,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            duration_ms=duration_ms,
+            outcome="success",
+        )
 
         return SandboxHandle(
             sandbox_id=sandbox_id,
@@ -350,6 +389,7 @@ class SandboxManager:
             status=SandboxStatus.WARMING,
             created_at=time.time(),
             snapshot_id=snapshot_image_id,
+            modal_object_id=modal_object_id,
         )
 
     async def maintain_warm_pool(

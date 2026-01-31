@@ -104,6 +104,10 @@ CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
 CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user_id);
 `;
 
+import { createLogger } from "../logger";
+
+const schemaLog = createLogger("schema");
+
 /**
  * Run a migration statement, only ignoring "column already exists" errors.
  * Rethrows any other errors to surface real problems.
@@ -117,7 +121,7 @@ function runMigration(sql: SqlStorage, statement: string): void {
     if (msg.includes("duplicate column") || msg.includes("already exists")) {
       return; // Expected for idempotent migrations
     }
-    console.error(`[schema] Migration failed: ${statement}`, msg);
+    schemaLog.error("Migration failed", { statement, error: msg });
     throw e;
   }
 }

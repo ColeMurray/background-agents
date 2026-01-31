@@ -81,7 +81,7 @@ export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
           ),
           // Code blocks with styling
           pre: ({ children, ...props }: ComponentPropsWithoutRef<"pre">) => (
-            <pre className="bg-card p-3 overflow-x-auto text-sm" {...props}>
+            <pre className="bg-card text-foreground p-3 overflow-x-auto text-sm" {...props}>
               {children}
             </pre>
           ),
@@ -97,7 +97,7 @@ export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
               );
             }
             return (
-              <code className="bg-card px-1.5 py-0.5 text-sm" {...props}>
+              <code className="bg-card text-foreground px-1.5 py-0.5 text-sm" {...props}>
                 {children}
               </code>
             );

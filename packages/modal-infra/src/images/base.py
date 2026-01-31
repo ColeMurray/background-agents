@@ -23,8 +23,8 @@ SANDBOX_DIR = Path(__file__).parent.parent / "sandbox"
 OPENCODE_VERSION = "latest"
 
 # Cache buster - change this to force Modal image rebuild
-# v32: Structured error responses for create-pull-request tool
-CACHE_BUSTER = "v32-structured-pr-errors"
+# v34: Replace print() with structured JSON logging in sandbox code
+CACHE_BUSTER = "v34-structured-logging"
 
 # Base image with all development tools
 base_image = (

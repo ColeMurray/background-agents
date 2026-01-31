@@ -61,7 +61,7 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   }
 
   const handleNewSession = () => {
-    router.push("/session/new");
+    router.push("/");
   };
 
   return (

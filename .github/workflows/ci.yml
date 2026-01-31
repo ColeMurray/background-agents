@@ -127,8 +127,11 @@ jobs:
       - name: Build shared package
         run: npm run build -w @open-inspect/shared
 
-      - name: Run tests
-        run: npm test -w @open-inspect/control-plane -- --passWithNoTests
+      - name: Run control-plane tests
+        run: npm test -w @open-inspect/control-plane
+
+      - name: Run web tests
+        run: npm test -w @open-inspect/web
 
   test-python:
     name: Test (Python)

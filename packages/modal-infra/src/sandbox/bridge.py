@@ -24,8 +24,12 @@ from typing import Any, ClassVar, NamedTuple
 import httpx
 import websockets
 from websockets import ClientConnection, State
+from websockets.exceptions import InvalidStatus
 
+from .log_config import configure_logging, get_logger
 from .types import GitUser
+
+configure_logging()
 
 
 def _extract_error_message(error: Any) -> str:
@@ -162,6 +166,17 @@ class SSEConnectionError(Exception):
     pass
 
 
+class SessionTerminatedError(Exception):
+    """Raised when the control plane has terminated the session (HTTP 410).
+
+    This is a non-recoverable error - the bridge should exit gracefully
+    rather than retry. The session can be restored via user action (sending
+    a new prompt), which will trigger snapshot restoration on the control plane.
+    """
+
+    pass
+
+
 class AgentBridge:
     """
     Bridge between sandbox OpenCode instance and control plane.
@@ -205,6 +220,14 @@ class AgentBridge:
         # HTTP client for OpenCode API
         self.http_client: httpx.AsyncClient | None = None
 
+        # Logger
+        self.log = get_logger(
+            "bridge",
+            service="sandbox",
+            sandbox_id=sandbox_id,
+            session_id=session_id,
+        )
+
     @property
     def ws_url(self) -> str:
         """WebSocket URL for control plane connection."""
@@ -212,8 +235,12 @@ class AgentBridge:
         return f"{url}/sessions/{self.session_id}/ws?type=sandbox"
 
     async def run(self) -> None:
-        """Main bridge loop with reconnection handling."""
-        print(f"[bridge] Starting bridge for sandbox {self.sandbox_id}")
+        """Main bridge loop with reconnection handling.
+
+        Handles reconnection for transient errors (network issues, etc.) but
+        exits gracefully for terminal errors like HTTP 410 (session terminated).
+        """
+        self.log.info("bridge.run_start")
 
         self.http_client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0))
         await self._load_session_id()
@@ -225,10 +252,37 @@ class AgentBridge:
                 try:
                     await self._connect_and_run()
                     reconnect_attempts = 0
+                except SessionTerminatedError as e:
+                    # Non-recoverable: session has been terminated by control plane
+                    self.log.info(
+                        "bridge.disconnect",
+                        reason="session_terminated",
+                        detail=str(e),
+                    )
+                    self.shutdown_event.set()
+                    break
                 except websockets.ConnectionClosed as e:
-                    print(f"[bridge] Connection closed: {e}")
+                    self.log.warn(
+                        "bridge.disconnect",
+                        reason="connection_closed",
+                        ws_close_code=e.code,
+                    )
                 except Exception as e:
-                    print(f"[bridge] Connection error: {e}")
+                    error_str = str(e)
+                    # Check for fatal HTTP errors that shouldn't trigger retry
+                    if self._is_fatal_connection_error(error_str):
+                        self.log.error(
+                            "bridge.disconnect",
+                            reason="fatal_error",
+                            exc=e,
+                        )
+                        self.shutdown_event.set()
+                        break
+                    self.log.warn(
+                        "bridge.disconnect",
+                        reason="connection_error",
+                        detail=error_str,
+                    )
 
                 if self.shutdown_event.is_set():
                     break
@@ -238,63 +292,100 @@ class AgentBridge:
                     self.RECONNECT_BACKOFF_BASE**reconnect_attempts,
                     self.RECONNECT_MAX_DELAY,
                 )
-                print(f"[bridge] Reconnecting in {delay:.1f}s (attempt {reconnect_attempts})...")
+                self.log.info(
+                    "bridge.reconnect",
+                    attempt=reconnect_attempts,
+                    delay_s=round(delay, 1),
+                )
                 await asyncio.sleep(delay)
 
         finally:
             if self.http_client:
                 await self.http_client.aclose()
 
-    async def _connect_and_run(self) -> None:
-        """Connect to control plane and handle messages."""
-        print(f"[bridge] Connecting to {self.ws_url}")
+    def _is_fatal_connection_error(self, error_str: str) -> bool:
+        """Check if a connection error is fatal and shouldn't trigger retry.
 
+        Fatal errors indicate the session is invalid or terminated, not a
+        transient network issue. These include:
+        - HTTP 401 (Unauthorized): Auth token invalid or expired
+        - HTTP 403 (Forbidden): Access denied
+        - HTTP 404 (Not Found): Session doesn't exist
+        - HTTP 410 (Gone): Session terminated, sandbox stopped/stale
+
+        For these errors, retrying is futile - the bridge should exit and
+        allow the control plane to spawn a new sandbox if needed.
+        """
+        fatal_patterns = [
+            "HTTP 401",  # Unauthorized
+            "HTTP 403",  # Forbidden
+            "HTTP 404",  # Session not found
+            "HTTP 410",  # Session terminated (stopped/stale)
+        ]
+        return any(pattern in error_str for pattern in fatal_patterns)
+
+    async def _connect_and_run(self) -> None:
+        """Connect to control plane and handle messages.
+
+        Raises:
+            SessionTerminatedError: If the control plane rejects the connection
+                with HTTP 410 (session stopped/stale).
+        """
         additional_headers = {
             "Authorization": f"Bearer {self.auth_token}",
             "X-Sandbox-ID": self.sandbox_id,
         }
 
-        async with websockets.connect(
-            self.ws_url,
-            additional_headers=additional_headers,
-            ping_interval=20,
-            ping_timeout=10,
-        ) as ws:
-            self.ws = ws
-            print("[bridge] Connected to control plane")
+        try:
+            async with websockets.connect(
+                self.ws_url,
+                additional_headers=additional_headers,
+                ping_interval=20,
+                ping_timeout=10,
+            ) as ws:
+                self.ws = ws
+                self.log.info("bridge.connect", outcome="success")
 
-            await self._send_event(
-                {
-                    "type": "ready",
-                    "sandboxId": self.sandbox_id,
-                    "opencodeSessionId": self.opencode_session_id,
-                }
-            )
+                await self._send_event(
+                    {
+                        "type": "ready",
+                        "sandboxId": self.sandbox_id,
+                        "opencodeSessionId": self.opencode_session_id,
+                    }
+                )
 
-            heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-            background_tasks: set[asyncio.Task[None]] = set()
+                heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+                background_tasks: set[asyncio.Task[None]] = set()
 
-            try:
-                async for message in ws:
-                    if self.shutdown_event.is_set():
-                        break
+                try:
+                    async for message in ws:
+                        if self.shutdown_event.is_set():
+                            break
 
-                    try:
-                        cmd = json.loads(message)
-                        task = await self._handle_command(cmd)
-                        if task:
-                            background_tasks.add(task)
-                            task.add_done_callback(background_tasks.discard)
-                    except json.JSONDecodeError as e:
-                        print(f"[bridge] Invalid message: {e}")
-                    except Exception as e:
-                        print(f"[bridge] Error handling command: {e}")
+                        try:
+                            cmd = json.loads(message)
+                            task = await self._handle_command(cmd)
+                            if task:
+                                background_tasks.add(task)
+                                task.add_done_callback(background_tasks.discard)
+                        except json.JSONDecodeError as e:
+                            self.log.warn("bridge.invalid_message", exc=e)
+                        except Exception as e:
+                            self.log.error("bridge.command_error", exc=e)
 
-            finally:
-                heartbeat_task.cancel()
-                for task in background_tasks:
-                    task.cancel()
-                self.ws = None
+                finally:
+                    heartbeat_task.cancel()
+                    for task in background_tasks:
+                        task.cancel()
+                    self.ws = None
+
+        except InvalidStatus as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status in (401, 403, 404, 410):
+                raise SessionTerminatedError(
+                    f"Session rejected by control plane (HTTP {status})."
+                ) from e
+            raise
 
     async def _heartbeat_loop(self) -> None:
         """Send periodic heartbeat events."""
@@ -316,10 +407,14 @@ class AgentBridge:
         event_type = event.get("type", "unknown")
 
         if not self.ws:
-            print(f"[bridge] Cannot send {event_type}: WebSocket is None")
+            self.log.debug("bridge.send_failed", event_type=event_type, reason="ws_none")
             return
         if self.ws.state != State.OPEN:
-            print(f"[bridge] Cannot send {event_type}: WebSocket state is {self.ws.state}")
+            self.log.debug(
+                "bridge.send_failed",
+                event_type=event_type,
+                reason=f"ws_state_{self.ws.state}",
+            )
             return
 
         event["sandboxId"] = self.sandbox_id
@@ -327,9 +422,8 @@ class AgentBridge:
 
         try:
             await self.ws.send(json.dumps(event))
-            print(f"[bridge] Sent event: {event_type}")
         except Exception as e:
-            print(f"[bridge] Failed to send {event_type} event: {e}")
+            self.log.error("bridge.send_error", event_type=event_type, exc=e)
 
     async def _handle_command(self, cmd: dict[str, Any]) -> asyncio.Task[None] | None:
         """Handle command from control plane.
@@ -340,7 +434,7 @@ class AgentBridge:
         Returns a Task for long-running commands, None for immediate commands.
         """
         cmd_type = cmd.get("type")
-        print(f"[bridge] Received command: {cmd_type}")
+        self.log.debug("bridge.command_received", cmd_type=cmd_type)
 
         if cmd_type == "prompt":
             message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
@@ -383,7 +477,7 @@ class AgentBridge:
         elif cmd_type == "push":
             await self._handle_push(cmd)
         else:
-            print(f"[bridge] Unknown command type: {cmd_type}")
+            self.log.debug("bridge.unknown_command", cmd_type=cmd_type)
         return None
 
     async def _handle_prompt(self, cmd: dict[str, Any]) -> None:
@@ -392,8 +486,14 @@ class AgentBridge:
         content = cmd.get("content", "")
         model = cmd.get("model")
         author_data = cmd.get("author", {})
+        start_time = time.time()
+        outcome = "success"
 
-        print(f"[bridge] Processing prompt {message_id} with model {model}, author={author_data}")
+        self.log.info(
+            "prompt.start",
+            message_id=message_id,
+            model=model,
+        )
 
         github_name = author_data.get("githubName")
         github_email = author_data.get("githubEmail")
@@ -425,7 +525,8 @@ class AgentBridge:
             )
 
         except Exception as e:
-            print(f"[bridge] Error processing prompt: {e}")
+            outcome = "error"
+            self.log.error("prompt.error", exc=e, message_id=message_id)
             await self._send_event(
                 {
                     "type": "execution_complete",
@@ -434,11 +535,18 @@ class AgentBridge:
                     "error": str(e),
                 }
             )
+        finally:
+            duration_ms = int((time.time() - start_time) * 1000)
+            self.log.info(
+                "prompt.run",
+                message_id=message_id,
+                model=model,
+                outcome=outcome,
+                duration_ms=duration_ms,
+            )
 
     async def _create_opencode_session(self) -> None:
         """Create a new OpenCode session."""
-        print("[bridge] Creating OpenCode session...")
-
         if not self.http_client:
             raise RuntimeError("HTTP client not initialized")
 
@@ -450,7 +558,11 @@ class AgentBridge:
         data = resp.json()
 
         self.opencode_session_id = data.get("id")
-        print(f"[bridge] Created OpenCode session: {self.opencode_session_id}")
+        self.log.info(
+            "opencode.session.ensure",
+            opencode_session_id=self.opencode_session_id,
+            action="created",
+        )
 
         await self._save_session_id()
 
@@ -475,12 +587,13 @@ class AgentBridge:
             status = state.get("status", "")
             tool_input = state.get("input", {})
 
-            print(
-                f"[bridge] Tool part: tool={part.get('tool')}, status={status}, input_keys={list(tool_input.keys()) if tool_input else 'empty'}"
+            self.log.debug(
+                "bridge.tool_part",
+                tool=part.get("tool"),
+                status=status,
             )
 
             if status in ("pending", "") and not tool_input:
-                print(f"[bridge] Skipping tool_call in {status} state with no input")
                 return None
 
             return {
@@ -524,7 +637,6 @@ class AgentBridge:
 
         if opencode_message_id:
             request_body["messageID"] = opencode_message_id
-            print(f"[bridge] Building prompt request, messageID={opencode_message_id}")
 
         if model:
             if "/" in model:
@@ -575,7 +687,7 @@ class AgentBridge:
                         event = json.loads(raw_data)
                         yield event
                     except json.JSONDecodeError as e:
-                        print(f"[bridge] SSE JSON parse error: {e}")
+                        self.log.debug("bridge.sse_parse_error", exc=e)
 
     async def _stream_opencode_response_sse(
         self,
@@ -604,8 +716,6 @@ class AgentBridge:
         sse_url = f"{self.opencode_base_url}/event"
         async_url = f"{self.opencode_base_url}/session/{self.opencode_session_id}/prompt_async"
 
-        print(f"[bridge] Connecting to SSE endpoint: {sse_url}, messageID={opencode_message_id}")
-
         cumulative_text: dict[str, str] = {}
         emitted_tool_states: set[str] = set()
         our_assistant_msg_ids: set[str] = set()
@@ -626,8 +736,6 @@ class AgentBridge:
                             f"SSE connection failed: {sse_response.status_code}"
                         )
 
-                    print("[bridge] SSE connected, sending prompt...")
-
                     prompt_response = await self.http_client.post(
                         async_url,
                         json=request_body,
@@ -635,20 +743,20 @@ class AgentBridge:
                     )
                     if prompt_response.status_code not in [200, 204]:
                         error_body = prompt_response.text
-                        print(f"[bridge] Prompt request body: {json.dumps(request_body)}")
-                        print(f"[bridge] Prompt error response: {error_body}")
+                        self.log.error(
+                            "bridge.prompt_request_error",
+                            status_code=prompt_response.status_code,
+                            error_body=error_body,
+                        )
                         raise RuntimeError(
                             f"Async prompt failed: {prompt_response.status_code} - {error_body}"
                         )
-
-                    print("[bridge] Prompt sent, processing SSE events...")
 
                     async for event in self._parse_sse_stream(sse_response):
                         event_type = event.get("type")
                         props = event.get("properties", {})
 
                         if event_type == "server.connected":
-                            print("[bridge] SSE server.connected received")
                             continue
 
                         if event_type == "server.heartbeat":
@@ -669,10 +777,11 @@ class AgentBridge:
                                 role = info.get("role", "")
                                 finish = info.get("finish", "")
 
-                                print(
-                                    f"[bridge] message.updated: role={role}, id={oc_msg_id}, "
-                                    f"parentID={parent_id}, expected={opencode_message_id}, "
-                                    f"match={parent_id == opencode_message_id}"
+                                self.log.debug(
+                                    "bridge.message_updated",
+                                    role=role,
+                                    oc_msg_id=oc_msg_id,
+                                    parent_match=(parent_id == opencode_message_id),
                                 )
 
                                 if (
@@ -681,17 +790,16 @@ class AgentBridge:
                                     and oc_msg_id
                                 ):
                                     our_assistant_msg_ids.add(oc_msg_id)
-                                    print(
-                                        f"[bridge] Tracking assistant message {oc_msg_id} "
-                                        f"(parentID matched)"
-                                    )
 
                                 if role == "user" and oc_msg_id:
                                     our_user_msg_ids.add(oc_msg_id)
                                     print(f"[bridge] Tracking user message {oc_msg_id}")
 
                                 if finish and finish not in ("tool-calls", ""):
-                                    print(f"[bridge] SSE message finished (finish={finish})")
+                                    self.log.debug(
+                                        "bridge.message_finished",
+                                        finish=finish,
+                                    )
                             continue
 
                         if event_type == "message.part.updated":
@@ -755,13 +863,10 @@ class AgentBridge:
                             idle_session_id = props.get("sessionID")
                             if idle_session_id == self.opencode_session_id:
                                 elapsed = time.time() - start_time
-                                print(
-                                    f"[bridge] SSE session.idle received after {elapsed:.1f}s, "
-                                    f"fetching final state..."
-                                )
-                                print(
-                                    f"[bridge] Tracked {len(our_assistant_msg_ids)} assistant messages: "
-                                    f"{our_assistant_msg_ids}"
+                                self.log.debug(
+                                    "bridge.session_idle",
+                                    elapsed_s=round(elapsed, 1),
+                                    tracked_msgs=len(our_assistant_msg_ids),
                                 )
                                 if not our_assistant_msg_ids:
                                     print("[bridge] WARNING: session.idle with no assistant messages")
@@ -788,13 +893,10 @@ class AgentBridge:
                                 and status.get("type") == "idle"
                             ):
                                 elapsed = time.time() - start_time
-                                print(
-                                    f"[bridge] SSE session.status idle received after {elapsed:.1f}s, "
-                                    f"fetching final state..."
-                                )
-                                print(
-                                    f"[bridge] Tracked {len(our_assistant_msg_ids)} assistant messages: "
-                                    f"{our_assistant_msg_ids}"
+                                self.log.debug(
+                                    "bridge.session_status_idle",
+                                    elapsed_s=round(elapsed, 1),
+                                    tracked_msgs=len(our_assistant_msg_ids),
                                 )
                                 if not our_assistant_msg_ids:
                                     print("[bridge] WARNING: session.status idle with no assistant messages")
@@ -817,9 +919,8 @@ class AgentBridge:
                             error_session_id = props.get("sessionID")
                             if error_session_id == self.opencode_session_id:
                                 error = props.get("error")
-                                print(f"[bridge] SSE session.error raw: {error}")
                                 error_msg = _extract_error_message(error)
-                                print(f"[bridge] SSE session.error: {error_msg}")
+                                self.log.error("bridge.session_error", error_msg=error_msg, raw_error=str(error))
                                 yield {
                                     "type": "error",
                                     "error": error_msg,
@@ -829,11 +930,11 @@ class AgentBridge:
 
         except TimeoutError:
             elapsed = time.time() - start_time
-            print(f"[bridge] SSE stream timed out after {elapsed:.1f}s")
+            self.log.error("bridge.sse_timeout", elapsed_s=round(elapsed, 1))
             raise RuntimeError("LLM request timed out")
 
         except httpx.ReadError as e:
-            print(f"[bridge] SSE read error: {e}")
+            self.log.error("bridge.sse_read_error", exc=e)
             raise SSEConnectionError(f"SSE read error: {e}")
 
     async def _fetch_final_message_state(
@@ -866,28 +967,19 @@ class AgentBridge:
         try:
             response = await self.http_client.get(messages_url, timeout=10.0)
             if response.status_code != 200:
-                print(f"[bridge] Final state fetch failed: {response.status_code}")
+                self.log.warn(
+                    "bridge.final_state_fetch_error",
+                    status_code=response.status_code,
+                )
                 return
 
             messages = response.json()
 
-            print(
-                f"[bridge] Final state fetch: got {len(messages)} messages, "
-                f"looking for parentID={opencode_message_id}"
-            )
-
-            matched_count = 0
             for msg in messages:
                 info = msg.get("info", {})
                 role = info.get("role", "")
                 msg_id = info.get("id", "")
                 parent_id = info.get("parentID", "")
-
-                if role == "assistant":
-                    print(
-                        f"[bridge] Assistant message: id={msg_id}, parentID={parent_id}, "
-                        f"match={parent_id == opencode_message_id}"
-                    )
 
                 if role != "assistant":
                     continue
@@ -896,17 +988,7 @@ class AgentBridge:
                 in_tracked_set = tracked_msg_ids and msg_id in tracked_msg_ids
 
                 if not parent_matches and not in_tracked_set:
-                    print(
-                        f"[bridge] Skipping message {msg_id}: "
-                        f"parentID={parent_id} != {opencode_message_id}, not in tracked set"
-                    )
                     continue
-
-                matched_count += 1
-                print(
-                    f"[bridge] Processing message {msg_id}: "
-                    f"parent_match={parent_matches}, in_tracked={in_tracked_set}"
-                )
 
                 parts = msg.get("parts", [])
                 for part in parts:
@@ -917,9 +999,10 @@ class AgentBridge:
                         text = part.get("text", "")
                         previously_sent = cumulative_text.get(part_id, "")
                         if len(text) > len(previously_sent):
-                            print(
-                                f"[bridge] Final fetch found additional text: "
-                                f"{len(previously_sent)} -> {len(text)} chars"
+                            self.log.debug(
+                                "bridge.final_text_update",
+                                prev_len=len(previously_sent),
+                                new_len=len(text),
                             )
                             cumulative_text[part_id] = text
                             yield {
@@ -929,11 +1012,11 @@ class AgentBridge:
                             }
 
         except Exception as e:
-            print(f"[bridge] Error fetching final state: {e}")
+            self.log.error("bridge.final_state_error", exc=e)
 
     async def _handle_stop(self) -> None:
         """Handle stop command - halt current execution."""
-        print("[bridge] Stopping current execution")
+        self.log.info("bridge.stop")
 
         if not self.http_client or not self.opencode_session_id:
             return
@@ -943,11 +1026,11 @@ class AgentBridge:
                 f"{self.opencode_base_url}/session/{self.opencode_session_id}/stop",
             )
         except Exception as e:
-            print(f"[bridge] Error stopping execution: {e}")
+            self.log.error("bridge.stop_error", exc=e)
 
     async def _handle_snapshot(self) -> None:
         """Handle snapshot command - prepare for snapshot."""
-        print("[bridge] Preparing for snapshot")
+        self.log.info("bridge.snapshot_prepare")
         await self._send_event(
             {
                 "type": "snapshot_ready",
@@ -957,7 +1040,7 @@ class AgentBridge:
 
     async def _handle_shutdown(self) -> None:
         """Handle shutdown command - graceful shutdown."""
-        print("[bridge] Shutdown requested")
+        self.log.info("bridge.shutdown_requested")
         self.shutdown_event.set()
 
     def _resolve_github_token(self, cmd: dict[str, Any]) -> TokenResolution:
@@ -985,13 +1068,17 @@ class AgentBridge:
         repo_name = cmd.get("repoName") or os.environ.get("REPO_NAME", "")
 
         github_token, token_source = self._resolve_github_token(cmd)
-        print(
-            f"[bridge] Pushing branch: {branch_name} to {repo_owner}/{repo_name} (token: {token_source})"
+        self.log.info(
+            "git.push_start",
+            branch_name=branch_name,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            token_source=token_source,
         )
 
         repo_dirs = list(self.repo_path.glob("*/.git"))
         if not repo_dirs:
-            print("[bridge] No repository found, cannot push")
+            self.log.warn("git.push_error", reason="no_repository")
             await self._send_event(
                 {
                     "type": "push_error",
@@ -1006,7 +1093,7 @@ class AgentBridge:
             refspec = f"HEAD:refs/heads/{branch_name}"
 
             if not github_token or not repo_owner or not repo_name:
-                print("[bridge] Push failed: missing GitHub token or repository info")
+                self.log.warn("git.push_error", reason="missing_credentials")
                 await self._send_event(
                     {
                         "type": "push_error",
@@ -1019,7 +1106,6 @@ class AgentBridge:
             push_url = (
                 f"https://x-access-token:{github_token}@github.com/{repo_owner}/{repo_name}.git"
             )
-            print(f"[bridge] Pushing HEAD to {branch_name} via authenticated URL")
 
             result = await asyncio.create_subprocess_exec(
                 "git",
@@ -1032,11 +1118,10 @@ class AgentBridge:
                 stderr=asyncio.subprocess.PIPE,
             )
 
-            _stdout, stderr = await result.communicate()
+            _stdout, _stderr = await result.communicate()
 
             if result.returncode != 0:
-                _error_msg = stderr.decode()  # Intentionally unused - may contain secrets
-                print("[bridge] Push failed (see event for details)")
+                self.log.warn("git.push_failed", branch_name=branch_name)
                 await self._send_event(
                     {
                         "type": "push_error",
@@ -1045,7 +1130,7 @@ class AgentBridge:
                     }
                 )
             else:
-                print("[bridge] Push successful")
+                self.log.info("git.push_complete", branch_name=branch_name)
                 await self._send_event(
                     {
                         "type": "push_complete",
@@ -1054,7 +1139,7 @@ class AgentBridge:
                 )
 
         except Exception as e:
-            print(f"[bridge] Push error: {e}")
+            self.log.error("git.push_error", exc=e, branch_name=branch_name)
             await self._send_event(
                 {
                     "type": "push_error",
@@ -1065,11 +1150,11 @@ class AgentBridge:
 
     async def _configure_git_identity(self, user: GitUser) -> None:
         """Configure git identity for commit attribution."""
-        print(f"[bridge] Configuring git identity: {user.name} <{user.email}>")
+        self.log.debug("git.identity_configure", git_name=user.name, git_email=user.email)
 
         repo_dirs = list(self.repo_path.glob("*/.git"))
         if not repo_dirs:
-            print("[bridge] No repository found, skipping git config")
+            self.log.debug("git.identity_skip", reason="no_repository")
             return
 
         repo_dir = repo_dirs[0].parent
@@ -1086,14 +1171,18 @@ class AgentBridge:
                 check=True,
             )
         except subprocess.CalledProcessError as e:
-            print(f"[bridge] Failed to configure git identity: {e}")
+            self.log.error("git.identity_error", exc=e)
 
     async def _load_session_id(self) -> None:
         """Load OpenCode session ID from file if it exists."""
         if self.session_id_file.exists():
             try:
                 self.opencode_session_id = self.session_id_file.read_text().strip()
-                print(f"[bridge] Loaded existing session ID: {self.opencode_session_id}")
+                self.log.info(
+                    "opencode.session.ensure",
+                    opencode_session_id=self.opencode_session_id,
+                    action="loaded",
+                )
 
                 if self.http_client:
                     try:
@@ -1101,13 +1190,16 @@ class AgentBridge:
                             f"{self.opencode_base_url}/session/{self.opencode_session_id}"
                         )
                         if resp.status_code != 200:
-                            print("[bridge] Existing session invalid, will create new one")
+                            self.log.info(
+                                "opencode.session.invalid",
+                                opencode_session_id=self.opencode_session_id,
+                            )
                             self.opencode_session_id = None
                     except Exception:
                         self.opencode_session_id = None
 
             except Exception as e:
-                print(f"[bridge] Failed to load session ID: {e}")
+                self.log.error("opencode.session.load_error", exc=e)
 
     async def _save_session_id(self) -> None:
         """Save OpenCode session ID to file for persistence."""
@@ -1115,7 +1207,7 @@ class AgentBridge:
             try:
                 self.session_id_file.write_text(self.opencode_session_id)
             except Exception as e:
-                print(f"[bridge] Failed to save session ID: {e}")
+                self.log.error("opencode.session.save_error", exc=e)
 
 
 async def main():

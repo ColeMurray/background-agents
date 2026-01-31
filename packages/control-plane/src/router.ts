@@ -12,6 +12,26 @@ import type {
   RepoMetadata,
 } from "@open-inspect/shared";
 import { getRepoMetadataKey } from "./utils/repo";
+import { createLogger } from "./logger";
+import type { CorrelationContext } from "./logger";
+
+const logger = createLogger("router");
+
+/**
+ * Request context with correlation IDs propagated to downstream services.
+ */
+export type RequestContext = CorrelationContext;
+
+/**
+ * Create a Request to a Durable Object stub with correlation headers.
+ * Ensures trace_id and request_id propagate into the DO.
+ */
+function internalRequest(url: string, init: RequestInit | undefined, ctx: RequestContext): Request {
+  const headers = new Headers(init?.headers);
+  headers.set("x-trace-id", ctx.trace_id);
+  headers.set("x-request-id", ctx.request_id);
+  return new Request(url, { ...init, headers });
+}
 
 /**
  * Route configuration.
@@ -19,7 +39,12 @@ import { getRepoMetadataKey } from "./utils/repo";
 interface Route {
   method: string;
   pattern: RegExp;
-  handler: (request: Request, env: Env, match: RegExpMatchArray) => Promise<Response>;
+  handler: (
+    request: Request,
+    env: Env,
+    match: RegExpMatchArray,
+    ctx: RequestContext
+  ) => Promise<Response>;
 }
 
 /**
@@ -94,12 +119,14 @@ function isSandboxAuthRoute(path: string): boolean {
  * @param request - The incoming request
  * @param env - Environment bindings
  * @param sessionId - Session ID extracted from path
+ * @param ctx - Request correlation context
  * @returns null if authentication passes, or an error Response to return immediately
  */
 async function verifySandboxAuth(
   request: Request,
   env: Env,
-  sessionId: string
+  sessionId: string,
+  ctx: RequestContext
 ): Promise<Response | null> {
   const authHeader = request.headers.get("Authorization");
   if (!authHeader?.startsWith("Bearer ")) {
@@ -113,18 +140,27 @@ async function verifySandboxAuth(
   const stub = env.SESSION.get(doId);
 
   const verifyResponse = await stub.fetch(
-    new Request("http://internal/internal/verify-sandbox-token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token }),
-    })
+    internalRequest(
+      "http://internal/internal/verify-sandbox-token",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      },
+      ctx
+    )
   );
 
   if (!verifyResponse.ok) {
     const clientIP = request.headers.get("CF-Connecting-IP") || "unknown";
-    console.warn(
-      `[auth] Sandbox auth failed for ${request.method} /sessions/${sessionId}/pr from ${clientIP}`
-    );
+    logger.warn("Auth failed: sandbox", {
+      event: "auth.sandbox_failed",
+      http_path: new URL(request.url).pathname,
+      client_ip: clientIP,
+      session_id: sessionId,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
     return error("Unauthorized: Invalid sandbox token", 401);
   }
 
@@ -138,15 +174,21 @@ async function verifySandboxAuth(
  * @param request - The incoming request
  * @param env - Environment bindings
  * @param path - Request path for logging
+ * @param ctx - Request correlation context
  * @returns null if authentication passes, or an error Response to return immediately
  */
 async function requireInternalAuth(
   request: Request,
   env: Env,
-  path: string
+  path: string,
+  ctx: RequestContext
 ): Promise<Response | null> {
   if (!env.INTERNAL_CALLBACK_SECRET) {
-    console.error("[auth] INTERNAL_CALLBACK_SECRET not configured - rejecting request");
+    logger.error("INTERNAL_CALLBACK_SECRET not configured - rejecting request", {
+      event: "auth.misconfigured",
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
     return error("Internal authentication not configured", 500);
   }
 
@@ -157,7 +199,13 @@ async function requireInternalAuth(
 
   if (!isValid) {
     const clientIP = request.headers.get("CF-Connecting-IP") || "unknown";
-    console.warn(`[auth] Authentication failed for ${request.method} ${path} from ${clientIP}`);
+    logger.warn("Auth failed: HMAC", {
+      event: "auth.hmac_failed",
+      http_path: path,
+      client_ip: clientIP,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
     return error("Unauthorized", 401);
   }
 
@@ -294,6 +342,13 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method;
+  const startTime = Date.now();
+
+  // Build correlation context
+  const ctx: RequestContext = {
+    trace_id: request.headers.get("x-trace-id") || crypto.randomUUID(),
+    request_id: crypto.randomUUID().slice(0, 8),
+  };
 
   // CORS preflight
   if (method === "OPTIONS") {
@@ -303,6 +358,8 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
         "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type, Authorization",
         "Access-Control-Max-Age": "86400",
+        "x-request-id": ctx.request_id,
+        "x-trace-id": ctx.trace_id,
       },
     });
   }
@@ -310,7 +367,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
   // Require authentication for non-public routes
   if (!isPublicRoute(path)) {
     // First try HMAC auth (for web app, slack bot, etc.)
-    const hmacAuthError = await requireInternalAuth(request, env, path);
+    const hmacAuthError = await requireInternalAuth(request, env, path, ctx);
 
     if (hmacAuthError) {
       // HMAC auth failed - check if this route accepts sandbox auth
@@ -319,13 +376,15 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
         const sessionIdMatch = path.match(/^\/sessions\/([^/]+)\//);
         if (sessionIdMatch) {
           const sessionId = sessionIdMatch[1];
-          const sandboxAuthError = await verifySandboxAuth(request, env, sessionId);
+          const sandboxAuthError = await verifySandboxAuth(request, env, sessionId, ctx);
           if (!sandboxAuthError) {
             // Sandbox auth passed, continue to route handler
           } else {
             // Both HMAC and sandbox auth failed
             const corsHeaders = new Headers(sandboxAuthError.headers);
             corsHeaders.set("Access-Control-Allow-Origin", "*");
+            corsHeaders.set("x-request-id", ctx.request_id);
+            corsHeaders.set("x-trace-id", ctx.trace_id);
             return new Response(sandboxAuthError.body, {
               status: sandboxAuthError.status,
               statusText: sandboxAuthError.statusText,
@@ -337,6 +396,8 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
         // Not a sandbox auth route, return HMAC auth error
         const corsHeaders = new Headers(hmacAuthError.headers);
         corsHeaders.set("Access-Control-Allow-Origin", "*");
+        corsHeaders.set("x-request-id", ctx.request_id);
+        corsHeaders.set("x-trace-id", ctx.trace_id);
         return new Response(hmacAuthError.body, {
           status: hmacAuthError.status,
           statusText: hmacAuthError.statusText,
@@ -352,20 +413,50 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
 
     const match = path.match(route.pattern);
     if (match) {
+      let response: Response;
+      let outcome: "success" | "error";
       try {
-        const response = await route.handler(request, env, match);
-        // Create new response with CORS headers (original response may be immutable)
-        const corsHeaders = new Headers(response.headers);
-        corsHeaders.set("Access-Control-Allow-Origin", "*");
-        return new Response(response.body, {
-          status: response.status,
-          statusText: response.statusText,
-          headers: corsHeaders,
-        });
+        response = await route.handler(request, env, match, ctx);
+        outcome = response.status >= 500 ? "error" : "success";
       } catch (e) {
-        console.error("Route handler error:", e);
+        const durationMs = Date.now() - startTime;
+        logger.error("http.request", {
+          event: "http.request",
+          request_id: ctx.request_id,
+          trace_id: ctx.trace_id,
+          http_method: method,
+          http_path: path,
+          http_status: 500,
+          duration_ms: durationMs,
+          outcome: "error",
+          error: e instanceof Error ? e : String(e),
+        });
         return error("Internal server error", 500);
       }
+
+      // Create new response with CORS + correlation headers
+      const corsHeaders = new Headers(response.headers);
+      corsHeaders.set("Access-Control-Allow-Origin", "*");
+      corsHeaders.set("x-request-id", ctx.request_id);
+      corsHeaders.set("x-trace-id", ctx.trace_id);
+
+      const durationMs = Date.now() - startTime;
+      logger.info("http.request", {
+        event: "http.request",
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+        http_method: method,
+        http_path: path,
+        http_status: response.status,
+        duration_ms: durationMs,
+        outcome,
+      });
+
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: corsHeaders,
+      });
     }
   }
 
@@ -377,7 +468,8 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
 async function handleListSessions(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray
+  _match: RegExpMatchArray,
+  _ctx: RequestContext
 ): Promise<Response> {
   const url = new URL(request.url);
   const limit = Math.min(parseInt(url.searchParams.get("limit") || "50"), 100);
@@ -408,7 +500,8 @@ async function handleListSessions(
 async function handleCreateSession(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray
+  _match: RegExpMatchArray,
+  ctx: RequestContext
 ): Promise<Response> {
   const body = (await request.json()) as CreateSessionRequest & {
     // Optional GitHub token for PR creation (will be encrypted and stored)
@@ -440,7 +533,9 @@ async function handleCreateSession(
     try {
       githubTokenEncrypted = await encryptToken(body.githubToken, env.TOKEN_ENCRYPTION_KEY);
     } catch (e) {
-      console.error("Failed to encrypt GitHub token:", e);
+      logger.error("Failed to encrypt GitHub token", {
+        error: e instanceof Error ? e : String(e),
+      });
       return error("Failed to process GitHub token", 500);
     }
   }
@@ -454,22 +549,26 @@ async function handleCreateSession(
 
   // Initialize session with user info and optional encrypted token
   const initResponse = await stub.fetch(
-    new Request("http://internal/internal/init", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionName: sessionId, // Pass the session name for WebSocket routing
-        repoOwner,
-        repoName,
-        title: body.title,
-        model: body.model || "claude-haiku-4-5", // Default to haiku for cost efficiency
-        userId,
-        githubLogin,
-        githubName,
-        githubEmail,
-        githubTokenEncrypted, // Pass encrypted token to store with owner
-      }),
-    })
+    internalRequest(
+      "http://internal/internal/init",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionName: sessionId, // Pass the session name for WebSocket routing
+          repoOwner,
+          repoName,
+          title: body.title,
+          model: body.model || "claude-haiku-4-5", // Default to haiku for cost efficiency
+          userId,
+          githubLogin,
+          githubName,
+          githubEmail,
+          githubTokenEncrypted, // Pass encrypted token to store with owner
+        }),
+      },
+      ctx
+    )
   );
 
   if (!initResponse.ok) {
@@ -503,7 +602,8 @@ async function handleCreateSession(
 async function handleGetSession(
   request: Request,
   env: Env,
-  match: RegExpMatchArray
+  match: RegExpMatchArray,
+  ctx: RequestContext
 ): Promise<Response> {
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
@@ -511,7 +611,9 @@ async function handleGetSession(
   const doId = env.SESSION.idFromName(sessionId);
   const stub = env.SESSION.get(doId);
 
-  const response = await stub.fetch(new Request("http://internal/internal/state"));
+  const response = await stub.fetch(
+    internalRequest("http://internal/internal/state", undefined, ctx)
+  );
 
   if (!response.ok) {
     return error("Session not found", 404);
@@ -523,7 +625,8 @@ async function handleGetSession(
 async function handleDeleteSession(
   request: Request,
   env: Env,
-  match: RegExpMatchArray
+  match: RegExpMatchArray,
+  _ctx: RequestContext
 ): Promise<Response> {
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
@@ -540,13 +643,12 @@ async function handleDeleteSession(
 async function handleSessionPrompt(
   request: Request,
   env: Env,
-  match: RegExpMatchArray
+  match: RegExpMatchArray,
+  ctx: RequestContext
 ): Promise<Response> {
-  console.log("handleSessionPrompt: start");
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
 
-  console.log("handleSessionPrompt: sessionId", sessionId);
   const body = (await request.json()) as {
     content: string;
     authorId?: string;
@@ -564,78 +666,86 @@ async function handleSessionPrompt(
     return error("content is required");
   }
 
-  console.log("handleSessionPrompt: getting DO stub");
   const doId = env.SESSION.idFromName(sessionId);
   const stub = env.SESSION.get(doId);
 
-  console.log("handleSessionPrompt: calling DO");
   const response = await stub.fetch(
-    new Request("http://internal/internal/prompt", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        content: body.content,
-        authorId: body.authorId || "anonymous",
-        source: body.source || "web",
-        attachments: body.attachments,
-        callbackContext: body.callbackContext,
-      }),
-    })
+    internalRequest(
+      "http://internal/internal/prompt",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: body.content,
+          authorId: body.authorId || "anonymous",
+          source: body.source || "web",
+          attachments: body.attachments,
+          callbackContext: body.callbackContext,
+        }),
+      },
+      ctx
+    )
   );
 
-  console.log("handleSessionPrompt: response status", response.status);
   return response;
 }
 
 async function handleSessionStop(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray
+  match: RegExpMatchArray,
+  ctx: RequestContext
 ): Promise<Response> {
   const stub = getSessionStub(env, match);
   if (!stub) return error("Session ID required");
 
-  return stub.fetch(new Request("http://internal/internal/stop", { method: "POST" }));
+  return stub.fetch(internalRequest("http://internal/internal/stop", { method: "POST" }, ctx));
 }
 
 async function handleSessionEvents(
   request: Request,
   env: Env,
-  match: RegExpMatchArray
+  match: RegExpMatchArray,
+  ctx: RequestContext
 ): Promise<Response> {
   const stub = getSessionStub(env, match);
   if (!stub) return error("Session ID required");
 
   const url = new URL(request.url);
-  return stub.fetch(new Request(`http://internal/internal/events${url.search}`));
+  return stub.fetch(
+    internalRequest(`http://internal/internal/events${url.search}`, undefined, ctx)
+  );
 }
 
 async function handleSessionArtifacts(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray
+  match: RegExpMatchArray,
+  ctx: RequestContext
 ): Promise<Response> {
   const stub = getSessionStub(env, match);
   if (!stub) return error("Session ID required");
 
-  return stub.fetch(new Request("http://internal/internal/artifacts"));
+  return stub.fetch(internalRequest("http://internal/internal/artifacts", undefined, ctx));
 }
 
 async function handleSessionParticipants(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray
+  match: RegExpMatchArray,
+  ctx: RequestContext
 ): Promise<Response> {
   const stub = getSessionStub(env, match);
   if (!stub) return error("Session ID required");
 
-  return stub.fetch(new Request("http://internal/internal/participants"));
+  return stub.fetch(internalRequest("http://internal/internal/participants", undefined, ctx));
 }
 
 async function handleAddParticipant(
   request: Request,
   env: Env,
-  match: RegExpMatchArray
+  match: RegExpMatchArray,
+  ctx: RequestContext
 ): Promise<Response> {
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
@@ -646,11 +756,15 @@ async function handleAddParticipant(
   const stub = env.SESSION.get(doId);
 
   const response = await stub.fetch(
-    new Request("http://internal/internal/participants", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    })
+    internalRequest(
+      "http://internal/internal/participants",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      ctx
+    )
   );
 
   return response;
@@ -659,19 +773,23 @@ async function handleAddParticipant(
 async function handleSessionMessages(
   request: Request,
   env: Env,
-  match: RegExpMatchArray
+  match: RegExpMatchArray,
+  ctx: RequestContext
 ): Promise<Response> {
   const stub = getSessionStub(env, match);
   if (!stub) return error("Session ID required");
 
   const url = new URL(request.url);
-  return stub.fetch(new Request(`http://internal/internal/messages${url.search}`));
+  return stub.fetch(
+    internalRequest(`http://internal/internal/messages${url.search}`, undefined, ctx)
+  );
 }
 
 async function handleCreatePR(
   request: Request,
   env: Env,
-  match: RegExpMatchArray
+  match: RegExpMatchArray,
+  ctx: RequestContext
 ): Promise<Response> {
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
@@ -690,15 +808,19 @@ async function handleCreatePR(
   const stub = env.SESSION.get(doId);
 
   const response = await stub.fetch(
-    new Request("http://internal/internal/create-pr", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: body.title,
-        body: body.body,
-        baseBranch: body.baseBranch,
-      }),
-    })
+    internalRequest(
+      "http://internal/internal/create-pr",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: body.title,
+          body: body.body,
+          baseBranch: body.baseBranch,
+        }),
+      },
+      ctx
+    )
   );
 
   return response;
@@ -707,7 +829,8 @@ async function handleCreatePR(
 async function handleSessionWsToken(
   request: Request,
   env: Env,
-  match: RegExpMatchArray
+  match: RegExpMatchArray,
+  ctx: RequestContext
 ): Promise<Response> {
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
@@ -732,7 +855,9 @@ async function handleSessionWsToken(
     try {
       githubTokenEncrypted = await encryptToken(body.githubToken, env.TOKEN_ENCRYPTION_KEY);
     } catch (e) {
-      console.error("[router] Failed to encrypt GitHub token:", e);
+      logger.error("Failed to encrypt GitHub token", {
+        error: e instanceof Error ? e : String(e),
+      });
       // Continue without token - PR creation will fail if this user triggers it
     }
   }
@@ -741,19 +866,23 @@ async function handleSessionWsToken(
   const stub = env.SESSION.get(doId);
 
   const response = await stub.fetch(
-    new Request("http://internal/internal/ws-token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        userId: body.userId,
-        githubUserId: body.githubUserId,
-        githubLogin: body.githubLogin,
-        githubName: body.githubName,
-        githubEmail: body.githubEmail,
-        githubTokenEncrypted,
-        githubTokenExpiresAt: body.githubTokenExpiresAt,
-      }),
-    })
+    internalRequest(
+      "http://internal/internal/ws-token",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: body.userId,
+          githubUserId: body.githubUserId,
+          githubLogin: body.githubLogin,
+          githubName: body.githubName,
+          githubEmail: body.githubEmail,
+          githubTokenEncrypted,
+          githubTokenExpiresAt: body.githubTokenExpiresAt,
+        }),
+      },
+      ctx
+    )
   );
 
   return response;
@@ -762,7 +891,8 @@ async function handleSessionWsToken(
 async function handleArchiveSession(
   request: Request,
   env: Env,
-  match: RegExpMatchArray
+  match: RegExpMatchArray,
+  ctx: RequestContext
 ): Promise<Response> {
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
@@ -780,11 +910,15 @@ async function handleArchiveSession(
   const stub = env.SESSION.get(doId);
 
   const response = await stub.fetch(
-    new Request("http://internal/internal/archive", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId }),
-    })
+    internalRequest(
+      "http://internal/internal/archive",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      },
+      ctx
+    )
   );
 
   if (response.ok) {
@@ -803,7 +937,7 @@ async function handleArchiveSession(
         })
       );
     } else {
-      console.warn(`Session ${sessionId} not found in KV index during archive`);
+      logger.warn("Session not found in KV index during archive", { session_id: sessionId });
     }
   }
 
@@ -813,7 +947,8 @@ async function handleArchiveSession(
 async function handleUnarchiveSession(
   request: Request,
   env: Env,
-  match: RegExpMatchArray
+  match: RegExpMatchArray,
+  ctx: RequestContext
 ): Promise<Response> {
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
@@ -831,11 +966,15 @@ async function handleUnarchiveSession(
   const stub = env.SESSION.get(doId);
 
   const response = await stub.fetch(
-    new Request("http://internal/internal/unarchive", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId }),
-    })
+    internalRequest(
+      "http://internal/internal/unarchive",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      },
+      ctx
+    )
   );
 
   if (response.ok) {
@@ -854,7 +993,7 @@ async function handleUnarchiveSession(
         })
       );
     } else {
-      console.warn(`Session ${sessionId} not found in KV index during unarchive`);
+      logger.warn("Session not found in KV index during unarchive", { session_id: sessionId });
     }
   }
 
@@ -878,7 +1017,8 @@ interface CachedReposList {
 async function handleListRepos(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray
+  _match: RegExpMatchArray,
+  _ctx: RequestContext
 ): Promise<Response> {
   const CACHE_KEY = "repos:list";
   const CACHE_TTL = 300; // 5 minutes
@@ -894,7 +1034,7 @@ async function handleListRepos(
       });
     }
   } catch (e) {
-    console.warn("Failed to read repos cache:", e);
+    logger.warn("Failed to read repos cache", { error: e instanceof Error ? e : String(e) });
   }
 
   // Get GitHub App config
@@ -908,7 +1048,9 @@ async function handleListRepos(
   try {
     repos = await listInstallationRepositories(appConfig);
   } catch (e) {
-    console.error("Failed to list installation repositories:", e);
+    logger.error("Failed to list installation repositories", {
+      error: e instanceof Error ? e : String(e),
+    });
     return error("Failed to fetch repositories from GitHub", 500);
   }
 
@@ -928,7 +1070,7 @@ async function handleListRepos(
             // Migrate to new key
             await env.SESSION_INDEX.put(newKey, JSON.stringify(metadata));
             await env.SESSION_INDEX.delete(oldKey);
-            console.log(`Migrated metadata from ${oldKey} to ${newKey}`);
+            logger.info("Migrated repo metadata key", { old_key: oldKey, new_key: newKey });
           }
         }
 
@@ -951,7 +1093,7 @@ async function handleListRepos(
       expirationTtl: CACHE_TTL,
     });
   } catch (e) {
-    console.warn("Failed to cache repos list:", e);
+    logger.warn("Failed to cache repos list", { error: e instanceof Error ? e : String(e) });
   }
 
   return json({
@@ -968,7 +1110,8 @@ async function handleListRepos(
 async function handleUpdateRepoMetadata(
   request: Request,
   env: Env,
-  match: RegExpMatchArray
+  match: RegExpMatchArray,
+  _ctx: RequestContext
 ): Promise<Response> {
   const owner = match.groups?.owner;
   const name = match.groups?.name;
@@ -1007,7 +1150,9 @@ async function handleUpdateRepoMetadata(
       metadata,
     });
   } catch (e) {
-    console.error("Failed to update repo metadata:", e);
+    logger.error("Failed to update repo metadata", {
+      error: e instanceof Error ? e : String(e),
+    });
     return error("Failed to update metadata", 500);
   }
 }
@@ -1018,7 +1163,8 @@ async function handleUpdateRepoMetadata(
 async function handleGetRepoMetadata(
   request: Request,
   env: Env,
-  match: RegExpMatchArray
+  match: RegExpMatchArray,
+  _ctx: RequestContext
 ): Promise<Response> {
   const owner = match.groups?.owner;
   const name = match.groups?.name;
@@ -1045,7 +1191,7 @@ async function handleGetRepoMetadata(
       metadata,
     });
   } catch (e) {
-    console.error("Failed to get repo metadata:", e);
+    logger.error("Failed to get repo metadata", { error: e instanceof Error ? e : String(e) });
     return error("Failed to get metadata", 500);
   }
 }

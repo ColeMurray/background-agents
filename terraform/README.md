@@ -145,6 +145,9 @@ The GitHub Actions workflow (`.github/workflows/terraform.yml`) automates:
 Add these secrets to your repository settings:
 
 ```
+# Deployment
+DEPLOYMENT_NAME          # Unique name for your deployment (e.g., 'acme', 'johndoe')
+
 # Cloudflare
 CLOUDFLARE_API_TOKEN
 CLOUDFLARE_ACCOUNT_ID

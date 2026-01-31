@@ -53,10 +53,7 @@ export default tool({
 
       if (!sessionId) {
         console.log("[create-pull-request] ERROR: Session ID not found")
-        return {
-          content: "Failed to create pull request: Session ID not found in environment. Please check that SESSION_CONFIG is set correctly.",
-          success: false,
-        }
+        return "Failed to create pull request: Session ID not found in environment. Please check that SESSION_CONFIG is set correctly."
       }
 
       // Use the session-specific endpoint
@@ -99,25 +96,16 @@ export default tool({
         }
 
         console.log(`[create-pull-request] ERROR: HTTP ${response.status} - ${errorMessage}`)
-        return {
-          content: userMessage,
-          success: false,
-        }
+        return userMessage
       }
 
       const result = await response.json()
       console.log(`[create-pull-request] SUCCESS: PR #${result.prNumber} created`)
-      return {
-        content: `Pull request created successfully!\n\nPR #${result.prNumber}: ${result.prUrl}\n\nThe PR is now ready for review.`,
-        success: true,
-      }
+      return `Pull request created successfully!\n\nPR #${result.prNumber}: ${result.prUrl}\n\nThe PR is now ready for review.`
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       console.log(`[create-pull-request] ERROR: ${message}`)
-      return {
-        content: `Failed to create pull request: ${message}`,
-        success: false,
-      }
+      return `Failed to create pull request: ${message}`
     }
   },
 })

@@ -178,6 +178,7 @@ jobs:
           TF_VAR_modal_api_secret: ${{ secrets.MODAL_API_SECRET }}
           TF_VAR_allowed_users: ${{ secrets.ALLOWED_USERS }}
           TF_VAR_allowed_email_domains: ${{ secrets.ALLOWED_EMAIL_DOMAINS }}
+          TF_VAR_deployment_name: ${{ secrets.DEPLOYMENT_NAME }}
 
       - name: Post Plan Results
         uses: actions/github-script@v7
@@ -287,6 +288,7 @@ jobs:
           TF_VAR_modal_api_secret: ${{ secrets.MODAL_API_SECRET }}
           TF_VAR_allowed_users: ${{ secrets.ALLOWED_USERS }}
           TF_VAR_allowed_email_domains: ${{ secrets.ALLOWED_EMAIL_DOMAINS }}
+          TF_VAR_deployment_name: ${{ secrets.DEPLOYMENT_NAME }}
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 

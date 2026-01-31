@@ -19,11 +19,14 @@ import { createClassifier } from "./classifier";
 import { getAvailableRepos } from "./classifier/repos";
 import { callbacksRouter } from "./callbacks";
 import { generateInternalToken } from "./utils/internal";
+import { createLogger } from "./logger";
+
+const log = createLogger("handler");
 
 /**
  * Build authenticated headers for control plane requests.
  */
-async function getAuthHeaders(env: Env): Promise<Record<string, string>> {
+async function getAuthHeaders(env: Env, traceId?: string): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -31,6 +34,10 @@ async function getAuthHeaders(env: Env): Promise<Record<string, string>> {
   if (env.INTERNAL_CALLBACK_SECRET) {
     const authToken = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
     headers["Authorization"] = `Bearer ${authToken}`;
+  }
+
+  if (traceId) {
+    headers["x-trace-id"] = traceId;
   }
 
   return headers;
@@ -48,10 +55,18 @@ async function createSession(
   env: Env,
   repo: RepoConfig,
   title?: string,
-  model?: string
+  model?: string,
+  traceId?: string
 ): Promise<{ sessionId: string; status: string } | null> {
+  const startTime = Date.now();
+  const base = {
+    trace_id: traceId,
+    repo_owner: repo.owner,
+    repo_name: repo.name,
+    model: model || env.DEFAULT_MODEL || DEFAULT_FALLBACK_MODEL,
+  };
   try {
-    const headers = await getAuthHeaders(env);
+    const headers = await getAuthHeaders(env, traceId);
     const response = await env.CONTROL_PLANE.fetch("https://internal/sessions", {
       method: "POST",
       headers,
@@ -64,13 +79,31 @@ async function createSession(
     });
 
     if (!response.ok) {
-      console.error(`Failed to create session: ${response.status}`);
+      log.error("control_plane.create_session", {
+        ...base,
+        outcome: "error",
+        http_status: response.status,
+        duration_ms: Date.now() - startTime,
+      });
       return null;
     }
 
-    return (await response.json()) as { sessionId: string; status: string };
+    const result = (await response.json()) as { sessionId: string; status: string };
+    log.info("control_plane.create_session", {
+      ...base,
+      outcome: "success",
+      session_id: result.sessionId,
+      http_status: 200,
+      duration_ms: Date.now() - startTime,
+    });
+    return result;
   } catch (e) {
-    console.error("Error creating session:", e);
+    log.error("control_plane.create_session", {
+      ...base,
+      outcome: "error",
+      error: e instanceof Error ? e : new Error(String(e)),
+      duration_ms: Date.now() - startTime,
+    });
     return null;
   }
 }
@@ -83,10 +116,13 @@ async function sendPrompt(
   sessionId: string,
   content: string,
   authorId: string,
-  callbackContext?: CallbackContext
+  callbackContext?: CallbackContext,
+  traceId?: string
 ): Promise<{ messageId: string } | null> {
+  const startTime = Date.now();
+  const base = { trace_id: traceId, session_id: sessionId, source: "slack" };
   try {
-    const headers = await getAuthHeaders(env);
+    const headers = await getAuthHeaders(env, traceId);
     const response = await env.CONTROL_PLANE.fetch(
       `https://internal/sessions/${sessionId}/prompt`,
       {
@@ -102,13 +138,31 @@ async function sendPrompt(
     );
 
     if (!response.ok) {
-      console.error(`Failed to send prompt: ${response.status}`);
+      log.error("control_plane.send_prompt", {
+        ...base,
+        outcome: "error",
+        http_status: response.status,
+        duration_ms: Date.now() - startTime,
+      });
       return null;
     }
 
-    return (await response.json()) as { messageId: string };
+    const result = (await response.json()) as { messageId: string };
+    log.info("control_plane.send_prompt", {
+      ...base,
+      outcome: "success",
+      message_id: result.messageId,
+      http_status: 200,
+      duration_ms: Date.now() - startTime,
+    });
+    return result;
   } catch (e) {
-    console.error("Error sending prompt:", e);
+    log.error("control_plane.send_prompt", {
+      ...base,
+      outcome: "error",
+      error: e instanceof Error ? e : new Error(String(e)),
+      duration_ms: Date.now() - startTime,
+    });
     return null;
   }
 }
@@ -137,7 +191,12 @@ async function lookupThreadSession(
     }
     return null;
   } catch (e) {
-    console.error(`Error looking up thread session for channel=${channel} thread=${threadTs}:`, e);
+    log.error("kv.get", {
+      key_prefix: "thread",
+      channel,
+      thread_ts: threadTs,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
     return null;
   }
 }
@@ -158,7 +217,12 @@ async function storeThreadSession(
       expirationTtl: 86400, // 24 hours
     });
   } catch (e) {
-    console.error(`Error storing thread session for channel=${channel} thread=${threadTs}:`, e);
+    log.error("kv.put", {
+      key_prefix: "thread",
+      channel,
+      thread_ts: threadTs,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
   }
 }
 
@@ -170,7 +234,12 @@ async function clearThreadSession(env: Env, channel: string, threadTs: string): 
     const key = getThreadSessionKey(channel, threadTs);
     await env.SLACK_KV.delete(key);
   } catch (e) {
-    console.error(`Error clearing thread session for channel=${channel} thread=${threadTs}:`, e);
+    log.error("kv.delete", {
+      key_prefix: "thread",
+      channel,
+      thread_ts: threadTs,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
   }
 }
 
@@ -235,7 +304,11 @@ async function getUserPreferences(env: Env, userId: string): Promise<UserPrefere
     }
     return null;
   } catch (e) {
-    console.error(`Error getting user preferences for ${userId}:`, e);
+    log.error("kv.get", {
+      key_prefix: "user_prefs",
+      user_id: userId,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
     return null;
   }
 }
@@ -256,7 +329,11 @@ async function saveUserPreferences(env: Env, userId: string, model: string): Pro
     await env.SLACK_KV.put(key, JSON.stringify(prefs));
     return true;
   } catch (e) {
-    console.error(`Error saving user preferences for ${userId}:`, e);
+    log.error("kv.put", {
+      key_prefix: "user_prefs",
+      user_id: userId,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
     return false;
   }
 }
@@ -327,7 +404,7 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
 
   const result = await publishView(env.SLACK_BOT_TOKEN, userId, view);
   if (!result.ok) {
-    console.error(`Failed to publish App Home for ${userId}:`, result.error);
+    log.error("slack.app_home", { user_id: userId, outcome: "error", slack_error: result.error });
   }
 }
 
@@ -345,6 +422,32 @@ function buildThreadSession(sessionId: string, repo: RepoConfig, model: string):
 }
 
 /**
+ * Format thread context for inclusion in a prompt.
+ * Returns a formatted string with previous messages from the thread.
+ */
+function formatThreadContext(previousMessages: string[]): string {
+  if (previousMessages.length === 0) {
+    return "";
+  }
+
+  const context = previousMessages.join("\n");
+  return `Context from the Slack thread:\n---\n${context}\n---\n\n`;
+}
+
+/**
+ * Format channel context for inclusion in a prompt.
+ * Returns a formatted string with the channel name and optional description.
+ */
+function formatChannelContext(channelName: string, channelDescription?: string): string {
+  let context = `Slack channel context:\n---\nChannel: #${channelName}`;
+  if (channelDescription) {
+    context += `\nDescription: ${channelDescription}`;
+  }
+  context += "\n---\n\n";
+  return context;
+}
+
+/**
  * Create a session and send the initial prompt.
  * Shared logic between handleAppMention and handleRepoSelection.
  *
@@ -356,7 +459,11 @@ async function startSessionAndSendPrompt(
   channel: string,
   threadTs: string,
   messageText: string,
-  userId: string
+  userId: string,
+  previousMessages?: string[],
+  channelName?: string,
+  channelDescription?: string,
+  traceId?: string
 ): Promise<{ sessionId: string } | null> {
   // Fetch user's preferred model and validate it
   const userPrefs = await getUserPreferences(env, userId);
@@ -364,7 +471,7 @@ async function startSessionAndSendPrompt(
   const model = normalizeModel(userPrefs?.model, fallback);
 
   // Create session via control plane with user's preferred model
-  const session = await createSession(env, repo, messageText.slice(0, 100), model);
+  const session = await createSession(env, repo, messageText.slice(0, 100), model, traceId);
 
   if (!session) {
     await postMessage(
@@ -391,13 +498,19 @@ async function startSessionAndSendPrompt(
     model,
   };
 
+  // Build prompt content with channel and thread context if available
+  const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
+  const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
+  const promptContent = channelContext + threadContext + messageText;
+
   // Send the prompt to the session
   const promptResult = await sendPrompt(
     env,
     session.sessionId,
-    messageText,
+    promptContent,
     `slack:${userId}`,
-    callbackContext
+    callbackContext,
+    traceId
   );
 
   if (!promptResult) {
@@ -452,6 +565,8 @@ app.get("/health", async (c) => {
 
 // Slack Events API
 app.post("/events", async (c) => {
+  const startTime = Date.now();
+  const traceId = crypto.randomUUID();
   const signature = c.req.header("x-slack-signature") ?? null;
   const timestamp = c.req.header("x-slack-request-timestamp") ?? null;
   const body = await c.req.text();
@@ -465,7 +580,15 @@ app.post("/events", async (c) => {
   );
 
   if (!isValid) {
-    console.error("Invalid Slack signature");
+    log.warn("http.request", {
+      trace_id: traceId,
+      http_method: "POST",
+      http_path: "/events",
+      http_status: 401,
+      outcome: "rejected",
+      reject_reason: "invalid_signature",
+      duration_ms: Date.now() - startTime,
+    });
     return c.json({ error: "Invalid signature" }, 401);
   }
 
@@ -483,7 +606,7 @@ app.post("/events", async (c) => {
     const dedupeKey = `event:${eventId}`;
     const existing = await c.env.SLACK_KV.get(dedupeKey);
     if (existing) {
-      console.log(`Ignoring duplicate event: ${eventId}`);
+      log.debug("slack.event.duplicate", { trace_id: traceId, event_id: eventId });
       return c.json({ ok: true });
     }
     // Mark as seen with 1 hour TTL (Slack retries are within minutes)
@@ -491,7 +614,17 @@ app.post("/events", async (c) => {
   }
 
   // Process event asynchronously
-  c.executionCtx.waitUntil(handleSlackEvent(payload, c.env));
+  c.executionCtx.waitUntil(handleSlackEvent(payload, c.env, traceId));
+
+  log.info("http.request", {
+    trace_id: traceId,
+    http_method: "POST",
+    http_path: "/events",
+    http_status: 200,
+    event_id: eventId,
+    event_type: payload.event?.type,
+    duration_ms: Date.now() - startTime,
+  });
 
   // Respond immediately (Slack requires response within 3 seconds)
   return c.json({ ok: true });
@@ -499,6 +632,8 @@ app.post("/events", async (c) => {
 
 // Slack Interactions (buttons, modals, etc.)
 app.post("/interactions", async (c) => {
+  const startTime = Date.now();
+  const traceId = crypto.randomUUID();
   const signature = c.req.header("x-slack-signature") ?? null;
   const timestamp = c.req.header("x-slack-request-timestamp") ?? null;
   const body = await c.req.text();
@@ -511,13 +646,31 @@ app.post("/interactions", async (c) => {
   );
 
   if (!isValid) {
+    log.warn("http.request", {
+      trace_id: traceId,
+      http_method: "POST",
+      http_path: "/interactions",
+      http_status: 401,
+      outcome: "rejected",
+      reject_reason: "invalid_signature",
+      duration_ms: Date.now() - startTime,
+    });
     return c.json({ error: "Invalid signature" }, 401);
   }
 
   const payloadStr = new URLSearchParams(body).get("payload") || "{}";
   const payload = JSON.parse(payloadStr);
 
-  c.executionCtx.waitUntil(handleSlackInteraction(payload, c.env));
+  c.executionCtx.waitUntil(handleSlackInteraction(payload, c.env, traceId));
+
+  log.info("http.request", {
+    trace_id: traceId,
+    http_method: "POST",
+    http_path: "/interactions",
+    http_status: 200,
+    action_id: payload.actions?.[0]?.action_id,
+    duration_ms: Date.now() - startTime,
+  });
 
   return c.json({ ok: true });
 });
@@ -542,7 +695,8 @@ async function handleSlackEvent(
       tab?: string;
     };
   },
-  env: Env
+  env: Env,
+  traceId?: string
 ): Promise<void> {
   if (payload.type !== "event_callback" || !payload.event) {
     return;
@@ -563,7 +717,7 @@ async function handleSlackEvent(
 
   // Handle app_mention events
   if (event.type === "app_mention" && event.text && event.channel && event.ts) {
-    await handleAppMention(event as Required<typeof event>, env);
+    await handleAppMention(event as Required<typeof event>, env, traceId);
   }
 }
 
@@ -579,7 +733,8 @@ async function handleAppMention(
     ts: string;
     thread_ts?: string;
   },
-  env: Env
+  env: Env,
+  traceId?: string
 ): Promise<void> {
   const { text, channel, ts, thread_ts } = event;
 
@@ -596,50 +751,8 @@ async function handleAppMention(
     return;
   }
 
-  if (thread_ts) {
-    const existingSession = await lookupThreadSession(env, channel, thread_ts);
-    if (existingSession) {
-      const callbackContext: CallbackContext = {
-        channel,
-        threadTs: thread_ts,
-        repoFullName: existingSession.repoFullName,
-        model: existingSession.model,
-      };
-
-      const promptResult = await sendPrompt(
-        env,
-        existingSession.sessionId,
-        messageText,
-        `slack:${event.user}`,
-        callbackContext
-      );
-
-      if (promptResult) {
-        return;
-      }
-
-      console.warn(
-        `Failed to send to existing session ${existingSession.sessionId} for channel=${channel} thread=${thread_ts}, clearing stale mapping`
-      );
-      await clearThreadSession(env, channel, thread_ts);
-    }
-  }
-
-  // Get channel context
-  let channelName: string | undefined;
-  let channelDescription: string | undefined;
-
-  try {
-    const channelInfo = await getChannelInfo(env.SLACK_BOT_TOKEN, channel);
-    if (channelInfo.ok && channelInfo.channel) {
-      channelName = channelInfo.channel.name;
-      channelDescription = channelInfo.channel.topic?.value || channelInfo.channel.purpose?.value;
-    }
-  } catch {
-    // Channel info not available
-  }
-
   // Get thread context if in a thread (include bot messages for better context)
+  // Fetched early so it's available for both existing session prompts and new sessions
   let previousMessages: string[] | undefined;
   if (thread_ts) {
     try {
@@ -655,20 +768,77 @@ async function handleAppMention(
     }
   }
 
+  // Get channel context (fetched early so it's available for all paths)
+  let channelName: string | undefined;
+  let channelDescription: string | undefined;
+
+  try {
+    const channelInfo = await getChannelInfo(env.SLACK_BOT_TOKEN, channel);
+    if (channelInfo.ok && channelInfo.channel) {
+      channelName = channelInfo.channel.name;
+      channelDescription = channelInfo.channel.topic?.value || channelInfo.channel.purpose?.value;
+    }
+  } catch {
+    // Channel info not available
+  }
+
+  if (thread_ts) {
+    const existingSession = await lookupThreadSession(env, channel, thread_ts);
+    if (existingSession) {
+      const callbackContext: CallbackContext = {
+        channel,
+        threadTs: thread_ts,
+        repoFullName: existingSession.repoFullName,
+        model: existingSession.model,
+      };
+
+      const channelContext = channelName
+        ? formatChannelContext(channelName, channelDescription)
+        : "";
+      const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
+      const promptContent = channelContext + threadContext + messageText;
+
+      const promptResult = await sendPrompt(
+        env,
+        existingSession.sessionId,
+        promptContent,
+        `slack:${event.user}`,
+        callbackContext,
+        traceId
+      );
+
+      if (promptResult) {
+        return;
+      }
+
+      log.warn("thread_session.stale", {
+        trace_id: traceId,
+        session_id: existingSession.sessionId,
+        channel,
+        thread_ts,
+      });
+      await clearThreadSession(env, channel, thread_ts);
+    }
+  }
+
   // Classify the repository
   const classifier = createClassifier(env);
-  const result = await classifier.classify(messageText, {
-    channelId: channel,
-    channelName,
-    channelDescription,
-    threadTs: thread_ts,
-    previousMessages,
-  });
+  const result = await classifier.classify(
+    messageText,
+    {
+      channelId: channel,
+      channelName,
+      channelDescription,
+      threadTs: thread_ts,
+      previousMessages,
+    },
+    traceId
+  );
 
   // Post initial response
   if (result.needsClarification || !result.repo) {
     // Need to clarify which repo
-    const repos = await getAvailableRepos(env);
+    const repos = await getAvailableRepos(env, traceId);
 
     if (repos.length === 0) {
       await postMessage(
@@ -684,7 +854,13 @@ async function handleAppMention(
     const pendingKey = `pending:${channel}:${thread_ts || ts}`;
     await env.SLACK_KV.put(
       pendingKey,
-      JSON.stringify({ message: messageText, userId: event.user }),
+      JSON.stringify({
+        message: messageText,
+        userId: event.user,
+        previousMessages,
+        channelName,
+        channelDescription,
+      }),
       { expirationTtl: 3600 } // Expire after 1 hour
     );
 
@@ -769,7 +945,11 @@ async function handleAppMention(
     channel,
     threadKey,
     messageText,
-    event.user
+    event.user,
+    previousMessages,
+    channelName,
+    channelDescription,
+    traceId
   );
 
   if (!sessionResult) {
@@ -817,7 +997,8 @@ async function handleRepoSelection(
   channel: string,
   messageTs: string,
   threadTs: string | undefined,
-  env: Env
+  env: Env,
+  traceId?: string
 ): Promise<void> {
   // Retrieve pending message from KV
   const pendingKey = `pending:${channel}:${threadTs || messageTs}`;
@@ -833,10 +1014,22 @@ async function handleRepoSelection(
     return;
   }
 
-  const { message: messageText, userId } = pendingData as { message: string; userId: string };
+  const {
+    message: messageText,
+    userId,
+    previousMessages,
+    channelName,
+    channelDescription,
+  } = pendingData as {
+    message: string;
+    userId: string;
+    previousMessages?: string[];
+    channelName?: string;
+    channelDescription?: string;
+  };
 
   // Find the repo config
-  const repos = await getAvailableRepos(env);
+  const repos = await getAvailableRepos(env, traceId);
   const repo = repos.find((r) => r.id === repoId);
 
   if (!repo) {
@@ -863,7 +1056,11 @@ async function handleRepoSelection(
     channel,
     threadKey,
     messageText,
-    userId
+    userId,
+    previousMessages,
+    channelName,
+    channelDescription,
+    traceId
   );
 
   if (!sessionResult) {
@@ -891,7 +1088,8 @@ async function handleSlackInteraction(
     message?: { ts: string; thread_ts?: string };
     user?: { id: string };
   },
-  env: Env
+  env: Env,
+  traceId?: string
 ): Promise<void> {
   if (payload.type !== "block_actions" || !payload.actions?.length) {
     return;
@@ -919,7 +1117,7 @@ async function handleSlackInteraction(
       if (!channel || !messageTs) return;
       const repoId = action.selected_option?.value;
       if (repoId) {
-        await handleRepoSelection(repoId, channel, messageTs, threadTs, env);
+        await handleRepoSelection(repoId, channel, messageTs, threadTs, env, traceId);
       }
       break;
     }
