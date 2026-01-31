@@ -10,6 +10,90 @@ to enable; omit or leave empty to disable Linear (API returns 503).
 
 ---
 
+## Testing the Linear integration
+
+### 1. Get a Linear API key
+
+1. In Linear: **Settings → API** (or **Security & access → Personal API keys**).
+2. Create a personal API key and copy it.
+
+### 2. Configure the control plane
+
+**Terraform (same as your other secrets):**
+
+- Add to your `terraform.tfvars` (in `terraform/environments/production/` or your env):
+  ```hcl
+  linear_api_key = "lin_api_..."
+  ```
+- Run `terraform apply`. Terraform passes `LINEAR_API_KEY` to the control-plane worker; no need to
+  set it in the Cloudflare dashboard or wrangler.
+
+**Only if you run the control plane locally** (e.g. `wrangler dev` without Terraform): use
+`.dev.vars` or your local env so the worker has `LINEAR_API_KEY`. For normal deployed setups,
+Terraform is enough.
+
+### 3. Run the web app
+
+- Start the web app (e.g. `npm run dev` in `packages/web`).
+- Ensure `.env` has:
+  - `CONTROL_PLANE_URL` = your control plane base URL (e.g.
+    `https://open-inspect-control-plane.xxx.workers.dev` or `http://localhost:8787` for local).
+  - `INTERNAL_CALLBACK_SECRET` = same value as on the control plane.
+  - `NEXT_PUBLIC_WS_URL` = same host as control plane, with `wss://` (or `ws://` for local).
+
+### 4. Test in the UI
+
+1. **Create a session** (repo, then start session).
+2. **Link session to an existing Linear issue** (optional, no agent required):
+   - In the right sidebar under **Metadata**, click **Link to Linear**.
+   - Choose a **Team**, then pick an **Issue** and click **Link**. The sidebar shows “Linked to
+     Linear” and the link updates live (no refresh needed). Use **Change** to pick a different issue
+     or **Unlink** to clear.
+   - When a session has a linked issue and you spawn a sandbox, the control plane passes that
+     issue’s context into the sandbox so the agent can see it.
+3. **Task-level linking** (after the agent emits TodoWrite):
+   - Send a prompt that leads to tasks (e.g. “Break this into a short task list and do the first
+     one”). Wait until the agent emits at least one **TodoWrite** so the right sidebar shows a
+     **Tasks** section.
+   - Under a task, click **Link to Linear** → choose **Team** and an issue → **Link**; or **Create
+     issue** → choose **Team**, optionally edit title/description → **Create**.
+   - **Refresh the page** so the task shows the Linear badge/link (task-level links are reflected
+     after refresh).
+4. **Session-level link + sandbox context**
+   - If a session has a linked Linear issue and you spawn a sandbox, the control plane fetches the
+     issue and passes optional `linear` context into the Modal session config so the agent can see
+     the issue (e.g. title/description).
+
+### Troubleshooting
+
+- **“Linear integration not configured”** or **503** on Linear routes: control plane has no
+  `LINEAR_API_KEY` or it’s empty. Set it as above.
+- **Teams or issues don’t load**: Check browser Network tab for `/api/linear/teams` or
+  `/api/linear/issues`; if 401, auth (NextAuth session) is missing; if 503, control plane Linear
+  config is missing or Linear API key is invalid.
+- **Link/Create succeeds but badge doesn’t show**: State is updated on the server; **refresh the
+  page** to refetch session state and see the new link.
+- **Tasks section never appears (no TodoWrite tasks)**:
+  1. **Check Modal logs** so the bridge can be debugged:
+     ```bash
+     cd packages/modal-infra && modal app logs open-inspect
+     ```
+     (Use your app name if different.) Reproduce the run (send a prompt that should trigger
+     TodoWrite), then look for:
+     - `[bridge] Tool part: tool=...` — confirms the bridge saw a tool part; check `has_todos=True`
+       for TodoWrite.
+     - `[bridge] Skipping tool_call (no input yet): part_keys=..., state_keys=...` — part arrived
+       without args; if you see this for `todo_write`/`TodoWrite`, OpenCode may be sending args in a
+       different shape (share `part_keys`/`state_keys` to adjust the bridge).
+     - `[bridge] Sent event: tool_call` — bridge did send a tool_call; if tasks still don’t show,
+       the issue is downstream (control plane or web app).
+  2. Ensure the agent actually uses the TodoWrite tool (e.g. “Break this into a short task list and
+     do the first one” and confirm in the agent UI that a todo_write/TodoWrite call appears).
+  3. Refresh the session page after the run so the client gets the latest events from the control
+     plane.
+
+---
+
 ## 1. Critique of the Original Plan
 
 ### What works well

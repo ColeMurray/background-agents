@@ -88,3 +88,4 @@ terraform.rc
 # Internal docs (kept locally)
 docs/internal/
 .env*.local
+commit_message.txt

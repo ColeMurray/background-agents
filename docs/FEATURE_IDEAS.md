@@ -408,5 +408,24 @@ users notice
 
 ## Related Documents
 
+- [RFC Index](./rfcs/README.md) - Detailed technical designs for all features
 - [Linear Integration Plan](./LINEAR_INTEGRATION_PLAN.md) - Already planned
 - [Getting Started](./GETTING_STARTED.md) - Deployment guide
+
+## Detailed RFCs
+
+Each feature has a detailed RFC with technical design, data models, API specs, and implementation
+plans:
+
+| Feature                             | RFC                                                |
+| ----------------------------------- | -------------------------------------------------- |
+| Session Replay & Time Travel        | [RFC-001](./rfcs/001-session-replay.md)            |
+| Smart Session Templates (Playbooks) | [RFC-002](./rfcs/002-playbooks.md)                 |
+| Cross-Session Memory & Context      | [RFC-003](./rfcs/003-cross-session-memory.md)      |
+| Figma Integration                   | [RFC-004](./rfcs/004-figma-integration.md)         |
+| GitHub Issues Integration           | [RFC-005](./rfcs/005-github-issues-integration.md) |
+| Scheduled & Triggered Runs          | [RFC-006](./rfcs/006-scheduled-runs.md)            |
+| Annotation Layer                    | [RFC-007](./rfcs/007-annotation-layer.md)          |
+| Voice Interface                     | [RFC-008](./rfcs/008-voice-interface.md)           |
+| Microsoft Teams Integration         | [RFC-009](./rfcs/009-teams-integration.md)         |
+| Analytics & Insights Dashboard      | [RFC-010](./rfcs/010-analytics-dashboard.md)       |

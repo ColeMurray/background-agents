@@ -160,7 +160,8 @@ export function formatToolCall(event: SandboxEvent): FormattedToolCall {
       };
     }
 
-    case "TodoWrite": {
+    case "TodoWrite":
+    case "todo_write": {
       const todos = args?.todos as unknown[] | undefined;
       return {
         toolName: "TodoWrite",

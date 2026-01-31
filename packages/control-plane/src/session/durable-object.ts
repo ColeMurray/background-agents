@@ -197,6 +197,11 @@ export class SessionDO extends DurableObject<Env> {
       path: "/internal/linear/link-task",
       handler: (req) => this.handleLinearLinkTask(req),
     },
+    {
+      method: "POST",
+      path: "/internal/linear/link-session",
+      handler: (req) => this.handleLinearLinkSession(req),
+    },
   ];
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -2462,6 +2467,71 @@ export class SessionDO extends DurableObject<Env> {
       console.error("[DO] handleLinearLinkTask error:", e);
       return Response.json(
         { error: e instanceof Error ? e.message : "Failed to link task" },
+        { status: 500 }
+      );
+    }
+  }
+
+  /**
+   * Link or unlink the session to/from an existing Linear issue.
+   * Body: { linearIssueId: string | null, linearTeamId?: string | null }
+   */
+  private async handleLinearLinkSession(request: Request): Promise<Response> {
+    try {
+      const body = (await request.json()) as {
+        linearIssueId: string | null;
+        linearTeamId?: string | null;
+      };
+      const linearIssueId =
+        body.linearIssueId === undefined ? undefined : (body.linearIssueId ?? null);
+      const linearTeamId =
+        body.linearTeamId === undefined ? undefined : (body.linearTeamId ?? null);
+
+      const session = this.sql.exec(`SELECT id FROM session LIMIT 1`).toArray() as Array<{
+        id: string;
+      }>;
+      if (!session.length) {
+        return Response.json({ error: "Session not found" }, { status: 404 });
+      }
+
+      if (linearIssueId !== undefined) {
+        this.sql.exec(
+          `UPDATE session SET linear_issue_id = ? WHERE id = ?`,
+          linearIssueId,
+          session[0].id
+        );
+      }
+      if (linearTeamId !== undefined) {
+        this.sql.exec(
+          `UPDATE session SET linear_team_id = ? WHERE id = ?`,
+          linearTeamId,
+          session[0].id
+        );
+      }
+
+      const updated = this.sql
+        .exec(`SELECT linear_issue_id, linear_team_id FROM session LIMIT 1`)
+        .toArray() as Array<{ linear_issue_id: string | null; linear_team_id: string | null }>;
+      const result = updated[0]
+        ? {
+            linearIssueId: updated[0].linear_issue_id ?? undefined,
+            linearTeamId: updated[0].linear_team_id ?? undefined,
+          }
+        : {};
+
+      this.broadcast({
+        type: "session_state_patch",
+        patch: {
+          linearIssueId: result.linearIssueId ?? null,
+          linearTeamId: result.linearTeamId ?? null,
+        },
+      });
+
+      return Response.json({ ok: true, ...result });
+    } catch (e) {
+      console.error("[DO] handleLinearLinkSession error:", e);
+      return Response.json(
+        { error: e instanceof Error ? e.message : "Failed to link session to Linear" },
         { status: 500 }
       );
     }

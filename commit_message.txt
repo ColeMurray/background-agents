@@ -1,29 +1,20 @@
-feat(linear): add Linear integration for task and issue linking
+feat(linear): session-level link to existing Linear issue + bridge state.raw for TodoWrite
 
-Control plane:
-- Linear GraphQL client (listIssues, listTeams, createIssue, updateIssue, getIssue)
-- Routes: GET /linear/issues, GET /linear/teams, POST /sessions/:id/linear/link-task,
-  POST /sessions/:id/linear/create-issue, PATCH /linear/issues/:id
-- Schema: session.linear_issue_id, linear_team_id; task_linear_links table
-- DO: internal/linear/link-task; state includes linearIssueId, linearTeamId, taskLinearLinks
-- Broadcast/replay events include id and messageId for stable task keys
-- Spawn sandbox: optional linear context in Modal config when session has linked issue
+Session-level "Link to Linear":
+- Control plane: POST /sessions/:id/linear/link-session, handleLinearLinkSession in DO;
+  updates session.linear_issue_id/linear_team_id, broadcasts session_state_patch
+- Router: handleLinearLinkSession, forward only present body keys
+- Types: session_state_patch ServerMessage with patch.linearIssueId/linearTeamId
+- Web: POST /api/sessions/[id]/linear/link-session, linkSessionToLinear() in lib/linear
+- use-session-socket: handle session_state_patch and merge into sessionState
+- Metadata section: "Link to Linear" when unlinked; when linked show link + Change/Unlink,
+  LinkSessionToLinearModal (team → issue picker → link). Pass sessionId into MetadataSection.
+- Docs: LINEAR_INTEGRATION_PLAN testing steps updated (session link first, then task-level)
 
-Modal:
-- SessionConfig.linear (LinearContext); web_api accepts linear in create-sandbox payload
-
-Web:
-- Task type with messageId, eventId, taskIndex; TaskLinearLink, LinearIssue types
-- extractLatestTasks returns task keys for linking
-- API routes proxying to control plane for Linear; lib/linear client helpers
-- Tasks section: Linear badge, Link to Linear (picker), Create issue (team required)
-- Metadata: Linked to Linear when session has linearIssueId
-- Session state and sidebar pass sessionId, taskLinearLinks
-
-Terraform:
-- Optional linear_api_key (LINEAR_API_KEY) for control plane worker
+Bridge TodoWrite / tool_call:
+- modal-infra bridge: when state.input is empty, use state.raw as tool args (dict or
+  JSON string). OpenCode sends first part update with status=pending and args in state.raw.
+- Log has_todos and part_keys/state_keys when skipping for debugging.
 
 Docs:
-- LINEAR_INTEGRATION_PLAN with Phase 1 implementation notes
-
-Also: remove design-lab page
+- Troubleshooting: "Tasks section never appears" with Modal logs and what to look for.

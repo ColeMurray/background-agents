@@ -54,6 +54,22 @@ export async function listLinearIssues(
   return res.json() as Promise<ListLinearIssuesResult>;
 }
 
+/** Link or unlink the session to/from an existing Linear issue. Pass linearIssueId: null to unlink. */
+export async function linkSessionToLinear(
+  sessionId: string,
+  payload: { linearIssueId: string | null; linearTeamId?: string | null }
+): Promise<void> {
+  const res = await fetch(`/api/sessions/${sessionId}/linear/link-session`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error ?? "Failed to link session to Linear");
+  }
+}
+
 export async function linkTaskToLinear(
   sessionId: string,
   payload: { messageId: string; eventId: string; taskIndex: number; linearIssueId: string }

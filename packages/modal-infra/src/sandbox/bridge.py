@@ -409,19 +409,47 @@ class AgentBridge:
         elif part_type == "tool":
             state = part.get("state", {})
             status = state.get("status", "")
-            tool_input = state.get("input", {})
+            # OpenCode may put tool args in state.input, state.args, state.raw, or top-level part.input / part.args
+            tool_input = (
+                state.get("input")
+                or state.get("args")
+                or part.get("input")
+                or part.get("args")
+                or {}
+            )
+            if not isinstance(tool_input, dict):
+                tool_input = {}
+            # OpenCode sometimes sends raw JSON in state.raw when state.input is empty (e.g. first part update)
+            if not tool_input and state.get("raw") is not None:
+                raw = state.get("raw")
+                if isinstance(raw, dict):
+                    tool_input = raw
+                elif isinstance(raw, str) and raw.strip():
+                    try:
+                        parsed = json.loads(raw)
+                        if isinstance(parsed, dict):
+                            tool_input = parsed
+                    except (json.JSONDecodeError, TypeError):
+                        pass
 
             output = state.get("output", "")
+            tool_name = part.get("tool", "")
+            has_todos = isinstance(tool_input.get("todos"), list)
             print(
-                f"[bridge] Tool part: tool={part.get('tool')}, status={status}, input_keys={list(tool_input.keys()) if tool_input else 'empty'}"
+                f"[bridge] Tool part: tool={tool_name}, status={status}, "
+                f"input_keys={list(tool_input.keys()) if tool_input else 'empty'}, has_todos={has_todos}"
             )
             if status == "error" and output:
                 print(
                     f"[bridge] Tool error output: {output[:500]}{'...' if len(output) > 500 else ''}"
                 )
 
+            # Skip only when we have no args and part is still pending (args may arrive in a later update)
             if status in ("pending", "") and not tool_input:
-                print(f"[bridge] Skipping tool_call in {status} state with no input")
+                print(
+                    f"[bridge] Skipping tool_call (no input yet): part_keys={list(part.keys())}, "
+                    f"state_keys={list(state.keys()) if state else []}"
+                )
                 return None
 
             return {

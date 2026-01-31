@@ -302,6 +302,11 @@ const routes: Route[] = [
   },
   {
     method: "POST",
+    pattern: parsePattern("/sessions/:id/linear/link-session"),
+    handler: handleLinearLinkSession,
+  },
+  {
+    method: "POST",
     pattern: parsePattern("/sessions/:id/linear/create-issue"),
     handler: handleLinearCreateIssue,
   },
@@ -1014,6 +1019,40 @@ async function handleLinearLinkTask(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+    })
+  );
+  return response;
+}
+
+async function handleLinearLinkSession(
+  request: Request,
+  env: Env,
+  match: RegExpMatchArray
+): Promise<Response> {
+  const sessionId = match.groups?.id;
+  if (!sessionId) return error("Session ID required");
+
+  let body: { linearIssueId?: string | null; linearTeamId?: string | null };
+  try {
+    body = (await request.json()) as {
+      linearIssueId?: string | null;
+      linearTeamId?: string | null;
+    };
+  } catch {
+    return error("Invalid JSON body", 400);
+  }
+  const payload: { linearIssueId?: string | null; linearTeamId?: string | null } = {};
+  if ("linearIssueId" in body) payload.linearIssueId = body.linearIssueId ?? null;
+  if ("linearTeamId" in body) payload.linearTeamId = body.linearTeamId ?? null;
+
+  const stub = getSessionStub(env, match);
+  if (!stub) return error("Session ID required");
+
+  const response = await stub.fetch(
+    new Request("http://internal/internal/linear/link-session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     })
   );
   return response;

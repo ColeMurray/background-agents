@@ -1,11 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { formatModelName, truncateBranch, copyToClipboard } from "@/lib/format";
 import { formatRelativeTime } from "@/lib/time";
 import type { Artifact } from "@/types/session";
+import { listLinearTeams, listLinearIssues, linkSessionToLinear } from "@/lib/linear";
+import type { LinearTeam } from "@/lib/linear";
+import type { LinearIssue } from "@/types/session";
 
 interface MetadataSectionProps {
+  sessionId: string;
   createdAt: number;
   model?: string;
   branchName?: string;
@@ -16,6 +20,7 @@ interface MetadataSectionProps {
 }
 
 export function MetadataSection({
+  sessionId,
   createdAt,
   model,
   branchName,
@@ -25,6 +30,8 @@ export function MetadataSection({
   linearIssueId,
 }: MetadataSectionProps) {
   const [copied, setCopied] = useState(false);
+  const [linkModalOpen, setLinkModalOpen] = useState(false);
+  const [unlinkLoading, setUnlinkLoading] = useState(false);
 
   const prArtifact = artifacts.find((a) => a.type === "pr");
   const prNumber = prArtifact?.metadata?.prNumber;
@@ -73,19 +80,60 @@ export function MetadataSection({
         </div>
       )}
 
-      {/* Linear link (session-level) */}
-      {linearIssueId && (
-        <div className="flex items-center gap-2 text-sm">
-          <LinearIcon className="w-4 h-4 text-muted-foreground" />
-          <a
-            href={`https://linear.app/issue/${linearIssueId}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-accent hover:underline"
+      {/* Linear link (session-level): link / change / unlink */}
+      <div className="flex items-center gap-2 text-sm">
+        <LinearIcon className="w-4 h-4 text-muted-foreground shrink-0" />
+        {linearIssueId ? (
+          <span className="flex items-center gap-2 flex-wrap">
+            <a
+              href={`https://linear.app/issue/${linearIssueId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-accent hover:underline"
+            >
+              Linked to Linear
+            </a>
+            <button
+              type="button"
+              onClick={() => setLinkModalOpen(true)}
+              className="text-muted-foreground hover:text-foreground text-xs"
+            >
+              Change
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                if (unlinkLoading) return;
+                setUnlinkLoading(true);
+                try {
+                  await linkSessionToLinear(sessionId, { linearIssueId: null });
+                  setLinkModalOpen(false);
+                } finally {
+                  setUnlinkLoading(false);
+                }
+              }}
+              disabled={unlinkLoading}
+              className="text-muted-foreground hover:text-foreground text-xs disabled:opacity-50"
+            >
+              {unlinkLoading ? "…" : "Unlink"}
+            </button>
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setLinkModalOpen(true)}
+            className="text-accent hover:underline text-left"
           >
-            Linked to Linear
-          </a>
-        </div>
+            Link to Linear
+          </button>
+        )}
+      </div>
+      {linkModalOpen && (
+        <LinkSessionToLinearModal
+          sessionId={sessionId}
+          onClose={() => setLinkModalOpen(false)}
+          onLinked={() => setLinkModalOpen(false)}
+        />
       )}
 
       {/* PR Badge */}
@@ -197,6 +245,152 @@ export function MetadataSection({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function LinkSessionToLinearModal({
+  sessionId,
+  onClose,
+  onLinked,
+}: {
+  sessionId: string;
+  onClose: () => void;
+  onLinked: () => void;
+}) {
+  const [teams, setTeams] = useState<LinearTeam[]>([]);
+  const [selectedTeamId, setSelectedTeamId] = useState<string>("");
+  const [issues, setIssues] = useState<LinearIssue[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadTeams = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const t = await listLinearTeams();
+      setTeams(t);
+      if (t.length > 0) setSelectedTeamId((prev) => prev || t[0].id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load teams");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const loadIssues = useCallback(async () => {
+    if (!selectedTeamId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await listLinearIssues({ teamId: selectedTeamId, limit: 50 });
+      setIssues(result.issues);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load issues");
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedTeamId]);
+
+  useEffect(() => {
+    loadTeams();
+  }, [loadTeams]);
+
+  useEffect(() => {
+    if (selectedTeamId) loadIssues();
+  }, [selectedTeamId, loadIssues]);
+
+  const handleTeamChange = (teamId: string) => {
+    setSelectedTeamId(teamId);
+    setIssues([]);
+  };
+
+  const handleLink = async (issueId: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      await linkSessionToLinear(sessionId, {
+        linearIssueId: issueId,
+        linearTeamId: selectedTeamId || undefined,
+      });
+      onLinked();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to link");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      onClick={onClose}
+    >
+      <div
+        className="bg-background border border-border rounded-lg shadow-lg p-4 w-full max-w-md max-h-[80vh] overflow-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="font-medium mb-3">Link session to Linear</h3>
+        <p className="text-sm text-muted-foreground mb-3">
+          Choose an existing Linear issue to link to this session. The sandbox will receive its
+          context when you start a run.
+        </p>
+        {error && <p className="text-destructive text-sm mb-2">{error}</p>}
+        <div className="space-y-2 mb-3">
+          <label className="block text-xs text-muted-foreground">Team</label>
+          <select
+            className="w-full border border-border rounded px-2 py-1.5 text-sm bg-background"
+            value={selectedTeamId}
+            onChange={(e) => handleTeamChange(e.target.value)}
+            onFocus={loadTeams}
+          >
+            <option value="">Select team</option>
+            {teams.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name} ({t.key})
+              </option>
+            ))}
+          </select>
+        </div>
+        {selectedTeamId && (
+          <div className="space-y-2 mb-3">
+            <label className="block text-xs text-muted-foreground">Issue</label>
+            <ul className="max-h-48 overflow-y-auto border border-border rounded divide-y divide-border">
+              {loading && issues.length === 0 ? (
+                <li className="px-2 py-2 text-sm text-muted-foreground">Loading…</li>
+              ) : (
+                issues.map((issue) => (
+                  <li
+                    key={issue.id}
+                    className="flex items-center justify-between gap-2 px-2 py-1.5"
+                  >
+                    <span className="text-sm truncate flex-1" title={issue.title}>
+                      {issue.identifier}: {issue.title}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleLink(issue.id)}
+                      disabled={loading}
+                      className="shrink-0 text-xs text-accent hover:underline disabled:opacity-50"
+                    >
+                      Link
+                    </button>
+                  </li>
+                ))
+              )}
+            </ul>
+          </div>
+        )}
+        <div className="flex justify-end mt-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-3 py-1.5 text-sm border border-border rounded hover:bg-muted"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

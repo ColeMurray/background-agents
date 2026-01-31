@@ -141,7 +141,11 @@ export type ServerMessage =
   | { type: "session_status"; status: SessionStatus }
   | { type: "processing_status"; isProcessing: boolean }
   | { type: "stream_frame"; frame: StreamFrame }
-  | { type: "history_complete" };
+  | { type: "history_complete" }
+  | {
+      type: "session_state_patch";
+      patch: { linearIssueId?: string | null; linearTeamId?: string | null };
+    };
 
 // Sandbox events (from Modal)
 export type SandboxEvent =

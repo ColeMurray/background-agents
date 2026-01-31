@@ -150,6 +150,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
       participant?: { participantId: string; name: string; avatar?: string };
       isProcessing?: boolean;
       frame?: StreamFrame;
+      patch?: { linearIssueId?: string | null; linearTeamId?: string | null };
     }) => {
       switch (data.type) {
         case "subscribed":
@@ -306,6 +307,28 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           if (typeof data.isProcessing === "boolean") {
             const isProcessing = data.isProcessing;
             setSessionState((prev) => (prev ? { ...prev, isProcessing } : null));
+          }
+          break;
+
+        case "session_state_patch":
+          if (data.patch && typeof data.patch === "object") {
+            const patch = data.patch as {
+              linearIssueId?: string | null;
+              linearTeamId?: string | null;
+            };
+            setSessionState((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    ...(patch.linearIssueId !== undefined && {
+                      linearIssueId: patch.linearIssueId ?? undefined,
+                    }),
+                    ...(patch.linearTeamId !== undefined && {
+                      linearTeamId: patch.linearTeamId ?? undefined,
+                    }),
+                  }
+                : null
+            );
           }
           break;
 

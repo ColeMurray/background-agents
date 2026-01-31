@@ -90,6 +90,7 @@ export function SessionRightSidebar({
       {/* Metadata */}
       <div className="px-4 py-4 border-b border-border-muted">
         <MetadataSection
+          sessionId={sessionId}
           createdAt={sessionState.createdAt}
           model={sessionState.model}
           branchName={sessionState.branchName || undefined}

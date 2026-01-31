@@ -23,15 +23,20 @@ interface TodoWriteArgs {
   }>;
 }
 
+/** OpenCode sends todo_write (snake_case); accept that and TodoWrite in any casing */
+function isTodoWriteEvent(event: SandboxEvent): boolean {
+  const tool = (event.tool ?? "").toLowerCase();
+  return event.type === "tool_call" && (tool === "todowrite" || tool === "todo_write");
+}
+
 /**
  * Extract the latest task list from sandbox events
  * Finds the most recent TodoWrite tool_call and parses its todos
  */
 export function extractLatestTasks(events: SandboxEvent[]): Task[] {
-  // Find all TodoWrite events, get the latest one
   const todoWriteEvents = events
-    .filter((event) => event.type === "tool_call" && event.tool === "TodoWrite")
-    .sort((a, b) => b.timestamp - a.timestamp);
+    .filter(isTodoWriteEvent)
+    .sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
 
   if (todoWriteEvents.length === 0) {
     return [];
