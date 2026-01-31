@@ -396,19 +396,7 @@ export class SessionDO extends DurableObject<Env> {
         return new Response("Sandbox is stopped", { status: 410 });
       }
 
-      // Validate auth token
-      if (!authHeader || authHeader !== `Bearer ${expectedToken}`) {
-        this.log.warn("ws.connect", {
-          event: "ws.connect",
-          ws_type: "sandbox",
-          outcome: "auth_failed",
-          reject_reason: "token_mismatch",
-          duration_ms: Date.now() - wsStartTime,
-        });
-        return new Response("Unauthorized: Invalid auth token", { status: 401 });
-      }
-
-      // Validate sandbox ID (if we expect a specific one)
+      // Validate sandbox ID first (catches stale sandboxes reconnecting after restore)
       if (expectedSandboxId && sandboxId !== expectedSandboxId) {
         this.log.warn("ws.connect", {
           event: "ws.connect",
@@ -420,6 +408,18 @@ export class SessionDO extends DurableObject<Env> {
           duration_ms: Date.now() - wsStartTime,
         });
         return new Response("Forbidden: Wrong sandbox ID", { status: 403 });
+      }
+
+      // Validate auth token
+      if (!authHeader || authHeader !== `Bearer ${expectedToken}`) {
+        this.log.warn("ws.connect", {
+          event: "ws.connect",
+          ws_type: "sandbox",
+          outcome: "auth_failed",
+          reject_reason: "token_mismatch",
+          duration_ms: Date.now() - wsStartTime,
+        });
+        return new Response("Unauthorized: Invalid auth token", { status: 401 });
       }
 
       // Auth passed — continue to WebSocket accept below

@@ -569,6 +569,12 @@ export class SandboxLifecycleManager {
       );
       this.storage.updateSandboxStatus("stale");
       this.broadcaster.broadcast({ type: "sandbox_status", status: "stale" });
+
+      // Best-effort shutdown: tell sandbox to exit cleanly (connection may already be dead).
+      // Unlike the inactivity path, we don't await the snapshot first — heartbeat stale means
+      // the connection is likely already lost, so we prioritize status broadcast over sequencing.
+      this.wsManager.sendToSandbox({ type: "shutdown" });
+      this.wsManager.closeSandboxWebSocket(1000, "Heartbeat stale");
       return;
     }
 
