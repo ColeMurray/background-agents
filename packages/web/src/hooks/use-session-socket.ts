@@ -200,6 +200,23 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           }
           break;
 
+        case "history_complete":
+          // After replay, flush any pending token so in-progress assistant text appears
+          if (pendingTextRef.current) {
+            const pending = pendingTextRef.current;
+            pendingTextRef.current = null;
+            setEvents((prev) => [
+              ...prev,
+              {
+                type: "token",
+                content: pending.content,
+                messageId: pending.messageId,
+                timestamp: pending.timestamp,
+              },
+            ]);
+          }
+          break;
+
         case "presence_sync":
         case "presence_update":
           if (data.participants) {

@@ -1008,6 +1008,8 @@ export class SessionDO extends DurableObject<Env> {
 
     // Send historical events (messages and sandbox events)
     this.sendHistoricalEvents(ws);
+    // Signal end of history so client can flush any pending token (assistant) text
+    this.safeSend(ws, { type: "history_complete" });
 
     // Send current presence
     this.sendPresence(ws);
