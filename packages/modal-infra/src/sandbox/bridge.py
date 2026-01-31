@@ -130,6 +130,7 @@ class AgentBridge:
     HEARTBEAT_INTERVAL = 30.0
     RECONNECT_BACKOFF_BASE = 2.0
     RECONNECT_MAX_DELAY = 60.0
+    SSE_INACTIVITY_TIMEOUT = 120.0
 
     def __init__(
         self,
@@ -145,6 +146,9 @@ class AgentBridge:
         self.auth_token = auth_token
         self.opencode_port = opencode_port
         self.opencode_base_url = f"http://localhost:{opencode_port}"
+        self.sse_inactivity_timeout = float(
+            os.environ.get("BRIDGE_SSE_INACTIVITY_TIMEOUT", str(self.SSE_INACTIVITY_TIMEOUT))
+        )
 
         self.ws: ClientConnection | None = None
         self.shutdown_event = asyncio.Event()
@@ -180,7 +184,7 @@ class AgentBridge:
         """
         self.log.info("bridge.run_start")
 
-        self.http_client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0))
+        self.http_client = httpx.AsyncClient(timeout=httpx.Timeout(None, connect=30.0))
         await self._load_session_id()
 
         reconnect_attempts = 0
@@ -587,6 +591,7 @@ class AgentBridge:
     async def _parse_sse_stream(
         self,
         response: httpx.Response,
+        timeout_ctx: asyncio.Timeout | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Parse Server-Sent Events stream from OpenCode.
 
@@ -596,10 +601,15 @@ class AgentBridge:
             data: {"type": "...", "properties": {...}}
 
         Events are separated by double newlines.
+        If timeout_ctx is provided, the deadline is reset on every chunk received.
         """
         buffer = ""
         async for chunk in response.aiter_text():
             buffer += chunk
+            if timeout_ctx is not None:
+                timeout_ctx.reschedule(
+                    asyncio.get_running_loop().time() + self.sse_inactivity_timeout
+                )
 
             # Process complete events (separated by double newlines)
             while "\n\n" in buffer:
@@ -654,15 +664,16 @@ class AgentBridge:
         emitted_tool_states: set[str] = set()
         our_assistant_msg_ids: set[str] = set()
 
-        max_wait_time = 300.0
+        inactivity_timeout = self.sse_inactivity_timeout
         start_time = time.time()
 
         try:
-            async with asyncio.timeout(max_wait_time):
+            deadline = asyncio.get_running_loop().time() + inactivity_timeout
+            async with asyncio.timeout_at(deadline) as timeout_ctx:
                 async with self.http_client.stream(
                     "GET",
                     sse_url,
-                    timeout=httpx.Timeout(max_wait_time, connect=30.0),
+                    timeout=httpx.Timeout(None, connect=30.0),
                 ) as sse_response:
                     if sse_response.status_code != 200:
                         raise SSEConnectionError(
@@ -685,7 +696,7 @@ class AgentBridge:
                             f"Async prompt failed: {prompt_response.status_code} - {error_body}"
                         )
 
-                    async for event in self._parse_sse_stream(sse_response):
+                    async for event in self._parse_sse_stream(sse_response, timeout_ctx):
                         event_type = event.get("type")
                         props = event.get("properties", {})
 
@@ -841,8 +852,15 @@ class AgentBridge:
 
         except TimeoutError:
             elapsed = time.time() - start_time
-            self.log.error("bridge.sse_timeout", elapsed_s=round(elapsed, 1))
-            raise RuntimeError("LLM request timed out")
+            self.log.error(
+                "bridge.sse_inactivity_timeout",
+                inactivity_timeout_s=inactivity_timeout,
+                elapsed_s=round(elapsed, 1),
+            )
+            raise RuntimeError(
+                f"SSE stream inactive for {inactivity_timeout:.0f}s "
+                f"(no data received). Total elapsed: {elapsed:.0f}s"
+            )
 
         except httpx.ReadError as e:
             self.log.error("bridge.sse_read_error", exc=e)

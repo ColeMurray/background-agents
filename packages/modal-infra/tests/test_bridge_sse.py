@@ -755,5 +755,207 @@ class TestSSEFollowUpMessageBug:
         assert last_token["messageId"] == "cp-msg-2"
 
 
+class DelayedMockSSEResponse:
+    """Mock SSE response with configurable delays between chunks."""
+
+    def __init__(self, events_with_delays: list[tuple[str, float]], status_code: int = 200):
+        """Each item is (event_text, delay_before_yielding)."""
+        self.status_code = status_code
+        self._events_with_delays = events_with_delays
+
+    async def aiter_text(self) -> AsyncIterator[str]:
+        for event, delay in self._events_with_delays:
+            if delay > 0:
+                await asyncio.sleep(delay)
+            yield event
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+
+class HangingMockSSEResponse:
+    """Mock SSE response that hangs forever after initial events."""
+
+    def __init__(self, initial_events: list[str], status_code: int = 200):
+        self.status_code = status_code
+        self._initial_events = initial_events
+
+    async def aiter_text(self) -> AsyncIterator[str]:
+        for event in self._initial_events:
+            yield event
+            await asyncio.sleep(0)
+        # Hang forever (will be interrupted by timeout)
+        await asyncio.sleep(3600)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+
+class DelayedMockHttpClient:
+    """Mock HTTP client that uses delayed/hanging SSE responses."""
+
+    def __init__(self, sse_response):
+        self.post_responses: list[Any] = []
+        self.get_responses: list[Any] = []
+        self._sse_response = sse_response
+        self._post_call_count = 0
+        self._get_call_count = 0
+
+    async def post(self, url: str, json: dict | None = None, timeout: float = 30.0) -> Any:
+        self._post_call_count += 1
+        if self.post_responses:
+            return self.post_responses.pop(0)
+        return MockResponse(204)
+
+    async def get(self, url: str, timeout: float = 10.0) -> Any:
+        self._get_call_count += 1
+        if self.get_responses:
+            return self.get_responses.pop(0)
+        return MockResponse(200, {})
+
+    def stream(self, method: str, url: str, timeout: Any = None):
+        return self._sse_response
+
+
+class TestInactivityTimeout:
+    """Tests for SSE inactivity timeout behavior."""
+
+    @pytest.mark.asyncio
+    async def test_timeout_on_no_data(self):
+        """Should raise RuntimeError when SSE stream hangs after connection."""
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+        bridge.opencode_session_id = "oc-session-123"
+        bridge.sse_inactivity_timeout = 0.2
+
+        # SSE connects but then hangs after server.connected
+        sse_response = HangingMockSSEResponse(
+            initial_events=[create_sse_event("server.connected", {})]
+        )
+        bridge.http_client = DelayedMockHttpClient(sse_response)
+
+        with pytest.raises(RuntimeError, match="SSE stream inactive"):
+            async for _event in bridge._stream_opencode_response_sse("msg-1", "test"):
+                pass
+
+    @pytest.mark.asyncio
+    async def test_timeout_resets_on_data(self):
+        """Events spaced under the timeout window should complete successfully."""
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+        bridge.opencode_session_id = "oc-session-123"
+        bridge.sse_inactivity_timeout = 0.5
+
+        # Events arrive every 0.1s — well under the 0.5s inactivity limit
+        # Total wall-clock time (~0.3s) would NOT matter; only gaps between chunks
+        sse_response = DelayedMockSSEResponse(
+            [
+                (create_sse_event("server.connected", {}), 0),
+                (
+                    create_sse_event(
+                        "message.part.updated",
+                        {
+                            "part": {
+                                "type": "text",
+                                "id": "part-1",
+                                "sessionID": "oc-session-123",
+                                "messageID": "msg-1",
+                                "text": "Hello",
+                            }
+                        },
+                    ),
+                    0.1,
+                ),
+                (
+                    create_sse_event(
+                        "message.part.updated",
+                        {
+                            "part": {
+                                "type": "text",
+                                "id": "part-1",
+                                "sessionID": "oc-session-123",
+                                "messageID": "msg-1",
+                                "text": "Hello world",
+                            }
+                        },
+                    ),
+                    0.1,
+                ),
+                (create_sse_event("session.idle", {"sessionID": "oc-session-123"}), 0.1),
+            ]
+        )
+        bridge.http_client = DelayedMockHttpClient(sse_response)
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("msg-1", "test"):
+            events.append(event)
+
+        token_events = [e for e in events if e["type"] == "token"]
+        assert len(token_events) == 2
+        assert token_events[-1]["content"] == "Hello world"
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_resets_timeout(self):
+        """server.heartbeat events should keep the session alive."""
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+        bridge.opencode_session_id = "oc-session-123"
+        bridge.sse_inactivity_timeout = 0.3
+
+        # Heartbeats arrive every 0.2s — under the 0.3s inactivity limit
+        # Without heartbeats, the 0.2s gaps would eventually accumulate beyond
+        # a wall-clock limit, but since each chunk resets the deadline, this works
+        sse_response = DelayedMockSSEResponse(
+            [
+                (create_sse_event("server.connected", {}), 0),
+                (create_sse_event("server.heartbeat", {}), 0.2),
+                (create_sse_event("server.heartbeat", {}), 0.2),
+                (
+                    create_sse_event(
+                        "message.part.updated",
+                        {
+                            "part": {
+                                "type": "text",
+                                "id": "part-1",
+                                "sessionID": "oc-session-123",
+                                "messageID": "msg-1",
+                                "text": "Finally!",
+                            }
+                        },
+                    ),
+                    0.2,
+                ),
+                (create_sse_event("session.idle", {"sessionID": "oc-session-123"}), 0),
+            ]
+        )
+        bridge.http_client = DelayedMockHttpClient(sse_response)
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("msg-1", "test"):
+            events.append(event)
+
+        token_events = [e for e in events if e["type"] == "token"]
+        assert len(token_events) == 1
+        assert token_events[0]["content"] == "Finally!"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
