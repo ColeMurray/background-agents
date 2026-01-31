@@ -2,7 +2,7 @@ import type { NextAuthOptions } from "next-auth";
 import GitHubProvider from "next-auth/providers/github";
 import { checkAccessAllowed, parseAllowlist } from "./access-control";
 
-// Extend NextAuth types to include GitHub-specific user info
+// Extend NextAuth types to include GitHub-specific user info and Anthropic tokens
 declare module "next-auth" {
   interface Session {
     accessToken?: string;
@@ -14,6 +14,8 @@ declare module "next-auth" {
       email?: string | null;
       image?: string | null;
     };
+    // Anthropic OAuth tokens (populated via separate API calls, not stored in JWT)
+    anthropicConnected?: boolean;
   }
 }
 
