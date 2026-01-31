@@ -4,7 +4,8 @@
 
 locals {
   # Combine all secrets for the create-secrets script
-  secrets_json = jsonencode(var.secrets)
+  # Base64 encode to safely pass multiline values (like PEM keys) through environment variables
+  secrets_json_b64 = base64encode(jsonencode(var.secrets))
 }
 
 # Create Modal secrets
@@ -13,7 +14,7 @@ resource "null_resource" "modal_secrets" {
 
   triggers = {
     # Re-run when secrets configuration changes
-    secrets_hash = sha256(local.secrets_json)
+    secrets_hash = sha256(local.secrets_json_b64)
   }
 
   provisioner "local-exec" {
@@ -23,7 +24,7 @@ resource "null_resource" "modal_secrets" {
     environment = {
       MODAL_TOKEN_ID     = var.modal_token_id
       MODAL_TOKEN_SECRET = var.modal_token_secret
-      SECRETS_JSON       = local.secrets_json
+      SECRETS_JSON_B64   = local.secrets_json_b64
     }
   }
 }

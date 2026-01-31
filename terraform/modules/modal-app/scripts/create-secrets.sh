@@ -3,21 +3,35 @@
 # Required environment variables:
 #   MODAL_TOKEN_ID - Modal API token ID
 #   MODAL_TOKEN_SECRET - Modal API token secret
-#   SECRETS_JSON - JSON array of secrets with format:
+#   SECRETS_JSON_B64 - Base64-encoded JSON array of secrets with format:
 #     [{"name": "secret-name", "values": {"KEY1": "value1", "KEY2": "value2"}}]
 
 set -euo pipefail
 
 echo "Creating/updating Modal secrets..."
 
+# Decode base64 and write JSON to a temp file
+SECRETS_FILE=$(mktemp)
+trap "rm -f '$SECRETS_FILE'" EXIT
+echo "${SECRETS_JSON_B64}" | base64 -d > "$SECRETS_FILE"
+
 # Validate SECRETS_JSON is valid JSON
-if ! echo "${SECRETS_JSON}" | jq empty 2>/dev/null; then
+if ! jq empty "$SECRETS_FILE" 2>&1; then
     echo "Error: SECRETS_JSON is not valid JSON"
+    echo "Debug: File size: $(wc -c < "$SECRETS_FILE") bytes"
+    echo "Debug: First 500 chars:"
+    head -c 500 "$SECRETS_FILE"
+    echo ""
+    echo "Debug: Last 200 chars:"
+    tail -c 200 "$SECRETS_FILE"
+    echo ""
+    echo "Debug: jq error:"
+    jq empty "$SECRETS_FILE" 2>&1 || true
     exit 1
 fi
 
 # Process each secret
-echo "${SECRETS_JSON}" | jq -c '.[]' | while IFS= read -r secret; do
+jq -c '.[]' "$SECRETS_FILE" | while IFS= read -r secret; do
     secret_name=$(echo "${secret}" | jq -r '.name')
 
     # Validate secret name contains only safe characters

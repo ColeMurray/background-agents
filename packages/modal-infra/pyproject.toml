@@ -8,6 +8,9 @@ dependencies = [
     "httpx>=0.27.0",
     "websockets>=13.0",
     "pydantic>=2.0",
+    "fastapi>=0.115.0",
+    "PyJWT>=2.8.0",
+    "cryptography>=41.0.0",  # Required for PyJWT RS256 algorithm
 ]
 
 [project.optional-dependencies]

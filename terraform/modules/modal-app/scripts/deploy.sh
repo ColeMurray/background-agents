@@ -30,22 +30,25 @@ cd "${DEPLOY_PATH}" || {
     exit 1
 }
 
-# Deploy using Modal CLI
+# Ensure uv is in PATH
+export PATH="$HOME/.local/bin:$PATH"
+
+# Deploy using Modal CLI via uv (handles dependencies)
 if [ "${DEPLOY_MODULE}" = "deploy" ]; then
     # Method 1: Use deploy.py wrapper (recommended)
-    modal deploy deploy.py || {
+    uv run modal deploy deploy.py || {
         echo "Error: Modal deployment failed for ${APP_NAME}"
         exit 1
     }
 elif [ "${DEPLOY_MODULE}" = "src" ]; then
     # Method 2: Deploy the src package directly
-    modal deploy -m src || {
+    uv run modal deploy -m src || {
         echo "Error: Modal deployment failed for ${APP_NAME}"
         exit 1
     }
 else
     # Generic deployment
-    modal deploy "${DEPLOY_MODULE}" || {
+    uv run modal deploy "${DEPLOY_MODULE}" || {
         echo "Error: Modal deployment failed for ${APP_NAME}"
         exit 1
     }
