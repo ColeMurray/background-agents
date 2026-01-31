@@ -496,6 +496,7 @@ async def api_restore_sandbox(
         raise HTTPException(status_code=400, detail="snapshot_image_id is required")
 
     try:
+        from .auth.github_app import generate_installation_token
         from .sandbox.manager import SandboxManager
 
         session_config = request.get("session_config", {})
@@ -504,6 +505,21 @@ async def api_restore_sandbox(
 
         manager = SandboxManager()
 
+        github_app_token = None
+        try:
+            app_id = os.environ.get("GITHUB_APP_ID")
+            private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
+            installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID")
+
+            if app_id and private_key and installation_id:
+                github_app_token = generate_installation_token(
+                    app_id=app_id,
+                    private_key=private_key,
+                    installation_id=installation_id,
+                )
+        except Exception as e:
+            log.warn("github.token_error", exc=e)
+
         # Restore sandbox from snapshot
         handle = await manager.restore_from_snapshot(
             snapshot_image_id=snapshot_image_id,
@@ -511,12 +527,14 @@ async def api_restore_sandbox(
             sandbox_id=sandbox_id,
             control_plane_url=control_plane_url,
             sandbox_auth_token=sandbox_auth_token,
+            github_app_token=github_app_token,
         )
 
         return {
             "success": True,
             "data": {
                 "sandbox_id": handle.sandbox_id,
+                "modal_object_id": handle.modal_object_id,
                 "status": handle.status.value,
             },
         }
