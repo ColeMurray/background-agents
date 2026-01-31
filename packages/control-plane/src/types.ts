@@ -31,6 +31,9 @@ export interface Env {
   GITHUB_APP_PRIVATE_KEY?: string;
   GITHUB_APP_INSTALLATION_ID?: string;
 
+  // Linear (optional - for task/issue linking)
+  LINEAR_API_KEY?: string;
+
   // Variables
   DEPLOYMENT_NAME: string;
   WORKER_URL?: string; // Base URL for the worker (for callbacks)

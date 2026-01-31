@@ -10,7 +10,7 @@ import {
   ArtifactsSection,
 } from "./sidebar";
 import { extractLatestTasks } from "@/lib/tasks";
-import type { Artifact, FileChange } from "@/types/session";
+import type { Artifact, FileChange, TaskLinearLink } from "@/types/session";
 
 interface SessionState {
   id: string;
@@ -23,6 +23,9 @@ interface SessionState {
   messageCount: number;
   createdAt: number;
   model?: string;
+  linearIssueId?: string;
+  linearTeamId?: string;
+  taskLinearLinks?: TaskLinearLink[];
 }
 
 interface Participant {
@@ -38,9 +41,12 @@ interface SandboxEvent {
   tool?: string;
   args?: Record<string, unknown>;
   timestamp: number;
+  id?: string;
+  messageId?: string;
 }
 
 interface SessionRightSidebarProps {
+  sessionId: string;
   sessionState: SessionState | null;
   participants: Participant[];
   events: SandboxEvent[];
@@ -49,14 +55,16 @@ interface SessionRightSidebarProps {
 }
 
 export function SessionRightSidebar({
+  sessionId,
   sessionState,
   participants,
   events,
   artifacts,
   filesChanged = [],
 }: SessionRightSidebarProps) {
-  // Extract latest tasks from TodoWrite events
+  // Extract latest tasks from TodoWrite events (with messageId/eventId/taskIndex for Linear)
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
+  const taskLinearLinks = sessionState?.taskLinearLinks ?? [];
 
   if (!sessionState) {
     return (
@@ -88,13 +96,14 @@ export function SessionRightSidebar({
           repoOwner={sessionState.repoOwner}
           repoName={sessionState.repoName}
           artifacts={artifacts}
+          linearIssueId={sessionState.linearIssueId}
         />
       </div>
 
       {/* Tasks */}
       {tasks.length > 0 && (
         <CollapsibleSection title="Tasks" defaultOpen={true}>
-          <TasksSection tasks={tasks} />
+          <TasksSection sessionId={sessionId} tasks={tasks} taskLinearLinks={taskLinearLinks} />
         </CollapsibleSection>
       )}
 

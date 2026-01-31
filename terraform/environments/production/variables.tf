@@ -87,6 +87,13 @@ variable "github_app_installation_id" {
   type        = string
 }
 
+variable "linear_api_key" {
+  description = "Linear personal API key (optional, for task/issue linking)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 # =============================================================================
 # Slack App Credentials
 # =============================================================================

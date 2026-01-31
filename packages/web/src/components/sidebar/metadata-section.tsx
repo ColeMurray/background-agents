@@ -12,6 +12,7 @@ interface MetadataSectionProps {
   repoOwner?: string;
   repoName?: string;
   artifacts?: Artifact[];
+  linearIssueId?: string | null;
 }
 
 export function MetadataSection({
@@ -21,6 +22,7 @@ export function MetadataSection({
   repoOwner,
   repoName,
   artifacts = [],
+  linearIssueId,
 }: MetadataSectionProps) {
   const [copied, setCopied] = useState(false);
 
@@ -68,6 +70,21 @@ export function MetadataSection({
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <SparkleIcon className="w-4 h-4" />
           <span>{formatModelName(model)}</span>
+        </div>
+      )}
+
+      {/* Linear link (session-level) */}
+      {linearIssueId && (
+        <div className="flex items-center gap-2 text-sm">
+          <LinearIcon className="w-4 h-4 text-muted-foreground" />
+          <a
+            href={`https://linear.app/issue/${linearIssueId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-accent hover:underline"
+          >
+            Linked to Linear
+          </a>
         </div>
       )}
 
@@ -269,6 +286,14 @@ function CheckIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+    </svg>
+  );
+}
+
+function LinearIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M13.5 3H3v10.5h10.5V3zM21 3h-7.5v4.5H21V3zM21 10.5h-7.5V21H21V10.5zM13.5 16.5V21H3v-4.5h10.5z" />
     </svg>
   );
 }

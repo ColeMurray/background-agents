@@ -9,6 +9,10 @@ interface SandboxEvent {
   tool?: string;
   args?: Record<string, unknown>;
   timestamp: number;
+  /** Event row id (for Linear task linking) */
+  id?: string;
+  /** Message id (for Linear task linking) */
+  messageId?: string;
 }
 
 interface TodoWriteArgs {
@@ -40,10 +44,16 @@ export function extractLatestTasks(events: SandboxEvent[]): Task[] {
     return [];
   }
 
-  return args.todos.map((todo) => ({
+  const eventId = (latestTodoWrite as SandboxEvent & { id?: string }).id;
+  const messageId = (latestTodoWrite as SandboxEvent & { messageId?: string }).messageId;
+
+  return args.todos.map((todo, taskIndex) => ({
     content: todo.content || "",
     status: todo.status || "pending",
     activeForm: todo.activeForm,
+    messageId,
+    eventId,
+    taskIndex,
   }));
 }
 

@@ -18,6 +18,10 @@ export interface Task {
   content: string;
   status: "pending" | "in_progress" | "completed";
   activeForm?: string;
+  /** Stable key for Linear linking (from latest TodoWrite event) */
+  messageId?: string;
+  eventId?: string;
+  taskIndex?: number;
 }
 
 export interface FileChange {
@@ -41,4 +45,21 @@ export interface SessionMetadata {
   projectTag?: string;
   createdAt: number;
   updatedAt?: number;
+}
+
+export interface TaskLinearLink {
+  messageId: string;
+  eventId: string;
+  taskIndex: number;
+  linearIssueId: string;
+}
+
+export interface LinearIssue {
+  id: string;
+  identifier: string;
+  title: string;
+  description?: string | null;
+  url?: string | null;
+  state?: { id: string; name: string } | null;
+  team?: { id: string; key: string; name: string } | null;
 }

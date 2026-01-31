@@ -106,6 +106,15 @@ class GitUser(BaseModel):
     email: str
 
 
+class LinearContext(BaseModel):
+    """Optional Linear issue context for the session (for agent awareness)."""
+
+    issue_id: str
+    title: str
+    url: str
+    description: str | None = None
+
+
 class SessionConfig(BaseModel):
     """Configuration passed to sandbox for a session."""
 
@@ -118,3 +127,4 @@ class SessionConfig(BaseModel):
     provider: str = "anthropic"
     model: str = "claude-sonnet-4-5"
     git_user: GitUser | None = None
+    linear: LinearContext | None = None

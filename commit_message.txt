@@ -1,11 +1,29 @@
-feat(select): hover highlight and viewport alignment for element selection
+feat(linear): add Linear integration for task and issue linking
 
-- Fix tunnelUrls type: index with string "8080" in session page (Record<string, string>)
-- Remove Chrome extension package and references (eslint, docs, READMEs)
-- Fix Select overlay: capture clicks on overlay instead of iframe (remove pointer-events-none, add onClick to overlay)
-- Sandbox: get_element_at_point.py accepts optional viewport width/height, returns element boundingRect for highlight
-- Bridge: pass viewportWidth/viewportHeight to script when provided
-- Control plane + router: accept viewport in element-at-point body, forward to sandbox
-- Web: send viewport with element-at-point requests; throttled hover (120ms) fetches element and boundingRect; draw blue highlight from rect; lighter overlay (bg-black/10); clear highlight on mouse leave and when leaving select mode
+Control plane:
+- Linear GraphQL client (listIssues, listTeams, createIssue, updateIssue, getIssue)
+- Routes: GET /linear/issues, GET /linear/teams, POST /sessions/:id/linear/link-task,
+  POST /sessions/:id/linear/create-issue, PATCH /linear/issues/:id
+- Schema: session.linear_issue_id, linear_team_id; task_linear_links table
+- DO: internal/linear/link-task; state includes linearIssueId, linearTeamId, taskLinearLinks
+- Broadcast/replay events include id and messageId for stable task keys
+- Spawn sandbox: optional linear context in Modal config when session has linked issue
 
-Redeploy Modal, control plane, and web for full hover-highlight and viewport-aligned selection.
+Modal:
+- SessionConfig.linear (LinearContext); web_api accepts linear in create-sandbox payload
+
+Web:
+- Task type with messageId, eventId, taskIndex; TaskLinearLink, LinearIssue types
+- extractLatestTasks returns task keys for linking
+- API routes proxying to control plane for Linear; lib/linear client helpers
+- Tasks section: Linear badge, Link to Linear (picker), Create issue (team required)
+- Metadata: Linked to Linear when session has linearIssueId
+- Session state and sidebar pass sessionId, taskLinearLinks
+
+Terraform:
+- Optional linear_api_key (LINEAR_API_KEY) for control plane worker
+
+Docs:
+- LINEAR_INTEGRATION_PLAN with Phase 1 implementation notes
+
+Also: remove design-lab page

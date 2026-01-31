@@ -171,4 +171,20 @@ export function initSchema(sql: SqlStorage): void {
   // Migration: Add tunnel_urls column to sandbox table for multiple port support
   // Stores JSON object mapping port numbers to tunnel URLs
   runMigration(sql, `ALTER TABLE sandbox ADD COLUMN tunnel_urls TEXT`);
+
+  // Migration: Linear integration - session-level link and task-level links
+  runMigration(sql, `ALTER TABLE session ADD COLUMN linear_issue_id TEXT`);
+  runMigration(sql, `ALTER TABLE session ADD COLUMN linear_team_id TEXT`);
+
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS task_linear_links (
+      id TEXT PRIMARY KEY,
+      message_id TEXT NOT NULL,
+      event_id TEXT NOT NULL,
+      task_index INTEGER NOT NULL,
+      linear_issue_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      UNIQUE(message_id, event_id, task_index)
+    )
+  `);
 }

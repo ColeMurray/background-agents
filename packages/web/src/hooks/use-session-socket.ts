@@ -38,6 +38,13 @@ interface SandboxEvent {
   };
 }
 
+interface TaskLinearLink {
+  messageId: string;
+  eventId: string;
+  taskIndex: number;
+  linearIssueId: string;
+}
+
 interface SessionState {
   id: string;
   title: string | null;
@@ -50,6 +57,9 @@ interface SessionState {
   createdAt: number;
   model?: string;
   isProcessing: boolean;
+  linearIssueId?: string;
+  linearTeamId?: string;
+  taskLinearLinks?: TaskLinearLink[];
 }
 
 interface Participant {

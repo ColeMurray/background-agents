@@ -30,6 +30,8 @@ export interface SessionRow {
   status: SessionStatus;
   created_at: number;
   updated_at: number;
+  linear_issue_id: string | null;
+  linear_team_id: string | null;
 }
 
 export interface ParticipantRow {

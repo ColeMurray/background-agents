@@ -119,6 +119,8 @@ module "control_plane_worker" {
     { name = "GITHUB_APP_ID", value = var.github_app_id },
     { name = "GITHUB_APP_PRIVATE_KEY", value = var.github_app_private_key },
     { name = "GITHUB_APP_INSTALLATION_ID", value = var.github_app_installation_id },
+    # Linear (optional - for task/issue linking)
+    { name = "LINEAR_API_KEY", value = var.linear_api_key },
   ]
 
   durable_objects = [

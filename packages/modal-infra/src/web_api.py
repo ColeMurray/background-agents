@@ -135,6 +135,22 @@ async def api_create_sandbox(
         if git_user_name and git_user_email:
             git_user = GitUser(name=git_user_name, email=git_user_email)
 
+        linear_data = request.get("linear")
+        linear = None
+        if linear_data and isinstance(linear_data, dict):
+            issue_id = linear_data.get("issue_id")
+            title = linear_data.get("title")
+            url = linear_data.get("url")
+            if issue_id and title and url:
+                from .sandbox.sandbox_types import LinearContext
+
+                linear = LinearContext(
+                    issue_id=issue_id,
+                    title=title,
+                    url=url,
+                    description=linear_data.get("description"),
+                )
+
         session_config = SessionConfig(
             session_id=request.get("session_id"),
             repo_owner=request.get("repo_owner"),
@@ -143,6 +159,7 @@ async def api_create_sandbox(
             provider=request.get("provider", "anthropic"),
             model=request.get("model", "claude-sonnet-4-5"),
             git_user=git_user,
+            linear=linear,
         )
 
         config = SandboxConfig(

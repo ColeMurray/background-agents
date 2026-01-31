@@ -12,6 +12,7 @@ import { initSchema } from "./schema";
 import { generateId, decryptToken, hashToken } from "../auth/crypto";
 import { generateInstallationToken, getGitHubAppConfig } from "../auth/github-app";
 import { createModalClient } from "../sandbox/client";
+import { getIssue } from "../linear/client";
 import { createPullRequest, getRepository } from "../auth/pr";
 import { generateBranchName, generateInternalToken } from "@open-inspect/shared";
 import type {
@@ -190,6 +191,11 @@ export class SessionDO extends DurableObject<Env> {
       method: "POST",
       path: "/internal/element-at-point",
       handler: (req) => this.handleElementAtPoint(req),
+    },
+    {
+      method: "POST",
+      path: "/internal/linear/link-task",
+      handler: (req) => this.handleLinearLinkTask(req),
     },
   ];
 
@@ -1073,10 +1079,14 @@ export class SessionDO extends DurableObject<Env> {
       } else {
         const event = item.data as EventRow;
         try {
-          const eventData = JSON.parse(event.data);
+          const eventData = JSON.parse(event.data) as Record<string, unknown>;
           this.safeSend(ws, {
             type: "sandbox_event",
-            event: eventData,
+            event: {
+              ...eventData,
+              id: event.id,
+              messageId: event.message_id ?? undefined,
+            },
           });
         } catch {
           // Skip malformed events
@@ -1347,8 +1357,11 @@ export class SessionDO extends DurableObject<Env> {
       }
     }
 
-    // Broadcast to clients
-    this.broadcast({ type: "sandbox_event", event });
+    // Broadcast to clients (include event id and messageId for task linking)
+    this.broadcast({
+      type: "sandbox_event",
+      event: { ...event, id: eventId, messageId: messageId ?? undefined },
+    });
   }
 
   /**
@@ -1737,6 +1750,26 @@ export class SessionDO extends DurableObject<Env> {
         throw new Error("MODAL_WORKSPACE not configured");
       }
 
+      // Optional Linear context for agent (session-level linked issue)
+      let linear:
+        | { issueId: string; title: string; url: string; description?: string | null }
+        | undefined;
+      if (session.linear_issue_id && this.env.LINEAR_API_KEY) {
+        try {
+          const issue = await getIssue(this.env, session.linear_issue_id);
+          if (issue) {
+            linear = {
+              issueId: issue.id,
+              title: issue.title,
+              url: issue.url ?? `https://linear.app/issue/${issue.identifier}`,
+              description: issue.description ?? null,
+            };
+          }
+        } catch (e) {
+          console.warn("[DO] Failed to fetch Linear issue for sandbox context:", e);
+        }
+      }
+
       // Call Modal to create the sandbox with the expected ID
       const modalClient = createModalClient(this.env.MODAL_API_SECRET, this.env.MODAL_WORKSPACE);
       const { provider, model } = extractProviderAndModel(session.model || DEFAULT_MODEL);
@@ -1752,6 +1785,7 @@ export class SessionDO extends DurableObject<Env> {
         gitUserEmail: undefined,
         provider,
         model,
+        linear,
       });
 
       console.log("Modal sandbox created:", result);
@@ -2347,6 +2381,23 @@ export class SessionDO extends DurableObject<Env> {
 
     const sandbox = this.getSandbox();
 
+    const taskLinksResult = this.sql.exec(
+      `SELECT message_id, event_id, task_index, linear_issue_id FROM task_linear_links ORDER BY created_at ASC`
+    );
+    const taskLinearLinks = (
+      taskLinksResult.toArray() as Array<{
+        message_id: string;
+        event_id: string;
+        task_index: number;
+        linear_issue_id: string;
+      }>
+    ).map((r) => ({
+      messageId: r.message_id,
+      eventId: r.event_id,
+      taskIndex: r.task_index,
+      linearIssueId: r.linear_issue_id,
+    }));
+
     return Response.json({
       id: session.id,
       title: session.title,
@@ -2360,6 +2411,9 @@ export class SessionDO extends DurableObject<Env> {
       status: session.status,
       createdAt: session.created_at,
       updatedAt: session.updated_at,
+      linearIssueId: session.linear_issue_id ?? undefined,
+      linearTeamId: session.linear_team_id ?? undefined,
+      taskLinearLinks,
       sandbox: sandbox
         ? {
             id: sandbox.id,
@@ -2370,6 +2424,47 @@ export class SessionDO extends DurableObject<Env> {
           }
         : null,
     });
+  }
+
+  private async handleLinearLinkTask(request: Request): Promise<Response> {
+    try {
+      const body = (await request.json()) as {
+        messageId: string;
+        eventId: string;
+        taskIndex: number;
+        linearIssueId: string;
+      };
+      if (
+        !body.messageId ||
+        !body.eventId ||
+        typeof body.taskIndex !== "number" ||
+        !body.linearIssueId
+      ) {
+        return Response.json(
+          { error: "messageId, eventId, taskIndex, and linearIssueId are required" },
+          { status: 400 }
+        );
+      }
+      const id = generateId();
+      const now = Date.now();
+      this.sql.exec(
+        `INSERT INTO task_linear_links (id, message_id, event_id, task_index, linear_issue_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        id,
+        body.messageId,
+        body.eventId,
+        body.taskIndex,
+        body.linearIssueId,
+        now
+      );
+      return Response.json({ id, status: "linked" });
+    } catch (e) {
+      console.error("[DO] handleLinearLinkTask error:", e);
+      return Response.json(
+        { error: e instanceof Error ? e.message : "Failed to link task" },
+        { status: 500 }
+      );
+    }
   }
 
   private async handleEnqueuePrompt(request: Request): Promise<Response> {

@@ -542,6 +542,7 @@ function SessionContent({
 
         {/* Right sidebar */}
         <SessionRightSidebar
+          sessionId={sessionId}
           sessionState={sessionState}
           participants={participants}
           events={events}
