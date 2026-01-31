@@ -83,6 +83,7 @@ module "control_plane_worker" {
 
   plain_text_bindings = [
     { name = "GITHUB_CLIENT_ID", value = var.github_client_id },
+    { name = "ANTHROPIC_CLIENT_ID", value = var.anthropic_client_id },
     { name = "WEB_APP_URL", value = local.web_app_url },
     { name = "WORKER_URL", value = local.control_plane_url },
     { name = "MODAL_WORKSPACE", value = var.modal_workspace },
@@ -248,6 +249,19 @@ module "web_app" {
       value     = var.allowed_email_domains
       targets   = ["production", "preview"]
       sensitive = false
+    },
+    # Anthropic OAuth (optional - for future use when Anthropic opens external OAuth)
+    {
+      key       = "ANTHROPIC_CLIENT_ID"
+      value     = var.anthropic_client_id
+      targets   = ["production", "preview"]
+      sensitive = false
+    },
+    {
+      key       = "ANTHROPIC_CLIENT_SECRET"
+      value     = var.anthropic_client_secret
+      targets   = ["production", "preview"]
+      sensitive = true
     },
   ]
 }

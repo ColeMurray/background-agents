@@ -114,6 +114,23 @@ variable "anthropic_api_key" {
 }
 
 # =============================================================================
+# Anthropic OAuth (Optional - for future use when Anthropic opens external OAuth)
+# =============================================================================
+
+variable "anthropic_client_id" {
+  description = "Anthropic OAuth client ID (for user-specific API access)"
+  type        = string
+  default     = ""
+}
+
+variable "anthropic_client_secret" {
+  description = "Anthropic OAuth client secret"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+# =============================================================================
 # Security Secrets
 # =============================================================================
 
