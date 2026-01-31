@@ -79,9 +79,12 @@ export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
               {children}
             </a>
           ),
-          // Code blocks with styling
+          // Code blocks with styling (explicit foreground for contrast on bg-card)
           pre: ({ children, ...props }: ComponentPropsWithoutRef<"pre">) => (
-            <pre className="bg-card p-3 overflow-x-auto text-sm" {...props}>
+            <pre
+              className="bg-card text-card-foreground p-3 overflow-x-auto text-sm rounded-md border border-border"
+              {...props}
+            >
               {children}
             </pre>
           ),
@@ -91,13 +94,16 @@ export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
             const isCodeBlock = className?.includes("language-");
             if (isCodeBlock) {
               return (
-                <code className={className} {...props}>
+                <code className={`text-card-foreground font-mono ${className ?? ""}`} {...props}>
                   {children}
                 </code>
               );
             }
             return (
-              <code className="bg-card px-1.5 py-0.5 text-sm" {...props}>
+              <code
+                className="bg-card text-card-foreground px-1.5 py-0.5 text-sm font-mono rounded border border-border"
+                {...props}
+              >
                 {children}
               </code>
             );
