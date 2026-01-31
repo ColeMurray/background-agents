@@ -119,6 +119,10 @@ class SandboxManager:
         # When set, the sandbox uses this token instead of the shared ANTHROPIC_API_KEY
         if config.session_config and config.session_config.anthropic_oauth_token:
             env_vars["ANTHROPIC_OAUTH_TOKEN"] = config.session_config.anthropic_oauth_token
+        if config.session_config and config.session_config.anthropic_oauth_token_expires_at:
+            env_vars["ANTHROPIC_OAUTH_TOKEN_EXPIRES_AT"] = str(
+                config.session_config.anthropic_oauth_token_expires_at
+            )
 
         if config.session_config:
             env_vars["SESSION_CONFIG"] = config.session_config.model_dump_json()
@@ -324,10 +328,17 @@ class SandboxManager:
 
         # Get anthropic_oauth_token if provided in session_config
         anthropic_oauth_token = None
+        anthropic_oauth_token_expires_at = None
         if isinstance(session_config, dict):
             anthropic_oauth_token = session_config.get("anthropic_oauth_token")
+            anthropic_oauth_token_expires_at = session_config.get(
+                "anthropic_oauth_token_expires_at"
+            )
         elif hasattr(session_config, "anthropic_oauth_token"):
             anthropic_oauth_token = session_config.anthropic_oauth_token
+            anthropic_oauth_token_expires_at = getattr(
+                session_config, "anthropic_oauth_token_expires_at", None
+            )
 
         # Prepare environment variables
         env_vars = {
@@ -355,6 +366,8 @@ class SandboxManager:
         # Add Anthropic OAuth token if available
         if anthropic_oauth_token:
             env_vars["ANTHROPIC_OAUTH_TOKEN"] = anthropic_oauth_token
+        if anthropic_oauth_token_expires_at:
+            env_vars["ANTHROPIC_OAUTH_TOKEN_EXPIRES_AT"] = str(anthropic_oauth_token_expires_at)
 
         # Create the sandbox from the snapshot image
         sandbox = modal.Sandbox.create(

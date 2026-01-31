@@ -102,6 +102,9 @@ export class SessionDO extends DurableObject<Env> {
   >();
   // Lifecycle manager (lazily initialized)
   private _lifecycleManager: SandboxLifecycleManager | null = null;
+  // Token refresh backoff state (in-memory only, resets on hibernation)
+  private tokenRefreshBackoff: { failureCount: number; nextRetryAfter: number } | null = null;
+  private noOAuthTokenConfigured = false;
 
   // Route table for internal API endpoints
   private readonly routes: InternalRoute[] = [
@@ -278,7 +281,9 @@ export class SessionDO extends DurableObject<Env> {
    * Create a resolver function that retrieves the Anthropic OAuth token for the session owner.
    * Returns undefined if OAuth is not configured or the token is unavailable.
    */
-  private createAnthropicOAuthTokenResolver(): (() => Promise<string | undefined>) | undefined {
+  private createAnthropicOAuthTokenResolver():
+    | (() => Promise<{ token: string; expiresAt: number } | undefined>)
+    | undefined {
     if (!this.env.SESSION_INDEX || !this.env.TOKEN_ENCRYPTION_KEY) {
       return undefined;
     }
@@ -289,11 +294,27 @@ export class SessionDO extends DurableObject<Env> {
     const sql = this.sql;
     const log = this.log;
 
-    return async (): Promise<string | undefined> => {
+    // Cache to avoid repeated DB/KV lookups
+    let cachedResult: { token: string; expiresAt: number; cachedAt: number } | null = null;
+    const CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes
+
+    return async (): Promise<{ token: string; expiresAt: number } | undefined> => {
+      // Return cached result if fresh and token isn't near expiry
+      if (cachedResult) {
+        const cacheAge = Date.now() - cachedResult.cachedAt;
+        const tokenNotNearExpiry = cachedResult.expiresAt - Date.now() > 15 * 60 * 1000;
+        if (cacheAge < CACHE_TTL_MS && tokenNotNearExpiry) {
+          return { token: cachedResult.token, expiresAt: cachedResult.expiresAt };
+        }
+      }
+
       const ownerResult = sql.exec(`SELECT user_id FROM participants WHERE role = 'owner' LIMIT 1`);
       const owners = ownerResult.toArray() as { user_id: string }[];
       const ownerUserId = owners[0]?.user_id;
-      if (!ownerUserId) return undefined;
+      if (!ownerUserId) {
+        cachedResult = null;
+        return undefined;
+      }
 
       const tokenData = (await kvRef.get(`anthropic:token:${ownerUserId}`, "json")) as {
         accessTokenEncrypted: string;
@@ -301,7 +322,12 @@ export class SessionDO extends DurableObject<Env> {
         expiresAt: number;
       } | null;
 
-      if (!tokenData) return undefined;
+      if (!tokenData) {
+        cachedResult = null;
+        return undefined;
+      }
+
+      let currentExpiresAt = tokenData.expiresAt;
 
       const token =
         (await getValidAnthropicToken(
@@ -312,6 +338,7 @@ export class SessionDO extends DurableObject<Env> {
           encKey,
           async (result) => {
             if (result.success && result.accessToken && result.expiresAt) {
+              currentExpiresAt = result.expiresAt;
               await kvRef.put(
                 `anthropic:token:${ownerUserId}`,
                 JSON.stringify({
@@ -331,11 +358,13 @@ export class SessionDO extends DurableObject<Env> {
 
       if (token) {
         log.info("Using Anthropic OAuth token", { user_id: ownerUserId });
+        cachedResult = { token, expiresAt: currentExpiresAt, cachedAt: Date.now() };
+        return { token, expiresAt: currentExpiresAt };
       } else {
         log.info("Anthropic token expired/refresh failed", { user_id: ownerUserId });
+        cachedResult = null;
+        return undefined;
       }
-
-      return token;
     };
   }
 
@@ -686,6 +715,12 @@ export class SessionDO extends DurableObject<Env> {
   private async proactiveTokenRefresh(): Promise<void> {
     if (!this.env.SESSION_INDEX || !this.env.TOKEN_ENCRYPTION_KEY) return;
 
+    // Skip entirely if we already know no OAuth token is configured
+    if (this.noOAuthTokenConfigured) return;
+
+    // Skip if in backoff period
+    if (this.tokenRefreshBackoff && Date.now() < this.tokenRefreshBackoff.nextRetryAfter) return;
+
     try {
       const ownerResult = this.sql.exec(
         `SELECT user_id FROM participants WHERE role = 'owner' LIMIT 1`
@@ -703,13 +738,16 @@ export class SessionDO extends DurableObject<Env> {
         expiresAt: number;
       } | null;
 
-      if (!tokenData || !tokenData.refreshTokenEncrypted) return;
+      if (!tokenData || !tokenData.refreshTokenEncrypted) {
+        this.noOAuthTokenConfigured = true;
+        return;
+      }
 
       // Import inline to avoid circular deps
       const { tokenNeedsRefresh, refreshAnthropicToken } = await import("../auth/anthropic");
       const { decryptToken } = await import("../auth/crypto");
 
-      // Check if token needs refresh (within 5 min of expiry)
+      // Check if token needs refresh (within buffer of expiry)
       if (!tokenNeedsRefresh(tokenData.expiresAt)) return;
 
       this.log.info("Proactive token refresh starting", { user_id: ownerUserId });
@@ -725,8 +763,19 @@ export class SessionDO extends DurableObject<Env> {
 
       if (!refreshResult.success || !refreshResult.accessToken || !refreshResult.expiresAt) {
         this.log.warn("Proactive token refresh failed", { error: refreshResult.error });
+        // Exponential backoff: 1min, 2min, 4min, ... capped at 1hr
+        const failureCount = (this.tokenRefreshBackoff?.failureCount ?? 0) + 1;
+        const backoffMs = Math.min(Math.pow(2, failureCount - 1) * 60_000, 3_600_000);
+        this.tokenRefreshBackoff = {
+          failureCount,
+          nextRetryAfter: Date.now() + backoffMs,
+        };
         return;
       }
+
+      // Success — reset backoff and noOAuthTokenConfigured flags
+      this.tokenRefreshBackoff = null;
+      this.noOAuthTokenConfigured = false;
 
       // Persist refreshed tokens to KV
       await this.env.SESSION_INDEX.put(
@@ -759,6 +808,13 @@ export class SessionDO extends DurableObject<Env> {
       this.log.error("Proactive token refresh error", {
         error: e instanceof Error ? e : String(e),
       });
+      // Backoff on unexpected errors too
+      const failureCount = (this.tokenRefreshBackoff?.failureCount ?? 0) + 1;
+      const backoffMs = Math.min(Math.pow(2, failureCount - 1) * 60_000, 3_600_000);
+      this.tokenRefreshBackoff = {
+        failureCount,
+        nextRetryAfter: Date.now() + backoffMs,
+      };
     }
   }
 

@@ -121,3 +121,5 @@ class SessionConfig(BaseModel):
     # User's Anthropic OAuth token (for user-specific API access)
     # When set, the sandbox uses this token instead of the shared ANTHROPIC_API_KEY
     anthropic_oauth_token: str | None = None
+    # Expiration timestamp (ms) of the Anthropic OAuth token
+    anthropic_oauth_token_expires_at: int | None = None

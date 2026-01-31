@@ -247,9 +247,12 @@ class SandboxSupervisor:
             opencode_data_dir = Path.home() / ".local" / "share" / "opencode"
             opencode_data_dir.mkdir(parents=True, exist_ok=True)
             auth_json_path = opencode_data_dir / "auth.json"
+            expires_at_env = os.environ.get("ANTHROPIC_OAUTH_TOKEN_EXPIRES_AT")
             auth_data = {
                 "accessToken": anthropic_oauth_token,
-                "expiresAt": int(time.time() * 1000) + 3600000,  # 1 hour from now
+                "expiresAt": int(expires_at_env)
+                if expires_at_env
+                else int(time.time() * 1000) + 3600000,
             }
             auth_json_path.write_text(json.dumps(auth_data))
             print(f"[supervisor] Wrote OAuth token to {auth_json_path}")

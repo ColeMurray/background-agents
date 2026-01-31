@@ -46,6 +46,8 @@ export interface CreateSandboxRequest {
   model?: string;
   // Anthropic OAuth token (encrypted) for user-specific API access
   anthropicOAuthToken?: string;
+  // Expiration timestamp (ms) of the Anthropic OAuth token
+  anthropicOAuthTokenExpiresAt?: number;
 }
 
 export interface CreateSandboxResponse {
@@ -188,6 +190,8 @@ export class ModalClient {
           git_user_email: request.gitUserEmail || null,
           provider: request.provider || "anthropic",
           model: request.model || "claude-sonnet-4-5",
+          anthropic_oauth_token: request.anthropicOAuthToken || null,
+          anthropic_oauth_token_expires_at: request.anthropicOAuthTokenExpiresAt || null,
         }),
       });
 

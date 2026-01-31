@@ -132,7 +132,7 @@ export interface SandboxLifecycleConfig {
   /** Session ID for log correlation. Optional — logs will omit sessionId if not provided. */
   sessionId?: string;
   /** Resolver to get the Anthropic OAuth token for the session owner. Called during spawn. */
-  getAnthropicOAuthToken?: () => Promise<string | undefined>;
+  getAnthropicOAuthToken?: () => Promise<{ token: string; expiresAt: number } | undefined>;
 }
 
 /**
@@ -297,9 +297,12 @@ export class SandboxLifecycleManager {
 
       // Resolve Anthropic OAuth token if available
       let anthropicOAuthToken: string | undefined;
+      let anthropicOAuthTokenExpiresAt: number | undefined;
       if (this.config.getAnthropicOAuthToken) {
         try {
-          anthropicOAuthToken = await this.config.getAnthropicOAuthToken();
+          const oauthResult = await this.config.getAnthropicOAuthToken();
+          anthropicOAuthToken = oauthResult?.token;
+          anthropicOAuthTokenExpiresAt = oauthResult?.expiresAt;
         } catch (e) {
           this.log.error("Failed to get Anthropic OAuth token", {
             error: e instanceof Error ? e : String(e),
@@ -323,6 +326,7 @@ export class SandboxLifecycleManager {
         provider: this.config.provider,
         model: session.model || this.config.model,
         anthropicOAuthToken,
+        anthropicOAuthTokenExpiresAt,
       };
 
       const result = await this.provider.createSandbox(createConfig);
@@ -412,9 +416,12 @@ export class SandboxLifecycleManager {
 
       // Resolve Anthropic OAuth token if available
       let anthropicOAuthToken: string | undefined;
+      let anthropicOAuthTokenExpiresAt: number | undefined;
       if (this.config.getAnthropicOAuthToken) {
         try {
-          anthropicOAuthToken = await this.config.getAnthropicOAuthToken();
+          const oauthResult = await this.config.getAnthropicOAuthToken();
+          anthropicOAuthToken = oauthResult?.token;
+          anthropicOAuthTokenExpiresAt = oauthResult?.expiresAt;
         } catch (e) {
           this.log.error("Failed to get Anthropic OAuth token for restore", {
             error: e instanceof Error ? e : String(e),
@@ -443,6 +450,7 @@ export class SandboxLifecycleManager {
         provider: this.config.provider,
         model: session.model || this.config.model,
         anthropicOAuthToken,
+        anthropicOAuthTokenExpiresAt,
       });
 
       if (result.success) {

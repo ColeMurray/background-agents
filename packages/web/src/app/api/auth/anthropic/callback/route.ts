@@ -60,6 +60,12 @@ export async function POST(request: Request) {
   // The pasted code is "<authorization_code>#<state>" — split on "#"
   const splits = rawCode.split("#");
   const code = splits[0];
+  if (!code) {
+    return NextResponse.json(
+      { error: "Invalid authorization code format. The code appears to be empty." },
+      { status: 400 }
+    );
+  }
   const state = splits[1] || "";
 
   try {

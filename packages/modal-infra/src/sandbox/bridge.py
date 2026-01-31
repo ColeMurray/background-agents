@@ -871,7 +871,9 @@ class AgentBridge:
                                     tracked_msgs=len(our_assistant_msg_ids),
                                 )
                                 if not our_assistant_msg_ids:
-                                    print("[bridge] WARNING: session.idle with no assistant messages")
+                                    print(
+                                        "[bridge] WARNING: session.idle with no assistant messages"
+                                    )
                                     yield {
                                         "type": "error",
                                         "error": "Agent failed to generate a response. The LLM API may be unavailable.",
@@ -901,7 +903,9 @@ class AgentBridge:
                                     tracked_msgs=len(our_assistant_msg_ids),
                                 )
                                 if not our_assistant_msg_ids:
-                                    print("[bridge] WARNING: session.status idle with no assistant messages")
+                                    print(
+                                        "[bridge] WARNING: session.status idle with no assistant messages"
+                                    )
                                     yield {
                                         "type": "error",
                                         "error": "Agent failed to generate a response. The LLM API may be unavailable.",
@@ -922,7 +926,11 @@ class AgentBridge:
                             if error_session_id == self.opencode_session_id:
                                 error = props.get("error")
                                 error_msg = _extract_error_message(error)
-                                self.log.error("bridge.session_error", error_msg=error_msg, raw_error=str(error))
+                                self.log.error(
+                                    "bridge.session_error",
+                                    error_msg=error_msg,
+                                    raw_error=str(error),
+                                )
                                 yield {
                                     "type": "error",
                                     "error": error_msg,
@@ -1164,10 +1172,10 @@ class AgentBridge:
             auth_json_path = opencode_data_dir / "auth.json"
             auth_data = {
                 "accessToken": token,
-                "expiresAt": expires_at or int(time.time() * 1000) + 3600000,
+                "expiresAt": expires_at if expires_at else int(time.time() * 1000) + 3600000,
             }
             auth_json_path.write_text(json.dumps(auth_data))
-            self.log.info("bridge.token_updated")
+            self.log.info("bridge.token_updated", expires_at=expires_at)
         except Exception as e:
             self.log.error("bridge.update_token_error", exc=e)
 

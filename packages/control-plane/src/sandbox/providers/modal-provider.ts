@@ -71,6 +71,7 @@ export class ModalSandboxProvider implements SandboxProvider {
         provider: config.provider,
         model: config.model,
         anthropicOAuthToken: config.anthropicOAuthToken,
+        anthropicOAuthTokenExpiresAt: config.anthropicOAuthTokenExpiresAt,
       });
 
       return {
@@ -115,6 +116,7 @@ export class ModalSandboxProvider implements SandboxProvider {
           control_plane_url: config.controlPlaneUrl,
           sandbox_auth_token: config.sandboxAuthToken,
           anthropic_oauth_token: config.anthropicOAuthToken,
+          anthropic_oauth_token_expires_at: config.anthropicOAuthTokenExpiresAt,
         }),
       });
 

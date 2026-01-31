@@ -10,8 +10,8 @@ import { encryptToken, decryptToken } from "./crypto";
 // Anthropic OAuth endpoints
 const ANTHROPIC_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
 
-// Token refresh buffer - refresh 5 minutes before expiry
-const REFRESH_BUFFER_MS = 5 * 60 * 1000;
+// Token refresh buffer - refresh 15 minutes before expiry
+const REFRESH_BUFFER_MS = 15 * 60 * 1000;
 
 interface TokenRefreshResponse {
   access_token: string;

@@ -50,6 +50,8 @@ export interface CreateSandboxConfig {
   requestId?: string;
   /** Anthropic OAuth token for user-specific API access */
   anthropicOAuthToken?: string;
+  /** Expiration timestamp (ms) of the Anthropic OAuth token */
+  anthropicOAuthTokenExpiresAt?: number;
 }
 
 /**
@@ -94,6 +96,8 @@ export interface RestoreConfig {
   requestId?: string;
   /** Anthropic OAuth token for user-specific API access */
   anthropicOAuthToken?: string;
+  /** Expiration timestamp (ms) of the Anthropic OAuth token */
+  anthropicOAuthTokenExpiresAt?: number;
 }
 
 /**
