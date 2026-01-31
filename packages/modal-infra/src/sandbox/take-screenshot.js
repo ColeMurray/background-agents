@@ -27,15 +27,18 @@ function getSessionId() {
 export default tool({
   name: "take-screenshot",
   description:
-    "Capture a screenshot of a web page (e.g. your local dev server at http://localhost:5173) and save it as a session artifact. Use this to visually verify frontend changes. The URL must be reachable from the sandbox (use localhost for a dev server running in the same sandbox).",
+    "Capture a screenshot of the application being developed (the repo's frontend/app). NEVER screenshot VS Code or the IDE — that is on port 8080 and is irrelevant. " +
+    "Always capture the user's app: use http://localhost:5173 (Vite/Svelte), http://localhost:3000 (Next.js/CRA), or whatever port the dev server uses. " +
+    "Start the dev server first (e.g. pnpm dev) if not already running. For external pages, use https:// URLs.",
   args: {
-    url: z.string().describe("URL to capture (e.g. http://localhost:5173 or http://localhost:3000)"),
+    url: z.string().describe("URL of the application to capture. Use 5173 (Vite), 3000 (Next.js), or the app's dev server port. NEVER use 8080 (that is VS Code)."),
     fullPage: z.boolean().optional().describe("Capture the full scrollable page. Default: false"),
     viewportWidth: z.number().optional().describe("Viewport width in pixels. Default: 1280"),
     viewportHeight: z.number().optional().describe("Viewport height in pixels. Default: 720"),
   },
   async execute(args) {
     const sessionId = getSessionId()
+    console.log("[take-screenshot] sessionId:", sessionId || "<empty>", "bridgeToken:", BRIDGE_TOKEN ? "<set>" : "<not set>")
     if (!sessionId) {
       return {
         content: "Failed to take screenshot: Session ID not found in environment (SESSION_CONFIG).",
@@ -50,6 +53,13 @@ export default tool({
     }
 
     const url = args.url || "http://localhost:5173"
+    if (url.includes("localhost:8080") || url.includes("127.0.0.1:8080")) {
+      return {
+        content: "Port 8080 is VS Code/the IDE — never screenshot that. Screenshot the application instead: start the dev server (pnpm dev) and use http://localhost:5173 (Vite) or http://localhost:3000 (Next.js).",
+        success: false,
+      }
+    }
+    console.log("[take-screenshot] Capturing URL:", url)
     const dir = mkdtempSync(join(tmpdir(), "screenshot-"))
     const outputPath = join(dir, "screenshot.png")
 
@@ -85,6 +95,7 @@ export default tool({
           const j = JSON.parse(errText)
           errMsg = j.error || errText
         } catch {}
+        console.error("[take-screenshot] Upload failed:", response.status, errMsg)
         return {
           content: `Failed to upload screenshot: ${errMsg}`,
           success: false,
@@ -98,8 +109,13 @@ export default tool({
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
+      console.error("[take-screenshot] Error:", message, e)
+      const isConnectionRefused = message.includes("ERR_CONNECTION_REFUSED")
+      const hint = isConnectionRefused
+        ? ` Nothing is listening — start the app's dev server first (e.g. pnpm dev for port 5173). Do NOT use port 8080 (VS Code). Or use a public URL like https://example.com.`
+        : " Ensure the URL is reachable from the sandbox."
       return {
-        content: `Failed to take screenshot: ${message}. Ensure the URL is reachable (e.g. start the dev server first with pnpm dev or npm run dev).`,
+        content: `Failed to take screenshot: ${message}.${hint}`,
         success: false,
       }
     } finally {

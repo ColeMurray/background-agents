@@ -411,9 +411,14 @@ class AgentBridge:
             status = state.get("status", "")
             tool_input = state.get("input", {})
 
+            output = state.get("output", "")
             print(
                 f"[bridge] Tool part: tool={part.get('tool')}, status={status}, input_keys={list(tool_input.keys()) if tool_input else 'empty'}"
             )
+            if status == "error" and output:
+                print(
+                    f"[bridge] Tool error output: {output[:500]}{'...' if len(output) > 500 else ''}"
+                )
 
             if status in ("pending", "") and not tool_input:
                 print(f"[bridge] Skipping tool_call in {status} state with no input")

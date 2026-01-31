@@ -30,7 +30,9 @@ def main() -> int:
                 viewport={"width": args.viewport_width, "height": args.viewport_height}
             )
             page = context.new_page()
-            page.goto(args.url, wait_until="networkidle", timeout=30000)
+            # Use "load" instead of "networkidle" - many pages never reach networkidle
+            # (analytics, WebSockets) and would timeout
+            page.goto(args.url, wait_until="load", timeout=30000)
             page.screenshot(path=args.output, full_page=args.full_page)
             context.close()
         finally:
