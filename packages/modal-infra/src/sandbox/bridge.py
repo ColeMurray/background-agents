@@ -692,7 +692,7 @@ class AgentBridge:
         progress_timeout = self.sse_progress_timeout
         start_time = time.time()
         loop = asyncio.get_running_loop()
-        last_progress = loop.time()
+        last_progress: float | None = None
 
         def mark_progress(reason: str) -> None:
             nonlocal last_progress
@@ -731,7 +731,168 @@ class AgentBridge:
                     last_progress = loop.time()
 
                     async for event in self._parse_sse_stream(sse_response, timeout_ctx):
-                        if loop.time() - last_progress > progress_timeout:
+                        event_type = event.get("type")
+                        props = event.get("properties", {})
+
+                        if event_type == "server.connected":
+                            mark_progress("server_connected")
+                        elif event_type != "server.heartbeat":
+                            event_session_id = props.get("sessionID") or props.get("part", {}).get(
+                                "sessionID"
+                            )
+                            if not event_session_id or event_session_id == self.opencode_session_id:
+                                if event_type == "message.updated":
+                                    info = props.get("info", {})
+                                    msg_session_id = info.get("sessionID")
+                                    if msg_session_id == self.opencode_session_id:
+                                        oc_msg_id = info.get("id", "")
+                                        parent_id = info.get("parentID", "")
+                                        role = info.get("role", "")
+                                        finish = info.get("finish", "")
+
+                                        self.log.debug(
+                                            "bridge.message_updated",
+                                            role=role,
+                                            oc_msg_id=oc_msg_id,
+                                            parent_match=(parent_id == opencode_message_id),
+                                        )
+
+                                        if (
+                                            role == "assistant"
+                                            and parent_id == opencode_message_id
+                                            and oc_msg_id
+                                        ):
+                                            our_assistant_msg_ids.add(oc_msg_id)
+                                            mark_progress("assistant_message")
+
+                                        if finish and finish not in ("tool-calls", ""):
+                                            self.log.debug(
+                                                "bridge.message_finished",
+                                                finish=finish,
+                                            )
+                                            mark_progress("message_finished")
+
+                                elif event_type == "message.part.updated":
+                                    part = props.get("part", {})
+                                    delta = props.get("delta")
+                                    part_type = part.get("type", "")
+                                    part_id = part.get("id", "")
+                                    oc_msg_id = part.get("messageID", "")
+
+                                    if not (
+                                        our_assistant_msg_ids
+                                        and oc_msg_id not in our_assistant_msg_ids
+                                    ):
+                                        if part_type == "text":
+                                            text = part.get("text", "")
+                                            if delta:
+                                                cumulative_text[part_id] = (
+                                                    cumulative_text.get(part_id, "") + delta
+                                                )
+                                            else:
+                                                cumulative_text[part_id] = text
+
+                                            if cumulative_text.get(part_id):
+                                                mark_progress("token")
+                                                yield {
+                                                    "type": "token",
+                                                    "content": cumulative_text[part_id],
+                                                    "messageId": message_id,
+                                                }
+
+                                        elif part_type == "tool":
+                                            tool_event = self._transform_part_to_event(
+                                                part, message_id
+                                            )
+                                            if tool_event:
+                                                state = part.get("state", {})
+                                                status = state.get("status", "")
+                                                call_id = part.get("callID", "")
+                                                tool_key = f"tool:{call_id}:{status}"
+
+                                                if tool_key not in emitted_tool_states:
+                                                    emitted_tool_states.add(tool_key)
+                                                    mark_progress("tool")
+                                                    yield tool_event
+
+                                        elif part_type == "step-start":
+                                            mark_progress("step_start")
+                                            yield {
+                                                "type": "step_start",
+                                                "messageId": message_id,
+                                            }
+
+                                        elif part_type == "step-finish":
+                                            mark_progress("step_finish")
+                                            yield {
+                                                "type": "step_finish",
+                                                "cost": part.get("cost"),
+                                                "tokens": part.get("tokens"),
+                                                "reason": part.get("reason"),
+                                                "messageId": message_id,
+                                            }
+
+                                elif event_type == "session.idle":
+                                    idle_session_id = props.get("sessionID")
+                                    if idle_session_id == self.opencode_session_id:
+                                        elapsed = time.time() - start_time
+                                        self.log.debug(
+                                            "bridge.session_idle",
+                                            elapsed_s=round(elapsed, 1),
+                                            tracked_msgs=len(our_assistant_msg_ids),
+                                        )
+                                        async for final_event in self._fetch_final_message_state(
+                                            message_id,
+                                            opencode_message_id,
+                                            cumulative_text,
+                                            our_assistant_msg_ids,
+                                        ):
+                                            yield final_event
+                                        return
+
+                                elif event_type == "session.status":
+                                    status_session_id = props.get("sessionID")
+                                    status = props.get("status", {})
+                                    if (
+                                        status_session_id == self.opencode_session_id
+                                        and status.get("type") == "idle"
+                                    ):
+                                        elapsed = time.time() - start_time
+                                        self.log.debug(
+                                            "bridge.session_status_idle",
+                                            elapsed_s=round(elapsed, 1),
+                                            tracked_msgs=len(our_assistant_msg_ids),
+                                        )
+                                        async for final_event in self._fetch_final_message_state(
+                                            message_id,
+                                            opencode_message_id,
+                                            cumulative_text,
+                                            our_assistant_msg_ids,
+                                        ):
+                                            yield final_event
+                                        return
+
+                                elif event_type == "session.error":
+                                    error_session_id = props.get("sessionID")
+                                    if error_session_id == self.opencode_session_id:
+                                        error = props.get("error", {})
+                                        error_msg = (
+                                            error.get("message")
+                                            if isinstance(error, dict)
+                                            else str(error)
+                                        )
+                                        self.log.error("bridge.session_error", error_msg=error_msg)
+                                        yield {
+                                            "type": "error",
+                                            "error": error_msg or "Unknown error",
+                                            "messageId": message_id,
+                                        }
+                                        return
+
+                        if (
+                            last_progress is not None
+                            and loop.time() - last_progress > progress_timeout
+                        ):
                             elapsed = time.time() - start_time
                             self.log.error(
                                 "bridge.sse_progress_timeout",
@@ -752,166 +913,6 @@ class AgentBridge:
                             raise RuntimeError(
                                 f"SSE stream made no progress for {progress_timeout:.0f}s."
                             )
-
-                        event_type = event.get("type")
-                        props = event.get("properties", {})
-
-                        if event_type == "server.connected":
-                            mark_progress("server_connected")
-                            continue
-
-                        if event_type == "server.heartbeat":
-                            continue
-
-                        event_session_id = props.get("sessionID") or props.get("part", {}).get(
-                            "sessionID"
-                        )
-                        if event_session_id and event_session_id != self.opencode_session_id:
-                            continue
-
-                        if event_type == "message.updated":
-                            info = props.get("info", {})
-                            msg_session_id = info.get("sessionID")
-                            if msg_session_id == self.opencode_session_id:
-                                oc_msg_id = info.get("id", "")
-                                parent_id = info.get("parentID", "")
-                                role = info.get("role", "")
-                                finish = info.get("finish", "")
-
-                                self.log.debug(
-                                    "bridge.message_updated",
-                                    role=role,
-                                    oc_msg_id=oc_msg_id,
-                                    parent_match=(parent_id == opencode_message_id),
-                                )
-
-                                if (
-                                    role == "assistant"
-                                    and parent_id == opencode_message_id
-                                    and oc_msg_id
-                                ):
-                                    our_assistant_msg_ids.add(oc_msg_id)
-                                    mark_progress("assistant_message")
-
-                                if finish and finish not in ("tool-calls", ""):
-                                    self.log.debug(
-                                        "bridge.message_finished",
-                                        finish=finish,
-                                    )
-                                    mark_progress("message_finished")
-                            continue
-
-                        if event_type == "message.part.updated":
-                            part = props.get("part", {})
-                            delta = props.get("delta")
-                            part_type = part.get("type", "")
-                            part_id = part.get("id", "")
-                            oc_msg_id = part.get("messageID", "")
-
-                            if our_assistant_msg_ids and oc_msg_id not in our_assistant_msg_ids:
-                                continue
-
-                            if part_type == "text":
-                                text = part.get("text", "")
-                                if delta:
-                                    cumulative_text[part_id] = (
-                                        cumulative_text.get(part_id, "") + delta
-                                    )
-                                else:
-                                    cumulative_text[part_id] = text
-
-                                if cumulative_text.get(part_id):
-                                    mark_progress("token")
-                                    yield {
-                                        "type": "token",
-                                        "content": cumulative_text[part_id],
-                                        "messageId": message_id,
-                                    }
-
-                            elif part_type == "tool":
-                                tool_event = self._transform_part_to_event(part, message_id)
-                                if tool_event:
-                                    state = part.get("state", {})
-                                    status = state.get("status", "")
-                                    call_id = part.get("callID", "")
-                                    tool_key = f"tool:{call_id}:{status}"
-
-                                    if tool_key not in emitted_tool_states:
-                                        emitted_tool_states.add(tool_key)
-                                        mark_progress("tool")
-                                        yield tool_event
-
-                            elif part_type == "step-start":
-                                mark_progress("step_start")
-                                yield {
-                                    "type": "step_start",
-                                    "messageId": message_id,
-                                }
-
-                            elif part_type == "step-finish":
-                                mark_progress("step_finish")
-                                yield {
-                                    "type": "step_finish",
-                                    "cost": part.get("cost"),
-                                    "tokens": part.get("tokens"),
-                                    "reason": part.get("reason"),
-                                    "messageId": message_id,
-                                }
-
-                        elif event_type == "session.idle":
-                            idle_session_id = props.get("sessionID")
-                            if idle_session_id == self.opencode_session_id:
-                                elapsed = time.time() - start_time
-                                self.log.debug(
-                                    "bridge.session_idle",
-                                    elapsed_s=round(elapsed, 1),
-                                    tracked_msgs=len(our_assistant_msg_ids),
-                                )
-                                async for final_event in self._fetch_final_message_state(
-                                    message_id,
-                                    opencode_message_id,
-                                    cumulative_text,
-                                    our_assistant_msg_ids,
-                                ):
-                                    yield final_event
-                                return
-
-                        elif event_type == "session.status":
-                            status_session_id = props.get("sessionID")
-                            status = props.get("status", {})
-                            if (
-                                status_session_id == self.opencode_session_id
-                                and status.get("type") == "idle"
-                            ):
-                                elapsed = time.time() - start_time
-                                self.log.debug(
-                                    "bridge.session_status_idle",
-                                    elapsed_s=round(elapsed, 1),
-                                    tracked_msgs=len(our_assistant_msg_ids),
-                                )
-                                async for final_event in self._fetch_final_message_state(
-                                    message_id,
-                                    opencode_message_id,
-                                    cumulative_text,
-                                    our_assistant_msg_ids,
-                                ):
-                                    yield final_event
-                                return
-
-                        elif event_type == "session.error":
-                            error_session_id = props.get("sessionID")
-                            if error_session_id == self.opencode_session_id:
-                                error = props.get("error", {})
-                                error_msg = (
-                                    error.get("message") if isinstance(error, dict) else str(error)
-                                )
-                                self.log.error("bridge.session_error", error_msg=error_msg)
-                                yield {
-                                    "type": "error",
-                                    "error": error_msg or "Unknown error",
-                                    "messageId": message_id,
-                                }
-                                return
 
         except TimeoutError:
             elapsed = time.time() - start_time
