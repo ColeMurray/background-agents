@@ -3,4 +3,5 @@
  */
 
 export { createWebSocketManager } from "./websocket-manager";
-export type { WebSocketManager } from "./types";
+export { createPresenceManager } from "./presence-manager";
+export type { WebSocketManager, PresenceManager, BroadcastCallback } from "./types";

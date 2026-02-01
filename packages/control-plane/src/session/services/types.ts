@@ -44,3 +44,23 @@ export interface WebSocketManager {
    */
   broadcast(message: object): void;
 }
+
+/**
+ * PresenceManager handles building and broadcasting participant presence.
+ */
+export interface PresenceManager {
+  /**
+   * Build a presence list from connected clients.
+   */
+  buildPresenceList(clients: Map<WebSocket, ClientInfo>): ClientInfo[];
+
+  /**
+   * Broadcast presence update to all clients.
+   */
+  broadcastPresence(clients: Map<WebSocket, ClientInfo>): void;
+}
+
+/**
+ * Callback for broadcasting messages to clients.
+ */
+export type BroadcastCallback = (message: object) => void;
