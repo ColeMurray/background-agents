@@ -131,14 +131,13 @@ class AgentBridge:
     RECONNECT_BACKOFF_BASE = 2.0
     RECONNECT_MAX_DELAY = 60.0
     SSE_INACTIVITY_TIMEOUT = 120.0
-    SSE_PROGRESS_TIMEOUT = 600.0
     SSE_INACTIVITY_TIMEOUT_MIN = 5.0
     SSE_INACTIVITY_TIMEOUT_MAX = 3600.0
-    SSE_PROGRESS_TIMEOUT_MIN = 30.0
-    SSE_PROGRESS_TIMEOUT_MAX = 14400.0
     HTTP_CONNECT_TIMEOUT = 30.0
     HTTP_DEFAULT_TIMEOUT = 30.0
     OPENCODE_REQUEST_TIMEOUT = 10.0
+    PROMPT_MAX_DURATION = 5400.0
+    MAX_PENDING_PART_EVENTS = 2000
 
     def __init__(
         self,
@@ -168,12 +167,6 @@ class AgentBridge:
             default=self.SSE_INACTIVITY_TIMEOUT,
             min_value=self.SSE_INACTIVITY_TIMEOUT_MIN,
             max_value=self.SSE_INACTIVITY_TIMEOUT_MAX,
-        )
-        self.sse_progress_timeout = self._resolve_timeout_seconds(
-            name="BRIDGE_SSE_PROGRESS_TIMEOUT",
-            default=self.SSE_PROGRESS_TIMEOUT,
-            min_value=self.SSE_PROGRESS_TIMEOUT_MIN,
-            max_value=self.SSE_PROGRESS_TIMEOUT_MAX,
         )
 
         self.ws: ClientConnection | None = None
@@ -686,16 +679,82 @@ class AgentBridge:
 
         cumulative_text: dict[str, str] = {}
         emitted_tool_states: set[str] = set()
-        our_assistant_msg_ids: set[str] = set()
+        allowed_assistant_msg_ids: set[str] = set()
+        pending_parts: dict[str, list[tuple[dict[str, Any], Any]]] = {}
+        pending_parts_total = 0
+        pending_drop_logged = False
 
         start_time = time.time()
         loop = asyncio.get_running_loop()
-        last_progress: float | None = None
 
-        def mark_progress(reason: str) -> None:
-            nonlocal last_progress
-            last_progress = loop.time()
-            self.log.debug("bridge.sse_progress", reason=reason, message_id=message_id)
+        def buffer_part(oc_msg_id: str, part: dict[str, Any], delta: Any) -> None:
+            nonlocal pending_parts_total
+            nonlocal pending_drop_logged
+            if pending_parts_total >= self.MAX_PENDING_PART_EVENTS:
+                if not pending_drop_logged:
+                    self.log.warn(
+                        "bridge.pending_parts_dropped",
+                        message_id=message_id,
+                        limit=self.MAX_PENDING_PART_EVENTS,
+                    )
+                    pending_drop_logged = True
+                return
+            pending_parts.setdefault(oc_msg_id, []).append((part, delta))
+            pending_parts_total += 1
+
+        def handle_part(part: dict[str, Any], delta: Any) -> list[dict[str, Any]]:
+            part_type = part.get("type", "")
+            part_id = part.get("id", "")
+            events: list[dict[str, Any]] = []
+
+            if part_type == "text":
+                text = part.get("text", "")
+                if delta:
+                    cumulative_text[part_id] = cumulative_text.get(part_id, "") + delta
+                else:
+                    cumulative_text[part_id] = text
+
+                if cumulative_text.get(part_id):
+                    events.append(
+                        {
+                            "type": "token",
+                            "content": cumulative_text[part_id],
+                            "messageId": message_id,
+                        }
+                    )
+
+            elif part_type == "tool":
+                tool_event = self._transform_part_to_event(part, message_id)
+                if tool_event:
+                    state = part.get("state", {})
+                    status = state.get("status", "")
+                    call_id = part.get("callID", "")
+                    tool_key = f"tool:{call_id}:{status}"
+
+                    if tool_key not in emitted_tool_states:
+                        emitted_tool_states.add(tool_key)
+                        events.append(tool_event)
+
+            elif part_type == "step-start":
+                events.append(
+                    {
+                        "type": "step_start",
+                        "messageId": message_id,
+                    }
+                )
+
+            elif part_type == "step-finish":
+                events.append(
+                    {
+                        "type": "step_finish",
+                        "cost": part.get("cost"),
+                        "tokens": part.get("tokens"),
+                        "reason": part.get("reason"),
+                        "messageId": message_id,
+                    }
+                )
+
+            return events
 
         try:
             deadline = asyncio.get_running_loop().time() + self.sse_inactivity_timeout
@@ -710,6 +769,7 @@ class AgentBridge:
                             f"SSE connection failed: {sse_response.status_code}"
                         )
 
+                    prompt_start = loop.time()
                     prompt_response = await self.http_client.post(
                         async_url,
                         json=request_body,
@@ -726,14 +786,12 @@ class AgentBridge:
                             f"Async prompt failed: {prompt_response.status_code} - {error_body}"
                         )
 
-                    last_progress = loop.time()
-
                     async for event in self._parse_sse_stream(sse_response, timeout_ctx):
                         event_type = event.get("type")
                         props = event.get("properties", {})
 
                         if event_type == "server.connected":
-                            mark_progress("server_connected")
+                            pass
                         elif event_type != "server.heartbeat":
                             event_session_id = props.get("sessionID") or props.get("part", {}).get(
                                 "sessionID"
@@ -760,75 +818,29 @@ class AgentBridge:
                                             and parent_id == opencode_message_id
                                             and oc_msg_id
                                         ):
-                                            our_assistant_msg_ids.add(oc_msg_id)
-                                            mark_progress("assistant_message")
+                                            allowed_assistant_msg_ids.add(oc_msg_id)
+                                            pending = pending_parts.pop(oc_msg_id, [])
+                                            if pending:
+                                                pending_parts_total -= len(pending)
+                                                for part, delta in pending:
+                                                    for part_event in handle_part(part, delta):
+                                                        yield part_event
 
                                         if finish and finish not in ("tool-calls", ""):
                                             self.log.debug(
                                                 "bridge.message_finished",
                                                 finish=finish,
                                             )
-                                            mark_progress("message_finished")
 
                                 elif event_type == "message.part.updated":
                                     part = props.get("part", {})
                                     delta = props.get("delta")
-                                    part_type = part.get("type", "")
-                                    part_id = part.get("id", "")
                                     oc_msg_id = part.get("messageID", "")
-
-                                    if not (
-                                        our_assistant_msg_ids
-                                        and oc_msg_id not in our_assistant_msg_ids
-                                    ):
-                                        if part_type == "text":
-                                            text = part.get("text", "")
-                                            if delta:
-                                                cumulative_text[part_id] = (
-                                                    cumulative_text.get(part_id, "") + delta
-                                                )
-                                            else:
-                                                cumulative_text[part_id] = text
-
-                                            if cumulative_text.get(part_id):
-                                                mark_progress("token")
-                                                yield {
-                                                    "type": "token",
-                                                    "content": cumulative_text[part_id],
-                                                    "messageId": message_id,
-                                                }
-
-                                        elif part_type == "tool":
-                                            tool_event = self._transform_part_to_event(
-                                                part, message_id
-                                            )
-                                            if tool_event:
-                                                state = part.get("state", {})
-                                                status = state.get("status", "")
-                                                call_id = part.get("callID", "")
-                                                tool_key = f"tool:{call_id}:{status}"
-
-                                                if tool_key not in emitted_tool_states:
-                                                    emitted_tool_states.add(tool_key)
-                                                    mark_progress("tool")
-                                                    yield tool_event
-
-                                        elif part_type == "step-start":
-                                            mark_progress("step_start")
-                                            yield {
-                                                "type": "step_start",
-                                                "messageId": message_id,
-                                            }
-
-                                        elif part_type == "step-finish":
-                                            mark_progress("step_finish")
-                                            yield {
-                                                "type": "step_finish",
-                                                "cost": part.get("cost"),
-                                                "tokens": part.get("tokens"),
-                                                "reason": part.get("reason"),
-                                                "messageId": message_id,
-                                            }
+                                    if oc_msg_id in allowed_assistant_msg_ids:
+                                        for part_event in handle_part(part, delta):
+                                            yield part_event
+                                    elif oc_msg_id:
+                                        buffer_part(oc_msg_id, part, delta)
 
                                 elif event_type == "session.idle":
                                     idle_session_id = props.get("sessionID")
@@ -837,13 +849,13 @@ class AgentBridge:
                                         self.log.debug(
                                             "bridge.session_idle",
                                             elapsed_s=round(elapsed, 1),
-                                            tracked_msgs=len(our_assistant_msg_ids),
+                                            tracked_msgs=len(allowed_assistant_msg_ids),
                                         )
                                         async for final_event in self._fetch_final_message_state(
                                             message_id,
                                             opencode_message_id,
                                             cumulative_text,
-                                            our_assistant_msg_ids,
+                                            allowed_assistant_msg_ids,
                                         ):
                                             yield final_event
                                         return
@@ -859,13 +871,13 @@ class AgentBridge:
                                         self.log.debug(
                                             "bridge.session_status_idle",
                                             elapsed_s=round(elapsed, 1),
-                                            tracked_msgs=len(our_assistant_msg_ids),
+                                            tracked_msgs=len(allowed_assistant_msg_ids),
                                         )
                                         async for final_event in self._fetch_final_message_state(
                                             message_id,
                                             opencode_message_id,
                                             cumulative_text,
-                                            our_assistant_msg_ids,
+                                            allowed_assistant_msg_ids,
                                         ):
                                             yield final_event
                                         return
@@ -887,29 +899,24 @@ class AgentBridge:
                                         }
                                         return
 
-                        if (
-                            last_progress is not None
-                            and loop.time() - last_progress > self.sse_progress_timeout
-                        ):
+                        if loop.time() > prompt_start + self.PROMPT_MAX_DURATION:
                             elapsed = time.time() - start_time
                             self.log.error(
-                                "bridge.sse_progress_timeout",
-                                timeout_name="sse_progress",
-                                timeout_ms=int(self.sse_progress_timeout * 1000),
+                                "bridge.prompt_max_duration_timeout",
+                                timeout_ms=int(self.PROMPT_MAX_DURATION * 1000),
                                 elapsed_ms=int(elapsed * 1000),
-                                operation="bridge.sse",
                                 message_id=message_id,
                             )
-                            await self._request_opencode_stop(reason="progress_timeout")
+                            await self._request_opencode_stop(reason="prompt_max_duration_timeout")
                             async for final_event in self._fetch_final_message_state(
                                 message_id,
                                 opencode_message_id,
                                 cumulative_text,
-                                our_assistant_msg_ids,
+                                allowed_assistant_msg_ids,
                             ):
                                 yield final_event
                             raise RuntimeError(
-                                f"SSE stream made no progress for {self.sse_progress_timeout:.0f}s."
+                                f"Prompt exceeded max duration of {self.PROMPT_MAX_DURATION:.0f}s."
                             )
 
         except TimeoutError:
@@ -927,7 +934,7 @@ class AgentBridge:
                 message_id,
                 opencode_message_id,
                 cumulative_text,
-                our_assistant_msg_ids,
+                allowed_assistant_msg_ids,
             ):
                 yield final_event
             raise RuntimeError(
