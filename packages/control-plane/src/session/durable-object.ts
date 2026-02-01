@@ -29,6 +29,20 @@ import {
   type ArtifactRepository,
   type SandboxRepository,
 } from "./repository";
+import {
+  createWebSocketManager,
+  createPresenceManager,
+  createEventProcessor,
+  createSandboxManager,
+  createMessageQueue,
+  createPRCreator,
+  type WebSocketManager,
+  type PresenceManager,
+  type EventProcessor,
+  type SandboxManager,
+  type MessageQueue,
+  type PRCreator,
+} from "./services";
 import type {
   Env,
   ClientInfo,
@@ -156,6 +170,14 @@ export class SessionDO extends DurableObject<Env> {
   private artifactRepo: ArtifactRepository;
   private sandboxRepo: SandboxRepository;
 
+  // Service layer
+  private wsManager: WebSocketManager | null = null;
+  private presenceManager: PresenceManager | null = null;
+  private eventProcessor: EventProcessor | null = null;
+  private sandboxManager: SandboxManager | null = null;
+  private messageQueue: MessageQueue | null = null;
+  private prCreator: PRCreator | null = null;
+
   // Route table for internal API endpoints
   private readonly routes: InternalRoute[] = [
     { method: "POST", path: "/internal/init", handler: (req) => this.handleInit(req) },
@@ -237,6 +259,76 @@ export class SessionDO extends DurableObject<Env> {
     this.eventRepo = createEventRepository(this.sql);
     this.artifactRepo = createArtifactRepository(this.sql);
     this.sandboxRepo = createSandboxRepository(this.sql);
+  }
+
+  /**
+   * Initialize services with dependencies.
+   * Called lazily on first use to ensure repositories are ready.
+   */
+  private initServices(): void {
+    if (this.wsManager) return; // Already initialized
+
+    // Create WebSocket manager
+    this.wsManager = createWebSocketManager();
+
+    // Create presence manager
+    this.presenceManager = createPresenceManager({
+      broadcast: (msg) => this.wsManager!.broadcast(msg),
+    });
+
+    // Create event processor with callbacks
+    this.eventProcessor = createEventProcessor({
+      eventRepo: this.eventRepo,
+      broadcast: (msg) => this.wsManager!.broadcast(msg),
+      callbacks: {
+        onExecutionComplete: async (messageId, success) => {
+          await this.handleExecutionComplete(messageId, success);
+        },
+        onProcessNextMessage: async () => {
+          await this.processMessageQueue();
+        },
+        triggerSnapshot: async (reason) => {
+          await this.triggerSnapshot(reason);
+        },
+      },
+    });
+
+    // Create sandbox manager
+    this.sandboxManager = createSandboxManager({
+      sandboxRepo: this.sandboxRepo,
+      modalSpawn: async (options) => {
+        return await this.spawnSandboxViaModal(options);
+      },
+      modalSnapshot: async (options) => {
+        return await this.snapshotSandboxViaModal(options);
+      },
+    });
+
+    // Create message queue
+    this.messageQueue = createMessageQueue({
+      messageRepo: this.messageRepo,
+      participantRepo: this.participantRepo,
+      sendToSandbox: async (command) => {
+        await this.sendCommandToSandbox(command);
+      },
+      spawnIfNeeded: async () => {
+        await this.spawnSandboxIfNeeded();
+      },
+    });
+
+    // Create PR creator
+    this.prCreator = createPRCreator({
+      participantRepo: this.participantRepo,
+      artifactRepo: this.artifactRepo,
+      sendToSandbox: async (command) => {
+        if (this.sandboxWs) {
+          this.wsManager!.safeSend(this.sandboxWs, command);
+        }
+      },
+      createGitHubPR: async (data) => {
+        return await this.createGitHubPullRequest(data);
+      },
+    });
   }
 
   /**
@@ -3282,5 +3374,72 @@ export class SessionDO extends DurableObject<Env> {
     });
 
     return Response.json({ status: "active" });
+  }
+
+  /**
+   * Handle execution complete callback from EventProcessor.
+   */
+  private async handleExecutionComplete(messageId: string, success: boolean): Promise<void> {
+    // TODO: Replace with inline implementation
+    const message = this.messageRepo.getById(messageId);
+    if (!message) return;
+
+    this.messageRepo.updateStatus(messageId, success ? "completed" : "failed", {
+      completedAt: Date.now(),
+    });
+  }
+
+  /**
+   * Spawn sandbox via Modal API.
+   */
+  private async spawnSandboxViaModal(_options: { snapshotId?: string }): Promise<{
+    sandbox_id: string;
+    object_id: string;
+  }> {
+    // TODO: Extract from existing spawn logic
+    throw new Error("Not implemented - will be extracted from existing code");
+  }
+
+  /**
+   * Trigger snapshot via Modal API.
+   */
+  private async snapshotSandboxViaModal(_options: { reason: string }): Promise<{
+    snapshot_id: string;
+  }> {
+    // TODO: Extract from existing snapshot logic
+    throw new Error("Not implemented - will be extracted from existing code");
+  }
+
+  /**
+   * Send command to sandbox WebSocket.
+   */
+  private async sendCommandToSandbox(command: SandboxCommand): Promise<void> {
+    // TODO: Extract from existing logic
+    if (this.sandboxWs && this.wsManager) {
+      this.wsManager.safeSend(this.sandboxWs, command);
+    }
+  }
+
+  /**
+   * Spawn sandbox if not connected.
+   */
+  private async spawnSandboxIfNeeded(): Promise<void> {
+    // TODO: Extract from existing logic
+    if (!this.sandboxWs && !this.isSpawningSandbox) {
+      await this.spawnSandbox();
+    }
+  }
+
+  /**
+   * Create GitHub pull request.
+   */
+  private async createGitHubPullRequest(_data: {
+    branch: string;
+    title: string;
+    body: string;
+    token: string;
+  }): Promise<{ number: number; html_url: string }> {
+    // TODO: Extract from existing PR creation logic
+    throw new Error("Not implemented - will be extracted from existing code");
   }
 }
