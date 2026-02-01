@@ -39,14 +39,14 @@ export function createEventProcessor(deps: EventProcessorDependencies): EventPro
 
         // Broadcast event to clients
         try {
+          const eventData = storedEvent.data ? JSON.parse(storedEvent.data) : {};
           broadcast({
-            type: "event",
+            type: "sandbox_event",
             event: {
               id: storedEvent.id,
               type: storedEvent.type,
-              data: storedEvent.data ? JSON.parse(storedEvent.data) : null,
-              messageId: storedEvent.message_id,
-              createdAt: storedEvent.created_at,
+              ...eventData,
+              messageId: storedEvent.message_id ?? undefined,
             },
           });
         } catch (broadcastError) {

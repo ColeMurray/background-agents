@@ -71,12 +71,12 @@ describe("EventProcessor", () => {
       await processor.processEvent(event);
 
       expect(mockBroadcast).toHaveBeenCalledWith({
-        type: "event",
+        type: "sandbox_event",
         event: expect.objectContaining({
           id: expect.any(String),
           type: "test_event",
-          data: { value: "test" },
-          createdAt: expect.any(Number),
+          value: "test",
+          messageId: undefined,
         }),
       });
     });

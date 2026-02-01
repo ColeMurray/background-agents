@@ -1368,7 +1368,9 @@ export class SessionDO extends DurableObject<Env> {
   private async processSandboxEvent(event: SandboxEvent): Promise<void> {
     console.log(`[DO] processSandboxEvent: type=${event.type}`);
     const now = Date.now();
-    const eventId = generateId();
+
+    // Ensure services are initialized
+    this.initServices();
 
     // Get messageId from the event first (sandbox sends correct messageId with every event)
     // Only fall back to DB lookup if event doesn't include messageId (legacy fallback)
@@ -1379,45 +1381,14 @@ export class SessionDO extends DurableObject<Env> {
       .toArray() as Array<{ id: string }>;
     const messageId = eventMessageId ?? processingResult[0]?.id ?? null;
 
-    // Store event
-    this.eventRepo.create({
-      id: eventId,
+    // Process event through EventProcessor (stores in DB and broadcasts)
+    await this.eventProcessor!.processEvent({
       type: event.type,
-      data: JSON.stringify(event),
-      messageId,
-      createdAt: now,
+      data: event,
+      message_id: messageId ?? undefined,
     });
 
-    // Handle specific event types
-    if (event.type === "execution_complete") {
-      // Use the resolved messageId (which now correctly prioritizes event.messageId)
-      const completionMessageId = messageId ?? event.messageId;
-      const status = event.success ? "completed" : "failed";
-
-      if (completionMessageId) {
-        this.messageRepo.updateStatus(completionMessageId, status, { completedAt: now });
-
-        // Broadcast processing status change (after DB update so getIsProcessing is accurate)
-        this.broadcast({ type: "processing_status", isProcessing: this.getIsProcessing() });
-
-        // Notify slack-bot of completion (fire-and-forget with retry)
-        this.ctx.waitUntil(this.notifySlackBot(completionMessageId, event.success));
-      } else {
-        console.error("[DO] execution_complete: no messageId available for status update");
-      }
-
-      // Take snapshot after execution completes (per Ramp spec)
-      // "When the agent is finished making changes, we take another snapshot"
-      // Use fire-and-forget so snapshot doesn't block the response to the user
-      this.ctx.waitUntil(this.triggerSnapshot("execution_complete"));
-
-      // Reset activity timer - give user time to review output before inactivity timeout
-      this.updateLastActivity(now);
-      await this.scheduleInactivityCheck();
-
-      // Process next in queue
-      await this.processMessageQueue();
-    }
+    // Handle additional event-specific logic not covered by EventProcessor callbacks
 
     if (event.type === "git_sync") {
       this.sandboxRepo.updateGitSyncStatus(event.status);
@@ -1451,12 +1422,6 @@ export class SessionDO extends DurableObject<Env> {
         }
       }
     }
-
-    // Broadcast to clients (include event id and messageId for task linking)
-    this.broadcast({
-      type: "sandbox_event",
-      event: { ...event, id: eventId, messageId: messageId ?? undefined },
-    });
   }
 
   /**
@@ -3366,13 +3331,33 @@ export class SessionDO extends DurableObject<Env> {
    * Handle execution complete callback from EventProcessor.
    */
   private async handleExecutionComplete(messageId: string, success: boolean): Promise<void> {
-    // TODO: Replace with inline implementation
     const message = this.messageRepo.getById(messageId);
-    if (!message) return;
+    if (!message) {
+      console.error("[DO] execution_complete: message not found for messageId:", messageId);
+      return;
+    }
 
+    const now = Date.now();
+
+    // Update message status
     this.messageRepo.updateStatus(messageId, success ? "completed" : "failed", {
-      completedAt: Date.now(),
+      completedAt: now,
     });
+
+    // Broadcast processing status change (after DB update so getIsProcessing is accurate)
+    this.broadcast({ type: "processing_status", isProcessing: this.getIsProcessing() });
+
+    // Notify slack-bot of completion (fire-and-forget with retry)
+    this.ctx.waitUntil(this.notifySlackBot(messageId, success));
+
+    // Take snapshot after execution completes (per Ramp spec)
+    // "When the agent is finished making changes, we take another snapshot"
+    // Use fire-and-forget so snapshot doesn't block the response to the user
+    this.ctx.waitUntil(this.triggerSnapshot("execution_complete"));
+
+    // Reset activity timer - give user time to review output before inactivity timeout
+    this.updateLastActivity(now);
+    await this.scheduleInactivityCheck();
   }
 
   /**
