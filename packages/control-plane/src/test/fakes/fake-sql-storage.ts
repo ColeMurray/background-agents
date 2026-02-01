@@ -146,13 +146,35 @@ export class FakeSqlStorage {
           return { toArray: () => [{ count: results.length }] };
         }
 
-        // Apply WHERE clause (basic support for "WHERE column = ?")
+        // Apply WHERE clause
         if (normalizedQuery.includes("where")) {
-          const whereMatch = query.match(/where\s+(\w+)\s*=\s*\?/i);
-          if (whereMatch && params.length > paramIndex) {
-            const column = whereMatch[1];
-            const value = params[paramIndex++];
-            results = results.filter((row) => row[column] === value);
+          // Handle multiple WHERE conditions with AND
+          const whereClause = query.match(
+            /where\s+(.+?)(?:\s+order\s+by|\s+limit|\s+offset|$)/i
+          )?.[1];
+          if (whereClause) {
+            const conditions = whereClause.split(/\s+and\s+/i);
+
+            conditions.forEach((condition) => {
+              // Handle IN clause: "column IN (?, ?, ?)"
+              const inMatch = condition.match(/(\w+)\s+in\s+\(([?',\s]+)\)/i);
+              if (inMatch) {
+                const column = inMatch[1];
+                const placeholderCount = (inMatch[2].match(/\?/g) || []).length;
+                const values = params.slice(paramIndex, paramIndex + placeholderCount);
+                paramIndex += placeholderCount;
+                results = results.filter((row) => values.includes(row[column]));
+                return;
+              }
+
+              // Handle simple equality: "column = ?"
+              const eqMatch = condition.match(/(\w+)\s*=\s*\?/i);
+              if (eqMatch && params.length > paramIndex) {
+                const column = eqMatch[1];
+                const value = params[paramIndex++];
+                results = results.filter((row) => row[column] === value);
+              }
+            });
           }
         }
 

@@ -95,6 +95,8 @@ export interface SandboxRow {
   created_at: number;
   preview_tunnel_url: string | null; // Public URL for live preview (port 5173, primary)
   tunnel_urls: string | null; // JSON: Record<port, url> for all exposed ports
+  spawn_failure_count?: number; // Circuit breaker: count of consecutive spawn failures
+  last_spawn_failure?: number | null; // Circuit breaker: timestamp of last spawn failure
 }
 
 // Command types for sandbox communication
