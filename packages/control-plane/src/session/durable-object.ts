@@ -455,13 +455,12 @@ export class SessionDO extends DurableObject<Env> {
 
         this.wsManager!.setSandboxWebSocket(server);
         this.isSpawningSandbox = false;
-        this.updateSandboxStatus("ready");
+        this.sandboxManager!.updateStatus("ready");
         this.broadcast({ type: "sandbox_status", status: "ready" });
 
         // Set initial activity timestamp and schedule inactivity check
         // IMPORTANT: Must await to ensure alarm is scheduled before returning
-        const now = Date.now();
-        this.updateLastActivity(now);
+        this.sandboxManager!.updateActivity();
         console.log(`[DO] Sandbox connected, scheduling inactivity check`);
         await this.scheduleInactivityCheck();
 
@@ -513,7 +512,7 @@ export class SessionDO extends DurableObject<Env> {
       // Unexpected close (network blip, container restart) → "connecting" so reconnect is accepted.
       const sandbox = this.getSandbox();
       if (sandbox?.status !== "stopped" && sandbox?.status !== "stale") {
-        this.updateSandboxStatus("connecting");
+        this.sandboxManager!.updateStatus("connecting");
         this.broadcast({ type: "sandbox_status", status: "connecting" });
       }
     } else {
@@ -670,7 +669,7 @@ export class SessionDO extends DurableObject<Env> {
 
         // IMPORTANT: Set status to "stopped" FIRST to block any reconnection attempts
         // This prevents race conditions where sandbox reconnects before we finish cleanup
-        this.updateSandboxStatus("stopped");
+        this.sandboxManager!.updateStatus("stopped");
         this.broadcast({ type: "sandbox_status", status: "stopped" });
         console.log("[DO] Status set to stopped, blocking reconnections");
 
@@ -727,7 +726,7 @@ export class SessionDO extends DurableObject<Env> {
       console.log(`[DO] Heartbeat timeout: ${heartbeatAge / 1000}s since last heartbeat`);
       // Use fire-and-forget so status broadcast isn't delayed by snapshot
       this.ctx.waitUntil(this.triggerSnapshot("heartbeat_timeout"));
-      this.updateSandboxStatus("stale");
+      this.sandboxManager!.updateStatus("stale");
       this.broadcast({ type: "sandbox_status", status: "stale" });
       return true;
     }
@@ -741,10 +740,6 @@ export class SessionDO extends DurableObject<Env> {
   /**
    * Update the last activity timestamp.
    */
-  private updateLastActivity(timestamp: number): void {
-    this.sandboxRepo.updateLastActivity(timestamp);
-  }
-
   /**
    * Schedule the inactivity check alarm.
    * Called when sandbox becomes ready or when activity occurs.
@@ -768,10 +763,11 @@ export class SessionDO extends DurableObject<Env> {
    * - Heartbeat timeout (sandbox may be unresponsive)
    */
   private async triggerSnapshot(reason: string): Promise<void> {
-    const sandbox = this.getSandbox();
-    const session = this.getSession();
-    if (!sandbox?.modal_object_id || !session) {
-      console.log("[DO] Cannot snapshot: no modal_object_id or session");
+    this.initServices();
+
+    const sandbox = this.sandboxRepo.get();
+    if (!sandbox?.modal_object_id) {
+      console.log("[DO] Cannot snapshot: no modal_object_id");
       return;
     }
 
@@ -782,199 +778,29 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     // Track previous status only if we're not in a terminal state
-    // Terminal states (stopped, stale, failed) should not be changed by snapshotting
     const isTerminalState =
       sandbox.status === "stopped" || sandbox.status === "stale" || sandbox.status === "failed";
     const previousStatus = sandbox.status;
 
     if (!isTerminalState) {
-      this.updateSandboxStatus("snapshotting");
+      this.sandboxManager!.updateStatus("snapshotting");
       this.broadcast({ type: "sandbox_status", status: "snapshotting" });
     }
 
     try {
-      // Verify Modal configuration
-      const modalApiSecret = this.env.MODAL_API_SECRET;
-      const modalWorkspace = this.env.MODAL_WORKSPACE;
-      if (!modalApiSecret || !modalWorkspace) {
-        console.error(
-          "[DO] MODAL_API_SECRET or MODAL_WORKSPACE not configured, cannot call Modal API"
-        );
-        this.broadcast({
-          type: "sandbox_warning",
-          message: "Snapshot skipped: Modal configuration missing",
-        });
-        return;
-      }
-
-      // Construct Modal API URL from workspace
-      const modalClient = createModalClient(modalApiSecret, modalWorkspace);
-      const modalApiUrl = modalClient.getSnapshotSandboxUrl();
-
-      console.log(
-        `[DO] Triggering snapshot for sandbox ${sandbox.modal_object_id}, reason: ${reason}`
-      );
-
-      // Generate auth token for Modal API
-      const authToken = await generateInternalToken(modalApiSecret);
-
-      // Call Modal endpoint to take snapshot using Modal's internal object ID
-      const response = await fetch(modalApiUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({
-          sandbox_id: sandbox.modal_object_id, // Use Modal's internal object ID
-          session_id: session.session_name || session.id,
-          reason,
-        }),
-      });
-
-      const result = (await response.json()) as {
-        success: boolean;
-        data?: { image_id: string };
-        error?: string;
-      };
-
-      if (result.success && result.data?.image_id) {
-        // Store snapshot image ID for later restoration
-        this.sandboxRepo.updateSnapshot(sandbox.snapshot_id!, result.data.image_id);
-        console.log(`[DO] Snapshot saved: ${result.data.image_id}`);
-        this.broadcast({
-          type: "snapshot_saved",
-          imageId: result.data.image_id,
-          reason,
-        });
-      } else {
-        console.error("[DO] Snapshot failed:", result.error);
-      }
+      await this.sandboxManager!.triggerSnapshot(reason);
     } catch (error) {
-      console.error("[DO] Snapshot request failed:", error);
+      console.error("[DO] Failed to trigger snapshot:", error);
+      this.broadcast({
+        type: "sandbox_warning",
+        message: error instanceof Error ? error.message : "Snapshot failed",
+      });
     }
 
     // Restore previous status if we weren't in a terminal state
-    // Terminal states (stopped, stale, failed) should persist after snapshot
     if (!isTerminalState && reason !== "heartbeat_timeout") {
-      this.updateSandboxStatus(previousStatus);
+      this.sandboxManager!.updateStatus(previousStatus);
       this.broadcast({ type: "sandbox_status", status: previousStatus });
-    }
-  }
-
-  /**
-   * Restore a sandbox from a filesystem snapshot.
-   *
-   * Called when resuming a session that has a saved snapshot.
-   * Creates a new sandbox from the snapshot Image, skipping git clone.
-   */
-  private async restoreFromSnapshot(snapshotImageId: string): Promise<void> {
-    const session = this.getSession();
-    if (!session) {
-      console.error("[DO] Cannot restore: no session");
-      return;
-    }
-
-    this.updateSandboxStatus("spawning");
-    this.broadcast({ type: "sandbox_status", status: "spawning" });
-
-    try {
-      const now = Date.now();
-      const sandboxAuthToken = generateId();
-      const expectedSandboxId = `sandbox-${session.repo_owner}-${session.repo_name}-${now}`;
-
-      // Store expected sandbox ID and auth token before calling Modal
-      // TODO: Move to repository when auth_token update method is added
-      this.sql.exec(
-        `UPDATE sandbox SET
-           status = 'spawning',
-           created_at = ?,
-           auth_token = ?,
-           modal_sandbox_id = ?
-         WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-        now,
-        sandboxAuthToken,
-        expectedSandboxId
-      );
-
-      // Verify Modal configuration
-      const modalApiSecret = this.env.MODAL_API_SECRET;
-      const modalWorkspace = this.env.MODAL_WORKSPACE;
-      if (!modalApiSecret || !modalWorkspace) {
-        console.error(
-          "[DO] MODAL_API_SECRET or MODAL_WORKSPACE not configured, cannot call Modal API"
-        );
-        this.updateSandboxStatus("failed");
-        this.broadcast({
-          type: "sandbox_error",
-          error: "Modal configuration missing (MODAL_API_SECRET or MODAL_WORKSPACE)",
-        });
-        return;
-      }
-
-      // Construct Modal API URL from workspace
-      const modalClient = createModalClient(modalApiSecret, modalWorkspace);
-      const modalApiUrl = modalClient.getRestoreSandboxUrl();
-
-      // Get control plane URL
-      const controlPlaneUrl =
-        this.env.WORKER_URL ||
-        `https://open-inspect-control-plane.${this.env.CF_ACCOUNT_ID || "workers"}.workers.dev`;
-
-      // Generate auth token for Modal API
-      const authToken = await generateInternalToken(modalApiSecret);
-
-      console.log(`[DO] Restoring sandbox from snapshot ${snapshotImageId}`);
-
-      const response = await fetch(modalApiUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({
-          snapshot_image_id: snapshotImageId,
-          session_config: {
-            session_id: session.session_name || session.id,
-            repo_owner: session.repo_owner,
-            repo_name: session.repo_name,
-            ...extractProviderAndModel(session.model || DEFAULT_MODEL),
-          },
-          sandbox_id: expectedSandboxId,
-          control_plane_url: controlPlaneUrl,
-          sandbox_auth_token: sandboxAuthToken,
-        }),
-      });
-
-      const result = (await response.json()) as {
-        success: boolean;
-        data?: { sandbox_id: string };
-        error?: string;
-      };
-
-      if (result.success) {
-        console.log(`[DO] Sandbox restored: ${result.data?.sandbox_id}`);
-        this.updateSandboxStatus("connecting");
-        this.broadcast({ type: "sandbox_status", status: "connecting" });
-        this.broadcast({
-          type: "sandbox_restored",
-          message: "Session restored from snapshot",
-        });
-      } else {
-        console.error("[DO] Restore from snapshot failed:", result.error);
-        this.updateSandboxStatus("failed");
-        this.broadcast({
-          type: "sandbox_error",
-          error: result.error || "Failed to restore from snapshot",
-        });
-      }
-    } catch (error) {
-      console.error("[DO] Restore from snapshot request failed:", error);
-      this.updateSandboxStatus("failed");
-      this.broadcast({
-        type: "sandbox_error",
-        error: error instanceof Error ? error.message : "Failed to restore sandbox",
-      });
     }
   }
 
@@ -1368,7 +1194,6 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async processSandboxEvent(event: SandboxEvent): Promise<void> {
     console.log(`[DO] processSandboxEvent: type=${event.type}`);
-    const now = Date.now();
 
     // Ensure services are initialized
     this.initServices();
@@ -1400,7 +1225,7 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     if (event.type === "heartbeat") {
-      this.sandboxRepo.updateLastHeartbeat(now);
+      this.sandboxManager!.updateHeartbeat();
       // Note: Don't schedule separate heartbeat alarm - it's handled in the main alarm()
       // which checks both inactivity and heartbeat health
     }
@@ -1581,66 +1406,53 @@ export class SessionDO extends DurableObject<Env> {
    *
    * @returns true if spawning should proceed, false if blocked by circuit breaker
    */
-  private enforceCircuitBreaker(spawnFailureCount: number, lastSpawnFailure: number): boolean {
-    const CIRCUIT_BREAKER_THRESHOLD = 3;
-    const CIRCUIT_BREAKER_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
-    const now = Date.now();
-    const timeSinceLastFailure = now - lastSpawnFailure;
-
-    if (
-      spawnFailureCount >= CIRCUIT_BREAKER_THRESHOLD &&
-      timeSinceLastFailure < CIRCUIT_BREAKER_WINDOW_MS
-    ) {
-      console.log(
-        `[DO] Circuit breaker open: ${spawnFailureCount} failures in last ${timeSinceLastFailure / 1000}s`
-      );
-      this.broadcast({
-        type: "sandbox_error",
-        error: `Sandbox spawning temporarily disabled after ${spawnFailureCount} failures. Try again in ${Math.ceil((CIRCUIT_BREAKER_WINDOW_MS - timeSinceLastFailure) / 1000)} seconds.`,
-      });
-      return false;
-    }
-
-    // Reset circuit breaker if window has passed
-    if (spawnFailureCount > 0 && timeSinceLastFailure >= CIRCUIT_BREAKER_WINDOW_MS) {
-      console.log("[DO] Circuit breaker window passed, resetting failure count");
-      this.sandboxRepo.resetSpawnFailureCount();
-    }
-
-    return true;
-  }
 
   /**
    * Spawn a sandbox via Modal.
    */
   private async spawnSandbox(): Promise<void> {
+    this.initServices();
+
     // Check persisted status and last spawn time to prevent duplicate spawns
     const sandbox = this.sandboxRepo.get();
     const currentStatus = sandbox?.status;
     const lastSpawnTime = sandbox?.created_at || 0;
     const snapshotImageId = sandbox?.snapshot_image_id;
-    const spawnFailureCount = sandbox?.spawn_failure_count || 0;
-    const lastSpawnFailure = sandbox?.last_spawn_failure || 0;
     const now = Date.now();
     const timeSinceLastSpawn = now - lastSpawnTime;
 
     // Check circuit breaker
-    if (!this.enforceCircuitBreaker(spawnFailureCount, lastSpawnFailure)) {
+    if (!this.sandboxManager!.canSpawnSandbox()) {
+      console.error("[DO] Circuit breaker open - too many recent spawn failures");
+      const failureInfo = this.sandboxRepo.getSpawnFailureInfo();
+      const CIRCUIT_BREAKER_WINDOW_MS = 5 * 60 * 1000;
+      const timeSinceLastFailure = failureInfo.lastFailure
+        ? Date.now() - failureInfo.lastFailure
+        : 0;
+      this.broadcast({
+        type: "sandbox_error",
+        error: `Sandbox spawning temporarily disabled after ${failureInfo.count} failures. Try again in ${Math.ceil((CIRCUIT_BREAKER_WINDOW_MS - timeSinceLastFailure) / 1000)} seconds.`,
+      });
       return;
     }
 
     // Check if we have a snapshot to restore from
-    // This implements the Ramp spec: "restore to it later if the sandbox has exited and the user sends a follow up"
     if (
       snapshotImageId &&
       (currentStatus === "stopped" || currentStatus === "stale" || currentStatus === "failed")
     ) {
       console.log(`[DO] Found snapshot ${snapshotImageId}, restoring instead of fresh spawn`);
-      await this.restoreFromSnapshot(snapshotImageId);
+      await this.sandboxManager!.restoreFromSnapshot(snapshotImageId);
+      this.sandboxManager!.updateStatus("connecting");
+      this.broadcast({ type: "sandbox_status", status: "connecting" });
+      this.broadcast({
+        type: "sandbox_restored",
+        message: "Session restored from snapshot",
+      });
       return;
     }
 
-    // Don't spawn if already spawning or connecting (persisted check)
+    // Don't spawn if already spawning or connecting
     if (currentStatus === "spawning" || currentStatus === "connecting") {
       console.log(`[DO] spawnSandbox: already ${currentStatus}, skipping`);
       return;
@@ -1673,155 +1485,15 @@ export class SessionDO extends DurableObject<Env> {
       console.log("[DO] spawnSandbox: isSpawningSandbox=true, skipping");
       return;
     }
+
     this.isSpawningSandbox = true;
-
     try {
-      const session = this.getSession();
-      if (!session) {
-        console.error("Cannot spawn sandbox: no session");
-        return;
-      }
-
-      // Use the session_name for WebSocket routing (not the DO internal ID)
-      const sessionId = session.session_name || this.ctx.id.toString();
-      const sandboxAuthToken = generateId(); // Token for sandbox to authenticate
-
-      // Generate predictable sandbox ID BEFORE calling Modal
-      // This allows us to validate the connecting sandbox
-      const expectedSandboxId = `sandbox-${session.repo_owner}-${session.repo_name}-${now}`;
-
-      // Store status, auth token, AND expected sandbox ID BEFORE calling Modal
-      // This prevents race conditions where sandbox connects before we've stored expected ID
-      // TODO: Move to repository when auth_token update method is added
-      this.sql.exec(
-        `UPDATE sandbox SET
-           status = 'spawning',
-           created_at = ?,
-           auth_token = ?,
-           modal_sandbox_id = ?
-         WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-        now,
-        sandboxAuthToken,
-        expectedSandboxId
-      );
-      this.broadcast({ type: "sandbox_status", status: "spawning" });
-      console.log(
-        `[DO] Creating sandbox via Modal API: ${session.session_name}, expectedId=${expectedSandboxId}`
-      );
-
-      // Get the control plane URL from env or construct it
-      const controlPlaneUrl =
-        this.env.WORKER_URL ||
-        `https://open-inspect-control-plane.${this.env.CF_ACCOUNT_ID || "workers"}.workers.dev`;
-
-      // Verify MODAL_API_SECRET and MODAL_WORKSPACE are configured
-      if (!this.env.MODAL_API_SECRET) {
-        throw new Error("MODAL_API_SECRET not configured");
-      }
-      if (!this.env.MODAL_WORKSPACE) {
-        throw new Error("MODAL_WORKSPACE not configured");
-      }
-
-      // Optional Linear context for agent (session-level linked issue)
-      let linear:
-        | { issueId: string; title: string; url: string; description?: string | null }
-        | undefined;
-      if (session.linear_issue_id && this.env.LINEAR_API_KEY) {
-        try {
-          const issue = await getIssue(this.env, session.linear_issue_id);
-          if (issue) {
-            linear = {
-              issueId: issue.id,
-              title: issue.title,
-              url: issue.url ?? `https://linear.app/issue/${issue.identifier}`,
-              description: issue.description ?? null,
-            };
-          }
-        } catch (e) {
-          console.warn("[DO] Failed to fetch Linear issue for sandbox context:", e);
-        }
-      }
-
-      // Call Modal to create the sandbox with the expected ID
-      const modalClient = createModalClient(this.env.MODAL_API_SECRET, this.env.MODAL_WORKSPACE);
-      const { provider, model } = extractProviderAndModel(session.model || DEFAULT_MODEL);
-      const result = await modalClient.createSandbox({
-        sessionId,
-        sandboxId: expectedSandboxId, // Pass expected ID to Modal
-        repoOwner: session.repo_owner,
-        repoName: session.repo_name,
-        controlPlaneUrl,
-        sandboxAuthToken,
-        snapshotId: undefined, // Could use snapshot if available
-        gitUserName: undefined, // Could pass user info
-        gitUserEmail: undefined,
-        provider,
-        model,
-        linear,
-      });
-
-      console.log("Modal sandbox created:", result);
-
-      // Store Modal's internal object ID for snapshot API calls
-      if (result.modalObjectId) {
-        // TODO: Add updateModalObjectId method to SandboxRepository
-        this.sql.exec(
-          `UPDATE sandbox SET modal_object_id = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-          result.modalObjectId
-        );
-        console.log(`[DO] Stored modal_object_id: ${result.modalObjectId}`);
-      }
-
-      // Store tunnel URLs and create preview artifact if available
-      if (result.tunnelUrls) {
-        this.sandboxRepo.updateTunnelUrls(JSON.stringify(result.tunnelUrls));
-        console.log(`[DO] Stored tunnel_urls: ${Object.keys(result.tunnelUrls).join(", ")}`);
-      }
-      if (result.previewTunnelUrl) {
-        this.sandboxRepo.updatePreviewTunnelUrl(result.previewTunnelUrl);
-        console.log(`[DO] Stored preview_tunnel_url`);
-        const session = this.getSession();
-        if (session) {
-          const artifactId = generateId();
-          const now = Date.now();
-          // Include all tunnel URLs in the metadata for port switching
-          const metadata: Record<string, unknown> = { previewStatus: "active" };
-          if (result.tunnelUrls) {
-            metadata.tunnelUrls = result.tunnelUrls;
-          }
-          this.artifactRepo.create({
-            id: artifactId,
-            type: "preview",
-            url: result.previewTunnelUrl,
-            metadata: JSON.stringify(metadata),
-            createdAt: now,
-          });
-          this.broadcast({
-            type: "artifact_created",
-            artifact: {
-              id: artifactId,
-              type: "preview",
-              url: result.previewTunnelUrl,
-              metadata,
-            },
-          });
-        }
-      }
-
-      this.updateSandboxStatus("connecting");
+      await this.sandboxManager!.spawnSandbox();
+      this.sandboxManager!.updateStatus("connecting");
       this.broadcast({ type: "sandbox_status", status: "connecting" });
-
-      // Reset circuit breaker on successful spawn initiation
-      this.sandboxRepo.resetSpawnFailureCount();
     } catch (error) {
       console.error("Failed to spawn sandbox:", error);
-
-      // Increment circuit breaker failure count
-      const failureNow = Date.now();
-      this.sandboxRepo.incrementSpawnFailureCount(failureNow);
-      console.log("[DO] Incremented spawn failure count for circuit breaker");
-
-      this.updateSandboxStatus("failed");
+      this.sandboxManager!.updateStatus("failed");
       this.broadcast({
         type: "sandbox_error",
         error: error instanceof Error ? error.message : "Failed to spawn sandbox",
@@ -2046,10 +1718,6 @@ export class SessionDO extends DurableObject<Env> {
       role: "member",
       joinedAt: now,
     });
-  }
-
-  private updateSandboxStatus(status: string): void {
-    this.sandboxRepo.updateStatus(status);
   }
 
   /**
@@ -3278,29 +2946,207 @@ export class SessionDO extends DurableObject<Env> {
     this.ctx.waitUntil(this.triggerSnapshot("execution_complete"));
 
     // Reset activity timer - give user time to review output before inactivity timeout
-    this.updateLastActivity(now);
+    this.sandboxManager!.updateActivity();
     await this.scheduleInactivityCheck();
   }
 
   /**
    * Spawn sandbox via Modal API.
    */
-  private async spawnSandboxViaModal(_options: { snapshotId?: string }): Promise<{
+  private async spawnSandboxViaModal(options: { snapshotId?: string }): Promise<{
     sandbox_id: string;
     object_id: string;
   }> {
-    // TODO: Extract from existing spawn logic
-    throw new Error("Not implemented - will be extracted from existing code");
+    const session = this.sessionRepo.get();
+    if (!session) {
+      throw new Error("Session not found");
+    }
+
+    // Verify Modal configuration
+    if (!this.env.MODAL_API_SECRET) {
+      throw new Error("MODAL_API_SECRET not configured");
+    }
+    if (!this.env.MODAL_WORKSPACE) {
+      throw new Error("MODAL_WORKSPACE not configured");
+    }
+
+    const now = Date.now();
+    const sessionId = session.session_name || this.ctx.id.toString();
+    const sandboxAuthToken = generateId();
+    const expectedSandboxId = `sandbox-${session.repo_owner}-${session.repo_name}-${now}`;
+
+    // Get control plane URL
+    const controlPlaneUrl =
+      this.env.WORKER_URL ||
+      `https://open-inspect-control-plane.${this.env.CF_ACCOUNT_ID || "workers"}.workers.dev`;
+
+    // Optional Linear context for agent
+    let linear:
+      | { issueId: string; title: string; url: string; description?: string | null }
+      | undefined;
+    if (session.linear_issue_id && this.env.LINEAR_API_KEY) {
+      try {
+        const issue = await getIssue(this.env, session.linear_issue_id);
+        if (issue) {
+          linear = {
+            issueId: issue.id,
+            title: issue.title,
+            url: issue.url ?? `https://linear.app/issue/${issue.identifier}`,
+            description: issue.description ?? null,
+          };
+        }
+      } catch (e) {
+        console.warn("[DO] Failed to fetch Linear issue for sandbox context:", e);
+      }
+    }
+
+    // Store status, auth token, and expected sandbox ID BEFORE calling Modal
+    // This prevents race conditions where sandbox connects before we've stored expected ID
+    this.sql.exec(
+      `UPDATE sandbox SET
+         status = 'spawning',
+         created_at = ?,
+         auth_token = ?,
+         modal_sandbox_id = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      now,
+      sandboxAuthToken,
+      expectedSandboxId
+    );
+    this.broadcast({ type: "sandbox_status", status: "spawning" });
+
+    // Call Modal to create the sandbox
+    const modalClient = createModalClient(this.env.MODAL_API_SECRET, this.env.MODAL_WORKSPACE);
+    const { provider, model } = extractProviderAndModel(session.model || DEFAULT_MODEL);
+    const result = await modalClient.createSandbox({
+      sessionId,
+      sandboxId: expectedSandboxId,
+      repoOwner: session.repo_owner,
+      repoName: session.repo_name,
+      controlPlaneUrl,
+      sandboxAuthToken,
+      snapshotId: options.snapshotId,
+      gitUserName: undefined,
+      gitUserEmail: undefined,
+      provider,
+      model,
+      linear,
+    });
+
+    console.log("Modal sandbox created:", result);
+
+    // Store Modal's internal object ID for snapshot API calls
+    if (result.modalObjectId) {
+      this.sql.exec(
+        `UPDATE sandbox SET modal_object_id = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+        result.modalObjectId
+      );
+      console.log(`[DO] Stored modal_object_id: ${result.modalObjectId}`);
+    }
+
+    // Store tunnel URLs and create preview artifact if available
+    if (result.tunnelUrls) {
+      this.sandboxRepo.updateTunnelUrls(JSON.stringify(result.tunnelUrls));
+      console.log(`[DO] Stored tunnel_urls: ${Object.keys(result.tunnelUrls).join(", ")}`);
+    }
+    if (result.previewTunnelUrl) {
+      this.sandboxRepo.updatePreviewTunnelUrl(result.previewTunnelUrl);
+      console.log(`[DO] Stored preview_tunnel_url`);
+      const artifactId = generateId();
+      const metadata: Record<string, unknown> = { previewStatus: "active" };
+      if (result.tunnelUrls) {
+        metadata.tunnelUrls = result.tunnelUrls;
+      }
+      this.artifactRepo.create({
+        id: artifactId,
+        type: "preview",
+        url: result.previewTunnelUrl,
+        metadata: JSON.stringify(metadata),
+        createdAt: now,
+      });
+      this.broadcast({
+        type: "artifact_created",
+        artifact: {
+          id: artifactId,
+          type: "preview",
+          url: result.previewTunnelUrl,
+          metadata,
+        },
+      });
+    }
+
+    return {
+      sandbox_id: expectedSandboxId,
+      object_id: result.modalObjectId || "",
+    };
   }
 
   /**
    * Trigger snapshot via Modal API.
    */
-  private async snapshotSandboxViaModal(_options: { reason: string }): Promise<{
+  private async snapshotSandboxViaModal(options: { reason: string }): Promise<{
     snapshot_id: string;
   }> {
-    // TODO: Extract from existing snapshot logic
-    throw new Error("Not implemented - will be extracted from existing code");
+    const sandbox = this.sandboxRepo.get();
+    const session = this.sessionRepo.get();
+
+    if (!sandbox?.modal_object_id) {
+      throw new Error("No modal_object_id available for snapshot");
+    }
+    if (!session) {
+      throw new Error("Session not found");
+    }
+
+    // Verify Modal configuration
+    if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {
+      throw new Error("MODAL_API_SECRET or MODAL_WORKSPACE not configured");
+    }
+
+    // Construct Modal API URL
+    const modalClient = createModalClient(this.env.MODAL_API_SECRET, this.env.MODAL_WORKSPACE);
+    const modalApiUrl = modalClient.getSnapshotSandboxUrl();
+
+    console.log(
+      `[DO] Triggering snapshot for sandbox ${sandbox.modal_object_id}, reason: ${options.reason}`
+    );
+
+    // Generate auth token for Modal API
+    const authToken = await generateInternalToken(this.env.MODAL_API_SECRET);
+
+    // Call Modal endpoint to take snapshot
+    const response = await fetch(modalApiUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({
+        sandbox_id: sandbox.modal_object_id,
+        session_id: session.session_name || session.id,
+        reason: options.reason,
+      }),
+    });
+
+    const result = (await response.json()) as {
+      success: boolean;
+      data?: { image_id: string };
+      error?: string;
+    };
+
+    if (!result.success || !result.data?.image_id) {
+      throw new Error(result.error || "Snapshot failed");
+    }
+
+    console.log(`[DO] Snapshot saved: ${result.data.image_id}`);
+    this.broadcast({
+      type: "snapshot_saved",
+      imageId: result.data.image_id,
+      reason: options.reason,
+    });
+
+    return {
+      snapshot_id: result.data.image_id,
+    };
   }
 
   /**
@@ -3314,7 +3160,7 @@ export class SessionDO extends DurableObject<Env> {
     this.broadcast({ type: "processing_status", isProcessing: true });
 
     // Reset activity timer - user is actively using the sandbox
-    this.updateLastActivity(Date.now());
+    this.sandboxManager!.updateActivity();
 
     const sandboxWs = this.wsManager!.getSandboxWebSocket();
     if (sandboxWs) {
