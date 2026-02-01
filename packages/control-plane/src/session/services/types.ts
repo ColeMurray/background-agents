@@ -155,3 +155,23 @@ export interface MessageQueue {
    */
   processQueue(): Promise<void>;
 }
+
+/**
+ * PRCreator handles pull request creation workflow.
+ */
+export interface PRCreator {
+  /**
+   * Create a pull request by pushing branch and creating PR on GitHub.
+   */
+  createPullRequest(data: { branch: string; title: string; body: string }): Promise<void>;
+
+  /**
+   * Find a participant with a valid GitHub access token.
+   */
+  findParticipantWithToken(): ParticipantRow | null;
+}
+
+/**
+ * Import ParticipantRow type for PRCreator interface.
+ */
+import type { ParticipantRow } from "../types";
