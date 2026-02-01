@@ -715,7 +715,7 @@ class AgentBridge:
                     prompt_response = await self.http_client.post(
                         async_url,
                         json=request_body,
-                        timeout=30.0,
+                        timeout=self.OPENCODE_REQUEST_TIMEOUT,
                     )
                     if prompt_response.status_code not in [200, 204]:
                         error_body = prompt_response.text
@@ -727,6 +727,8 @@ class AgentBridge:
                         raise RuntimeError(
                             f"Async prompt failed: {prompt_response.status_code} - {error_body}"
                         )
+
+                    last_progress = loop.time()
 
                     async for event in self._parse_sse_stream(sse_response, timeout_ctx):
                         if loop.time() - last_progress > progress_timeout:
@@ -755,6 +757,7 @@ class AgentBridge:
                         props = event.get("properties", {})
 
                         if event_type == "server.connected":
+                            mark_progress("server_connected")
                             continue
 
                         if event_type == "server.heartbeat":
