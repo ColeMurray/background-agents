@@ -64,3 +64,33 @@ export interface PresenceManager {
  * Callback for broadcasting messages to clients.
  */
 export type BroadcastCallback = (message: object) => void;
+
+/**
+ * Callbacks for EventProcessor to avoid circular dependencies.
+ */
+export interface EventProcessorCallbacks {
+  /**
+   * Called when execution completes.
+   */
+  onExecutionComplete: (messageId: string, success: boolean) => Promise<void>;
+
+  /**
+   * Called to process the next message in the queue.
+   */
+  onProcessNextMessage: () => Promise<void>;
+
+  /**
+   * Called to trigger a snapshot.
+   */
+  triggerSnapshot: (reason: string) => Promise<void>;
+}
+
+/**
+ * EventProcessor handles event storage and special event processing.
+ */
+export interface EventProcessor {
+  /**
+   * Process an event: store it, broadcast it, and handle special event types.
+   */
+  processEvent(event: { type: string; data?: unknown; message_id?: string }): Promise<void>;
+}
