@@ -17,7 +17,7 @@ export class FakeSqlStorage {
    * Execute a SQL query.
    * Only supports basic INSERT, UPDATE, SELECT, DELETE operations.
    */
-  exec(query: string, ...params: SQLValue[]): { results: SQLRow[] } {
+  exec(query: string, ...params: SQLValue[]): { toArray: () => SQLRow[] } {
     const normalizedQuery = query.trim().toLowerCase();
 
     // CREATE TABLE - extract table name and store empty map
@@ -29,7 +29,12 @@ export class FakeSqlStorage {
           this._tables.set(tableName, new Map());
         }
       }
-      return { results: [] };
+      return { toArray: () => [] };
+    }
+
+    // CREATE INDEX - ignore for testing
+    if (normalizedQuery.startsWith("create index")) {
+      return { toArray: () => [] };
     }
 
     // INSERT - store row
@@ -40,8 +45,8 @@ export class FakeSqlStorage {
         const table = this._tables.get(tableName) || new Map();
         this._tables.set(tableName, table);
 
-        // Extract column names and values (simple implementation)
-        const columnsMatch = query.match(/\(([^)]+)\)/);
+        // Extract column names from query
+        const columnsMatch = query.match(/\(([^)]+)\)\s+VALUES/i);
         const columns = columnsMatch ? columnsMatch[1].split(",").map((c) => c.trim()) : [];
 
         const row: SQLRow = {};
@@ -53,7 +58,7 @@ export class FakeSqlStorage {
         const id = row[columns[0]] as string;
         table.set(id, row);
       }
-      return { results: [] };
+      return { toArray: () => [] };
     }
 
     // UPDATE - modify existing row
@@ -63,23 +68,64 @@ export class FakeSqlStorage {
         const tableName = match[1];
         const table = this._tables.get(tableName);
         if (table) {
-          // For simplicity, update all rows with provided params
-          const setMatch = query.match(/set\s+(.+?)(?:where|$)/i);
+          const setMatch = query.match(/set\s+(.+?)\s+where/i);
           if (setMatch) {
-            const sets = setMatch[1].split(",");
+            // Parse SET clause to extract column assignments
+            const setClause = setMatch[1];
+            const assignments = setClause.split(",").map((s) => s.trim());
+
             const updates: Record<string, SQLValue> = {};
-            sets.forEach((set, index) => {
-              const [col] = set.trim().split("=");
-              updates[col.trim()] = params[index];
+            let paramIndex = 0;
+
+            assignments.forEach((assignment) => {
+              const eqIndex = assignment.indexOf("=");
+              if (eqIndex > 0) {
+                const column = assignment.substring(0, eqIndex).trim();
+                const valuePart = assignment.substring(eqIndex + 1).trim();
+
+                if (valuePart === "?") {
+                  updates[column] = params[paramIndex++];
+                }
+              }
             });
 
-            table.forEach((row) => {
-              Object.assign(row, updates);
-            });
+            // Parse WHERE clause
+            const whereMatch = query.match(/where\s+(\w+)\s*=\s*\?/i);
+            if (whereMatch) {
+              const column = whereMatch[1];
+              const value = params[paramIndex];
+              table.forEach((row) => {
+                if (row[column] === value) {
+                  Object.assign(row, updates);
+                }
+              });
+            }
+          } else {
+            // No WHERE clause - update all rows
+            const setOnlyMatch = query.match(/set\s+(.+?)$/i);
+            if (setOnlyMatch) {
+              const setClause = setOnlyMatch[1];
+              const assignments = setClause.split(",").map((s) => s.trim());
+
+              const updates: Record<string, SQLValue> = {};
+              let paramIndex = 0;
+
+              assignments.forEach((assignment) => {
+                const eqIndex = assignment.indexOf("=");
+                if (eqIndex > 0) {
+                  const column = assignment.substring(0, eqIndex).trim();
+                  updates[column] = params[paramIndex++];
+                }
+              });
+
+              table.forEach((row) => {
+                Object.assign(row, updates);
+              });
+            }
           }
         }
       }
-      return { results: [] };
+      return { toArray: () => [] };
     }
 
     // SELECT - retrieve rows
@@ -89,33 +135,82 @@ export class FakeSqlStorage {
         const tableName = match[1];
         const table = this._tables.get(tableName);
         if (!table) {
-          return { results: [] };
+          return { toArray: () => [] };
         }
 
         let results = Array.from(table.values());
+        let paramIndex = 0;
+
+        // Handle COUNT(*) aggregation
+        if (normalizedQuery.includes("count(*)")) {
+          return { toArray: () => [{ count: results.length }] };
+        }
 
         // Apply WHERE clause (basic support for "WHERE column = ?")
         if (normalizedQuery.includes("where")) {
           const whereMatch = query.match(/where\s+(\w+)\s*=\s*\?/i);
-          if (whereMatch && params.length > 0) {
+          if (whereMatch && params.length > paramIndex) {
             const column = whereMatch[1];
-            const value = params[0];
+            const value = params[paramIndex++];
             results = results.filter((row) => row[column] === value);
           }
         }
 
-        // Apply LIMIT
-        if (normalizedQuery.includes("limit")) {
-          const limitMatch = query.match(/limit\s+(\d+)/i);
-          if (limitMatch) {
-            const limit = parseInt(limitMatch[1], 10);
-            results = results.slice(0, limit);
+        // Apply ORDER BY (basic support for single column ASC/DESC)
+        if (normalizedQuery.includes("order by")) {
+          const orderMatch = query.match(/order\s+by\s+(\w+)(?:\s+(asc|desc))?/i);
+          if (orderMatch) {
+            const column = orderMatch[1];
+            const direction = orderMatch[2]?.toLowerCase() === "desc" ? -1 : 1;
+            results.sort((a, b) => {
+              const aVal = a[column] ?? 0;
+              const bVal = b[column] ?? 0;
+              if (aVal < bVal) return -1 * direction;
+              if (aVal > bVal) return 1 * direction;
+              return 0;
+            });
           }
         }
 
-        return { results };
+        // Apply LIMIT
+        let limit: number | null = null;
+        if (normalizedQuery.includes("limit")) {
+          const limitMatch = query.match(/limit\s+\?/i);
+          if (limitMatch && params.length > paramIndex) {
+            limit = params[paramIndex++] as number;
+          } else {
+            const limitNumMatch = query.match(/limit\s+(\d+)/i);
+            if (limitNumMatch) {
+              limit = parseInt(limitNumMatch[1], 10);
+            }
+          }
+        }
+
+        // Apply OFFSET
+        let offset = 0;
+        if (normalizedQuery.includes("offset")) {
+          const offsetMatch = query.match(/offset\s+\?/i);
+          if (offsetMatch && params.length > paramIndex) {
+            offset = params[paramIndex++] as number;
+          } else {
+            const offsetNumMatch = query.match(/offset\s+(\d+)/i);
+            if (offsetNumMatch) {
+              offset = parseInt(offsetNumMatch[1], 10);
+            }
+          }
+        }
+
+        // Apply pagination
+        if (offset > 0) {
+          results = results.slice(offset);
+        }
+        if (limit !== null) {
+          results = results.slice(0, limit);
+        }
+
+        return { toArray: () => results };
       }
-      return { results: [] };
+      return { toArray: () => [] };
     }
 
     // DELETE - remove rows
@@ -143,10 +238,15 @@ export class FakeSqlStorage {
           }
         }
       }
-      return { results: [] };
+      return { toArray: () => [] };
     }
 
-    return { results: [] };
+    // ALTER TABLE - ignore for testing (migrations are idempotent)
+    if (normalizedQuery.startsWith("alter table")) {
+      return { toArray: () => [] };
+    }
+
+    return { toArray: () => [] };
   }
 
   /**
