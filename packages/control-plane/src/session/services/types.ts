@@ -148,7 +148,18 @@ export interface MessageQueue {
    * Enqueue a new message with pending status.
    * @returns The created message ID
    */
-  enqueue(data: { content: string; authorId: string; source: string }): Promise<string>;
+  enqueue(data: {
+    content: string;
+    authorId: string;
+    source: string;
+    attachments?: Array<{ type: string; name: string; url?: string }>;
+    callbackContext?: {
+      channel: string;
+      threadTs: string;
+      repoFullName: string;
+      model: string;
+    };
+  }): Promise<string>;
 
   /**
    * Process the next pending message in the queue (FIFO).

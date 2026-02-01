@@ -15,6 +15,7 @@ describe("MessageQueue", () => {
   let participantRepo: ParticipantRepository;
   let mockSendToSandbox: Mock;
   let mockSpawnIfNeeded: Mock;
+  let mockGetSession: Mock;
   let sql: FakeSqlStorage;
 
   beforeEach(() => {
@@ -28,6 +29,9 @@ describe("MessageQueue", () => {
         content TEXT NOT NULL,
         source TEXT NOT NULL,
         status TEXT NOT NULL,
+        model TEXT,
+        attachments TEXT,
+        callback_context TEXT,
         created_at INTEGER NOT NULL,
         started_at INTEGER,
         completed_at INTEGER
@@ -69,10 +73,12 @@ describe("MessageQueue", () => {
     participantRepo = createParticipantRepository(sql);
     mockSendToSandbox = vi.fn().mockResolvedValue(undefined);
     mockSpawnIfNeeded = vi.fn().mockResolvedValue(undefined);
+    mockGetSession = vi.fn().mockReturnValue({ model: "claude-haiku-4-5" });
 
     queue = createMessageQueue({
       messageRepo,
       participantRepo,
+      getSession: mockGetSession,
       sendToSandbox: mockSendToSandbox,
       spawnIfNeeded: mockSpawnIfNeeded,
     });
@@ -191,11 +197,13 @@ describe("MessageQueue", () => {
 
       expect(mockSendToSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
-          id: expect.any(String),
+          type: "prompt",
+          messageId: expect.any(String),
           content: "test command",
+          model: "claude-haiku-4-5",
           author: expect.objectContaining({
-            id: "participant-1",
-            githubLogin: "testuser",
+            userId: "user-1",
+            githubName: null,
           }),
         })
       );
@@ -239,8 +247,9 @@ describe("MessageQueue", () => {
       // Should still send command but with minimal author info
       expect(mockSendToSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
+          type: "prompt",
           author: expect.objectContaining({
-            id: "nonexistent",
+            userId: "unknown",
           }),
         })
       );

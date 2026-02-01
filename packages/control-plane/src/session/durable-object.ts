@@ -57,7 +57,7 @@ import type {
   MessageRow,
   EventRow,
   SandboxRow,
-  SandboxCommand,
+  PromptCommand,
 } from "./types";
 
 /**
@@ -304,6 +304,7 @@ export class SessionDO extends DurableObject<Env> {
     this.messageQueue = createMessageQueue({
       messageRepo: this.messageRepo,
       participantRepo: this.participantRepo,
+      getSession: () => this.getSession(),
       sendToSandbox: async (command) => {
         await this.sendCommandToSandbox(command);
       },
@@ -1569,78 +1570,8 @@ export class SessionDO extends DurableObject<Env> {
    * Process message queue.
    */
   private async processMessageQueue(): Promise<void> {
-    console.log("processMessageQueue: start");
-
-    // Check if already processing
-    const processing = this.messageRepo.getProcessing();
-    if (processing !== null) {
-      console.log("processMessageQueue: already processing, returning");
-      return;
-    }
-
-    // Get next pending message
-    const nextMessage = this.messageRepo.getNextPending();
-    if (nextMessage === null) {
-      console.log("processMessageQueue: no pending messages");
-      return;
-    }
-
-    const message = nextMessage;
-    console.log("processMessageQueue: found message", message.id);
-    const now = Date.now();
-
-    // Check if sandbox is connected (with hibernation recovery)
-    const sandboxWs = this.getSandboxWebSocket();
-    console.log("processMessageQueue: checking sandbox", {
-      hasSandboxWs: !!sandboxWs,
-      readyState: sandboxWs?.readyState,
-      OPEN: WebSocket.OPEN,
-    });
-    if (!sandboxWs) {
-      // No sandbox connected - spawn one if not already spawning
-      // spawnSandbox has its own persisted status check
-      console.log("processMessageQueue: no sandbox, attempting spawn");
-      this.broadcast({ type: "sandbox_spawning" });
-      await this.spawnSandbox();
-      // Don't mark as processing yet - wait for sandbox to connect
-      return;
-    }
-
-    console.log("processMessageQueue: marking as processing");
-    // Mark as processing
-    this.messageRepo.updateStatus(message.id, "processing", { startedAt: now });
-
-    // Broadcast processing status change (hardcoded true since we just set status above)
-    this.broadcast({ type: "processing_status", isProcessing: true });
-
-    // Reset activity timer - user is actively using the sandbox
-    this.updateLastActivity(now);
-
-    // Get author info (use toArray since author may not exist in participants table)
-    console.log("processMessageQueue: getting author", message.author_id);
-    const author = this.participantRepo.getById(message.author_id);
-    console.log("processMessageQueue: author found", !!author);
-
-    // Get session for default model
-    const session = this.getSession();
-
-    // Send to sandbox with model (per-message override or session default)
-    const command: SandboxCommand = {
-      type: "prompt",
-      messageId: message.id,
-      content: message.content,
-      model: message.model || session?.model || "claude-haiku-4-5",
-      author: {
-        userId: author?.user_id ?? "unknown",
-        githubName: author?.github_name ?? null,
-        githubEmail: author?.github_email ?? null,
-      },
-      attachments: message.attachments ? JSON.parse(message.attachments) : undefined,
-    };
-
-    console.log("processMessageQueue: sending to sandbox");
-    this.wsManager!.safeSend(sandboxWs, command);
-    console.log("processMessageQueue: sent");
+    this.initServices();
+    await this.messageQueue!.processQueue();
   }
 
   /**
@@ -2548,26 +2479,17 @@ export class SessionDO extends DurableObject<Env> {
         participant = this.createParticipant(body.authorId, body.authorId);
       }
 
-      const messageId = generateId();
-      const now = Date.now();
-
-      console.log(
-        "handleEnqueuePrompt: inserting message",
-        messageId,
-        "with author",
-        participant.id
-      );
-      this.messageRepo.create({
-        id: messageId,
-        authorId: participant.id, // Use the participant's row ID, not the user ID
+      // Use MessageQueue service to enqueue the message
+      this.initServices();
+      const messageId = await this.messageQueue!.enqueue({
         content: body.content,
+        authorId: participant.id, // Use the participant's row ID, not the user ID
         source: body.source,
-        attachments: body.attachments ? JSON.stringify(body.attachments) : null,
-        callbackContext: body.callbackContext ? JSON.stringify(body.callbackContext) : null,
-        createdAt: now,
+        attachments: body.attachments,
+        callbackContext: body.callbackContext,
       });
 
-      console.log("handleEnqueuePrompt: message inserted, processing queue");
+      console.log("handleEnqueuePrompt: message enqueued, processing queue");
       await this.processMessageQueue();
 
       console.log("handleEnqueuePrompt: done");
@@ -3383,25 +3305,32 @@ export class SessionDO extends DurableObject<Env> {
 
   /**
    * Send command to sandbox WebSocket.
+   * Called by MessageQueue when processing a message.
    */
-  private async sendCommandToSandbox(command: SandboxCommand): Promise<void> {
+  private async sendCommandToSandbox(command: PromptCommand): Promise<void> {
     this.initServices();
+
+    // Broadcast processing status change
+    this.broadcast({ type: "processing_status", isProcessing: true });
+
+    // Reset activity timer - user is actively using the sandbox
+    this.updateLastActivity(Date.now());
+
     const sandboxWs = this.wsManager!.getSandboxWebSocket();
     if (sandboxWs) {
-      this.wsManager!.safeSend(sandboxWs, {
-        type: "execute",
-        ...command,
-      });
+      this.wsManager!.safeSend(sandboxWs, command);
     }
   }
 
   /**
    * Spawn sandbox if not connected.
+   * Called by MessageQueue when processing a message that needs a sandbox.
    */
   private async spawnSandboxIfNeeded(): Promise<void> {
     this.initServices();
     const sandboxWs = this.wsManager!.getSandboxWebSocket();
     if (!sandboxWs && !this.isSpawningSandbox) {
+      this.broadcast({ type: "sandbox_spawning" });
       await this.spawnSandbox();
     }
   }

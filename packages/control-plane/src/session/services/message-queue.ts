@@ -4,33 +4,35 @@
 
 import type { MessageQueue } from "./types";
 import type { MessageRepository, ParticipantRepository } from "../repository/types";
+import type { PromptCommand } from "../types";
 
 interface MessageQueueDependencies {
   messageRepo: MessageRepository;
   participantRepo: ParticipantRepository;
-  sendToSandbox: (command: SandboxCommand) => Promise<void>;
+  getSession: () => { model?: string } | null;
+  sendToSandbox: (command: PromptCommand) => Promise<void>;
   spawnIfNeeded: () => Promise<void>;
-}
-
-interface SandboxCommand {
-  id: string;
-  content: string;
-  author: {
-    id: string;
-    githubLogin?: string | null;
-    githubName?: string | null;
-  };
-  source: string;
 }
 
 /**
  * Create a MessageQueue instance.
  */
 export function createMessageQueue(deps: MessageQueueDependencies): MessageQueue {
-  const { messageRepo, participantRepo, sendToSandbox, spawnIfNeeded } = deps;
+  const { messageRepo, participantRepo, getSession, sendToSandbox, spawnIfNeeded } = deps;
 
   return {
-    async enqueue(data: { content: string; authorId: string; source: string }): Promise<string> {
+    async enqueue(data: {
+      content: string;
+      authorId: string;
+      source: string;
+      attachments?: Array<{ type: string; name: string; url?: string }>;
+      callbackContext?: {
+        channel: string;
+        threadTs: string;
+        repoFullName: string;
+        model: string;
+      };
+    }): Promise<string> {
       const messageId = crypto.randomUUID();
       const now = Date.now();
 
@@ -39,7 +41,8 @@ export function createMessageQueue(deps: MessageQueueDependencies): MessageQueue
         authorId: data.authorId,
         content: data.content,
         source: data.source,
-        status: "pending",
+        attachments: data.attachments ? JSON.stringify(data.attachments) : null,
+        callbackContext: data.callbackContext ? JSON.stringify(data.callbackContext) : null,
         createdAt: now,
       });
 
@@ -60,6 +63,9 @@ export function createMessageQueue(deps: MessageQueueDependencies): MessageQueue
           return;
         }
 
+        // Spawn sandbox if needed (before marking as processing)
+        await spawnIfNeeded();
+
         // Update message status to processing
         messageRepo.updateStatus(nextMessage.id, "processing", {
           startedAt: Date.now(),
@@ -68,20 +74,22 @@ export function createMessageQueue(deps: MessageQueueDependencies): MessageQueue
         // Get author information
         const author = participantRepo.getById(nextMessage.author_id);
 
-        // Build sandbox command
-        const command: SandboxCommand = {
-          id: nextMessage.id,
-          content: nextMessage.content,
-          author: {
-            id: nextMessage.author_id,
-            githubLogin: author?.github_login,
-            githubName: author?.github_name,
-          },
-          source: nextMessage.source,
-        };
+        // Get session for default model
+        const session = getSession();
 
-        // Spawn sandbox if needed
-        await spawnIfNeeded();
+        // Build prompt command with model and attachments
+        const command: PromptCommand = {
+          type: "prompt",
+          messageId: nextMessage.id,
+          content: nextMessage.content,
+          model: nextMessage.model || session?.model || "claude-haiku-4-5",
+          author: {
+            userId: author?.user_id ?? "unknown",
+            githubName: author?.github_name ?? null,
+            githubEmail: author?.github_email ?? null,
+          },
+          attachments: nextMessage.attachments ? JSON.parse(nextMessage.attachments) : undefined,
+        };
 
         // Send command to sandbox
         await sendToSandbox(command);
