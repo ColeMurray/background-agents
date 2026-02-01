@@ -43,7 +43,7 @@ class TestSandboxTypes:
         assert config.repo_owner == "acme"
         assert config.repo_name == "webapp"
         assert config.provider == "anthropic"
-        assert config.model == "claude-sonnet-4-20250514"
+        assert config.model == "claude-sonnet-4-5"
         assert config.branch is None
         assert config.git_user is None
 
