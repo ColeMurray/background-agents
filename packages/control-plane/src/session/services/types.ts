@@ -139,3 +139,19 @@ export interface SandboxManager {
    */
   updateActivity(): void;
 }
+
+/**
+ * MessageQueue handles message queuing and processing.
+ */
+export interface MessageQueue {
+  /**
+   * Enqueue a new message with pending status.
+   * @returns The created message ID
+   */
+  enqueue(data: { content: string; authorId: string; source: string }): Promise<string>;
+
+  /**
+   * Process the next pending message in the queue (FIFO).
+   */
+  processQueue(): Promise<void>;
+}
