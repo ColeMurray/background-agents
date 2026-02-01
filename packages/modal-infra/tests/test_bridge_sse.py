@@ -61,7 +61,7 @@ class MockHttpClient:
         self._get_call_count += 1
         if self.get_responses:
             return self.get_responses.pop(0)
-        return MockResponse(200, {})
+        return MockResponse(200, [])
 
     def stream(self, method: str, url: str, timeout: Any = None):
         """Return a context manager for SSE streaming."""
@@ -804,20 +804,24 @@ class DelayedMockHttpClient:
         self.post_responses: list[Any] = []
         self.get_responses: list[Any] = []
         self._sse_response = sse_response
+        self.post_urls: list[str] = []
+        self.get_urls: list[str] = []
         self._post_call_count = 0
         self._get_call_count = 0
 
     async def post(self, url: str, json: dict | None = None, timeout: float = 30.0) -> Any:
         self._post_call_count += 1
+        self.post_urls.append(url)
         if self.post_responses:
             return self.post_responses.pop(0)
         return MockResponse(204)
 
     async def get(self, url: str, timeout: float = 10.0) -> Any:
         self._get_call_count += 1
+        self.get_urls.append(url)
         if self.get_responses:
             return self.get_responses.pop(0)
-        return MockResponse(200, {})
+        return MockResponse(200, [])
 
     def stream(self, method: str, url: str, timeout: Any = None):
         return self._sse_response
@@ -955,6 +959,41 @@ class TestInactivityTimeout:
         token_events = [e for e in events if e["type"] == "token"]
         assert len(token_events) == 1
         assert token_events[0]["content"] == "Finally!"
+
+
+class TestProgressTimeout:
+    """Tests for SSE progress timeout behavior."""
+
+    @pytest.mark.asyncio
+    async def test_progress_timeout_on_heartbeat_only(self):
+        """Heartbeats should not prevent the progress timeout from firing."""
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+        bridge.opencode_session_id = "oc-session-123"
+        bridge.sse_inactivity_timeout = 1.0
+        bridge.sse_progress_timeout = 0.25
+
+        sse_response = DelayedMockSSEResponse(
+            [
+                (create_sse_event("server.connected", {}), 0),
+                (create_sse_event("server.heartbeat", {}), 0.2),
+                (create_sse_event("server.heartbeat", {}), 0.2),
+            ]
+        )
+        http_client = DelayedMockHttpClient(sse_response)
+        http_client.get_responses = [MockResponse(200, [])]
+        bridge.http_client = http_client
+
+        with pytest.raises(RuntimeError, match="no progress"):
+            async for _event in bridge._stream_opencode_response_sse("msg-1", "test"):
+                pass
+
+        assert any(url.endswith("/stop") for url in http_client.post_urls)
+        assert any(url.endswith("/message") for url in http_client.get_urls)
 
 
 if __name__ == "__main__":

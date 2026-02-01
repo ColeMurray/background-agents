@@ -132,7 +132,7 @@ class AgentBridge:
     RECONNECT_MAX_DELAY = 60.0
     SSE_INACTIVITY_TIMEOUT = 120.0
     SSE_PROGRESS_TIMEOUT = 600.0
-    SSE_TIMEOUT_MIN = 5.0
+    SSE_INACTIVITY_TIMEOUT_MIN = 5.0
     SSE_INACTIVITY_TIMEOUT_MAX = 3600.0
     SSE_PROGRESS_TIMEOUT_MIN = 30.0
     SSE_PROGRESS_TIMEOUT_MAX = 14400.0
@@ -166,7 +166,7 @@ class AgentBridge:
         self.sse_inactivity_timeout = self._resolve_timeout_seconds(
             name="BRIDGE_SSE_INACTIVITY_TIMEOUT",
             default=self.SSE_INACTIVITY_TIMEOUT,
-            min_value=self.SSE_TIMEOUT_MIN,
+            min_value=self.SSE_INACTIVITY_TIMEOUT_MIN,
             max_value=self.SSE_INACTIVITY_TIMEOUT_MAX,
         )
         self.sse_progress_timeout = self._resolve_timeout_seconds(
@@ -688,8 +688,6 @@ class AgentBridge:
         emitted_tool_states: set[str] = set()
         our_assistant_msg_ids: set[str] = set()
 
-        inactivity_timeout = self.sse_inactivity_timeout
-        progress_timeout = self.sse_progress_timeout
         start_time = time.time()
         loop = asyncio.get_running_loop()
         last_progress: float | None = None
@@ -700,7 +698,7 @@ class AgentBridge:
             self.log.debug("bridge.sse_progress", reason=reason, message_id=message_id)
 
         try:
-            deadline = asyncio.get_running_loop().time() + inactivity_timeout
+            deadline = asyncio.get_running_loop().time() + self.sse_inactivity_timeout
             async with asyncio.timeout_at(deadline) as timeout_ctx:
                 async with self.http_client.stream(
                     "GET",
@@ -891,13 +889,13 @@ class AgentBridge:
 
                         if (
                             last_progress is not None
-                            and loop.time() - last_progress > progress_timeout
+                            and loop.time() - last_progress > self.sse_progress_timeout
                         ):
                             elapsed = time.time() - start_time
                             self.log.error(
                                 "bridge.sse_progress_timeout",
                                 timeout_name="sse_progress",
-                                timeout_ms=int(progress_timeout * 1000),
+                                timeout_ms=int(self.sse_progress_timeout * 1000),
                                 elapsed_ms=int(elapsed * 1000),
                                 operation="bridge.sse",
                                 message_id=message_id,
@@ -911,7 +909,7 @@ class AgentBridge:
                             ):
                                 yield final_event
                             raise RuntimeError(
-                                f"SSE stream made no progress for {progress_timeout:.0f}s."
+                                f"SSE stream made no progress for {self.sse_progress_timeout:.0f}s."
                             )
 
         except TimeoutError:
@@ -919,13 +917,21 @@ class AgentBridge:
             self.log.error(
                 "bridge.sse_inactivity_timeout",
                 timeout_name="sse_inactivity",
-                timeout_ms=int(inactivity_timeout * 1000),
+                timeout_ms=int(self.sse_inactivity_timeout * 1000),
                 elapsed_ms=int(elapsed * 1000),
                 operation="bridge.sse",
                 message_id=message_id,
             )
+            await self._request_opencode_stop(reason="inactivity_timeout")
+            async for final_event in self._fetch_final_message_state(
+                message_id,
+                opencode_message_id,
+                cumulative_text,
+                our_assistant_msg_ids,
+            ):
+                yield final_event
             raise RuntimeError(
-                f"SSE stream inactive for {inactivity_timeout:.0f}s "
+                f"SSE stream inactive for {self.sse_inactivity_timeout:.0f}s "
                 f"(no data received). Total elapsed: {elapsed:.0f}s"
             )
 
@@ -1200,9 +1206,9 @@ class AgentBridge:
             except Exception as e:
                 self.log.error("opencode.session.save_error", exc=e)
 
-    async def _request_opencode_stop(self, reason: str) -> None:
+    async def _request_opencode_stop(self, reason: str) -> bool:
         if not self.http_client or not self.opencode_session_id:
-            return
+            return False
 
         try:
             await self.http_client.post(
@@ -1210,8 +1216,10 @@ class AgentBridge:
                 timeout=self.OPENCODE_REQUEST_TIMEOUT,
             )
             self.log.info("bridge.stop_requested", reason=reason)
+            return True
         except Exception as e:
-            self.log.error("bridge.stop_request_error", exc=e, reason=reason)
+            self.log.warn("bridge.stop_request_error", exc=e, reason=reason)
+            return False
 
     def _resolve_timeout_seconds(
         self,
