@@ -669,13 +669,14 @@ describe("SandboxLifecycleManager", () => {
       });
       const storage = createMockStorage(createMockSession(), sandbox);
       const broadcaster = createMockBroadcaster();
+      const wsManager = createMockWebSocketManager();
       const provider = createMockProvider();
 
       const manager = new SandboxLifecycleManager(
         provider,
         storage,
         broadcaster,
-        createMockWebSocketManager(),
+        wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
         createTestConfig()
@@ -687,6 +688,8 @@ describe("SandboxLifecycleManager", () => {
       expect(broadcaster.messages.some((m) => (m as { status?: string }).status === "stale")).toBe(
         true
       );
+      expect(wsManager.sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
+      expect(wsManager.closeSandboxWebSocket).toHaveBeenCalledWith(1000, "Heartbeat stale");
     });
 
     it("handles inactivity timeout", async () => {

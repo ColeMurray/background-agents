@@ -9,6 +9,9 @@
 import type { Env, RepoConfig, ControlPlaneRepo, ControlPlaneReposResponse } from "../types";
 import { normalizeRepoId } from "../utils/repo";
 import { generateInternalToken } from "../utils/internal";
+import { createLogger } from "../logger";
+
+const log = createLogger("repos");
 
 /**
  * Fallback repositories if the control plane is unreachable.
@@ -65,12 +68,13 @@ function toRepoConfig(repo: ControlPlaneRepo): RepoConfig {
  * @param env - Cloudflare Worker environment
  * @returns Array of RepoConfig objects
  */
-export async function getAvailableRepos(env: Env): Promise<RepoConfig[]> {
+export async function getAvailableRepos(env: Env, traceId?: string): Promise<RepoConfig[]> {
   // Check local cache first
   if (localCache && Date.now() - localCache.timestamp < LOCAL_CACHE_TTL_MS) {
     return localCache.repos;
   }
 
+  const startTime = Date.now();
   try {
     // Use service binding if available, otherwise fall back to HTTP fetch
     let response: Response;
@@ -83,6 +87,10 @@ export async function getAvailableRepos(env: Env): Promise<RepoConfig[]> {
     if (env.INTERNAL_CALLBACK_SECRET) {
       const authToken = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
       headers["Authorization"] = `Bearer ${authToken}`;
+    }
+
+    if (traceId) {
+      headers["x-trace-id"] = traceId;
     }
 
     if (env.CONTROL_PLANE) {
@@ -100,7 +108,12 @@ export async function getAvailableRepos(env: Env): Promise<RepoConfig[]> {
     }
 
     if (!response.ok) {
-      console.error(`Failed to fetch repos from control plane: ${response.status}`);
+      log.error("control_plane.fetch_repos", {
+        trace_id: traceId,
+        outcome: "error",
+        http_status: response.status,
+        duration_ms: Date.now() - startTime,
+      });
       return getFromCacheOrFallback(env);
     }
 
@@ -119,12 +132,28 @@ export async function getAvailableRepos(env: Env): Promise<RepoConfig[]> {
         expirationTtl: 300, // 5 minutes
       });
     } catch (e) {
-      console.warn("Failed to persist repos to KV:", e);
+      log.warn("kv.put", {
+        trace_id: traceId,
+        key_prefix: "repos_cache",
+        error: e instanceof Error ? e : new Error(String(e)),
+      });
     }
+
+    log.info("control_plane.fetch_repos", {
+      trace_id: traceId,
+      outcome: "success",
+      repo_count: repos.length,
+      duration_ms: Date.now() - startTime,
+    });
 
     return repos;
   } catch (e) {
-    console.error("Error fetching repos from control plane:", e);
+    log.error("control_plane.fetch_repos", {
+      trace_id: traceId,
+      outcome: "error",
+      error: e instanceof Error ? e : new Error(String(e)),
+      duration_ms: Date.now() - startTime,
+    });
     return getFromCacheOrFallback(env);
   }
 }
@@ -136,19 +165,23 @@ async function getFromCacheOrFallback(env: Env): Promise<RepoConfig[]> {
   try {
     const cached = await env.SLACK_KV.get("repos:cache", "json");
     if (cached && Array.isArray(cached)) {
-      console.log("Using cached repos from KV");
+      log.info("control_plane.fetch_repos", { source: "kv_cache" });
       return cached as RepoConfig[];
     }
   } catch (e) {
-    console.warn("Failed to read repos from KV cache:", e);
+    log.warn("kv.get", {
+      key_prefix: "repos_cache",
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
   }
 
-  console.warn("Using fallback repos (control plane unavailable)");
+  log.warn("control_plane.fetch_repos", { source: "fallback" });
   if (FALLBACK_REPOS.length === 0) {
-    console.error(
-      "CRITICAL: No fallback repos configured and control plane is unavailable. " +
-        "Bot will not be able to process requests until control plane is restored."
-    );
+    log.error("control_plane.fetch_repos", {
+      error_message:
+        "No fallback repos configured and control plane is unavailable. " +
+        "Bot will not be able to process requests until control plane is restored.",
+    });
   }
   return FALLBACK_REPOS;
 }
@@ -158,25 +191,34 @@ async function getFromCacheOrFallback(env: Env): Promise<RepoConfig[]> {
  */
 export async function getRepoByFullName(
   env: Env,
-  fullName: string
+  fullName: string,
+  traceId?: string
 ): Promise<RepoConfig | undefined> {
-  const repos = await getAvailableRepos(env);
+  const repos = await getAvailableRepos(env, traceId);
   return repos.find((r) => r.fullName.toLowerCase() === fullName.toLowerCase());
 }
 
 /**
  * Find a repository by its ID.
  */
-export async function getRepoById(env: Env, id: string): Promise<RepoConfig | undefined> {
-  const repos = await getAvailableRepos(env);
+export async function getRepoById(
+  env: Env,
+  id: string,
+  traceId?: string
+): Promise<RepoConfig | undefined> {
+  const repos = await getAvailableRepos(env, traceId);
   return repos.find((r) => r.id.toLowerCase() === id.toLowerCase());
 }
 
 /**
  * Find repositories associated with a Slack channel.
  */
-export async function getReposByChannel(env: Env, channelId: string): Promise<RepoConfig[]> {
-  const repos = await getAvailableRepos(env);
+export async function getReposByChannel(
+  env: Env,
+  channelId: string,
+  traceId?: string
+): Promise<RepoConfig[]> {
+  const repos = await getAvailableRepos(env, traceId);
   return repos.filter((r) => r.channelAssociations?.includes(channelId));
 }
 
@@ -184,8 +226,8 @@ export async function getReposByChannel(env: Env, channelId: string): Promise<Re
  * Build a description string for all available repos.
  * Used in the classification prompt.
  */
-export async function buildRepoDescriptions(env: Env): Promise<string> {
-  const repos = await getAvailableRepos(env);
+export async function buildRepoDescriptions(env: Env, traceId?: string): Promise<string> {
+  const repos = await getAvailableRepos(env, traceId);
 
   if (repos.length === 0) {
     return "No repositories are currently available.";

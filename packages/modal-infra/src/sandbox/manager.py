@@ -276,6 +276,7 @@ class SandboxManager:
         sandbox_id: str | None = None,
         control_plane_url: str = "",
         sandbox_auth_token: str = "",
+        github_app_token: str | None = None,
     ) -> SandboxHandle:
         """
         Create a new sandbox from a filesystem snapshot Image.
@@ -336,6 +337,9 @@ class SandboxManager:
             ),
         }
 
+        if github_app_token:
+            env_vars["GITHUB_APP_TOKEN"] = github_app_token
+
         # Create the sandbox from the snapshot image
         sandbox = modal.Sandbox.create(
             "python",
@@ -349,10 +353,13 @@ class SandboxManager:
             env=env_vars,
         )
 
+        modal_object_id = sandbox.object_id
+
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
             "sandbox.restore",
             sandbox_id=sandbox_id,
+            modal_object_id=modal_object_id,
             snapshot_image_id=snapshot_image_id,
             repo_owner=repo_owner,
             repo_name=repo_name,
@@ -366,6 +373,7 @@ class SandboxManager:
             status=SandboxStatus.WARMING,
             created_at=time.time(),
             snapshot_id=snapshot_image_id,
+            modal_object_id=modal_object_id,
         )
 
     async def maintain_warm_pool(

@@ -7,6 +7,9 @@ import type { Env, CompletionCallback } from "./types";
 import { extractAgentResponse } from "./completion/extractor";
 import { buildCompletionBlocks, getFallbackText } from "./completion/blocks";
 import { postMessage } from "./utils/slack-client";
+import { createLogger } from "./logger";
+
+const log = createLogger("callback");
 
 /**
  * Verify internal callback signature using shared secret.
@@ -58,28 +61,66 @@ export const callbacksRouter = new Hono<{ Bindings: Env }>();
  * Callback endpoint for session completion notifications.
  */
 callbacksRouter.post("/complete", async (c) => {
+  const startTime = Date.now();
+  // Use trace_id from control-plane if present, otherwise generate one
+  const traceId = c.req.header("x-trace-id") || crypto.randomUUID();
   const payload = await c.req.json();
 
   // Validate payload shape
   if (!isValidPayload(payload)) {
-    console.error("Invalid callback payload shape");
+    log.warn("http.request", {
+      trace_id: traceId,
+      http_method: "POST",
+      http_path: "/callbacks/complete",
+      http_status: 400,
+      outcome: "rejected",
+      reject_reason: "invalid_payload",
+      duration_ms: Date.now() - startTime,
+    });
     return c.json({ error: "invalid payload" }, 400);
   }
 
   // Verify signature (prevents external forgery)
   if (!c.env.INTERNAL_CALLBACK_SECRET) {
-    console.error("INTERNAL_CALLBACK_SECRET not configured");
+    log.error("http.request", {
+      trace_id: traceId,
+      http_method: "POST",
+      http_path: "/callbacks/complete",
+      http_status: 500,
+      outcome: "error",
+      reject_reason: "secret_not_configured",
+      duration_ms: Date.now() - startTime,
+    });
     return c.json({ error: "not configured" }, 500);
   }
 
   const isValid = await verifyCallbackSignature(payload, c.env.INTERNAL_CALLBACK_SECRET);
   if (!isValid) {
-    console.error("Invalid callback signature");
+    log.warn("http.request", {
+      trace_id: traceId,
+      http_method: "POST",
+      http_path: "/callbacks/complete",
+      http_status: 401,
+      outcome: "rejected",
+      reject_reason: "invalid_signature",
+      session_id: payload.sessionId,
+      duration_ms: Date.now() - startTime,
+    });
     return c.json({ error: "unauthorized" }, 401);
   }
 
   // Process in background
-  c.executionCtx.waitUntil(handleCompletionCallback(payload, c.env));
+  c.executionCtx.waitUntil(handleCompletionCallback(payload, c.env, traceId));
+
+  log.info("http.request", {
+    trace_id: traceId,
+    http_method: "POST",
+    http_path: "/callbacks/complete",
+    http_status: 200,
+    session_id: payload.sessionId,
+    message_id: payload.messageId,
+    duration_ms: Date.now() - startTime,
+  });
 
   return c.json({ ok: true });
 });
@@ -87,16 +128,32 @@ callbacksRouter.post("/complete", async (c) => {
 /**
  * Handle completion callback - fetch events and post to Slack.
  */
-async function handleCompletionCallback(payload: CompletionCallback, env: Env): Promise<void> {
+async function handleCompletionCallback(
+  payload: CompletionCallback,
+  env: Env,
+  traceId?: string
+): Promise<void> {
+  const startTime = Date.now();
   const { sessionId, context } = payload;
+  const base = {
+    trace_id: traceId,
+    session_id: sessionId,
+    message_id: payload.messageId,
+    channel: context.channel,
+  };
 
   try {
     // Fetch events to build response (filtered by messageId directly)
-    const agentResponse = await extractAgentResponse(env, sessionId, payload.messageId);
+    const agentResponse = await extractAgentResponse(env, sessionId, payload.messageId, traceId);
 
     // Check if extraction succeeded (has content or was explicitly successful)
     if (!agentResponse.textContent && agentResponse.toolCalls.length === 0 && !payload.success) {
-      console.error("Failed to extract agent response, posting error message");
+      log.error("callback.complete", {
+        ...base,
+        outcome: "error",
+        error_message: "empty_agent_response",
+        duration_ms: Date.now() - startTime,
+      });
       await postMessage(
         env.SLACK_BOT_TOKEN,
         context.channel,
@@ -136,9 +193,22 @@ async function handleCompletionCallback(payload: CompletionCallback, env: Env): 
       blocks,
     });
 
-    console.log(`Posted completion message for session ${sessionId}`);
+    log.info("callback.complete", {
+      ...base,
+      outcome: "success",
+      agent_success: payload.success,
+      tool_call_count: agentResponse.toolCalls.length,
+      artifact_count: agentResponse.artifacts.length,
+      has_text: Boolean(agentResponse.textContent),
+      duration_ms: Date.now() - startTime,
+    });
   } catch (error) {
-    console.error("Error handling completion callback:", error);
+    log.error("callback.complete", {
+      ...base,
+      outcome: "error",
+      error: error instanceof Error ? error : new Error(String(error)),
+      duration_ms: Date.now() - startTime,
+    });
     // Don't throw - this is fire-and-forget
   }
 }

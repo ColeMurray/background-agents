@@ -160,6 +160,7 @@ export type SandboxEvent =
       type: "execution_complete";
       messageId: string;
       success: boolean;
+      error?: string;
       sandboxId: string;
       timestamp: number;
     }
