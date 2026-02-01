@@ -371,7 +371,7 @@ export function SecretsEditor({
               {saving ? "Saving..." : "Save secrets"}
             </button>
             <span className="text-[11px] text-muted-foreground">
-              Recommended: use uppercase keys.
+              Keys are automatically uppercased.
             </span>
           </div>
         </>

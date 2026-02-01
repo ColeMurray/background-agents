@@ -1480,10 +1480,7 @@ async function handleDeleteRepoSecret(
   const store = new RepoSecretsStore(env.DB, env.TOKEN_ENCRYPTION_KEY);
 
   try {
-    const keyError = store.validateKey(store.normalizeKey(key));
-    if (keyError) {
-      return error(keyError, 400);
-    }
+    store.validateKey(store.normalizeKey(key));
 
     const deleted = await store.deleteSecret(resolved.repoId, key);
     if (!deleted) {
@@ -1505,6 +1502,9 @@ async function handleDeleteRepoSecret(
       key: store.normalizeKey(key),
     });
   } catch (e) {
+    if (e instanceof RepoSecretsValidationError) {
+      return error(e.message, 400);
+    }
     logger.error("Failed to delete repo secret", {
       error: e instanceof Error ? e.message : String(e),
       repo_id: resolved.repoId,

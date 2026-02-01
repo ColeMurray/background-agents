@@ -50,18 +50,20 @@ export class RepoSecretsStore {
     return key.toUpperCase();
   }
 
-  validateKey(key: string): string | null {
-    if (!key || key.length > MAX_KEY_LENGTH) return "Key too long or empty";
-    if (!VALID_KEY_PATTERN.test(key)) return "Key must match [A-Za-z_][A-Za-z0-9_]*";
-    if (RESERVED_KEYS.has(key.toUpperCase())) return `Key '${key}' is reserved`;
-    return null;
+  validateKey(key: string): void {
+    if (!key || key.length > MAX_KEY_LENGTH)
+      throw new RepoSecretsValidationError("Key too long or empty");
+    if (!VALID_KEY_PATTERN.test(key))
+      throw new RepoSecretsValidationError("Key must match [A-Za-z_][A-Za-z0-9_]*");
+    if (RESERVED_KEYS.has(key.toUpperCase()))
+      throw new RepoSecretsValidationError(`Key '${key}' is reserved`);
   }
 
-  validateValue(value: string): string | null {
-    if (typeof value !== "string") return "Value must be a string";
+  validateValue(value: string): void {
+    if (typeof value !== "string") throw new RepoSecretsValidationError("Value must be a string");
     const bytes = new TextEncoder().encode(value).length;
-    if (bytes > MAX_VALUE_SIZE) return `Value exceeds ${MAX_VALUE_SIZE} bytes`;
-    return null;
+    if (bytes > MAX_VALUE_SIZE)
+      throw new RepoSecretsValidationError(`Value exceeds ${MAX_VALUE_SIZE} bytes`);
   }
 
   async setSecrets(
@@ -78,10 +80,8 @@ export class RepoSecretsStore {
     let totalValueBytes = 0;
     for (const [rawKey, value] of Object.entries(secrets)) {
       const key = this.normalizeKey(rawKey);
-      const keyErr = this.validateKey(key);
-      if (keyErr) throw new RepoSecretsValidationError(keyErr);
-      const valErr = this.validateValue(value);
-      if (valErr) throw new RepoSecretsValidationError(valErr);
+      this.validateKey(key);
+      this.validateValue(value);
       totalValueBytes += new TextEncoder().encode(value).length;
       normalized[key] = value;
     }
