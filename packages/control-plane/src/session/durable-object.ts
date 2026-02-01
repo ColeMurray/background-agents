@@ -43,7 +43,6 @@ import type {
   ParticipantRow,
   MessageRow,
   EventRow,
-  ArtifactRow,
   SandboxRow,
   SandboxCommand,
 } from "./types";
@@ -663,10 +662,7 @@ export class SessionDO extends DurableObject<Env> {
    * Update the last activity timestamp.
    */
   private updateLastActivity(timestamp: number): void {
-    this.sql.exec(
-      `UPDATE sandbox SET last_activity = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-      timestamp
-    );
+    this.sandboxRepo.updateLastActivity(timestamp);
   }
 
   /**
@@ -764,11 +760,7 @@ export class SessionDO extends DurableObject<Env> {
 
       if (result.success && result.data?.image_id) {
         // Store snapshot image ID for later restoration
-        this.sql.exec(
-          `UPDATE sandbox SET snapshot_image_id = ? WHERE id = ?`,
-          result.data.image_id,
-          sandbox.id
-        );
+        this.sandboxRepo.updateSnapshot(sandbox.snapshot_id!, result.data.image_id);
         console.log(`[DO] Snapshot saved: ${result.data.image_id}`);
         this.broadcast({
           type: "snapshot_saved",
@@ -812,6 +804,7 @@ export class SessionDO extends DurableObject<Env> {
       const expectedSandboxId = `sandbox-${session.repo_owner}-${session.repo_name}-${now}`;
 
       // Store expected sandbox ID and auth token before calling Modal
+      // TODO: Move to repository when auth_token update method is added
       this.sql.exec(
         `UPDATE sandbox SET
            status = 'spawning',
@@ -1073,8 +1066,7 @@ export class SessionDO extends DurableObject<Env> {
     const messages = messagesResult.toArray() as unknown as MessageWithParticipant[];
 
     // Get events (tool calls, tokens, etc.)
-    const eventsResult = this.sql.exec(`SELECT * FROM events ORDER BY created_at ASC LIMIT 500`);
-    const events = eventsResult.toArray() as unknown as EventRow[];
+    const events = this.eventRepo.list({ limit: 500 });
 
     // Combine and sort by timestamp
     interface HistoryItem {
@@ -1344,21 +1336,15 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     if (event.type === "git_sync") {
-      this.sql.exec(
-        `UPDATE sandbox SET git_sync_status = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-        event.status
-      );
+      this.sandboxRepo.updateGitSyncStatus(event.status);
 
       if (event.sha) {
-        this.sql.exec(`UPDATE session SET current_sha = ?`, event.sha);
+        this.sessionRepo.updateCurrentSha(event.sha);
       }
     }
 
     if (event.type === "heartbeat") {
-      this.sql.exec(
-        `UPDATE sandbox SET last_heartbeat = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-        now
-      );
+      this.sandboxRepo.updateLastHeartbeat(now);
       // Note: Don't schedule separate heartbeat alarm - it's handled in the main alarm()
       // which checks both inactivity and heartbeat health
     }
@@ -1635,9 +1621,7 @@ export class SessionDO extends DurableObject<Env> {
     // Reset circuit breaker if window has passed
     if (spawnFailureCount > 0 && timeSinceLastFailure >= CIRCUIT_BREAKER_WINDOW_MS) {
       console.log("[DO] Circuit breaker window passed, resetting failure count");
-      this.sql.exec(
-        `UPDATE sandbox SET spawn_failure_count = 0 WHERE id = (SELECT id FROM sandbox LIMIT 1)`
-      );
+      this.sandboxRepo.resetSpawnFailureCount();
     }
 
     return true;
@@ -1648,21 +1632,12 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async spawnSandbox(): Promise<void> {
     // Check persisted status and last spawn time to prevent duplicate spawns
-    const sandboxResult = this.sql.exec(
-      `SELECT status, created_at, snapshot_image_id, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
-    );
-    const sandboxRows = sandboxResult.toArray() as {
-      status: string;
-      created_at: number;
-      snapshot_image_id: string | null;
-      spawn_failure_count: number | null;
-      last_spawn_failure: number | null;
-    }[];
-    const currentStatus = sandboxRows[0]?.status;
-    const lastSpawnTime = sandboxRows[0]?.created_at || 0;
-    const snapshotImageId = sandboxRows[0]?.snapshot_image_id;
-    const spawnFailureCount = sandboxRows[0]?.spawn_failure_count || 0;
-    const lastSpawnFailure = sandboxRows[0]?.last_spawn_failure || 0;
+    const sandbox = this.sandboxRepo.get();
+    const currentStatus = sandbox?.status;
+    const lastSpawnTime = sandbox?.created_at || 0;
+    const snapshotImageId = sandbox?.snapshot_image_id;
+    const spawnFailureCount = sandbox?.spawn_failure_count || 0;
+    const lastSpawnFailure = sandbox?.last_spawn_failure || 0;
     const now = Date.now();
     const timeSinceLastSpawn = now - lastSpawnTime;
 
@@ -1734,6 +1709,7 @@ export class SessionDO extends DurableObject<Env> {
 
       // Store status, auth token, AND expected sandbox ID BEFORE calling Modal
       // This prevents race conditions where sandbox connects before we've stored expected ID
+      // TODO: Move to repository when auth_token update method is added
       this.sql.exec(
         `UPDATE sandbox SET
            status = 'spawning',
@@ -1805,6 +1781,7 @@ export class SessionDO extends DurableObject<Env> {
 
       // Store Modal's internal object ID for snapshot API calls
       if (result.modalObjectId) {
+        // TODO: Add updateModalObjectId method to SandboxRepository
         this.sql.exec(
           `UPDATE sandbox SET modal_object_id = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
           result.modalObjectId
@@ -1814,17 +1791,11 @@ export class SessionDO extends DurableObject<Env> {
 
       // Store tunnel URLs and create preview artifact if available
       if (result.tunnelUrls) {
-        this.sql.exec(
-          `UPDATE sandbox SET tunnel_urls = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-          JSON.stringify(result.tunnelUrls)
-        );
+        this.sandboxRepo.updateTunnelUrls(JSON.stringify(result.tunnelUrls));
         console.log(`[DO] Stored tunnel_urls: ${Object.keys(result.tunnelUrls).join(", ")}`);
       }
       if (result.previewTunnelUrl) {
-        this.sql.exec(
-          `UPDATE sandbox SET preview_tunnel_url = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-          result.previewTunnelUrl
-        );
+        this.sandboxRepo.updatePreviewTunnelUrl(result.previewTunnelUrl);
         console.log(`[DO] Stored preview_tunnel_url`);
         const session = this.getSession();
         if (session) {
@@ -1858,21 +1829,13 @@ export class SessionDO extends DurableObject<Env> {
       this.broadcast({ type: "sandbox_status", status: "connecting" });
 
       // Reset circuit breaker on successful spawn initiation
-      this.sql.exec(
-        `UPDATE sandbox SET spawn_failure_count = 0 WHERE id = (SELECT id FROM sandbox LIMIT 1)`
-      );
+      this.sandboxRepo.resetSpawnFailureCount();
     } catch (error) {
       console.error("Failed to spawn sandbox:", error);
 
       // Increment circuit breaker failure count
       const failureNow = Date.now();
-      this.sql.exec(
-        `UPDATE sandbox SET
-           spawn_failure_count = COALESCE(spawn_failure_count, 0) + 1,
-           last_spawn_failure = ?
-         WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-        failureNow
-      );
+      this.sandboxRepo.incrementSpawnFailureCount(failureNow);
       console.log("[DO] Incremented spawn failure count for circuit breaker");
 
       this.updateSandboxStatus("failed");
@@ -2091,8 +2054,7 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   private getMessageCount(): number {
-    const result = this.sql.exec(`SELECT COUNT(*) as count FROM messages`);
-    return (result.one() as { count: number }).count;
+    return this.messageRepo.count();
   }
 
   private getParticipantByUserId(userId: string): ParticipantRow | null {
@@ -2113,10 +2075,7 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   private updateSandboxStatus(status: string): void {
-    this.sql.exec(
-      `UPDATE sandbox SET status = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-      status
-    );
+    this.sandboxRepo.updateStatus(status);
   }
 
   /**
@@ -2144,11 +2103,7 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async notifySlackBot(messageId: string, success: boolean): Promise<void> {
     // Safely query for callback context
-    const result = this.sql
-      .exec(`SELECT callback_context FROM messages WHERE id = ?`, messageId)
-      .toArray() as Array<{ callback_context: string | null }>;
-
-    const message = result[0];
+    const message = this.messageRepo.getById(messageId);
     if (!message?.callback_context) {
       console.log(`[DO] No callback context for message ${messageId}, skipping notification`);
       return;
@@ -2228,12 +2183,9 @@ export class SessionDO extends DurableObject<Env> {
     | { user?: never; error: string; status: number }
   > {
     // Find the currently processing message
-    const processingResult = this.sql.exec(
-      `SELECT author_id FROM messages WHERE status = 'processing' LIMIT 1`
-    );
-    const processingRows = processingResult.toArray() as Array<{ author_id: string }>;
+    const processingMessage = this.messageRepo.getProcessing();
 
-    if (processingRows.length === 0) {
+    if (!processingMessage) {
       console.log("[DO] PR creation failed: no processing message found");
       return {
         error: "No active prompt found. PR creation must be triggered by a user prompt.",
@@ -2241,15 +2193,10 @@ export class SessionDO extends DurableObject<Env> {
       };
     }
 
-    const participantId = processingRows[0].author_id;
+    const participantId = processingMessage.author_id;
 
     // Get the participant record
-    const participantResult = this.sql.exec(
-      `SELECT * FROM participants WHERE id = ?`,
-      participantId
-    );
-    const participants = participantResult.toArray() as unknown as ParticipantRow[];
-    const participant = participants[0];
+    const participant = this.participantRepo.getById(participantId);
 
     if (!participant) {
       console.log(`[DO] PR creation failed: participant not found for id=${participantId}`);
@@ -2315,47 +2262,55 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     // Create session (store both internal ID and external name)
-    this.sql.exec(
-      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, model, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      sessionId,
-      sessionName, // Store the session name for WebSocket routing
-      body.title ?? null,
-      body.repoOwner,
-      body.repoName,
+    this.sessionRepo.create({
+      id: sessionId,
+      session_name: sessionName,
+      title: body.title ?? null,
+      repo_owner: body.repoOwner,
+      repo_name: body.repoName,
+      repo_default_branch: "main", // Default, will be updated by git sync
+      branch_name: null,
+      base_sha: null,
+      current_sha: null,
+      opencode_session_id: null,
       model,
-      "created",
-      now,
-      now
-    );
+      status: "created",
+      linear_issue_id: null,
+      linear_team_id: null,
+    });
 
     // Create sandbox record
     // Note: created_at is set to 0 initially so the first spawn isn't blocked by cooldown
     // It will be updated to the actual spawn time when spawnSandbox() is called
     const sandboxId = generateId();
-    this.sql.exec(
-      `INSERT INTO sandbox (id, status, git_sync_status, created_at)
-       VALUES (?, ?, ?, ?)`,
-      sandboxId,
-      "pending",
-      "pending",
-      0
-    );
+    this.sandboxRepo.create({
+      id: sandboxId,
+      modal_sandbox_id: null,
+      modal_object_id: null,
+      snapshot_id: null,
+      snapshot_image_id: null,
+      auth_token: null,
+      status: "pending",
+      git_sync_status: "pending",
+      last_heartbeat: null,
+      last_activity: null,
+      preview_tunnel_url: null,
+      tunnel_urls: null,
+      created_at: 0,
+    });
 
     // Create owner participant with encrypted GitHub token
     const participantId = generateId();
-    this.sql.exec(
-      `INSERT INTO participants (id, user_id, github_login, github_name, github_email, github_access_token_encrypted, role, joined_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      participantId,
-      body.userId,
-      body.githubLogin ?? null,
-      body.githubName ?? null,
-      body.githubEmail ?? null,
-      encryptedToken,
-      "owner",
-      now
-    );
+    this.participantRepo.create({
+      id: participantId,
+      userId: body.userId,
+      githubLogin: body.githubLogin,
+      githubName: body.githubName,
+      githubEmail: body.githubEmail,
+      githubAccessTokenEncrypted: encryptedToken,
+      role: "owner",
+      joinedAt: now,
+    });
 
     return Response.json({ sessionId, status: "created" });
   }
@@ -2592,8 +2547,7 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   private handleListParticipants(): Response {
-    const result = this.sql.exec(`SELECT * FROM participants ORDER BY joined_at`);
-    const participants = result.toArray() as unknown as ParticipantRow[];
+    const participants = this.participantRepo.list();
 
     return Response.json({
       participants: participants.map((p) => ({
@@ -2619,17 +2573,15 @@ export class SessionDO extends DurableObject<Env> {
     const id = generateId();
     const now = Date.now();
 
-    this.sql.exec(
-      `INSERT INTO participants (id, user_id, github_login, github_name, github_email, role, joined_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    this.participantRepo.create({
       id,
-      body.userId,
-      body.githubLogin ?? null,
-      body.githubName ?? null,
-      body.githubEmail ?? null,
-      body.role ?? "member",
-      now
-    );
+      userId: body.userId,
+      githubLogin: body.githubLogin,
+      githubName: body.githubName,
+      githubEmail: body.githubEmail,
+      role: body.role ?? "member",
+      joinedAt: now,
+    });
 
     return Response.json({ id, status: "added" });
   }
@@ -2686,8 +2638,7 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   private handleListArtifacts(): Response {
-    const result = this.sql.exec(`SELECT * FROM artifacts ORDER BY created_at DESC`);
-    const artifacts = result.toArray() as unknown as ArtifactRow[];
+    const artifacts = this.artifactRepo.list();
 
     return Response.json({
       artifacts: artifacts.map((a) => ({
@@ -3139,7 +3090,7 @@ export class SessionDO extends DurableObject<Env> {
       });
 
       // Update session with branch name
-      this.sql.exec(`UPDATE session SET branch_name = ? WHERE id = ?`, headBranch, session.id);
+      this.sessionRepo.update({ branchName: headBranch });
 
       // Broadcast PR creation to all clients
       this.broadcast({
@@ -3219,21 +3170,18 @@ export class SessionDO extends DurableObject<Env> {
     } else {
       // Create new participant with optional GitHub token
       const id = generateId();
-      this.sql.exec(
-        `INSERT INTO participants (id, user_id, github_user_id, github_login, github_name, github_email, github_access_token_encrypted, github_token_expires_at, role, joined_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      participant = this.participantRepo.create({
         id,
-        body.userId,
-        body.githubUserId ?? null,
-        body.githubLogin ?? null,
-        body.githubName ?? null,
-        body.githubEmail ?? null,
-        body.githubTokenEncrypted ?? null,
-        body.githubTokenExpiresAt ?? null,
-        "member",
-        now
-      );
-      participant = this.getParticipantByUserId(body.userId)!;
+        userId: body.userId,
+        githubUserId: body.githubUserId,
+        githubLogin: body.githubLogin,
+        githubName: body.githubName,
+        githubEmail: body.githubEmail,
+        githubAccessTokenEncrypted: body.githubTokenEncrypted,
+        githubTokenExpiresAt: body.githubTokenExpiresAt,
+        role: "member",
+        joinedAt: now,
+      });
     }
 
     // Generate a new WebSocket token (32 bytes = 256 bits)
@@ -3241,12 +3189,7 @@ export class SessionDO extends DurableObject<Env> {
     const tokenHash = await hashToken(plainToken);
 
     // Store the hash (invalidates any previous token)
-    this.sql.exec(
-      `UPDATE participants SET ws_auth_token = ?, ws_token_created_at = ? WHERE id = ?`,
-      tokenHash,
-      now,
-      participant.id
-    );
+    this.participantRepo.updateWsAuthToken(participant.id, tokenHash, now);
 
     console.log(`[DO] Generated WS token for participant ${participant.id} (user: ${body.userId})`);
 
@@ -3260,9 +3203,7 @@ export class SessionDO extends DurableObject<Env> {
    * Get participant by WebSocket token hash.
    */
   private getParticipantByWsTokenHash(tokenHash: string): ParticipantRow | null {
-    const result = this.sql.exec(`SELECT * FROM participants WHERE ws_auth_token = ?`, tokenHash);
-    const rows = result.toArray() as unknown as ParticipantRow[];
-    return rows[0] ?? null;
+    return this.participantRepo.getByWsAuthToken(tokenHash);
   }
 
   /**
@@ -3293,12 +3234,7 @@ export class SessionDO extends DurableObject<Env> {
       return Response.json({ error: "Not authorized to archive this session" }, { status: 403 });
     }
 
-    const now = Date.now();
-    this.sql.exec(
-      `UPDATE session SET status = 'archived', updated_at = ? WHERE id = ?`,
-      now,
-      session.id
-    );
+    this.sessionRepo.updateStatus("archived");
 
     // Broadcast status change to all connected clients
     this.broadcast({
@@ -3337,12 +3273,7 @@ export class SessionDO extends DurableObject<Env> {
       return Response.json({ error: "Not authorized to unarchive this session" }, { status: 403 });
     }
 
-    const now = Date.now();
-    this.sql.exec(
-      `UPDATE session SET status = 'active', updated_at = ? WHERE id = ?`,
-      now,
-      session.id
-    );
+    this.sessionRepo.updateStatus("active");
 
     // Broadcast status change to all connected clients
     this.broadcast({
