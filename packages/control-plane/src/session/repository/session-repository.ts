@@ -12,7 +12,7 @@ export function createSessionRepository(sql: SqlStorage): SessionRepository {
   return {
     get(): SessionRow | null {
       const result = sql.exec(`SELECT * FROM session LIMIT 1`);
-      const rows = result.toArray() as SessionRow[];
+      const rows = result.toArray() as unknown as SessionRow[];
       return rows.length > 0 ? rows[0] : null;
     },
 

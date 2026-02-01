@@ -12,7 +12,7 @@ export function createArtifactRepository(sql: SqlStorage): ArtifactRepository {
   return {
     getById(id: string): ArtifactRow | null {
       const result = sql.exec(`SELECT * FROM artifacts WHERE id = ? LIMIT 1`, id);
-      const rows = result.toArray() as ArtifactRow[];
+      const rows = result.toArray() as unknown as ArtifactRow[];
       return rows.length > 0 ? rows[0] : null;
     },
 
@@ -35,7 +35,7 @@ export function createArtifactRepository(sql: SqlStorage): ArtifactRepository {
 
     list(): ArtifactRow[] {
       const result = sql.exec(`SELECT * FROM artifacts ORDER BY created_at DESC`);
-      return result.toArray() as ArtifactRow[];
+      return result.toArray() as unknown as ArtifactRow[];
     },
   };
 }

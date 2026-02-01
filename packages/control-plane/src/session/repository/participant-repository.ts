@@ -12,13 +12,13 @@ export function createParticipantRepository(sql: SqlStorage): ParticipantReposit
   return {
     getById(id: string): ParticipantRow | null {
       const result = sql.exec(`SELECT * FROM participants WHERE id = ? LIMIT 1`, id);
-      const rows = result.toArray() as ParticipantRow[];
+      const rows = result.toArray() as unknown as ParticipantRow[];
       return rows.length > 0 ? rows[0] : null;
     },
 
     getByUserId(userId: string): ParticipantRow | null {
       const result = sql.exec(`SELECT * FROM participants WHERE user_id = ? LIMIT 1`, userId);
-      const rows = result.toArray() as ParticipantRow[];
+      const rows = result.toArray() as unknown as ParticipantRow[];
       return rows.length > 0 ? rows[0] : null;
     },
 
@@ -27,7 +27,7 @@ export function createParticipantRepository(sql: SqlStorage): ParticipantReposit
         `SELECT * FROM participants WHERE ws_auth_token = ? LIMIT 1`,
         tokenHash
       );
-      const rows = result.toArray() as ParticipantRow[];
+      const rows = result.toArray() as unknown as ParticipantRow[];
       return rows.length > 0 ? rows[0] : null;
     },
 
@@ -104,7 +104,7 @@ export function createParticipantRepository(sql: SqlStorage): ParticipantReposit
 
     list(): ParticipantRow[] {
       const result = sql.exec(`SELECT * FROM participants ORDER BY joined_at ASC`);
-      return result.toArray() as ParticipantRow[];
+      return result.toArray() as unknown as ParticipantRow[];
     },
   };
 }

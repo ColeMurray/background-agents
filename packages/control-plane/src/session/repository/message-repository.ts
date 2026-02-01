@@ -18,13 +18,13 @@ export function createMessageRepository(sql: SqlStorage): MessageRepository {
   return {
     getById(id: string): MessageRow | null {
       const result = sql.exec(`SELECT * FROM messages WHERE id = ? LIMIT 1`, id);
-      const rows = result.toArray() as MessageRow[];
+      const rows = result.toArray() as unknown as MessageRow[];
       return rows.length > 0 ? rows[0] : null;
     },
 
     getProcessing(): MessageRow | null {
       const result = sql.exec(`SELECT * FROM messages WHERE status = ? LIMIT 1`, "processing");
-      const rows = result.toArray() as MessageRow[];
+      const rows = result.toArray() as unknown as MessageRow[];
       return rows.length > 0 ? rows[0] : null;
     },
 
@@ -33,7 +33,7 @@ export function createMessageRepository(sql: SqlStorage): MessageRepository {
         `SELECT * FROM messages WHERE status = ? ORDER BY created_at ASC LIMIT 1`,
         "pending"
       );
-      const rows = result.toArray() as MessageRow[];
+      const rows = result.toArray() as unknown as MessageRow[];
       return rows.length > 0 ? rows[0] : null;
     },
 
@@ -108,7 +108,7 @@ export function createMessageRepository(sql: SqlStorage): MessageRepository {
       params.push(limit + 1, offset);
 
       const result = sql.exec(query, ...params);
-      const rows = result.toArray() as MessageRow[];
+      const rows = result.toArray() as unknown as MessageRow[];
 
       const hasMore = rows.length > limit;
       const messages = hasMore ? rows.slice(0, limit) : rows;
@@ -118,7 +118,7 @@ export function createMessageRepository(sql: SqlStorage): MessageRepository {
 
     count(): number {
       const result = sql.exec(`SELECT COUNT(*) as count FROM messages`);
-      const rows = result.toArray() as Array<{ count: number }>;
+      const rows = result.toArray() as unknown as Array<{ count: number }>;
       return rows[0]?.count ?? 0;
     },
   };

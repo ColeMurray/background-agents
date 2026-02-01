@@ -105,7 +105,7 @@ export interface SessionRepository {
   /**
    * Create the initial session record.
    */
-  create(data: Omit<SessionRow, "createdAt" | "updatedAt">): SessionRow;
+  create(data: Omit<SessionRow, "created_at" | "updated_at">): SessionRow;
 
   /**
    * Update session fields.

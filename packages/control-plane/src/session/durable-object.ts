@@ -15,6 +15,20 @@ import { createModalClient } from "../sandbox/client";
 import { getIssue } from "../linear/client";
 import { createPullRequest, getRepository } from "../auth/pr";
 import { generateBranchName, generateInternalToken } from "@open-inspect/shared";
+import {
+  createMessageRepository,
+  createSessionRepository,
+  createParticipantRepository,
+  createEventRepository,
+  createArtifactRepository,
+  createSandboxRepository,
+  type MessageRepository,
+  type SessionRepository,
+  type ParticipantRepository,
+  type EventRepository,
+  type ArtifactRepository,
+  type SandboxRepository,
+} from "./repository";
 import type {
   Env,
   ClientInfo,
@@ -135,6 +149,14 @@ export class SessionDO extends DurableObject<Env> {
     { resolve: (element: unknown) => void; reject: (err: Error) => void }
   >();
 
+  // Repository layer
+  private messageRepo: MessageRepository;
+  private sessionRepo: SessionRepository;
+  private participantRepo: ParticipantRepository;
+  private eventRepo: EventRepository;
+  private artifactRepo: ArtifactRepository;
+  private sandboxRepo: SandboxRepository;
+
   // Route table for internal API endpoints
   private readonly routes: InternalRoute[] = [
     { method: "POST", path: "/internal/init", handler: (req) => this.handleInit(req) },
@@ -208,6 +230,14 @@ export class SessionDO extends DurableObject<Env> {
     super(ctx, env);
     this.sql = ctx.storage.sql;
     this.clients = new Map();
+
+    // Initialize repositories
+    this.messageRepo = createMessageRepository(this.sql);
+    this.sessionRepo = createSessionRepository(this.sql);
+    this.participantRepo = createParticipantRepository(this.sql);
+    this.eventRepo = createEventRepository(this.sql);
+    this.artifactRepo = createArtifactRepository(this.sql);
+    this.sandboxRepo = createSandboxRepository(this.sql);
   }
 
   /**
@@ -1294,12 +1324,7 @@ export class SessionDO extends DurableObject<Env> {
       const status = event.success ? "completed" : "failed";
 
       if (completionMessageId) {
-        this.sql.exec(
-          `UPDATE messages SET status = ?, completed_at = ? WHERE id = ?`,
-          status,
-          now,
-          completionMessageId
-        );
+        this.messageRepo.updateStatus(completionMessageId, status, { completedAt: now });
 
         // Broadcast processing status change (after DB update so getIsProcessing is accurate)
         this.broadcast({ type: "processing_status", isProcessing: this.getIsProcessing() });
@@ -1514,23 +1539,20 @@ export class SessionDO extends DurableObject<Env> {
     console.log("processMessageQueue: start");
 
     // Check if already processing
-    const processing = this.sql.exec(`SELECT id FROM messages WHERE status = 'processing' LIMIT 1`);
-    if (processing.toArray().length > 0) {
+    const processing = this.messageRepo.getProcessing();
+    if (processing !== null) {
       console.log("processMessageQueue: already processing, returning");
       return;
     }
 
     // Get next pending message
-    const pending = this.sql.exec(
-      `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1`
-    );
-    const messages = pending.toArray() as unknown as MessageRow[];
-    if (messages.length === 0) {
+    const nextMessage = this.messageRepo.getNextPending();
+    if (nextMessage === null) {
       console.log("processMessageQueue: no pending messages");
       return;
     }
 
-    const message = messages[0];
+    const message = nextMessage;
     console.log("processMessageQueue: found message", message.id);
     const now = Date.now();
 
@@ -1553,11 +1575,7 @@ export class SessionDO extends DurableObject<Env> {
 
     console.log("processMessageQueue: marking as processing");
     // Mark as processing
-    this.sql.exec(
-      `UPDATE messages SET status = 'processing', started_at = ? WHERE id = ?`,
-      now,
-      message.id
-    );
+    this.messageRepo.updateStatus(message.id, "processing", { startedAt: now });
 
     // Broadcast processing status change (hardcoded true since we just set status above)
     this.broadcast({ type: "processing_status", isProcessing: true });
@@ -1958,22 +1976,17 @@ export class SessionDO extends DurableObject<Env> {
    * Check if any message is currently being processed.
    */
   private getIsProcessing(): boolean {
-    const result = this.sql.exec(`SELECT id FROM messages WHERE status = 'processing' LIMIT 1`);
-    return result.toArray().length > 0;
+    return this.messageRepo.getProcessing() !== null;
   }
 
   // Database helpers
 
   private getSession(): SessionRow | null {
-    const result = this.sql.exec(`SELECT * FROM session LIMIT 1`);
-    const rows = result.toArray() as unknown as SessionRow[];
-    return rows[0] ?? null;
+    return this.sessionRepo.get();
   }
 
   private getSandbox(): SandboxRow | null {
-    const result = this.sql.exec(`SELECT * FROM sandbox LIMIT 1`);
-    const rows = result.toArray() as unknown as SandboxRow[];
-    return rows[0] ?? null;
+    return this.sandboxRepo.get();
   }
 
   /**

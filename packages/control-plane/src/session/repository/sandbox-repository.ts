@@ -12,7 +12,7 @@ export function createSandboxRepository(sql: SqlStorage): SandboxRepository {
   return {
     get(): SandboxRow | null {
       const result = sql.exec(`SELECT * FROM sandbox LIMIT 1`);
-      const rows = result.toArray() as SandboxRow[];
+      const rows = result.toArray() as unknown as SandboxRow[];
       return rows.length > 0 ? rows[0] : null;
     },
 

@@ -12,7 +12,7 @@ export function createEventRepository(sql: SqlStorage): EventRepository {
   return {
     getById(id: string): EventRow | null {
       const result = sql.exec(`SELECT * FROM events WHERE id = ? LIMIT 1`, id);
-      const rows = result.toArray() as EventRow[];
+      const rows = result.toArray() as unknown as EventRow[];
       return rows.length > 0 ? rows[0] : null;
     },
 
@@ -67,7 +67,7 @@ export function createEventRepository(sql: SqlStorage): EventRepository {
       }
 
       const result = sql.exec(query, ...params);
-      return result.toArray() as EventRow[];
+      return result.toArray() as unknown as EventRow[];
     },
   };
 }
