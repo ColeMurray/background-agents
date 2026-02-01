@@ -18,9 +18,9 @@ locals {
     }] : [],
     # D1 database bindings
     [for db in var.d1_databases : {
-      type        = "d1"
-      name        = db.binding_name
-      database_id = db.database_id
+      type = "d1"
+      name = db.binding_name
+      id   = db.database_id
     }],
     # Plain text bindings (environment variables)
     [for pt in var.plain_text_bindings : {
