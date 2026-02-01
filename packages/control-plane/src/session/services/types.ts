@@ -94,3 +94,48 @@ export interface EventProcessor {
    */
   processEvent(event: { type: string; data?: unknown; message_id?: string }): Promise<void>;
 }
+
+/**
+ * SandboxManager handles sandbox lifecycle and circuit breaker logic.
+ */
+export interface SandboxManager {
+  /**
+   * Spawn a new sandbox.
+   */
+  spawnSandbox(): Promise<void>;
+
+  /**
+   * Restore sandbox from snapshot.
+   */
+  restoreFromSnapshot(snapshotId: string): Promise<void>;
+
+  /**
+   * Check if sandbox can be spawned (circuit breaker check).
+   */
+  canSpawnSandbox(): boolean;
+
+  /**
+   * Trigger a snapshot.
+   */
+  triggerSnapshot(reason: string): Promise<void>;
+
+  /**
+   * Check if sandbox is inactive (> 30 minutes).
+   */
+  isInactive(): boolean;
+
+  /**
+   * Update sandbox status.
+   */
+  updateStatus(status: string): void;
+
+  /**
+   * Update heartbeat timestamp.
+   */
+  updateHeartbeat(): void;
+
+  /**
+   * Update activity timestamp.
+   */
+  updateActivity(): void;
+}
