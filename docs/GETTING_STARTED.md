@@ -223,6 +223,9 @@ Generate these random secrets (you'll need them for `terraform.tfvars`):
 # Token encryption key
 echo "token_encryption_key: $(openssl rand -base64 32)"
 
+# Repo secrets encryption key
+echo "repo_secrets_encryption_key: $(openssl rand -base64 32)"
+
 # Internal callback secret
 echo "internal_callback_secret: $(openssl rand -base64 32)"
 
@@ -294,8 +297,9 @@ slack_signing_secret = ""
 anthropic_api_key = "sk-ant-..."
 
 # Security Secrets (from Step 5)
-token_encryption_key     = "your-generated-value"
-internal_callback_secret = "your-generated-value"
+token_encryption_key          = "your-generated-value"
+repo_secrets_encryption_key   = "your-generated-value"
+internal_callback_secret      = "your-generated-value"
 modal_api_secret         = "your-generated-value"
 nextauth_secret          = "your-generated-value"
 
@@ -512,7 +516,8 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `SLACK_BOT_TOKEN`             | Slack bot token (or empty)                                                   |
 | `SLACK_SIGNING_SECRET`        | Slack signing secret (or empty)                                              |
 | `ANTHROPIC_API_KEY`           | Anthropic API key                                                            |
-| `TOKEN_ENCRYPTION_KEY`        | Generated encryption key                                                     |
+| `TOKEN_ENCRYPTION_KEY`        | Generated encryption key (OAuth tokens)                                      |
+| `REPO_SECRETS_ENCRYPTION_KEY` | Generated encryption key (repo secrets)                                      |
 | `INTERNAL_CALLBACK_SECRET`    | Generated callback secret                                                    |
 | `MODAL_API_SECRET`            | Generated Modal API secret                                                   |
 | `NEXTAUTH_SECRET`             | Generated NextAuth secret                                                    |

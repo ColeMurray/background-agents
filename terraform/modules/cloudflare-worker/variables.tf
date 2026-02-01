@@ -37,6 +37,15 @@ variable "service_bindings" {
   default = []
 }
 
+variable "d1_databases" {
+  description = "List of D1 database bindings"
+  type = list(object({
+    binding_name = string
+    database_id  = string
+  }))
+  default = []
+}
+
 variable "plain_text_bindings" {
   description = "List of plain text environment variable bindings"
   type = list(object({

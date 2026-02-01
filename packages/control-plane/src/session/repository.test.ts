@@ -67,6 +67,7 @@ describe("SessionRepository", () => {
         title: "Test",
         repo_owner: "owner",
         repo_name: "repo",
+        repo_id: null,
       };
       mock.setData(`SELECT * FROM session LIMIT 1`, [session]);
       expect(repo.getSession()).toEqual(session);
@@ -95,11 +96,22 @@ describe("SessionRepository", () => {
         "Test Title",
         "owner",
         "repo",
+        null,
         "claude-sonnet-4",
         "created",
         1000,
         2000,
       ]);
+    });
+  });
+
+  describe("updateSessionRepoId", () => {
+    it("updates repo_id", () => {
+      repo.updateSessionRepoId(12345);
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("UPDATE session SET repo_id");
+      expect(mock.calls[0].params).toEqual([12345]);
     });
   });
 
@@ -238,6 +250,16 @@ describe("SessionRepository", () => {
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("UPDATE sandbox SET git_sync_status");
       expect(mock.calls[0].params).toEqual(["completed"]);
+    });
+  });
+
+  describe("updateSandboxSpawnError", () => {
+    it("updates spawn error fields", () => {
+      repo.updateSandboxSpawnError("Failed to spawn sandbox", 123456);
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("UPDATE sandbox SET last_spawn_error");
+      expect(mock.calls[0].params).toEqual(["Failed to spawn sandbox", 123456]);
     });
   });
 

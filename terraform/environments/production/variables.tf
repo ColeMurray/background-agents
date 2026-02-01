@@ -123,6 +123,12 @@ variable "token_encryption_key" {
   sensitive   = true
 }
 
+variable "repo_secrets_encryption_key" {
+  description = "Key for encrypting repo secrets in D1 (generate with: openssl rand -base64 32)"
+  type        = string
+  sensitive   = true
+}
+
 variable "internal_callback_secret" {
   description = "Shared secret for internal service communication (generate with: openssl rand -base64 32)"
   type        = string

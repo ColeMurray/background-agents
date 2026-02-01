@@ -4,6 +4,7 @@ import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { SidebarLayout, useSidebarContext } from "@/components/sidebar-layout";
+import { SecretsEditor } from "@/components/secrets-editor";
 import { formatModelNameLower } from "@/lib/format";
 
 interface Repo {
@@ -473,6 +474,12 @@ function HomeContent({
                   <span className="text-sm text-muted-foreground">build agent</span>
                 </div>
               </div>
+
+              <SecretsEditor
+                owner={selectedRepoObj?.owner}
+                name={selectedRepoObj?.name}
+                disabled={creating || loadingRepos}
+              />
 
               {repos.length === 0 && !loadingRepos && (
                 <p className="mt-3 text-sm text-muted-foreground text-center">

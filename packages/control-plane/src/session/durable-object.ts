@@ -10,7 +10,11 @@
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { generateId, decryptToken, encryptToken, hashToken } from "../auth/crypto";
-import { generateInstallationToken, getGitHubAppConfig } from "../auth/github-app";
+import {
+  generateInstallationToken,
+  getGitHubAppConfig,
+  getInstallationRepository,
+} from "../auth/github-app";
 import { refreshAccessToken } from "../auth/github";
 import { createModalClient } from "../sandbox/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
@@ -42,6 +46,7 @@ import type {
 } from "../types";
 import type { SessionRow, ParticipantRow, EventRow, SandboxRow, SandboxCommand } from "./types";
 import { SessionRepository, type MessageWithParticipant } from "./repository";
+import { RepoSecretsStore } from "../db/repo-secrets";
 
 /**
  * Build GitHub avatar URL from login.
@@ -180,6 +185,7 @@ export class SessionDO extends DurableObject<Env> {
       getSandbox: () => this.repository.getSandbox(),
       getSandboxWithCircuitBreaker: () => this.repository.getSandboxWithCircuitBreaker(),
       getSession: () => this.repository.getSession(),
+      getUserEnvVars: () => this.getUserEnvVars(),
       updateSandboxStatus: (status) => this.updateSandboxStatus(status),
       updateSandboxForSpawn: (data) => this.repository.updateSandboxForSpawn(data),
       updateSandboxModalObjectId: (id) => this.repository.updateSandboxModalObjectId(id),
@@ -190,6 +196,8 @@ export class SessionDO extends DurableObject<Env> {
       incrementCircuitBreakerFailure: (timestamp) =>
         this.repository.incrementCircuitBreakerFailure(timestamp),
       resetCircuitBreaker: () => this.repository.resetCircuitBreaker(),
+      setLastSpawnError: (error, timestamp) =>
+        this.repository.updateSandboxSpawnError(error, timestamp),
     };
 
     // Broadcaster adapter
@@ -790,6 +798,11 @@ export class SessionDO extends DurableObject<Env> {
         avatar: getGitHubAvatarUrl(participant.github_login),
       },
     } as ServerMessage);
+
+    const sandbox = this.getSandbox();
+    if (sandbox?.last_spawn_error) {
+      this.safeSend(ws, { type: "sandbox_error", error: sandbox.last_spawn_error });
+    }
 
     // Send historical events (messages and sandbox events)
     this.sendHistoricalEvents(ws);
@@ -1454,6 +1467,66 @@ export class SessionDO extends DurableObject<Env> {
     return this.repository.getSandbox();
   }
 
+  private async ensureRepoId(session: SessionRow): Promise<number> {
+    if (session.repo_id) {
+      return session.repo_id;
+    }
+
+    const appConfig = getGitHubAppConfig(this.env);
+    if (!appConfig) {
+      throw new Error("GitHub App not configured");
+    }
+
+    const repo = await getInstallationRepository(appConfig, session.repo_owner, session.repo_name);
+    if (!repo) {
+      throw new Error("Repository is not installed for the GitHub App");
+    }
+
+    this.repository.updateSessionRepoId(repo.id);
+    return repo.id;
+  }
+
+  private async getUserEnvVars(): Promise<Record<string, string> | undefined> {
+    const session = this.getSession();
+    if (!session) {
+      this.log.warn("Cannot load secrets: no session");
+      return undefined;
+    }
+
+    if (!this.env.DB || !this.env.REPO_SECRETS_ENCRYPTION_KEY) {
+      this.log.debug("Secrets not configured, skipping", {
+        has_db: !!this.env.DB,
+        has_encryption_key: !!this.env.REPO_SECRETS_ENCRYPTION_KEY,
+      });
+      return undefined;
+    }
+
+    let repoId: number;
+    try {
+      repoId = await this.ensureRepoId(session);
+    } catch (e) {
+      this.log.warn("Cannot resolve repo ID for secrets, proceeding without", {
+        repo_owner: session.repo_owner,
+        repo_name: session.repo_name,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return undefined;
+    }
+
+    const store = new RepoSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+
+    try {
+      const secrets = await store.getDecryptedSecrets(repoId);
+      return Object.keys(secrets).length === 0 ? undefined : secrets;
+    } catch (e) {
+      this.log.error("Failed to load repo secrets, proceeding without", {
+        repo_id: repoId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return undefined;
+    }
+  }
+
   /**
    * Verify a sandbox authentication token.
    * Called by the router to validate sandbox-originated requests.
@@ -1776,6 +1849,7 @@ export class SessionDO extends DurableObject<Env> {
       sessionName: string; // The name used for WebSocket routing
       repoOwner: string;
       repoName: string;
+      repoId?: number;
       title?: string;
       model?: string; // LLM model to use
       userId: string;
@@ -1820,6 +1894,7 @@ export class SessionDO extends DurableObject<Env> {
       title: body.title ?? null,
       repoOwner: body.repoOwner,
       repoName: body.repoName,
+      repoId: body.repoId ?? null,
       model,
       status: "created",
       createdAt: now,

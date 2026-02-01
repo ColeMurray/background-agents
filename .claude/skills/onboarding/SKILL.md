@@ -154,6 +154,7 @@ Guide user:
 
 ```bash
 echo "token_encryption_key: $(openssl rand -base64 32)"
+echo "repo_secrets_encryption_key: $(openssl rand -base64 32)"
 echo "internal_callback_secret: $(openssl rand -base64 32)"
 echo "nextauth_secret: $(openssl rand -base64 32)"
 echo "modal_api_secret: $(openssl rand -hex 32)"

@@ -64,6 +64,7 @@ export interface UpsertSessionData {
   title: string | null;
   repoOwner: string;
   repoName: string;
+  repoId?: number | null;
   model: string;
   status: SessionStatus;
   createdAt: number;
@@ -217,17 +218,25 @@ export class SessionRepository {
 
   upsertSession(data: UpsertSessionData): void {
     this.sql.exec(
-      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, model, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, model, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.sessionName,
       data.title,
       data.repoOwner,
       data.repoName,
+      data.repoId ?? null,
       data.model,
       data.status,
       data.createdAt,
       data.updatedAt
+    );
+  }
+
+  updateSessionRepoId(repoId: number): void {
+    this.sql.exec(
+      `UPDATE session SET repo_id = ? WHERE id = (SELECT id FROM session LIMIT 1)`,
+      repoId
     );
   }
 
@@ -332,6 +341,14 @@ export class SessionRepository {
     this.sql.exec(
       `UPDATE sandbox SET git_sync_status = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       status
+    );
+  }
+
+  updateSandboxSpawnError(error: string | null, timestamp: number | null): void {
+    this.sql.exec(
+      `UPDATE sandbox SET last_spawn_error = ?, last_spawn_error_at = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      error,
+      timestamp
     );
   }
 

@@ -70,6 +70,7 @@ export class ModalSandboxProvider implements SandboxProvider {
         gitUserEmail: config.gitUserEmail,
         provider: config.provider,
         model: config.model,
+        userEnvVars: config.userEnvVars,
       });
 
       return {
@@ -113,6 +114,7 @@ export class ModalSandboxProvider implements SandboxProvider {
           sandbox_id: config.sandboxId,
           control_plane_url: config.controlPlaneUrl,
           sandbox_auth_token: config.sandboxAuthToken,
+          user_env_vars: config.userEnvVars || null,
         }),
       });
 

@@ -37,6 +37,7 @@ class SandboxConfig:
     sandbox_auth_token: str = ""
     timeout_hours: float = 2.0
     github_app_token: str | None = None  # GitHub App token for git operations
+    user_env_vars: dict[str, str] | None = None  # User-provided env vars (repo secrets)
 
 
 @dataclass
@@ -101,15 +102,22 @@ class SandboxManager:
         else:
             sandbox_id = f"sandbox-{config.repo_owner}-{config.repo_name}-{int(time.time() * 1000)}"
 
-        # Prepare environment variables
-        env_vars = {
-            "PYTHONUNBUFFERED": "1",  # Ensure logs are flushed immediately
-            "SANDBOX_ID": sandbox_id,
-            "CONTROL_PLANE_URL": config.control_plane_url,
-            "SANDBOX_AUTH_TOKEN": config.sandbox_auth_token,
-            "REPO_OWNER": config.repo_owner,
-            "REPO_NAME": config.repo_name,
-        }
+        # Prepare environment variables (user vars first, system vars override)
+        env_vars: dict[str, str] = {}
+
+        if config.user_env_vars:
+            env_vars.update(config.user_env_vars)
+
+        env_vars.update(
+            {
+                "PYTHONUNBUFFERED": "1",  # Ensure logs are flushed immediately
+                "SANDBOX_ID": sandbox_id,
+                "CONTROL_PLANE_URL": config.control_plane_url,
+                "SANDBOX_AUTH_TOKEN": config.sandbox_auth_token,
+                "REPO_OWNER": config.repo_owner,
+                "REPO_NAME": config.repo_name,
+            }
+        )
 
         # Add GitHub App token if available (for git sync operations)
         if config.github_app_token:
@@ -277,6 +285,7 @@ class SandboxManager:
         control_plane_url: str = "",
         sandbox_auth_token: str = "",
         github_app_token: str | None = None,
+        user_env_vars: dict[str, str] | None = None,
     ) -> SandboxHandle:
         """
         Create a new sandbox from a filesystem snapshot Image.
@@ -317,25 +326,32 @@ class SandboxManager:
         # Lookup the image by ID
         image = modal.Image.from_id(snapshot_image_id)
 
-        # Prepare environment variables
-        env_vars = {
-            "PYTHONUNBUFFERED": "1",
-            "SANDBOX_ID": sandbox_id,
-            "CONTROL_PLANE_URL": control_plane_url,
-            "SANDBOX_AUTH_TOKEN": sandbox_auth_token,
-            "REPO_OWNER": repo_owner,
-            "REPO_NAME": repo_name,
-            "RESTORED_FROM_SNAPSHOT": "true",  # Signal to skip git clone
-            "SESSION_CONFIG": json.dumps(
-                {
-                    "session_id": session_id,
-                    "repo_owner": repo_owner,
-                    "repo_name": repo_name,
-                    "provider": provider,
-                    "model": model,
-                }
-            ),
-        }
+        # Prepare environment variables (user vars first, system vars override)
+        env_vars: dict[str, str] = {}
+
+        if user_env_vars:
+            env_vars.update(user_env_vars)
+
+        env_vars.update(
+            {
+                "PYTHONUNBUFFERED": "1",
+                "SANDBOX_ID": sandbox_id,
+                "CONTROL_PLANE_URL": control_plane_url,
+                "SANDBOX_AUTH_TOKEN": sandbox_auth_token,
+                "REPO_OWNER": repo_owner,
+                "REPO_NAME": repo_name,
+                "RESTORED_FROM_SNAPSHOT": "true",  # Signal to skip git clone
+                "SESSION_CONFIG": json.dumps(
+                    {
+                        "session_id": session_id,
+                        "repo_owner": repo_owner,
+                        "repo_name": repo_name,
+                        "provider": provider,
+                        "model": model,
+                    }
+                ),
+            }
+        )
 
         if github_app_token:
             env_vars["GITHUB_APP_TOKEN"] = github_app_token

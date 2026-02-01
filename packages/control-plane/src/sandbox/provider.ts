@@ -38,6 +38,8 @@ export interface CreateSandboxConfig {
   provider: string;
   /** LLM model (e.g., "claude-sonnet-4-5") */
   model: string;
+  /** User-provided environment variables (repo secrets) */
+  userEnvVars?: Record<string, string>;
   /** OpenCode session ID for resumption */
   opencodeSessionId?: string;
   /** Git user name for commits */
@@ -86,6 +88,8 @@ export interface RestoreConfig {
   provider: string;
   /** LLM model (e.g., "claude-sonnet-4-5") */
   model: string;
+  /** User-provided environment variables (repo secrets) */
+  userEnvVars?: Record<string, string>;
   /** Trace ID for correlation */
   traceId?: string;
   /** Request ID for correlation */

@@ -254,6 +254,56 @@ export async function listInstallationRepositories(
 }
 
 /**
+ * Fetch a single repository using the GitHub App installation token.
+ * Returns null if the repository is not accessible to the installation.
+ */
+export async function getInstallationRepository(
+  config: GitHubAppConfig,
+  owner: string,
+  repo: string
+): Promise<InstallationRepository | null> {
+  const token = await generateInstallationToken(config);
+
+  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "Open-Inspect",
+    },
+  });
+
+  if (response.status === 404 || response.status === 403) {
+    return null;
+  }
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to fetch repository: ${response.status} ${error}`);
+  }
+
+  const data = (await response.json()) as {
+    id: number;
+    name: string;
+    full_name: string;
+    description: string | null;
+    private: boolean;
+    default_branch: string;
+    owner: { login: string };
+  };
+
+  return {
+    id: data.id,
+    owner: data.owner.login,
+    name: data.name,
+    fullName: data.full_name,
+    description: data.description,
+    private: data.private,
+    defaultBranch: data.default_branch,
+  };
+}
+
+/**
  * Check if GitHub App credentials are configured.
  */
 export function isGitHubAppConfigured(env: {
