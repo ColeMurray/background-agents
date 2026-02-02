@@ -171,6 +171,13 @@ export default function SessionPage() {
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
 
+  // Sync selectedModel with session's model when session state loads
+  useEffect(() => {
+    if (sessionState?.model) {
+      setSelectedModel(sessionState.model);
+    }
+  }, [sessionState?.model]);
+
   // Scroll to bottom when new content arrives
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
