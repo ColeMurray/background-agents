@@ -12,9 +12,9 @@ import { initSchema } from "./schema";
 import { generateId, decryptToken, hashToken } from "../auth/crypto";
 import { getGitHubAppConfig } from "../auth/github-app";
 import { generateBranchName } from "@open-inspect/shared";
-import { ModalAdapter } from "../adapters/modal-adapter";
-import { GitHubAdapter } from "../adapters/github-adapter";
-import { LinearAdapter } from "../adapters/linear-adapter";
+import { ModalClient } from "../sandbox/client";
+import { LinearClient } from "../linear/client";
+import { GitHubClient } from "../auth/client";
 import type { ModalPort } from "../ports/modal-port";
 import type { GitHubPort } from "../ports/github-port";
 import type { LinearPort } from "../ports/linear-port";
@@ -265,16 +265,16 @@ export class SessionDO extends DurableObject<Env> {
       console.warn("GitHub App config missing or incomplete");
     }
 
-    this.github = new GitHubAdapter(githubAppConfig!, {
+    this.github = new GitHubClient(githubAppConfig!, {
       clientId: env.GITHUB_CLIENT_ID,
       clientSecret: env.GITHUB_CLIENT_SECRET,
       encryptionKey: env.TOKEN_ENCRYPTION_KEY,
     });
 
-    this.modal = new ModalAdapter(env.MODAL_API_SECRET!, env.MODAL_WORKSPACE!);
+    this.modal = new ModalClient(env.MODAL_API_SECRET!, env.MODAL_WORKSPACE!);
 
     if (env.LINEAR_API_KEY) {
-      this.linear = new LinearAdapter(env.LINEAR_API_KEY);
+      this.linear = new LinearClient(env.LINEAR_API_KEY);
     }
   }
 

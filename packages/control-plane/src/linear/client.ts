@@ -1,8 +1,4 @@
-/**
- * Linear API client (GraphQL).
- *
- * Uses LINEAR_API_KEY for authentication (personal API key: Authorization: <key>).
- */
+import type { LinearPort } from "../ports/linear-port";
 
 const LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql";
 
@@ -27,7 +23,7 @@ export interface ListIssuesOptions {
   teamId?: string;
   teamKey?: string;
   query?: string;
-  cursor?: string;
+  cursor?: string | null;
   limit?: number;
 }
 
@@ -42,10 +38,6 @@ export interface UpdateIssueInput {
   assigneeId?: string | null;
   title?: string | null;
   description?: string | null;
-}
-
-interface EnvWithLinear {
-  LINEAR_API_KEY?: string;
 }
 
 function getAuthHeader(apiKey: string): string {
@@ -89,101 +81,117 @@ async function linearFetch<T>(
   return json.data as T;
 }
 
-export function listIssues(
-  env: EnvWithLinear,
-  options: ListIssuesOptions = {}
-): Promise<{ issues: LinearIssue[]; cursor: string | null; hasMore: boolean }> {
-  const apiKey = env.LINEAR_API_KEY;
-  if (!apiKey) {
-    throw new Error("LINEAR_API_KEY not configured");
+export class LinearClient implements LinearPort {
+  constructor(private apiKey: string) {
+    if (!apiKey) {
+      throw new Error("LinearClient requires LINEAR_API_KEY");
+    }
   }
 
-  const limit = Math.min(options.limit ?? 50, 100);
+  async listIssues(
+    teamId: string,
+    filters: ListIssuesOptions = {}
+  ): Promise<{ issues: LinearIssue[]; cursor: string | null; hasMore: boolean }> {
+    const limit = Math.min(filters.limit ?? 50, 100);
 
-  const query = `
-    query ListIssues($first: Int!, $after: String, $filter: IssueFilter) {
-      issues(first: $first, after: $after, filter: $filter) {
-        nodes {
-          id
-          identifier
-          title
-          description
-          url
-          state { id name }
-          team { id key name }
-        }
-        pageInfo { hasNextPage endCursor }
-      }
-    }
-  `;
-
-  const filter: Record<string, unknown> = {};
-  if (options.teamId) filter.team = { id: { eq: options.teamId } };
-  if (options.teamKey) filter.team = { key: { eq: options.teamKey } };
-  if (options.query) filter.title = { containsIgnoreCase: options.query };
-
-  return linearFetch<LinearIssuesResponse>(apiKey, {
-    query,
-    variables: {
-      first: limit,
-      after: options.cursor ?? null,
-      filter: Object.keys(filter).length ? filter : {},
-    },
-  }).then((data) => ({
-    issues: data.issues.nodes,
-    cursor: data.issues.pageInfo.endCursor,
-    hasMore: data.issues.pageInfo.hasNextPage,
-  }));
-}
-
-export function createIssue(env: EnvWithLinear, input: CreateIssueInput): Promise<LinearIssue> {
-  const apiKey = env.LINEAR_API_KEY;
-  if (!apiKey) {
-    throw new Error("LINEAR_API_KEY not configured");
-  }
-
-  const mutation = `
-    mutation CreateIssue($input: IssueCreateInput!) {
-      issueCreate(input: $input) {
-        issue {
-          id
-          identifier
-          title
-          description
-          url
-          state { id name }
-          team { id key name }
+    const query = `
+      query ListIssues($first: Int!, $after: String, $filter: IssueFilter) {
+        issues(first: $first, after: $after, filter: $filter) {
+          nodes {
+            id
+            identifier
+            title
+            description
+            url
+            state { id name }
+            team { id key name }
+          }
+          pageInfo { hasNextPage endCursor }
         }
       }
-    }
-  `;
+    `;
 
-  return linearFetch<{ issueCreate: { issue: LinearIssue } }>(apiKey, {
-    query: mutation,
-    variables: {
-      input: {
-        teamId: input.teamId,
-        title: input.title,
-        description: input.description ?? null,
+    const filter: Record<string, unknown> = {};
+    if (teamId) filter.team = { id: { eq: teamId } };
+    if (filters.teamKey) filter.team = { key: { eq: filters.teamKey } };
+    if (filters.query) filter.title = { containsIgnoreCase: filters.query };
+
+    return linearFetch<LinearIssuesResponse>(this.apiKey, {
+      query,
+      variables: {
+        first: limit,
+        after: filters.cursor ?? null,
+        filter: Object.keys(filter).length ? filter : {},
       },
-    },
-  }).then((data) => data.issueCreate.issue);
-}
-
-export function updateIssue(
-  env: EnvWithLinear,
-  issueId: string,
-  input: UpdateIssueInput
-): Promise<LinearIssue> {
-  const apiKey = env.LINEAR_API_KEY;
-  if (!apiKey) {
-    throw new Error("LINEAR_API_KEY not configured");
+    }).then((data) => ({
+      issues: data.issues.nodes,
+      cursor: data.issues.pageInfo.endCursor,
+      hasMore: data.issues.pageInfo.hasNextPage,
+    }));
   }
 
-  const mutation = `
-    mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
-      issueUpdate(id: $id, input: $input) {
-        issue {
+  async createIssue(input: CreateIssueInput): Promise<LinearIssue> {
+    const mutation = `
+      mutation CreateIssue($input: IssueCreateInput!) {
+        issueCreate(input: $input) {
+          issue {
+            id
+            identifier
+            title
+            description
+            url
+            state { id name }
+            team { id key name }
+          }
+        }
+      }
+    `;
+
+    return linearFetch<{ issueCreate: { issue: LinearIssue } }>(this.apiKey, {
+      query: mutation,
+      variables: {
+        input: {
+          teamId: input.teamId,
+          title: input.title,
+          description: input.description ?? null,
+        },
+      },
+    }).then((data) => data.issueCreate.issue);
+  }
+
+  async updateIssue(issueId: string, input: UpdateIssueInput): Promise<LinearIssue> {
+    const mutation = `
+      mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
+        issueUpdate(id: $id, input: $input) {
+          issue {
+            id
+            identifier
+            title
+            description
+            url
+            state { id name }
+            team { id key name }
+          }
+        }
+      }
+    `;
+
+    const updateInput: Record<string, unknown> = {};
+    if (input.stateId !== undefined) updateInput.stateId = input.stateId;
+    if (input.assigneeId !== undefined) updateInput.assigneeId = input.assigneeId;
+    if (input.title !== undefined) updateInput.title = input.title;
+    if (input.description !== undefined) updateInput.description = input.description;
+
+    return linearFetch<{ issueUpdate: { issue: LinearIssue } }>(this.apiKey, {
+      query: mutation,
+      variables: { id: issueId, input: updateInput },
+    }).then((data) => data.issueUpdate.issue);
+  }
+
+  async getIssue(issueId: string): Promise<LinearIssue | null> {
+    const query = `
+      query GetIssue($id: String!) {
+        issue(id: $id) {
           id
           identifier
           title
@@ -193,69 +201,33 @@ export function updateIssue(
           team { id key name }
         }
       }
-    }
-  `;
+    `;
 
-  const updateInput: Record<string, unknown> = {};
-  if (input.stateId !== undefined) updateInput.stateId = input.stateId;
-  if (input.assigneeId !== undefined) updateInput.assigneeId = input.assigneeId;
-  if (input.title !== undefined) updateInput.title = input.title;
-  if (input.description !== undefined) updateInput.description = input.description;
-
-  return linearFetch<{ issueUpdate: { issue: LinearIssue } }>(apiKey, {
-    query: mutation,
-    variables: { id: issueId, input: updateInput },
-  }).then((data) => data.issueUpdate.issue);
-}
-
-export function getIssue(env: EnvWithLinear, issueId: string): Promise<LinearIssue | null> {
-  const apiKey = env.LINEAR_API_KEY;
-  if (!apiKey) {
-    throw new Error("LINEAR_API_KEY not configured");
+    return linearFetch<{ issue: LinearIssue | null }>(this.apiKey, {
+      query,
+      variables: { id: issueId },
+    }).then((data) => data.issue);
   }
 
-  const query = `
-    query GetIssue($id: String!) {
-      issue(id: $id) {
-        id
-        identifier
-        title
-        description
-        url
-        state { id name }
-        team { id key name }
-      }
-    }
-  `;
-
-  return linearFetch<{ issue: LinearIssue | null }>(apiKey, {
-    query,
-    variables: { id: issueId },
-  }).then((data) => data.issue);
-}
-
-export function listTeams(
-  env: EnvWithLinear
-): Promise<Array<{ id: string; key: string; name: string }>> {
-  const apiKey = env.LINEAR_API_KEY;
-  if (!apiKey) {
-    throw new Error("LINEAR_API_KEY not configured");
-  }
-
-  const query = `
-    query ListTeams {
-      teams {
-        nodes {
-          id
-          key
-          name
+  async listTeams(): Promise<Array<{ id: string; key: string; name: string }>> {
+    const query = `
+      query ListTeams {
+        teams {
+          nodes {
+            id
+            key
+            name
+          }
         }
       }
-    }
-  `;
+    `;
 
-  return linearFetch<{ teams: { nodes: Array<{ id: string; key: string; name: string }> } }>(
-    apiKey,
-    { query }
-  ).then((data) => data.teams.nodes);
+    return linearFetch<{ teams: { nodes: Array<{ id: string; key: string; name: string }> } }>(
+      this.apiKey,
+      { query }
+    ).then((data) => data.teams.nodes);
+  }
 }
+
+// Keep standalone functions for backward compatibility if needed, or remove them.
+// Removing them as we are refactoring to use the class.
