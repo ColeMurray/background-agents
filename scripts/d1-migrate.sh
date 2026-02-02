@@ -35,8 +35,9 @@ for file in "$MIGRATIONS_DIR"/*.sql; do
   echo "Applying: $FILENAME"
   $WRANGLER d1 execute "$DATABASE_NAME" --remote --file "$file"
 
+  SAFE_FILENAME=$(echo "$FILENAME" | sed "s/'/''/g")
   $WRANGLER d1 execute "$DATABASE_NAME" --remote \
-    --command "INSERT INTO _schema_migrations (version, name) VALUES ('$VERSION', '$FILENAME')"
+    --command "INSERT INTO _schema_migrations (version, name) VALUES ('$VERSION', '$SAFE_FILENAME')"
 
   COUNT=$((COUNT + 1))
 done
