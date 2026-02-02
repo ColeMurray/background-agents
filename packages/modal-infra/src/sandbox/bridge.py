@@ -115,6 +115,7 @@ class AgentBridge:
     HEARTBEAT_INTERVAL = 30.0
     RECONNECT_BACKOFF_BASE = 2.0
     RECONNECT_MAX_DELAY = 60.0
+    MAX_BUFFERED_PARTS = 10000  # Prevent unbounded memory growth
 
     def __init__(
         self,
@@ -581,8 +582,9 @@ class AgentBridge:
         # Parts that arrived before we saw message.updated; flush when we see assistant msg
         buffered_parts_by_msg_id: dict[str, list[dict[str, Any]]] = {}
 
-        max_wait_time = 300.0
+        max_wait_time = 600.0  # Increased from 300s to support longer-running agents
         start_time = time.time()
+        last_token_time = time.time()  # Track when we last received a token
 
         try:
             async with asyncio.timeout(max_wait_time):
@@ -622,6 +624,8 @@ class AgentBridge:
                             continue
 
                         if event_type == "server.heartbeat":
+                            # Reset last_token_time on heartbeat to keep control plane alive
+                            last_token_time = time.time()
                             continue
 
                         event_session_id = props.get("sessionID") or props.get("part", {}).get(
@@ -669,6 +673,14 @@ class AgentBridge:
                                             else:
                                                 cumulative_text[part_id] = text
                                             if cumulative_text.get(part_id):
+                                                last_token_time = time.time()
+                                                # Send heartbeat to control plane every 30s to prevent timeout
+                                                elapsed_since_heartbeat = time.time() - start_time
+                                                if elapsed_since_heartbeat > 30 and elapsed_since_heartbeat % 30 < 0.5:
+                                                    await self._send_event({
+                                                        "type": "sse_heartbeat",
+                                                        "messageId": message_id,
+                                                    })
                                                 yield {
                                                     "type": "token",
                                                     "content": cumulative_text[part_id],
@@ -716,7 +728,17 @@ class AgentBridge:
 
                             # Only emit parts from assistant messages; buffer until we know role
                             if oc_msg_id not in our_assistant_msg_ids:
-                                buffered_parts_by_msg_id.setdefault(oc_msg_id, []).append(part)
+                                # Enforce buffer size limit to prevent memory bloat
+                                total_buffered = sum(
+                                    len(parts) for parts in buffered_parts_by_msg_id.values()
+                                )
+                                if total_buffered < self.MAX_BUFFERED_PARTS:
+                                    buffered_parts_by_msg_id.setdefault(oc_msg_id, []).append(part)
+                                else:
+                                    print(
+                                        f"[bridge] Buffer full ({total_buffered} parts), "
+                                        f"dropping part for {oc_msg_id}"
+                                    )
                                 continue
 
                             if part_type == "text":
@@ -729,6 +751,14 @@ class AgentBridge:
                                     cumulative_text[part_id] = text
 
                                 if cumulative_text.get(part_id):
+                                    last_token_time = time.time()
+                                    # Send heartbeat to control plane every 30s to prevent timeout
+                                    elapsed_since_heartbeat = time.time() - start_time
+                                    if elapsed_since_heartbeat > 30 and elapsed_since_heartbeat % 30 < 0.5:
+                                        await self._send_event({
+                                            "type": "sse_heartbeat",
+                                            "messageId": message_id,
+                                        })
                                     yield {
                                         "type": "token",
                                         "content": cumulative_text[part_id],
@@ -825,8 +855,16 @@ class AgentBridge:
 
         except TimeoutError:
             elapsed = time.time() - start_time
-            print(f"[bridge] SSE stream timed out after {elapsed:.1f}s")
-            raise RuntimeError("LLM request timed out")
+            print(f"[bridge] SSE stream timed out after {elapsed:.1f}s, attempting polling fallback...")
+            # Try polling fallback to recover remaining events
+            async for final_event in self._fetch_final_message_state(
+                message_id,
+                opencode_message_id,
+                cumulative_text,
+                our_assistant_msg_ids,
+            ):
+                yield final_event
+            return
 
         except httpx.ReadError as e:
             print(f"[bridge] SSE read error: {e}")
