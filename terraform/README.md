@@ -52,7 +52,7 @@ brew install node@22
 ### 2. Cloudflare Setup
 
 1. **Create API Token** at [Cloudflare Dashboard](https://dash.cloudflare.com/profile/api-tokens)
-   - Permissions needed: Workers Scripts (Edit), Workers KV (Edit), Workers Routes (Edit)
+   - Permissions needed: Workers Scripts (Edit), Workers KV (Edit), Workers Routes (Edit), D1 (Edit)
 
 2. **Create R2 Bucket** for Terraform state:
    - Bucket name: `open-inspect-terraform-state`
@@ -180,6 +180,7 @@ ANTHROPIC_API_KEY
 
 # Security Secrets
 TOKEN_ENCRYPTION_KEY
+REPO_SECRETS_ENCRYPTION_KEY
 INTERNAL_CALLBACK_SECRET
 NEXTAUTH_SECRET
 ```

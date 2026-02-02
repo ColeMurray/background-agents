@@ -13,6 +13,12 @@ output "slack_kv_id" {
   value       = module.slack_kv.namespace_id
 }
 
+# Cloudflare D1 Database
+output "d1_database_id" {
+  description = "The ID of the D1 database"
+  value       = cloudflare_d1_database.main.id
+}
+
 # Cloudflare Workers
 output "control_plane_url" {
   description = "Control plane worker URL"

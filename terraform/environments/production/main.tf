@@ -41,6 +41,40 @@ module "slack_kv" {
 }
 
 # =============================================================================
+# Cloudflare D1 Database
+# =============================================================================
+
+resource "cloudflare_d1_database" "main" {
+  account_id = var.cloudflare_account_id
+  name       = "open-inspect-${local.name_suffix}"
+
+  read_replication = {
+    mode = "disabled"
+  }
+}
+
+resource "null_resource" "d1_migrations" {
+  depends_on = [cloudflare_d1_database.main]
+
+  triggers = {
+    database_id = cloudflare_d1_database.main.id
+    migrations_sha = sha256(join(",", [
+      for f in sort(fileset("${var.project_root}/terraform/d1/migrations", "*.sql")) :
+      filesha256("${var.project_root}/terraform/d1/migrations/${f}")
+    ]))
+  }
+
+  provisioner "local-exec" {
+    command = "bash ${var.project_root}/scripts/d1-migrate.sh ${cloudflare_d1_database.main.name} ${var.project_root}/terraform/d1/migrations"
+
+    environment = {
+      CLOUDFLARE_ACCOUNT_ID = var.cloudflare_account_id
+      CLOUDFLARE_API_TOKEN  = var.cloudflare_api_token
+    }
+  }
+}
+
+# =============================================================================
 # Cloudflare Workers
 # =============================================================================
 
@@ -72,6 +106,13 @@ module "control_plane_worker" {
     }
   ]
 
+  d1_databases = [
+    {
+      binding_name = "DB"
+      database_id  = cloudflare_d1_database.main.id
+    }
+  ]
+
   service_bindings = [
     {
       binding_name = "SLACK_BOT"
@@ -92,6 +133,7 @@ module "control_plane_worker" {
   secrets = [
     { name = "GITHUB_CLIENT_SECRET", value = var.github_client_secret },
     { name = "TOKEN_ENCRYPTION_KEY", value = var.token_encryption_key },
+    { name = "REPO_SECRETS_ENCRYPTION_KEY", value = var.repo_secrets_encryption_key },
     { name = "MODAL_TOKEN_ID", value = var.modal_token_id },
     { name = "MODAL_TOKEN_SECRET", value = var.modal_token_secret },
     { name = "MODAL_API_SECRET", value = var.modal_api_secret },
@@ -112,7 +154,7 @@ module "control_plane_worker" {
   compatibility_flags = ["nodejs_compat"]
   migration_tag       = "v1"
 
-  depends_on = [null_resource.control_plane_build, module.session_index_kv]
+  depends_on = [null_resource.control_plane_build, module.session_index_kv, null_resource.d1_migrations]
 }
 
 # Build slack-bot worker bundle (only runs during apply, not plan)

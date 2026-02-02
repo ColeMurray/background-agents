@@ -13,11 +13,14 @@ export interface Env {
   // Service bindings
   SLACK_BOT?: Fetcher; // Optional - only if slack-bot is deployed
 
+  // D1 database
+  DB: D1Database;
+
   // Secrets
-  GITHUB_CLIENT_ID: string;
-  GITHUB_CLIENT_SECRET: string;
+  GITHUB_CLIENT_ID?: string;
+  GITHUB_CLIENT_SECRET?: string;
   TOKEN_ENCRYPTION_KEY: string;
-  ENCRYPTION_KEY: string; // Key for encrypting/decrypting tokens
+  REPO_SECRETS_ENCRYPTION_KEY?: string;
   MODAL_TOKEN_ID?: string;
   MODAL_TOKEN_SECRET?: string;
   MODAL_API_SECRET?: string; // Shared secret for authenticating with Modal endpoints

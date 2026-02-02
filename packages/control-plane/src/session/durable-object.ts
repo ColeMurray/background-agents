@@ -9,8 +9,13 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
-import { generateId, decryptToken, hashToken } from "../auth/crypto";
-import { generateInstallationToken, getGitHubAppConfig } from "../auth/github-app";
+import { generateId, decryptToken, encryptToken, hashToken } from "../auth/crypto";
+import {
+  generateInstallationToken,
+  getGitHubAppConfig,
+  getInstallationRepository,
+} from "../auth/github-app";
+import { refreshAccessToken } from "../auth/github";
 import { createModalClient } from "../sandbox/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
 import { createLogger, parseLogLevel } from "../logger";
@@ -41,6 +46,7 @@ import type {
 } from "../types";
 import type { SessionRow, ParticipantRow, EventRow, SandboxRow, SandboxCommand } from "./types";
 import { SessionRepository, type MessageWithParticipant } from "./repository";
+import { RepoSecretsStore } from "../db/repo-secrets";
 
 /**
  * Build GitHub avatar URL from login.
@@ -179,6 +185,7 @@ export class SessionDO extends DurableObject<Env> {
       getSandbox: () => this.repository.getSandbox(),
       getSandboxWithCircuitBreaker: () => this.repository.getSandboxWithCircuitBreaker(),
       getSession: () => this.repository.getSession(),
+      getUserEnvVars: () => this.getUserEnvVars(),
       updateSandboxStatus: (status) => this.updateSandboxStatus(status),
       updateSandboxForSpawn: (data) => this.repository.updateSandboxForSpawn(data),
       updateSandboxModalObjectId: (id) => this.repository.updateSandboxModalObjectId(id),
@@ -189,6 +196,8 @@ export class SessionDO extends DurableObject<Env> {
       incrementCircuitBreakerFailure: (timestamp) =>
         this.repository.incrementCircuitBreakerFailure(timestamp),
       resetCircuitBreaker: () => this.repository.resetCircuitBreaker(),
+      setLastSpawnError: (error, timestamp) =>
+        this.repository.updateSandboxSpawnError(error, timestamp),
     };
 
     // Broadcaster adapter
@@ -789,6 +798,11 @@ export class SessionDO extends DurableObject<Env> {
         avatar: getGitHubAvatarUrl(participant.github_login),
       },
     } as ServerMessage);
+
+    const sandbox = this.getSandbox();
+    if (sandbox?.last_spawn_error) {
+      this.safeSend(ws, { type: "sandbox_error", error: sandbox.last_spawn_error });
+    }
 
     // Send historical events (messages and sandbox events)
     this.sendHistoricalEvents(ws);
@@ -1453,6 +1467,66 @@ export class SessionDO extends DurableObject<Env> {
     return this.repository.getSandbox();
   }
 
+  private async ensureRepoId(session: SessionRow): Promise<number> {
+    if (session.repo_id) {
+      return session.repo_id;
+    }
+
+    const appConfig = getGitHubAppConfig(this.env);
+    if (!appConfig) {
+      throw new Error("GitHub App not configured");
+    }
+
+    const repo = await getInstallationRepository(appConfig, session.repo_owner, session.repo_name);
+    if (!repo) {
+      throw new Error("Repository is not installed for the GitHub App");
+    }
+
+    this.repository.updateSessionRepoId(repo.id);
+    return repo.id;
+  }
+
+  private async getUserEnvVars(): Promise<Record<string, string> | undefined> {
+    const session = this.getSession();
+    if (!session) {
+      this.log.warn("Cannot load secrets: no session");
+      return undefined;
+    }
+
+    if (!this.env.DB || !this.env.REPO_SECRETS_ENCRYPTION_KEY) {
+      this.log.debug("Secrets not configured, skipping", {
+        has_db: !!this.env.DB,
+        has_encryption_key: !!this.env.REPO_SECRETS_ENCRYPTION_KEY,
+      });
+      return undefined;
+    }
+
+    let repoId: number;
+    try {
+      repoId = await this.ensureRepoId(session);
+    } catch (e) {
+      this.log.warn("Cannot resolve repo ID for secrets, proceeding without", {
+        repo_owner: session.repo_owner,
+        repo_name: session.repo_name,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return undefined;
+    }
+
+    const store = new RepoSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+
+    try {
+      const secrets = await store.getDecryptedSecrets(repoId);
+      return Object.keys(secrets).length === 0 ? undefined : secrets;
+    } catch (e) {
+      this.log.error("Failed to load repo secrets, proceeding without", {
+        repo_id: repoId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return undefined;
+    }
+  }
+
   /**
    * Verify a sandbox authentication token.
    * Called by the router to validate sandbox-originated requests.
@@ -1650,6 +1724,67 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
+   * Refresh an expired GitHub access token using the stored refresh token.
+   *
+   * Returns the updated participant row, or null if refresh cannot be performed.
+   */
+  private async refreshParticipantToken(
+    participant: ParticipantRow
+  ): Promise<ParticipantRow | null> {
+    if (!participant.github_refresh_token_encrypted) {
+      this.log.warn("Cannot refresh: no refresh token stored", { user_id: participant.user_id });
+      return null;
+    }
+
+    if (!this.env.GITHUB_CLIENT_ID || !this.env.GITHUB_CLIENT_SECRET) {
+      this.log.warn("Cannot refresh: GitHub OAuth credentials not configured");
+      return null;
+    }
+
+    try {
+      const refreshToken = await decryptToken(
+        participant.github_refresh_token_encrypted,
+        this.env.TOKEN_ENCRYPTION_KEY
+      );
+
+      const newTokens = await refreshAccessToken(refreshToken, {
+        clientId: this.env.GITHUB_CLIENT_ID,
+        clientSecret: this.env.GITHUB_CLIENT_SECRET,
+        encryptionKey: this.env.TOKEN_ENCRYPTION_KEY,
+      });
+
+      const newAccessTokenEncrypted = await encryptToken(
+        newTokens.access_token,
+        this.env.TOKEN_ENCRYPTION_KEY
+      );
+
+      const newRefreshTokenEncrypted = newTokens.refresh_token
+        ? await encryptToken(newTokens.refresh_token, this.env.TOKEN_ENCRYPTION_KEY)
+        : null;
+
+      const newExpiresAt = newTokens.expires_in
+        ? Date.now() + newTokens.expires_in * 1000
+        : Date.now() + 8 * 60 * 60 * 1000;
+
+      this.repository.updateParticipantTokens(participant.id, {
+        githubAccessTokenEncrypted: newAccessTokenEncrypted,
+        githubRefreshTokenEncrypted: newRefreshTokenEncrypted,
+        githubTokenExpiresAt: newExpiresAt,
+      });
+
+      this.log.info("Server-side token refresh succeeded", { user_id: participant.user_id });
+
+      return this.repository.getParticipantById(participant.id);
+    } catch (error) {
+      this.log.error("Server-side token refresh failed", {
+        user_id: participant.user_id,
+        error: error instanceof Error ? error : String(error),
+      });
+      return null;
+    }
+  }
+
+  /**
    * Get the prompting user for PR creation.
    * Returns the participant who triggered the currently processing message.
    */
@@ -1671,7 +1806,7 @@ export class SessionDO extends DurableObject<Env> {
     const participantId = processingMessage.author_id;
 
     // Get the participant record
-    const participant = this.repository.getParticipantById(participantId);
+    let participant = this.repository.getParticipantById(participantId);
 
     if (!participant) {
       this.log.warn("PR creation failed: participant not found", { participantId });
@@ -1688,8 +1823,20 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     if (this.isGitHubTokenExpired(participant)) {
-      this.log.warn("PR creation failed: GitHub token expired", { userId: participant.user_id });
-      return { error: "Your GitHub token has expired. Please re-authenticate.", status: 401 };
+      this.log.warn("GitHub token expired, attempting server-side refresh", {
+        userId: participant.user_id,
+      });
+
+      const refreshed = await this.refreshParticipantToken(participant);
+      if (refreshed) {
+        participant = refreshed;
+      } else {
+        return {
+          error:
+            "Your GitHub token has expired and could not be refreshed. Please re-authenticate.",
+          status: 401,
+        };
+      }
     }
 
     return { user: participant };
@@ -1702,6 +1849,7 @@ export class SessionDO extends DurableObject<Env> {
       sessionName: string; // The name used for WebSocket routing
       repoOwner: string;
       repoName: string;
+      repoId?: number;
       title?: string;
       model?: string; // LLM model to use
       userId: string;
@@ -1746,6 +1894,7 @@ export class SessionDO extends DurableObject<Env> {
       title: body.title ?? null,
       repoOwner: body.repoOwner,
       repoName: body.repoName,
+      repoId: body.repoId ?? null,
       model,
       status: "created",
       createdAt: now,
@@ -2158,6 +2307,7 @@ export class SessionDO extends DurableObject<Env> {
       githubName?: string;
       githubEmail?: string;
       githubTokenEncrypted?: string | null; // Encrypted GitHub OAuth token for PR creation
+      githubRefreshTokenEncrypted?: string | null; // Encrypted GitHub OAuth refresh token
       githubTokenExpiresAt?: number | null; // Token expiry timestamp in milliseconds
     };
 
@@ -2171,15 +2321,35 @@ export class SessionDO extends DurableObject<Env> {
     let participant = this.getParticipantByUserId(body.userId);
 
     if (participant) {
-      // Update existing participant with any new info
-      // Use COALESCE for token fields to only update if new values provided
+      // Only accept client tokens if they're newer than what we have in the DB.
+      // The server-side refresh may have rotated tokens, and the client could
+      // be sending stale values from an old session cookie.
+      const clientExpiresAt = body.githubTokenExpiresAt ?? null;
+      const dbExpiresAt = participant.github_token_expires_at;
+      const clientSentAnyToken =
+        body.githubTokenEncrypted != null || body.githubRefreshTokenEncrypted != null;
+
+      const shouldUpdateTokens =
+        clientSentAnyToken &&
+        (dbExpiresAt == null || (clientExpiresAt != null && clientExpiresAt >= dbExpiresAt));
+
+      // If we already have a refresh token (server-side refresh may rotate it),
+      // only accept an incoming refresh token when we're also accepting the
+      // access token update, or when we don't have one yet.
+      const shouldUpdateRefreshToken =
+        body.githubRefreshTokenEncrypted != null &&
+        (participant.github_refresh_token_encrypted == null || shouldUpdateTokens);
+
       this.repository.updateParticipantCoalesce(participant.id, {
         githubUserId: body.githubUserId ?? null,
         githubLogin: body.githubLogin ?? null,
         githubName: body.githubName ?? null,
         githubEmail: body.githubEmail ?? null,
-        githubAccessTokenEncrypted: body.githubTokenEncrypted ?? null,
-        githubTokenExpiresAt: body.githubTokenExpiresAt ?? null,
+        githubAccessTokenEncrypted: shouldUpdateTokens ? (body.githubTokenEncrypted ?? null) : null,
+        githubRefreshTokenEncrypted: shouldUpdateRefreshToken
+          ? (body.githubRefreshTokenEncrypted ?? null)
+          : null,
+        githubTokenExpiresAt: shouldUpdateTokens ? clientExpiresAt : null,
       });
     } else {
       // Create new participant with optional GitHub token
@@ -2192,6 +2362,7 @@ export class SessionDO extends DurableObject<Env> {
         githubName: body.githubName ?? null,
         githubEmail: body.githubEmail ?? null,
         githubAccessTokenEncrypted: body.githubTokenEncrypted ?? null,
+        githubRefreshTokenEncrypted: body.githubRefreshTokenEncrypted ?? null,
         githubTokenExpiresAt: body.githubTokenExpiresAt ?? null,
         role: "member",
         joinedAt: now,

@@ -37,6 +37,7 @@ function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
     title: "Test Session",
     repo_owner: "testowner",
     repo_name: "testrepo",
+    repo_id: 123,
     repo_default_branch: "main",
     branch_name: null,
     base_sha: null,
@@ -64,6 +65,8 @@ function createMockSandbox(
     git_sync_status: "completed",
     last_heartbeat: Date.now() - 10000,
     last_activity: Date.now() - 30000,
+    last_spawn_error: null,
+    last_spawn_error_at: null,
     created_at: Date.now() - 60000,
     spawn_failure_count: 0,
     last_spawn_failure: 0,
@@ -75,7 +78,8 @@ function createMockStorage(
   session: SessionRow | null = createMockSession(),
   sandbox:
     | (SandboxRow & { spawn_failure_count: number; last_spawn_failure: number })
-    | null = createMockSandbox()
+    | null = createMockSandbox(),
+  userEnvVars: Record<string, string> | undefined = undefined
 ): SandboxStorage & { calls: string[] } {
   const calls: string[] = [];
 
@@ -92,6 +96,10 @@ function createMockStorage(
     getSession: vi.fn(() => {
       calls.push("getSession");
       return session;
+    }),
+    getUserEnvVars: vi.fn(async () => {
+      calls.push("getUserEnvVars");
+      return userEnvVars;
     }),
     updateSandboxStatus: vi.fn((status: SandboxStatus) => {
       calls.push(`updateSandboxStatus:${status}`);
@@ -130,6 +138,13 @@ function createMockStorage(
       if (sandbox) {
         sandbox.spawn_failure_count = 0;
         sandbox.last_spawn_failure = 0;
+      }
+    }),
+    setLastSpawnError: vi.fn((error: string | null, timestamp: number | null) => {
+      calls.push(`setLastSpawnError:${error ?? "null"}`);
+      if (sandbox) {
+        sandbox.last_spawn_error = error;
+        sandbox.last_spawn_error_at = timestamp;
       }
     }),
   };
@@ -256,6 +271,31 @@ describe("SandboxLifecycleManager", () => {
       expect(
         broadcaster.messages.some((m) => (m as { type: string }).type === "sandbox_status")
       ).toBe(true);
+    });
+
+    it("passes user env vars to provider", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const userEnvVars = { DATABASE_URL: "postgres://example" };
+      const storage = createMockStorage(createMockSession(), sandbox, userEnvVars);
+      const broadcaster = createMockBroadcaster();
+      const wsManager = createMockWebSocketManager(false);
+      const alarmScheduler = createMockAlarmScheduler();
+      const idGenerator = createMockIdGenerator();
+      const provider = createMockProvider();
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        broadcaster,
+        wsManager,
+        alarmScheduler,
+        idGenerator,
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(expect.objectContaining({ userEnvVars }));
     });
 
     it("respects circuit breaker blocking", async () => {

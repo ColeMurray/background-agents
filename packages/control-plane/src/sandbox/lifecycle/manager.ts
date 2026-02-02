@@ -55,6 +55,8 @@ export interface SandboxStorage {
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerInfo | null;
   /** Get current session */
   getSession(): SessionRow | null;
+  /** Get user env vars for sandbox injection */
+  getUserEnvVars(): Promise<Record<string, string> | undefined>;
   /** Update sandbox status */
   updateSandboxStatus(status: SandboxStatus): void;
   /** Update sandbox for spawn (status, auth token, sandbox ID, created_at) */
@@ -74,6 +76,8 @@ export interface SandboxStorage {
   incrementCircuitBreakerFailure(timestamp: number): void;
   /** Reset circuit breaker failure count */
   resetCircuitBreaker(): void;
+  /** Persist last spawn error */
+  setLastSpawnError(error: string | null, timestamp: number | null): void;
 }
 
 /**
@@ -270,6 +274,8 @@ export class SandboxLifecycleManager {
         return;
       }
 
+      this.storage.setLastSpawnError(null, null);
+
       const now = Date.now();
       const sessionId = session.session_name || session.id;
       const sandboxAuthToken = this.idGenerator.generateId();
@@ -291,6 +297,8 @@ export class SandboxLifecycleManager {
         repo_name: session.repo_name,
       });
 
+      const userEnvVars = await this.storage.getUserEnvVars();
+
       // Create sandbox via provider
       const createConfig: CreateSandboxConfig = {
         sessionId,
@@ -301,6 +309,7 @@ export class SandboxLifecycleManager {
         sandboxAuthToken,
         provider: this.config.provider,
         model: session.model || this.config.model,
+        userEnvVars,
       };
 
       const result = await this.provider.createSandbox(createConfig);
@@ -322,6 +331,8 @@ export class SandboxLifecycleManager {
       // Reset circuit breaker on successful spawn initiation
       this.storage.resetCircuitBreaker();
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to spawn sandbox";
+      this.storage.setLastSpawnError(errorMessage, Date.now());
       this.log.error("Sandbox spawn failed", {
         event: "sandbox.spawn_failed",
         error: error instanceof Error ? error : String(error),
@@ -346,7 +357,7 @@ export class SandboxLifecycleManager {
       this.storage.updateSandboxStatus("failed");
       this.broadcaster.broadcast({
         type: "sandbox_error",
-        error: error instanceof Error ? error.message : "Failed to spawn sandbox",
+        error: errorMessage,
       });
     } finally {
       this.isSpawningSandbox = false;
@@ -373,6 +384,8 @@ export class SandboxLifecycleManager {
         return;
       }
 
+      this.storage.setLastSpawnError(null, null);
+
       this.storage.updateSandboxStatus("spawning");
       this.broadcaster.broadcast({ type: "sandbox_status", status: "spawning" });
 
@@ -393,6 +406,8 @@ export class SandboxLifecycleManager {
         snapshot_image_id: snapshotImageId,
       });
 
+      const userEnvVars = await this.storage.getUserEnvVars();
+
       const result = await this.provider.restoreFromSnapshot({
         snapshotImageId,
         sessionId: session.session_name || session.id,
@@ -403,6 +418,7 @@ export class SandboxLifecycleManager {
         repoName: session.repo_name,
         provider: this.config.provider,
         model: session.model || this.config.model,
+        userEnvVars,
       });
 
       if (result.success) {
@@ -428,6 +444,10 @@ export class SandboxLifecycleManager {
           error: result.error,
           snapshot_image_id: snapshotImageId,
         });
+        this.storage.setLastSpawnError(
+          result.error || "Failed to restore from snapshot",
+          Date.now()
+        );
         this.storage.updateSandboxStatus("failed");
         this.broadcaster.broadcast({
           type: "sandbox_error",
@@ -435,6 +455,8 @@ export class SandboxLifecycleManager {
         });
       }
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to restore sandbox";
+      this.storage.setLastSpawnError(errorMessage, Date.now());
       this.log.error("Snapshot restore request failed", {
         error: error instanceof Error ? error : String(error),
         snapshot_image_id: snapshotImageId,
@@ -442,7 +464,7 @@ export class SandboxLifecycleManager {
       this.storage.updateSandboxStatus("failed");
       this.broadcaster.broadcast({
         type: "sandbox_error",
-        error: error instanceof Error ? error.message : "Failed to restore sandbox",
+        error: errorMessage,
       });
     } finally {
       this.isSpawningSandbox = false;

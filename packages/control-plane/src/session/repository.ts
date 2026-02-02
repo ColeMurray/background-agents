@@ -64,6 +64,7 @@ export interface UpsertSessionData {
   title: string | null;
   repoOwner: string;
   repoName: string;
+  repoId?: number | null;
   model: string;
   status: SessionStatus;
   createdAt: number;
@@ -91,6 +92,7 @@ export interface CreateParticipantData {
   githubName?: string | null;
   githubEmail?: string | null;
   githubAccessTokenEncrypted?: string | null;
+  githubRefreshTokenEncrypted?: string | null;
   githubTokenExpiresAt?: number | null;
   role: ParticipantRole;
   joinedAt: number;
@@ -105,6 +107,7 @@ export interface UpdateParticipantData {
   githubName?: string | null;
   githubEmail?: string | null;
   githubAccessTokenEncrypted?: string | null;
+  githubRefreshTokenEncrypted?: string | null;
   githubTokenExpiresAt?: number | null;
 }
 
@@ -215,17 +218,25 @@ export class SessionRepository {
 
   upsertSession(data: UpsertSessionData): void {
     this.sql.exec(
-      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, model, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, model, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.sessionName,
       data.title,
       data.repoOwner,
       data.repoName,
+      data.repoId ?? null,
       data.model,
       data.status,
       data.createdAt,
       data.updatedAt
+    );
+  }
+
+  updateSessionRepoId(repoId: number): void {
+    this.sql.exec(
+      `UPDATE session SET repo_id = ? WHERE id = (SELECT id FROM session LIMIT 1)`,
+      repoId
     );
   }
 
@@ -333,6 +344,14 @@ export class SessionRepository {
     );
   }
 
+  updateSandboxSpawnError(error: string | null, timestamp: number | null): void {
+    this.sql.exec(
+      `UPDATE sandbox SET last_spawn_error = ?, last_spawn_error_at = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      error,
+      timestamp
+    );
+  }
+
   resetCircuitBreaker(): void {
     this.sql.exec(
       `UPDATE sandbox SET spawn_failure_count = 0 WHERE id = (SELECT id FROM sandbox LIMIT 1)`
@@ -371,8 +390,8 @@ export class SessionRepository {
 
   createParticipant(data: CreateParticipantData): void {
     this.sql.exec(
-      `INSERT INTO participants (id, user_id, github_user_id, github_login, github_name, github_email, github_access_token_encrypted, github_token_expires_at, role, joined_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO participants (id, user_id, github_user_id, github_login, github_name, github_email, github_access_token_encrypted, github_refresh_token_encrypted, github_token_expires_at, role, joined_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.userId,
       data.githubUserId ?? null,
@@ -380,6 +399,7 @@ export class SessionRepository {
       data.githubName ?? null,
       data.githubEmail ?? null,
       data.githubAccessTokenEncrypted ?? null,
+      data.githubRefreshTokenEncrypted ?? null,
       data.githubTokenExpiresAt ?? null,
       data.role,
       data.joinedAt
@@ -394,6 +414,7 @@ export class SessionRepository {
          github_name = COALESCE(?, github_name),
          github_email = COALESCE(?, github_email),
          github_access_token_encrypted = COALESCE(?, github_access_token_encrypted),
+         github_refresh_token_encrypted = COALESCE(?, github_refresh_token_encrypted),
          github_token_expires_at = COALESCE(?, github_token_expires_at)
        WHERE id = ?`,
       data.githubUserId ?? null,
@@ -401,7 +422,29 @@ export class SessionRepository {
       data.githubName ?? null,
       data.githubEmail ?? null,
       data.githubAccessTokenEncrypted ?? null,
+      data.githubRefreshTokenEncrypted ?? null,
       data.githubTokenExpiresAt ?? null,
+      participantId
+    );
+  }
+
+  updateParticipantTokens(
+    participantId: string,
+    data: {
+      githubAccessTokenEncrypted: string;
+      githubRefreshTokenEncrypted?: string | null;
+      githubTokenExpiresAt: number;
+    }
+  ): void {
+    this.sql.exec(
+      `UPDATE participants SET
+         github_access_token_encrypted = ?,
+         github_refresh_token_encrypted = COALESCE(?, github_refresh_token_encrypted),
+         github_token_expires_at = ?
+       WHERE id = ?`,
+      data.githubAccessTokenEncrypted,
+      data.githubRefreshTokenEncrypted ?? null,
+      data.githubTokenExpiresAt,
       participantId
     );
   }

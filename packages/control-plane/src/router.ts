@@ -5,7 +5,12 @@
 import type { Env, CreateSessionRequest, CreateSessionResponse } from "./types";
 import { generateId, encryptToken } from "./auth/crypto";
 import { verifyInternalToken } from "./auth/internal";
-import { getGitHubAppConfig, listInstallationRepositories } from "./auth/github-app";
+import {
+  getGitHubAppConfig,
+  getInstallationRepository,
+  listInstallationRepositories,
+} from "./auth/github-app";
+import { RepoSecretsStore, RepoSecretsValidationError } from "./db/repo-secrets";
 import type {
   EnrichedRepository,
   InstallationRepository,
@@ -316,6 +321,21 @@ const routes: Route[] = [
     pattern: parsePattern("/repos/:owner/:name/metadata"),
     handler: handleGetRepoMetadata,
   },
+  {
+    method: "PUT",
+    pattern: parsePattern("/repos/:owner/:name/secrets"),
+    handler: handleSetRepoSecrets,
+  },
+  {
+    method: "GET",
+    pattern: parsePattern("/repos/:owner/:name/secrets"),
+    handler: handleListRepoSecrets,
+  },
+  {
+    method: "DELETE",
+    pattern: parsePattern("/repos/:owner/:name/secrets/:key"),
+    handler: handleDeleteRepoSecret,
+  },
 ];
 
 /**
@@ -504,6 +524,26 @@ async function handleCreateSession(
   const repoOwner = body.repoOwner.toLowerCase();
   const repoName = body.repoName.toLowerCase();
 
+  let repoId: number;
+  try {
+    const resolved = await resolveInstalledRepo(env, repoOwner, repoName);
+    if (!resolved) {
+      return error("Repository is not installed for the GitHub App", 404);
+    }
+    repoId = resolved.repoId;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    logger.error("Failed to resolve repository", {
+      error: message,
+      repo_owner: repoOwner,
+      repo_name: repoName,
+    });
+    return error(
+      message === "GitHub App not configured" ? message : "Failed to resolve repository",
+      500
+    );
+  }
+
   // User info from direct params
   const userId = body.userId || "anonymous";
   const githubLogin = body.githubLogin;
@@ -541,6 +581,7 @@ async function handleCreateSession(
           sessionName: sessionId, // Pass the session name for WebSocket routing
           repoOwner,
           repoName,
+          repoId,
           title: body.title,
           model: body.model || "claude-haiku-4-5", // Default to haiku for cost efficiency
           userId,
@@ -826,6 +867,7 @@ async function handleSessionWsToken(
     githubEmail?: string;
     githubToken?: string; // User's GitHub OAuth token for PR creation
     githubTokenExpiresAt?: number; // Token expiry timestamp in milliseconds
+    githubRefreshToken?: string; // GitHub OAuth refresh token for server-side renewal
   };
 
   if (!body.userId) {
@@ -845,6 +887,21 @@ async function handleSessionWsToken(
     }
   }
 
+  // Encrypt the GitHub refresh token if provided
+  let githubRefreshTokenEncrypted: string | null = null;
+  if (body.githubRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
+    try {
+      githubRefreshTokenEncrypted = await encryptToken(
+        body.githubRefreshToken,
+        env.TOKEN_ENCRYPTION_KEY
+      );
+    } catch (e) {
+      logger.error("Failed to encrypt GitHub refresh token", {
+        error: e instanceof Error ? e : String(e),
+      });
+    }
+  }
+
   const doId = env.SESSION.idFromName(sessionId);
   const stub = env.SESSION.get(doId);
 
@@ -861,6 +918,7 @@ async function handleSessionWsToken(
           githubName: body.githubName,
           githubEmail: body.githubEmail,
           githubTokenEncrypted,
+          githubRefreshTokenEncrypted,
           githubTokenExpiresAt: body.githubTokenExpiresAt,
         }),
       },
@@ -984,6 +1042,28 @@ async function handleUnarchiveSession(
 }
 
 // Repository handlers
+
+async function resolveInstalledRepo(
+  env: Env,
+  repoOwner: string,
+  repoName: string
+): Promise<{ repoId: number; repoOwner: string; repoName: string } | null> {
+  const appConfig = getGitHubAppConfig(env);
+  if (!appConfig) {
+    throw new Error("GitHub App not configured");
+  }
+
+  const repo = await getInstallationRepository(appConfig, repoOwner, repoName);
+  if (!repo) {
+    return null;
+  }
+
+  return {
+    repoId: repo.id,
+    repoOwner: repoOwner.toLowerCase(),
+    repoName: repoName.toLowerCase(),
+  };
+}
 
 /**
  * Cached repos list structure.
@@ -1176,5 +1256,263 @@ async function handleGetRepoMetadata(
   } catch (e) {
     logger.error("Failed to get repo metadata", { error: e instanceof Error ? e : String(e) });
     return error("Failed to get metadata", 500);
+  }
+}
+
+/**
+ * Upsert secrets for a repository.
+ */
+async function handleSetRepoSecrets(
+  request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  if (!env.DB) {
+    return error("Secrets storage is not configured", 503);
+  }
+  if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
+    return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
+  }
+
+  const owner = match.groups?.owner;
+  const name = match.groups?.name;
+  if (!owner || !name) {
+    return error("Owner and name are required");
+  }
+
+  let resolved;
+  try {
+    resolved = await resolveInstalledRepo(env, owner, name);
+    if (!resolved) {
+      return error("Repository is not installed for the GitHub App", 404);
+    }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    logger.error("Failed to resolve repository for secrets", {
+      error: message,
+      repo_owner: owner,
+      repo_name: name,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error(
+      message === "GitHub App not configured" ? message : "Failed to resolve repository",
+      500
+    );
+  }
+
+  let body: { secrets?: Record<string, string> };
+  try {
+    body = (await request.json()) as { secrets?: Record<string, string> };
+  } catch {
+    return error("Invalid JSON body", 400);
+  }
+
+  if (!body?.secrets || typeof body.secrets !== "object") {
+    return error("Request body must include secrets object", 400);
+  }
+
+  const store = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+
+  try {
+    const result = await store.setSecrets(
+      resolved.repoId,
+      resolved.repoOwner,
+      resolved.repoName,
+      body.secrets
+    );
+
+    logger.info("repo.secrets_updated", {
+      event: "repo.secrets_updated",
+      repo_id: resolved.repoId,
+      repo_owner: resolved.repoOwner,
+      repo_name: resolved.repoName,
+      keys_count: result.keys.length,
+      created: result.created,
+      updated: result.updated,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+
+    return json({
+      status: "updated",
+      repo: `${resolved.repoOwner}/${resolved.repoName}`,
+      keys: result.keys,
+      created: result.created,
+      updated: result.updated,
+    });
+  } catch (e) {
+    if (e instanceof RepoSecretsValidationError) {
+      return error(e.message, 400);
+    }
+    logger.error("Failed to update repo secrets", {
+      error: e instanceof Error ? e.message : String(e),
+      repo_id: resolved.repoId,
+      repo_owner: resolved.repoOwner,
+      repo_name: resolved.repoName,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Secrets storage unavailable", 503);
+  }
+}
+
+/**
+ * List secret keys for a repository.
+ */
+async function handleListRepoSecrets(
+  _request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  if (!env.DB) {
+    return error("Secrets storage is not configured", 503);
+  }
+  if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
+    return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
+  }
+
+  const owner = match.groups?.owner;
+  const name = match.groups?.name;
+  if (!owner || !name) {
+    return error("Owner and name are required");
+  }
+
+  let resolved;
+  try {
+    resolved = await resolveInstalledRepo(env, owner, name);
+    if (!resolved) {
+      return error("Repository is not installed for the GitHub App", 404);
+    }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    logger.error("Failed to resolve repository for secrets list", {
+      error: message,
+      repo_owner: owner,
+      repo_name: name,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error(
+      message === "GitHub App not configured" ? message : "Failed to resolve repository",
+      500
+    );
+  }
+
+  const store = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+
+  try {
+    const secrets = await store.listSecretKeys(resolved.repoId);
+
+    logger.info("repo.secrets_listed", {
+      event: "repo.secrets_listed",
+      repo_id: resolved.repoId,
+      repo_owner: resolved.repoOwner,
+      repo_name: resolved.repoName,
+      keys_count: secrets.length,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+
+    return json({
+      repo: `${resolved.repoOwner}/${resolved.repoName}`,
+      secrets,
+    });
+  } catch (e) {
+    logger.error("Failed to list repo secrets", {
+      error: e instanceof Error ? e.message : String(e),
+      repo_id: resolved.repoId,
+      repo_owner: resolved.repoOwner,
+      repo_name: resolved.repoName,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Secrets storage unavailable", 503);
+  }
+}
+
+/**
+ * Delete a secret for a repository.
+ */
+async function handleDeleteRepoSecret(
+  _request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  if (!env.DB) {
+    return error("Secrets storage is not configured", 503);
+  }
+  if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
+    return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
+  }
+
+  const owner = match.groups?.owner;
+  const name = match.groups?.name;
+  const key = match.groups?.key;
+  if (!owner || !name || !key) {
+    return error("Owner, name, and key are required");
+  }
+
+  let resolved;
+  try {
+    resolved = await resolveInstalledRepo(env, owner, name);
+    if (!resolved) {
+      return error("Repository is not installed for the GitHub App", 404);
+    }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    logger.error("Failed to resolve repository for secrets delete", {
+      error: message,
+      repo_owner: owner,
+      repo_name: name,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error(
+      message === "GitHub App not configured" ? message : "Failed to resolve repository",
+      500
+    );
+  }
+
+  const store = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+
+  try {
+    store.validateKey(store.normalizeKey(key));
+
+    const deleted = await store.deleteSecret(resolved.repoId, key);
+    if (!deleted) {
+      return error("Secret not found", 404);
+    }
+
+    logger.info("repo.secret_deleted", {
+      event: "repo.secret_deleted",
+      repo_id: resolved.repoId,
+      repo_owner: resolved.repoOwner,
+      repo_name: resolved.repoName,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+
+    return json({
+      status: "deleted",
+      repo: `${resolved.repoOwner}/${resolved.repoName}`,
+      key: store.normalizeKey(key),
+    });
+  } catch (e) {
+    if (e instanceof RepoSecretsValidationError) {
+      return error(e.message, 400);
+    }
+    logger.error("Failed to delete repo secret", {
+      error: e instanceof Error ? e.message : String(e),
+      repo_id: resolved.repoId,
+      repo_owner: resolved.repoOwner,
+      repo_name: resolved.repoName,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Secrets storage unavailable", 503);
   }
 }
