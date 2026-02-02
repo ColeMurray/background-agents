@@ -41,14 +41,15 @@ Create accounts on these services before continuing:
 ### Required Tools
 
 ```bash
-# Terraform (1.5.0+)
+# Terraform (1.6.0+)
 brew install terraform
 
 # Node.js (22+)
 brew install node@22
 
 # Python 3.12+ and Modal CLI
-pip install modal
+pipx install modal
+modal setup
 
 # Wrangler CLI (for initial R2 bucket setup)
 npm install -g wrangler
@@ -58,18 +59,24 @@ npm install -g wrangler
 
 ## Step 1: Fork the Repository
 
-Fork [ColeMurray/open-inspect](https://github.com/ColeMurray/open-inspect) to your GitHub account or
+Fork [ColeMurray/background-agents](https://github.com/ColeMurray/background-agents) to your GitHub account or
 organization.
 
 ```bash
 # Clone your fork
-git clone https://github.com/YOUR-USERNAME/open-inspect.git
-cd open-inspect
+git clone https://github.com/YOUR-USERNAME/background-agents.git
+cd background-agents
 npm install
 
 # Build the shared package (required before Terraform deployment)
 npm run build -w @open-inspect/shared
 ```
+
+---
+
+> **Tip**: Before proceeding, copy `terraform/environments/production/terraform.tfvars.example` to
+> `terraform.tfvars` and keep it open. As you collect credentials in the following steps, paste them
+> directly into this file.
 
 ---
 
@@ -84,6 +91,7 @@ npm run build -w @open-inspect/shared
 4. **Create API Token** at [API Tokens](https://dash.cloudflare.com/profile/api-tokens):
    - Use template: "Edit Cloudflare Workers"
    - Add permissions: Workers KV Storage (Edit), Workers R2 Storage (Edit)
+5. **Enable R2**: Must add payment info, but first 10 GB/month is free
 
 ### Cloudflare R2 (Terraform State Backend)
 
@@ -92,6 +100,7 @@ Terraform needs a place to store its state. We use Cloudflare R2.
 ```bash
 # Login to Cloudflare
 wrangler login
+
 
 # Create the state bucket
 wrangler r2 bucket create open-inspect-terraform-state
@@ -109,13 +118,13 @@ Create an R2 API Token:
 2. Create a new token with full access
 3. **Note your Team/Account ID**:
    - Go to **Settings** (Account Settings or Team Settings)
-   - Look for **"Your ID"** or find it in the URL: `vercel.com/teams/TEAM_ID/...`
+   - Look for **"Your ID"** or find it in the URL: `vercel.com/{YOUR_TEAM_ID}/...`
    - Even personal accounts have an ID (usually starts with `team_`)
 
 ### Modal
 
 1. Go to [Modal Settings](https://modal.com/settings)
-2. Create a new API token
+2. **Create a new API token**: Settings -> API Tokens -> New Token
 3. Note the **Token ID** and **Token Secret**
 4. Note your **Workspace name** (visible in your Modal dashboard URL)
 
@@ -138,7 +147,7 @@ access.
    - **Name**: `Open-Inspect-YourName` (must be globally unique)
    - **Homepage URL**: `https://open-inspect-{your-deployment-name}.vercel.app` (or your custom
      domain)
-   - **Webhook**: Uncheck "Active" (not needed)
+   - **Webhook**: Leave "Active" **unchecked**
 4. Configure **Identifying and authorizing users** (OAuth):
    - **Callback URL**:
      `https://open-inspect-{your-deployment-name}.vercel.app/api/auth/callback/github`
@@ -152,7 +161,7 @@ access.
    - Pull requests: **Read & Write**
    - Metadata: **Read-only**
 6. Click **"Create GitHub App"**
-7. Note the **App ID** (shown at top of settings page)
+7. Note the **App ID** and **Client ID** (top of page)
 8. Under **"Client secrets"**, click **"Generate a new client secret"** and note the **Client
    Secret**
 9. Scroll down to **"Private keys"** and click **"Generate a private key"** (downloads a .pem file)
@@ -197,7 +206,7 @@ Skip this step if you don't need Slack integration.
    - `app_mentions:read`
    - `chat:write`
    - `channels:history`
-3. Click **"Install to Workspace"**
+3. Click **"Install to {YOUR_WORKSPACE_NAME}"**
 4. Note the **Bot Token** (`xoxb-...`)
 
 > **Important**: If you update bot token scopes later, you must **reinstall the app** to your
@@ -226,12 +235,13 @@ echo "token_encryption_key: $(openssl rand -base64 32)"
 # Internal callback secret
 echo "internal_callback_secret: $(openssl rand -base64 32)"
 
-# NextAuth secret
-echo "nextauth_secret: $(openssl rand -base64 32)"
-
 # Modal API secret (use hex for this one)
 echo "modal_api_secret: $(openssl rand -hex 32)"
+
+# NextAuth secret
+echo "nextauth_secret: $(openssl rand -base64 32)"
 ```
+
 
 Save these values somewhere secure—you'll need them in the next step.
 
@@ -267,7 +277,8 @@ Fill in all the values you gathered. Here's the structure:
 # Provider Authentication
 cloudflare_api_token        = "your-cloudflare-api-token"
 cloudflare_account_id       = "your-account-id"
-cloudflare_worker_subdomain = "your-subdomain"  # from *.your-subdomain.workers.dev
+cloudflare_worker_subdomain = "your-subdomain"  # e.g., "twilight-unit-b2cf" (without .workers.dev)
+
 vercel_api_token            = "your-vercel-token"
 vercel_team_id              = "team_xxxxx"       # Your Vercel ID (even personal accounts have one)
 modal_token_id              = "your-modal-token-id"
@@ -379,13 +390,12 @@ Now that the Slack bot worker is deployed, configure the App Home and Event Subs
 
 The App Home provides a settings interface where users can configure their preferred Claude model.
 
-1. Go to your Slack App → **App Home**
+1. Go to [Slack Apps](https://api.slack.com/apps) -> Your Slack App → **App Home**
 2. Under **Show Tabs**, toggle **"Home Tab"** to On
-3. Click **Save Changes**
 
 ### Configure Event Subscriptions
 
-1. Go to your Slack App → **Event Subscriptions**
+1. Go to [Slack Apps](https://api.slack.com/apps) -> Your Slack App → **Event Subscriptions**
 2. Toggle **"Enable Events"** to On
 3. Enter **Request URL**:
    ```
@@ -518,6 +528,23 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `NEXTAUTH_SECRET`             | Generated NextAuth secret                                                    |
 | `ALLOWED_USERS`               | Comma-separated GitHub usernames (or empty for all users)                    |
 | `ALLOWED_EMAIL_DOMAINS`       | Comma-separated email domains (or empty for all domains)                     |
+
+**Bulk upload secrets with `gh` CLI:**
+
+Instead of adding secrets one by one, create a `.secrets` file (don't commit this!):
+
+```
+CLOUDFLARE_API_TOKEN=your-token
+CLOUDFLARE_ACCOUNT_ID=your-account-id
+ANTHROPIC_API_KEY=sk-ant-...
+# ... add all secrets
+```
+
+Then upload all at once (run from your fork's directory, or use `-R {your_github_username}/{background-agents}`):
+
+```bash
+gh secret set -f .secrets
+```
 
 Once configured, the GitHub Actions workflow will:
 
