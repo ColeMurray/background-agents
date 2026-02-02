@@ -147,7 +147,7 @@ access.
    - **Name**: `Open-Inspect-YourName` (must be globally unique)
    - **Homepage URL**: `https://open-inspect-{your-deployment-name}.vercel.app` (or your custom
      domain)
-   - **Webhook**: Leave "Active" **unchecked**
+   - **Webhook**: Uncheck "Active" (not needed)
 4. Configure **Identifying and authorizing users** (OAuth):
    - **Callback URL**:
      `https://open-inspect-{your-deployment-name}.vercel.app/api/auth/callback/github`
