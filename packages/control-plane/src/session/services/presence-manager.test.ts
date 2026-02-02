@@ -17,6 +17,20 @@ class MockWebSocket {
   close = vi.fn();
 }
 
+function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
+  const ws = overrides.ws ?? (new MockWebSocket() as unknown as WebSocket);
+  return {
+    participantId: "participant-1",
+    userId: "user-1",
+    name: "User 1",
+    status: "active",
+    lastSeen: Date.now(),
+    clientId: "client-1",
+    ws,
+    ...overrides,
+  };
+}
+
 describe("PresenceManager", () => {
   let manager: PresenceManager;
   let mockBroadcast: ReturnType<typeof vi.fn>;
@@ -38,18 +52,15 @@ describe("PresenceManager", () => {
     it("should build presence list from single client", () => {
       const clients = new Map<WebSocket, ClientInfo>();
       const ws = new MockWebSocket() as unknown as WebSocket;
-      clients.set(ws, {
-        participantId: "participant-1",
-        clientId: "client-1",
-      });
+      clients.set(ws, createClientInfo({ ws }));
 
       const presence = manager.buildPresenceList(clients);
 
       expect(presence).toEqual([
-        {
+        expect.objectContaining({
           participantId: "participant-1",
           clientId: "client-1",
-        },
+        }),
       ]);
     });
 
@@ -58,14 +69,24 @@ describe("PresenceManager", () => {
       const ws1 = new MockWebSocket() as unknown as WebSocket;
       const ws2 = new MockWebSocket() as unknown as WebSocket;
 
-      clients.set(ws1, { participantId: "p1", clientId: "c1" });
-      clients.set(ws2, { participantId: "p2", clientId: "c2" });
+      clients.set(ws1, createClientInfo({ participantId: "p1", clientId: "c1", ws: ws1 }));
+      clients.set(ws2, createClientInfo({ participantId: "p2", clientId: "c2", ws: ws2 }));
 
       const presence = manager.buildPresenceList(clients);
 
       expect(presence).toHaveLength(2);
-      expect(presence).toContainEqual({ participantId: "p1", clientId: "c1" });
-      expect(presence).toContainEqual({ participantId: "p2", clientId: "c2" });
+      expect(presence).toContainEqual(
+        expect.objectContaining({
+          participantId: "p1",
+          clientId: "c1",
+        })
+      );
+      expect(presence).toContainEqual(
+        expect.objectContaining({
+          participantId: "p2",
+          clientId: "c2",
+        })
+      );
     });
 
     it("should handle clients with same participant but different client IDs", () => {
@@ -73,14 +94,24 @@ describe("PresenceManager", () => {
       const ws1 = new MockWebSocket() as unknown as WebSocket;
       const ws2 = new MockWebSocket() as unknown as WebSocket;
 
-      clients.set(ws1, { participantId: "p1", clientId: "c1" });
-      clients.set(ws2, { participantId: "p1", clientId: "c2" });
+      clients.set(ws1, createClientInfo({ participantId: "p1", clientId: "c1", ws: ws1 }));
+      clients.set(ws2, createClientInfo({ participantId: "p1", clientId: "c2", ws: ws2 }));
 
       const presence = manager.buildPresenceList(clients);
 
       expect(presence).toHaveLength(2);
-      expect(presence).toContainEqual({ participantId: "p1", clientId: "c1" });
-      expect(presence).toContainEqual({ participantId: "p1", clientId: "c2" });
+      expect(presence).toContainEqual(
+        expect.objectContaining({
+          participantId: "p1",
+          clientId: "c1",
+        })
+      );
+      expect(presence).toContainEqual(
+        expect.objectContaining({
+          participantId: "p1",
+          clientId: "c2",
+        })
+      );
     });
   });
 
@@ -100,13 +131,13 @@ describe("PresenceManager", () => {
     it("should broadcast presence update with single client", () => {
       const clients = new Map<WebSocket, ClientInfo>();
       const ws = new MockWebSocket() as unknown as WebSocket;
-      clients.set(ws, { participantId: "p1", clientId: "c1" });
+      clients.set(ws, createClientInfo({ participantId: "p1", clientId: "c1", ws }));
 
       manager.broadcastPresence(clients);
 
       expect(mockBroadcast).toHaveBeenCalledWith({
         type: "presence",
-        participants: [{ participantId: "p1", clientId: "c1" }],
+        participants: [expect.objectContaining({ participantId: "p1", clientId: "c1" })],
       });
     });
 
@@ -115,8 +146,8 @@ describe("PresenceManager", () => {
       const ws1 = new MockWebSocket() as unknown as WebSocket;
       const ws2 = new MockWebSocket() as unknown as WebSocket;
 
-      clients.set(ws1, { participantId: "p1", clientId: "c1" });
-      clients.set(ws2, { participantId: "p2", clientId: "c2" });
+      clients.set(ws1, createClientInfo({ participantId: "p1", clientId: "c1", ws: ws1 }));
+      clients.set(ws2, createClientInfo({ participantId: "p2", clientId: "c2", ws: ws2 }));
 
       manager.broadcastPresence(clients);
 
@@ -128,7 +159,7 @@ describe("PresenceManager", () => {
     it("should not throw if broadcast fails", () => {
       const clients = new Map<WebSocket, ClientInfo>();
       const ws = new MockWebSocket() as unknown as WebSocket;
-      clients.set(ws, { participantId: "p1", clientId: "c1" });
+      clients.set(ws, createClientInfo({ participantId: "p1", clientId: "c1", ws }));
 
       mockBroadcast.mockImplementation(() => {
         throw new Error("Broadcast failed");

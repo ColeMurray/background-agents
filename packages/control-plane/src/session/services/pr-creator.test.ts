@@ -145,7 +145,6 @@ describe("PRCreator", () => {
         authorId: "participant-1",
         content: "test",
         source: "web",
-        status: "pending",
         createdAt: Date.now(),
       });
       messageRepo.updateStatus("msg-1", "processing", { startedAt: Date.now() });
@@ -172,7 +171,6 @@ describe("PRCreator", () => {
         authorId: "nonexistent",
         content: "test",
         source: "web",
-        status: "pending",
         createdAt: Date.now(),
       });
       messageRepo.updateStatus("msg-1", "processing", { startedAt: Date.now() });
@@ -203,7 +201,6 @@ describe("PRCreator", () => {
         authorId: "participant-2",
         content: "test",
         source: "web",
-        status: "pending",
         createdAt: Date.now(),
       });
       messageRepo.updateStatus("msg-2", "processing", { startedAt: Date.now() });
@@ -236,7 +233,6 @@ describe("PRCreator", () => {
         authorId: "participant-3",
         content: "test",
         source: "web",
-        status: "pending",
         createdAt: Date.now(),
       });
       messageRepo.updateStatus("msg-3", "processing", { startedAt: Date.now() });
@@ -377,7 +373,9 @@ describe("PRCreator", () => {
       });
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain("timed out");
+      if (!result.success) {
+        expect(result.error).toContain("timed out");
+      }
     });
   });
 

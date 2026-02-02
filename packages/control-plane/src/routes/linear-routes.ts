@@ -4,7 +4,7 @@
  */
 
 import type { Env } from "../types";
-import { listIssues, createIssue, updateIssue, listTeams } from "../linear/client";
+import { LinearAdapter } from "../adapters/linear-adapter";
 import { json, error, getSessionStub } from "./helpers";
 
 /**
@@ -26,7 +26,8 @@ export async function handleLinearIssues(
   const cursor = url.searchParams.get("cursor") ?? undefined;
   const limit = url.searchParams.get("limit");
   try {
-    const result = await listIssues(env, {
+    const client = new LinearAdapter(env.LINEAR_API_KEY);
+    const result = await client.listIssues({
       teamId,
       teamKey,
       query,
@@ -58,7 +59,8 @@ export async function handleLinearTeams(
     return error("Linear integration not configured", 503);
   }
   try {
-    const teams = await listTeams(env);
+    const client = new LinearAdapter(env.LINEAR_API_KEY);
+    const teams = await client.listTeams();
     return json({ teams });
   } catch (e) {
     console.error("[router] Linear listTeams error:", e);
@@ -187,7 +189,8 @@ export async function handleLinearCreateIssue(
   const description = body.description ?? undefined;
 
   try {
-    const issue = await createIssue(env, {
+    const client = new LinearAdapter(env.LINEAR_API_KEY);
+    const issue = await client.createIssue({
       teamId: body.teamId,
       title,
       description: description ?? null,
@@ -242,7 +245,8 @@ export async function handleLinearUpdateIssue(
   }
 
   try {
-    const issue = await updateIssue(env, issueId, {
+    const client = new LinearAdapter(env.LINEAR_API_KEY);
+    const issue = await client.updateIssue(issueId, {
       stateId: body.stateId ?? undefined,
       assigneeId: body.assigneeId ?? undefined,
       title: body.title ?? undefined,

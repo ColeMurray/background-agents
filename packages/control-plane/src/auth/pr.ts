@@ -3,34 +3,7 @@
  */
 
 import { decryptToken } from "./crypto";
-
-export interface CreatePRRequest {
-  /** User's encrypted GitHub access token */
-  accessTokenEncrypted: string;
-  /** Repository owner */
-  owner: string;
-  /** Repository name */
-  repo: string;
-  /** PR title */
-  title: string;
-  /** PR body/description */
-  body: string;
-  /** Head branch (the branch with changes) */
-  head: string;
-  /** Base branch to merge into */
-  base: string;
-}
-
-export interface CreatePRResponse {
-  /** PR number */
-  number: number;
-  /** PR URL */
-  url: string;
-  /** PR state */
-  state: string;
-  /** HTML URL */
-  htmlUrl: string;
-}
+import type { CreatePRRequest, CreatePRResponse, RepositoryInfo } from "../ports/types";
 
 /**
  * Create a pull request on GitHub.
@@ -192,7 +165,7 @@ export async function getRepository(
   accessToken: string,
   owner: string,
   repo: string
-): Promise<{ defaultBranch: string; private: boolean; fullName: string }> {
+): Promise<RepositoryInfo> {
   const response = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
     headers: {
       Accept: "application/vnd.github.v3+json",

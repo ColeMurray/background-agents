@@ -1,25 +1,16 @@
 /**
- * Modal sandbox API client.
+ * Modal sandbox API adapter.
  *
  * Provides methods to interact with Modal sandboxes from the control plane.
  * All requests are authenticated using HMAC-signed tokens.
  */
 
 import { generateInternalToken } from "@open-inspect/shared";
-import type {
-  ModalPort,
-  CreateSandboxRequest,
-  SandboxResponse,
-  SnapshotResponse,
-} from "../ports/modal-port";
+import type { ModalPort } from "../ports/modal-port";
+import type { CreateSandboxRequest, SandboxResponse, SnapshotResponse } from "../ports/types";
 
-// Modal app name
 const MODAL_APP_NAME = "open-inspect";
 
-/**
- * Construct the Modal base URL from workspace name.
- * Modal endpoint URLs follow the pattern: https://{workspace}--{app-name}
- */
 function getModalBaseUrl(workspace: string): string {
   return `https://${workspace}--${MODAL_APP_NAME}`;
 }
@@ -51,12 +42,7 @@ interface ModalApiResponse<T> {
   error?: string;
 }
 
-/**
- * Modal sandbox API client.
- *
- * Requires MODAL_API_SECRET for authentication and MODAL_WORKSPACE for URL construction.
- */
-export class ModalClient implements ModalPort {
+export class ModalAdapter implements ModalPort {
   private createSandboxUrl: string;
   private warmSandboxUrl: string;
   private healthUrl: string;
@@ -67,10 +53,10 @@ export class ModalClient implements ModalPort {
 
   constructor(secret: string, workspace: string) {
     if (!secret) {
-      throw new Error("ModalClient requires MODAL_API_SECRET for authentication");
+      throw new Error("ModalAdapter requires MODAL_API_SECRET for authentication");
     }
     if (!workspace) {
-      throw new Error("ModalClient requires MODAL_WORKSPACE for URL construction");
+      throw new Error("ModalAdapter requires MODAL_WORKSPACE for URL construction");
     }
     this.secret = secret;
     const baseUrl = getModalBaseUrl(workspace);
@@ -82,23 +68,6 @@ export class ModalClient implements ModalPort {
     this.restoreSandboxUrl = `${baseUrl}-api-restore-sandbox.modal.run`;
   }
 
-  /**
-   * Get the URL for the snapshot sandbox endpoint.
-   */
-  getSnapshotSandboxUrl(): string {
-    return this.snapshotSandboxUrl;
-  }
-
-  /**
-   * Get the URL for the restore sandbox endpoint.
-   */
-  getRestoreSandboxUrl(): string {
-    return this.restoreSandboxUrl;
-  }
-
-  /**
-   * Generate authentication headers for POST/PUT requests (includes Content-Type).
-   */
   private async getPostHeaders(): Promise<Record<string, string>> {
     const token = await generateInternalToken(this.secret);
     return {
@@ -107,9 +76,6 @@ export class ModalClient implements ModalPort {
     };
   }
 
-  /**
-   * Generate authentication headers for GET requests (no Content-Type).
-   */
   private async getGetHeaders(): Promise<Record<string, string>> {
     const token = await generateInternalToken(this.secret);
     return {
@@ -117,9 +83,6 @@ export class ModalClient implements ModalPort {
     };
   }
 
-  /**
-   * Create a new sandbox for a session.
-   */
   async createSandbox(request: CreateSandboxRequest): Promise<SandboxResponse> {
     console.log("Creating sandbox via Modal API:", request.sessionId);
 
@@ -129,7 +92,7 @@ export class ModalClient implements ModalPort {
       headers,
       body: JSON.stringify({
         session_id: request.sessionId,
-        sandbox_id: request.sandboxId || null, // Use control-plane-generated ID
+        sandbox_id: request.sandboxId || null,
         repo_owner: request.repoOwner,
         repo_name: request.repoName,
         control_plane_url: request.controlPlaneUrl,
@@ -179,9 +142,6 @@ export class ModalClient implements ModalPort {
     };
   }
 
-  /**
-   * Snapshot a running sandbox.
-   */
   async snapshotSandbox(
     sandboxId: string,
     sessionId: string,
@@ -216,9 +176,6 @@ export class ModalClient implements ModalPort {
     };
   }
 
-  /**
-   * Pre-warm a sandbox for faster startup.
-   */
   async warmSandbox(request: WarmSandboxRequest): Promise<WarmSandboxResponse> {
     console.log("Warming sandbox via Modal API:", request.repoOwner, request.repoName);
 
@@ -253,10 +210,6 @@ export class ModalClient implements ModalPort {
     };
   }
 
-  /**
-   * Check Modal API health.
-   * Note: Health endpoint does not require authentication.
-   */
   async health(): Promise<{ status: string; service: string }> {
     const response = await fetch(this.healthUrl);
 
@@ -276,9 +229,6 @@ export class ModalClient implements ModalPort {
     return result.data;
   }
 
-  /**
-   * Get the latest snapshot for a repository.
-   */
   async getLatestSnapshot(repoOwner: string, repoName: string): Promise<SnapshotInfo | null> {
     const url = `${this.snapshotUrl}?repo_owner=${encodeURIComponent(repoOwner)}&repo_name=${encodeURIComponent(repoName)}`;
 
@@ -297,25 +247,4 @@ export class ModalClient implements ModalPort {
 
     return result.data || null;
   }
-}
-
-/**
- * Create a new Modal client instance.
- *
- * This is a simple factory function that creates a new client each time.
- * The caller is responsible for managing the client lifecycle.
- *
- * @param secret - The MODAL_API_SECRET for authentication
- * @param workspace - The Modal workspace name (used in endpoint URLs)
- * @returns A new ModalClient instance
- * @throws Error if secret or workspace is not provided
- */
-export function createModalClient(secret: string, workspace: string): ModalClient {
-  if (!secret) {
-    throw new Error("MODAL_API_SECRET is required to create ModalClient");
-  }
-  if (!workspace) {
-    throw new Error("MODAL_WORKSPACE is required to create ModalClient");
-  }
-  return new ModalClient(secret, workspace);
 }

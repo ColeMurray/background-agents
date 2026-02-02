@@ -32,7 +32,7 @@ export function createEventProcessor(deps: EventProcessorDependencies): EventPro
         const storedEvent = eventRepo.create({
           id: eventId,
           type: event.type,
-          data: event.data ? JSON.stringify(event.data) : null,
+          data: event.data ? JSON.stringify(event.data) : "{}",
           messageId: event.message_id,
           createdAt: now,
         });

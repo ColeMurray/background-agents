@@ -16,7 +16,7 @@ interface PRCreatorDependencies {
   participantRepo: ParticipantRepository;
   artifactRepo: ArtifactRepository;
   getSandboxWebSocket: () => WebSocket | null;
-  safeSend: (ws: WebSocket, message: unknown) => boolean;
+  safeSend: (ws: WebSocket, message: object | string) => boolean;
   registerPushPromise: (
     branchName: string,
     resolve: () => void,

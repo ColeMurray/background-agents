@@ -1,43 +1,18 @@
+import type {
+  LinearIssue,
+  ListIssuesOptions,
+  CreateIssueInput,
+  UpdateIssueInput,
+} from "../ports/types";
 import type { LinearPort } from "../ports/linear-port";
 
 const LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql";
 
-export interface LinearIssue {
-  id: string;
-  identifier: string;
-  title: string;
-  description?: string | null;
-  url?: string | null;
-  state?: { id: string; name: string } | null;
-  team?: { id: string; key: string; name: string } | null;
-}
-
-export interface LinearIssuesResponse {
+interface LinearIssuesResponse {
   issues: {
     nodes: LinearIssue[];
     pageInfo: { hasNextPage: boolean; endCursor: string | null };
   };
-}
-
-export interface ListIssuesOptions {
-  teamId?: string;
-  teamKey?: string;
-  query?: string;
-  cursor?: string | null;
-  limit?: number;
-}
-
-export interface CreateIssueInput {
-  teamId: string;
-  title: string;
-  description?: string | null;
-}
-
-export interface UpdateIssueInput {
-  stateId?: string | null;
-  assigneeId?: string | null;
-  title?: string | null;
-  description?: string | null;
 }
 
 function getAuthHeader(apiKey: string): string {
@@ -81,15 +56,14 @@ async function linearFetch<T>(
   return json.data as T;
 }
 
-export class LinearClient implements LinearPort {
+export class LinearAdapter implements LinearPort {
   constructor(private apiKey: string) {
     if (!apiKey) {
-      throw new Error("LinearClient requires LINEAR_API_KEY");
+      throw new Error("LinearAdapter requires LINEAR_API_KEY");
     }
   }
 
   async listIssues(
-    teamId: string,
     filters: ListIssuesOptions = {}
   ): Promise<{ issues: LinearIssue[]; cursor: string | null; hasMore: boolean }> {
     const limit = Math.min(filters.limit ?? 50, 100);
@@ -112,7 +86,7 @@ export class LinearClient implements LinearPort {
     `;
 
     const filter: Record<string, unknown> = {};
-    if (teamId) filter.team = { id: { eq: teamId } };
+    if (filters.teamId) filter.team = { id: { eq: filters.teamId } };
     if (filters.teamKey) filter.team = { key: { eq: filters.teamKey } };
     if (filters.query) filter.title = { containsIgnoreCase: filters.query };
 
@@ -228,6 +202,3 @@ export class LinearClient implements LinearPort {
     ).then((data) => data.teams.nodes);
   }
 }
-
-// Keep standalone functions for backward compatibility if needed, or remove them.
-// Removing them as we are refactoring to use the class.

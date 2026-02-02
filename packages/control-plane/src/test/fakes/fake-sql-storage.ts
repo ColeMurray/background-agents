@@ -2,14 +2,66 @@
  * Fake SQL storage for testing Durable Objects without real SQLite.
  */
 
-type SQLValue = string | number | null | ArrayBuffer;
+type SQLValue = SqlStorageValue;
 type SQLRow = Record<string, SQLValue>;
+
+class FakeSqlStorageCursor<T extends SQLRow> implements SqlStorageCursor<T> {
+  columnNames: string[];
+  private rows: T[];
+  private index = 0;
+
+  constructor(rows: T[]) {
+    this.rows = rows;
+    this.columnNames = rows.length > 0 ? Object.keys(rows[0]) : [];
+  }
+
+  next(): { done?: false; value: T } | { done: true; value?: never } {
+    if (this.index >= this.rows.length) {
+      return { done: true };
+    }
+    const value = this.rows[this.index++];
+    return { done: false, value };
+  }
+
+  toArray(): T[] {
+    return [...this.rows];
+  }
+
+  one(): T {
+    if (this.rows.length === 0) {
+      throw new Error("No rows available");
+    }
+    return this.rows[0];
+  }
+
+  raw<U extends SQLValue[]>(): IterableIterator<U> {
+    const rows = this.rows.map((row) => Object.values(row) as U);
+    return rows[Symbol.iterator]();
+  }
+
+  get rowsRead(): number {
+    return this.rows.length;
+  }
+
+  get rowsWritten(): number {
+    return 0;
+  }
+
+  [Symbol.iterator](): IterableIterator<T> {
+    return this.rows[Symbol.iterator]();
+  }
+}
+
+class FakeSqlStorageStatement extends SqlStorageStatement {}
 
 /**
  * Minimal fake implementation of DurableObjectStorage's SQL interface.
  * Stores data in memory as a simple object.
  */
 export class FakeSqlStorage {
+  databaseSize = 0;
+  Cursor = FakeSqlStorageCursor as unknown as typeof SqlStorageCursor;
+  Statement = FakeSqlStorageStatement as unknown as typeof SqlStorageStatement;
   private _tables: Map<string, Map<string, SQLRow>> = new Map();
   private _autoIncrementCounters: Map<string, number> = new Map();
 
@@ -17,7 +69,10 @@ export class FakeSqlStorage {
    * Execute a SQL query.
    * Only supports basic INSERT, UPDATE, SELECT, DELETE operations.
    */
-  exec(query: string, ...params: SQLValue[]): { toArray: () => SQLRow[] } {
+  exec<T extends Record<string, SqlStorageValue>>(
+    query: string,
+    ...params: SQLValue[]
+  ): FakeSqlStorageCursor<T> {
     const normalizedQuery = query.trim().toLowerCase();
 
     // CREATE TABLE - extract table name and store empty map
@@ -29,12 +84,12 @@ export class FakeSqlStorage {
           this._tables.set(tableName, new Map());
         }
       }
-      return { toArray: () => [] };
+      return new FakeSqlStorageCursor([] as T[]);
     }
 
     // CREATE INDEX - ignore for testing
     if (normalizedQuery.startsWith("create index")) {
-      return { toArray: () => [] };
+      return new FakeSqlStorageCursor([] as T[]);
     }
 
     // INSERT - store row
@@ -58,7 +113,7 @@ export class FakeSqlStorage {
         const id = row[columns[0]] as string;
         table.set(id, row);
       }
-      return { toArray: () => [] };
+      return new FakeSqlStorageCursor([] as T[]);
     }
 
     // UPDATE - modify existing row
@@ -125,7 +180,7 @@ export class FakeSqlStorage {
           }
         }
       }
-      return { toArray: () => [] };
+      return new FakeSqlStorageCursor([] as T[]);
     }
 
     // SELECT - retrieve rows
@@ -135,7 +190,7 @@ export class FakeSqlStorage {
         const tableName = match[1];
         const table = this._tables.get(tableName);
         if (!table) {
-          return { toArray: () => [] };
+          return new FakeSqlStorageCursor([] as T[]);
         }
 
         let results = Array.from(table.values());
@@ -143,7 +198,7 @@ export class FakeSqlStorage {
 
         // Handle COUNT(*) aggregation
         if (normalizedQuery.includes("count(*)")) {
-          return { toArray: () => [{ count: results.length }] };
+          return new FakeSqlStorageCursor([{ count: results.length }] as unknown as T[]);
         }
 
         // Apply WHERE clause
@@ -230,9 +285,9 @@ export class FakeSqlStorage {
           results = results.slice(0, limit);
         }
 
-        return { toArray: () => results };
+        return new FakeSqlStorageCursor(results as unknown as T[]);
       }
-      return { toArray: () => [] };
+      return new FakeSqlStorageCursor([] as T[]);
     }
 
     // DELETE - remove rows
@@ -260,15 +315,15 @@ export class FakeSqlStorage {
           }
         }
       }
-      return { toArray: () => [] };
+      return new FakeSqlStorageCursor([] as T[]);
     }
 
     // ALTER TABLE - ignore for testing (migrations are idempotent)
     if (normalizedQuery.startsWith("alter table")) {
-      return { toArray: () => [] };
+      return new FakeSqlStorageCursor([] as T[]);
     }
 
-    return { toArray: () => [] };
+    return new FakeSqlStorageCursor([] as T[]);
   }
 
   /**

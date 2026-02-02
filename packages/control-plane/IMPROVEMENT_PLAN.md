@@ -1,8 +1,8 @@
 # Control-Plane Package Improvement Plan
 
-## Status: Phase 2 Complete ✅
+## Status: Phase 3 Complete ✅
 
-**Last Updated**: 2026-02-01 **Current Branch**: `refactor-sessions` **Commit**: `40e5bd2`
+**Last Updated**: 2026-02-02 **Current Branch**: `feature/hexagonal-ports` **Commit**: `f93b135`
 
 ---
 
@@ -1198,13 +1198,18 @@ git commit -m "refactor SessionDO and add rate limiting"
   - Clean dependency injection pattern
   - Hexagonal architecture foundation
 
+- ✅ **Phase 3**: Hexagonal Architecture (2026-02-02)
+  - Ports defined for GitHub, Modal, Linear
+  - Adapters implemented for external services
+  - PRCreator uses GitHubPort with updated tests
+  - SessionDO injects ports for external dependencies
+
 ### In Progress
 
 - 🚧 None
 
 ### Upcoming
 
-- ⏳ **Phase 3**: Hexagonal Architecture
 - ⏳ **Phase 4**: Test Coverage Expansion
 - ⏳ **Phase 5**: Security Hardening
 

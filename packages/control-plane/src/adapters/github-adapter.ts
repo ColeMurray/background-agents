@@ -1,28 +1,23 @@
-import type { GitHubPort, RepositoryInfo } from "../ports/github-port";
+import type { GitHubPort } from "../ports/github-port";
+import type { RepositoryInfo, CreatePRRequest, CreatePRResponse } from "../ports/types";
 import {
   exchangeCodeForToken,
   refreshAccessToken,
   getGitHubUser,
   type GitHubOAuthConfig,
-} from "./github";
+} from "../auth/github";
 import {
   generateInstallationToken,
   listInstallationRepositories,
   type GitHubAppConfig,
-} from "./github-app";
-import {
-  createPullRequest,
-  getPullRequestByHead,
-  getRepository,
-  type CreatePRRequest,
-  type CreatePRResponse,
-} from "./pr";
+} from "../auth/github-app";
+import { createPullRequest, getPullRequestByHead, getRepository } from "../auth/pr";
 import type { GitHubTokenResponse, GitHubUser } from "../types";
 import type { InstallationRepository } from "@open-inspect/shared";
 
-export class GitHubClient implements GitHubPort {
+export class GitHubAdapter implements GitHubPort {
   constructor(
-    private appConfig: GitHubAppConfig,
+    private appConfig: GitHubAppConfig | null,
     private oauthConfig: GitHubOAuthConfig
   ) {}
 
@@ -39,13 +34,14 @@ export class GitHubClient implements GitHubPort {
   }
 
   async generateInstallationToken(installationId?: string): Promise<string> {
+    if (!this.appConfig) {
+      throw new Error("GitHub App config not configured");
+    }
     const config = installationId ? { ...this.appConfig, installationId } : this.appConfig;
     return generateInstallationToken(config);
   }
 
   async createPullRequest(request: CreatePRRequest): Promise<CreatePRResponse> {
-    // Encryption key is needed by createPullRequest to decrypt the user's token
-    // The existing function takes the request and the key
     return createPullRequest(request, this.oauthConfig.encryptionKey);
   }
 
@@ -63,6 +59,9 @@ export class GitHubClient implements GitHubPort {
   }
 
   async listInstallationRepositories(): Promise<InstallationRepository[]> {
+    if (!this.appConfig) {
+      throw new Error("GitHub App config not configured");
+    }
     return listInstallationRepositories(this.appConfig);
   }
 }

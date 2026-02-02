@@ -17,6 +17,20 @@ class MockWebSocket {
   close = vi.fn();
 }
 
+function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
+  const ws = overrides.ws ?? (new MockWebSocket() as unknown as WebSocket);
+  return {
+    participantId: "participant-1",
+    userId: "user-1",
+    name: "User 1",
+    status: "active",
+    lastSeen: Date.now(),
+    clientId: "client-1",
+    ws,
+    ...overrides,
+  };
+}
+
 describe("WebSocketManager", () => {
   let manager: WebSocketManager;
 
@@ -27,10 +41,7 @@ describe("WebSocketManager", () => {
   describe("client management", () => {
     it("should register a client", () => {
       const ws = new MockWebSocket() as unknown as WebSocket;
-      const clientInfo: ClientInfo = {
-        participantId: "participant-1",
-        clientId: "client-1",
-      };
+      const clientInfo = createClientInfo({ ws });
 
       manager.registerClient(ws, clientInfo);
 
@@ -41,10 +52,7 @@ describe("WebSocketManager", () => {
 
     it("should remove a client", () => {
       const ws = new MockWebSocket() as unknown as WebSocket;
-      const clientInfo: ClientInfo = {
-        participantId: "participant-1",
-        clientId: "client-1",
-      };
+      const clientInfo = createClientInfo({ ws });
 
       manager.registerClient(ws, clientInfo);
       manager.removeClient(ws);
@@ -57,8 +65,14 @@ describe("WebSocketManager", () => {
       const ws1 = new MockWebSocket() as unknown as WebSocket;
       const ws2 = new MockWebSocket() as unknown as WebSocket;
 
-      manager.registerClient(ws1, { participantId: "p1", clientId: "c1" });
-      manager.registerClient(ws2, { participantId: "p2", clientId: "c2" });
+      manager.registerClient(
+        ws1,
+        createClientInfo({ participantId: "p1", clientId: "c1", ws: ws1 })
+      );
+      manager.registerClient(
+        ws2,
+        createClientInfo({ participantId: "p2", clientId: "c2", ws: ws2 })
+      );
 
       expect(manager.getClients().size).toBe(2);
     });
@@ -96,7 +110,7 @@ describe("WebSocketManager", () => {
 
     it("should not send when WebSocket is closed", () => {
       const ws = new MockWebSocket() as unknown as WebSocket;
-      ws.readyState = MockWebSocket.CLOSED;
+      (ws as unknown as { readyState: number }).readyState = MockWebSocket.CLOSED;
       const message = { type: "test" };
 
       const result = manager.safeSend(ws, message);
@@ -133,8 +147,14 @@ describe("WebSocketManager", () => {
       const ws1 = new MockWebSocket() as unknown as WebSocket;
       const ws2 = new MockWebSocket() as unknown as WebSocket;
 
-      manager.registerClient(ws1, { participantId: "p1", clientId: "c1" });
-      manager.registerClient(ws2, { participantId: "p2", clientId: "c2" });
+      manager.registerClient(
+        ws1,
+        createClientInfo({ participantId: "p1", clientId: "c1", ws: ws1 })
+      );
+      manager.registerClient(
+        ws2,
+        createClientInfo({ participantId: "p2", clientId: "c2", ws: ws2 })
+      );
 
       const message = { type: "test_event", data: "broadcast" };
       manager.broadcast(message);
@@ -146,10 +166,16 @@ describe("WebSocketManager", () => {
     it("should skip closed connections during broadcast", () => {
       const ws1 = new MockWebSocket() as unknown as WebSocket;
       const ws2 = new MockWebSocket() as unknown as WebSocket;
-      ws2.readyState = MockWebSocket.CLOSED;
+      (ws2 as unknown as { readyState: number }).readyState = MockWebSocket.CLOSED;
 
-      manager.registerClient(ws1, { participantId: "p1", clientId: "c1" });
-      manager.registerClient(ws2, { participantId: "p2", clientId: "c2" });
+      manager.registerClient(
+        ws1,
+        createClientInfo({ participantId: "p1", clientId: "c1", ws: ws1 })
+      );
+      manager.registerClient(
+        ws2,
+        createClientInfo({ participantId: "p2", clientId: "c2", ws: ws2 })
+      );
 
       const message = { type: "test_event" };
       manager.broadcast(message);
@@ -165,8 +191,14 @@ describe("WebSocketManager", () => {
         throw new Error("Send failed");
       });
 
-      manager.registerClient(ws1, { participantId: "p1", clientId: "c1" });
-      manager.registerClient(ws2, { participantId: "p2", clientId: "c2" });
+      manager.registerClient(
+        ws1,
+        createClientInfo({ participantId: "p1", clientId: "c1", ws: ws1 })
+      );
+      manager.registerClient(
+        ws2,
+        createClientInfo({ participantId: "p2", clientId: "c2", ws: ws2 })
+      );
 
       const message = { type: "test_event" };
       // Should not throw

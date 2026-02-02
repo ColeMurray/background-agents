@@ -1,13 +1,7 @@
-import type {
-  LinearIssue,
-  ListIssuesOptions,
-  CreateIssueInput,
-  UpdateIssueInput,
-} from "../linear/client";
+import type { LinearIssue, ListIssuesOptions, CreateIssueInput, UpdateIssueInput } from "./types";
 
 export interface LinearPort {
   listIssues(
-    teamId: string,
     filters?: ListIssuesOptions
   ): Promise<{ issues: LinearIssue[]; cursor: string | null; hasMore: boolean }>;
   getIssue(issueId: string): Promise<LinearIssue | null>;

@@ -1,12 +1,6 @@
 import type { GitHubTokenResponse, GitHubUser } from "../types";
-import type { CreatePRRequest, CreatePRResponse } from "../auth/pr";
+import type { CreatePRRequest, CreatePRResponse, RepositoryInfo } from "./types";
 import type { InstallationRepository } from "@open-inspect/shared";
-
-export interface RepositoryInfo {
-  defaultBranch: string;
-  private: boolean;
-  fullName: string;
-}
 
 export interface GitHubPort {
   // OAuth
