@@ -400,7 +400,11 @@ dependencies
 
 **Purpose**: Define interfaces for external systems to enable testing and flexibility
 
-**Ports to create** (`src/ports/`):
+**Tasks**:
+
+- [ ] Create `src/ports/github-port.ts`
+- [ ] Create `src/ports/modal-port.ts`
+- [ ] Create `src/ports/linear-port.ts`
 
 #### GitHub Port
 
@@ -444,6 +448,12 @@ export interface CreateSandboxRequest {
   model: string;
   opencodeSessionId?: string;
   snapshotId?: string;
+  linear?: {
+    issueId: string;
+    title: string;
+    url: string;
+    description?: string | null;
+  };
 }
 ```
 
@@ -463,6 +473,12 @@ export interface LinearPort {
 ### 3.2 Implement Adapters
 
 **Adapters wrap existing code** (`src/adapters/`):
+
+**Tasks**:
+
+- [ ] Create `src/adapters/modal-adapter.ts`
+- [ ] Create `src/adapters/linear-adapter.ts`
+- [ ] Create `src/adapters/github-adapter.ts`
 
 #### GitHub Adapter
 
@@ -528,7 +544,19 @@ export class ModalAdapter implements ModalPort {
 }
 ```
 
-### 3.3 Dependency Injection in SessionDO
+### 3.3 Refactor PRCreator Service
+
+**Tasks**:
+
+- [ ] Update `PRCreatorDependencies` to use `GitHubPort`
+- [ ] Refactor `PRCreator` to use `GitHubPort` instead of direct functions
+
+### 3.4 Dependency Injection in SessionDO
+
+**Tasks**:
+
+- [ ] Inject `ModalPort`, `GitHubPort`, `LinearPort` into `SessionDO`
+- [ ] Replace direct usage of clients with ports
 
 **Current** (tightly coupled):
 

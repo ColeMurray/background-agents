@@ -17,6 +17,8 @@ import {
 } from "../repository";
 import { FakeSqlStorage } from "../../test/fakes/fake-sql-storage";
 
+import type { GitHubPort } from "../../ports/github-port";
+
 describe("PRCreator", () => {
   let creator: PRCreator;
   let messageRepo: MessageRepository;
@@ -26,11 +28,13 @@ describe("PRCreator", () => {
   let mockSafeSend: Mock;
   let mockRegisterPushPromise: Mock;
   let mockBroadcast: Mock;
+  let mockGitHub: GitHubPort;
   let sql: FakeSqlStorage;
 
   beforeEach(() => {
     sql = new FakeSqlStorage();
 
+    // ... (tables creation code stays same) ...
     // Create messages table
     sql.exec(`
       CREATE TABLE messages (
@@ -105,6 +109,22 @@ describe("PRCreator", () => {
     });
     mockBroadcast = vi.fn();
 
+    mockGitHub = {
+      createPullRequest: vi.fn().mockResolvedValue({
+        number: 123,
+        htmlUrl: "https://github.com/owner/repo/pull/123",
+        state: "open",
+        url: "https://api.github.com/repos/owner/repo/pulls/123",
+      }),
+      exchangeCodeForToken: vi.fn(),
+      refreshAccessToken: vi.fn(),
+      getCurrentUser: vi.fn(),
+      generateInstallationToken: vi.fn(),
+      getPullRequestByHead: vi.fn(),
+      getRepository: vi.fn(),
+      listInstallationRepositories: vi.fn(),
+    };
+
     creator = createPRCreator({
       messageRepo,
       participantRepo,
@@ -113,7 +133,7 @@ describe("PRCreator", () => {
       safeSend: mockSafeSend,
       registerPushPromise: mockRegisterPushPromise,
       broadcast: mockBroadcast,
-      tokenEncryptionKey: "test-key",
+      github: mockGitHub,
     });
   });
 
@@ -363,15 +383,6 @@ describe("PRCreator", () => {
 
   describe("createPR", () => {
     it("should create PR and store artifact", async () => {
-      // Mock the createPullRequest import
-      vi.mock("../../auth/pr", () => ({
-        createPullRequest: vi.fn().mockResolvedValue({
-          number: 123,
-          htmlUrl: "https://github.com/owner/repo/pull/123",
-          state: "open",
-        }),
-      }));
-
       const result = await creator.createPR({
         title: "Test PR",
         body: "PR body",
@@ -380,6 +391,16 @@ describe("PRCreator", () => {
         repoOwner: "owner",
         repoName: "repo",
         userToken: "encrypted_token",
+      });
+
+      expect(mockGitHub.createPullRequest).toHaveBeenCalledWith({
+        accessTokenEncrypted: "encrypted_token",
+        owner: "owner",
+        repo: "repo",
+        title: "Test PR",
+        body: "PR body",
+        head: "feature-branch",
+        base: "main",
       });
 
       expect(result.prNumber).toBe(123);

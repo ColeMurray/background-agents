@@ -10,11 +10,14 @@
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { generateId, decryptToken, hashToken } from "../auth/crypto";
-import { generateInstallationToken, getGitHubAppConfig } from "../auth/github-app";
-import { createModalClient } from "../sandbox/client";
-import { getIssue } from "../linear/client";
-import { getRepository } from "../auth/pr";
-import { generateBranchName, generateInternalToken } from "@open-inspect/shared";
+import { getGitHubAppConfig } from "../auth/github-app";
+import { generateBranchName } from "@open-inspect/shared";
+import { ModalAdapter } from "../adapters/modal-adapter";
+import { GitHubAdapter } from "../adapters/github-adapter";
+import { LinearAdapter } from "../adapters/linear-adapter";
+import type { ModalPort } from "../ports/modal-port";
+import type { GitHubPort } from "../ports/github-port";
+import type { LinearPort } from "../ports/linear-port";
 import {
   createMessageRepository,
   createSessionRepository,
@@ -159,6 +162,11 @@ export class SessionDO extends DurableObject<Env> {
     { resolve: (element: unknown) => void; reject: (err: Error) => void }
   >();
 
+  // Adapters
+  private github: GitHubPort;
+  private modal: ModalPort;
+  private linear: LinearPort | undefined;
+
   // Repository layer
   private messageRepo: MessageRepository;
   private sessionRepo: SessionRepository;
@@ -250,6 +258,24 @@ export class SessionDO extends DurableObject<Env> {
     this.eventRepo = createEventRepository(this.sql);
     this.artifactRepo = createArtifactRepository(this.sql);
     this.sandboxRepo = createSandboxRepository(this.sql);
+
+    // Initialize adapters
+    const githubAppConfig = getGitHubAppConfig(env);
+    if (!githubAppConfig) {
+      console.warn("GitHub App config missing or incomplete");
+    }
+
+    this.github = new GitHubAdapter(githubAppConfig!, {
+      clientId: env.GITHUB_CLIENT_ID,
+      clientSecret: env.GITHUB_CLIENT_SECRET,
+      encryptionKey: env.TOKEN_ENCRYPTION_KEY,
+    });
+
+    this.modal = new ModalAdapter(env.MODAL_API_SECRET!, env.MODAL_WORKSPACE!);
+
+    if (env.LINEAR_API_KEY) {
+      this.linear = new LinearAdapter(env.LINEAR_API_KEY);
+    }
   }
 
   /**
@@ -327,7 +353,7 @@ export class SessionDO extends DurableObject<Env> {
         return { timeoutId };
       },
       broadcast: (msg) => this.wsManager!.broadcast(msg),
-      tokenEncryptionKey: this.env.TOKEN_ENCRYPTION_KEY,
+      github: this.github,
     });
   }
 
@@ -2486,7 +2512,11 @@ export class SessionDO extends DurableObject<Env> {
       );
 
       // Get repository info to determine default branch
-      const repoInfo = await getRepository(accessToken, session.repo_owner, session.repo_name);
+      const repoInfo = await this.github.getRepository(
+        accessToken,
+        session.repo_owner,
+        session.repo_name
+      );
 
       const baseBranch = body.baseBranch || repoInfo.defaultBranch;
       const sessionId = session.session_name || session.id;
@@ -2498,7 +2528,7 @@ export class SessionDO extends DurableObject<Env> {
       const appConfig = getGitHubAppConfig(this.env);
       if (appConfig) {
         try {
-          pushToken = await generateInstallationToken(appConfig);
+          pushToken = await this.github.generateInstallationToken();
           console.log("[DO] Generated fresh GitHub App token for push");
         } catch (err) {
           console.error("[DO] Failed to generate app token, push may fail:", err);
@@ -2784,9 +2814,9 @@ export class SessionDO extends DurableObject<Env> {
     let linear:
       | { issueId: string; title: string; url: string; description?: string | null }
       | undefined;
-    if (session.linear_issue_id && this.env.LINEAR_API_KEY) {
+    if (session.linear_issue_id && this.linear) {
       try {
-        const issue = await getIssue(this.env, session.linear_issue_id);
+        const issue = await this.linear.getIssue(session.linear_issue_id);
         if (issue) {
           linear = {
             issueId: issue.id,
@@ -2816,9 +2846,8 @@ export class SessionDO extends DurableObject<Env> {
     this.broadcast({ type: "sandbox_status", status: "spawning" });
 
     // Call Modal to create the sandbox
-    const modalClient = createModalClient(this.env.MODAL_API_SECRET, this.env.MODAL_WORKSPACE);
     const { provider, model } = extractProviderAndModel(session.model || DEFAULT_MODEL);
-    const result = await modalClient.createSandbox({
+    const result = await this.modal.createSandbox({
       sessionId,
       sandboxId: expectedSandboxId,
       repoOwner: session.repo_owner,
@@ -2902,50 +2931,25 @@ export class SessionDO extends DurableObject<Env> {
       throw new Error("MODAL_API_SECRET or MODAL_WORKSPACE not configured");
     }
 
-    // Construct Modal API URL
-    const modalClient = createModalClient(this.env.MODAL_API_SECRET, this.env.MODAL_WORKSPACE);
-    const modalApiUrl = modalClient.getSnapshotSandboxUrl();
-
     console.log(
       `[DO] Triggering snapshot for sandbox ${sandbox.modal_object_id}, reason: ${options.reason}`
     );
 
-    // Generate auth token for Modal API
-    const authToken = await generateInternalToken(this.env.MODAL_API_SECRET);
+    const result = await this.modal.snapshotSandbox(
+      sandbox.modal_object_id,
+      session.session_name || session.id,
+      options.reason
+    );
 
-    // Call Modal endpoint to take snapshot
-    const response = await fetch(modalApiUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${authToken}`,
-      },
-      body: JSON.stringify({
-        sandbox_id: sandbox.modal_object_id,
-        session_id: session.session_name || session.id,
-        reason: options.reason,
-      }),
-    });
-
-    const result = (await response.json()) as {
-      success: boolean;
-      data?: { image_id: string };
-      error?: string;
-    };
-
-    if (!result.success || !result.data?.image_id) {
-      throw new Error(result.error || "Snapshot failed");
-    }
-
-    console.log(`[DO] Snapshot saved: ${result.data.image_id}`);
+    console.log(`[DO] Snapshot saved: ${result.snapshotId}`);
     this.broadcast({
       type: "snapshot_saved",
-      imageId: result.data.image_id,
+      imageId: result.snapshotId,
       reason: options.reason,
     });
 
     return {
-      snapshot_id: result.data.image_id,
+      snapshot_id: result.snapshotId,
     };
   }
 

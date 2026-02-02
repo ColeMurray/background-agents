@@ -9,7 +9,7 @@ import type {
   ArtifactRepository,
 } from "../repository/types";
 import type { ParticipantRow } from "../types";
-import { createPullRequest } from "../../auth/pr";
+import type { GitHubPort } from "../../ports/github-port";
 
 interface PRCreatorDependencies {
   messageRepo: MessageRepository;
@@ -23,7 +23,7 @@ interface PRCreatorDependencies {
     reject: (err: Error) => void
   ) => { timeoutId: ReturnType<typeof setTimeout> };
   broadcast: (message: unknown) => void;
-  tokenEncryptionKey: string;
+  github: GitHubPort;
 }
 
 /**
@@ -38,7 +38,7 @@ export function createPRCreator(deps: PRCreatorDependencies): PRCreator {
     safeSend,
     registerPushPromise,
     broadcast,
-    tokenEncryptionKey,
+    github,
   } = deps;
 
   return {
@@ -148,18 +148,15 @@ export function createPRCreator(deps: PRCreatorDependencies): PRCreator {
       userToken: string;
     }): Promise<{ prNumber: number; prUrl: string; state: string }> {
       // Create the PR using GitHub API
-      const prResult = await createPullRequest(
-        {
-          accessTokenEncrypted: data.userToken,
-          owner: data.repoOwner,
-          repo: data.repoName,
-          title: data.title,
-          body: data.body,
-          head: data.headBranch,
-          base: data.baseBranch,
-        },
-        tokenEncryptionKey
-      );
+      const prResult = await github.createPullRequest({
+        accessTokenEncrypted: data.userToken,
+        owner: data.repoOwner,
+        repo: data.repoName,
+        title: data.title,
+        body: data.body,
+        head: data.headBranch,
+        base: data.baseBranch,
+      });
 
       // Store the PR as an artifact
       const artifactId = crypto.randomUUID();
