@@ -59,8 +59,8 @@ npm install -g wrangler
 
 ## Step 1: Fork the Repository
 
-Fork [ColeMurray/background-agents](https://github.com/ColeMurray/background-agents) to your GitHub account or
-organization.
+Fork [ColeMurray/background-agents](https://github.com/ColeMurray/background-agents) to your GitHub
+account or organization.
 
 ```bash
 # Clone your fork
@@ -241,7 +241,6 @@ echo "modal_api_secret: $(openssl rand -hex 32)"
 # NextAuth secret
 echo "nextauth_secret: $(openssl rand -base64 32)"
 ```
-
 
 Save these values somewhere secure—you'll need them in the next step.
 
@@ -540,7 +539,8 @@ ANTHROPIC_API_KEY=sk-ant-...
 # ... add all secrets
 ```
 
-Then upload all at once (run from your fork's directory, or use `-R {your_github_username}/{background-agents}`):
+Then upload all at once (run from your fork's directory, or use
+`-R {your_github_username}/{background-agents}`):
 
 ```bash
 gh secret set -f .secrets
