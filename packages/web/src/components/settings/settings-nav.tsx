@@ -6,6 +6,11 @@ const NAV_ITEMS = [
     label: "Secrets",
     icon: KeyIcon,
   },
+  {
+    id: "data-controls",
+    label: "Data Controls",
+    icon: DataControlsIcon,
+  },
 ] as const;
 
 export type SettingsCategory = (typeof NAV_ITEMS)[number]["id"];
@@ -41,6 +46,24 @@ export function SettingsNav({ activeCategory, onSelect }: SettingsNavProps) {
         })}
       </ul>
     </nav>
+  );
+}
+
+function DataControlsIcon() {
+  return (
+    <svg
+      className="w-4 h-4"
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 24 24"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <ellipse cx="12" cy="5" rx="9" ry="3" />
+      <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+      <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+    </svg>
   );
 }
 
