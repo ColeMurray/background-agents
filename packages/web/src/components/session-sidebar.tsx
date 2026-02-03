@@ -51,13 +51,15 @@ export function SessionSidebar({ onNewSession, onToggle }: SessionSidebarProps) 
 
   // Sort sessions by updatedAt (most recent first) and filter by search query
   const { activeSessions, inactiveSessions } = useMemo(() => {
-    const filtered = sessions.filter((session) => {
-      if (!searchQuery) return true;
-      const query = searchQuery.toLowerCase();
-      const title = session.title?.toLowerCase() || "";
-      const repo = `${session.repoOwner}/${session.repoName}`.toLowerCase();
-      return title.includes(query) || repo.includes(query);
-    });
+    const filtered = sessions
+      .filter((session) => session.status !== "archived")
+      .filter((session) => {
+        if (!searchQuery) return true;
+        const query = searchQuery.toLowerCase();
+        const title = session.title?.toLowerCase() || "";
+        const repo = `${session.repoOwner}/${session.repoName}`.toLowerCase();
+        return title.includes(query) || repo.includes(query);
+      });
 
     // Sort by updatedAt descending
     const sorted = [...filtered].sort((a, b) => {
