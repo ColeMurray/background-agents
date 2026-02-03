@@ -204,10 +204,11 @@ DO, which decrypts secrets from D1 and passes them as environment variables. Sys
 **Migrations**: D1 schema migrations live in `terraform/d1/migrations/` and are applied via
 `scripts/d1-migrate.sh` during `terraform apply`.
 
-**KV migration endpoint** (temporary): `POST /internal/migrate-kv-to-d1` copies session and repo
-metadata from the `SESSION_INDEX` KV namespace to D1. Protected by internal auth. Idempotent via
-`INSERT OR IGNORE` / `ON CONFLICT`. Run this after deploying the new code to migrate existing data.
-Remove this endpoint once migration is verified.
+**KV → D1 migration** (one-off): Run
+`scripts/migrate-kv-to-d1.sh <kv-namespace-id> <d1-database-name>` to copy session and repo metadata
+from the legacy `SESSION_INDEX` KV namespace to D1. Get the namespace ID from
+`terraform output session_index_kv_id`. Requires `wrangler` auth and `jq`. Idempotent — safe to
+re-run.
 
 ## Coding Conventions
 
