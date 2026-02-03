@@ -1,6 +1,6 @@
 import pytest
 
-from src.sandbox.manager import SandboxConfig, SandboxManager
+from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxConfig, SandboxManager
 
 
 @pytest.mark.asyncio
@@ -88,7 +88,7 @@ async def test_restore_user_env_vars_override_order(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_restore_uses_default_timeout(monkeypatch):
-    """restore_from_snapshot defaults to 2 hours (matching SandboxConfig.timeout_hours)."""
+    """restore_from_snapshot defaults to DEFAULT_SANDBOX_TIMEOUT_SECONDS."""
     captured = {}
 
     class FakeImage:
@@ -121,12 +121,12 @@ async def test_restore_uses_default_timeout(monkeypatch):
         },
     )
 
-    assert captured["timeout"] == 7200  # 2.0 * 3600
+    assert captured["timeout"] == DEFAULT_SANDBOX_TIMEOUT_SECONDS
 
 
 @pytest.mark.asyncio
 async def test_restore_uses_custom_timeout(monkeypatch):
-    """restore_from_snapshot respects a custom timeout_hours value."""
+    """restore_from_snapshot respects a custom timeout_seconds value."""
     captured = {}
 
     class FakeImage:
@@ -157,10 +157,10 @@ async def test_restore_uses_custom_timeout(monkeypatch):
             "model": "claude-sonnet-4-5",
             "session_id": "sess-1",
         },
-        timeout_hours=4.0,
+        timeout_seconds=14400,
     )
 
-    assert captured["timeout"] == 14400  # 4.0 * 3600
+    assert captured["timeout"] == 14400
 
 
 @pytest.mark.asyncio
@@ -197,7 +197,7 @@ async def test_create_and_restore_timeout_consistency(monkeypatch):
     config = SandboxConfig(
         repo_owner="acme",
         repo_name="repo",
-        timeout_hours=3.5,
+        timeout_seconds=5400,
     )
     await manager.create_sandbox(config)
 
@@ -211,8 +211,8 @@ async def test_create_and_restore_timeout_consistency(monkeypatch):
             "model": "claude-sonnet-4-5",
             "session_id": "sess-1",
         },
-        timeout_hours=3.5,
+        timeout_seconds=5400,
     )
 
     assert captured_create["timeout"] == captured_restore["timeout"]
-    assert captured_create["timeout"] == 12600  # 3.5 * 3600
+    assert captured_create["timeout"] == 5400

@@ -8,6 +8,7 @@
 import { generateInternalToken } from "@open-inspect/shared";
 import type { ModalClient } from "../client";
 import {
+  DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   SandboxProviderError,
   type SandboxProvider,
   type SandboxProviderCapabilities,
@@ -115,7 +116,7 @@ export class ModalSandboxProvider implements SandboxProvider {
           control_plane_url: config.controlPlaneUrl,
           sandbox_auth_token: config.sandboxAuthToken,
           user_env_vars: config.userEnvVars || null,
-          timeout_hours: config.timeoutHours ?? 2.0,
+          timeout_seconds: config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS,
         }),
       });
 

@@ -15,6 +15,7 @@ export {
 
 // Provider interface
 export {
+  DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   SandboxProviderError,
   type SandboxProvider,
   type SandboxProviderCapabilities,

@@ -23,6 +23,8 @@ from .types import SandboxStatus, SessionConfig
 
 log = get_logger("manager")
 
+DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200  # 2 hours
+
 
 @dataclass
 class SandboxConfig:
@@ -35,7 +37,7 @@ class SandboxConfig:
     session_config: SessionConfig | None = None
     control_plane_url: str = ""
     sandbox_auth_token: str = ""
-    timeout_hours: float = 2.0
+    timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS
     github_app_token: str | None = None  # GitHub App token for git operations
     user_env_vars: dict[str, str] | None = None  # User-provided env vars (repo secrets)
 
@@ -143,7 +145,7 @@ class SandboxManager:
             image=image,
             app=app,
             secrets=[llm_secrets],
-            timeout=int(config.timeout_hours * 3600),
+            timeout=config.timeout_seconds,
             workdir="/workspace",
             env=env_vars,
             # Note: volumes parameter is not supported in Sandbox.create
@@ -286,7 +288,7 @@ class SandboxManager:
         sandbox_auth_token: str = "",
         github_app_token: str | None = None,
         user_env_vars: dict[str, str] | None = None,
-        timeout_hours: float = 2.0,
+        timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS,
     ) -> SandboxHandle:
         """
         Create a new sandbox from a filesystem snapshot Image.
@@ -365,7 +367,7 @@ class SandboxManager:
             image=image,  # Use the snapshot image directly
             app=app,
             secrets=[llm_secrets],
-            timeout=int(timeout_hours * 3600),
+            timeout=timeout_seconds,
             workdir="/workspace",
             env=env_vars,
         )
