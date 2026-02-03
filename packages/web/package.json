@@ -15,7 +15,7 @@
   "dependencies": {
     "@open-inspect/shared": "file:../shared",
     "@tailwindcss/typography": "^0.5.19",
-    "next": "^15.1.4",
+    "next": "^16.1.5",
     "next-auth": "^4.24.11",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

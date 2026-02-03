@@ -15,7 +15,7 @@
     "@open-inspect/shared": "file:../shared"
   },
   "devDependencies": {
-    "esbuild": "^0.24.2",
+    "esbuild": "^0.25.0",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8",
     "wrangler": "^3.99.0"
