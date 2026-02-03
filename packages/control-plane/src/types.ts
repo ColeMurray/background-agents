@@ -209,6 +209,7 @@ export interface SessionState {
   sandboxStatus: SandboxStatus;
   messageCount: number;
   createdAt: number;
+  model?: string;
   isProcessing: boolean;
 }
 

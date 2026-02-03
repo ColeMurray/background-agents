@@ -1446,6 +1446,7 @@ export class SessionDO extends DurableObject<Env> {
       sandboxStatus: sandbox?.status ?? "pending",
       messageCount,
       createdAt: session?.created_at ?? Date.now(),
+      model: session?.model ?? DEFAULT_MODEL,
       isProcessing,
     };
   }
@@ -1950,6 +1951,7 @@ export class SessionDO extends DurableObject<Env> {
       currentSha: session.current_sha,
       opencodeSessionId: session.opencode_session_id,
       status: session.status,
+      model: session.model,
       createdAt: session.created_at,
       updatedAt: session.updated_at,
       sandbox: sandbox
