@@ -12,7 +12,7 @@
 # Provider Authentication
 # =============================================================================
 
-# Cloudflare API token with Workers, KV, and R2 permissions
+# Cloudflare API token with Workers, KV, R2, and D1 permissions
 # Create at: https://dash.cloudflare.com/profile/api-tokens
 cloudflare_api_token = ""
 
@@ -98,6 +98,9 @@ anthropic_api_key = ""
 
 # Token encryption key (for encrypting OAuth tokens)
 token_encryption_key = ""
+
+# Repo secrets encryption key (for encrypting repo secrets in D1)
+repo_secrets_encryption_key = ""
 
 # Internal callback secret (shared between services)
 internal_callback_secret = ""

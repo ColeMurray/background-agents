@@ -21,12 +21,14 @@ Next.js web application for interacting with Open-Inspect coding sessions.
 │  │  /                  - Dashboard (session list)           │   │
 │  │  /session/new       - Create new session                 │   │
 │  │  /session/[id]      - Session view with streaming        │   │
+│  │  /settings          - Settings (secrets management)      │   │
 │  └──────────────────────────────────────────────────────────┘   │
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │                      API Routes                           │   │
 │  │  /api/auth/[...nextauth] - GitHub OAuth                  │   │
 │  │  /api/sessions           - Session CRUD                  │   │
 │  │  /api/repos              - Repository list               │   │
+│  │  /api/repos/:owner/:name/secrets - Secrets CRUD          │   │
 │  └──────────────────────────────────────────────────────────┘   │
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │                        Hooks                              │   │
@@ -121,6 +123,12 @@ npm run build
 - Repository selector (populated from GitHub)
 - Optional title field
 - Creates session and redirects to session view
+
+### Settings (`/settings`)
+
+- Repository-scoped secrets management
+- Select a repository, then add/edit/delete environment variable secrets
+- Secrets are encrypted and stored in D1, injected into sandboxes at runtime
 
 ### Session View (`/session/[id]`)
 

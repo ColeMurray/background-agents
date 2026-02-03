@@ -67,6 +67,7 @@ describe("SessionRepository", () => {
         title: "Test",
         repo_owner: "owner",
         repo_name: "repo",
+        repo_id: null,
       };
       mock.setData(`SELECT * FROM session LIMIT 1`, [session]);
       expect(repo.getSession()).toEqual(session);
@@ -95,11 +96,22 @@ describe("SessionRepository", () => {
         "Test Title",
         "owner",
         "repo",
+        null,
         "claude-sonnet-4",
         "created",
         1000,
         2000,
       ]);
+    });
+  });
+
+  describe("updateSessionRepoId", () => {
+    it("updates repo_id", () => {
+      repo.updateSessionRepoId(12345);
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("UPDATE session SET repo_id");
+      expect(mock.calls[0].params).toEqual([12345]);
     });
   });
 
@@ -241,6 +253,16 @@ describe("SessionRepository", () => {
     });
   });
 
+  describe("updateSandboxSpawnError", () => {
+    it("updates spawn error fields", () => {
+      repo.updateSandboxSpawnError("Failed to spawn sandbox", 123456);
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("UPDATE sandbox SET last_spawn_error");
+      expect(mock.calls[0].params).toEqual(["Failed to spawn sandbox", 123456]);
+    });
+  });
+
   describe("resetCircuitBreaker", () => {
     it("resets failure count to zero", () => {
       repo.resetCircuitBreaker();
@@ -322,6 +344,7 @@ describe("SessionRepository", () => {
         "Test User",
         "test@example.com",
         "encrypted-token",
+        null,
         9000,
         "owner",
         1000,
@@ -345,6 +368,7 @@ describe("SessionRepository", () => {
         null,
         null,
         null,
+        null,
         "member",
         1000,
       ]);
@@ -362,7 +386,7 @@ describe("SessionRepository", () => {
       expect(mock.calls[0].query).toContain("COALESCE");
       expect(mock.calls[0].params[0]).toBe(null); // githubUserId
       expect(mock.calls[0].params[1]).toBe("newlogin");
-      expect(mock.calls[0].params[6]).toBe("p-1"); // participantId
+      expect(mock.calls[0].params[7]).toBe("p-1"); // participantId
     });
   });
 

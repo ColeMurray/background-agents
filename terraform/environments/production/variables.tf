@@ -3,7 +3,7 @@
 # =============================================================================
 
 variable "cloudflare_api_token" {
-  description = "Cloudflare API token with Workers and KV permissions"
+  description = "Cloudflare API token with Workers, KV, R2, and D1 permissions"
   type        = string
   sensitive   = true
 }
@@ -119,6 +119,12 @@ variable "anthropic_api_key" {
 
 variable "token_encryption_key" {
   description = "Key for encrypting tokens (generate with: openssl rand -base64 32)"
+  type        = string
+  sensitive   = true
+}
+
+variable "repo_secrets_encryption_key" {
+  description = "Key for encrypting repo secrets in D1 (generate with: openssl rand -base64 32)"
   type        = string
   sensitive   = true
 }

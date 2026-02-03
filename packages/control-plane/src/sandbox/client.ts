@@ -44,6 +44,7 @@ export interface CreateSandboxRequest {
   gitUserEmail?: string;
   provider?: string;
   model?: string;
+  userEnvVars?: Record<string, string>;
 }
 
 export interface CreateSandboxResponse {
@@ -186,6 +187,7 @@ export class ModalClient {
           git_user_email: request.gitUserEmail || null,
           provider: request.provider || "anthropic",
           model: request.model || "claude-sonnet-4-5",
+          user_env_vars: request.userEnvVars || null,
         }),
       });
 

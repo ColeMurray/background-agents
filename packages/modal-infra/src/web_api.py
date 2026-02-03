@@ -166,6 +166,7 @@ async def api_create_sandbox(
             control_plane_url=control_plane_url,
             sandbox_auth_token=request.get("sandbox_auth_token"),
             github_app_token=github_app_token,
+            user_env_vars=request.get("user_env_vars") or None,
         )
 
         handle = await manager.create_sandbox(config)
@@ -497,11 +498,13 @@ async def api_restore_sandbox(
 
     try:
         from .auth.github_app import generate_installation_token
-        from .sandbox.manager import SandboxManager
+        from .sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxManager
 
         session_config = request.get("session_config", {})
         sandbox_id = request.get("sandbox_id")
         sandbox_auth_token = request.get("sandbox_auth_token", "")
+        user_env_vars = request.get("user_env_vars") or None
+        timeout_seconds = int(request.get("timeout_seconds", DEFAULT_SANDBOX_TIMEOUT_SECONDS))
 
         manager = SandboxManager()
 
@@ -528,6 +531,8 @@ async def api_restore_sandbox(
             control_plane_url=control_plane_url,
             sandbox_auth_token=sandbox_auth_token,
             github_app_token=github_app_token,
+            user_env_vars=user_env_vars,
+            timeout_seconds=timeout_seconds,
         )
 
         return {

@@ -20,6 +20,7 @@ declare module "next-auth" {
 declare module "next-auth/jwt" {
   interface JWT {
     accessToken?: string;
+    refreshToken?: string;
     accessTokenExpiresAt?: number; // Unix timestamp in milliseconds
     githubUserId?: string;
     githubLogin?: string;
@@ -60,14 +61,9 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, account, profile }) {
       if (account) {
         token.accessToken = account.access_token;
-        // GitHub OAuth tokens expire after 8 hours
-        // expires_at is in seconds, convert to milliseconds
-        if (account.expires_at) {
-          token.accessTokenExpiresAt = account.expires_at * 1000;
-        } else {
-          // Default to 8 hours from now if not provided
-          token.accessTokenExpiresAt = Date.now() + 8 * 60 * 60 * 1000;
-        }
+        token.refreshToken = account.refresh_token as string | undefined;
+        // expires_at is in seconds, convert to milliseconds (only set if provided)
+        token.accessTokenExpiresAt = account.expires_at ? account.expires_at * 1000 : undefined;
       }
       if (profile) {
         // GitHub profile includes id (numeric) and login (username)

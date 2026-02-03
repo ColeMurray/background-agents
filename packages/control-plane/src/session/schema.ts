@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS session (
   title TEXT,                                       -- Session/PR title
   repo_owner TEXT NOT NULL,                         -- e.g., "acme-corp"
   repo_name TEXT NOT NULL,                          -- e.g., "web-app"
+  repo_id INTEGER,                                  -- GitHub repository ID (stable)
   repo_default_branch TEXT NOT NULL DEFAULT 'main', -- Base branch for PRs
   branch_name TEXT,                                 -- Working branch (set after first commit)
   base_sha TEXT,                                    -- SHA of base branch at session start
@@ -89,6 +90,8 @@ CREATE TABLE IF NOT EXISTS sandbox (
   git_sync_status TEXT DEFAULT 'pending',           -- 'pending', 'in_progress', 'completed', 'failed'
   last_heartbeat INTEGER,
   last_activity INTEGER,                            -- Last activity timestamp for inactivity-based snapshot
+  last_spawn_error TEXT,                            -- Last sandbox spawn error (if any)
+  last_spawn_error_at INTEGER,                      -- Timestamp of last spawn error
   created_at INTEGER NOT NULL
 );
 
@@ -131,6 +134,9 @@ export function initSchema(sql: SqlStorage): void {
   // Migration: Add session_name column if it doesn't exist (for existing DOs)
   runMigration(sql, `ALTER TABLE session ADD COLUMN session_name TEXT`);
 
+  // Migration: Add repo_id column if it doesn't exist (for existing DOs)
+  runMigration(sql, `ALTER TABLE session ADD COLUMN repo_id INTEGER`);
+
   // Migration: Add model column if it doesn't exist (for existing DOs)
   runMigration(sql, `ALTER TABLE session ADD COLUMN model TEXT DEFAULT 'claude-haiku-4-5'`);
 
@@ -141,11 +147,18 @@ export function initSchema(sql: SqlStorage): void {
   runMigration(sql, `ALTER TABLE participants ADD COLUMN ws_auth_token TEXT`);
   runMigration(sql, `ALTER TABLE participants ADD COLUMN ws_token_created_at INTEGER`);
 
+  // Migration: Add GitHub refresh token column to participants table
+  runMigration(sql, `ALTER TABLE participants ADD COLUMN github_refresh_token_encrypted TEXT`);
+
   // Migration: Add snapshot_image_id column to sandbox table for Modal filesystem snapshots
   runMigration(sql, `ALTER TABLE sandbox ADD COLUMN snapshot_image_id TEXT`);
 
   // Migration: Add last_activity column to sandbox table for inactivity-based snapshot
   runMigration(sql, `ALTER TABLE sandbox ADD COLUMN last_activity INTEGER`);
+
+  // Migration: Add last_spawn_error columns to sandbox table
+  runMigration(sql, `ALTER TABLE sandbox ADD COLUMN last_spawn_error TEXT`);
+  runMigration(sql, `ALTER TABLE sandbox ADD COLUMN last_spawn_error_at INTEGER`);
 
   // Migration: Add modal_object_id column for Modal's internal sandbox ID
   runMigration(sql, `ALTER TABLE sandbox ADD COLUMN modal_object_id TEXT`);

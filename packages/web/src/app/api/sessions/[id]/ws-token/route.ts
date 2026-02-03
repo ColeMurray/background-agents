@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { getToken } from "next-auth/jwt";
 import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
 
@@ -26,6 +27,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const user = session.user;
     const userId = user.id || user.email || "anonymous";
 
+    // Read refresh token from the JWT directly (not exposed on session)
+    const jwt = await getToken({ req: request });
+
     const response = await controlPlaneFetch(`/sessions/${sessionId}/ws-token`, {
       method: "POST",
       body: JSON.stringify({
@@ -37,6 +41,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         // Pass user's GitHub token for PR creation (will be encrypted by control plane)
         githubToken: (session as { accessToken?: string }).accessToken,
         githubTokenExpiresAt: (session as { accessTokenExpiresAt?: number }).accessTokenExpiresAt,
+        githubRefreshToken: jwt?.refreshToken as string | undefined,
       }),
     });
 

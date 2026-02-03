@@ -11,6 +11,7 @@ The control plane provides:
 - **Multi-client Sync**: Web, Slack, extension clients all see the same state
 - **GitHub Integration**: GitHub App for repository access
 - **Token Encryption**: AES-256-GCM encryption for GitHub tokens at rest
+- **Repo Secrets**: Encrypted repo-scoped secrets stored in D1, injected into sandboxes as env vars
 
 ## Architecture
 
@@ -34,6 +35,9 @@ The control plane provides:
 │  │  │ - sandbox      │                                       │   │
 │  │  │ - ws_mapping   │                                       │   │
 │  │  └────────────────┘                                       │   │
+│  └───────────────────────────────────────────────────────────┘   │
+│  ┌───────────────────────────────────────────────────────────┐   │
+│  │              D1 Database (repo-scoped secrets)              │   │
 │  └───────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -68,11 +72,14 @@ The control plane provides:
 
 ### Repositories
 
-| Endpoint                       | Method | Description          |
-| ------------------------------ | ------ | -------------------- |
-| `/repos`                       | GET    | List repositories    |
-| `/repos/:owner/:name/metadata` | GET    | Get repo metadata    |
-| `/repos/:owner/:name/metadata` | PUT    | Update repo metadata |
+| Endpoint                           | Method | Description          |
+| ---------------------------------- | ------ | -------------------- |
+| `/repos`                           | GET    | List repositories    |
+| `/repos/:owner/:name/metadata`     | GET    | Get repo metadata    |
+| `/repos/:owner/:name/metadata`     | PUT    | Update repo metadata |
+| `/repos/:owner/:name/secrets`      | GET    | List secret keys     |
+| `/repos/:owner/:name/secrets`      | PUT    | Upsert secrets       |
+| `/repos/:owner/:name/secrets/:key` | DELETE | Delete a secret      |
 
 ## WebSocket Protocol
 
@@ -195,6 +202,7 @@ All secrets are configured via Terraform. Required secrets include:
 - `GITHUB_APP_ID` - GitHub App ID
 - `GITHUB_APP_PRIVATE_KEY` - GitHub App private key (PKCS#8 format)
 - `GITHUB_APP_INSTALLATION_ID` - Single installation for all users
+- `REPO_SECRETS_ENCRYPTION_KEY` - AES-GCM key for encrypting repo secrets in D1
 
 See
 [terraform/environments/production/terraform.tfvars.example](../../terraform/environments/production/terraform.tfvars.example)
