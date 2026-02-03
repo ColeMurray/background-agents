@@ -265,6 +265,7 @@ export interface SessionResponse {
 
 export interface ListSessionsResponse {
   sessions: SessionResponse[];
+  total: number;
   cursor?: string;
   hasMore: boolean;
 }

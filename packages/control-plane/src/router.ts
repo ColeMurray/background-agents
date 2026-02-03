@@ -11,16 +11,28 @@ import {
   listInstallationRepositories,
 } from "./auth/github-app";
 import { RepoSecretsStore, RepoSecretsValidationError } from "./db/repo-secrets";
+import { SessionIndexStore } from "./db/session-index";
+import type { SessionEntry } from "./db/session-index";
+import { RepoMetadataStore } from "./db/repo-metadata";
 import type {
   EnrichedRepository,
   InstallationRepository,
   RepoMetadata,
 } from "@open-inspect/shared";
-import { getRepoMetadataKey } from "./utils/repo";
 import { createLogger } from "./logger";
 import type { CorrelationContext } from "./logger";
 
 const logger = createLogger("router");
+
+// In-memory repos cache (replaces KV "repos:list" entry)
+let reposCacheData: { repos: EnrichedRepository[]; cachedAt: string } | null = null;
+let reposCacheExpiry = 0;
+const REPOS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function invalidateReposCache(): void {
+  reposCacheData = null;
+  reposCacheExpiry = 0;
+}
 
 /**
  * Request context with correlation IDs propagated to downstream services.
@@ -336,6 +348,13 @@ const routes: Route[] = [
     pattern: parsePattern("/repos/:owner/:name/secrets/:key"),
     handler: handleDeleteRepoSecret,
   },
+
+  // Internal migration endpoint (temporary — for migrating KV data to D1)
+  {
+    method: "POST",
+    pattern: parsePattern("/internal/migrate-kv-to-d1"),
+    handler: handleMigrateKvToD1,
+  },
 ];
 
 /**
@@ -476,27 +495,18 @@ async function handleListSessions(
 ): Promise<Response> {
   const url = new URL(request.url);
   const limit = Math.min(parseInt(url.searchParams.get("limit") || "50"), 100);
-  const cursor = url.searchParams.get("cursor") || undefined;
+  const offset = parseInt(url.searchParams.get("offset") || "0");
+  const status = url.searchParams.get("status") || undefined;
+  const excludeStatus = url.searchParams.get("excludeStatus") || undefined;
 
-  // List sessions from KV index
-  const listResult = await env.SESSION_INDEX.list({
-    prefix: "session:",
-    limit,
-    cursor,
-  });
-
-  // Fetch session data for each key
-  const sessions = await Promise.all(
-    listResult.keys.map(async (key) => {
-      const data = await env.SESSION_INDEX.get(key.name, "json");
-      return data;
-    })
-  );
+  const store = new SessionIndexStore(env.DB);
+  const result = await store.list({ status, excludeStatus, limit, offset });
 
   return json({
-    sessions: sessions.filter(Boolean),
-    cursor: listResult.list_complete ? undefined : listResult.cursor,
-    hasMore: !listResult.list_complete,
+    sessions: result.sessions,
+    total: result.total,
+    cursor: undefined, // kept for backward compatibility
+    hasMore: result.hasMore,
   });
 }
 
@@ -599,21 +609,19 @@ async function handleCreateSession(
     return error("Failed to create session", 500);
   }
 
-  // Store session in KV index for listing
+  // Store session in D1 index for listing
   const now = Date.now();
-  await env.SESSION_INDEX.put(
-    `session:${sessionId}`,
-    JSON.stringify({
-      id: sessionId,
-      title: body.title || null,
-      repoOwner,
-      repoName,
-      model: body.model || "claude-haiku-4-5",
-      status: "created",
-      createdAt: now,
-      updatedAt: now,
-    })
-  );
+  const sessionStore = new SessionIndexStore(env.DB);
+  await sessionStore.create({
+    id: sessionId,
+    title: body.title || null,
+    repoOwner,
+    repoName,
+    model: body.model || "claude-haiku-4-5",
+    status: "created",
+    createdAt: now,
+    updatedAt: now,
+  });
 
   const result: CreateSessionResponse = {
     sessionId,
@@ -655,8 +663,9 @@ async function handleDeleteSession(
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
 
-  // Delete from KV index
-  await env.SESSION_INDEX.delete(`session:${sessionId}`);
+  // Delete from D1 index
+  const sessionStore = new SessionIndexStore(env.DB);
+  await sessionStore.delete(sessionId);
 
   // Note: Durable Object data will be garbage collected by Cloudflare
   // when no longer referenced. We could also call a cleanup method on the DO.
@@ -963,22 +972,11 @@ async function handleArchiveSession(
   );
 
   if (response.ok) {
-    // Update KV index
-    const sessionData = (await env.SESSION_INDEX.get(`session:${sessionId}`, "json")) as Record<
-      string,
-      unknown
-    > | null;
-    if (sessionData) {
-      await env.SESSION_INDEX.put(
-        `session:${sessionId}`,
-        JSON.stringify({
-          ...sessionData,
-          status: "archived",
-          updatedAt: Date.now(),
-        })
-      );
-    } else {
-      logger.warn("Session not found in KV index during archive", { session_id: sessionId });
+    // Update D1 index
+    const sessionStore = new SessionIndexStore(env.DB);
+    const updated = await sessionStore.updateStatus(sessionId, "archived");
+    if (!updated) {
+      logger.warn("Session not found in D1 index during archive", { session_id: sessionId });
     }
   }
 
@@ -1019,22 +1017,11 @@ async function handleUnarchiveSession(
   );
 
   if (response.ok) {
-    // Update KV index
-    const sessionData = (await env.SESSION_INDEX.get(`session:${sessionId}`, "json")) as Record<
-      string,
-      unknown
-    > | null;
-    if (sessionData) {
-      await env.SESSION_INDEX.put(
-        `session:${sessionId}`,
-        JSON.stringify({
-          ...sessionData,
-          status: "active",
-          updatedAt: Date.now(),
-        })
-      );
-    } else {
-      logger.warn("Session not found in KV index during unarchive", { session_id: sessionId });
+    // Update D1 index
+    const sessionStore = new SessionIndexStore(env.DB);
+    const updated = await sessionStore.updateStatus(sessionId, "active");
+    if (!updated) {
+      logger.warn("Session not found in D1 index during unarchive", { session_id: sessionId });
     }
   }
 
@@ -1066,16 +1053,8 @@ async function resolveInstalledRepo(
 }
 
 /**
- * Cached repos list structure.
- */
-interface CachedReposList {
-  repos: EnrichedRepository[];
-  cachedAt: string;
-}
-
-/**
  * List all repositories accessible via the GitHub App installation.
- * Results are cached in KV for 5 minutes to avoid rate limits.
+ * Results are cached in-memory for 5 minutes to avoid rate limits.
  */
 async function handleListRepos(
   request: Request,
@@ -1083,21 +1062,13 @@ async function handleListRepos(
   _match: RegExpMatchArray,
   _ctx: RequestContext
 ): Promise<Response> {
-  const CACHE_KEY = "repos:list";
-  const CACHE_TTL = 300; // 5 minutes
-
-  // Check KV cache first
-  try {
-    const cached = (await env.SESSION_INDEX.get(CACHE_KEY, "json")) as CachedReposList | null;
-    if (cached) {
-      return json({
-        repos: cached.repos,
-        cached: true,
-        cachedAt: cached.cachedAt,
-      });
-    }
-  } catch (e) {
-    logger.warn("Failed to read repos cache", { error: e instanceof Error ? e : String(e) });
+  // Check in-memory cache first
+  if (reposCacheData && Date.now() < reposCacheExpiry) {
+    return json({
+      repos: reposCacheData.repos,
+      cached: true,
+      cachedAt: reposCacheData.cachedAt,
+    });
   }
 
   // Get GitHub App config
@@ -1117,47 +1088,31 @@ async function handleListRepos(
     return error("Failed to fetch repositories from GitHub", 500);
   }
 
-  // Enrich repos with stored metadata
-  const enrichedRepos: EnrichedRepository[] = await Promise.all(
-    repos.map(async (repo) => {
-      const newKey = getRepoMetadataKey(repo.owner, repo.name);
-      const oldKey = `repo:metadata:${repo.fullName}`; // Original casing for migration
-
-      try {
-        let metadata = (await env.SESSION_INDEX.get(newKey, "json")) as RepoMetadata | null;
-
-        // Migration: check old key pattern if metadata not found at new key
-        if (!metadata && repo.fullName.toLowerCase() !== newKey.replace("repo:metadata:", "")) {
-          metadata = (await env.SESSION_INDEX.get(oldKey, "json")) as RepoMetadata | null;
-          if (metadata) {
-            // Migrate to new key
-            await env.SESSION_INDEX.put(newKey, JSON.stringify(metadata));
-            await env.SESSION_INDEX.delete(oldKey);
-            logger.info("Migrated repo metadata key", { old_key: oldKey, new_key: newKey });
-          }
-        }
-
-        return metadata ? { ...repo, metadata } : repo;
-      } catch {
-        return repo;
-      }
-    })
-  );
-
-  // Cache the results
-  const cachedAt = new Date().toISOString();
-  const cacheData: CachedReposList = {
-    repos: enrichedRepos,
-    cachedAt,
-  };
-
+  // Batch-fetch metadata from D1
+  const metadataStore = new RepoMetadataStore(env.DB);
+  let metadataMap: Map<string, RepoMetadata>;
   try {
-    await env.SESSION_INDEX.put(CACHE_KEY, JSON.stringify(cacheData), {
-      expirationTtl: CACHE_TTL,
-    });
+    metadataMap = await metadataStore.getBatch(
+      repos.map((r) => ({ owner: r.owner, name: r.name }))
+    );
   } catch (e) {
-    logger.warn("Failed to cache repos list", { error: e instanceof Error ? e : String(e) });
+    logger.warn("Failed to fetch repo metadata batch", {
+      error: e instanceof Error ? e : String(e),
+    });
+    metadataMap = new Map();
   }
+
+  // Enrich repos with stored metadata
+  const enrichedRepos: EnrichedRepository[] = repos.map((repo) => {
+    const key = `${repo.owner.toLowerCase()}/${repo.name.toLowerCase()}`;
+    const metadata = metadataMap.get(key);
+    return metadata ? { ...repo, metadata } : repo;
+  });
+
+  // Cache the results in memory
+  const cachedAt = new Date().toISOString();
+  reposCacheData = { repos: enrichedRepos, cachedAt };
+  reposCacheExpiry = Date.now() + REPOS_CACHE_TTL_MS;
 
   return json({
     repos: enrichedRepos,
@@ -1197,13 +1152,13 @@ async function handleUpdateRepoMetadata(
     }).filter(([, v]) => v !== undefined)
   ) as RepoMetadata;
 
-  const metadataKey = getRepoMetadataKey(owner, name);
+  const metadataStore = new RepoMetadataStore(env.DB);
 
   try {
-    await env.SESSION_INDEX.put(metadataKey, JSON.stringify(metadata));
+    await metadataStore.upsert(owner, name, metadata);
 
-    // Invalidate the repos cache so next fetch includes updated metadata
-    await env.SESSION_INDEX.delete("repos:list");
+    // Invalidate the in-memory repos cache so next fetch includes updated metadata
+    invalidateReposCache();
 
     // Return normalized repo identifier
     const normalizedRepo = `${owner.toLowerCase()}/${name.toLowerCase()}`;
@@ -1236,22 +1191,15 @@ async function handleGetRepoMetadata(
     return error("Owner and name are required");
   }
 
-  const metadataKey = getRepoMetadataKey(owner, name);
   const normalizedRepo = `${owner.toLowerCase()}/${name.toLowerCase()}`;
+  const metadataStore = new RepoMetadataStore(env.DB);
 
   try {
-    const metadata = (await env.SESSION_INDEX.get(metadataKey, "json")) as RepoMetadata | null;
-
-    if (!metadata) {
-      return json({
-        repo: normalizedRepo,
-        metadata: null,
-      });
-    }
+    const metadata = await metadataStore.get(owner, name);
 
     return json({
       repo: normalizedRepo,
-      metadata,
+      metadata: metadata ?? null,
     });
   } catch (e) {
     logger.error("Failed to get repo metadata", { error: e instanceof Error ? e : String(e) });
@@ -1515,4 +1463,101 @@ async function handleDeleteRepoSecret(
     });
     return error("Secrets storage unavailable", 503);
   }
+}
+
+// Migration handler (temporary — remove in Phase 2)
+
+/**
+ * Migrate session and repo metadata from KV to D1.
+ * Idempotent via INSERT OR IGNORE / ON CONFLICT.
+ * Protected by internal auth.
+ */
+async function handleMigrateKvToD1(
+  request: Request,
+  env: Env,
+  _match: RegExpMatchArray,
+  _ctx: RequestContext
+): Promise<Response> {
+  const sessionStore = new SessionIndexStore(env.DB);
+  const metadataStore = new RepoMetadataStore(env.DB);
+
+  const summary = {
+    sessions: { migrated: 0, errors: 0 },
+    repoMetadata: { migrated: 0, errors: 0 },
+  };
+
+  // Migrate sessions using cursor-based KV pagination
+  let sessionCursor: string | undefined;
+  do {
+    const listResult = await env.SESSION_INDEX.list({
+      prefix: "session:",
+      cursor: sessionCursor,
+    });
+
+    for (const key of listResult.keys) {
+      try {
+        const data = (await env.SESSION_INDEX.get(key.name, "json")) as SessionEntry | null;
+        if (data) {
+          await sessionStore.create({
+            id: data.id,
+            title: data.title,
+            repoOwner: data.repoOwner,
+            repoName: data.repoName,
+            model: data.model || "claude-haiku-4-5",
+            status: data.status || "created",
+            createdAt: data.createdAt,
+            updatedAt: data.updatedAt,
+          });
+          summary.sessions.migrated++;
+        }
+      } catch (e) {
+        summary.sessions.errors++;
+        logger.error("Failed to migrate session", {
+          key: key.name,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    sessionCursor = listResult.list_complete ? undefined : (listResult.cursor as string);
+  } while (sessionCursor);
+
+  // Migrate repo metadata using cursor-based KV pagination
+  let metadataCursor: string | undefined;
+  do {
+    const listResult = await env.SESSION_INDEX.list({
+      prefix: "repo:metadata:",
+      cursor: metadataCursor,
+    });
+
+    for (const key of listResult.keys) {
+      try {
+        const data = (await env.SESSION_INDEX.get(key.name, "json")) as RepoMetadata | null;
+        if (data) {
+          // Extract owner/name from key: "repo:metadata:owner/name"
+          const repoPath = key.name.replace("repo:metadata:", "");
+          const slashIdx = repoPath.indexOf("/");
+          if (slashIdx === -1) continue;
+
+          const owner = repoPath.slice(0, slashIdx);
+          const name = repoPath.slice(slashIdx + 1);
+
+          await metadataStore.upsert(owner, name, data);
+          summary.repoMetadata.migrated++;
+        }
+      } catch (e) {
+        summary.repoMetadata.errors++;
+        logger.error("Failed to migrate repo metadata", {
+          key: key.name,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    metadataCursor = listResult.list_complete ? undefined : (listResult.cursor as string);
+  } while (metadataCursor);
+
+  logger.info("KV to D1 migration complete", { summary });
+
+  return json({ status: "complete", summary });
 }
