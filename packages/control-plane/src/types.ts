@@ -7,6 +7,9 @@ export interface Env {
   // Durable Objects
   SESSION: DurableObjectNamespace;
 
+  // KV Namespaces
+  REPOS_CACHE: KVNamespace; // Short-lived cache for /repos listing
+
   // Service bindings
   SLACK_BOT?: Fetcher; // Optional - only if slack-bot is deployed
 
@@ -263,7 +266,6 @@ export interface SessionResponse {
 export interface ListSessionsResponse {
   sessions: SessionResponse[];
   total: number;
-  cursor?: string;
   hasMore: boolean;
 }
 

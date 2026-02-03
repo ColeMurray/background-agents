@@ -187,9 +187,9 @@ fetching via `db.batch()`.
 **Repo Secrets** (`repo_secrets` table): Encrypted repository-scoped secrets (AES-256-GCM using
 `REPO_SECRETS_ENCRYPTION_KEY`). Managed by `RepoSecretsStore` in `src/db/repo-secrets.ts`.
 
-**Repository list cache**: The `/repos` endpoint caches the enriched repository list in-memory
-(module-level variable in `router.ts`) with a 5-minute TTL. On cold start or cache miss, it
-re-fetches from GitHub and D1.
+**Repository list cache**: The `/repos` endpoint caches the enriched repository list in KV
+(`REPOS_CACHE` binding) with a 5-minute TTL. KV is shared across isolates, so cache invalidation (on
+metadata update) is consistent. On cache miss it re-fetches from GitHub and D1.
 
 **API routes** (in `src/router.ts`):
 

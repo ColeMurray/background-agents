@@ -24,15 +24,8 @@ import type { CorrelationContext } from "./logger";
 
 const logger = createLogger("router");
 
-// In-memory repos cache (replaces KV "repos:list" entry)
-let reposCacheData: { repos: EnrichedRepository[]; cachedAt: string } | null = null;
-let reposCacheExpiry = 0;
-const REPOS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-function invalidateReposCache(): void {
-  reposCacheData = null;
-  reposCacheExpiry = 0;
-}
+const REPOS_CACHE_KEY = "repos:list";
+const REPOS_CACHE_TTL_SECONDS = 300; // 5 minutes
 
 /**
  * Request context with correlation IDs propagated to downstream services.
@@ -498,7 +491,6 @@ async function handleListSessions(
   return json({
     sessions: result.sessions,
     total: result.total,
-    cursor: undefined, // kept for backward compatibility
     hasMore: result.hasMore,
   });
 }
@@ -1046,8 +1038,17 @@ async function resolveInstalledRepo(
 }
 
 /**
+ * Cached repos list structure stored in KV.
+ */
+interface CachedReposList {
+  repos: EnrichedRepository[];
+  cachedAt: string;
+}
+
+/**
  * List all repositories accessible via the GitHub App installation.
- * Results are cached in-memory for 5 minutes to avoid rate limits.
+ * Results are cached in KV for 5 minutes to avoid rate limits.
+ * KV is shared across isolates, so cache invalidation is consistent.
  */
 async function handleListRepos(
   request: Request,
@@ -1055,13 +1056,18 @@ async function handleListRepos(
   _match: RegExpMatchArray,
   _ctx: RequestContext
 ): Promise<Response> {
-  // Check in-memory cache first
-  if (reposCacheData && Date.now() < reposCacheExpiry) {
-    return json({
-      repos: reposCacheData.repos,
-      cached: true,
-      cachedAt: reposCacheData.cachedAt,
-    });
+  // Check KV cache first
+  try {
+    const cached = await env.REPOS_CACHE.get<CachedReposList>(REPOS_CACHE_KEY, "json");
+    if (cached) {
+      return json({
+        repos: cached.repos,
+        cached: true,
+        cachedAt: cached.cachedAt,
+      });
+    }
+  } catch (e) {
+    logger.warn("Failed to read repos cache", { error: e instanceof Error ? e : String(e) });
   }
 
   // Get GitHub App config
@@ -1102,10 +1108,15 @@ async function handleListRepos(
     return metadata ? { ...repo, metadata } : repo;
   });
 
-  // Cache the results in memory
+  // Cache the results in KV with TTL
   const cachedAt = new Date().toISOString();
-  reposCacheData = { repos: enrichedRepos, cachedAt };
-  reposCacheExpiry = Date.now() + REPOS_CACHE_TTL_MS;
+  try {
+    await env.REPOS_CACHE.put(REPOS_CACHE_KEY, JSON.stringify({ repos: enrichedRepos, cachedAt }), {
+      expirationTtl: REPOS_CACHE_TTL_SECONDS,
+    });
+  } catch (e) {
+    logger.warn("Failed to cache repos list", { error: e instanceof Error ? e : String(e) });
+  }
 
   return json({
     repos: enrichedRepos,
@@ -1150,8 +1161,8 @@ async function handleUpdateRepoMetadata(
   try {
     await metadataStore.upsert(owner, name, metadata);
 
-    // Invalidate the in-memory repos cache so next fetch includes updated metadata
-    invalidateReposCache();
+    // Invalidate the KV repos cache so next fetch includes updated metadata
+    await env.REPOS_CACHE.delete(REPOS_CACHE_KEY);
 
     // Return normalized repo identifier
     const normalizedRepo = `${owner.toLowerCase()}/${name.toLowerCase()}`;
