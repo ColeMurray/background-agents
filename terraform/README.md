@@ -7,19 +7,21 @@ Terraform.
 
 The infrastructure spans three cloud providers:
 
-| Provider       | Resources                               | Terraform Support                |
-| -------------- | --------------------------------------- | -------------------------------- |
-| **Cloudflare** | Workers, KV Namespaces, Durable Objects | Native provider                  |
-| **Vercel**     | Next.js Web App                         | Native provider                  |
-| **Modal**      | Sandbox Infrastructure                  | CLI wrapper (no provider exists) |
+| Provider       | Resources                                            | Terraform Support                |
+| -------------- | ---------------------------------------------------- | -------------------------------- |
+| **Cloudflare** | Workers, KV Namespaces, Durable Objects, D1 Database | Native provider                  |
+| **Vercel**     | Next.js Web App                                      | Native provider                  |
+| **Modal**      | Sandbox Infrastructure                               | CLI wrapper (no provider exists) |
 
 ## Directory Structure
 
 ```
 terraform/
+├── d1/
+│   └── migrations/              # D1 database migrations (applied via d1-migrate.sh)
 ├── modules/                      # Reusable Terraform modules
 │   ├── cloudflare-kv/           # KV namespace management
-│   ├── cloudflare-worker/       # Worker deployment with bindings
+│   ├── cloudflare-worker/       # Worker deployment with bindings (KV, DO, D1)
 │   ├── vercel-project/          # Vercel project + environment vars
 │   └── modal-app/               # Modal CLI wrapper
 │       └── scripts/             # Deployment scripts
@@ -229,6 +231,10 @@ module "my_worker" {
 
   durable_objects = [
     { binding_name = "DO", class_name = "MyDurableObject" }
+  ]
+
+  d1_databases = [
+    { binding_name = "DB", database_id = cloudflare_d1_database.main.id }
   ]
 
   compatibility_date = "2024-09-23"

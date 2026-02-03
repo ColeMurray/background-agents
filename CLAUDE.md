@@ -172,6 +172,28 @@ Sessions use Durable Objects with SQLite storage. Key patterns:
 - Use `ctx.getWebSockets()` to recover WebSocket references after hibernation
 - Store critical state in SQLite, not just memory
 
+### Repo Secrets (D1 Database)
+
+Repository-scoped secrets are stored in a Cloudflare D1 database, separate from the per-session
+Durable Object SQLite storage. Secrets are encrypted at rest with AES-GCM using
+`REPO_SECRETS_ENCRYPTION_KEY` (distinct from `TOKEN_ENCRYPTION_KEY` for OAuth tokens).
+
+**Storage**: `RepoSecretsStore` class in `src/db/repo-secrets.ts` handles encryption, validation,
+and CRUD operations against the `DB` D1 binding.
+
+**API routes** (in `src/router.ts`):
+
+- `GET /repos/:owner/:name/secrets` — list secret keys (values never exposed)
+- `PUT /repos/:owner/:name/secrets` — upsert secrets (batch)
+- `DELETE /repos/:owner/:name/secrets/:key` — delete a single secret
+
+**Sandbox injection**: At spawn time, the lifecycle manager calls `getUserEnvVars()` on the session
+DO, which decrypts secrets from D1 and passes them as environment variables. System variables
+(`CONTROL_PLANE_URL`, `SANDBOX_AUTH_TOKEN`, etc.) always take precedence.
+
+**Migrations**: D1 schema migrations live in `terraform/d1/migrations/` and are applied via
+`scripts/d1-migrate.sh` during `terraform apply`.
+
 ## Testing
 
 ### End-to-End Test Flow

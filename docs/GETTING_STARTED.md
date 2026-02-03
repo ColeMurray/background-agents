@@ -12,11 +12,11 @@ This guide walks you through deploying your own instance of Open-Inspect using T
 
 Open-Inspect uses Terraform to automate deployment across three cloud providers:
 
-| Provider       | Purpose                          | What Terraform Creates                  |
-| -------------- | -------------------------------- | --------------------------------------- |
-| **Cloudflare** | Control plane, session state     | Workers, KV namespaces, Durable Objects |
-| **Vercel**     | Web application                  | Project, environment variables          |
-| **Modal**      | Sandbox execution infrastructure | App deployment, secrets, volumes        |
+| Provider       | Purpose                          | What Terraform Creates                               |
+| -------------- | -------------------------------- | ---------------------------------------------------- |
+| **Cloudflare** | Control plane, session state     | Workers, KV namespaces, Durable Objects, D1 Database |
+| **Vercel**     | Web application                  | Project, environment variables                       |
+| **Modal**      | Sandbox execution infrastructure | App deployment, secrets, volumes                     |
 
 **Your job**: Create accounts, gather credentials, and configure one file (`terraform.tfvars`).
 **Terraform's job**: Create all infrastructure and configure services.
