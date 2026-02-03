@@ -12,7 +12,7 @@ import {
 } from "./auth/github-app";
 import { RepoSecretsStore, RepoSecretsValidationError } from "./db/repo-secrets";
 import { SessionIndexStore } from "./db/session-index";
-import type { SessionEntry } from "./db/session-index";
+
 import { RepoMetadataStore } from "./db/repo-metadata";
 import type {
   EnrichedRepository,
@@ -347,13 +347,6 @@ const routes: Route[] = [
     method: "DELETE",
     pattern: parsePattern("/repos/:owner/:name/secrets/:key"),
     handler: handleDeleteRepoSecret,
-  },
-
-  // Internal migration endpoint (temporary — for migrating KV data to D1)
-  {
-    method: "POST",
-    pattern: parsePattern("/internal/migrate-kv-to-d1"),
-    handler: handleMigrateKvToD1,
   },
 ];
 
@@ -1463,101 +1456,4 @@ async function handleDeleteRepoSecret(
     });
     return error("Secrets storage unavailable", 503);
   }
-}
-
-// Migration handler (temporary — remove in Phase 2)
-
-/**
- * Migrate session and repo metadata from KV to D1.
- * Idempotent via INSERT OR IGNORE / ON CONFLICT.
- * Protected by internal auth.
- */
-async function handleMigrateKvToD1(
-  request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
-  _ctx: RequestContext
-): Promise<Response> {
-  const sessionStore = new SessionIndexStore(env.DB);
-  const metadataStore = new RepoMetadataStore(env.DB);
-
-  const summary = {
-    sessions: { migrated: 0, errors: 0 },
-    repoMetadata: { migrated: 0, errors: 0 },
-  };
-
-  // Migrate sessions using cursor-based KV pagination
-  let sessionCursor: string | undefined;
-  do {
-    const listResult = await env.SESSION_INDEX.list({
-      prefix: "session:",
-      cursor: sessionCursor,
-    });
-
-    for (const key of listResult.keys) {
-      try {
-        const data = (await env.SESSION_INDEX.get(key.name, "json")) as SessionEntry | null;
-        if (data) {
-          await sessionStore.create({
-            id: data.id,
-            title: data.title,
-            repoOwner: data.repoOwner,
-            repoName: data.repoName,
-            model: data.model || "claude-haiku-4-5",
-            status: data.status || "created",
-            createdAt: data.createdAt,
-            updatedAt: data.updatedAt,
-          });
-          summary.sessions.migrated++;
-        }
-      } catch (e) {
-        summary.sessions.errors++;
-        logger.error("Failed to migrate session", {
-          key: key.name,
-          error: e instanceof Error ? e.message : String(e),
-        });
-      }
-    }
-
-    sessionCursor = listResult.list_complete ? undefined : (listResult.cursor as string);
-  } while (sessionCursor);
-
-  // Migrate repo metadata using cursor-based KV pagination
-  let metadataCursor: string | undefined;
-  do {
-    const listResult = await env.SESSION_INDEX.list({
-      prefix: "repo:metadata:",
-      cursor: metadataCursor,
-    });
-
-    for (const key of listResult.keys) {
-      try {
-        const data = (await env.SESSION_INDEX.get(key.name, "json")) as RepoMetadata | null;
-        if (data) {
-          // Extract owner/name from key: "repo:metadata:owner/name"
-          const repoPath = key.name.replace("repo:metadata:", "");
-          const slashIdx = repoPath.indexOf("/");
-          if (slashIdx === -1) continue;
-
-          const owner = repoPath.slice(0, slashIdx);
-          const name = repoPath.slice(slashIdx + 1);
-
-          await metadataStore.upsert(owner, name, data);
-          summary.repoMetadata.migrated++;
-        }
-      } catch (e) {
-        summary.repoMetadata.errors++;
-        logger.error("Failed to migrate repo metadata", {
-          key: key.name,
-          error: e instanceof Error ? e.message : String(e),
-        });
-      }
-    }
-
-    metadataCursor = listResult.list_complete ? undefined : (listResult.cursor as string);
-  } while (metadataCursor);
-
-  logger.info("KV to D1 migration complete", { summary });
-
-  return json({ status: "complete", summary });
 }

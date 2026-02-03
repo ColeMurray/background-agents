@@ -7,9 +7,6 @@ export interface Env {
   // Durable Objects
   SESSION: DurableObjectNamespace;
 
-  // KV Namespaces
-  SESSION_INDEX: KVNamespace; // Index for listing sessions
-
   // Service bindings
   SLACK_BOT?: Fetcher; // Optional - only if slack-bot is deployed
 
