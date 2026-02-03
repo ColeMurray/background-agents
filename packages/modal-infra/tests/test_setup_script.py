@@ -1,5 +1,6 @@
 """Tests for SandboxSupervisor.run_setup_script() and its integration in run()."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.sandbox.entrypoint import SandboxSupervisor
@@ -185,10 +186,11 @@ class TestSetupScriptTimeout:
         _create_setup_script(sup.repo_path)
         fake_proc = _fake_process()
         fake_proc.communicate = AsyncMock(side_effect=TimeoutError)
+        fake_proc.stdout = MagicMock()
+        fake_proc.stdout.read = AsyncMock(return_value=b"partial output\n")
 
-        with (
-            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc),
-            patch("asyncio.wait_for", side_effect=TimeoutError),
+        with patch(
+            "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
         ):
             result = await sup.run_setup_script()
 
@@ -200,39 +202,68 @@ class TestSetupScriptTimeout:
         sup = _make_supervisor(tmp_path)
         _create_setup_script(sup.repo_path)
         fake_proc = _fake_process(returncode=0, stdout=b"ok\n")
+        captured_timeout = {}
+
+        original_wait_for = asyncio.wait_for
+
+        async def capturing_wait_for(coro, *, timeout=None):
+            captured_timeout["value"] = timeout
+            return await original_wait_for(coro, timeout=timeout)
 
         with (
             patch.dict("os.environ", {}, clear=False),
             patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc),
-            patch(
-                "asyncio.wait_for", new_callable=AsyncMock, return_value=(b"ok\n", None)
-            ) as mock_wait_for,
+            patch("asyncio.wait_for", side_effect=capturing_wait_for),
         ):
-            # Remove SETUP_TIMEOUT_SECONDS if present
             import os
 
             os.environ.pop("SETUP_TIMEOUT_SECONDS", None)
             await sup.run_setup_script()
 
-        mock_wait_for.assert_called_once()
-        assert mock_wait_for.call_args[1]["timeout"] == 300
+        assert captured_timeout["value"] == 300
 
     async def test_custom_timeout_from_env(self, tmp_path):
         sup = _make_supervisor(tmp_path)
         _create_setup_script(sup.repo_path)
         fake_proc = _fake_process(returncode=0, stdout=b"ok\n")
+        captured_timeout = {}
+
+        original_wait_for = asyncio.wait_for
+
+        async def capturing_wait_for(coro, *, timeout=None):
+            captured_timeout["value"] = timeout
+            return await original_wait_for(coro, timeout=timeout)
 
         with (
             patch.dict("os.environ", {"SETUP_TIMEOUT_SECONDS": "60"}, clear=False),
             patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc),
-            patch(
-                "asyncio.wait_for", new_callable=AsyncMock, return_value=(b"ok\n", None)
-            ) as mock_wait_for,
+            patch("asyncio.wait_for", side_effect=capturing_wait_for),
         ):
             await sup.run_setup_script()
 
-        mock_wait_for.assert_called_once()
-        assert mock_wait_for.call_args[1]["timeout"] == 60
+        assert captured_timeout["value"] == 60
+
+    async def test_invalid_timeout_env_uses_default(self, tmp_path):
+        sup = _make_supervisor(tmp_path)
+        _create_setup_script(sup.repo_path)
+        fake_proc = _fake_process(returncode=0, stdout=b"ok\n")
+        captured_timeout = {}
+
+        original_wait_for = asyncio.wait_for
+
+        async def capturing_wait_for(coro, *, timeout=None):
+            captured_timeout["value"] = timeout
+            return await original_wait_for(coro, timeout=timeout)
+
+        with (
+            patch.dict("os.environ", {"SETUP_TIMEOUT_SECONDS": "not_a_number"}, clear=False),
+            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc),
+            patch("asyncio.wait_for", side_effect=capturing_wait_for),
+        ):
+            result = await sup.run_setup_script()
+
+        assert result is True
+        assert captured_timeout["value"] == 300
 
 
 # ---------------------------------------------------------------------------

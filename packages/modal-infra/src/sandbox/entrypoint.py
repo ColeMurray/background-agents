@@ -546,9 +546,12 @@ class SandboxSupervisor:
             self.log.debug("setup.skip", reason="no_setup_script", path=str(setup_script))
             return True
 
-        timeout_seconds = int(
-            os.environ.get("SETUP_TIMEOUT_SECONDS", str(self.DEFAULT_SETUP_TIMEOUT_SECONDS))
-        )
+        try:
+            timeout_seconds = int(
+                os.environ.get("SETUP_TIMEOUT_SECONDS", str(self.DEFAULT_SETUP_TIMEOUT_SECONDS))
+            )
+        except ValueError:
+            timeout_seconds = self.DEFAULT_SETUP_TIMEOUT_SECONDS
 
         self.log.info("setup.start", script=str(setup_script), timeout_seconds=timeout_seconds)
 
@@ -566,9 +569,14 @@ class SandboxSupervisor:
                 stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
             except TimeoutError:
                 process.kill()
+                stdout = await process.stdout.read() if process.stdout else b""
                 await process.wait()
+                output_tail = "\n".join(stdout.decode(errors="replace").splitlines()[-50:])
                 self.log.error(
-                    "setup.timeout", timeout_seconds=timeout_seconds, script=str(setup_script)
+                    "setup.timeout",
+                    timeout_seconds=timeout_seconds,
+                    output_tail=output_tail,
+                    script=str(setup_script),
                 )
                 return False
 
