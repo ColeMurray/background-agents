@@ -175,7 +175,7 @@ Sessions use Durable Objects with SQLite storage. Key patterns:
 ### Repo Secrets (D1 Database)
 
 Repository-scoped secrets are stored in a Cloudflare D1 database, separate from the per-session
-Durable Object SQLite storage. Secrets are encrypted at rest with AES-GCM using
+Durable Object SQLite storage. Secrets are encrypted at rest with AES-256-GCM using
 `REPO_SECRETS_ENCRYPTION_KEY` (distinct from `TOKEN_ENCRYPTION_KEY` for OAuth tokens).
 
 **Storage**: `RepoSecretsStore` class in `src/db/repo-secrets.ts` handles encryption, validation,
