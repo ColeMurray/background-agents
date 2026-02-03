@@ -84,3 +84,135 @@ async def test_restore_user_env_vars_override_order(monkeypatch):
     assert env_vars["SANDBOX_AUTH_TOKEN"] == "token-456"
     # User vars that don't collide are preserved
     assert env_vars["CUSTOM_SECRET"] == "value"
+
+
+@pytest.mark.asyncio
+async def test_restore_uses_default_timeout(monkeypatch):
+    """restore_from_snapshot defaults to 2 hours (matching SandboxConfig.timeout_hours)."""
+    captured = {}
+
+    class FakeImage:
+        object_id = "img-123"
+
+    def fake_from_id(*args, **kwargs):
+        return FakeImage()
+
+    def fake_create(*args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+
+        class FakeSandbox:
+            object_id = "obj-789"
+            stdout = None
+
+        return FakeSandbox()
+
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", fake_from_id)
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+
+    manager = SandboxManager()
+    await manager.restore_from_snapshot(
+        snapshot_image_id="img-abc",
+        session_config={
+            "repo_owner": "acme",
+            "repo_name": "repo",
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-5",
+            "session_id": "sess-1",
+        },
+    )
+
+    assert captured["timeout"] == 7200  # 2.0 * 3600
+
+
+@pytest.mark.asyncio
+async def test_restore_uses_custom_timeout(monkeypatch):
+    """restore_from_snapshot respects a custom timeout_hours value."""
+    captured = {}
+
+    class FakeImage:
+        object_id = "img-123"
+
+    def fake_from_id(*args, **kwargs):
+        return FakeImage()
+
+    def fake_create(*args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+
+        class FakeSandbox:
+            object_id = "obj-789"
+            stdout = None
+
+        return FakeSandbox()
+
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", fake_from_id)
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+
+    manager = SandboxManager()
+    await manager.restore_from_snapshot(
+        snapshot_image_id="img-abc",
+        session_config={
+            "repo_owner": "acme",
+            "repo_name": "repo",
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-5",
+            "session_id": "sess-1",
+        },
+        timeout_hours=4.0,
+    )
+
+    assert captured["timeout"] == 14400  # 4.0 * 3600
+
+
+@pytest.mark.asyncio
+async def test_create_and_restore_timeout_consistency(monkeypatch):
+    """create_sandbox and restore_from_snapshot produce the same timeout for the same config."""
+    captured_create = {}
+    captured_restore = {}
+
+    class FakeImage:
+        object_id = "img-123"
+
+    def fake_from_id(*args, **kwargs):
+        return FakeImage()
+
+    def fake_create(*args, **kwargs):
+        return_key = "restore" if captured_create.get("timeout") is not None else "create"
+        if return_key == "create":
+            captured_create["timeout"] = kwargs.get("timeout")
+        else:
+            captured_restore["timeout"] = kwargs.get("timeout")
+
+        class FakeSandbox:
+            object_id = "obj-789"
+            stdout = None
+
+        return FakeSandbox()
+
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", fake_from_id)
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+
+    manager = SandboxManager()
+
+    # Create with custom timeout
+    config = SandboxConfig(
+        repo_owner="acme",
+        repo_name="repo",
+        timeout_hours=3.5,
+    )
+    await manager.create_sandbox(config)
+
+    # Restore with same timeout
+    await manager.restore_from_snapshot(
+        snapshot_image_id="img-abc",
+        session_config={
+            "repo_owner": "acme",
+            "repo_name": "repo",
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-5",
+            "session_id": "sess-1",
+        },
+        timeout_hours=3.5,
+    )
+
+    assert captured_create["timeout"] == captured_restore["timeout"]
+    assert captured_create["timeout"] == 12600  # 3.5 * 3600

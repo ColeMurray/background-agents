@@ -90,6 +90,8 @@ export interface RestoreConfig {
   model: string;
   /** User-provided environment variables (repo secrets) */
   userEnvVars?: Record<string, string>;
+  /** Sandbox timeout in hours (default: 2.0, should match SandboxConfig.timeout_hours) */
+  timeoutHours?: number;
   /** Trace ID for correlation */
   traceId?: string;
   /** Request ID for correlation */

@@ -286,6 +286,7 @@ class SandboxManager:
         sandbox_auth_token: str = "",
         github_app_token: str | None = None,
         user_env_vars: dict[str, str] | None = None,
+        timeout_hours: float = 2.0,
     ) -> SandboxHandle:
         """
         Create a new sandbox from a filesystem snapshot Image.
@@ -364,7 +365,7 @@ class SandboxManager:
             image=image,  # Use the snapshot image directly
             app=app,
             secrets=[llm_secrets],
-            timeout=2 * 3600,  # 2 hours
+            timeout=int(timeout_hours * 3600),
             workdir="/workspace",
             env=env_vars,
         )

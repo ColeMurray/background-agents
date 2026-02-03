@@ -115,6 +115,7 @@ export class ModalSandboxProvider implements SandboxProvider {
           control_plane_url: config.controlPlaneUrl,
           sandbox_auth_token: config.sandboxAuthToken,
           user_env_vars: config.userEnvVars || null,
+          timeout_hours: config.timeoutHours ?? 2.0,
         }),
       });
 

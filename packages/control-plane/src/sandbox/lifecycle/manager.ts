@@ -131,6 +131,8 @@ export interface SandboxLifecycleConfig {
   controlPlaneUrl: string;
   provider: string;
   model: string;
+  /** Sandbox timeout in hours. Passed to the sandbox provider on create/restore. Default: 2.0 */
+  sandboxTimeoutHours?: number;
   /** Session ID for log correlation. Optional — logs will omit sessionId if not provided. */
   sessionId?: string;
 }
@@ -419,6 +421,7 @@ export class SandboxLifecycleManager {
         provider: this.config.provider,
         model: session.model || this.config.model,
         userEnvVars,
+        timeoutHours: this.config.sandboxTimeoutHours,
       });
 
       if (result.success) {

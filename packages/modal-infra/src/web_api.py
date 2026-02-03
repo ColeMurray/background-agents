@@ -504,6 +504,7 @@ async def api_restore_sandbox(
         sandbox_id = request.get("sandbox_id")
         sandbox_auth_token = request.get("sandbox_auth_token", "")
         user_env_vars = request.get("user_env_vars") or None
+        timeout_hours = float(request.get("timeout_hours", 2.0))
 
         manager = SandboxManager()
 
@@ -531,6 +532,7 @@ async def api_restore_sandbox(
             sandbox_auth_token=sandbox_auth_token,
             github_app_token=github_app_token,
             user_env_vars=user_env_vars,
+            timeout_hours=timeout_hours,
         )
 
         return {
