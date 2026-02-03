@@ -60,8 +60,8 @@ export class SessionIndexStore {
       .bind(
         session.id,
         session.title,
-        session.repoOwner,
-        session.repoName,
+        session.repoOwner.toLowerCase(),
+        session.repoName.toLowerCase(),
         session.model,
         session.status,
         session.createdAt,

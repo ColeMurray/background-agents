@@ -1,5 +1,8 @@
 import type { RepoMetadata } from "@open-inspect/shared";
 
+/** D1 batch() supports at most 100 statements per call. */
+const D1_BATCH_LIMIT = 100;
+
 interface RepoMetadataRow {
   repo_owner: string;
   repo_name: string;
@@ -79,20 +82,26 @@ export class RepoMetadataStore {
   ): Promise<Map<string, RepoMetadata>> {
     if (repos.length === 0) return new Map();
 
-    const statements = repos.map((repo) =>
-      this.db
-        .prepare("SELECT * FROM repo_metadata WHERE repo_owner = ? AND repo_name = ?")
-        .bind(repo.owner.toLowerCase(), repo.name.toLowerCase())
-    );
-
-    const results = await this.db.batch<RepoMetadataRow>(statements);
     const map = new Map<string, RepoMetadata>();
 
-    for (let i = 0; i < repos.length; i++) {
-      const rows = results[i]?.results;
-      if (rows && rows.length > 0) {
-        const key = `${repos[i].owner.toLowerCase()}/${repos[i].name.toLowerCase()}`;
-        map.set(key, toMetadata(rows[0]));
+    // D1 batch() has a per-call statement limit; chunk to stay within it.
+    for (let start = 0; start < repos.length; start += D1_BATCH_LIMIT) {
+      const chunk = repos.slice(start, start + D1_BATCH_LIMIT);
+
+      const statements = chunk.map((repo) =>
+        this.db
+          .prepare("SELECT * FROM repo_metadata WHERE repo_owner = ? AND repo_name = ?")
+          .bind(repo.owner.toLowerCase(), repo.name.toLowerCase())
+      );
+
+      const results = await this.db.batch<RepoMetadataRow>(statements);
+
+      for (let i = 0; i < chunk.length; i++) {
+        const rows = results[i]?.results;
+        if (rows && rows.length > 0) {
+          const key = `${chunk[i].owner.toLowerCase()}/${chunk[i].name.toLowerCase()}`;
+          map.set(key, toMetadata(rows[0]));
+        }
       }
     }
 

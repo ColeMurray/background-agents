@@ -215,6 +215,15 @@ describe("SessionIndexStore", () => {
       expect(result).toEqual(session);
     });
 
+    it("normalizes repoOwner and repoName to lowercase", async () => {
+      const session = makeSession({ repoOwner: "Owner", repoName: "Repo" });
+      await store.create(session);
+
+      const result = await store.get("test-id");
+      expect(result?.repoOwner).toBe("owner");
+      expect(result?.repoName).toBe("repo");
+    });
+
     it("ignores duplicate inserts (INSERT OR IGNORE)", async () => {
       const session = makeSession();
       await store.create(session);

@@ -35,7 +35,7 @@ echo "=== Migrating sessions from KV to D1 ==="
 # List all session:* keys from KV
 SESSION_KEYS=$($WRANGLER kv key list --namespace-id "$KV_NAMESPACE_ID" --prefix "session:" 2>/dev/null || echo "[]")
 
-echo "$SESSION_KEYS" | jq -r '.[].name' | while IFS= read -r key; do
+while IFS= read -r key; do
   [ -z "$key" ] && continue
 
   VALUE=$($WRANGLER kv key get --namespace-id "$KV_NAMESPACE_ID" "$key" --text 2>/dev/null || echo "")
@@ -63,7 +63,7 @@ echo "$SESSION_KEYS" | jq -r '.[].name' | while IFS= read -r key; do
   echo "INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, status, created_at, updated_at) VALUES ('$(sql_escape "$ID")', $TITLE_SQL, '$REPO_OWNER', '$REPO_NAME', '$MODEL', '$STATUS', $CREATED_AT, $UPDATED_AT);" >> "$SQL_FILE"
   SESSION_COUNT=$((SESSION_COUNT + 1))
   echo "  Session: $ID"
-done
+done < <(echo "$SESSION_KEYS" | jq -r '.[].name')
 
 echo ""
 echo "=== Migrating repo metadata from KV to D1 ==="
@@ -71,7 +71,7 @@ echo "=== Migrating repo metadata from KV to D1 ==="
 # List all repo:metadata:* keys from KV
 METADATA_KEYS=$($WRANGLER kv key list --namespace-id "$KV_NAMESPACE_ID" --prefix "repo:metadata:" 2>/dev/null || echo "[]")
 
-echo "$METADATA_KEYS" | jq -r '.[].name' | while IFS= read -r key; do
+while IFS= read -r key; do
   [ -z "$key" ] && continue
 
   VALUE=$($WRANGLER kv key get --namespace-id "$KV_NAMESPACE_ID" "$key" --text 2>/dev/null || echo "")
@@ -92,7 +92,7 @@ echo "$METADATA_KEYS" | jq -r '.[].name' | while IFS= read -r key; do
   CHANNEL_ASSOC=$(sql_escape "$(echo "$VALUE" | jq -c '.channelAssociations // []')")
   KEYWORDS=$(sql_escape "$(echo "$VALUE" | jq -c '.keywords // []')")
 
-  NOW_MS=$(date +%s)000
+  NOW_MS=$(( $(date +%s) * 1000 ))
 
   # Handle null/empty description
   if [ "$DESCRIPTION" = "" ]; then
@@ -114,7 +114,7 @@ EOSQL
 
   METADATA_COUNT=$((METADATA_COUNT + 1))
   echo "  Repo: $OWNER_LOWER/$NAME_LOWER"
-done
+done < <(echo "$METADATA_KEYS" | jq -r '.[].name')
 
 # Execute all SQL against D1
 if [ -s "$SQL_FILE" ]; then
@@ -122,7 +122,7 @@ if [ -s "$SQL_FILE" ]; then
   echo "=== Executing SQL against D1 ==="
   $WRANGLER d1 execute "$D1_DATABASE_NAME" --remote --file "$SQL_FILE"
   echo ""
-  echo "Done. Migration complete."
+  echo "Done. Migrated $SESSION_COUNT session(s) and $METADATA_COUNT repo metadata record(s)."
 else
   echo ""
   echo "No data found in KV namespace. Nothing to migrate."
