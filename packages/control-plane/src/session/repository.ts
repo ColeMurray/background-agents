@@ -629,7 +629,8 @@ export class SessionRepository {
   getEventsForReplay(limit: number): EventRow[] {
     const result = this.sql.exec(
       `SELECT * FROM (
-         SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?
+         SELECT * FROM events WHERE type != 'heartbeat'
+         ORDER BY created_at DESC, id DESC LIMIT ?
        ) sub ORDER BY created_at ASC, id ASC`,
       limit
     );
@@ -649,11 +650,11 @@ export class SessionRepository {
     messages: MessageWithParticipant[];
     hasMore: boolean;
   } {
-    // Query both tables with the SAME composite cursor
+    // Query both tables with the SAME composite cursor (exclude heartbeats - they are noise)
     const events = this.sql
       .exec(
         `SELECT * FROM events
-         WHERE (created_at < ?1) OR (created_at = ?1 AND id < ?2)
+         WHERE type != 'heartbeat' AND ((created_at < ?1) OR (created_at = ?1 AND id < ?2))
          ORDER BY created_at DESC, id DESC LIMIT ?3`,
         cursorTimestamp,
         cursorId,

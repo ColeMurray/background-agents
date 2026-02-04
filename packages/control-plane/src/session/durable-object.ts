@@ -840,13 +840,17 @@ export class SessionDO extends DurableObject<Env> {
     // Get events (tool calls, tokens, etc.) - newest N in chronological order
     const events = this.repository.getEventsForReplay(REPLAY_LIMIT);
 
-    // Get messages covering the same time window as fetched events
-    // If no events, get all messages
+    // Get all messages that overlap with the event window.
+    // Messages are always few relative to events, so fetch them all when the
+    // full event history fits in the replay.  When paginated (hasMore), use the
+    // oldest event timestamp to scope the query — any earlier messages will be
+    // loaded via fetch_history when the user scrolls up.
+    const hasMore = events.length >= REPLAY_LIMIT;
     const oldestEventTimestamp = events.length > 0 ? events[0].created_at : null;
     const messages =
-      oldestEventTimestamp !== null
+      hasMore && oldestEventTimestamp !== null
         ? this.repository.getMessagesWithParticipantsAfter(oldestEventTimestamp)
-        : this.repository.getMessagesWithParticipants(100);
+        : this.repository.getMessagesWithParticipants(1000);
 
     // Combine and sort by timestamp, then id for stability
     interface HistoryItem {
@@ -908,8 +912,7 @@ export class SessionDO extends DurableObject<Env> {
       }
     }
 
-    // Determine if there's more history beyond what we sent
-    const hasMore = events.length >= REPLAY_LIMIT;
+    // hasMore was already computed above when deciding how to fetch messages
     const oldestItem =
       combined.length > 0 ? { created_at: combined[0].timestamp, id: combined[0].id } : null;
 
@@ -1175,6 +1178,15 @@ export class SessionDO extends DurableObject<Env> {
       this.log.info("Sandbox event", { event_type: event.type });
     }
     const now = Date.now();
+
+    // Heartbeats update the sandbox table (for health monitoring) but are not
+    // stored as events — they are high-frequency noise that drowns out real
+    // content in replay and pagination queries.
+    if (event.type === "heartbeat") {
+      this.repository.updateSandboxHeartbeat(now);
+      return;
+    }
+
     const eventId = generateId();
 
     // Get messageId from the event first (sandbox sends correct messageId with every event)
@@ -1254,12 +1266,6 @@ export class SessionDO extends DurableObject<Env> {
       if (event.sha) {
         this.repository.updateSessionCurrentSha(event.sha);
       }
-    }
-
-    if (event.type === "heartbeat") {
-      this.repository.updateSandboxHeartbeat(now);
-      // Note: Don't schedule separate heartbeat alarm - it's handled in the main alarm()
-      // which checks both inactivity and heartbeat health
     }
 
     // Handle push completion events

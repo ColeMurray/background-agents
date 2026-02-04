@@ -645,7 +645,7 @@ describe("SessionRepository", () => {
     it("returns hasMore=false when merged results fit within limit", () => {
       // Mock: 2 events, 1 message (total 3, limit 50)
       const eventsQuery = `SELECT * FROM events
-         WHERE (created_at < ?1) OR (created_at = ?1 AND id < ?2)
+         WHERE type != 'heartbeat' AND ((created_at < ?1) OR (created_at = ?1 AND id < ?2))
          ORDER BY created_at DESC, id DESC LIMIT ?3`;
       const messagesQuery = `SELECT m.*, p.id as participant_id, p.github_name, p.github_login
          FROM messages m LEFT JOIN participants p ON m.author_id = p.id
@@ -666,7 +666,7 @@ describe("SessionRepository", () => {
 
     it("returns hasMore=true when merged results exceed limit", () => {
       const eventsQuery = `SELECT * FROM events
-         WHERE (created_at < ?1) OR (created_at = ?1 AND id < ?2)
+         WHERE type != 'heartbeat' AND ((created_at < ?1) OR (created_at = ?1 AND id < ?2))
          ORDER BY created_at DESC, id DESC LIMIT ?3`;
       const messagesQuery = `SELECT m.*, p.id as participant_id, p.github_name, p.github_login
          FROM messages m LEFT JOIN participants p ON m.author_id = p.id
