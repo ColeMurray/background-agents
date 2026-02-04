@@ -14,6 +14,8 @@ import { RepoSecretsStore, RepoSecretsValidationError } from "./db/repo-secrets"
 import { SessionIndexStore } from "./db/session-index";
 
 import { RepoMetadataStore } from "./db/repo-metadata";
+import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
+import type { RequestMetrics } from "./db/instrumented-d1";
 import type {
   EnrichedRepository,
   InstallationRepository,
@@ -25,12 +27,17 @@ import type { CorrelationContext } from "./logger";
 const logger = createLogger("router");
 
 const REPOS_CACHE_KEY = "repos:list";
-const REPOS_CACHE_TTL_SECONDS = 300; // 5 minutes
+const REPOS_CACHE_FRESH_MS = 5 * 60 * 1000; // Serve without revalidation for 5 minutes
+const REPOS_CACHE_KV_TTL_SECONDS = 3600; // Keep stale data in KV for 1 hour
 
 /**
- * Request context with correlation IDs propagated to downstream services.
+ * Request context with correlation IDs and per-request metrics.
  */
-export type RequestContext = CorrelationContext;
+export type RequestContext = CorrelationContext & {
+  metrics: RequestMetrics;
+  /** Worker ExecutionContext for waitUntil (background tasks). */
+  executionCtx?: ExecutionContext;
+};
 
 /**
  * Create a Request to a Durable Object stub with correlation headers.
@@ -346,17 +353,27 @@ const routes: Route[] = [
 /**
  * Match request to route and execute handler.
  */
-export async function handleRequest(request: Request, env: Env): Promise<Response> {
+export async function handleRequest(
+  request: Request,
+  env: Env,
+  executionCtx?: ExecutionContext
+): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method;
   const startTime = Date.now();
 
-  // Build correlation context
+  // Build correlation context with per-request metrics
+  const metrics = createRequestMetrics();
   const ctx: RequestContext = {
     trace_id: request.headers.get("x-trace-id") || crypto.randomUUID(),
     request_id: crypto.randomUUID().slice(0, 8),
+    metrics,
+    executionCtx,
   };
+
+  // Instrument D1 so all queries are automatically timed
+  const instrumentedEnv: Env = { ...env, DB: instrumentD1(env.DB, metrics) };
 
   // CORS preflight
   if (method === "OPTIONS") {
@@ -424,7 +441,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
       let response: Response;
       let outcome: "success" | "error";
       try {
-        response = await route.handler(request, env, match, ctx);
+        response = await route.handler(request, instrumentedEnv, match, ctx);
         outcome = response.status >= 500 ? "error" : "success";
       } catch (e) {
         const durationMs = Date.now() - startTime;
@@ -438,6 +455,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
           duration_ms: durationMs,
           outcome: "error",
           error: e instanceof Error ? e : String(e),
+          ...ctx.metrics.summarize(),
         });
         return error("Internal server error", 500);
       }
@@ -458,6 +476,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
         http_status: response.status,
         duration_ms: durationMs,
         outcome,
+        ...ctx.metrics.summarize(),
       });
 
       return new Response(response.body, {
@@ -868,55 +887,61 @@ async function handleSessionWsToken(
     return error("userId is required");
   }
 
-  // Encrypt the GitHub token if provided
-  let githubTokenEncrypted: string | null = null;
-  if (body.githubToken && env.TOKEN_ENCRYPTION_KEY) {
-    try {
-      githubTokenEncrypted = await encryptToken(body.githubToken, env.TOKEN_ENCRYPTION_KEY);
-    } catch (e) {
-      logger.error("Failed to encrypt GitHub token", {
-        error: e instanceof Error ? e : String(e),
-      });
-      // Continue without token - PR creation will fail if this user triggers it
-    }
-  }
+  // Encrypt the GitHub tokens if provided
+  const { githubTokenEncrypted, githubRefreshTokenEncrypted } = await ctx.metrics.time(
+    "encrypt_tokens",
+    async () => {
+      let accessToken: string | null = null;
+      let refreshToken: string | null = null;
 
-  // Encrypt the GitHub refresh token if provided
-  let githubRefreshTokenEncrypted: string | null = null;
-  if (body.githubRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
-    try {
-      githubRefreshTokenEncrypted = await encryptToken(
-        body.githubRefreshToken,
-        env.TOKEN_ENCRYPTION_KEY
-      );
-    } catch (e) {
-      logger.error("Failed to encrypt GitHub refresh token", {
-        error: e instanceof Error ? e : String(e),
-      });
+      if (body.githubToken && env.TOKEN_ENCRYPTION_KEY) {
+        try {
+          accessToken = await encryptToken(body.githubToken, env.TOKEN_ENCRYPTION_KEY);
+        } catch (e) {
+          logger.error("Failed to encrypt GitHub token", {
+            error: e instanceof Error ? e : String(e),
+          });
+          // Continue without token - PR creation will fail if this user triggers it
+        }
+      }
+
+      if (body.githubRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
+        try {
+          refreshToken = await encryptToken(body.githubRefreshToken, env.TOKEN_ENCRYPTION_KEY);
+        } catch (e) {
+          logger.error("Failed to encrypt GitHub refresh token", {
+            error: e instanceof Error ? e : String(e),
+          });
+        }
+      }
+
+      return { githubTokenEncrypted: accessToken, githubRefreshTokenEncrypted: refreshToken };
     }
-  }
+  );
 
   const doId = env.SESSION.idFromName(sessionId);
   const stub = env.SESSION.get(doId);
 
-  const response = await stub.fetch(
-    internalRequest(
-      "http://internal/internal/ws-token",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: body.userId,
-          githubUserId: body.githubUserId,
-          githubLogin: body.githubLogin,
-          githubName: body.githubName,
-          githubEmail: body.githubEmail,
-          githubTokenEncrypted,
-          githubRefreshTokenEncrypted,
-          githubTokenExpiresAt: body.githubTokenExpiresAt,
-        }),
-      },
-      ctx
+  const response = await ctx.metrics.time("do_fetch", () =>
+    stub.fetch(
+      internalRequest(
+        "http://internal/internal/ws-token",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: body.userId,
+            githubUserId: body.githubUserId,
+            githubLogin: body.githubLogin,
+            githubName: body.githubName,
+            githubEmail: body.githubEmail,
+            githubTokenEncrypted,
+            githubRefreshTokenEncrypted,
+            githubTokenExpiresAt: body.githubTokenExpiresAt,
+          }),
+        },
+        ctx
+      )
     )
   );
 
@@ -1043,43 +1068,144 @@ async function resolveInstalledRepo(
 interface CachedReposList {
   repos: EnrichedRepository[];
   cachedAt: string;
+  /** Epoch ms — cache is considered fresh until this time. Missing in entries cached before this field was added. */
+  freshUntil?: number;
+}
+
+/**
+ * Fetch repos from GitHub, enrich with D1 metadata, and write to KV cache.
+ * Runs either in the foreground (cache miss) or background (stale-while-revalidate).
+ */
+async function refreshReposCache(env: Env, traceId?: string): Promise<void> {
+  const appConfig = getGitHubAppConfig(env);
+  if (!appConfig) return;
+
+  let repos: InstallationRepository[];
+  try {
+    const result = await listInstallationRepositories(appConfig);
+    repos = result.repos;
+
+    logger.info("GitHub repo fetch completed", {
+      trace_id: traceId,
+      total_repos: result.timing.totalRepos,
+      total_pages: result.timing.totalPages,
+      token_generation_ms: result.timing.tokenGenerationMs,
+      pages: result.timing.pages,
+    });
+  } catch (e) {
+    logger.error("Failed to list installation repositories (background refresh)", {
+      trace_id: traceId,
+      error: e instanceof Error ? e : String(e),
+    });
+    return;
+  }
+
+  const metadataStore = new RepoMetadataStore(env.DB);
+  let metadataMap: Map<string, RepoMetadata>;
+  try {
+    metadataMap = await metadataStore.getBatch(
+      repos.map((r) => ({ owner: r.owner, name: r.name }))
+    );
+  } catch (e) {
+    logger.warn("Failed to fetch repo metadata batch (background refresh)", {
+      trace_id: traceId,
+      error: e instanceof Error ? e : String(e),
+    });
+    metadataMap = new Map();
+  }
+
+  const enrichedRepos: EnrichedRepository[] = repos.map((repo) => {
+    const key = `${repo.owner.toLowerCase()}/${repo.name.toLowerCase()}`;
+    const metadata = metadataMap.get(key);
+    return metadata ? { ...repo, metadata } : repo;
+  });
+
+  const cachedAt = new Date().toISOString();
+  const freshUntil = Date.now() + REPOS_CACHE_FRESH_MS;
+  try {
+    await env.REPOS_CACHE.put(
+      REPOS_CACHE_KEY,
+      JSON.stringify({ repos: enrichedRepos, cachedAt, freshUntil }),
+      { expirationTtl: REPOS_CACHE_KV_TTL_SECONDS }
+    );
+    logger.info("Repos cache refreshed", {
+      trace_id: traceId,
+      repo_count: enrichedRepos.length,
+    });
+  } catch (e) {
+    logger.warn("Failed to write repos cache", {
+      trace_id: traceId,
+      error: e instanceof Error ? e : String(e),
+    });
+  }
 }
 
 /**
  * List all repositories accessible via the GitHub App installation.
- * Results are cached in KV for 5 minutes to avoid rate limits.
- * KV is shared across isolates, so cache invalidation is consistent.
+ *
+ * Uses stale-while-revalidate caching:
+ * - Fresh cache (< 5 min old): return immediately
+ * - Stale cache (5 min – 1 hr): return immediately, revalidate in background
+ * - No cache: fetch synchronously (first load or after 1 hr KV expiry)
+ *
+ * This prevents the slow GitHub API pagination from blocking the Worker
+ * isolate and causing head-of-line blocking for other requests.
  */
 async function handleListRepos(
   request: Request,
   env: Env,
   _match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
-  // Check KV cache first
+  // Read from KV cache
+  let cached: CachedReposList | null = null;
   try {
-    const cached = await env.REPOS_CACHE.get<CachedReposList>(REPOS_CACHE_KEY, "json");
-    if (cached) {
-      return json({
-        repos: cached.repos,
-        cached: true,
-        cachedAt: cached.cachedAt,
-      });
-    }
+    cached = await ctx.metrics.time("kv_read", () =>
+      env.REPOS_CACHE.get<CachedReposList>(REPOS_CACHE_KEY, "json")
+    );
   } catch (e) {
     logger.warn("Failed to read repos cache", { error: e instanceof Error ? e : String(e) });
   }
 
-  // Get GitHub App config
+  if (cached) {
+    const isFresh = cached.freshUntil && Date.now() < cached.freshUntil;
+
+    if (!isFresh && ctx.executionCtx) {
+      // Stale — serve immediately but refresh in background
+      logger.info("Serving stale repos cache, refreshing in background", {
+        trace_id: ctx.trace_id,
+        cached_at: cached.cachedAt,
+      });
+      ctx.executionCtx.waitUntil(refreshReposCache(env, ctx.trace_id));
+    }
+
+    return json({
+      repos: cached.repos,
+      cached: true,
+      cachedAt: cached.cachedAt,
+    });
+  }
+
+  // No cache at all — must fetch synchronously
   const appConfig = getGitHubAppConfig(env);
   if (!appConfig) {
     return error("GitHub App not configured", 500);
   }
 
-  // Fetch repositories from GitHub App installation
   let repos: InstallationRepository[];
   try {
-    repos = await listInstallationRepositories(appConfig);
+    const result = await ctx.metrics.time("github_api", () =>
+      listInstallationRepositories(appConfig)
+    );
+    repos = result.repos;
+
+    logger.info("GitHub repo fetch completed", {
+      trace_id: ctx.trace_id,
+      total_repos: result.timing.totalRepos,
+      total_pages: result.timing.totalPages,
+      token_generation_ms: result.timing.tokenGenerationMs,
+      pages: result.timing.pages,
+    });
   } catch (e) {
     logger.error("Failed to list installation repositories", {
       error: e instanceof Error ? e : String(e),
@@ -1087,7 +1213,6 @@ async function handleListRepos(
     return error("Failed to fetch repositories from GitHub", 500);
   }
 
-  // Batch-fetch metadata from D1
   const metadataStore = new RepoMetadataStore(env.DB);
   let metadataMap: Map<string, RepoMetadata>;
   try {
@@ -1101,19 +1226,22 @@ async function handleListRepos(
     metadataMap = new Map();
   }
 
-  // Enrich repos with stored metadata
   const enrichedRepos: EnrichedRepository[] = repos.map((repo) => {
     const key = `${repo.owner.toLowerCase()}/${repo.name.toLowerCase()}`;
     const metadata = metadataMap.get(key);
     return metadata ? { ...repo, metadata } : repo;
   });
 
-  // Cache the results in KV with TTL
   const cachedAt = new Date().toISOString();
+  const freshUntil = Date.now() + REPOS_CACHE_FRESH_MS;
   try {
-    await env.REPOS_CACHE.put(REPOS_CACHE_KEY, JSON.stringify({ repos: enrichedRepos, cachedAt }), {
-      expirationTtl: REPOS_CACHE_TTL_SECONDS,
-    });
+    await ctx.metrics.time("kv_write", () =>
+      env.REPOS_CACHE.put(
+        REPOS_CACHE_KEY,
+        JSON.stringify({ repos: enrichedRepos, cachedAt, freshUntil }),
+        { expirationTtl: REPOS_CACHE_KV_TTL_SECONDS }
+      )
+    );
   } catch (e) {
     logger.warn("Failed to cache repos list", { error: e instanceof Error ? e : String(e) });
   }

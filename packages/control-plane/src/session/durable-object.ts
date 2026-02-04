@@ -44,8 +44,8 @@ import type {
   MessageSource,
   ParticipantRole,
 } from "../types";
-import type { SessionRow, ParticipantRow, EventRow, SandboxRow, SandboxCommand } from "./types";
-import { SessionRepository, type MessageWithParticipant } from "./repository";
+import type { SessionRow, ParticipantRow, SandboxRow, SandboxCommand } from "./types";
+import { SessionRepository } from "./repository";
 import { RepoSecretsStore } from "../db/repo-secrets";
 
 /**
@@ -69,6 +69,7 @@ const VALID_EVENT_TYPES = [
   "heartbeat",
   "push_complete",
   "push_error",
+  "user_message",
 ] as const;
 
 /**
@@ -323,7 +324,10 @@ export class SessionDO extends DurableObject<Env> {
    * Handle incoming HTTP requests.
    */
   async fetch(request: Request): Promise<Response> {
+    const fetchStart = performance.now();
+
     this.ensureInitialized();
+    const initMs = performance.now() - fetchStart;
 
     // Extract correlation headers and create a request-scoped logger
     const traceId = request.headers.get("x-trace-id");
@@ -347,7 +351,7 @@ export class SessionDO extends DurableObject<Env> {
     const route = this.routes.find((r) => r.path === path && r.method === request.method);
 
     if (route) {
-      const routeStart = Date.now();
+      const handlerStart = performance.now();
       let status = 500;
       let outcome: "success" | "error" = "error";
       try {
@@ -360,12 +364,16 @@ export class SessionDO extends DurableObject<Env> {
         outcome = "error";
         throw e;
       } finally {
+        const handlerMs = performance.now() - handlerStart;
+        const totalMs = performance.now() - fetchStart;
         this.log.info("do.request", {
           event: "do.request",
           http_method: request.method,
           http_path: path,
           http_status: status,
-          duration_ms: Date.now() - routeStart,
+          duration_ms: Math.round(totalMs * 100) / 100,
+          init_ms: Math.round(initMs * 100) / 100,
+          handler_ms: Math.round(handlerMs * 100) / 100,
           outcome,
         });
       }
@@ -687,6 +695,10 @@ export class SessionDO extends DurableObject<Env> {
           await this.handleTyping();
           break;
 
+        case "fetch_history":
+          this.handleFetchHistory(ws, data);
+          break;
+
         case "presence":
           await this.updatePresence(ws, data);
           break;
@@ -805,7 +817,16 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     // Send historical events (messages and sandbox events)
-    this.sendHistoricalEvents(ws);
+    const replay = this.sendHistoricalEvents(ws);
+
+    // Signal replay is complete with pagination cursor
+    this.safeSend(ws, {
+      type: "replay_complete",
+      hasMore: replay.hasMore,
+      cursor: replay.oldestItem
+        ? { timestamp: replay.oldestItem.created_at, id: replay.oldestItem.id }
+        : null,
+    } as ServerMessage);
 
     // Send current presence
     this.sendPresence(ws);
@@ -816,62 +837,33 @@ export class SessionDO extends DurableObject<Env> {
 
   /**
    * Send historical events to a newly connected client.
+   * Queries only the events table — user_message events are written at prompt time.
+   * Returns metadata about what was sent for the replay_complete message.
    */
-  private sendHistoricalEvents(ws: WebSocket): void {
-    // Get messages with participant info (user prompts)
-    const messages = this.repository.getMessagesWithParticipants(100);
+  private sendHistoricalEvents(ws: WebSocket): {
+    hasMore: boolean;
+    oldestItem: { created_at: number; id: string } | null;
+  } {
+    const REPLAY_LIMIT = 500;
+    const events = this.repository.getEventsForReplay(REPLAY_LIMIT);
+    const hasMore = events.length >= REPLAY_LIMIT;
 
-    // Get events (tool calls, tokens, etc.)
-    const events = this.repository.getEventsForReplay(500);
-
-    // Combine and sort by timestamp
-    interface HistoryItem {
-      type: "message" | "event";
-      timestamp: number;
-      data: MessageWithParticipant | EventRow;
-    }
-
-    const combined: HistoryItem[] = [
-      ...messages.map((m) => ({ type: "message" as const, timestamp: m.created_at, data: m })),
-      ...events.map((e) => ({ type: "event" as const, timestamp: e.created_at, data: e })),
-    ];
-
-    // Sort by timestamp ascending
-    combined.sort((a, b) => a.timestamp - b.timestamp);
-
-    // Send in chronological order
-    for (const item of combined) {
-      if (item.type === "message") {
-        const msg = item.data as MessageWithParticipant;
+    for (const event of events) {
+      try {
+        const eventData = JSON.parse(event.data);
         this.safeSend(ws, {
           type: "sandbox_event",
-          event: {
-            type: "user_message",
-            content: msg.content,
-            messageId: msg.id,
-            timestamp: msg.created_at / 1000, // Convert to seconds
-            author: msg.participant_id
-              ? {
-                  participantId: msg.participant_id,
-                  name: msg.github_name || msg.github_login || "Unknown",
-                  avatar: getGitHubAvatarUrl(msg.github_login),
-                }
-              : undefined,
-          },
+          event: eventData,
         });
-      } else {
-        const event = item.data as EventRow;
-        try {
-          const eventData = JSON.parse(event.data);
-          this.safeSend(ws, {
-            type: "sandbox_event",
-            event: eventData,
-          });
-        } catch {
-          // Skip malformed events
-        }
+      } catch {
+        // Skip malformed events
       }
     }
+
+    const oldestItem =
+      events.length > 0 ? { created_at: events[0].created_at, id: events[0].id } : null;
+
+    return { hasMore, oldestItem };
   }
 
   /**
@@ -971,6 +963,8 @@ export class SessionDO extends DurableObject<Env> {
       createdAt: now,
     });
 
+    this.writeUserMessageEvent(participant, data.content, messageId, now);
+
     // Get queue position
     const position = this.repository.getPendingOrProcessingCount();
 
@@ -1028,6 +1022,73 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
+   * Handle fetch_history request from client for paginated history loading.
+   */
+  private handleFetchHistory(
+    ws: WebSocket,
+    data: { cursor?: { timestamp: number; id: string }; limit?: number }
+  ): void {
+    const client = this.getClientInfo(ws);
+    if (!client) {
+      this.safeSend(ws, {
+        type: "error",
+        code: "NOT_SUBSCRIBED",
+        message: "Must subscribe first",
+      });
+      return;
+    }
+
+    // Validate cursor
+    if (
+      !data.cursor ||
+      typeof data.cursor.timestamp !== "number" ||
+      typeof data.cursor.id !== "string"
+    ) {
+      this.safeSend(ws, {
+        type: "error",
+        code: "INVALID_CURSOR",
+        message: "Invalid cursor",
+      });
+      return;
+    }
+
+    // Rate limit: reject if < 200ms since last fetch
+    const now = Date.now();
+    if (client.lastFetchHistoryAt && now - client.lastFetchHistoryAt < 200) {
+      this.safeSend(ws, {
+        type: "error",
+        code: "RATE_LIMITED",
+        message: "Too many requests",
+      });
+      return;
+    }
+    client.lastFetchHistoryAt = now;
+
+    const rawLimit = typeof data.limit === "number" ? data.limit : 200;
+    const limit = Math.max(1, Math.min(rawLimit, 500));
+    const page = this.repository.getEventsHistoryPage(data.cursor.timestamp, data.cursor.id, limit);
+
+    const items: SandboxEvent[] = [];
+    for (const event of page.events) {
+      try {
+        items.push(JSON.parse(event.data));
+      } catch {
+        // Skip malformed events
+      }
+    }
+
+    // Compute new cursor from oldest item in the page
+    const oldestEvent = page.events.length > 0 ? page.events[0] : null;
+
+    this.safeSend(ws, {
+      type: "history_page",
+      items,
+      hasMore: page.hasMore,
+      cursor: oldestEvent ? { timestamp: oldestEvent.created_at, id: oldestEvent.id } : null,
+    } as ServerMessage);
+  }
+
+  /**
    * Process sandbox event.
    */
   private async processSandboxEvent(event: SandboxEvent): Promise<void> {
@@ -1039,6 +1100,15 @@ export class SessionDO extends DurableObject<Env> {
       this.log.info("Sandbox event", { event_type: event.type });
     }
     const now = Date.now();
+
+    // Heartbeats update the sandbox table (for health monitoring) but are not
+    // stored as events — they are high-frequency noise that drowns out real
+    // content in replay and pagination queries.
+    if (event.type === "heartbeat") {
+      this.repository.updateSandboxHeartbeat(now);
+      return;
+    }
+
     const eventId = generateId();
 
     // Get messageId from the event first (sandbox sends correct messageId with every event)
@@ -1118,12 +1188,6 @@ export class SessionDO extends DurableObject<Env> {
       if (event.sha) {
         this.repository.updateSessionCurrentSha(event.sha);
       }
-    }
-
-    if (event.type === "heartbeat") {
-      this.repository.updateSandboxHeartbeat(now);
-      // Note: Don't schedule separate heartbeat alarm - it's handled in the main alarm()
-      // which checks both inactivity and heartbeat health
     }
 
     // Handle push completion events
@@ -1586,6 +1650,37 @@ export class SessionDO extends DurableObject<Env> {
     return this.repository.getParticipantByUserId(userId);
   }
 
+  /**
+   * Write a user_message event to the events table and broadcast to connected clients.
+   * Used by both WebSocket and HTTP prompt handlers for unified timeline replay.
+   */
+  private writeUserMessageEvent(
+    participant: ParticipantRow,
+    content: string,
+    messageId: string,
+    now: number
+  ): void {
+    const userMessageEvent: SandboxEvent = {
+      type: "user_message",
+      content,
+      messageId,
+      timestamp: now / 1000, // Convert to seconds to match other events
+      author: {
+        participantId: participant.id,
+        name: participant.github_name || participant.github_login || participant.user_id,
+        avatar: getGitHubAvatarUrl(participant.github_login),
+      },
+    };
+    this.repository.createEvent({
+      id: generateId(),
+      type: "user_message",
+      data: JSON.stringify(userMessageEvent),
+      messageId,
+      createdAt: now,
+    });
+    this.broadcast({ type: "sandbox_event", event: userMessageEvent });
+  }
+
   private createParticipant(userId: string, name: string): ParticipantRow {
     const id = generateId();
     const now = Date.now();
@@ -2001,6 +2096,8 @@ export class SessionDO extends DurableObject<Env> {
         status: "pending",
         createdAt: now,
       });
+
+      this.writeUserMessageEvent(participant, body.content, messageId, now);
 
       const queuePosition = this.repository.getPendingOrProcessingCount();
 

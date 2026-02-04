@@ -15,7 +15,11 @@ import { controlPlaneFetch } from "@/lib/control-plane";
  * 4. Returns the token to the client for WebSocket connection
  */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const routeStart = Date.now();
+
   const session = await getServerSession(authOptions);
+  const authMs = Date.now() - routeStart;
+
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -28,8 +32,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const userId = user.id || user.email || "anonymous";
 
     // Read refresh token from the JWT directly (not exposed on session)
+    const jwtStart = Date.now();
     const jwt = await getToken({ req: request });
+    const jwtMs = Date.now() - jwtStart;
 
+    const fetchStart = Date.now();
     const response = await controlPlaneFetch(`/sessions/${sessionId}/ws-token`, {
       method: "POST",
       body: JSON.stringify({
@@ -44,6 +51,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         githubRefreshToken: jwt?.refreshToken as string | undefined,
       }),
     });
+    const fetchMs = Date.now() - fetchStart;
+    const totalMs = Date.now() - routeStart;
+
+    console.log(
+      `[ws-token] session=${sessionId} total=${totalMs}ms auth=${authMs}ms jwt=${jwtMs}ms fetch=${fetchMs}ms status=${response.status}`
+    );
 
     if (!response.ok) {
       const error = await response.text();

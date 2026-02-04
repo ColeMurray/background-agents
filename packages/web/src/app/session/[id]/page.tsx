@@ -2,7 +2,7 @@
 
 import { useSession } from "next-auth/react";
 import { useParams, useRouter } from "next/navigation";
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from "react";
 import { useSessionSocket } from "@/hooks/use-session-socket";
 import { SafeMarkdown } from "@/components/safe-markdown";
 import { ToolCallGroup } from "@/components/tool-call-group";
@@ -131,10 +131,12 @@ export default function SessionPage() {
     artifacts,
     currentParticipantId,
     isProcessing,
+    loadingHistory,
     sendPrompt,
     stopExecution,
     sendTyping,
     reconnect,
+    loadOlderEvents,
   } = useSessionSocket(sessionId);
 
   const handleArchive = useCallback(async () => {
@@ -177,11 +179,6 @@ export default function SessionPage() {
       setSelectedModel(sessionState.model);
     }
   }, [sessionState?.model]);
-
-  // Scroll to bottom when new content arrives
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [events]);
 
   // Redirect if not authenticated
   useEffect(() => {
@@ -264,6 +261,8 @@ export default function SessionPage() {
         stopExecution={stopExecution}
         handleArchive={handleArchive}
         handleUnarchive={handleUnarchive}
+        loadingHistory={loadingHistory}
+        loadOlderEvents={loadOlderEvents}
       />
     </SidebarLayout>
   );
@@ -295,6 +294,8 @@ function SessionContent({
   stopExecution,
   handleArchive,
   handleUnarchive,
+  loadingHistory,
+  loadOlderEvents,
 }: {
   sessionState: ReturnType<typeof useSessionSocket>["sessionState"];
   connected: boolean;
@@ -321,8 +322,67 @@ function SessionContent({
   stopExecution: () => void;
   handleArchive: () => void;
   handleUnarchive: () => void;
+  loadingHistory: boolean;
+  loadOlderEvents: () => void;
 }) {
   const { isOpen, toggle } = useSidebarContext();
+
+  // Scroll pagination refs
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const topSentinelRef = useRef<HTMLDivElement>(null);
+  const hasScrolledRef = useRef(false);
+  const isPrependingRef = useRef(false);
+  const prevScrollHeightRef = useRef(0);
+  const isNearBottomRef = useRef(true);
+
+  // Track user scroll
+  const handleScroll = useCallback(() => {
+    hasScrolledRef.current = true;
+    const el = scrollContainerRef.current;
+    if (el) {
+      isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+    }
+  }, []);
+
+  // IntersectionObserver to trigger loading older events
+  useEffect(() => {
+    const sentinel = topSentinelRef.current;
+    const container = scrollContainerRef.current;
+    if (!sentinel || !container) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (
+          entry.isIntersecting &&
+          hasScrolledRef.current &&
+          container.scrollHeight > container.clientHeight
+        ) {
+          // Capture scroll height BEFORE triggering load
+          prevScrollHeightRef.current = container.scrollHeight;
+          isPrependingRef.current = true;
+          loadOlderEvents();
+        }
+      },
+      { root: container, threshold: 0.1 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loadOlderEvents]);
+
+  // Maintain scroll position when older events are prepended
+  useLayoutEffect(() => {
+    if (isPrependingRef.current && scrollContainerRef.current) {
+      const el = scrollContainerRef.current;
+      el.scrollTop += el.scrollHeight - prevScrollHeightRef.current;
+      isPrependingRef.current = false;
+    }
+  }, [events]);
+
+  // Auto-scroll to bottom only when near bottom (not when prepending older history)
+  useEffect(() => {
+    if (isNearBottomRef.current && !isPrependingRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+    }
+  }, [events, messagesEndRef]);
 
   // Deduplicate and group events for rendering
   const groupedEvents = useMemo(() => {
@@ -403,8 +463,17 @@ function SessionContent({
       {/* Main content */}
       <main className="flex-1 flex overflow-hidden">
         {/* Event timeline */}
-        <div className="flex-1 overflow-y-auto p-4">
+        <div
+          ref={scrollContainerRef}
+          onScroll={handleScroll}
+          className="flex-1 overflow-y-auto p-4"
+        >
           <div className="max-w-3xl mx-auto space-y-2">
+            {/* Scroll sentinel for loading older history */}
+            <div ref={topSentinelRef} className="h-1" />
+            {loadingHistory && (
+              <div className="text-center text-muted-foreground text-sm py-2">Loading...</div>
+            )}
             {groupedEvents.map((group) =>
               group.type === "tool_group" ? (
                 <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />
