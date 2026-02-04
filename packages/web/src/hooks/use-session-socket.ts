@@ -362,6 +362,8 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
 
         case "error":
           console.error("Session error:", data);
+          // Reset loading state if a fetch_history request was rejected
+          setLoadingHistory(false);
           break;
       }
     },

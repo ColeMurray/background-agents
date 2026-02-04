@@ -131,7 +131,6 @@ export default function SessionPage() {
     artifacts,
     currentParticipantId,
     isProcessing,
-    hasMoreHistory,
     loadingHistory,
     sendPrompt,
     stopExecution,
@@ -262,7 +261,6 @@ export default function SessionPage() {
         stopExecution={stopExecution}
         handleArchive={handleArchive}
         handleUnarchive={handleUnarchive}
-        hasMoreHistory={hasMoreHistory}
         loadingHistory={loadingHistory}
         loadOlderEvents={loadOlderEvents}
       />
@@ -296,7 +294,6 @@ function SessionContent({
   stopExecution,
   handleArchive,
   handleUnarchive,
-  hasMoreHistory,
   loadingHistory,
   loadOlderEvents,
 }: {
@@ -325,7 +322,6 @@ function SessionContent({
   stopExecution: () => void;
   handleArchive: () => void;
   handleUnarchive: () => void;
-  hasMoreHistory: boolean;
   loadingHistory: boolean;
   loadOlderEvents: () => void;
 }) {
@@ -357,8 +353,6 @@ function SessionContent({
       ([entry]) => {
         if (
           entry.isIntersecting &&
-          hasMoreHistory &&
-          !loadingHistory &&
           hasScrolledRef.current &&
           container.scrollHeight > container.clientHeight
         ) {
@@ -372,7 +366,7 @@ function SessionContent({
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [hasMoreHistory, loadingHistory, loadOlderEvents]);
+  }, [loadOlderEvents]);
 
   // Maintain scroll position when older events are prepended
   useLayoutEffect(() => {
