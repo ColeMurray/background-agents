@@ -963,26 +963,7 @@ export class SessionDO extends DurableObject<Env> {
       createdAt: now,
     });
 
-    // Write user_message event to the events table for unified timeline replay
-    const userMessageEvent: SandboxEvent = {
-      type: "user_message",
-      content: data.content,
-      messageId,
-      timestamp: now / 1000, // Convert to seconds to match other events
-      author: {
-        participantId: participant.id,
-        name: participant.github_name || participant.github_login || participant.user_id,
-        avatar: getGitHubAvatarUrl(participant.github_login),
-      },
-    };
-    this.repository.createEvent({
-      id: generateId(),
-      type: "user_message",
-      data: JSON.stringify(userMessageEvent),
-      messageId,
-      createdAt: now,
-    });
-    this.broadcast({ type: "sandbox_event", event: userMessageEvent });
+    this.writeUserMessageEvent(participant, data.content, messageId, now);
 
     // Get queue position
     const position = this.repository.getPendingOrProcessingCount();
@@ -1083,7 +1064,8 @@ export class SessionDO extends DurableObject<Env> {
     }
     client.lastFetchHistoryAt = now;
 
-    const limit = Math.max(1, Math.min(data.limit ?? 200, 500));
+    const rawLimit = typeof data.limit === "number" ? data.limit : 200;
+    const limit = Math.max(1, Math.min(rawLimit, 500));
     const page = this.repository.getEventsHistoryPage(data.cursor.timestamp, data.cursor.id, limit);
 
     const items: SandboxEvent[] = [];
@@ -1668,6 +1650,37 @@ export class SessionDO extends DurableObject<Env> {
     return this.repository.getParticipantByUserId(userId);
   }
 
+  /**
+   * Write a user_message event to the events table and broadcast to connected clients.
+   * Used by both WebSocket and HTTP prompt handlers for unified timeline replay.
+   */
+  private writeUserMessageEvent(
+    participant: ParticipantRow,
+    content: string,
+    messageId: string,
+    now: number
+  ): void {
+    const userMessageEvent: SandboxEvent = {
+      type: "user_message",
+      content,
+      messageId,
+      timestamp: now / 1000, // Convert to seconds to match other events
+      author: {
+        participantId: participant.id,
+        name: participant.github_name || participant.github_login || participant.user_id,
+        avatar: getGitHubAvatarUrl(participant.github_login),
+      },
+    };
+    this.repository.createEvent({
+      id: generateId(),
+      type: "user_message",
+      data: JSON.stringify(userMessageEvent),
+      messageId,
+      createdAt: now,
+    });
+    this.broadcast({ type: "sandbox_event", event: userMessageEvent });
+  }
+
   private createParticipant(userId: string, name: string): ParticipantRow {
     const id = generateId();
     const now = Date.now();
@@ -2084,26 +2097,7 @@ export class SessionDO extends DurableObject<Env> {
         createdAt: now,
       });
 
-      // Write user_message event to the events table for unified timeline replay
-      const userMessageEvent: SandboxEvent = {
-        type: "user_message",
-        content: body.content,
-        messageId,
-        timestamp: now / 1000, // Convert to seconds to match other events
-        author: {
-          participantId: participant.id,
-          name: participant.github_name || participant.github_login || participant.user_id,
-          avatar: getGitHubAvatarUrl(participant.github_login),
-        },
-      };
-      this.repository.createEvent({
-        id: generateId(),
-        type: "user_message",
-        data: JSON.stringify(userMessageEvent),
-        messageId,
-        createdAt: now,
-      });
-      this.broadcast({ type: "sandbox_event", event: userMessageEvent });
+      this.writeUserMessageEvent(participant, body.content, messageId, now);
 
       const queuePosition = this.repository.getPendingOrProcessingCount();
 

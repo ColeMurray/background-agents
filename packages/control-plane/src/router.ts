@@ -1068,8 +1068,8 @@ async function resolveInstalledRepo(
 interface CachedReposList {
   repos: EnrichedRepository[];
   cachedAt: string;
-  /** Epoch ms — cache is considered fresh until this time. */
-  freshUntil: number;
+  /** Epoch ms — cache is considered fresh until this time. Missing in entries cached before this field was added. */
+  freshUntil?: number;
 }
 
 /**

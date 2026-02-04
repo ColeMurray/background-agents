@@ -382,7 +382,7 @@ function SessionContent({
     if (isNearBottomRef.current && !isPrependingRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
     }
-  }, [events, messagesEndRef]);
+  }, [events]);
 
   // Deduplicate and group events for rendering
   const groupedEvents = useMemo(() => {

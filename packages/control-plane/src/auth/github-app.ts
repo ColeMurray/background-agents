@@ -12,7 +12,7 @@
 import type { InstallationRepository } from "@open-inspect/shared";
 
 /** Timeout for individual GitHub API requests (ms). */
-const GITHUB_FETCH_TIMEOUT_MS = 15_000;
+const GITHUB_FETCH_TIMEOUT_MS = 60_000;
 
 /** Fetch with an AbortController timeout. */
 function fetchWithTimeout(
@@ -228,7 +228,7 @@ interface ListInstallationReposResponse {
  * List all repositories accessible to the GitHub App installation.
  *
  * Fetches page 1 sequentially to learn total_count, then fetches any
- * remaining pages concurrently. Each GitHub API call has a 15-second timeout.
+ * remaining pages concurrently.
  *
  * @param config - GitHub App configuration
  * @returns repos and per-page timing breakdown for diagnostics
