@@ -228,7 +228,7 @@ interface ListInstallationReposResponse {
  * List all repositories accessible to the GitHub App installation.
  *
  * Fetches page 1 sequentially to learn total_count, then fetches any
- * remaining pages concurrently. Each GitHub API call has a 15-second timeout.
+ * remaining pages concurrently.
  *
  * @param config - GitHub App configuration
  * @returns repos and per-page timing breakdown for diagnostics
