@@ -36,11 +36,21 @@ export async function POST(request: NextRequest) {
     // Get GitHub access token from session (added by next-auth callback)
     const githubToken = (session as { accessToken?: string }).accessToken;
 
-    // Add the token to the session creation request
-    // The control plane will encrypt it before storing
+    // Explicitly pick allowed fields from client body and derive identity
+    // from the server-side NextAuth session (not client-supplied data)
+    const user = session.user;
+    const userId = user.id || user.email || "anonymous";
+
     const sessionBody = {
-      ...body,
-      githubToken, // Plain token - control plane encrypts it
+      repoOwner: body.repoOwner,
+      repoName: body.repoName,
+      model: body.model,
+      title: body.title,
+      githubToken,
+      userId,
+      githubLogin: user.login,
+      githubName: user.name,
+      githubEmail: user.email,
     };
 
     const response = await controlPlaneFetch("/sessions", {
