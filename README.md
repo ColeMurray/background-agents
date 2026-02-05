@@ -144,6 +144,22 @@ await configureGitIdentity({
 });
 ```
 
+### Repository Setup Scripts
+
+Repositories can include a `.openinspect/setup.sh` script for custom environment setup:
+
+```bash
+# .openinspect/setup.sh
+#!/bin/bash
+npm install
+pip install -r requirements.txt
+```
+
+- Runs automatically after git clone, before the agent starts
+- Skipped when restoring from a snapshot (dependencies already installed)
+- Non-blocking: failures are logged but don't prevent the session from starting
+- Default timeout: 5 minutes (configurable via `SETUP_TIMEOUT_SECONDS` environment variable)
+
 ## License
 
 MIT
