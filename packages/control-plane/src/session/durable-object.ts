@@ -10,11 +10,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { generateId, decryptToken, encryptToken, hashToken } from "../auth/crypto";
-import {
-  generateInstallationToken,
-  getGitHubAppConfig,
-  getInstallationRepository,
-} from "../auth/github-app";
+import { getGitHubAppConfig, getInstallationRepository } from "../auth/github-app";
 import { refreshAccessToken } from "../auth/github";
 import { createModalClient } from "../sandbox/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
@@ -29,7 +25,13 @@ import {
   type AlarmScheduler,
   type IdGenerator,
 } from "../sandbox/lifecycle/manager";
-import { createPullRequest, getRepository } from "../auth/pr";
+import {
+  createGitHubProvider,
+  createTokenManager,
+  SourceControlProviderError,
+  type SourceControlProvider,
+  type SourceControlAuthContext,
+} from "../source-control";
 import { generateBranchName } from "@open-inspect/shared";
 import { DEFAULT_MODEL, isValidModel, extractProviderAndModel } from "../utils/models";
 import type {
@@ -108,6 +110,8 @@ export class SessionDO extends DurableObject<Env> {
   >();
   // Lifecycle manager (lazily initialized)
   private _lifecycleManager: SandboxLifecycleManager | null = null;
+  // Source control provider (lazily initialized)
+  private _sourceControlProvider: SourceControlProvider | null = null;
 
   // Route table for internal API endpoints
   private readonly routes: InternalRoute[] = [
@@ -166,6 +170,29 @@ export class SessionDO extends DurableObject<Env> {
       this._lifecycleManager = this.createLifecycleManager();
     }
     return this._lifecycleManager;
+  }
+
+  /**
+   * Get the source control provider, creating it lazily if needed.
+   */
+  private get sourceControlProvider(): SourceControlProvider {
+    if (!this._sourceControlProvider) {
+      this._sourceControlProvider = this.createSourceControlProvider();
+    }
+    return this._sourceControlProvider;
+  }
+
+  /**
+   * Create the source control provider.
+   */
+  private createSourceControlProvider(): SourceControlProvider {
+    const tokenManager = createTokenManager(this.env.TOKEN_ENCRYPTION_KEY);
+    const appConfig = getGitHubAppConfig(this.env);
+
+    return createGitHubProvider({
+      tokenManager,
+      appConfig: appConfig ?? undefined,
+    });
   }
 
   /**
@@ -2282,41 +2309,48 @@ export class SessionDO extends DurableObject<Env> {
 
     const user = promptingUser.user;
 
-    try {
-      // Decrypt the prompting user's GitHub token
-      const accessToken = await decryptToken(
-        user.github_access_token_encrypted!,
-        this.env.TOKEN_ENCRYPTION_KEY
-      );
+    // Build auth context for source control operations
+    const userAuth: SourceControlAuthContext = {
+      authType: "oauth",
+      encryptedToken: user.github_access_token_encrypted!,
+      encryptedRefreshToken: user.github_refresh_token_encrypted ?? undefined,
+      expiresAt: user.github_token_expires_at ?? undefined,
+    };
 
-      // Get repository info to determine default branch
-      const repoInfo = await getRepository(accessToken, session.repo_owner, session.repo_name);
+    try {
+      // Get repository info via provider
+      const repoInfo = await this.sourceControlProvider.getRepository(userAuth, {
+        owner: session.repo_owner,
+        name: session.repo_name,
+      });
 
       const baseBranch = body.baseBranch || repoInfo.defaultBranch;
       const sessionId = session.session_name || session.id;
       const headBranch = generateBranchName(sessionId);
 
-      // Generate GitHub App token for push (not user token)
+      // Generate push auth via provider (GitHub App token, not user token)
       // User token is only used for PR API call below
-      let pushToken: string | undefined;
-      const appConfig = getGitHubAppConfig(this.env);
-      if (appConfig) {
-        try {
-          pushToken = await generateInstallationToken(appConfig);
-          this.log.info("Generated fresh GitHub App token for push");
-        } catch (err) {
-          this.log.error("Failed to generate app token, push may fail", {
-            error: err instanceof Error ? err : String(err),
-          });
-        }
+      let pushAuth;
+      try {
+        pushAuth = await this.sourceControlProvider.generatePushAuth();
+        this.log.info("Generated fresh push auth token");
+      } catch (err) {
+        this.log.error("Failed to generate push auth", {
+          error: err instanceof Error ? err : String(err),
+        });
+        const errorMessage =
+          err instanceof SourceControlProviderError
+            ? err.message
+            : "Failed to generate push authentication";
+        return Response.json({ error: errorMessage }, { status: 500 });
       }
 
-      // Push branch to remote via sandbox
+      // Push branch to remote via sandbox (session-layer coordination)
       const pushResult = await this.pushBranchToRemote(
         headBranch,
         session.repo_owner,
         session.repo_name,
-        pushToken
+        pushAuth.token
       );
 
       if (!pushResult.success) {
@@ -2328,19 +2362,14 @@ export class SessionDO extends DurableObject<Env> {
       const sessionUrl = `${webAppUrl}/session/${sessionId}`;
       const fullBody = body.body + `\n\n---\n*Created with [Open-Inspect](${sessionUrl})*`;
 
-      // Create the PR using GitHub API (using the prompting user's token)
-      const prResult = await createPullRequest(
-        {
-          accessTokenEncrypted: user.github_access_token_encrypted!,
-          owner: session.repo_owner,
-          repo: session.repo_name,
-          title: body.title,
-          body: fullBody,
-          head: headBranch,
-          base: baseBranch,
-        },
-        this.env.TOKEN_ENCRYPTION_KEY
-      );
+      // Create the PR via provider (using the prompting user's token)
+      const prResult = await this.sourceControlProvider.createPullRequest(userAuth, {
+        repository: repoInfo,
+        title: body.title,
+        body: fullBody,
+        sourceBranch: headBranch,
+        targetBranch: baseBranch,
+      });
 
       // Store the PR as an artifact
       const artifactId = generateId();
@@ -2348,9 +2377,9 @@ export class SessionDO extends DurableObject<Env> {
       this.repository.createArtifact({
         id: artifactId,
         type: "pr",
-        url: prResult.htmlUrl,
+        url: prResult.webUrl,
         metadata: JSON.stringify({
-          number: prResult.number,
+          number: prResult.id,
           state: prResult.state,
           head: headBranch,
           base: baseBranch,
@@ -2367,20 +2396,26 @@ export class SessionDO extends DurableObject<Env> {
         artifact: {
           id: artifactId,
           type: "pr",
-          url: prResult.htmlUrl,
-          prNumber: prResult.number,
+          url: prResult.webUrl,
+          prNumber: prResult.id,
         },
       });
 
       return Response.json({
-        prNumber: prResult.number,
-        prUrl: prResult.htmlUrl,
+        prNumber: prResult.id,
+        prUrl: prResult.webUrl,
         state: prResult.state,
       });
     } catch (error) {
       this.log.error("PR creation failed", {
         error: error instanceof Error ? error : String(error),
       });
+
+      // Handle SourceControlProviderError with HTTP status
+      if (error instanceof SourceControlProviderError) {
+        return Response.json({ error: error.message }, { status: error.httpStatus || 500 });
+      }
+
       return Response.json(
         { error: error instanceof Error ? error.message : "Failed to create PR" },
         { status: 500 }
