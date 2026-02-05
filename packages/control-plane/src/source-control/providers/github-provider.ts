@@ -15,7 +15,7 @@ import type {
   GitPushAuthContext,
 } from "../types";
 import { SourceControlProviderError } from "../errors";
-import { generateInstallationToken } from "../../auth/github-app";
+import { generateInstallationToken, fetchWithTimeout } from "../../auth/github-app";
 import type { GitHubProviderConfig } from "./types";
 import { USER_AGENT, GITHUB_API_BASE } from "./constants";
 
@@ -38,13 +38,16 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     auth: SourceControlAuthContext,
     config: GetRepositoryConfig
   ): Promise<RepositoryInfo> {
-    const response = await fetch(`${GITHUB_API_BASE}/repos/${config.owner}/${config.name}`, {
-      headers: {
-        Accept: "application/vnd.github.v3+json",
-        Authorization: `Bearer ${auth.token}`,
-        "User-Agent": USER_AGENT,
-      },
-    });
+    const response = await fetchWithTimeout(
+      `${GITHUB_API_BASE}/repos/${config.owner}/${config.name}`,
+      {
+        headers: {
+          Accept: "application/vnd.github.v3+json",
+          Authorization: `Bearer ${auth.token}`,
+          "User-Agent": USER_AGENT,
+        },
+      }
+    );
 
     if (!response.ok) {
       const error = await response.text();
@@ -93,7 +96,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       requestBody.draft = true;
     }
 
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       `${GITHUB_API_BASE}/repos/${config.repository.owner}/${config.repository.name}/pulls`,
       {
         method: "POST",
@@ -213,7 +216,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     labels: string[]
   ): Promise<void> {
     try {
-      const response = await fetch(
+      const response = await fetchWithTimeout(
         `${GITHUB_API_BASE}/repos/${owner}/${repo}/issues/${prNumber}/labels`,
         {
           method: "POST",
@@ -248,7 +251,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     reviewers: string[]
   ): Promise<void> {
     try {
-      const response = await fetch(
+      const response = await fetchWithTimeout(
         `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/requested_reviewers`,
         {
           method: "POST",

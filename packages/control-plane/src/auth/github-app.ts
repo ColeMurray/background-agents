@@ -12,10 +12,10 @@
 import type { InstallationRepository } from "@open-inspect/shared";
 
 /** Timeout for individual GitHub API requests (ms). */
-const GITHUB_FETCH_TIMEOUT_MS = 60_000;
+export const GITHUB_FETCH_TIMEOUT_MS = 60_000;
 
 /** Fetch with an AbortController timeout. */
-function fetchWithTimeout(
+export function fetchWithTimeout(
   url: string,
   init: RequestInit,
   timeoutMs = GITHUB_FETCH_TIMEOUT_MS
