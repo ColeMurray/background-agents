@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { getToken } from "next-auth/jwt";
 import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
 
@@ -45,8 +46,8 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    // Get GitHub access token from session (added by next-auth callback)
-    const githubToken = (session as { accessToken?: string }).accessToken;
+    const jwt = await getToken({ req: request });
+    const githubToken = jwt?.accessToken as string | undefined;
 
     // Explicitly pick allowed fields from client body and derive identity
     // from the server-side NextAuth session (not client-supplied data)

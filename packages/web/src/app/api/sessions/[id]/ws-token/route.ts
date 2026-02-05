@@ -31,7 +31,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const user = session.user;
     const userId = user.id || user.email || "anonymous";
 
-    // Read refresh token from the JWT directly (not exposed on session)
     const jwtStart = Date.now();
     const jwt = await getToken({ req: request });
     const jwtMs = Date.now() - jwtStart;
@@ -45,9 +44,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         githubLogin: user.login,
         githubName: user.name,
         githubEmail: user.email,
-        // Pass user's GitHub token for PR creation (will be encrypted by control plane)
-        githubToken: (session as { accessToken?: string }).accessToken,
-        githubTokenExpiresAt: (session as { accessTokenExpiresAt?: number }).accessTokenExpiresAt,
+        githubToken: jwt?.accessToken as string | undefined,
+        githubTokenExpiresAt: jwt?.accessTokenExpiresAt as number | undefined,
         githubRefreshToken: jwt?.refreshToken as string | undefined,
       }),
     });
