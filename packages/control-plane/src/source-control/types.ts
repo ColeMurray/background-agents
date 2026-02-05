@@ -43,16 +43,15 @@ export interface RepositoryInfo {
 
 /**
  * Authentication context for source control API operations.
+ *
+ * Contains plain (decrypted) tokens. The session layer is responsible
+ * for decrypting tokens before constructing this context.
  */
 export interface SourceControlAuthContext {
   /** Type of authentication */
-  authType: "oauth" | "pat" | "token";
-  /** Encrypted access token */
-  encryptedToken: string;
-  /** Encrypted refresh token (for OAuth) */
-  encryptedRefreshToken?: string;
-  /** Token expiry timestamp in milliseconds */
-  expiresAt?: number;
+  authType: "oauth" | "pat" | "app";
+  /** Plain access token for API calls */
+  token: string;
 }
 
 /**
@@ -117,30 +116,6 @@ export interface CreatePullRequestResult {
 }
 
 /**
- * Token manager interface.
- *
- * Provides a clean abstraction over token encryption/decryption
- * for source control providers.
- */
-export interface SourceControlTokenManager {
-  /**
-   * Decrypt an encrypted token.
-   *
-   * @param encryptedToken - Base64-encoded encrypted token
-   * @returns Decrypted plain text token
-   */
-  decrypt(encryptedToken: string): Promise<string>;
-
-  /**
-   * Encrypt a plain text token.
-   *
-   * @param plainToken - Plain text token to encrypt
-   * @returns Base64-encoded encrypted token
-   */
-  encrypt(plainToken: string): Promise<string>;
-}
-
-/**
  * Source control provider interface.
  *
  * Defines the contract for source control platform operations.
@@ -153,7 +128,11 @@ export interface SourceControlTokenManager {
  *
  * @example
  * ```typescript
- * const provider: SourceControlProvider = new GitHubSourceControlProvider(config);
+ * const provider: SourceControlProvider = createGitHubProvider({ appConfig });
+ *
+ * // Session layer decrypts token before calling provider
+ * const token = await decryptToken(encryptedToken, encryptionKey);
+ * const auth: SourceControlAuthContext = { authType: "oauth", token };
  *
  * try {
  *   const repo = await provider.getRepository(auth, { owner: "acme", name: "app" });
@@ -182,7 +161,7 @@ export interface SourceControlProvider {
   /**
    * Get repository information including default branch.
    *
-   * @param auth - Authentication context with encrypted token
+   * @param auth - Authentication context with plain token
    * @param config - Repository identifier (owner/name)
    * @returns Repository information
    * @throws SourceControlProviderError
@@ -195,7 +174,7 @@ export interface SourceControlProvider {
   /**
    * Create a pull request.
    *
-   * @param auth - Authentication context with encrypted token
+   * @param auth - Authentication context with plain token
    * @param config - Pull request configuration
    * @returns Pull request result with URL and ID
    * @throws SourceControlProviderError

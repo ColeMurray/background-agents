@@ -27,7 +27,6 @@ import {
 } from "../sandbox/lifecycle/manager";
 import {
   createGitHubProvider,
-  createTokenManager,
   SourceControlProviderError,
   type SourceControlProvider,
   type SourceControlAuthContext,
@@ -186,11 +185,9 @@ export class SessionDO extends DurableObject<Env> {
    * Create the source control provider.
    */
   private createSourceControlProvider(): SourceControlProvider {
-    const tokenManager = createTokenManager(this.env.TOKEN_ENCRYPTION_KEY);
     const appConfig = getGitHubAppConfig(this.env);
 
     return createGitHubProvider({
-      tokenManager,
       appConfig: appConfig ?? undefined,
     });
   }
@@ -2309,15 +2306,18 @@ export class SessionDO extends DurableObject<Env> {
 
     const user = promptingUser.user;
 
-    // Build auth context for source control operations
-    const userAuth: SourceControlAuthContext = {
-      authType: "oauth",
-      encryptedToken: user.github_access_token_encrypted!,
-      encryptedRefreshToken: user.github_refresh_token_encrypted ?? undefined,
-      expiresAt: user.github_token_expires_at ?? undefined,
-    };
-
     try {
+      // Decrypt the user's GitHub token at the session layer
+      const accessToken = await decryptToken(
+        user.github_access_token_encrypted!,
+        this.env.TOKEN_ENCRYPTION_KEY
+      );
+
+      // Build auth context with plain token for provider
+      const userAuth: SourceControlAuthContext = {
+        authType: "oauth",
+        token: accessToken,
+      };
       // Get repository info via provider
       const repoInfo = await this.sourceControlProvider.getRepository(userAuth, {
         owner: session.repo_owner,

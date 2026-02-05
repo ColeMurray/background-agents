@@ -15,15 +15,11 @@ export type {
   GetRepositoryConfig,
   CreatePullRequestConfig,
   CreatePullRequestResult,
-  SourceControlTokenManager,
 } from "./types";
 
 // Errors
 export type { SourceControlErrorType } from "./errors";
 export { SourceControlProviderError } from "./errors";
-
-// Token manager
-export { DefaultTokenManager, createTokenManager } from "./token-manager";
 
 // Providers
 export {

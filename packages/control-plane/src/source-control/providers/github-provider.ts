@@ -14,7 +14,6 @@ import type {
   CreatePullRequestConfig,
   CreatePullRequestResult,
   GitPushAuthContext,
-  SourceControlTokenManager,
 } from "../types";
 import { SourceControlProviderError } from "../errors";
 import { generateInstallationToken } from "../../auth/github-app";
@@ -36,11 +35,9 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     supportsAppAuth: true,
   };
 
-  private readonly tokenManager: SourceControlTokenManager;
   private readonly appConfig?: GitHubProviderConfig["appConfig"];
 
-  constructor(config: GitHubProviderConfig) {
-    this.tokenManager = config.tokenManager;
+  constructor(config: GitHubProviderConfig = {}) {
     this.appConfig = config.appConfig;
   }
 
@@ -51,12 +48,10 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     auth: SourceControlAuthContext,
     config: GetRepositoryConfig
   ): Promise<RepositoryInfo> {
-    const accessToken = await this.tokenManager.decrypt(auth.encryptedToken);
-
     const response = await fetch(`${GITHUB_API_BASE}/repos/${config.owner}/${config.name}`, {
       headers: {
         Accept: "application/vnd.github.v3+json",
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: `Bearer ${auth.token}`,
         "User-Agent": USER_AGENT,
       },
     });
@@ -96,8 +91,6 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     auth: SourceControlAuthContext,
     config: CreatePullRequestConfig
   ): Promise<CreatePullRequestResult> {
-    const accessToken = await this.tokenManager.decrypt(auth.encryptedToken);
-
     const requestBody: Record<string, unknown> = {
       title: config.title,
       body: config.body,
@@ -116,7 +109,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         method: "POST",
         headers: {
           Accept: "application/vnd.github.v3+json",
-          Authorization: `Bearer ${accessToken}`,
+          Authorization: `Bearer ${auth.token}`,
           "User-Agent": USER_AGENT,
           "Content-Type": "application/json",
         },
@@ -171,7 +164,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     // Add labels if requested
     if (config.labels && config.labels.length > 0) {
       await this.addLabels(
-        accessToken,
+        auth.token,
         config.repository.owner,
         config.repository.name,
         data.number,
@@ -182,7 +175,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     // Request reviewers if requested
     if (config.reviewers && config.reviewers.length > 0) {
       await this.requestReviewers(
-        accessToken,
+        auth.token,
         config.repository.owner,
         config.repository.name,
         data.number,
@@ -292,9 +285,9 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
 /**
  * Create a GitHub source control provider.
  *
- * @param config - Provider configuration
+ * @param config - Provider configuration (optional)
  * @returns GitHub source control provider instance
  */
-export function createGitHubProvider(config: GitHubProviderConfig): SourceControlProvider {
+export function createGitHubProvider(config: GitHubProviderConfig = {}): SourceControlProvider {
   return new GitHubSourceControlProvider(config);
 }
