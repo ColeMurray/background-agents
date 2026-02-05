@@ -8,7 +8,6 @@
 // Types
 export type {
   SourceControlProvider,
-  SourceControlProviderCapabilities,
   SourceControlAuthContext,
   GitPushAuthContext,
   RepositoryInfo,

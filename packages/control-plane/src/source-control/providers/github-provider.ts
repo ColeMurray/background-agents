@@ -7,7 +7,6 @@
 
 import type {
   SourceControlProvider,
-  SourceControlProviderCapabilities,
   SourceControlAuthContext,
   GetRepositoryConfig,
   RepositoryInfo,
@@ -25,15 +24,6 @@ import { USER_AGENT, GITHUB_API_BASE } from "./constants";
  */
 export class GitHubSourceControlProvider implements SourceControlProvider {
   readonly name = "github";
-
-  readonly capabilities: SourceControlProviderCapabilities = {
-    supportsPullRequests: true,
-    supportsDraftPullRequests: true,
-    supportsReviewers: true,
-    supportsLabels: true,
-    supportsProtectedBranches: true,
-    supportsAppAuth: true,
-  };
 
   private readonly appConfig?: GitHubProviderConfig["appConfig"];
 

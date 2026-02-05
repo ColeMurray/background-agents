@@ -5,25 +5,6 @@
  */
 
 /**
- * Capabilities supported by a source control provider.
- * Providers can support different feature sets.
- */
-export interface SourceControlProviderCapabilities {
-  /** Whether the provider supports pull/merge requests */
-  supportsPullRequests: boolean;
-  /** Whether the provider supports draft pull/merge requests */
-  supportsDraftPullRequests: boolean;
-  /** Whether the provider supports reviewers on pull/merge requests */
-  supportsReviewers: boolean;
-  /** Whether the provider supports labels on pull/merge requests */
-  supportsLabels: boolean;
-  /** Whether the provider supports protected branches */
-  supportsProtectedBranches: boolean;
-  /** Whether the provider supports app authentication (GitHub Apps, GitLab deploy tokens) */
-  supportsAppAuth: boolean;
-}
-
-/**
  * Repository information.
  */
 export interface RepositoryInfo {
@@ -154,9 +135,6 @@ export interface CreatePullRequestResult {
 export interface SourceControlProvider {
   /** Provider name for logging and debugging */
   readonly name: string;
-
-  /** Provider capabilities */
-  readonly capabilities: SourceControlProviderCapabilities;
 
   /**
    * Get repository information including default branch.
