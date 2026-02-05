@@ -408,21 +408,20 @@ function SessionContent({
           filteredEvents.push(event);
         }
       } else if (event.type === "token" && event.messageId) {
-        // Deduplicate tokens by messageId - keep latest (most complete cumulative text)
+        // Deduplicate tokens by messageId - keep latest at its chronological position
         const existingIdx = seenTokens.get(event.messageId);
         if (existingIdx !== undefined) {
-          filteredEvents[existingIdx] = event;
-        } else {
-          seenTokens.set(event.messageId, filteredEvents.length);
-          filteredEvents.push(event);
+          filteredEvents[existingIdx] = null as unknown as SandboxEvent;
         }
+        seenTokens.set(event.messageId, filteredEvents.length);
+        filteredEvents.push(event);
       } else {
         // All other events (user_message, git_sync, etc.) - add as-is
         filteredEvents.push(event);
       }
     }
 
-    return groupEvents(filteredEvents);
+    return groupEvents(filteredEvents.filter(Boolean) as SandboxEvent[]);
   }, [events]);
 
   return (
