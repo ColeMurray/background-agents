@@ -114,6 +114,9 @@ built for internal use where all employees are trusted and have access to compan
 
 See **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** for deployment instructions.
 
+To understand the architecture and core concepts, read
+**[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)**.
+
 ## Key Features
 
 ### Fast Startup
