@@ -136,6 +136,11 @@ export interface SourceControlProvider {
   /** Provider name for logging and debugging */
   readonly name: string;
 
+  //
+  // User-authenticated operations
+  // These methods require a user's OAuth/PAT token to act on their behalf.
+  //
+
   /**
    * Get repository information including default branch.
    *
@@ -162,13 +167,20 @@ export interface SourceControlProvider {
     config: CreatePullRequestConfig
   ): Promise<CreatePullRequestResult>;
 
+  //
+  // App-authenticated operations
+  // These methods use app-level credentials (e.g., GitHub App installation token)
+  // configured at provider construction time, not user tokens.
+  //
+
   /**
    * Generate authentication for git push operations.
    *
-   * Returns a decrypted token that can be sent to the sandbox
-   * for git push authentication.
+   * Uses app-level credentials (configured at provider construction) rather than
+   * user auth because push operations run in the sandbox, which shouldn't have
+   * access to user OAuth tokens.
    *
-   * @returns Git push authentication context
+   * @returns Git push authentication context with app token
    * @throws SourceControlProviderError
    */
   generatePushAuth(): Promise<GitPushAuthContext>;
