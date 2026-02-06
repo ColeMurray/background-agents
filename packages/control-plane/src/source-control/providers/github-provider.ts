@@ -216,7 +216,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
   }
 
   buildGitPushSpec(config: BuildGitPushSpecConfig): GitPushSpec {
-    const force = config.force ?? true;
+    const force = config.force ?? false;
     const remoteUrl = `https://x-access-token:${config.auth.token}@github.com/${config.owner}/${config.name}.git`;
     const redactedRemoteUrl = `https://x-access-token:<redacted>@github.com/${config.owner}/${config.name}.git`;
 

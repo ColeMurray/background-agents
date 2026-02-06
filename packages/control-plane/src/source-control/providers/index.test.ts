@@ -7,4 +7,12 @@ describe("createSourceControlProvider", () => {
     const provider = createSourceControlProvider({ provider: "github" });
     expect(provider).toBeInstanceOf(GitHubSourceControlProvider);
   });
+
+  it("throws for unsupported provider names", () => {
+    expect(() =>
+      createSourceControlProvider({
+        provider: "gitlab" as unknown as "github",
+      })
+    ).toThrow("Unsupported source control provider");
+  });
 });

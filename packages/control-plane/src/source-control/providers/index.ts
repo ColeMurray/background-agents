@@ -29,5 +29,12 @@ export interface SourceControlProviderFactoryConfig {
 export function createSourceControlProvider(
   config: SourceControlProviderFactoryConfig
 ): SourceControlProvider {
-  return createGitHubProvider(config.github ?? {});
+  switch (config.provider) {
+    case "github":
+      return createGitHubProvider(config.github ?? {});
+    default: {
+      const provider: never = config.provider;
+      throw new Error(`Unsupported source control provider: ${String(provider)}`);
+    }
+  }
 }

@@ -38,4 +38,20 @@ describe("GitHubSourceControlProvider", () => {
       force: false,
     });
   });
+
+  it("defaults push spec to non-force push", () => {
+    const provider = new GitHubSourceControlProvider();
+    const spec = provider.buildGitPushSpec({
+      owner: "acme",
+      name: "web",
+      sourceRef: "HEAD",
+      targetBranch: "feature/two",
+      auth: {
+        authType: "app",
+        token: "token-456",
+      },
+    });
+
+    expect(spec.force).toBe(false);
+  });
 });
