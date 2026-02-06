@@ -3,6 +3,7 @@
  */
 
 import type { AgentResponse, CallbackContext } from "../types";
+import type { ManualPullRequestArtifactMetadata } from "@open-inspect/shared";
 
 /**
  * Slack Block Kit block type (subset).
@@ -143,11 +144,13 @@ function getManualCreatePrUrl(artifacts: AgentResponse["artifacts"]): string | n
     if (!artifact.metadata || typeof artifact.metadata !== "object") {
       return false;
     }
-    if (artifact.metadata.mode === "manual_pr") {
+    const metadata = artifact.metadata as Partial<ManualPullRequestArtifactMetadata> &
+      Record<string, unknown>;
+    if (metadata.mode === "manual_pr") {
       return true;
     }
     // Backward-compatible fallback for older artifacts that may not include mode.
-    return artifact.metadata.mode == null && typeof artifact.metadata.createPrUrl === "string";
+    return metadata.mode == null && typeof metadata.createPrUrl === "string";
   });
 
   if (!manualBranchArtifact) {
