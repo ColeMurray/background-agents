@@ -23,6 +23,11 @@ export interface RepositoryInfo {
 }
 
 /**
+ * Supported source control provider names.
+ */
+export type SourceControlProviderName = "github";
+
+/**
  * Authentication context for source control API operations.
  *
  * Contains plain (decrypted) tokens. The session layer is responsible
@@ -44,6 +49,56 @@ export interface GitPushAuthContext {
   authType: "app" | "pat" | "token";
   /** Decrypted token for git operations */
   token: string;
+}
+
+/**
+ * Configuration for building a manual pull-request URL.
+ */
+export interface BuildManualPullRequestUrlConfig {
+  /** Repository owner */
+  owner: string;
+  /** Repository name */
+  name: string;
+  /** Source branch (branch with changes) */
+  sourceBranch: string;
+  /** Target branch (branch to merge into) */
+  targetBranch: string;
+}
+
+/**
+ * Configuration for building a provider-specific git push specification.
+ */
+export interface BuildGitPushSpecConfig {
+  /** Repository owner */
+  owner: string;
+  /** Repository name */
+  name: string;
+  /** Local ref to push from (e.g. HEAD) */
+  sourceRef: string;
+  /** Remote branch to push to */
+  targetBranch: string;
+  /** Authentication context for git push operations */
+  auth: GitPushAuthContext;
+  /** Whether to force push */
+  force?: boolean;
+}
+
+/**
+ * Provider-specific git push specification.
+ *
+ * The bridge uses this spec to perform git push without embedding provider logic.
+ */
+export interface GitPushSpec {
+  /** Remote URL including credentials */
+  remoteUrl: string;
+  /** Redacted form for safe logging */
+  redactedRemoteUrl: string;
+  /** Refspec in format <src>:<dst> */
+  refspec: string;
+  /** Remote branch name (for observability and event correlation) */
+  targetBranch: string;
+  /** Whether force push is required */
+  force: boolean;
 }
 
 /**
@@ -184,4 +239,14 @@ export interface SourceControlProvider {
    * @throws SourceControlProviderError
    */
   generatePushAuth(): Promise<GitPushAuthContext>;
+
+  /**
+   * Build provider-specific URL for manual pull request creation.
+   */
+  buildManualPullRequestUrl(config: BuildManualPullRequestUrlConfig): string;
+
+  /**
+   * Build provider-specific git push specification for bridge execution.
+   */
+  buildGitPushSpec(config: BuildGitPushSpecConfig): GitPushSpec;
 }

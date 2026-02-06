@@ -12,6 +12,9 @@ import type {
   RepositoryInfo,
   CreatePullRequestConfig,
   CreatePullRequestResult,
+  BuildManualPullRequestUrlConfig,
+  BuildGitPushSpecConfig,
+  GitPushSpec,
   GitPushAuthContext,
 } from "../types";
 import { SourceControlProviderError } from "../errors";
@@ -202,6 +205,28 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         error
       );
     }
+  }
+
+  buildManualPullRequestUrl(config: BuildManualPullRequestUrlConfig): string {
+    const encodedOwner = encodeURIComponent(config.owner);
+    const encodedName = encodeURIComponent(config.name);
+    const encodedBase = encodeURIComponent(config.targetBranch);
+    const encodedHead = encodeURIComponent(config.sourceBranch);
+    return `https://github.com/${encodedOwner}/${encodedName}/pull/new/${encodedBase}...${encodedHead}`;
+  }
+
+  buildGitPushSpec(config: BuildGitPushSpecConfig): GitPushSpec {
+    const force = config.force ?? true;
+    const remoteUrl = `https://x-access-token:${config.auth.token}@github.com/${config.owner}/${config.name}.git`;
+    const redactedRemoteUrl = `https://x-access-token:<redacted>@github.com/${config.owner}/${config.name}.git`;
+
+    return {
+      remoteUrl,
+      redactedRemoteUrl,
+      refspec: `${config.sourceRef}:refs/heads/${config.targetBranch}`,
+      targetBranch: config.targetBranch,
+      force,
+    };
   }
 
   /**

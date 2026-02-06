@@ -8,8 +8,12 @@
 // Types
 export type {
   SourceControlProvider,
+  SourceControlProviderName,
   SourceControlAuthContext,
   GitPushAuthContext,
+  BuildManualPullRequestUrlConfig,
+  BuildGitPushSpecConfig,
+  GitPushSpec,
   RepositoryInfo,
   GetRepositoryConfig,
   CreatePullRequestConfig,
@@ -24,5 +28,7 @@ export { SourceControlProviderError } from "./errors";
 export {
   GitHubSourceControlProvider,
   createGitHubProvider,
+  createSourceControlProvider,
   type GitHubProviderConfig,
+  type SourceControlProviderFactoryConfig,
 } from "./providers";
