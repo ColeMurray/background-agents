@@ -70,6 +70,18 @@ The control plane provides:
 | `/sessions/:id/archive`      | POST      | Archive session          |
 | `/sessions/:id/unarchive`    | POST      | Unarchive session        |
 
+### Create PR Payload
+
+`POST /sessions/:id/pr` accepts:
+
+- `title` (required)
+- `body` (required)
+- `baseBranch` (optional)
+- `headBranch` (optional)
+
+When `headBranch` is omitted, control-plane resolves it from session state and finally falls back to
+the generated `open-inspect/<session>` branch.
+
 ### Repositories
 
 | Endpoint                           | Method | Description          |

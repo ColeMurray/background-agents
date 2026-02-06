@@ -26,12 +26,14 @@ import {
   type IdGenerator,
 } from "../sandbox/lifecycle/manager";
 import {
-  createGitHubProvider,
+  createSourceControlProvider as createSourceControlProviderImpl,
   SourceControlProviderError,
   type SourceControlProvider,
   type SourceControlAuthContext,
+  type GitPushSpec,
 } from "../source-control";
-import { generateBranchName } from "@open-inspect/shared";
+import { resolveHeadBranchForPr } from "../source-control/branch-resolution";
+import { generateBranchName, type ManualPullRequestArtifactMetadata } from "@open-inspect/shared";
 import { DEFAULT_MODEL, isValidModel, extractProviderAndModel } from "../utils/models";
 import type {
   Env,
@@ -54,22 +56,6 @@ import { RepoSecretsStore } from "../db/repo-secrets";
  */
 function getGitHubAvatarUrl(githubLogin: string | null | undefined): string | undefined {
   return githubLogin ? `https://github.com/${githubLogin}.png` : undefined;
-}
-
-/**
- * Build a GitHub pull/new URL for manual PR creation.
- */
-function buildGitHubPullNewUrl(
-  owner: string,
-  name: string,
-  baseBranch: string,
-  headBranch: string
-): string {
-  const encodedOwner = encodeURIComponent(owner);
-  const encodedName = encodeURIComponent(name);
-  const encodedBase = encodeURIComponent(baseBranch);
-  const encodedHead = encodeURIComponent(headBranch);
-  return `https://github.com/${encodedOwner}/${encodedName}/pull/new/${encodedBase}...${encodedHead}`;
 }
 
 /**
@@ -203,8 +189,11 @@ export class SessionDO extends DurableObject<Env> {
   private createSourceControlProvider(): SourceControlProvider {
     const appConfig = getGitHubAppConfig(this.env);
 
-    return createGitHubProvider({
-      appConfig: appConfig ?? undefined,
+    return createSourceControlProviderImpl({
+      provider: "github",
+      github: {
+        appConfig: appConfig ?? undefined,
+      },
     });
   }
 
@@ -1247,9 +1236,7 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async pushBranchToRemote(
     branchName: string,
-    repoOwner: string,
-    repoName: string,
-    githubToken?: string
+    pushSpec: GitPushSpec
   ): Promise<{ success: true } | { success: false; error: string }> {
     const sandboxWs = this.getSandboxWebSocket();
 
@@ -1276,16 +1263,11 @@ export class SessionDO extends DurableObject<Env> {
       }, 180000);
     });
 
-    // Tell sandbox to push the current branch
-    // Pass GitHub App token for authentication (sandbox uses for git push)
-    // User's OAuth token is NOT sent to sandbox - only used server-side for PR API
+    // Tell sandbox to push the branch using provider-generated transport details.
     this.log.info("Sending push command", { branch_name: branchName });
     this.safeSend(sandboxWs, {
       type: "push",
-      branchName,
-      repoOwner,
-      repoName,
-      githubToken,
+      pushSpec,
     });
 
     // Wait for push_complete or push_error event
@@ -2339,7 +2321,7 @@ export class SessionDO extends DurableObject<Env> {
   /**
    * Handle PR creation request.
    * 1. Resolve prompting participant and branch metadata
-   * 2. Push branch to remote via GitHub App auth
+   * 2. Push branch to remote via provider push auth
    * 3. Create PR via OAuth token, or return manual PR URL fallback
    */
   private async handleCreatePR(request: Request): Promise<Response> {
@@ -2347,6 +2329,7 @@ export class SessionDO extends DurableObject<Env> {
       title: string;
       body: string;
       baseBranch?: string;
+      headBranch?: string;
     };
 
     const session = this.getSession();
@@ -2367,7 +2350,7 @@ export class SessionDO extends DurableObject<Env> {
 
     try {
       const sessionId = session.session_name || session.id;
-      const headBranch = generateBranchName(sessionId);
+      const generatedHeadBranch = generateBranchName(sessionId);
 
       const initialArtifacts = this.repository.listArtifacts();
       const existingPrArtifact = initialArtifacts.find((artifact) => artifact.type === "pr");
@@ -2378,7 +2361,7 @@ export class SessionDO extends DurableObject<Env> {
         );
       }
 
-      // Generate push auth via provider (GitHub App token, not user token)
+      // Generate push auth via provider app credentials (not user token)
       // User token (if available) is only used for PR API call below
       let pushAuth;
       try {
@@ -2405,14 +2388,32 @@ export class SessionDO extends DurableObject<Env> {
         name: session.repo_name,
       });
       const baseBranch = body.baseBranch || repoInfo.defaultBranch;
+      const branchResolution = resolveHeadBranchForPr({
+        requestedHeadBranch: body.headBranch,
+        sessionBranchName: session.branch_name,
+        generatedBranchName: generatedHeadBranch,
+        baseBranch,
+      });
+      const headBranch = branchResolution.headBranch;
+      this.log.info("Resolved PR head branch", {
+        requested_head_branch: body.headBranch ?? null,
+        session_branch_name: session.branch_name,
+        generated_head_branch: generatedHeadBranch,
+        resolved_head_branch: headBranch,
+        resolution_source: branchResolution.source,
+        base_branch: baseBranch,
+      });
+      const pushSpec = this.sourceControlProvider.buildGitPushSpec({
+        owner: session.repo_owner,
+        name: session.repo_name,
+        sourceRef: "HEAD",
+        targetBranch: headBranch,
+        auth: pushAuth,
+        force: true,
+      });
 
       // Push branch to remote via sandbox (session-layer coordination)
-      const pushResult = await this.pushBranchToRemote(
-        headBranch,
-        session.repo_owner,
-        session.repo_name,
-        pushAuth.token
-      );
+      const pushResult = await this.pushBranchToRemote(headBranch, pushSpec);
 
       if (!pushResult.success) {
         return Response.json({ error: pushResult.error }, { status: 500 });
@@ -2572,12 +2573,12 @@ export class SessionDO extends DurableObject<Env> {
     artifacts: ArtifactRow[],
     reason?: string
   ): Response {
-    const manualCreatePrUrl = buildGitHubPullNewUrl(
-      session.repo_owner,
-      session.repo_name,
-      baseBranch,
-      headBranch
-    );
+    const manualCreatePrUrl = this.sourceControlProvider.buildManualPullRequestUrl({
+      owner: session.repo_owner,
+      name: session.repo_name,
+      sourceBranch: headBranch,
+      targetBranch: baseBranch,
+    });
 
     const existingManualArtifact = this.getExistingManualBranchArtifact(artifacts, headBranch);
     if (existingManualArtifact) {
@@ -2602,16 +2603,18 @@ export class SessionDO extends DurableObject<Env> {
 
     const artifactId = generateId();
     const now = Date.now();
+    const metadata: ManualPullRequestArtifactMetadata = {
+      head: headBranch,
+      base: baseBranch,
+      mode: "manual_pr",
+      createPrUrl: manualCreatePrUrl,
+      provider: this.sourceControlProvider.name,
+    };
     this.repository.createArtifact({
       id: artifactId,
       type: "branch",
       url: manualCreatePrUrl,
-      metadata: JSON.stringify({
-        head: headBranch,
-        base: baseBranch,
-        mode: "manual_pr",
-        createPrUrl: manualCreatePrUrl,
-      }),
+      metadata: JSON.stringify(metadata),
       createdAt: now,
     });
 

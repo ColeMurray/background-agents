@@ -19,7 +19,7 @@ import tempfile
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, ClassVar, NamedTuple
+from typing import Any, ClassVar
 
 import httpx
 import websockets
@@ -30,13 +30,6 @@ from .log_config import configure_logging, get_logger
 from .types import GitUser
 
 configure_logging()
-
-
-class TokenResolution(NamedTuple):
-    """Result of GitHub token resolution."""
-
-    token: str
-    source: str
 
 
 class OpenCodeIdentifier:
@@ -1046,37 +1039,15 @@ class AgentBridge:
         self.log.info("bridge.shutdown_requested")
         self.shutdown_event.set()
 
-    def _resolve_github_token(self, cmd: dict[str, Any]) -> TokenResolution:
-        """Resolve GitHub token with priority ordering.
-
-        Token priority:
-        1. Fresh app token from command (just-in-time from control plane)
-        2. Startup app token from env (may be expired for long sessions)
-        3. No auth (will fail for private repos)
-
-        Returns:
-            TokenResolution with token and source description for logging.
-        """
-        if cmd.get("githubToken"):
-            return TokenResolution(cmd["githubToken"], "fresh from command")
-        elif os.environ.get("GITHUB_APP_TOKEN"):
-            return TokenResolution(os.environ["GITHUB_APP_TOKEN"], "from env")
-        else:
-            return TokenResolution("", "none")
-
     async def _handle_push(self, cmd: dict[str, Any]) -> None:
-        """Handle push command - push current branch to GitHub."""
-        branch_name = cmd.get("branchName", "")
-        repo_owner = cmd.get("repoOwner") or os.environ.get("REPO_OWNER", "")
-        repo_name = cmd.get("repoName") or os.environ.get("REPO_NAME", "")
+        """Handle push command using provider-generated push spec."""
+        push_spec = cmd.get("pushSpec") if isinstance(cmd.get("pushSpec"), dict) else None
+        branch_name = str(push_spec.get("targetBranch", "")).strip() if push_spec else ""
 
-        github_token, token_source = self._resolve_github_token(cmd)
         self.log.info(
             "git.push_start",
             branch_name=branch_name,
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            token_source=token_source,
+            mode="push_spec",
         )
 
         repo_dirs = list(self.repo_path.glob("*/.git"))
@@ -1093,21 +1064,50 @@ class AgentBridge:
         repo_dir = repo_dirs[0].parent
 
         try:
-            refspec = f"HEAD:refs/heads/{branch_name}"
-
-            if not github_token or not repo_owner or not repo_name:
-                self.log.warn("git.push_error", reason="missing_credentials")
+            if not push_spec:
+                self.log.warn("git.push_error", reason="missing_push_spec")
                 await self._send_event(
                     {
                         "type": "push_error",
-                        "error": "Push failed - GitHub authentication token is required",
+                        "error": "Push failed - missing push specification",
                         "branchName": branch_name,
                     }
                 )
                 return
 
-            push_url = (
-                f"https://x-access-token:{github_token}@github.com/{repo_owner}/{repo_name}.git"
+            if not branch_name:
+                self.log.warn("git.push_error", reason="missing_target_branch")
+                await self._send_event(
+                    {
+                        "type": "push_error",
+                        "error": "Push failed - missing target branch",
+                        "branchName": "",
+                    }
+                )
+                return
+
+            refspec = str(push_spec.get("refspec", "")).strip()
+            push_url = str(push_spec.get("remoteUrl", "")).strip()
+            redacted_push_url = str(push_spec.get("redactedRemoteUrl", "")).strip()
+            force_push = bool(push_spec.get("force", False))
+
+            if not refspec or not push_url:
+                self.log.warn("git.push_error", reason="invalid_push_spec")
+                await self._send_event(
+                    {
+                        "type": "push_error",
+                        "error": "Push failed - invalid push specification",
+                        "branchName": branch_name,
+                    }
+                )
+                return
+
+            self.log.info(
+                "git.push_command",
+                branch_name=branch_name,
+                refspec=refspec,
+                force=force_push,
+                remote_url=redacted_push_url,
             )
 
             result = await asyncio.create_subprocess_exec(
@@ -1115,7 +1115,7 @@ class AgentBridge:
                 "push",
                 push_url,
                 refspec,
-                "-f",
+                *(["-f"] if force_push else []),
                 cwd=repo_dir,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,

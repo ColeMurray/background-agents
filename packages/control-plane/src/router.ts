@@ -835,10 +835,24 @@ async function handleCreatePR(
     title: string;
     body: string;
     baseBranch?: string;
+    headBranch?: string;
   };
 
-  if (!body.title || !body.body) {
+  if (
+    typeof body.title !== "string" ||
+    typeof body.body !== "string" ||
+    body.title.trim().length === 0 ||
+    body.body.trim().length === 0
+  ) {
     return error("title and body are required");
+  }
+
+  if (body.baseBranch != null && typeof body.baseBranch !== "string") {
+    return error("baseBranch must be a string");
+  }
+
+  if (body.headBranch != null && typeof body.headBranch !== "string") {
+    return error("headBranch must be a string");
   }
 
   const doId = env.SESSION.idFromName(sessionId);
@@ -854,6 +868,7 @@ async function handleCreatePR(
           title: body.title,
           body: body.body,
           baseBranch: body.baseBranch,
+          headBranch: body.headBranch,
         }),
       },
       ctx

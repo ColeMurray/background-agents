@@ -90,6 +90,17 @@ export interface SessionArtifact {
   createdAt: number;
 }
 
+/**
+ * Metadata stored on branch artifacts when PR creation falls back to manual flow.
+ */
+export interface ManualPullRequestArtifactMetadata {
+  mode: "manual_pr";
+  head: string;
+  base: string;
+  createPrUrl: string;
+  provider?: string;
+}
+
 // Pull request info
 export interface PullRequest {
   number: number;
