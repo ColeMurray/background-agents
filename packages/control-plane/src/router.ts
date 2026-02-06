@@ -10,6 +10,7 @@ import {
   getInstallationRepository,
   listInstallationRepositories,
 } from "./auth/github-app";
+import { resolveScmProviderFromEnv, SourceControlProviderError } from "./source-control";
 import { RepoSecretsStore, RepoSecretsValidationError } from "./db/repo-secrets";
 import { SessionIndexStore } from "./db/session-index";
 
@@ -127,6 +128,63 @@ function isPublicRoute(path: string): boolean {
  */
 function isSandboxAuthRoute(path: string): boolean {
   return SANDBOX_AUTH_ROUTES.some((pattern) => pattern.test(path));
+}
+
+function enforceImplementedScmProvider(
+  path: string,
+  env: Env,
+  ctx: RequestContext
+): Response | null {
+  try {
+    const provider = resolveScmProviderFromEnv(env.SCM_PROVIDER);
+    if (provider !== "github" && !isPublicRoute(path)) {
+      logger.warn("SCM provider not implemented", {
+        event: "scm.provider_not_implemented",
+        scm_provider: provider,
+        http_path: path,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      const response = error(
+        `SCM provider '${provider}' is not implemented in this deployment.`,
+        501
+      );
+      const headers = new Headers(response.headers);
+      headers.set("Access-Control-Allow-Origin", "*");
+      headers.set("x-request-id", ctx.request_id);
+      headers.set("x-trace-id", ctx.trace_id);
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
+    }
+
+    return null;
+  } catch (errorValue) {
+    const errorMessage =
+      errorValue instanceof SourceControlProviderError
+        ? errorValue.message
+        : "Invalid SCM provider configuration";
+
+    logger.error("Invalid SCM provider configuration", {
+      event: "scm.provider_invalid",
+      error: errorValue instanceof Error ? errorValue : String(errorValue),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+
+    const response = error(errorMessage, 500);
+    const headers = new Headers(response.headers);
+    headers.set("Access-Control-Allow-Origin", "*");
+    headers.set("x-request-id", ctx.request_id);
+    headers.set("x-trace-id", ctx.trace_id);
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
 }
 
 /**
@@ -430,6 +488,11 @@ export async function handleRequest(
         });
       }
     }
+  }
+
+  const providerCheck = enforceImplementedScmProvider(path, env, ctx);
+  if (providerCheck) {
+    return providerCheck;
   }
 
   // Find matching route

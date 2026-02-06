@@ -2,6 +2,7 @@
  * Source control provider factory and exports.
  */
 
+import { SourceControlProviderError } from "../errors";
 import type { SourceControlProvider, SourceControlProviderName } from "../types";
 import { createGitHubProvider } from "./github-provider";
 import type { GitHubProviderConfig } from "./types";
@@ -32,9 +33,15 @@ export function createSourceControlProvider(
   switch (config.provider) {
     case "github":
       return createGitHubProvider(config.github ?? {});
-    default: {
-      const provider: never = config.provider;
-      throw new Error(`Unsupported source control provider: ${String(provider)}`);
-    }
+    case "bitbucket":
+      throw new SourceControlProviderError(
+        "SCM provider 'bitbucket' is configured but not implemented.",
+        "permanent"
+      );
+    default:
+      throw new SourceControlProviderError(
+        `Unsupported source control provider: ${String(config.provider)}`,
+        "permanent"
+      );
   }
 }

@@ -33,6 +33,7 @@ export interface Env {
 
   // Variables
   DEPLOYMENT_NAME: string;
+  SCM_PROVIDER?: string; // Source control provider for this deployment (default: github)
   WORKER_URL?: string; // Base URL for the worker (for callbacks)
   WEB_APP_URL?: string; // Base URL for the web app (for PR links)
   CF_ACCOUNT_ID?: string; // Cloudflare account ID

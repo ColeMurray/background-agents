@@ -27,6 +27,7 @@ import {
 } from "../sandbox/lifecycle/manager";
 import {
   createSourceControlProvider as createSourceControlProviderImpl,
+  resolveScmProviderFromEnv,
   SourceControlProviderError,
   type SourceControlProvider,
   type SourceControlAuthContext,
@@ -188,9 +189,10 @@ export class SessionDO extends DurableObject<Env> {
    */
   private createSourceControlProvider(): SourceControlProvider {
     const appConfig = getGitHubAppConfig(this.env);
+    const provider = resolveScmProviderFromEnv(this.env.SCM_PROVIDER);
 
     return createSourceControlProviderImpl({
-      provider: "github",
+      provider,
       github: {
         appConfig: appConfig ?? undefined,
       },

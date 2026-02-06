@@ -220,6 +220,12 @@ All secrets are configured via Terraform. Required secrets include:
 - `GITHUB_APP_INSTALLATION_ID` - Single installation for all users
 - `REPO_SECRETS_ENCRYPTION_KEY` - AES-GCM key for encrypting repo secrets in D1
 
+Optional variables:
+
+- `SCM_PROVIDER` - Source control provider for this deployment (`github` or `bitbucket`, default:
+  `github`). Current implementation supports `github` only; `bitbucket` returns explicit
+  `501 Not Implemented` responses until implemented.
+
 See
 [terraform/environments/production/terraform.tfvars.example](../../terraform/environments/production/terraform.tfvars.example)
 for the complete list.
