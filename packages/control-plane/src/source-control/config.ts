@@ -14,7 +14,7 @@ export function resolveScmProviderFromEnv(value: string | undefined): SourceCont
   }
 
   throw new SourceControlProviderError(
-    `Invalid SCM_PROVIDER value '${value}'. Supported values: github, bitbucket.`,
+    `Invalid SCM_PROVIDER value '${normalized}'. Supported values: github, bitbucket.`,
     "permanent"
   );
 }

@@ -38,10 +38,13 @@ export function createSourceControlProvider(
         "SCM provider 'bitbucket' is configured but not implemented.",
         "permanent"
       );
-    default:
+    default: {
+      const runtimeProvider = String(config.provider);
+      const _exhaustive: never = config.provider;
       throw new SourceControlProviderError(
-        `Unsupported source control provider: ${String(config.provider)}`,
+        `Unsupported source control provider: ${runtimeProvider}`,
         "permanent"
       );
+    }
   }
 }

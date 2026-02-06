@@ -10,16 +10,15 @@ describe("createSourceControlProvider", () => {
   });
 
   it("throws explicit not-implemented error for bitbucket", () => {
-    expect(() =>
+    const createBitbucketProvider = () =>
       createSourceControlProvider({
         provider: "bitbucket",
-      })
-    ).toThrow(SourceControlProviderError);
-    expect(() =>
-      createSourceControlProvider({
-        provider: "bitbucket",
-      })
-    ).toThrow("SCM provider 'bitbucket' is configured but not implemented.");
+      });
+
+    expect(createBitbucketProvider).toThrow(SourceControlProviderError);
+    expect(createBitbucketProvider).toThrow(
+      "SCM provider 'bitbucket' is configured but not implemented."
+    );
   });
 
   it("throws for unknown provider values at runtime", () => {
