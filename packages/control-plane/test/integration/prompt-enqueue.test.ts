@@ -33,10 +33,7 @@ describe("POST /internal/prompt", () => {
       source: string;
       status: string;
       author_id: string;
-    }>(
-      stub,
-      `SELECT id, content, source, status, author_id FROM messages WHERE id = '${messageId}'`
-    );
+    }>(stub, `SELECT id, content, source, status, author_id FROM messages WHERE id = ?`, messageId);
 
     expect(messages).toHaveLength(1);
     expect(messages[0].content).toBe("Add tests");
@@ -114,7 +111,8 @@ describe("POST /internal/prompt", () => {
     const { messageId } = await res.json<{ messageId: string }>();
     const messages = await queryDO<{ attachments: string }>(
       stub,
-      `SELECT attachments FROM messages WHERE id = '${messageId}'`
+      `SELECT attachments FROM messages WHERE id = ?`,
+      messageId
     );
 
     expect(messages[0].attachments).not.toBeNull();
@@ -146,7 +144,8 @@ describe("POST /internal/prompt", () => {
     const { messageId } = await res.json<{ messageId: string }>();
     const messages = await queryDO<{ callback_context: string }>(
       stub,
-      `SELECT callback_context FROM messages WHERE id = '${messageId}'`
+      `SELECT callback_context FROM messages WHERE id = ?`,
+      messageId
     );
 
     expect(messages[0].callback_context).not.toBeNull();

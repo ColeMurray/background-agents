@@ -137,7 +137,8 @@ describe("POST /internal/sandbox-event", () => {
 
     const messages = await queryDO<{ status: string; completed_at: number | null }>(
       stub,
-      `SELECT status, completed_at FROM messages WHERE id = '${msgId}'`
+      `SELECT status, completed_at FROM messages WHERE id = ?`,
+      msgId
     );
     expect(messages[0].status).toBe("completed");
     expect(messages[0].completed_at).toEqual(expect.any(Number));
@@ -178,7 +179,8 @@ describe("POST /internal/sandbox-event", () => {
 
     const messages = await queryDO<{ status: string }>(
       stub,
-      `SELECT status FROM messages WHERE id = '${msgId}'`
+      `SELECT status FROM messages WHERE id = ?`,
+      msgId
     );
     expect(messages[0].status).toBe("failed");
   });

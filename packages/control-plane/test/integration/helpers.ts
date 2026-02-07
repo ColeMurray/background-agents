@@ -36,9 +36,13 @@ export async function initSession(overrides?: {
 /**
  * Query the DO's SQLite via runInDurableObject.
  */
-export async function queryDO<T>(stub: DurableObjectStub, sql: string): Promise<T[]> {
+export async function queryDO<T>(
+  stub: DurableObjectStub,
+  sql: string,
+  ...params: unknown[]
+): Promise<T[]> {
   return runInDurableObject(stub, (instance: SessionDO) => {
-    return instance.ctx.storage.sql.exec(sql).toArray() as T[];
+    return instance.ctx.storage.sql.exec(sql, ...params).toArray() as T[];
   });
 }
 
