@@ -28,6 +28,8 @@ export default defineWorkersConfig(async () => {
               INTERNAL_CALLBACK_SECRET: "test-hmac-secret-for-integration-tests",
               TOKEN_ENCRYPTION_KEY: "test-encryption-key-32chars-long!",
               DEPLOYMENT_NAME: "integration-test",
+              MODAL_API_SECRET: "test-modal-api-secret",
+              MODAL_WORKSPACE: "test-workspace",
               TEST_MIGRATIONS: migrations,
             },
           },
