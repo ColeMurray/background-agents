@@ -342,6 +342,7 @@ export class SessionDO extends DurableObject<Env> {
       { session_id: sessionId },
       parseLogLevel(this.env.LOG_LEVEL)
     );
+    this.wsManager.enableAutoPingPong();
   }
 
   /**
@@ -719,8 +720,6 @@ export class SessionDO extends DurableObject<Env> {
         participant_id: participant.id,
       });
     }
-
-    this.wsManager.enableAutoPingPong();
 
     // Send session state with current participant info
     const state = this.getSessionState();
