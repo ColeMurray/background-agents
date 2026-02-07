@@ -1,7 +1,4 @@
-import {
-  defineWorkersConfig,
-  readD1Migrations,
-} from "@cloudflare/vitest-pool-workers/config";
+import { defineWorkersConfig, readD1Migrations } from "@cloudflare/vitest-pool-workers/config";
 import path from "path";
 
 const migrationsPath = path.resolve(__dirname, "../../terraform/d1/migrations");
