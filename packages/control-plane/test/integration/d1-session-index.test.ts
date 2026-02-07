@@ -1,12 +1,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
 import { SessionIndexStore } from "../../src/db/session-index";
+import { cleanD1Tables } from "./cleanup";
 
 describe("D1 SessionIndexStore", () => {
-  beforeEach(async () => {
-    // Clean D1 tables before each test since isolatedStorage is disabled
-    await env.DB.exec("DELETE FROM sessions");
-  });
+  beforeEach(cleanD1Tables);
 
   it("creates and retrieves a session", async () => {
     const store = new SessionIndexStore(env.DB);

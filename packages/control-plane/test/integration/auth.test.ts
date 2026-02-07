@@ -1,12 +1,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { generateInternalToken } from "../../src/auth/internal";
+import { cleanD1Tables } from "./cleanup";
 
 describe("HMAC authentication", () => {
-  beforeEach(async () => {
-    // Clean D1 tables before each test since isolatedStorage is disabled
-    await env.DB.exec("DELETE FROM sessions");
-  });
+  beforeEach(cleanD1Tables);
 
   it("rejects requests without Authorization header", async () => {
     const response = await SELF.fetch("https://test.local/sessions");
