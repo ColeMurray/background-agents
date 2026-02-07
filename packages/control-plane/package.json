@@ -6,6 +6,7 @@
   "scripts": {
     "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/index.js --platform=browser --target=es2022 --external:cloudflare:* --external:node:*",
     "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix"
@@ -15,6 +16,7 @@
     "@open-inspect/shared": "file:../shared"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.12.10",
     "esbuild": "^0.25.0",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8",
