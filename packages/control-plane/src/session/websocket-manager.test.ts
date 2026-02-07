@@ -599,6 +599,45 @@ describe("SessionWebSocketManagerImpl", () => {
       expect(called).toHaveLength(0);
     });
 
+    it("broadcast pattern delivers to authenticated clients and skips unauthenticated", () => {
+      const { manager, sockets, mockRepo } = createManager();
+
+      // Authenticated client (in-memory)
+      const authedWs = createFakeWebSocket();
+      sockets.set(authedWs, ["wsid:ws-authed"]);
+      manager.setClient(authedWs, createClientInfo({ ws: authedWs }));
+
+      // Post-hibernation client (persisted mapping only, no in-memory ClientInfo)
+      const hibernatedWs = createFakeWebSocket();
+      sockets.set(hibernatedWs, ["wsid:ws-hibernated"]);
+      mockRepo.addMapping("ws-hibernated", {
+        participant_id: "p-2",
+        client_id: "c-2",
+        user_id: "u-2",
+        github_name: null,
+        github_login: null,
+      });
+
+      // Unauthenticated client (connected but never subscribed)
+      const unauthWs = createFakeWebSocket();
+      sockets.set(unauthWs, ["wsid:ws-unauth"]);
+
+      // Sandbox (should never receive)
+      const sandboxWs = createFakeWebSocket();
+      sockets.set(sandboxWs, ["sandbox", "sid:sb-1"]);
+
+      // Simulate the DO's broadcast() pattern
+      const message = JSON.stringify({ type: "sandbox_status", status: "ready" });
+      manager.forEachClientSocket("authenticated_only", (ws) => {
+        manager.send(ws, message);
+      });
+
+      expect(authedWs.send).toHaveBeenCalledWith(message);
+      expect(hibernatedWs.send).toHaveBeenCalledWith(message);
+      expect(unauthWs.send).not.toHaveBeenCalled();
+      expect(sandboxWs.send).not.toHaveBeenCalled();
+    });
+
     it("never calls fn for sandbox sockets regardless of mode", () => {
       const { manager, sockets } = createManager();
       const sandboxWs = createFakeWebSocket();

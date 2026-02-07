@@ -1316,10 +1316,10 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
-   * Broadcast message to all connected clients.
+   * Broadcast message to all authenticated clients.
    */
   private broadcast(message: ServerMessage): void {
-    this.wsManager.forEachClientSocket("all_clients", (ws) => {
+    this.wsManager.forEachClientSocket("authenticated_only", (ws) => {
       this.wsManager.send(ws, message);
     });
   }
