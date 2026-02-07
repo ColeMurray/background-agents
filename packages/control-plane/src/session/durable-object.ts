@@ -50,6 +50,7 @@ import type {
 } from "../types";
 import type { SessionRow, ParticipantRow, ArtifactRow, SandboxRow, SandboxCommand } from "./types";
 import { SessionRepository } from "./repository";
+import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
 import { RepoSecretsStore } from "../db/repo-secrets";
 
 /**
@@ -101,10 +102,10 @@ interface InternalRoute {
 export class SessionDO extends DurableObject<Env> {
   private sql: SqlStorage;
   private repository: SessionRepository;
-  private clients: Map<WebSocket, ClientInfo>;
-  private sandboxWs: WebSocket | null = null;
   private initialized = false;
   private log: Logger;
+  // WebSocket manager (lazily initialized like lifecycleManager)
+  private _wsManager: SessionWebSocketManager | null = null;
   // Track pending push operations by branch name
   private pendingPushResolvers = new Map<
     string,
@@ -158,7 +159,6 @@ export class SessionDO extends DurableObject<Env> {
     super(ctx, env);
     this.sql = ctx.storage.sql;
     this.repository = new SessionRepository(this.sql);
-    this.clients = new Map();
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
     // Note: session_id context is set in ensureInitialized() once DB is ready
   }
@@ -182,6 +182,20 @@ export class SessionDO extends DurableObject<Env> {
       this._sourceControlProvider = this.createSourceControlProvider();
     }
     return this._sourceControlProvider;
+  }
+
+  /**
+   * Get the WebSocket manager, creating it lazily if needed.
+   * Lazy initialization ensures the logger has session_id context
+   * (set by ensureInitialized()) by the time the manager is created.
+   */
+  private get wsManager(): SessionWebSocketManager {
+    if (!this._wsManager) {
+      this._wsManager = new SessionWebSocketManagerImpl(this.ctx, this.repository, this.log, {
+        authTimeoutMs: WS_AUTH_TIMEOUT_MS,
+      });
+    }
+    return this._wsManager;
   }
 
   /**
@@ -237,30 +251,21 @@ export class SessionDO extends DurableObject<Env> {
       broadcast: (message) => this.broadcast(message as ServerMessage),
     };
 
-    // WebSocket manager adapter
+    // WebSocket manager adapter — thin delegation to wsManager
     const wsManager: WebSocketManager = {
-      getSandboxWebSocket: () => this.getSandboxWebSocket(),
+      getSandboxWebSocket: () => this.wsManager.getSandboxSocket(),
       closeSandboxWebSocket: (code, reason) => {
-        const ws = this.getSandboxWebSocket();
+        const ws = this.wsManager.getSandboxSocket();
         if (ws) {
-          try {
-            ws.close(code, reason);
-          } catch {
-            // Ignore errors closing WebSocket
-          }
-          this.sandboxWs = null;
+          this.wsManager.close(ws, code, reason);
+          this.wsManager.clearSandboxSocket();
         }
       },
       sendToSandbox: (message) => {
-        const ws = this.getSandboxWebSocket();
-        return ws ? this.safeSend(ws, message) : false;
+        const ws = this.wsManager.getSandboxSocket();
+        return ws ? this.wsManager.send(ws, message) : false;
       },
-      getConnectedClientCount: () => {
-        return this.ctx.getWebSockets().filter((ws) => {
-          const tags = this.ctx.getTags(ws);
-          return !tags.includes("sandbox") && ws.readyState === WebSocket.OPEN;
-        }).length;
-      },
+      getConnectedClientCount: () => this.wsManager.getConnectedClientCount(),
     };
 
     // Alarm scheduler adapter
@@ -310,22 +315,10 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
-   * Safely send a message over a WebSocket, handling errors and closed connections.
-   * Returns true if the message was sent, false otherwise.
+   * Safely send a message over a WebSocket.
    */
   private safeSend(ws: WebSocket, message: string | object): boolean {
-    try {
-      if (ws.readyState !== WebSocket.OPEN) {
-        this.log.debug("Cannot send: WebSocket not open", { ready_state: ws.readyState });
-        return false;
-      }
-      const data = typeof message === "string" ? message : JSON.stringify(message);
-      ws.send(data);
-      return true;
-    } catch (e) {
-      this.log.warn("WebSocket send failed", { error: e instanceof Error ? e : String(e) });
-      return false;
-    }
+    return this.wsManager.send(ws, message);
   }
 
   /**
@@ -478,34 +471,14 @@ export class SessionDO extends DurableObject<Env> {
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
 
-      // Accept with hibernation support
-      // Include sandbox ID in tags for identity validation after hibernation recovery
-      // For client WebSockets, generate a unique ws_id for mapping recovery
       const sandboxId = request.headers.get("X-Sandbox-ID");
-      let tags: string[];
-      let wsId: string | undefined;
-      if (isSandbox) {
-        tags = ["sandbox", ...(sandboxId ? [`sid:${sandboxId}`] : [])];
-      } else {
-        // Generate unique ws_id for client WebSocket mapping
-        wsId = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-        tags = [`wsid:${wsId}`];
-      }
-      this.ctx.acceptWebSocket(server, tags);
 
       if (isSandbox) {
-        // Close any existing sandbox WebSocket to prevent duplicates
-        const existingSandboxWs = this.getSandboxWebSocket();
-        const replacedExisting = !!(existingSandboxWs && existingSandboxWs !== server);
-        if (replacedExisting) {
-          try {
-            existingSandboxWs!.close(1000, "New sandbox connecting");
-          } catch {
-            // Ignore errors closing old WebSocket
-          }
-        }
+        const { replaced } = this.wsManager.acceptAndSetSandboxSocket(
+          server,
+          sandboxId ?? undefined
+        );
 
-        this.sandboxWs = server;
         // Notify manager that sandbox connected so it can reset the spawning flag
         this.lifecycleManager.onSandboxConnected();
         this.updateSandboxStatus("ready");
@@ -522,18 +495,16 @@ export class SessionDO extends DurableObject<Env> {
           ws_type: "sandbox",
           outcome: "success",
           sandbox_id: sandboxId,
-          replaced_existing: replacedExisting,
+          replaced_existing: replaced,
           duration_ms: Date.now() - now,
         });
 
         // Process any pending messages now that sandbox is connected
         this.processMessageQueue();
       } else {
-        // For client WebSockets, schedule authentication timeout check
-        // This prevents resource abuse from connections that never authenticate
-        if (wsId) {
-          this.ctx.waitUntil(this.enforceAuthTimeout(server, wsId));
-        }
+        const wsId = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        this.wsManager.acceptClientSocket(server, wsId);
+        this.ctx.waitUntil(this.wsManager.enforceAuthTimeout(server, wsId));
       }
 
       return new Response(null, { status: 101, webSocket: client });
@@ -552,8 +523,8 @@ export class SessionDO extends DurableObject<Env> {
     this.ensureInitialized();
     if (typeof message !== "string") return;
 
-    const tags = this.ctx.getTags(ws);
-    if (tags.includes("sandbox")) {
+    const { kind } = this.wsManager.classify(ws);
+    if (kind === "sandbox") {
       await this.handleSandboxMessage(ws, message);
     } else {
       await this.handleClientMessage(ws, message);
@@ -565,15 +536,13 @@ export class SessionDO extends DurableObject<Env> {
    */
   async webSocketClose(ws: WebSocket, _code: number, _reason: string): Promise<void> {
     this.ensureInitialized();
-    const tags = this.ctx.getTags(ws);
+    const { kind } = this.wsManager.classify(ws);
 
-    if (tags.includes("sandbox")) {
-      this.sandboxWs = null;
+    if (kind === "sandbox") {
+      this.wsManager.clearSandboxSocket();
       this.updateSandboxStatus("stopped");
     } else {
-      const client = this.clients.get(ws);
-      this.clients.delete(ws);
-
+      const client = this.wsManager.removeClient(ws);
       if (client) {
         this.broadcast({ type: "presence_leave", userId: client.userId });
       }
@@ -587,62 +556,6 @@ export class SessionDO extends DurableObject<Env> {
     this.ensureInitialized();
     this.log.error("WebSocket error", { error });
     ws.close(1011, "Internal error");
-  }
-
-  /**
-   * Enforce authentication timeout for client WebSockets.
-   *
-   * This method is called via ctx.waitUntil() after a client WebSocket is accepted.
-   * It waits for the auth timeout period, then checks if the connection has been
-   * authenticated (i.e., the client sent a valid 'subscribe' message).
-   *
-   * If the connection is still unauthenticated after the timeout, it is closed.
-   * This prevents DoS attacks where attackers open many WebSocket connections
-   * without ever completing the authentication handshake.
-   *
-   * @param ws - The WebSocket to check
-   * @param wsId - The unique WebSocket ID for logging
-   */
-  private async enforceAuthTimeout(ws: WebSocket, wsId: string): Promise<void> {
-    // Wait for the authentication timeout period
-    await new Promise((resolve) => setTimeout(resolve, WS_AUTH_TIMEOUT_MS));
-
-    // Check if the WebSocket is still open
-    if (ws.readyState !== WebSocket.OPEN) {
-      return; // Already closed, nothing to do
-    }
-
-    // Check if this WebSocket has been authenticated
-    // An authenticated WebSocket will be in the clients Map
-    if (this.clients.has(ws)) {
-      return; // Authenticated, nothing to do
-    }
-
-    // After hibernation, the clients Map may be empty
-    // Try to recover client info from the database
-    // If recovery succeeds, the client was authenticated before hibernation
-    const tags = this.ctx.getTags(ws);
-    const wsIdTag = tags.find((t) => t.startsWith("wsid:"));
-    if (wsIdTag) {
-      const tagWsId = wsIdTag.replace("wsid:", "");
-      if (this.repository.hasWsClientMapping(tagWsId)) {
-        return; // Was authenticated before hibernation
-      }
-    }
-
-    // Connection is unauthenticated after timeout - close it
-    this.log.warn("ws.connect", {
-      event: "ws.connect",
-      ws_type: "client",
-      outcome: "auth_timeout",
-      ws_id: wsId,
-      timeout_ms: WS_AUTH_TIMEOUT_MS,
-    });
-    try {
-      ws.close(4008, "Authentication timeout");
-    } catch {
-      // WebSocket may have been closed by the client
-    }
   }
 
   /**
@@ -683,11 +596,6 @@ export class SessionDO extends DurableObject<Env> {
    * Handle messages from sandbox.
    */
   private async handleSandboxMessage(ws: WebSocket, message: string): Promise<void> {
-    // Recover sandbox WebSocket reference after hibernation
-    if (!this.sandboxWs || this.sandboxWs !== ws) {
-      this.sandboxWs = ws;
-    }
-
     try {
       const event = JSON.parse(message) as SandboxEvent;
       await this.processSandboxEvent(event);
@@ -801,32 +709,18 @@ export class SessionDO extends DurableObject<Env> {
       ws,
     };
 
-    this.clients.set(ws, clientInfo);
+    this.wsManager.setClient(ws, clientInfo);
 
-    // Store WebSocket to participant mapping for hibernation recovery
-    // Get the ws_id from the WebSocket's tags
-    const wsTags = this.ctx.getTags(ws);
-    const wsIdTag = wsTags.find((t) => t.startsWith("wsid:"));
-    if (wsIdTag) {
-      const wsId = wsIdTag.replace("wsid:", "");
-      const now = Date.now();
-      // Upsert the mapping (in case of reconnection)
-      this.repository.upsertWsClientMapping({
-        wsId,
-        participantId: participant.id,
-        clientId: data.clientId,
-        createdAt: now,
+    const parsed = this.wsManager.classify(ws);
+    if (parsed.kind === "client" && parsed.wsId) {
+      this.wsManager.persistClientMapping(parsed.wsId, participant.id, data.clientId);
+      this.log.debug("Stored ws_client_mapping", {
+        ws_id: parsed.wsId,
+        participant_id: participant.id,
       });
-      this.log.debug("Stored ws_client_mapping", { ws_id: wsId, participant_id: participant.id });
     }
 
-    // Set auto-response for ping/pong during hibernation
-    this.ctx.setWebSocketAutoResponse(
-      new WebSocketRequestResponsePair(
-        JSON.stringify({ type: "ping" }),
-        JSON.stringify({ type: "pong", timestamp: Date.now() })
-      )
-    );
+    this.wsManager.enableAutoPingPong();
 
     // Send session state with current participant info
     const state = this.getSessionState();
@@ -901,45 +795,34 @@ export class SessionDO extends DurableObject<Env> {
    * Get client info for a WebSocket, reconstructing from storage if needed after hibernation.
    */
   private getClientInfo(ws: WebSocket): ClientInfo | null {
-    // First check in-memory cache
-    let client = this.clients.get(ws);
-    if (client) return client;
+    // 1. In-memory cache (manager)
+    const cached = this.wsManager.getClient(ws);
+    if (cached) return cached;
 
-    // After hibernation, the Map is empty but WebSocket is still valid
-    // Try to recover client info from the database using ws_id tag
-    const tags = this.ctx.getTags(ws);
-    if (!tags.includes("sandbox")) {
-      // This is a client WebSocket that survived hibernation
-      // Try to recover from ws_client_mapping table
-      const wsIdTag = tags.find((t) => t.startsWith("wsid:"));
-      if (wsIdTag) {
-        const wsId = wsIdTag.replace("wsid:", "");
-        const mapping = this.repository.getWsClientMapping(wsId);
-
-        if (mapping) {
-          this.log.info("Recovered client info from DB", { ws_id: wsId, user_id: mapping.user_id });
-          client = {
-            participantId: mapping.participant_id,
-            userId: mapping.user_id,
-            name: mapping.github_name || mapping.github_login || mapping.user_id,
-            avatar: getGitHubAvatarUrl(mapping.github_login),
-            status: "active",
-            lastSeen: Date.now(),
-            clientId: mapping.client_id || `client-${Date.now()}`,
-            ws,
-          };
-          this.clients.set(ws, client);
-          return client;
-        }
-      }
-
-      // No mapping found - client must reconnect with valid auth
+    // 2. DB recovery (manager handles tag parsing + DB lookup)
+    const mapping = this.wsManager.recoverClientMapping(ws);
+    if (!mapping) {
       this.log.warn("No client mapping found after hibernation, closing WebSocket");
-      ws.close(4002, "Session expired, please reconnect");
+      this.wsManager.close(ws, 4002, "Session expired, please reconnect");
       return null;
     }
 
-    return null;
+    // 3. Build ClientInfo (DO owns domain logic)
+    this.log.info("Recovered client info from DB", { user_id: mapping.user_id });
+    const clientInfo: ClientInfo = {
+      participantId: mapping.participant_id,
+      userId: mapping.user_id,
+      name: mapping.github_name || mapping.github_login || mapping.user_id,
+      avatar: getGitHubAvatarUrl(mapping.github_login),
+      status: "active",
+      lastSeen: Date.now(),
+      clientId: mapping.client_id || `client-${Date.now()}`,
+      ws,
+    };
+
+    // 4. Re-cache
+    this.wsManager.setClient(ws, clientInfo);
+    return clientInfo;
   }
 
   /**
@@ -1028,7 +911,7 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async handleTyping(): Promise<void> {
     // If no sandbox or not connected, try to warm/spawn one
-    if (!this.sandboxWs || this.sandboxWs.readyState !== WebSocket.OPEN) {
+    if (!this.wsManager.getSandboxSocket()) {
       if (!this.lifecycleManager.isSpawning()) {
         this.broadcast({ type: "sandbox_warming" });
         // Proactively spawn sandbox when user starts typing
@@ -1240,7 +1123,7 @@ export class SessionDO extends DurableObject<Env> {
     branchName: string,
     pushSpec: GitPushSpec
   ): Promise<{ success: true } | { success: false; error: string }> {
-    const sandboxWs = this.getSandboxWebSocket();
+    const sandboxWs = this.wsManager.getSandboxSocket();
 
     if (!sandboxWs) {
       // No sandbox connected - user may have already pushed manually
@@ -1325,47 +1208,6 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
-   * Get the sandbox WebSocket, recovering from hibernation if needed.
-   */
-  private getSandboxWebSocket(): WebSocket | null {
-    // First check in-memory reference
-    if (this.sandboxWs && this.sandboxWs.readyState === WebSocket.OPEN) {
-      return this.sandboxWs;
-    }
-
-    // After hibernation, try to recover from ctx.getWebSockets()
-    // Validate sandbox ID to prevent wrong sandbox connections
-    const sandbox = this.getSandbox();
-    const expectedSandboxId = sandbox?.modal_sandbox_id;
-
-    const allWebSockets = this.ctx.getWebSockets();
-    for (const ws of allWebSockets) {
-      const tags = this.ctx.getTags(ws);
-      if (tags.includes("sandbox") && ws.readyState === WebSocket.OPEN) {
-        // Validate sandbox ID if we have an expected one
-        if (expectedSandboxId) {
-          const sidTag = tags.find((t) => t.startsWith("sid:"));
-          if (sidTag) {
-            const tagSandboxId = sidTag.replace("sid:", "");
-            if (tagSandboxId !== expectedSandboxId) {
-              this.log.debug("Skipping WS with wrong sandbox ID", {
-                tag_sandbox_id: tagSandboxId,
-                expected_sandbox_id: expectedSandboxId,
-              });
-              continue;
-            }
-          }
-        }
-        this.log.info("Recovered sandbox WebSocket from hibernation");
-        this.sandboxWs = ws;
-        return ws;
-      }
-    }
-
-    return null;
-  }
-
-  /**
    * Warm sandbox proactively.
    * Delegates to the lifecycle manager.
    */
@@ -1391,7 +1233,7 @@ export class SessionDO extends DurableObject<Env> {
     const now = Date.now();
 
     // Check if sandbox is connected (with hibernation recovery)
-    const sandboxWs = this.getSandboxWebSocket();
+    const sandboxWs = this.wsManager.getSandboxSocket();
     if (!sandboxWs) {
       // No sandbox connected - spawn one if not already spawning
       // spawnSandbox has its own persisted status check
@@ -1468,8 +1310,9 @@ export class SessionDO extends DurableObject<Env> {
    * The processing status will be updated when execution_complete is received.
    */
   private async stopExecution(): Promise<void> {
-    if (this.sandboxWs) {
-      this.safeSend(this.sandboxWs, { type: "stop" });
+    const sandboxWs = this.wsManager.getSandboxSocket();
+    if (sandboxWs) {
+      this.wsManager.send(sandboxWs, { type: "stop" });
     }
   }
 
@@ -1477,12 +1320,9 @@ export class SessionDO extends DurableObject<Env> {
    * Broadcast message to all connected clients.
    */
   private broadcast(message: ServerMessage): void {
-    for (const ws of this.ctx.getWebSockets()) {
-      const tags = this.ctx.getTags(ws);
-      if (!tags.includes("sandbox")) {
-        this.safeSend(ws, message);
-      }
-    }
+    this.wsManager.forEachClientSocket("all_clients", (ws) => {
+      this.wsManager.send(ws, message);
+    });
   }
 
   /**
@@ -1505,7 +1345,7 @@ export class SessionDO extends DurableObject<Env> {
    * Get list of present participants.
    */
   private getPresenceList(): ParticipantPresence[] {
-    return Array.from(this.clients.values()).map((c) => ({
+    return Array.from(this.wsManager.getAuthenticatedClients()).map((c) => ({
       participantId: c.participantId,
       userId: c.userId,
       name: c.name,
