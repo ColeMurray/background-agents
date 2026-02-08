@@ -22,7 +22,7 @@ import { generateInternalToken } from "./utils/internal";
 import { createLogger } from "./logger";
 import {
   MODEL_OPTIONS,
-  isValidModel as sharedIsValidModel,
+  isValidModel,
   getValidModelOrDefault,
   getReasoningConfig,
   getDefaultReasoningEffort,
@@ -62,18 +62,17 @@ const DEFAULT_FALLBACK_MODEL = "claude-haiku-4-5";
 async function createSession(
   env: Env,
   repo: RepoConfig,
-  title?: string,
-  model?: string,
-  reasoningEffort?: string,
+  title: string | undefined,
+  model: string,
+  reasoningEffort: string | undefined,
   traceId?: string
 ): Promise<{ sessionId: string; status: string } | null> {
   const startTime = Date.now();
-  const resolvedModel = model || env.DEFAULT_MODEL || DEFAULT_FALLBACK_MODEL;
   const base = {
     trace_id: traceId,
     repo_owner: repo.owner,
     repo_name: repo.name,
-    model: resolvedModel,
+    model,
     reasoning_effort: reasoningEffort,
   };
   try {
@@ -85,7 +84,7 @@ async function createSession(
         repoOwner: repo.owner,
         repoName: repo.name,
         title: title || `Slack: ${repo.name}`,
-        model: resolvedModel,
+        model,
         reasoningEffort,
       }),
     });
@@ -266,21 +265,6 @@ const AVAILABLE_MODELS = MODEL_OPTIONS.flatMap((group) =>
 );
 
 /**
- * Check if a model value is valid.
- */
-function isValidModel(model: string): boolean {
-  return sharedIsValidModel(model);
-}
-
-/**
- * Normalize a model value to ensure it's valid.
- * Returns the model if valid, otherwise returns the fallback.
- */
-function normalizeModel(model: string | undefined, fallback: string): string {
-  return getValidModelOrDefault(model || fallback);
-}
-
-/**
  * Generate a consistent KV key for user preferences.
  */
 function getUserPreferencesKey(userId: string): string {
@@ -335,11 +319,10 @@ async function saveUserPreferences(
 ): Promise<boolean> {
   try {
     const key = getUserPreferencesKey(userId);
-    const existing = await getUserPreferences(env, userId);
     const prefs: UserPreferences = {
       userId,
       model,
-      reasoningEffort: reasoningEffort ?? existing?.reasoningEffort,
+      reasoningEffort,
       updatedAt: Date.now(),
     };
     // No TTL - preferences persist indefinitely
@@ -362,16 +345,16 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
   const prefs = await getUserPreferences(env, userId);
   const fallback = env.DEFAULT_MODEL || DEFAULT_FALLBACK_MODEL;
   // Normalize model to ensure it's valid - UI and behavior will be consistent
-  const currentModel = normalizeModel(prefs?.model, fallback);
+  const currentModel = getValidModelOrDefault(prefs?.model ?? fallback);
   const currentModelInfo =
     AVAILABLE_MODELS.find((m) => m.value === currentModel) || AVAILABLE_MODELS[0];
 
   // Determine reasoning effort options for the current model
   const reasoningConfig = getReasoningConfig(currentModel);
   const currentEffort =
-    prefs?.reasoningEffort && reasoningConfig?.efforts.includes(prefs.reasoningEffort as never)
+    prefs?.reasoningEffort && isValidReasoningEffort(currentModel, prefs.reasoningEffort)
       ? prefs.reasoningEffort
-      : (getDefaultReasoningEffort(currentModel) ?? undefined);
+      : getDefaultReasoningEffort(currentModel);
 
   const reasoningOptions = reasoningConfig
     ? reasoningConfig.efforts.map((effort) => ({
@@ -421,7 +404,7 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
   ];
 
   // Add reasoning effort dropdown if the model supports it
-  if (reasoningConfig && reasoningOptions.length > 0 && currentEffort) {
+  if (reasoningConfig) {
     const currentEffortOption = reasoningOptions.find((o) => o.value === currentEffort);
     blocks.push(
       {
@@ -536,11 +519,11 @@ async function startSessionAndSendPrompt(
   // Fetch user's preferred model and reasoning effort
   const userPrefs = await getUserPreferences(env, userId);
   const fallback = env.DEFAULT_MODEL || DEFAULT_FALLBACK_MODEL;
-  const model = normalizeModel(userPrefs?.model, fallback);
+  const model = getValidModelOrDefault(userPrefs?.model ?? fallback);
   const reasoningEffort =
     userPrefs?.reasoningEffort && isValidReasoningEffort(model, userPrefs.reasoningEffort)
       ? userPrefs.reasoningEffort
-      : (getDefaultReasoningEffort(model) ?? undefined);
+      : getDefaultReasoningEffort(model);
 
   // Create session via control plane with user's preferred model and reasoning effort
   const session = await createSession(
@@ -870,6 +853,7 @@ async function handleAppMention(
         threadTs: thread_ts,
         repoFullName: existingSession.repoFullName,
         model: existingSession.model,
+        reasoningEffort: existingSession.reasoningEffort,
       };
 
       const channelContext = channelName
@@ -1188,7 +1172,7 @@ async function handleSlackInteraction(
       // Validate the selected model before saving
       if (selectedModel && userId && isValidModel(selectedModel)) {
         // Reset reasoning effort to new model's default when model changes
-        const newDefault = getDefaultReasoningEffort(selectedModel) ?? undefined;
+        const newDefault = getDefaultReasoningEffort(selectedModel);
         await saveUserPreferences(env, userId, selectedModel, newDefault);
         await publishAppHome(env, userId);
       }
@@ -1200,9 +1184,8 @@ async function handleSlackInteraction(
       const selectedEffort = action.selected_option?.value;
       if (selectedEffort && userId) {
         const currentPrefs = await getUserPreferences(env, userId);
-        const currentModel = normalizeModel(
-          currentPrefs?.model,
-          env.DEFAULT_MODEL || DEFAULT_FALLBACK_MODEL
+        const currentModel = getValidModelOrDefault(
+          currentPrefs?.model ?? env.DEFAULT_MODEL ?? DEFAULT_FALLBACK_MODEL
         );
         if (isValidReasoningEffort(currentModel, selectedEffort)) {
           await saveUserPreferences(env, userId, currentModel, selectedEffort);
