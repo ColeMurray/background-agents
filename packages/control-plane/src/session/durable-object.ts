@@ -1329,7 +1329,8 @@ export class SessionDO extends DurableObject<Env> {
         },
       });
 
-      // Notify slack-bot of stopped execution (fire-and-forget)
+      // Notify slack-bot now because the bridge's late execution_complete will hit
+      // the "already_stopped" branch in processSandboxEvent() which skips notification.
       this.ctx.waitUntil(this.notifySlackBot(processingMessage.id, false));
     }
 
