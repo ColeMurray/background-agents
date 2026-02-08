@@ -173,6 +173,13 @@ export type SandboxEvent =
       timestamp: number;
     }
   | {
+      type: "error";
+      error: string;
+      messageId: string;
+      sandboxId: string;
+      timestamp: number;
+    }
+  | {
       type: "execution_complete";
       messageId: string;
       success: boolean;

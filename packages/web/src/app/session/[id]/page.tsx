@@ -823,6 +823,15 @@ function EventItem({
         </div>
       );
 
+    case "error":
+      return (
+        <div className="flex items-center gap-2 text-sm text-red-600 dark:text-red-400">
+          <span className="w-2 h-2 rounded-full bg-red-500" />
+          Error{event.error ? `: ${event.error}` : ""}
+          <span className="text-xs text-secondary-foreground">{time}</span>
+        </div>
+      );
+
     case "execution_complete":
       if (event.success === false) {
         return (

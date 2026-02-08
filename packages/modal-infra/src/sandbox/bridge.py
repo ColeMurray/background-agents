@@ -466,14 +466,23 @@ class AgentBridge:
             await self._create_opencode_session()
 
         try:
+            had_error = False
+            error_message = None
             async for event in self._stream_opencode_response_sse(message_id, content, model):
+                if event.get("type") == "error":
+                    had_error = True
+                    error_message = event.get("error")
                 await self._send_event(event)
+
+            if had_error:
+                outcome = "error"
 
             await self._send_event(
                 {
                     "type": "execution_complete",
                     "messageId": message_id,
-                    "success": True,
+                    "success": not had_error,
+                    **({"error": error_message} if error_message else {}),
                 }
             )
 
@@ -885,11 +894,17 @@ class AgentBridge:
                                     error_session_id = props.get("sessionID")
                                     if error_session_id == self.opencode_session_id:
                                         error = props.get("error", {})
-                                        error_msg = (
-                                            error.get("message")
-                                            if isinstance(error, dict)
-                                            else str(error)
-                                        )
+                                        # OpenCode NamedError structure: { "name": "...", "data": { "message": "..." } }
+                                        if isinstance(error, dict):
+                                            data = error.get("data")
+                                            if isinstance(data, dict) and "message" in data:
+                                                error_msg = data["message"]
+                                            else:
+                                                error_msg = error.get("message") or error.get(
+                                                    "name"
+                                                )
+                                        else:
+                                            error_msg = str(error) if error else None
                                         self.log.error("bridge.session_error", error_msg=error_msg)
                                         yield {
                                             "type": "error",
