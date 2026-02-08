@@ -10,6 +10,12 @@ import { SidebarLayout, useSidebarContext } from "@/components/sidebar-layout";
 import { SessionRightSidebar } from "@/components/session-right-sidebar";
 import { ActionBar } from "@/components/action-bar";
 import { formatModelNameLower } from "@/lib/format";
+import {
+  MODEL_OPTIONS,
+  MODEL_REASONING_CONFIG,
+  getDefaultReasoningEffort,
+  type ValidModel,
+} from "@open-inspect/shared";
 import type { SandboxEvent } from "@/lib/tool-formatters";
 
 // Event grouping types
@@ -61,24 +67,12 @@ function groupEvents(events: SandboxEvent[]): EventGroup[] {
   return groups;
 }
 
-// Model options configuration
+// Model option type for dropdown buttons
 interface ModelOption {
   id: string;
   name: string;
   description: string;
-  category?: string;
 }
-
-const MODEL_OPTIONS: { category: string; models: ModelOption[] }[] = [
-  {
-    category: "Model",
-    models: [
-      { id: "claude-haiku-4-5", name: "claude haiku 4.5", description: "Fast and efficient" },
-      { id: "claude-sonnet-4-5", name: "claude sonnet 4.5", description: "Balanced performance" },
-      { id: "claude-opus-4-5", name: "claude opus 4.5", description: "Most capable" },
-    ],
-  },
-];
 
 function CheckIcon() {
   return (
@@ -167,18 +161,24 @@ export default function SessionPage() {
 
   const [prompt, setPrompt] = useState("");
   const [selectedModel, setSelectedModel] = useState("claude-haiku-4-5");
+  const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
+    getDefaultReasoningEffort("claude-haiku-4-5") ?? undefined
+  );
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
 
-  // Sync selectedModel with session's model when session state loads
+  // Sync selectedModel and reasoningEffort with session state when it loads
   useEffect(() => {
     if (sessionState?.model) {
       setSelectedModel(sessionState.model);
+      setReasoningEffort(
+        sessionState.reasoningEffort ?? getDefaultReasoningEffort(sessionState.model) ?? undefined
+      );
     }
-  }, [sessionState?.model]);
+  }, [sessionState?.model, sessionState?.reasoningEffort]);
 
   // Redirect if not authenticated
   useEffect(() => {
@@ -202,7 +202,7 @@ export default function SessionPage() {
     e.preventDefault();
     if (!prompt.trim() || isProcessing) return;
 
-    sendPrompt(prompt, selectedModel);
+    sendPrompt(prompt, selectedModel, reasoningEffort);
     setPrompt("");
   };
 
@@ -250,6 +250,7 @@ export default function SessionPage() {
         prompt={prompt}
         isProcessing={isProcessing}
         selectedModel={selectedModel}
+        reasoningEffort={reasoningEffort}
         modelDropdownOpen={modelDropdownOpen}
         modelDropdownRef={modelDropdownRef}
         inputRef={inputRef}
@@ -257,7 +258,11 @@ export default function SessionPage() {
         handleInputChange={handleInputChange}
         handleKeyDown={handleKeyDown}
         setModelDropdownOpen={setModelDropdownOpen}
-        setSelectedModel={setSelectedModel}
+        setSelectedModel={(model: string) => {
+          setSelectedModel(model);
+          setReasoningEffort(getDefaultReasoningEffort(model) ?? undefined);
+        }}
+        setReasoningEffort={setReasoningEffort}
         stopExecution={stopExecution}
         handleArchive={handleArchive}
         handleUnarchive={handleUnarchive}
@@ -283,6 +288,7 @@ function SessionContent({
   prompt,
   isProcessing,
   selectedModel,
+  reasoningEffort,
   modelDropdownOpen,
   modelDropdownRef,
   inputRef,
@@ -291,6 +297,7 @@ function SessionContent({
   handleKeyDown,
   setModelDropdownOpen,
   setSelectedModel,
+  setReasoningEffort,
   stopExecution,
   handleArchive,
   handleUnarchive,
@@ -311,6 +318,7 @@ function SessionContent({
   prompt: string;
   isProcessing: boolean;
   selectedModel: string;
+  reasoningEffort: string | undefined;
   modelDropdownOpen: boolean;
   modelDropdownRef: React.RefObject<HTMLDivElement | null>;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -319,6 +327,7 @@ function SessionContent({
   handleKeyDown: (e: React.KeyboardEvent) => void;
   setModelDropdownOpen: (open: boolean) => void;
   setSelectedModel: (model: string) => void;
+  setReasoningEffort: (value: string | undefined) => void;
   stopExecution: () => void;
   handleArchive: () => void;
   handleUnarchive: () => void;
@@ -571,46 +580,69 @@ function SessionContent({
               </div>
             </div>
 
-            {/* Footer row with model selector and agent label */}
+            {/* Footer row with model selector, reasoning pills, and agent label */}
             <div className="flex items-center justify-between px-4 py-2 border-t border-border-muted">
-              {/* Left side - Model selector */}
-              <div className="relative" ref={modelDropdownRef}>
-                <button
-                  type="button"
-                  onClick={() => !isProcessing && setModelDropdownOpen(!modelDropdownOpen)}
-                  disabled={isProcessing}
-                  className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
-                >
-                  <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-                  </svg>
-                  <span>{formatModelNameLower(selectedModel)}</span>
-                </button>
+              {/* Left side - Model selector + Reasoning pills */}
+              <div className="flex items-center gap-4">
+                <div className="relative" ref={modelDropdownRef}>
+                  <button
+                    type="button"
+                    onClick={() => !isProcessing && setModelDropdownOpen(!modelDropdownOpen)}
+                    disabled={isProcessing}
+                    className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                    </svg>
+                    <span>{formatModelNameLower(selectedModel)}</span>
+                  </button>
 
-                {/* Dropdown menu */}
-                {modelDropdownOpen && (
-                  <div className="absolute bottom-full left-0 mb-2 w-56 bg-background shadow-lg border border-border py-1 z-50">
-                    {MODEL_OPTIONS.map((group, groupIdx) => (
-                      <div key={group.category}>
-                        <div
-                          className={`px-3 py-1.5 text-xs font-medium text-secondary-foreground uppercase tracking-wider ${
-                            groupIdx > 0 ? "border-t border-border-muted mt-1" : ""
-                          }`}
-                        >
-                          {group.category}
+                  {/* Dropdown menu */}
+                  {modelDropdownOpen && (
+                    <div className="absolute bottom-full left-0 mb-2 w-56 bg-background shadow-lg border border-border py-1 z-50">
+                      {MODEL_OPTIONS.map((group, groupIdx) => (
+                        <div key={group.category}>
+                          <div
+                            className={`px-3 py-1.5 text-xs font-medium text-secondary-foreground uppercase tracking-wider ${
+                              groupIdx > 0 ? "border-t border-border-muted mt-1" : ""
+                            }`}
+                          >
+                            {group.category}
+                          </div>
+                          {group.models.map((model) => (
+                            <ModelOptionButton
+                              key={model.id}
+                              model={model}
+                              isSelected={selectedModel === model.id}
+                              onSelect={() => {
+                                setSelectedModel(model.id);
+                                setModelDropdownOpen(false);
+                              }}
+                            />
+                          ))}
                         </div>
-                        {group.models.map((model) => (
-                          <ModelOptionButton
-                            key={model.id}
-                            model={model}
-                            isSelected={selectedModel === model.id}
-                            onSelect={() => {
-                              setSelectedModel(model.id);
-                              setModelDropdownOpen(false);
-                            }}
-                          />
-                        ))}
-                      </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Reasoning effort pills */}
+                {MODEL_REASONING_CONFIG[selectedModel as ValidModel] && (
+                  <div className="flex items-center gap-1">
+                    {MODEL_REASONING_CONFIG[selectedModel as ValidModel]!.efforts.map((effort) => (
+                      <button
+                        key={effort}
+                        type="button"
+                        onClick={() => setReasoningEffort(effort)}
+                        disabled={isProcessing}
+                        className={`px-2 py-0.5 text-xs transition ${
+                          reasoningEffort === effort
+                            ? "bg-accent text-accent-foreground"
+                            : "text-muted-foreground hover:bg-muted"
+                        } disabled:opacity-50 disabled:cursor-not-allowed`}
+                      >
+                        {effort}
+                      </button>
                     ))}
                   </div>
                 )}

@@ -58,6 +58,7 @@ export async function POST(request: NextRequest) {
       repoOwner: body.repoOwner,
       repoName: body.repoName,
       model: body.model,
+      reasoningEffort: body.reasoningEffort,
       title: body.title,
       githubToken,
       userId,

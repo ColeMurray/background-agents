@@ -6,6 +6,12 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { SidebarLayout, useSidebarContext } from "@/components/sidebar-layout";
 import { formatModelNameLower } from "@/lib/format";
+import {
+  MODEL_OPTIONS,
+  MODEL_REASONING_CONFIG,
+  getDefaultReasoningEffort,
+  type ValidModel,
+} from "@open-inspect/shared";
 
 interface Repo {
   id: number;
@@ -16,23 +22,6 @@ interface Repo {
   private: boolean;
 }
 
-interface ModelOption {
-  id: string;
-  name: string;
-  description: string;
-}
-
-const MODEL_OPTIONS: { category: string; models: ModelOption[] }[] = [
-  {
-    category: "Model",
-    models: [
-      { id: "claude-haiku-4-5", name: "claude haiku 4.5", description: "Fast and efficient" },
-      { id: "claude-sonnet-4-5", name: "claude sonnet 4.5", description: "Balanced performance" },
-      { id: "claude-opus-4-5", name: "claude opus 4.5", description: "Most capable" },
-    ],
-  },
-];
-
 export default function Home() {
   const { data: session, status } = useSession();
   const router = useRouter();
@@ -40,6 +29,9 @@ export default function Home() {
   const [loadingRepos, setLoadingRepos] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState("claude-haiku-4-5");
+  const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
+    getDefaultReasoningEffort("claude-haiku-4-5") ?? undefined
+  );
   const [prompt, setPrompt] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
@@ -47,7 +39,9 @@ export default function Home() {
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const sessionCreationPromise = useRef<Promise<string | null> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const pendingConfigRef = useRef<{ repo: string; model: string } | null>(null);
+  const pendingConfigRef = useRef<{ repo: string; model: string; reasoningEffort?: string } | null>(
+    null
+  );
 
   const fetchRepos = useCallback(async () => {
     setLoadingRepos(true);
@@ -83,7 +77,7 @@ export default function Home() {
     setIsCreatingSession(false);
     sessionCreationPromise.current = null;
     pendingConfigRef.current = null;
-  }, [selectedRepo, selectedModel]);
+  }, [selectedRepo, selectedModel, reasoningEffort]);
 
   const createSessionForWarming = useCallback(async () => {
     if (pendingSessionId) return pendingSessionId;
@@ -92,7 +86,7 @@ export default function Home() {
 
     setIsCreatingSession(true);
     const [owner, name] = selectedRepo.split("/");
-    const currentConfig = { repo: selectedRepo, model: selectedModel };
+    const currentConfig = { repo: selectedRepo, model: selectedModel, reasoningEffort };
     pendingConfigRef.current = currentConfig;
 
     const abortController = new AbortController();
@@ -107,6 +101,7 @@ export default function Home() {
             repoOwner: owner,
             repoName: name,
             model: selectedModel,
+            reasoningEffort,
           }),
           signal: abortController.signal,
         });
@@ -115,7 +110,8 @@ export default function Home() {
           const data = await res.json();
           if (
             pendingConfigRef.current?.repo === currentConfig.repo &&
-            pendingConfigRef.current?.model === currentConfig.model
+            pendingConfigRef.current?.model === currentConfig.model &&
+            pendingConfigRef.current?.reasoningEffort === currentConfig.reasoningEffort
           ) {
             setPendingSessionId(data.sessionId);
             return data.sessionId as string;
@@ -140,7 +136,7 @@ export default function Home() {
 
     sessionCreationPromise.current = promise;
     return promise;
-  }, [selectedRepo, selectedModel, pendingSessionId]);
+  }, [selectedRepo, selectedModel, reasoningEffort, pendingSessionId]);
 
   const handlePromptChange = (value: string) => {
     const wasEmpty = prompt.length === 0;
@@ -179,6 +175,7 @@ export default function Home() {
         body: JSON.stringify({
           content: prompt,
           model: selectedModel,
+          reasoningEffort,
         }),
       });
 
@@ -212,7 +209,12 @@ export default function Home() {
         selectedRepo={selectedRepo}
         setSelectedRepo={setSelectedRepo}
         selectedModel={selectedModel}
-        setSelectedModel={setSelectedModel}
+        setSelectedModel={(model: string) => {
+          setSelectedModel(model);
+          setReasoningEffort(getDefaultReasoningEffort(model) ?? undefined);
+        }}
+        reasoningEffort={reasoningEffort}
+        setReasoningEffort={setReasoningEffort}
         prompt={prompt}
         handlePromptChange={handlePromptChange}
         creating={creating}
@@ -232,6 +234,8 @@ function HomeContent({
   setSelectedRepo,
   selectedModel,
   setSelectedModel,
+  reasoningEffort,
+  setReasoningEffort,
   prompt,
   handlePromptChange,
   creating,
@@ -246,6 +250,8 @@ function HomeContent({
   setSelectedRepo: (value: string) => void;
   selectedModel: string;
   setSelectedModel: (value: string) => void;
+  reasoningEffort: string | undefined;
+  setReasoningEffort: (value: string | undefined) => void;
   prompt: string;
   handlePromptChange: (value: string) => void;
   creating: boolean;
@@ -468,6 +474,29 @@ function HomeContent({
                         </div>
                       )}
                     </div>
+
+                    {/* Reasoning effort pills */}
+                    {MODEL_REASONING_CONFIG[selectedModel as ValidModel] && (
+                      <div className="flex items-center gap-1">
+                        {MODEL_REASONING_CONFIG[selectedModel as ValidModel]!.efforts.map(
+                          (effort) => (
+                            <button
+                              key={effort}
+                              type="button"
+                              onClick={() => setReasoningEffort(effort)}
+                              disabled={creating}
+                              className={`px-2 py-0.5 text-xs transition ${
+                                reasoningEffort === effort
+                                  ? "bg-accent text-accent-foreground"
+                                  : "text-muted-foreground hover:bg-muted"
+                              } disabled:opacity-50 disabled:cursor-not-allowed`}
+                            >
+                              {effort}
+                            </button>
+                          )
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* Right side - Agent label */}

@@ -50,6 +50,7 @@ interface SessionState {
   messageCount: number;
   createdAt: number;
   model?: string;
+  reasoningEffort?: string;
   isProcessing: boolean;
 }
 
@@ -76,7 +77,7 @@ interface UseSessionSocketReturn {
   isProcessing: boolean;
   hasMoreHistory: boolean;
   loadingHistory: boolean;
-  sendPrompt: (content: string, model?: string) => void;
+  sendPrompt: (content: string, model?: string, reasoningEffort?: string) => void;
   stopExecution: () => void;
   sendTyping: () => void;
   reconnect: () => void;
@@ -517,7 +518,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
     };
   }, [sessionId, handleMessage, fetchWsToken]);
 
-  const sendPrompt = useCallback((content: string, model?: string) => {
+  const sendPrompt = useCallback((content: string, model?: string, reasoningEffort?: string) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       console.error("WebSocket not connected");
       return;
@@ -526,11 +527,11 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
     if (!subscribedRef.current) {
       console.error("Not subscribed yet, waiting...");
       // Retry after a short delay
-      setTimeout(() => sendPrompt(content, model), 500);
+      setTimeout(() => sendPrompt(content, model, reasoningEffort), 500);
       return;
     }
 
-    console.log("Sending prompt:", content, "with model:", model);
+    console.log("Sending prompt:", content, "with model:", model, "reasoning:", reasoningEffort);
 
     // Optimistically set isProcessing for immediate feedback
     // Server will confirm with processing_status message
@@ -545,6 +546,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
         type: "prompt",
         content,
         model, // Include model for per-message model switching
+        reasoningEffort,
       })
     );
   }, []);
