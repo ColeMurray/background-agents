@@ -6,9 +6,10 @@ the task lifecycle correctly manages _current_prompt_task.
 """
 
 import asyncio
+import contextlib
 import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -131,11 +132,13 @@ class TestHandleStop:
         ]
 
         # Run a prompt command
-        task = await bridge._handle_command({
-            "type": "prompt",
-            "messageId": "msg-1",
-            "content": "hello",
-        })
+        task = await bridge._handle_command(
+            {
+                "type": "prompt",
+                "messageId": "msg-1",
+                "content": "hello",
+            }
+        )
 
         # Wait for task to complete
         assert task is not None
@@ -157,11 +160,13 @@ class TestHandleStop:
             create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
         ]
 
-        task = await bridge._handle_command({
-            "type": "prompt",
-            "messageId": "msg-1",
-            "content": "hello",
-        })
+        task = await bridge._handle_command(
+            {
+                "type": "prompt",
+                "messageId": "msg-1",
+                "content": "hello",
+            }
+        )
 
         # Task should be set before completion
         assert bridge._current_prompt_task is task
@@ -172,10 +177,55 @@ class TestHandleStop:
         await asyncio.sleep(0)
 
     @pytest.mark.asyncio
+    async def test_older_prompt_completion_does_not_clear_newer_task(self, bridge: AgentBridge):
+        """Completing an older prompt must not clear a newer _current_prompt_task."""
+        old_can_finish = asyncio.Event()
+        new_can_finish = asyncio.Event()
+
+        async def fake_handle_prompt(cmd: dict[str, Any]) -> None:
+            message_id = cmd.get("messageId")
+            if message_id == "msg-old":
+                await old_can_finish.wait()
+            elif message_id == "msg-new":
+                await new_can_finish.wait()
+            else:
+                raise AssertionError(f"Unexpected messageId: {message_id}")
+
+        bridge._handle_prompt = fake_handle_prompt
+
+        old_task = await bridge._handle_command(
+            {
+                "type": "prompt",
+                "messageId": "msg-old",
+                "content": "old",
+            }
+        )
+        assert old_task is not None
+
+        new_task = await bridge._handle_command(
+            {
+                "type": "prompt",
+                "messageId": "msg-new",
+                "content": "new",
+            }
+        )
+        assert new_task is not None
+        assert bridge._current_prompt_task is new_task
+
+        old_can_finish.set()
+        await old_task
+        await asyncio.sleep(0)
+
+        assert bridge._current_prompt_task is new_task
+
+        new_can_finish.set()
+        await new_task
+        await asyncio.sleep(0)
+
+    @pytest.mark.asyncio
     async def test_cancelled_task_sends_execution_complete(self, bridge: AgentBridge):
         """Cancelling the prompt task should trigger execution_complete with success=False."""
         sent_events: list[dict] = []
-        original_send = bridge._send_event
 
         async def capture_send(event: dict) -> None:
             sent_events.append(event)
@@ -200,11 +250,13 @@ class TestHandleStop:
 
         http_client.stream = lambda *a, **kw: HangingSSEResponse()
 
-        task = await bridge._handle_command({
-            "type": "prompt",
-            "messageId": "msg-cancel-test",
-            "content": "will be cancelled",
-        })
+        task = await bridge._handle_command(
+            {
+                "type": "prompt",
+                "messageId": "msg-cancel-test",
+                "content": "will be cancelled",
+            }
+        )
 
         assert task is not None
 
@@ -213,10 +265,8 @@ class TestHandleStop:
 
         # Cancel it
         task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await task
-        except asyncio.CancelledError:
-            pass
 
         # Give the done callback a chance to fire and the
         # inner asyncio.create_task to run

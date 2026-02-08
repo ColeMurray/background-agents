@@ -396,7 +396,8 @@ class AgentBridge:
             self._current_prompt_task = task
 
             def handle_task_exception(t: asyncio.Task[None], mid: str = message_id) -> None:
-                self._current_prompt_task = None
+                if self._current_prompt_task is t:
+                    self._current_prompt_task = None
                 if t.cancelled():
                     asyncio.create_task(
                         self._send_event(
