@@ -153,6 +153,7 @@ export interface CallbackContext {
   threadTs: string;
   repoFullName: string;
   model: string;
+  reasoningEffort?: string;
 }
 
 /**
@@ -163,6 +164,7 @@ export interface ThreadSession {
   repoId: string;
   repoFullName: string;
   model: string;
+  reasoningEffort?: string;
   /** Unix timestamp of when the session was created. Used for debugging and observability. */
   createdAt: number;
 }
@@ -251,5 +253,6 @@ export interface AgentResponse {
 export interface UserPreferences {
   userId: string;
   model: string;
+  reasoningEffort?: string;
   updatedAt: number;
 }
