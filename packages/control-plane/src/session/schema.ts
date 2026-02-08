@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS session (
   current_sha TEXT,                                 -- Current HEAD SHA
   opencode_session_id TEXT,                         -- OpenCode session ID (for 1:1 mapping)
   model TEXT DEFAULT 'claude-haiku-4-5',            -- LLM model to use
+  reasoning_effort TEXT,                            -- Session-level reasoning effort default
   status TEXT DEFAULT 'created',                    -- 'created', 'active', 'completed', 'archived'
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
@@ -51,7 +52,9 @@ CREATE TABLE IF NOT EXISTS messages (
   content TEXT NOT NULL,
   source TEXT NOT NULL,                             -- 'web', 'slack', 'extension', 'github'
   model TEXT,                                       -- LLM model for this specific message (per-message override)
+  reasoning_effort TEXT,                            -- Per-message reasoning effort override
   attachments TEXT,                                 -- JSON array
+  callback_context TEXT,                            -- JSON callback context for Slack follow-up notifications
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
   created_at INTEGER NOT NULL,
