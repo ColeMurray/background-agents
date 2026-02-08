@@ -236,7 +236,6 @@ function createTestConfig(): SandboxLifecycleConfig {
   return {
     ...DEFAULT_LIFECYCLE_CONFIG,
     controlPlaneUrl: "https://test.workers.dev",
-    provider: "anthropic",
     model: "claude-sonnet-4-5",
   };
 }

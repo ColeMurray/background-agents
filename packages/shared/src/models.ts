@@ -8,7 +8,14 @@
 /**
  * Valid model names supported by the system.
  */
-export const VALID_MODELS = ["claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5"] as const;
+export const VALID_MODELS = [
+  "claude-haiku-4-5",
+  "claude-sonnet-4-5",
+  "claude-opus-4-5",
+  "openai/gpt-5.2",
+  "openai/gpt-5.2-codex",
+  "openai/gpt-5.3-codex",
+] as const;
 
 export type ValidModel = (typeof VALID_MODELS)[number];
 
@@ -39,6 +46,9 @@ export const MODEL_REASONING_CONFIG: Partial<Record<ValidModel, ModelReasoningCo
   "claude-haiku-4-5": { efforts: ["high", "max"], default: "max" },
   "claude-sonnet-4-5": { efforts: ["high", "max"], default: "max" },
   "claude-opus-4-5": { efforts: ["high", "max"], default: "max" },
+  "openai/gpt-5.2": { efforts: ["none", "low", "medium", "high", "xhigh"], default: undefined },
+  "openai/gpt-5.2-codex": { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
+  "openai/gpt-5.3-codex": { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
 };
 
 export interface ModelDisplayInfo {
@@ -66,6 +76,14 @@ export const MODEL_OPTIONS: ModelCategory[] = [
         description: "Balanced performance",
       },
       { id: "claude-opus-4-5", name: "Claude Opus 4.5", description: "Most capable" },
+    ],
+  },
+  {
+    category: "OpenAI",
+    models: [
+      { id: "openai/gpt-5.2", name: "GPT 5.2", description: "400K context, fast" },
+      { id: "openai/gpt-5.2-codex", name: "GPT 5.2 Codex", description: "Optimized for code" },
+      { id: "openai/gpt-5.3-codex", name: "GPT 5.3 Codex", description: "Latest codex" },
     ],
   },
 ];

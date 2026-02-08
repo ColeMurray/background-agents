@@ -28,6 +28,7 @@ import {
   type InactivityConfig,
   type HeartbeatConfig,
 } from "./decisions";
+import { extractProviderAndModel } from "../../utils/models";
 import { createLogger, type Logger } from "../../logger";
 
 const log = createLogger("lifecycle-manager");
@@ -129,7 +130,7 @@ export interface SandboxLifecycleConfig {
   inactivity: InactivityConfig;
   heartbeat: HeartbeatConfig;
   controlPlaneUrl: string;
-  provider: string;
+  /** Default model ID used when the session has no model override. */
   model: string;
   /** Sandbox lifetime in seconds. Passed to the sandbox provider on create/restore. */
   sandboxTimeoutSeconds?: number;
@@ -140,10 +141,7 @@ export interface SandboxLifecycleConfig {
 /**
  * Default lifecycle configuration.
  */
-export const DEFAULT_LIFECYCLE_CONFIG: Omit<
-  SandboxLifecycleConfig,
-  "controlPlaneUrl" | "provider" | "model"
-> = {
+export const DEFAULT_LIFECYCLE_CONFIG: Omit<SandboxLifecycleConfig, "controlPlaneUrl" | "model"> = {
   circuitBreaker: DEFAULT_CIRCUIT_BREAKER_CONFIG,
   spawn: DEFAULT_SPAWN_CONFIG,
   inactivity: DEFAULT_INACTIVITY_CONFIG,
@@ -300,6 +298,7 @@ export class SandboxLifecycleManager {
       });
 
       const userEnvVars = await this.storage.getUserEnvVars();
+      const { provider, model: modelId } = this.resolveProviderAndModel(session);
 
       // Create sandbox via provider
       const createConfig: CreateSandboxConfig = {
@@ -309,8 +308,8 @@ export class SandboxLifecycleManager {
         repoName: session.repo_name,
         controlPlaneUrl: this.config.controlPlaneUrl,
         sandboxAuthToken,
-        provider: this.config.provider,
-        model: session.model || this.config.model,
+        provider,
+        model: modelId,
         userEnvVars,
       };
 
@@ -409,6 +408,7 @@ export class SandboxLifecycleManager {
       });
 
       const userEnvVars = await this.storage.getUserEnvVars();
+      const { provider, model: modelId } = this.resolveProviderAndModel(session);
 
       const result = await this.provider.restoreFromSnapshot({
         snapshotImageId,
@@ -418,8 +418,8 @@ export class SandboxLifecycleManager {
         controlPlaneUrl: this.config.controlPlaneUrl,
         repoOwner: session.repo_owner,
         repoName: session.repo_name,
-        provider: this.config.provider,
-        model: session.model || this.config.model,
+        provider,
+        model: modelId,
         userEnvVars,
         timeoutSeconds: this.config.sandboxTimeoutSeconds,
       });
@@ -701,6 +701,14 @@ export class SandboxLifecycleManager {
     const alarmTime = Date.now() + this.config.inactivity.timeoutMs;
     this.log.debug("Scheduling inactivity check", { timeout_ms: this.config.inactivity.timeoutMs });
     await this.alarmScheduler.scheduleAlarm(alarmTime);
+  }
+
+  /**
+   * Resolve the provider and model ID from the session or config default.
+   * e.g., "openai/gpt-5.2-codex" -> { provider: "openai", model: "gpt-5.2-codex" }
+   */
+  private resolveProviderAndModel(session: SessionRow): { provider: string; model: string } {
+    return extractProviderAndModel(session.model || this.config.model);
   }
 
   /**

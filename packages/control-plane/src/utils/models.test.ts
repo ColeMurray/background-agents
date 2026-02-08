@@ -24,6 +24,12 @@ describe("model utilities", () => {
       expect(isValidModel("claude-opus-4-5")).toBe(true);
     });
 
+    it("returns true for OpenAI models", () => {
+      expect(isValidModel("openai/gpt-5.2")).toBe(true);
+      expect(isValidModel("openai/gpt-5.2-codex")).toBe(true);
+      expect(isValidModel("openai/gpt-5.3-codex")).toBe(true);
+    });
+
     it("returns false for invalid models", () => {
       expect(isValidModel("gpt-4")).toBe(false);
       expect(isValidModel("claude-3-opus")).toBe(false);
@@ -69,6 +75,23 @@ describe("model utilities", () => {
       expect(result).toEqual({
         provider: "anthropic",
         model: "claude-haiku-4-5",
+      });
+    });
+
+    it("extracts openai provider from OpenAI models", () => {
+      expect(extractProviderAndModel("openai/gpt-5.2")).toEqual({
+        provider: "openai",
+        model: "gpt-5.2",
+      });
+
+      expect(extractProviderAndModel("openai/gpt-5.2-codex")).toEqual({
+        provider: "openai",
+        model: "gpt-5.2-codex",
+      });
+
+      expect(extractProviderAndModel("openai/gpt-5.3-codex")).toEqual({
+        provider: "openai",
+        model: "gpt-5.3-codex",
       });
     });
 
@@ -142,6 +165,12 @@ describe("model utilities", () => {
       expect(supportsReasoning("claude-opus-4-5")).toBe(true);
     });
 
+    it("returns true for OpenAI models with reasoning config", () => {
+      expect(supportsReasoning("openai/gpt-5.2")).toBe(true);
+      expect(supportsReasoning("openai/gpt-5.2-codex")).toBe(true);
+      expect(supportsReasoning("openai/gpt-5.3-codex")).toBe(true);
+    });
+
     it("returns false for invalid models", () => {
       expect(supportsReasoning("gpt-4")).toBe(false);
       expect(supportsReasoning("invalid")).toBe(false);
@@ -156,6 +185,15 @@ describe("model utilities", () => {
       expect(getDefaultReasoningEffort("claude-opus-4-5")).toBe("max");
     });
 
+    it("returns high for OpenAI codex models", () => {
+      expect(getDefaultReasoningEffort("openai/gpt-5.2-codex")).toBe("high");
+      expect(getDefaultReasoningEffort("openai/gpt-5.3-codex")).toBe("high");
+    });
+
+    it("returns undefined for GPT 5.2 (no default)", () => {
+      expect(getDefaultReasoningEffort("openai/gpt-5.2")).toBeUndefined();
+    });
+
     it("returns undefined for invalid models", () => {
       expect(getDefaultReasoningEffort("gpt-4")).toBeUndefined();
       expect(getDefaultReasoningEffort("invalid")).toBeUndefined();
@@ -168,6 +206,22 @@ describe("model utilities", () => {
       expect(config).toEqual({
         efforts: ["high", "max"],
         default: "max",
+      });
+    });
+
+    it("returns config for OpenAI codex models", () => {
+      const config = getReasoningConfig("openai/gpt-5.2-codex");
+      expect(config).toEqual({
+        efforts: ["low", "medium", "high", "xhigh"],
+        default: "high",
+      });
+    });
+
+    it("returns config for GPT 5.2 with none effort", () => {
+      const config = getReasoningConfig("openai/gpt-5.2");
+      expect(config).toEqual({
+        efforts: ["none", "low", "medium", "high", "xhigh"],
+        default: undefined,
       });
     });
 
@@ -187,6 +241,24 @@ describe("model utilities", () => {
       expect(isValidReasoningEffort("claude-sonnet-4-5", "medium")).toBe(false);
       expect(isValidReasoningEffort("claude-sonnet-4-5", "xhigh")).toBe(false);
       expect(isValidReasoningEffort("claude-sonnet-4-5", "none")).toBe(false);
+    });
+
+    it("returns true for valid effort on OpenAI codex models", () => {
+      expect(isValidReasoningEffort("openai/gpt-5.2-codex", "low")).toBe(true);
+      expect(isValidReasoningEffort("openai/gpt-5.2-codex", "medium")).toBe(true);
+      expect(isValidReasoningEffort("openai/gpt-5.2-codex", "high")).toBe(true);
+      expect(isValidReasoningEffort("openai/gpt-5.2-codex", "xhigh")).toBe(true);
+    });
+
+    it("returns false for max on OpenAI models (Anthropic-only)", () => {
+      expect(isValidReasoningEffort("openai/gpt-5.2-codex", "max")).toBe(false);
+      expect(isValidReasoningEffort("openai/gpt-5.3-codex", "max")).toBe(false);
+      expect(isValidReasoningEffort("openai/gpt-5.2", "max")).toBe(false);
+    });
+
+    it("returns true for none on GPT 5.2 only", () => {
+      expect(isValidReasoningEffort("openai/gpt-5.2", "none")).toBe(true);
+      expect(isValidReasoningEffort("openai/gpt-5.2-codex", "none")).toBe(false);
     });
 
     it("returns false for invalid models", () => {

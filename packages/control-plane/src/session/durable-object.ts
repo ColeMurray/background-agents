@@ -40,7 +40,6 @@ import {
   isValidModel,
   isValidReasoningEffort,
   getDefaultReasoningEffort,
-  extractProviderAndModel,
 } from "../utils/models";
 import type {
   Env,
@@ -291,8 +290,6 @@ export class SessionDO extends DurableObject<Env> {
       this.env.WORKER_URL ||
       `https://open-inspect-control-plane.${this.env.CF_ACCOUNT_ID || "workers"}.workers.dev`;
 
-    const { provider: llmProvider, model } = extractProviderAndModel(DEFAULT_MODEL);
-
     // Resolve sessionId for lifecycle manager logging context
     const session = this.repository.getSession();
     const sessionId = session?.session_name || session?.id || this.ctx.id.toString();
@@ -300,8 +297,7 @@ export class SessionDO extends DurableObject<Env> {
     const config = {
       ...DEFAULT_LIFECYCLE_CONFIG,
       controlPlaneUrl,
-      provider: llmProvider,
-      model,
+      model: DEFAULT_MODEL,
       sessionId,
       inactivity: {
         ...DEFAULT_LIFECYCLE_CONFIG.inactivity,
