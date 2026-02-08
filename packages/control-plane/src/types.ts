@@ -85,7 +85,13 @@ export type ArtifactType = "pr" | "screenshot" | "preview" | "branch";
 export type ClientMessage =
   | { type: "ping" }
   | { type: "subscribe"; token: string; clientId: string }
-  | { type: "prompt"; content: string; model?: string; attachments?: Attachment[] }
+  | {
+      type: "prompt";
+      content: string;
+      model?: string;
+      reasoningEffort?: string;
+      attachments?: Attachment[];
+    }
   | { type: "stop" }
   | { type: "typing" }
   | {
@@ -237,6 +243,7 @@ export interface SessionState {
   messageCount: number;
   createdAt: number;
   model?: string;
+  reasoningEffort?: string;
   isProcessing: boolean;
 }
 
@@ -269,6 +276,7 @@ export interface CreateSessionRequest {
   repoName: string;
   title?: string;
   model?: string; // LLM model to use (e.g., "claude-haiku-4-5", "claude-sonnet-4-5")
+  reasoningEffort?: string; // Reasoning effort level (e.g., "high", "max")
 }
 
 export interface CreateSessionResponse {

@@ -182,4 +182,10 @@ export function initSchema(sql: SqlStorage): void {
 
   // Migration: Add callback_context column to messages table for Slack follow-up notifications
   runMigration(sql, `ALTER TABLE messages ADD COLUMN callback_context TEXT`);
+
+  // Migration: Add reasoning_effort column to session table for session-level reasoning defaults
+  runMigration(sql, `ALTER TABLE session ADD COLUMN reasoning_effort TEXT`);
+
+  // Migration: Add reasoning_effort column to messages table for per-message reasoning override
+  runMigration(sql, `ALTER TABLE messages ADD COLUMN reasoning_effort TEXT`);
 }

@@ -44,6 +44,7 @@ function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
     current_sha: null,
     opencode_session_id: null,
     model: "claude-sonnet-4-5",
+    reasoning_effort: null,
     status: "active",
     created_at: Date.now() - 60000,
     updated_at: Date.now(),

@@ -4,6 +4,10 @@ import {
   isValidModel,
   extractProviderAndModel,
   getValidModelOrDefault,
+  supportsReasoning,
+  getDefaultReasoningEffort,
+  isValidReasoningEffort,
+  getReasoningConfig,
 } from "./models";
 
 describe("model utilities", () => {
@@ -128,6 +132,70 @@ describe("model utilities", () => {
 
     it("returns default for empty string", () => {
       expect(getValidModelOrDefault("")).toBe(DEFAULT_MODEL);
+    });
+  });
+
+  describe("supportsReasoning", () => {
+    it("returns true for Claude models with reasoning config", () => {
+      expect(supportsReasoning("claude-haiku-4-5")).toBe(true);
+      expect(supportsReasoning("claude-sonnet-4-5")).toBe(true);
+      expect(supportsReasoning("claude-opus-4-5")).toBe(true);
+    });
+
+    it("returns false for invalid models", () => {
+      expect(supportsReasoning("gpt-4")).toBe(false);
+      expect(supportsReasoning("invalid")).toBe(false);
+      expect(supportsReasoning("")).toBe(false);
+    });
+  });
+
+  describe("getDefaultReasoningEffort", () => {
+    it("returns max for all Claude models", () => {
+      expect(getDefaultReasoningEffort("claude-haiku-4-5")).toBe("max");
+      expect(getDefaultReasoningEffort("claude-sonnet-4-5")).toBe("max");
+      expect(getDefaultReasoningEffort("claude-opus-4-5")).toBe("max");
+    });
+
+    it("returns undefined for invalid models", () => {
+      expect(getDefaultReasoningEffort("gpt-4")).toBeUndefined();
+      expect(getDefaultReasoningEffort("invalid")).toBeUndefined();
+    });
+  });
+
+  describe("getReasoningConfig", () => {
+    it("returns config for Claude models", () => {
+      const config = getReasoningConfig("claude-sonnet-4-5");
+      expect(config).toEqual({
+        efforts: ["high", "max"],
+        default: "max",
+      });
+    });
+
+    it("returns undefined for invalid models", () => {
+      expect(getReasoningConfig("invalid")).toBeUndefined();
+    });
+  });
+
+  describe("isValidReasoningEffort", () => {
+    it("returns true for valid effort on Claude models", () => {
+      expect(isValidReasoningEffort("claude-sonnet-4-5", "high")).toBe(true);
+      expect(isValidReasoningEffort("claude-sonnet-4-5", "max")).toBe(true);
+    });
+
+    it("returns false for invalid effort on Claude models", () => {
+      expect(isValidReasoningEffort("claude-sonnet-4-5", "low")).toBe(false);
+      expect(isValidReasoningEffort("claude-sonnet-4-5", "medium")).toBe(false);
+      expect(isValidReasoningEffort("claude-sonnet-4-5", "xhigh")).toBe(false);
+      expect(isValidReasoningEffort("claude-sonnet-4-5", "none")).toBe(false);
+    });
+
+    it("returns false for invalid models", () => {
+      expect(isValidReasoningEffort("gpt-4", "high")).toBe(false);
+      expect(isValidReasoningEffort("invalid", "max")).toBe(false);
+    });
+
+    it("returns false for empty effort", () => {
+      expect(isValidReasoningEffort("claude-sonnet-4-5", "")).toBe(false);
     });
   });
 });

@@ -675,6 +675,7 @@ async function handleCreateSession(
           repoId,
           title: body.title,
           model: body.model || "claude-haiku-4-5", // Default to haiku for cost efficiency
+          reasoningEffort: body.reasoningEffort,
           userId,
           githubLogin,
           githubName,
@@ -767,6 +768,8 @@ async function handleSessionPrompt(
     content: string;
     authorId?: string;
     source?: string;
+    model?: string;
+    reasoningEffort?: string;
     attachments?: Array<{ type: string; name: string; url?: string }>;
     callbackContext?: {
       channel: string;
@@ -793,6 +796,8 @@ async function handleSessionPrompt(
           content: body.content,
           authorId: body.authorId || "anonymous",
           source: body.source || "web",
+          model: body.model,
+          reasoningEffort: body.reasoningEffort,
           attachments: body.attachments,
           callbackContext: body.callbackContext,
         }),
