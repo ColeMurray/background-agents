@@ -16,23 +16,21 @@ export function ReasoningEffortPills({
   const config = MODEL_REASONING_CONFIG[selectedModel as ValidModel];
   if (!config) return null;
 
+  const currentIndex = reasoningEffort ? config.efforts.indexOf(reasoningEffort as never) : -1;
+  const handleCycle = () => {
+    const nextIndex = (currentIndex + 1) % config.efforts.length;
+    onSelect(config.efforts[nextIndex]);
+  };
+
   return (
-    <div className="flex items-center gap-1">
-      {config.efforts.map((effort) => (
-        <button
-          key={effort}
-          type="button"
-          onClick={() => onSelect(effort)}
-          disabled={disabled}
-          className={`px-2 py-0.5 text-xs transition ${
-            reasoningEffort === effort
-              ? "bg-accent text-accent-foreground"
-              : "text-muted-foreground hover:bg-muted"
-          } disabled:opacity-50 disabled:cursor-not-allowed`}
-        >
-          {effort}
-        </button>
-      ))}
-    </div>
+    <button
+      type="button"
+      onClick={handleCycle}
+      disabled={disabled}
+      className="px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground transition disabled:opacity-50 disabled:cursor-not-allowed"
+      title={`Reasoning: ${reasoningEffort ?? config.default ?? "default"} (click to cycle)`}
+    >
+      {reasoningEffort ?? config.default ?? "default"}
+    </button>
   );
 }
