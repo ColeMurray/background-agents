@@ -174,6 +174,9 @@ class AgentBridge:
         # HTTP client for OpenCode API
         self.http_client: httpx.AsyncClient | None = None
 
+        # Track the current prompt task so _handle_stop can cancel it
+        self._current_prompt_task: asyncio.Task[None] | None = None
+
     @property
     def ws_url(self) -> str:
         """WebSocket URL for control plane connection."""
@@ -390,8 +393,10 @@ class AgentBridge:
         if cmd_type == "prompt":
             message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
             task = asyncio.create_task(self._handle_prompt(cmd))
+            self._current_prompt_task = task
 
             def handle_task_exception(t: asyncio.Task[None], mid: str = message_id) -> None:
+                self._current_prompt_task = None
                 if t.cancelled():
                     asyncio.create_task(
                         self._send_event(
@@ -1020,8 +1025,12 @@ class AgentBridge:
             self.log.error("bridge.final_state_error", exc=e)
 
     async def _handle_stop(self) -> None:
-        """Handle stop command - halt current execution."""
+        """Handle stop command - cancel prompt task and request OpenCode stop."""
         self.log.info("bridge.stop")
+        task = self._current_prompt_task
+        if task and not task.done():
+            task.cancel()
+        # Best-effort: also tell OpenCode to stop (saves LLM compute cost)
         await self._request_opencode_stop(reason="command")
 
     async def _handle_snapshot(self) -> None:
