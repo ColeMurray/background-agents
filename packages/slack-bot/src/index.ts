@@ -421,7 +421,8 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
           {
             type: "static_select",
             action_id: "select_reasoning_effort",
-            initial_option: currentEffortOption || reasoningOptions[0],
+            ...(currentEffortOption ? { initial_option: currentEffortOption } : {}),
+            placeholder: { type: "plain_text" as const, text: "Select effort" },
             options: reasoningOptions,
           },
         ],
