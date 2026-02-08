@@ -24,15 +24,6 @@ import type {
 } from "../types";
 
 /**
- * Message row with joined participant info for author attribution.
- */
-export type MessageWithParticipant = MessageRow & {
-  participant_id: string | null;
-  github_name: string | null;
-  github_login: string | null;
-};
-
-/**
  * WS client mapping result for hibernation recovery.
  */
 export interface WsClientMappingResult {
@@ -563,17 +554,6 @@ export class SessionRepository {
     return result.toArray() as unknown as MessageRow[];
   }
 
-  getMessagesWithParticipants(limit: number): MessageWithParticipant[] {
-    const result = this.sql.exec(
-      `SELECT m.*, p.id as participant_id, p.github_name, p.github_login
-       FROM messages m
-       LEFT JOIN participants p ON m.author_id = p.id
-       ORDER BY m.created_at ASC LIMIT ?`,
-      limit
-    );
-    return result.toArray() as unknown as MessageWithParticipant[];
-  }
-
   // === EVENTS ===
 
   createEvent(data: CreateEventData): void {
@@ -615,8 +595,44 @@ export class SessionRepository {
   }
 
   getEventsForReplay(limit: number): EventRow[] {
-    const result = this.sql.exec(`SELECT * FROM events ORDER BY created_at ASC LIMIT ?`, limit);
+    const result = this.sql.exec(
+      `SELECT * FROM (
+         SELECT * FROM events WHERE type != 'heartbeat'
+         ORDER BY created_at DESC, id DESC LIMIT ?
+       ) sub ORDER BY created_at ASC, id ASC`,
+      limit
+    );
     return result.toArray() as unknown as EventRow[];
+  }
+
+  /**
+   * Paginate the events timeline using a composite cursor.
+   * Returns events older than the cursor in chronological order, plus a hasMore flag.
+   */
+  getEventsHistoryPage(
+    cursorTimestamp: number,
+    cursorId: string,
+    limit: number
+  ): {
+    events: EventRow[];
+    hasMore: boolean;
+  } {
+    const rows = this.sql
+      .exec(
+        `SELECT * FROM events
+         WHERE type != 'heartbeat' AND ((created_at < ?1) OR (created_at = ?1 AND id < ?2))
+         ORDER BY created_at DESC, id DESC LIMIT ?3`,
+        cursorTimestamp,
+        cursorId,
+        limit + 1
+      )
+      .toArray() as unknown as EventRow[];
+
+    const hasMore = rows.length > limit;
+    if (hasMore) rows.pop();
+    rows.reverse(); // chronological order
+
+    return { events: rows, hasMore };
   }
 
   // === ARTIFACTS ===

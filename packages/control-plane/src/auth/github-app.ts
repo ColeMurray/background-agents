@@ -11,6 +11,35 @@
 
 import type { InstallationRepository } from "@open-inspect/shared";
 
+/** Timeout for individual GitHub API requests (ms). */
+export const GITHUB_FETCH_TIMEOUT_MS = 60_000;
+
+/** Fetch with an AbortController timeout. */
+export function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs = GITHUB_FETCH_TIMEOUT_MS
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
+/** Per-page timing record returned from listInstallationRepositories. */
+export interface GitHubPageTiming {
+  page: number;
+  fetchMs: number;
+  repoCount: number;
+}
+
+/** Timing breakdown returned alongside repos from listInstallationRepositories. */
+export interface ListReposTiming {
+  tokenGenerationMs: number;
+  pages: GitHubPageTiming[];
+  totalPages: number;
+  totalRepos: number;
+}
+
 /**
  * Configuration for GitHub App authentication.
  */
@@ -141,7 +170,7 @@ export async function generateAppJwt(appId: string, privateKey: string): Promise
 export async function getInstallationToken(jwt: string, installationId: string): Promise<string> {
   const url = `https://api.github.com/app/installations/${installationId}/access_tokens`;
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${jwt}`,
@@ -198,39 +227,50 @@ interface ListInstallationReposResponse {
 /**
  * List all repositories accessible to the GitHub App installation.
  *
+ * Fetches page 1 sequentially to learn total_count, then fetches any
+ * remaining pages concurrently.
+ *
  * @param config - GitHub App configuration
- * @returns Array of repositories the App can access
+ * @returns repos and per-page timing breakdown for diagnostics
  */
 export async function listInstallationRepositories(
   config: GitHubAppConfig
-): Promise<InstallationRepository[]> {
+): Promise<{ repos: InstallationRepository[]; timing: ListReposTiming }> {
+  const tokenStart = performance.now();
   const token = await generateInstallationToken(config);
+  const tokenGenerationMs = performance.now() - tokenStart;
 
-  const allRepos: InstallationRepository[] = [];
-  let page = 1;
   const perPage = 100;
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "Open-Inspect",
+  };
 
-  // Paginate through all repositories
-  while (true) {
+  const fetchPage = async (
+    page: number
+  ): Promise<{ data: ListInstallationReposResponse; timing: GitHubPageTiming }> => {
     const url = `https://api.github.com/installation/repositories?per_page=${perPage}&page=${page}`;
+    const pageStart = performance.now();
 
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "Open-Inspect",
-      },
-    });
+    const response = await fetchWithTimeout(url, { headers });
 
     if (!response.ok) {
       const error = await response.text();
-      throw new Error(`Failed to list installation repositories: ${response.status} ${error}`);
+      throw new Error(
+        `Failed to list installation repositories (page ${page}): ${response.status} ${error}`
+      );
     }
 
     const data = (await response.json()) as ListInstallationReposResponse;
+    const fetchMs = Math.round((performance.now() - pageStart) * 100) / 100;
 
-    const repos = data.repositories.map((repo) => ({
+    return { data, timing: { page, fetchMs, repoCount: data.repositories.length } };
+  };
+
+  const mapRepos = (data: ListInstallationReposResponse): InstallationRepository[] =>
+    data.repositories.map((repo) => ({
       id: repo.id,
       owner: repo.owner.login,
       name: repo.name,
@@ -240,17 +280,34 @@ export async function listInstallationRepositories(
       defaultBranch: repo.default_branch,
     }));
 
-    allRepos.push(...repos);
+  // Fetch page 1 to learn total_count
+  const first = await fetchPage(1);
+  const allRepos = mapRepos(first.data);
+  const pageTiming: GitHubPageTiming[] = [first.timing];
 
-    // Check if we've fetched all pages
-    if (data.repositories.length < perPage || allRepos.length >= data.total_count) {
-      break;
+  const totalCount = first.data.total_count;
+  const totalPages = Math.ceil(totalCount / perPage);
+
+  // Fetch remaining pages concurrently
+  if (totalPages > 1) {
+    const remaining = Array.from({ length: totalPages - 1 }, (_, i) => i + 2);
+    const results = await Promise.all(remaining.map((p) => fetchPage(p)));
+
+    for (const result of results) {
+      allRepos.push(...mapRepos(result.data));
+      pageTiming.push(result.timing);
     }
-
-    page++;
   }
 
-  return allRepos;
+  return {
+    repos: allRepos,
+    timing: {
+      tokenGenerationMs: Math.round(tokenGenerationMs * 100) / 100,
+      pages: pageTiming,
+      totalPages,
+      totalRepos: allRepos.length,
+    },
+  };
 }
 
 /**
@@ -264,7 +321,7 @@ export async function getInstallationRepository(
 ): Promise<InstallationRepository | null> {
   const token = await generateInstallationToken(config);
 
-  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+  const response = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}`, {
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: "application/vnd.github+json",

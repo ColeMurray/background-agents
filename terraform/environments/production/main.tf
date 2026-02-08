@@ -101,7 +101,7 @@ module "control_plane_worker" {
 
   kv_namespaces = [
     {
-      binding_name = "SESSION_INDEX"
+      binding_name = "REPOS_CACHE"
       namespace_id = module.session_index_kv.namespace_id
     }
   ]

@@ -70,6 +70,18 @@ The control plane provides:
 | `/sessions/:id/archive`      | POST      | Archive session          |
 | `/sessions/:id/unarchive`    | POST      | Unarchive session        |
 
+### Create PR Payload
+
+`POST /sessions/:id/pr` accepts:
+
+- `title` (required)
+- `body` (required)
+- `baseBranch` (optional)
+- `headBranch` (optional)
+
+When `headBranch` is omitted, control-plane resolves it from session state and finally falls back to
+the generated `open-inspect/<session>` branch.
+
 ### Repositories
 
 | Endpoint                           | Method | Description          |
@@ -187,6 +199,10 @@ The system uses two types of GitHub tokens:
 | GitHub App Token | Clone, push | Yes (ephemeral)  | All repos where App is installed |
 | User OAuth Token | Create PRs  | No (server-only) | User's accessible repos          |
 
+If a `create-pr` request is triggered by a participant without a user OAuth token (for example,
+Slack-created sessions), the control-plane still pushes the branch with the GitHub App token and
+returns a manual GitHub `pull/new` URL instead of failing the request.
+
 ### Why This Matters
 
 - **No per-user repo access validation**: When a session is created, the system does not verify that
@@ -203,6 +219,12 @@ All secrets are configured via Terraform. Required secrets include:
 - `GITHUB_APP_PRIVATE_KEY` - GitHub App private key (PKCS#8 format)
 - `GITHUB_APP_INSTALLATION_ID` - Single installation for all users
 - `REPO_SECRETS_ENCRYPTION_KEY` - AES-GCM key for encrypting repo secrets in D1
+
+Optional variables:
+
+- `SCM_PROVIDER` - Source control provider for this deployment (`github` or `bitbucket`, default:
+  `github`). Current implementation supports `github` only; `bitbucket` returns explicit
+  `501 Not Implemented` responses until implemented.
 
 See
 [terraform/environments/production/terraform.tfvars.example](../../terraform/environments/production/terraform.tfvars.example)

@@ -4,10 +4,11 @@ Sandbox entrypoint - manages OpenCode server and bridge lifecycle.
 
 Runs as PID 1 inside the sandbox. Responsibilities:
 1. Perform git sync with latest code
-2. Start OpenCode server
-3. Start bridge process for control plane communication
-4. Monitor processes and restart on crash with exponential backoff
-5. Handle graceful shutdown on SIGTERM/SIGINT
+2. Run repo setup script (if present, fresh clone only)
+3. Start OpenCode server
+4. Start bridge process for control plane communication
+5. Monitor processes and restart on crash with exponential backoff
+6. Handle graceful shutdown on SIGTERM/SIGINT
 """
 
 import asyncio
@@ -42,6 +43,8 @@ class SandboxSupervisor:
     MAX_RESTARTS = 5
     BACKOFF_BASE = 2.0
     BACKOFF_MAX = 60.0
+    SETUP_SCRIPT_PATH = ".openinspect/setup.sh"
+    DEFAULT_SETUP_TIMEOUT_SECONDS = 300
 
     def __init__(self):
         self.opencode_process: asyncio.subprocess.Process | None = None
@@ -528,6 +531,75 @@ class SandboxSupervisor:
         except Exception as e:
             self.log.error("git.identity_error", exc=e)
 
+    async def run_setup_script(self) -> bool:
+        """
+        Run .openinspect/setup.sh if it exists in the cloned repo.
+
+        Non-fatal: failures are logged but don't block startup.
+
+        Returns:
+            True if script succeeded or was not present, False on failure/timeout.
+        """
+        setup_script = self.repo_path / self.SETUP_SCRIPT_PATH
+
+        if not setup_script.exists():
+            self.log.debug("setup.skip", reason="no_setup_script", path=str(setup_script))
+            return True
+
+        try:
+            timeout_seconds = int(
+                os.environ.get("SETUP_TIMEOUT_SECONDS", str(self.DEFAULT_SETUP_TIMEOUT_SECONDS))
+            )
+        except ValueError:
+            timeout_seconds = self.DEFAULT_SETUP_TIMEOUT_SECONDS
+
+        self.log.info("setup.start", script=str(setup_script), timeout_seconds=timeout_seconds)
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "bash",
+                str(setup_script),
+                cwd=self.repo_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=os.environ.copy(),
+            )
+
+            try:
+                stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
+            except TimeoutError:
+                process.kill()
+                stdout = await process.stdout.read() if process.stdout else b""
+                await process.wait()
+                output_tail = "\n".join(stdout.decode(errors="replace").splitlines()[-50:])
+                self.log.error(
+                    "setup.timeout",
+                    timeout_seconds=timeout_seconds,
+                    output_tail=output_tail,
+                    script=str(setup_script),
+                )
+                return False
+
+            output_tail = "\n".join(
+                (stdout.decode(errors="replace") if stdout else "").splitlines()[-50:]
+            )
+
+            if process.returncode == 0:
+                self.log.debug("setup.complete", exit_code=0, output_tail=output_tail)
+                return True
+            else:
+                self.log.error(
+                    "setup.failed",
+                    exit_code=process.returncode,
+                    output_tail=output_tail,
+                    script=str(setup_script),
+                )
+                return False
+
+        except Exception as e:
+            self.log.error("setup.error", exc=e, script=str(setup_script))
+            return False
+
     async def _quick_git_fetch(self) -> None:
         """
         Quick fetch to check if we're behind after snapshot restore.
@@ -649,6 +721,11 @@ class SandboxSupervisor:
             # Phase 2: Configure git identity (if repo was cloned)
             await self.configure_git_identity()
 
+            # Phase 2.5: Run repo setup script (fresh clone only)
+            setup_success: bool | None = None
+            if not restored_from_snapshot:
+                setup_success = await self.run_setup_script()
+
             # Phase 3: Start OpenCode server (in repo directory)
             await self.start_opencode()
             opencode_ready = True
@@ -664,6 +741,7 @@ class SandboxSupervisor:
                 repo_name=self.repo_name,
                 restored_from_snapshot=restored_from_snapshot,
                 git_sync_success=git_sync_success,
+                setup_success=setup_success,
                 opencode_ready=opencode_ready,
                 duration_ms=duration_ms,
                 outcome="success",

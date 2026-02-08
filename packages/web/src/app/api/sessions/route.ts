@@ -1,11 +1,16 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { getToken } from "next-auth/jwt";
 import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
 
 export async function GET(request: NextRequest) {
-  const session = await getServerSession();
+  const routeStart = Date.now();
+
+  const session = await getServerSession(authOptions);
+  const authMs = Date.now() - routeStart;
+
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -15,8 +20,16 @@ export async function GET(request: NextRequest) {
   const path = queryString ? `/sessions?${queryString}` : "/sessions";
 
   try {
+    const fetchStart = Date.now();
     const response = await controlPlaneFetch(path);
+    const fetchMs = Date.now() - fetchStart;
     const data = await response.json();
+    const totalMs = Date.now() - routeStart;
+
+    console.log(
+      `[sessions:GET] total=${totalMs}ms auth=${authMs}ms fetch=${fetchMs}ms status=${response.status}`
+    );
+
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
     console.error("Failed to fetch sessions:", error);
@@ -33,14 +46,24 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    // Get GitHub access token from session (added by next-auth callback)
-    const githubToken = (session as { accessToken?: string }).accessToken;
+    const jwt = await getToken({ req: request });
+    const githubToken = jwt?.accessToken as string | undefined;
 
-    // Add the token to the session creation request
-    // The control plane will encrypt it before storing
+    // Explicitly pick allowed fields from client body and derive identity
+    // from the server-side NextAuth session (not client-supplied data)
+    const user = session.user;
+    const userId = user.id || user.email || "anonymous";
+
     const sessionBody = {
-      ...body,
-      githubToken, // Plain token - control plane encrypts it
+      repoOwner: body.repoOwner,
+      repoName: body.repoName,
+      model: body.model,
+      title: body.title,
+      githubToken,
+      userId,
+      githubLogin: user.login,
+      githubName: user.name,
+      githubEmail: user.email,
     };
 
     const response = await controlPlaneFetch("/sessions", {

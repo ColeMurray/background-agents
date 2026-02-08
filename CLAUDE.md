@@ -172,14 +172,24 @@ Sessions use Durable Objects with SQLite storage. Key patterns:
 - Use `ctx.getWebSockets()` to recover WebSocket references after hibernation
 - Store critical state in SQLite, not just memory
 
-### Repo Secrets (D1 Database)
+### D1 Database
 
-Repository-scoped secrets are stored in a Cloudflare D1 database, separate from the per-session
-Durable Object SQLite storage. Secrets are encrypted at rest with AES-256-GCM using
-`REPO_SECRETS_ENCRYPTION_KEY` (distinct from `TOKEN_ENCRYPTION_KEY` for OAuth tokens).
+The control plane uses a Cloudflare D1 database (`env.DB` binding) for three data categories:
 
-**Storage**: `RepoSecretsStore` class in `src/db/repo-secrets.ts` handles encryption, validation,
-and CRUD operations against the `DB` D1 binding.
+**Session Index** (`sessions` table): Session metadata for listing and filtering. Managed by
+`SessionIndexStore` in `src/db/session-index.ts`. Supports server-side filtering by status and
+pagination via `limit`/`offset`.
+
+**Repository Metadata** (`repo_metadata` table): Custom descriptions, aliases, channel associations,
+and keywords per repo. Managed by `RepoMetadataStore` in `src/db/repo-metadata.ts`. Supports batch
+fetching via `db.batch()`.
+
+**Repo Secrets** (`repo_secrets` table): Encrypted repository-scoped secrets (AES-256-GCM using
+`REPO_SECRETS_ENCRYPTION_KEY`). Managed by `RepoSecretsStore` in `src/db/repo-secrets.ts`.
+
+**Repository list cache**: The `/repos` endpoint caches the enriched repository list in KV
+(`REPOS_CACHE` binding) with a 5-minute TTL. KV is shared across isolates, so cache invalidation (on
+metadata update) is consistent. On cache miss it re-fetches from GitHub and D1.
 
 **API routes** (in `src/router.ts`):
 
@@ -193,6 +203,35 @@ DO, which decrypts secrets from D1 and passes them as environment variables. Sys
 
 **Migrations**: D1 schema migrations live in `terraform/d1/migrations/` and are applied via
 `scripts/d1-migrate.sh` during `terraform apply`.
+
+**KV → D1 migration** (one-off): Run
+`scripts/migrate-kv-to-d1.sh <kv-namespace-id> <d1-database-name>` to copy session and repo metadata
+from the legacy `SESSION_INDEX` KV namespace to D1. Get the namespace ID from
+`terraform output session_index_kv_id`. Requires `wrangler` auth and `jq`. Idempotent — safe to
+re-run.
+
+## Coding Conventions
+
+### Durations and timeouts
+
+- **Use seconds for Python, milliseconds for TypeScript.** These match the native conventions of
+  each ecosystem (Modal's `timeout=` takes seconds; the control-plane uses `_MS` suffixes
+  throughout). Never use minutes or hours as the unit — they force fractional values for common
+  cases and require error-prone conversions at call sites.
+- **Encode the unit in the name.** Python: `timeout_seconds`, `max_age_seconds`. TypeScript:
+  `timeoutMs`, `INACTIVITY_TIMEOUT_MS`. A bare `timeout` with no unit suffix is ambiguous.
+- **Define each default value exactly once.** Extract to a named constant
+  (`DEFAULT_SANDBOX_TIMEOUT_SECONDS`) and import it everywhere. Never repeat a literal like `7200`
+  across multiple files as a default — it will drift.
+- **Don't restate literal values in comments.** Write `Defaults to DEFAULT_SANDBOX_TIMEOUT_SECONDS`
+  instead of `Default: 7200`. Comments that echo a literal become silently wrong when the constant
+  changes.
+
+### Extending existing patterns
+
+- When threading an existing field through new code paths, evaluate whether the existing design
+  (naming, types, units) is correct — don't blindly propagate it. If the existing field has a bad
+  unit or name, fix it in the same change rather than spreading the problem to more files.
 
 ## Testing
 

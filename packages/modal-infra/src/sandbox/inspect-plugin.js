@@ -6,6 +6,10 @@
  */
 import { tool } from "@opencode-ai/plugin"
 import { z } from "zod"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
+
+const execFileAsync = promisify(execFile)
 
 // Debug: Log that the tool was loaded
 console.log("[create-pull-request] Tool module loaded")
@@ -29,6 +33,22 @@ function getSessionId() {
   }
 }
 
+async function getCurrentBranch() {
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      timeout: 5000,
+    })
+    const branch = stdout.trim()
+    if (!branch || branch === "HEAD") {
+      return undefined
+    }
+    return branch
+  } catch (e) {
+    console.log("[create-pull-request] Failed to resolve current branch:", e.message)
+    return undefined
+  }
+}
+
 // Use tool() helper - args should be a ZodRawShape (plain object), NOT a ZodObject
 // OpenCode wraps it with z.object() internally
 export default tool({
@@ -44,6 +64,7 @@ export default tool({
     const title = args.title || "Changes from OpenCode session"
     const body = args.body || "Automated PR created via create-pull-request tool"
     const baseBranch = args.baseBranch // undefined if not provided, server will use default
+    const headBranch = await getCurrentBranch()
 
     try {
       const sessionId = getSessionId()
@@ -70,6 +91,7 @@ export default tool({
           title: title,
           body: body,
           baseBranch: baseBranch,
+          headBranch: headBranch,
           timestamp: Date.now(),
         }),
       })
@@ -100,6 +122,12 @@ export default tool({
       }
 
       const result = await response.json()
+
+      if (result?.status === "manual" && result?.createPrUrl) {
+        console.log("[create-pull-request] SUCCESS: branch pushed, manual PR URL generated")
+        return `Branch pushed successfully.\n\nCreate the pull request in GitHub:\n${result.createPrUrl}\n\nUse your logged-in GitHub account to finish creating the PR.`
+      }
+
       console.log(`[create-pull-request] SUCCESS: PR #${result.prNumber} created`)
       return `Pull request created successfully!\n\nPR #${result.prNumber}: ${result.prUrl}\n\nThe PR is now ready for review.`
     } catch (error) {

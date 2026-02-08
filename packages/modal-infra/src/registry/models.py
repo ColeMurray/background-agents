@@ -1,12 +1,12 @@
 """Data models for repository and snapshot registry."""
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel
 
 
-class SnapshotStatus(str, Enum):
+class SnapshotStatus(StrEnum):
     """Status of a snapshot."""
 
     BUILDING = "building"

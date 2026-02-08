@@ -15,7 +15,11 @@ import { controlPlaneFetch } from "@/lib/control-plane";
  * 4. Returns the token to the client for WebSocket connection
  */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const routeStart = Date.now();
+
   const session = await getServerSession(authOptions);
+  const authMs = Date.now() - routeStart;
+
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -27,9 +31,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const user = session.user;
     const userId = user.id || user.email || "anonymous";
 
-    // Read refresh token from the JWT directly (not exposed on session)
+    const jwtStart = Date.now();
     const jwt = await getToken({ req: request });
+    const jwtMs = Date.now() - jwtStart;
 
+    const fetchStart = Date.now();
     const response = await controlPlaneFetch(`/sessions/${sessionId}/ws-token`, {
       method: "POST",
       body: JSON.stringify({
@@ -38,12 +44,17 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         githubLogin: user.login,
         githubName: user.name,
         githubEmail: user.email,
-        // Pass user's GitHub token for PR creation (will be encrypted by control plane)
-        githubToken: (session as { accessToken?: string }).accessToken,
-        githubTokenExpiresAt: (session as { accessTokenExpiresAt?: number }).accessTokenExpiresAt,
+        githubToken: jwt?.accessToken as string | undefined,
+        githubTokenExpiresAt: jwt?.accessTokenExpiresAt as number | undefined,
         githubRefreshToken: jwt?.refreshToken as string | undefined,
       }),
     });
+    const fetchMs = Date.now() - fetchStart;
+    const totalMs = Date.now() - routeStart;
+
+    console.log(
+      `[ws-token] session=${sessionId} total=${totalMs}ms auth=${authMs}ms jwt=${jwtMs}ms fetch=${fetchMs}ms status=${response.status}`
+    );
 
     if (!response.ok) {
       const error = await response.text();

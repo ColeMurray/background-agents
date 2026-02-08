@@ -5,8 +5,6 @@ import { checkAccessAllowed, parseAllowlist } from "./access-control";
 // Extend NextAuth types to include GitHub-specific user info
 declare module "next-auth" {
   interface Session {
-    accessToken?: string;
-    accessTokenExpiresAt?: number; // Unix timestamp in milliseconds
     user: {
       id?: string; // GitHub user ID
       login?: string; // GitHub username
@@ -78,9 +76,6 @@ export const authOptions: NextAuthOptions = {
       return token;
     },
     async session({ session, token }) {
-      // Add GitHub-specific info to session
-      session.accessToken = token.accessToken;
-      session.accessTokenExpiresAt = token.accessTokenExpiresAt;
       if (session.user) {
         session.user.id = token.githubUserId;
         session.user.login = token.githubLogin;

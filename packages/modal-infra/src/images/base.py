@@ -23,8 +23,8 @@ SANDBOX_DIR = Path(__file__).parent.parent / "sandbox"
 OPENCODE_VERSION = "latest"
 
 # Cache buster - change this to force Modal image rebuild
-# v34: Replace print() with structured JSON logging in sandbox code
-CACHE_BUSTER = "v34-structured-logging"
+# v35: Add jq to base image
+CACHE_BUSTER = "v35-add-jq"
 
 # Base image with all development tools
 base_image = (
@@ -37,6 +37,7 @@ base_image = (
         "ca-certificates",
         "gnupg",
         "openssh-client",
+        "jq",
         "unzip",  # Required for Bun installation
         # For Playwright
         "libnss3",

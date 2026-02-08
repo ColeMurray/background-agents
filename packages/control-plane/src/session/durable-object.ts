@@ -10,11 +10,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { generateId, decryptToken, encryptToken, hashToken } from "../auth/crypto";
-import {
-  generateInstallationToken,
-  getGitHubAppConfig,
-  getInstallationRepository,
-} from "../auth/github-app";
+import { getGitHubAppConfig, getInstallationRepository } from "../auth/github-app";
 import { refreshAccessToken } from "../auth/github";
 import { createModalClient } from "../sandbox/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
@@ -29,8 +25,16 @@ import {
   type AlarmScheduler,
   type IdGenerator,
 } from "../sandbox/lifecycle/manager";
-import { createPullRequest, getRepository } from "../auth/pr";
-import { generateBranchName } from "@open-inspect/shared";
+import {
+  createSourceControlProvider as createSourceControlProviderImpl,
+  resolveScmProviderFromEnv,
+  SourceControlProviderError,
+  type SourceControlProvider,
+  type SourceControlAuthContext,
+  type GitPushSpec,
+} from "../source-control";
+import { resolveHeadBranchForPr } from "../source-control/branch-resolution";
+import { generateBranchName, type ManualPullRequestArtifactMetadata } from "@open-inspect/shared";
 import { DEFAULT_MODEL, isValidModel, extractProviderAndModel } from "../utils/models";
 import type {
   Env,
@@ -44,8 +48,9 @@ import type {
   MessageSource,
   ParticipantRole,
 } from "../types";
-import type { SessionRow, ParticipantRow, EventRow, SandboxRow, SandboxCommand } from "./types";
-import { SessionRepository, type MessageWithParticipant } from "./repository";
+import type { SessionRow, ParticipantRow, ArtifactRow, SandboxRow, SandboxCommand } from "./types";
+import { SessionRepository } from "./repository";
+import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
 import { RepoSecretsStore } from "../db/repo-secrets";
 
 /**
@@ -69,6 +74,7 @@ const VALID_EVENT_TYPES = [
   "heartbeat",
   "push_complete",
   "push_error",
+  "user_message",
 ] as const;
 
 /**
@@ -96,10 +102,10 @@ interface InternalRoute {
 export class SessionDO extends DurableObject<Env> {
   private sql: SqlStorage;
   private repository: SessionRepository;
-  private clients: Map<WebSocket, ClientInfo>;
-  private sandboxWs: WebSocket | null = null;
   private initialized = false;
   private log: Logger;
+  // WebSocket manager (lazily initialized like lifecycleManager)
+  private _wsManager: SessionWebSocketManager | null = null;
   // Track pending push operations by branch name
   private pendingPushResolvers = new Map<
     string,
@@ -107,6 +113,8 @@ export class SessionDO extends DurableObject<Env> {
   >();
   // Lifecycle manager (lazily initialized)
   private _lifecycleManager: SandboxLifecycleManager | null = null;
+  // Source control provider (lazily initialized)
+  private _sourceControlProvider: SourceControlProvider | null = null;
 
   // Route table for internal API endpoints
   private readonly routes: InternalRoute[] = [
@@ -151,7 +159,6 @@ export class SessionDO extends DurableObject<Env> {
     super(ctx, env);
     this.sql = ctx.storage.sql;
     this.repository = new SessionRepository(this.sql);
-    this.clients = new Map();
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
     // Note: session_id context is set in ensureInitialized() once DB is ready
   }
@@ -165,6 +172,45 @@ export class SessionDO extends DurableObject<Env> {
       this._lifecycleManager = this.createLifecycleManager();
     }
     return this._lifecycleManager;
+  }
+
+  /**
+   * Get the source control provider, creating it lazily if needed.
+   */
+  private get sourceControlProvider(): SourceControlProvider {
+    if (!this._sourceControlProvider) {
+      this._sourceControlProvider = this.createSourceControlProvider();
+    }
+    return this._sourceControlProvider;
+  }
+
+  /**
+   * Get the WebSocket manager, creating it lazily if needed.
+   * Lazy initialization ensures the logger has session_id context
+   * (set by ensureInitialized()) by the time the manager is created.
+   */
+  private get wsManager(): SessionWebSocketManager {
+    if (!this._wsManager) {
+      this._wsManager = new SessionWebSocketManagerImpl(this.ctx, this.repository, this.log, {
+        authTimeoutMs: WS_AUTH_TIMEOUT_MS,
+      });
+    }
+    return this._wsManager;
+  }
+
+  /**
+   * Create the source control provider.
+   */
+  private createSourceControlProvider(): SourceControlProvider {
+    const appConfig = getGitHubAppConfig(this.env);
+    const provider = resolveScmProviderFromEnv(this.env.SCM_PROVIDER);
+
+    return createSourceControlProviderImpl({
+      provider,
+      github: {
+        appConfig: appConfig ?? undefined,
+      },
+    });
   }
 
   /**
@@ -205,30 +251,21 @@ export class SessionDO extends DurableObject<Env> {
       broadcast: (message) => this.broadcast(message as ServerMessage),
     };
 
-    // WebSocket manager adapter
+    // WebSocket manager adapter — thin delegation to wsManager
     const wsManager: WebSocketManager = {
-      getSandboxWebSocket: () => this.getSandboxWebSocket(),
+      getSandboxWebSocket: () => this.wsManager.getSandboxSocket(),
       closeSandboxWebSocket: (code, reason) => {
-        const ws = this.getSandboxWebSocket();
+        const ws = this.wsManager.getSandboxSocket();
         if (ws) {
-          try {
-            ws.close(code, reason);
-          } catch {
-            // Ignore errors closing WebSocket
-          }
-          this.sandboxWs = null;
+          this.wsManager.close(ws, code, reason);
+          this.wsManager.clearSandboxSocket();
         }
       },
       sendToSandbox: (message) => {
-        const ws = this.getSandboxWebSocket();
-        return ws ? this.safeSend(ws, message) : false;
+        const ws = this.wsManager.getSandboxSocket();
+        return ws ? this.wsManager.send(ws, message) : false;
       },
-      getConnectedClientCount: () => {
-        return this.ctx.getWebSockets().filter((ws) => {
-          const tags = this.ctx.getTags(ws);
-          return !tags.includes("sandbox") && ws.readyState === WebSocket.OPEN;
-        }).length;
-      },
+      getConnectedClientCount: () => this.wsManager.getConnectedClientCount(),
     };
 
     // Alarm scheduler adapter
@@ -278,22 +315,10 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
-   * Safely send a message over a WebSocket, handling errors and closed connections.
-   * Returns true if the message was sent, false otherwise.
+   * Safely send a message over a WebSocket.
    */
   private safeSend(ws: WebSocket, message: string | object): boolean {
-    try {
-      if (ws.readyState !== WebSocket.OPEN) {
-        this.log.debug("Cannot send: WebSocket not open", { ready_state: ws.readyState });
-        return false;
-      }
-      const data = typeof message === "string" ? message : JSON.stringify(message);
-      ws.send(data);
-      return true;
-    } catch (e) {
-      this.log.warn("WebSocket send failed", { error: e instanceof Error ? e : String(e) });
-      return false;
-    }
+    return this.wsManager.send(ws, message);
   }
 
   /**
@@ -317,13 +342,17 @@ export class SessionDO extends DurableObject<Env> {
       { session_id: sessionId },
       parseLogLevel(this.env.LOG_LEVEL)
     );
+    this.wsManager.enableAutoPingPong();
   }
 
   /**
    * Handle incoming HTTP requests.
    */
   async fetch(request: Request): Promise<Response> {
+    const fetchStart = performance.now();
+
     this.ensureInitialized();
+    const initMs = performance.now() - fetchStart;
 
     // Extract correlation headers and create a request-scoped logger
     const traceId = request.headers.get("x-trace-id");
@@ -347,7 +376,7 @@ export class SessionDO extends DurableObject<Env> {
     const route = this.routes.find((r) => r.path === path && r.method === request.method);
 
     if (route) {
-      const routeStart = Date.now();
+      const handlerStart = performance.now();
       let status = 500;
       let outcome: "success" | "error" = "error";
       try {
@@ -360,12 +389,16 @@ export class SessionDO extends DurableObject<Env> {
         outcome = "error";
         throw e;
       } finally {
+        const handlerMs = performance.now() - handlerStart;
+        const totalMs = performance.now() - fetchStart;
         this.log.info("do.request", {
           event: "do.request",
           http_method: request.method,
           http_path: path,
           http_status: status,
-          duration_ms: Date.now() - routeStart,
+          duration_ms: Math.round(totalMs * 100) / 100,
+          init_ms: Math.round(initMs * 100) / 100,
+          handler_ms: Math.round(handlerMs * 100) / 100,
           outcome,
         });
       }
@@ -439,34 +472,14 @@ export class SessionDO extends DurableObject<Env> {
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
 
-      // Accept with hibernation support
-      // Include sandbox ID in tags for identity validation after hibernation recovery
-      // For client WebSockets, generate a unique ws_id for mapping recovery
       const sandboxId = request.headers.get("X-Sandbox-ID");
-      let tags: string[];
-      let wsId: string | undefined;
-      if (isSandbox) {
-        tags = ["sandbox", ...(sandboxId ? [`sid:${sandboxId}`] : [])];
-      } else {
-        // Generate unique ws_id for client WebSocket mapping
-        wsId = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-        tags = [`wsid:${wsId}`];
-      }
-      this.ctx.acceptWebSocket(server, tags);
 
       if (isSandbox) {
-        // Close any existing sandbox WebSocket to prevent duplicates
-        const existingSandboxWs = this.getSandboxWebSocket();
-        const replacedExisting = !!(existingSandboxWs && existingSandboxWs !== server);
-        if (replacedExisting) {
-          try {
-            existingSandboxWs!.close(1000, "New sandbox connecting");
-          } catch {
-            // Ignore errors closing old WebSocket
-          }
-        }
+        const { replaced } = this.wsManager.acceptAndSetSandboxSocket(
+          server,
+          sandboxId ?? undefined
+        );
 
-        this.sandboxWs = server;
         // Notify manager that sandbox connected so it can reset the spawning flag
         this.lifecycleManager.onSandboxConnected();
         this.updateSandboxStatus("ready");
@@ -483,18 +496,16 @@ export class SessionDO extends DurableObject<Env> {
           ws_type: "sandbox",
           outcome: "success",
           sandbox_id: sandboxId,
-          replaced_existing: replacedExisting,
+          replaced_existing: replaced,
           duration_ms: Date.now() - now,
         });
 
         // Process any pending messages now that sandbox is connected
         this.processMessageQueue();
       } else {
-        // For client WebSockets, schedule authentication timeout check
-        // This prevents resource abuse from connections that never authenticate
-        if (wsId) {
-          this.ctx.waitUntil(this.enforceAuthTimeout(server, wsId));
-        }
+        const wsId = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        this.wsManager.acceptClientSocket(server, wsId);
+        this.ctx.waitUntil(this.wsManager.enforceAuthTimeout(server, wsId));
       }
 
       return new Response(null, { status: 101, webSocket: client });
@@ -513,8 +524,8 @@ export class SessionDO extends DurableObject<Env> {
     this.ensureInitialized();
     if (typeof message !== "string") return;
 
-    const tags = this.ctx.getTags(ws);
-    if (tags.includes("sandbox")) {
+    const { kind } = this.wsManager.classify(ws);
+    if (kind === "sandbox") {
       await this.handleSandboxMessage(ws, message);
     } else {
       await this.handleClientMessage(ws, message);
@@ -526,15 +537,13 @@ export class SessionDO extends DurableObject<Env> {
    */
   async webSocketClose(ws: WebSocket, _code: number, _reason: string): Promise<void> {
     this.ensureInitialized();
-    const tags = this.ctx.getTags(ws);
+    const { kind } = this.wsManager.classify(ws);
 
-    if (tags.includes("sandbox")) {
-      this.sandboxWs = null;
+    if (kind === "sandbox") {
+      this.wsManager.clearSandboxSocket();
       this.updateSandboxStatus("stopped");
     } else {
-      const client = this.clients.get(ws);
-      this.clients.delete(ws);
-
+      const client = this.wsManager.removeClient(ws);
       if (client) {
         this.broadcast({ type: "presence_leave", userId: client.userId });
       }
@@ -548,62 +557,6 @@ export class SessionDO extends DurableObject<Env> {
     this.ensureInitialized();
     this.log.error("WebSocket error", { error });
     ws.close(1011, "Internal error");
-  }
-
-  /**
-   * Enforce authentication timeout for client WebSockets.
-   *
-   * This method is called via ctx.waitUntil() after a client WebSocket is accepted.
-   * It waits for the auth timeout period, then checks if the connection has been
-   * authenticated (i.e., the client sent a valid 'subscribe' message).
-   *
-   * If the connection is still unauthenticated after the timeout, it is closed.
-   * This prevents DoS attacks where attackers open many WebSocket connections
-   * without ever completing the authentication handshake.
-   *
-   * @param ws - The WebSocket to check
-   * @param wsId - The unique WebSocket ID for logging
-   */
-  private async enforceAuthTimeout(ws: WebSocket, wsId: string): Promise<void> {
-    // Wait for the authentication timeout period
-    await new Promise((resolve) => setTimeout(resolve, WS_AUTH_TIMEOUT_MS));
-
-    // Check if the WebSocket is still open
-    if (ws.readyState !== WebSocket.OPEN) {
-      return; // Already closed, nothing to do
-    }
-
-    // Check if this WebSocket has been authenticated
-    // An authenticated WebSocket will be in the clients Map
-    if (this.clients.has(ws)) {
-      return; // Authenticated, nothing to do
-    }
-
-    // After hibernation, the clients Map may be empty
-    // Try to recover client info from the database
-    // If recovery succeeds, the client was authenticated before hibernation
-    const tags = this.ctx.getTags(ws);
-    const wsIdTag = tags.find((t) => t.startsWith("wsid:"));
-    if (wsIdTag) {
-      const tagWsId = wsIdTag.replace("wsid:", "");
-      if (this.repository.hasWsClientMapping(tagWsId)) {
-        return; // Was authenticated before hibernation
-      }
-    }
-
-    // Connection is unauthenticated after timeout - close it
-    this.log.warn("ws.connect", {
-      event: "ws.connect",
-      ws_type: "client",
-      outcome: "auth_timeout",
-      ws_id: wsId,
-      timeout_ms: WS_AUTH_TIMEOUT_MS,
-    });
-    try {
-      ws.close(4008, "Authentication timeout");
-    } catch {
-      // WebSocket may have been closed by the client
-    }
   }
 
   /**
@@ -644,11 +597,6 @@ export class SessionDO extends DurableObject<Env> {
    * Handle messages from sandbox.
    */
   private async handleSandboxMessage(ws: WebSocket, message: string): Promise<void> {
-    // Recover sandbox WebSocket reference after hibernation
-    if (!this.sandboxWs || this.sandboxWs !== ws) {
-      this.sandboxWs = ws;
-    }
-
     try {
       const event = JSON.parse(message) as SandboxEvent;
       await this.processSandboxEvent(event);
@@ -685,6 +633,10 @@ export class SessionDO extends DurableObject<Env> {
 
         case "typing":
           await this.handleTyping();
+          break;
+
+        case "fetch_history":
+          this.handleFetchHistory(ws, data);
           break;
 
         case "presence":
@@ -758,32 +710,16 @@ export class SessionDO extends DurableObject<Env> {
       ws,
     };
 
-    this.clients.set(ws, clientInfo);
+    this.wsManager.setClient(ws, clientInfo);
 
-    // Store WebSocket to participant mapping for hibernation recovery
-    // Get the ws_id from the WebSocket's tags
-    const wsTags = this.ctx.getTags(ws);
-    const wsIdTag = wsTags.find((t) => t.startsWith("wsid:"));
-    if (wsIdTag) {
-      const wsId = wsIdTag.replace("wsid:", "");
-      const now = Date.now();
-      // Upsert the mapping (in case of reconnection)
-      this.repository.upsertWsClientMapping({
-        wsId,
-        participantId: participant.id,
-        clientId: data.clientId,
-        createdAt: now,
+    const parsed = this.wsManager.classify(ws);
+    if (parsed.kind === "client" && parsed.wsId) {
+      this.wsManager.persistClientMapping(parsed.wsId, participant.id, data.clientId);
+      this.log.debug("Stored ws_client_mapping", {
+        ws_id: parsed.wsId,
+        participant_id: participant.id,
       });
-      this.log.debug("Stored ws_client_mapping", { ws_id: wsId, participant_id: participant.id });
     }
-
-    // Set auto-response for ping/pong during hibernation
-    this.ctx.setWebSocketAutoResponse(
-      new WebSocketRequestResponsePair(
-        JSON.stringify({ type: "ping" }),
-        JSON.stringify({ type: "pong", timestamp: Date.now() })
-      )
-    );
 
     // Send session state with current participant info
     const state = this.getSessionState();
@@ -805,7 +741,16 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     // Send historical events (messages and sandbox events)
-    this.sendHistoricalEvents(ws);
+    const replay = this.sendHistoricalEvents(ws);
+
+    // Signal replay is complete with pagination cursor
+    this.safeSend(ws, {
+      type: "replay_complete",
+      hasMore: replay.hasMore,
+      cursor: replay.oldestItem
+        ? { timestamp: replay.oldestItem.created_at, id: replay.oldestItem.id }
+        : null,
+    } as ServerMessage);
 
     // Send current presence
     this.sendPresence(ws);
@@ -816,107 +761,67 @@ export class SessionDO extends DurableObject<Env> {
 
   /**
    * Send historical events to a newly connected client.
+   * Queries only the events table — user_message events are written at prompt time.
+   * Returns metadata about what was sent for the replay_complete message.
    */
-  private sendHistoricalEvents(ws: WebSocket): void {
-    // Get messages with participant info (user prompts)
-    const messages = this.repository.getMessagesWithParticipants(100);
+  private sendHistoricalEvents(ws: WebSocket): {
+    hasMore: boolean;
+    oldestItem: { created_at: number; id: string } | null;
+  } {
+    const REPLAY_LIMIT = 500;
+    const events = this.repository.getEventsForReplay(REPLAY_LIMIT);
+    const hasMore = events.length >= REPLAY_LIMIT;
 
-    // Get events (tool calls, tokens, etc.)
-    const events = this.repository.getEventsForReplay(500);
-
-    // Combine and sort by timestamp
-    interface HistoryItem {
-      type: "message" | "event";
-      timestamp: number;
-      data: MessageWithParticipant | EventRow;
-    }
-
-    const combined: HistoryItem[] = [
-      ...messages.map((m) => ({ type: "message" as const, timestamp: m.created_at, data: m })),
-      ...events.map((e) => ({ type: "event" as const, timestamp: e.created_at, data: e })),
-    ];
-
-    // Sort by timestamp ascending
-    combined.sort((a, b) => a.timestamp - b.timestamp);
-
-    // Send in chronological order
-    for (const item of combined) {
-      if (item.type === "message") {
-        const msg = item.data as MessageWithParticipant;
+    for (const event of events) {
+      try {
+        const eventData = JSON.parse(event.data);
         this.safeSend(ws, {
           type: "sandbox_event",
-          event: {
-            type: "user_message",
-            content: msg.content,
-            messageId: msg.id,
-            timestamp: msg.created_at / 1000, // Convert to seconds
-            author: msg.participant_id
-              ? {
-                  participantId: msg.participant_id,
-                  name: msg.github_name || msg.github_login || "Unknown",
-                  avatar: getGitHubAvatarUrl(msg.github_login),
-                }
-              : undefined,
-          },
+          event: eventData,
         });
-      } else {
-        const event = item.data as EventRow;
-        try {
-          const eventData = JSON.parse(event.data);
-          this.safeSend(ws, {
-            type: "sandbox_event",
-            event: eventData,
-          });
-        } catch {
-          // Skip malformed events
-        }
+      } catch {
+        // Skip malformed events
       }
     }
+
+    const oldestItem =
+      events.length > 0 ? { created_at: events[0].created_at, id: events[0].id } : null;
+
+    return { hasMore, oldestItem };
   }
 
   /**
    * Get client info for a WebSocket, reconstructing from storage if needed after hibernation.
    */
   private getClientInfo(ws: WebSocket): ClientInfo | null {
-    // First check in-memory cache
-    let client = this.clients.get(ws);
-    if (client) return client;
+    // 1. In-memory cache (manager)
+    const cached = this.wsManager.getClient(ws);
+    if (cached) return cached;
 
-    // After hibernation, the Map is empty but WebSocket is still valid
-    // Try to recover client info from the database using ws_id tag
-    const tags = this.ctx.getTags(ws);
-    if (!tags.includes("sandbox")) {
-      // This is a client WebSocket that survived hibernation
-      // Try to recover from ws_client_mapping table
-      const wsIdTag = tags.find((t) => t.startsWith("wsid:"));
-      if (wsIdTag) {
-        const wsId = wsIdTag.replace("wsid:", "");
-        const mapping = this.repository.getWsClientMapping(wsId);
-
-        if (mapping) {
-          this.log.info("Recovered client info from DB", { ws_id: wsId, user_id: mapping.user_id });
-          client = {
-            participantId: mapping.participant_id,
-            userId: mapping.user_id,
-            name: mapping.github_name || mapping.github_login || mapping.user_id,
-            avatar: getGitHubAvatarUrl(mapping.github_login),
-            status: "active",
-            lastSeen: Date.now(),
-            clientId: mapping.client_id || `client-${Date.now()}`,
-            ws,
-          };
-          this.clients.set(ws, client);
-          return client;
-        }
-      }
-
-      // No mapping found - client must reconnect with valid auth
+    // 2. DB recovery (manager handles tag parsing + DB lookup)
+    const mapping = this.wsManager.recoverClientMapping(ws);
+    if (!mapping) {
       this.log.warn("No client mapping found after hibernation, closing WebSocket");
-      ws.close(4002, "Session expired, please reconnect");
+      this.wsManager.close(ws, 4002, "Session expired, please reconnect");
       return null;
     }
 
-    return null;
+    // 3. Build ClientInfo (DO owns domain logic)
+    this.log.info("Recovered client info from DB", { user_id: mapping.user_id });
+    const clientInfo: ClientInfo = {
+      participantId: mapping.participant_id,
+      userId: mapping.user_id,
+      name: mapping.github_name || mapping.github_login || mapping.user_id,
+      avatar: getGitHubAvatarUrl(mapping.github_login),
+      status: "active",
+      lastSeen: Date.now(),
+      clientId: mapping.client_id || `client-${Date.now()}`,
+      ws,
+    };
+
+    // 4. Re-cache
+    this.wsManager.setClient(ws, clientInfo);
+    return clientInfo;
   }
 
   /**
@@ -971,6 +876,8 @@ export class SessionDO extends DurableObject<Env> {
       createdAt: now,
     });
 
+    this.writeUserMessageEvent(participant, data.content, messageId, now);
+
     // Get queue position
     const position = this.repository.getPendingOrProcessingCount();
 
@@ -1003,7 +910,7 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async handleTyping(): Promise<void> {
     // If no sandbox or not connected, try to warm/spawn one
-    if (!this.sandboxWs || this.sandboxWs.readyState !== WebSocket.OPEN) {
+    if (!this.wsManager.getSandboxSocket()) {
       if (!this.lifecycleManager.isSpawning()) {
         this.broadcast({ type: "sandbox_warming" });
         // Proactively spawn sandbox when user starts typing
@@ -1028,6 +935,73 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
+   * Handle fetch_history request from client for paginated history loading.
+   */
+  private handleFetchHistory(
+    ws: WebSocket,
+    data: { cursor?: { timestamp: number; id: string }; limit?: number }
+  ): void {
+    const client = this.getClientInfo(ws);
+    if (!client) {
+      this.safeSend(ws, {
+        type: "error",
+        code: "NOT_SUBSCRIBED",
+        message: "Must subscribe first",
+      });
+      return;
+    }
+
+    // Validate cursor
+    if (
+      !data.cursor ||
+      typeof data.cursor.timestamp !== "number" ||
+      typeof data.cursor.id !== "string"
+    ) {
+      this.safeSend(ws, {
+        type: "error",
+        code: "INVALID_CURSOR",
+        message: "Invalid cursor",
+      });
+      return;
+    }
+
+    // Rate limit: reject if < 200ms since last fetch
+    const now = Date.now();
+    if (client.lastFetchHistoryAt && now - client.lastFetchHistoryAt < 200) {
+      this.safeSend(ws, {
+        type: "error",
+        code: "RATE_LIMITED",
+        message: "Too many requests",
+      });
+      return;
+    }
+    client.lastFetchHistoryAt = now;
+
+    const rawLimit = typeof data.limit === "number" ? data.limit : 200;
+    const limit = Math.max(1, Math.min(rawLimit, 500));
+    const page = this.repository.getEventsHistoryPage(data.cursor.timestamp, data.cursor.id, limit);
+
+    const items: SandboxEvent[] = [];
+    for (const event of page.events) {
+      try {
+        items.push(JSON.parse(event.data));
+      } catch {
+        // Skip malformed events
+      }
+    }
+
+    // Compute new cursor from oldest item in the page
+    const oldestEvent = page.events.length > 0 ? page.events[0] : null;
+
+    this.safeSend(ws, {
+      type: "history_page",
+      items,
+      hasMore: page.hasMore,
+      cursor: oldestEvent ? { timestamp: oldestEvent.created_at, id: oldestEvent.id } : null,
+    } as ServerMessage);
+  }
+
+  /**
    * Process sandbox event.
    */
   private async processSandboxEvent(event: SandboxEvent): Promise<void> {
@@ -1039,6 +1013,15 @@ export class SessionDO extends DurableObject<Env> {
       this.log.info("Sandbox event", { event_type: event.type });
     }
     const now = Date.now();
+
+    // Heartbeats update the sandbox table (for health monitoring) but are not
+    // stored as events — they are high-frequency noise that drowns out real
+    // content in replay and pagination queries.
+    if (event.type === "heartbeat") {
+      this.repository.updateSandboxHeartbeat(now);
+      return;
+    }
+
     const eventId = generateId();
 
     // Get messageId from the event first (sandbox sends correct messageId with every event)
@@ -1120,12 +1103,6 @@ export class SessionDO extends DurableObject<Env> {
       }
     }
 
-    if (event.type === "heartbeat") {
-      this.repository.updateSandboxHeartbeat(now);
-      // Note: Don't schedule separate heartbeat alarm - it's handled in the main alarm()
-      // which checks both inactivity and heartbeat health
-    }
-
     // Handle push completion events
     if (event.type === "push_complete" || event.type === "push_error") {
       this.handlePushEvent(event);
@@ -1143,11 +1120,9 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async pushBranchToRemote(
     branchName: string,
-    repoOwner: string,
-    repoName: string,
-    githubToken?: string
+    pushSpec: GitPushSpec
   ): Promise<{ success: true } | { success: false; error: string }> {
-    const sandboxWs = this.getSandboxWebSocket();
+    const sandboxWs = this.wsManager.getSandboxSocket();
 
     if (!sandboxWs) {
       // No sandbox connected - user may have already pushed manually
@@ -1172,16 +1147,11 @@ export class SessionDO extends DurableObject<Env> {
       }, 180000);
     });
 
-    // Tell sandbox to push the current branch
-    // Pass GitHub App token for authentication (sandbox uses for git push)
-    // User's OAuth token is NOT sent to sandbox - only used server-side for PR API
+    // Tell sandbox to push the branch using provider-generated transport details.
     this.log.info("Sending push command", { branch_name: branchName });
     this.safeSend(sandboxWs, {
       type: "push",
-      branchName,
-      repoOwner,
-      repoName,
-      githubToken,
+      pushSpec,
     });
 
     // Wait for push_complete or push_error event
@@ -1237,47 +1207,6 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
-   * Get the sandbox WebSocket, recovering from hibernation if needed.
-   */
-  private getSandboxWebSocket(): WebSocket | null {
-    // First check in-memory reference
-    if (this.sandboxWs && this.sandboxWs.readyState === WebSocket.OPEN) {
-      return this.sandboxWs;
-    }
-
-    // After hibernation, try to recover from ctx.getWebSockets()
-    // Validate sandbox ID to prevent wrong sandbox connections
-    const sandbox = this.getSandbox();
-    const expectedSandboxId = sandbox?.modal_sandbox_id;
-
-    const allWebSockets = this.ctx.getWebSockets();
-    for (const ws of allWebSockets) {
-      const tags = this.ctx.getTags(ws);
-      if (tags.includes("sandbox") && ws.readyState === WebSocket.OPEN) {
-        // Validate sandbox ID if we have an expected one
-        if (expectedSandboxId) {
-          const sidTag = tags.find((t) => t.startsWith("sid:"));
-          if (sidTag) {
-            const tagSandboxId = sidTag.replace("sid:", "");
-            if (tagSandboxId !== expectedSandboxId) {
-              this.log.debug("Skipping WS with wrong sandbox ID", {
-                tag_sandbox_id: tagSandboxId,
-                expected_sandbox_id: expectedSandboxId,
-              });
-              continue;
-            }
-          }
-        }
-        this.log.info("Recovered sandbox WebSocket from hibernation");
-        this.sandboxWs = ws;
-        return ws;
-      }
-    }
-
-    return null;
-  }
-
-  /**
    * Warm sandbox proactively.
    * Delegates to the lifecycle manager.
    */
@@ -1303,7 +1232,7 @@ export class SessionDO extends DurableObject<Env> {
     const now = Date.now();
 
     // Check if sandbox is connected (with hibernation recovery)
-    const sandboxWs = this.getSandboxWebSocket();
+    const sandboxWs = this.wsManager.getSandboxSocket();
     if (!sandboxWs) {
       // No sandbox connected - spawn one if not already spawning
       // spawnSandbox has its own persisted status check
@@ -1380,21 +1309,19 @@ export class SessionDO extends DurableObject<Env> {
    * The processing status will be updated when execution_complete is received.
    */
   private async stopExecution(): Promise<void> {
-    if (this.sandboxWs) {
-      this.safeSend(this.sandboxWs, { type: "stop" });
+    const sandboxWs = this.wsManager.getSandboxSocket();
+    if (sandboxWs) {
+      this.wsManager.send(sandboxWs, { type: "stop" });
     }
   }
 
   /**
-   * Broadcast message to all connected clients.
+   * Broadcast message to all authenticated clients.
    */
   private broadcast(message: ServerMessage): void {
-    for (const ws of this.ctx.getWebSockets()) {
-      const tags = this.ctx.getTags(ws);
-      if (!tags.includes("sandbox")) {
-        this.safeSend(ws, message);
-      }
-    }
+    this.wsManager.forEachClientSocket("authenticated_only", (ws) => {
+      this.wsManager.send(ws, message);
+    });
   }
 
   /**
@@ -1417,7 +1344,7 @@ export class SessionDO extends DurableObject<Env> {
    * Get list of present participants.
    */
   private getPresenceList(): ParticipantPresence[] {
-    return Array.from(this.clients.values()).map((c) => ({
+    return Array.from(this.wsManager.getAuthenticatedClients()).map((c) => ({
       participantId: c.participantId,
       userId: c.userId,
       name: c.name,
@@ -1584,6 +1511,37 @@ export class SessionDO extends DurableObject<Env> {
 
   private getParticipantByUserId(userId: string): ParticipantRow | null {
     return this.repository.getParticipantByUserId(userId);
+  }
+
+  /**
+   * Write a user_message event to the events table and broadcast to connected clients.
+   * Used by both WebSocket and HTTP prompt handlers for unified timeline replay.
+   */
+  private writeUserMessageEvent(
+    participant: ParticipantRow,
+    content: string,
+    messageId: string,
+    now: number
+  ): void {
+    const userMessageEvent: SandboxEvent = {
+      type: "user_message",
+      content,
+      messageId,
+      timestamp: now / 1000, // Convert to seconds to match other events
+      author: {
+        participantId: participant.id,
+        name: participant.github_name || participant.github_login || participant.user_id,
+        avatar: getGitHubAvatarUrl(participant.github_login),
+      },
+    };
+    this.repository.createEvent({
+      id: generateId(),
+      type: "user_message",
+      data: JSON.stringify(userMessageEvent),
+      messageId,
+      createdAt: now,
+    });
+    this.broadcast({ type: "sandbox_event", event: userMessageEvent });
   }
 
   private createParticipant(userId: string, name: string): ParticipantRow {
@@ -1786,12 +1744,12 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
-   * Get the prompting user for PR creation.
+   * Get the prompting participant for PR creation.
    * Returns the participant who triggered the currently processing message.
    */
-  private async getPromptingUserForPR(): Promise<
-    | { user: ParticipantRow; error?: never; status?: never }
-    | { user?: never; error: string; status: number }
+  private async getPromptingParticipantForPR(): Promise<
+    | { participant: ParticipantRow; error?: never; status?: never }
+    | { participant?: never; error: string; status: number }
   > {
     // Find the currently processing message
     const processingMessage = this.repository.getProcessingMessageAuthor();
@@ -1807,30 +1765,46 @@ export class SessionDO extends DurableObject<Env> {
     const participantId = processingMessage.author_id;
 
     // Get the participant record
-    let participant = this.repository.getParticipantById(participantId);
+    const participant = this.repository.getParticipantById(participantId);
 
     if (!participant) {
       this.log.warn("PR creation failed: participant not found", { participantId });
       return { error: "User not found. Please re-authenticate.", status: 401 };
     }
 
-    if (!participant.github_access_token_encrypted) {
-      this.log.warn("PR creation failed: no GitHub token", { userId: participant.user_id });
-      return {
-        error:
-          "Your GitHub token is not available for PR creation. Please reconnect to the session to re-authenticate.",
-        status: 401,
-      };
+    return { participant };
+  }
+
+  /**
+   * Resolve the prompting participant's OAuth credentials for API-based PR creation.
+   * Returns `auth: null` when no user OAuth token is available (manual PR fallback).
+   */
+  private async resolvePromptingUserAuthForPR(participant: ParticipantRow): Promise<
+    | {
+        participant: ParticipantRow;
+        auth: SourceControlAuthContext | null;
+        error?: never;
+        status?: never;
+      }
+    | { participant?: never; auth?: never; error: string; status: number }
+  > {
+    let resolvedParticipant = participant;
+
+    if (!resolvedParticipant.github_access_token_encrypted) {
+      this.log.info("PR creation: prompting user has no OAuth token, using manual fallback", {
+        user_id: resolvedParticipant.user_id,
+      });
+      return { participant: resolvedParticipant, auth: null };
     }
 
-    if (this.isGitHubTokenExpired(participant)) {
+    if (this.isGitHubTokenExpired(resolvedParticipant)) {
       this.log.warn("GitHub token expired, attempting server-side refresh", {
-        userId: participant.user_id,
+        userId: resolvedParticipant.user_id,
       });
 
-      const refreshed = await this.refreshParticipantToken(participant);
+      const refreshed = await this.refreshParticipantToken(resolvedParticipant);
       if (refreshed) {
-        participant = refreshed;
+        resolvedParticipant = refreshed;
       } else {
         return {
           error:
@@ -1840,7 +1814,33 @@ export class SessionDO extends DurableObject<Env> {
       }
     }
 
-    return { user: participant };
+    if (!resolvedParticipant.github_access_token_encrypted) {
+      return { participant: resolvedParticipant, auth: null };
+    }
+
+    try {
+      const accessToken = await decryptToken(
+        resolvedParticipant.github_access_token_encrypted,
+        this.env.TOKEN_ENCRYPTION_KEY
+      );
+
+      return {
+        participant: resolvedParticipant,
+        auth: {
+          authType: "oauth",
+          token: accessToken,
+        },
+      };
+    } catch (error) {
+      this.log.error("Failed to decrypt GitHub token for PR creation", {
+        user_id: resolvedParticipant.user_id,
+        error: error instanceof Error ? error : String(error),
+      });
+      return {
+        error: "Failed to process GitHub token for PR creation.",
+        status: 500,
+      };
+    }
   }
 
   // HTTP handlers
@@ -2002,6 +2002,8 @@ export class SessionDO extends DurableObject<Env> {
         createdAt: now,
       });
 
+      this.writeUserMessageEvent(participant, body.content, messageId, now);
+
       const queuePosition = this.repository.getPendingOrProcessingCount();
 
       this.log.info("prompt.enqueue", {
@@ -2117,7 +2119,7 @@ export class SessionDO extends DurableObject<Env> {
         id: a.id,
         type: a.type,
         url: a.url,
-        metadata: a.metadata ? JSON.parse(a.metadata) : null,
+        metadata: this.parseArtifactMetadata(a),
         createdAt: a.created_at,
       })),
     });
@@ -2159,15 +2161,16 @@ export class SessionDO extends DurableObject<Env> {
 
   /**
    * Handle PR creation request.
-   * 1. Get prompting user's GitHub token (required, no fallback)
-   * 2. Send push command to sandbox
-   * 3. Create PR using GitHub API
+   * 1. Resolve prompting participant and branch metadata
+   * 2. Push branch to remote via provider push auth
+   * 3. Create PR via OAuth token, or return manual PR URL fallback
    */
   private async handleCreatePR(request: Request): Promise<Response> {
     const body = (await request.json()) as {
       title: string;
       body: string;
       baseBranch?: string;
+      headBranch?: string;
     };
 
     const session = this.getSession();
@@ -2175,55 +2178,114 @@ export class SessionDO extends DurableObject<Env> {
       return Response.json({ error: "Session not found" }, { status: 404 });
     }
 
-    // Get the prompting user who will create the PR
-    const promptingUser = await this.getPromptingUserForPR();
-    if (!promptingUser.user) {
-      return Response.json({ error: promptingUser.error }, { status: promptingUser.status });
+    const promptingParticipantResult = await this.getPromptingParticipantForPR();
+    if (!promptingParticipantResult.participant) {
+      return Response.json(
+        { error: promptingParticipantResult.error },
+        { status: promptingParticipantResult.status }
+      );
     }
 
-    this.log.info("Creating PR", { user_id: promptingUser.user.user_id });
-
-    const user = promptingUser.user;
+    const promptingParticipant = promptingParticipantResult.participant;
+    this.log.info("Creating PR", { user_id: promptingParticipant.user_id });
 
     try {
-      // Decrypt the prompting user's GitHub token
-      const accessToken = await decryptToken(
-        user.github_access_token_encrypted!,
-        this.env.TOKEN_ENCRYPTION_KEY
-      );
-
-      // Get repository info to determine default branch
-      const repoInfo = await getRepository(accessToken, session.repo_owner, session.repo_name);
-
-      const baseBranch = body.baseBranch || repoInfo.defaultBranch;
       const sessionId = session.session_name || session.id;
-      const headBranch = generateBranchName(sessionId);
+      const generatedHeadBranch = generateBranchName(sessionId);
 
-      // Generate GitHub App token for push (not user token)
-      // User token is only used for PR API call below
-      let pushToken: string | undefined;
-      const appConfig = getGitHubAppConfig(this.env);
-      if (appConfig) {
-        try {
-          pushToken = await generateInstallationToken(appConfig);
-          this.log.info("Generated fresh GitHub App token for push");
-        } catch (err) {
-          this.log.error("Failed to generate app token, push may fail", {
-            error: err instanceof Error ? err : String(err),
-          });
-        }
+      const initialArtifacts = this.repository.listArtifacts();
+      const existingPrArtifact = initialArtifacts.find((artifact) => artifact.type === "pr");
+      if (existingPrArtifact) {
+        return Response.json(
+          { error: "A pull request has already been created for this session." },
+          { status: 409 }
+        );
       }
 
-      // Push branch to remote via sandbox
-      const pushResult = await this.pushBranchToRemote(
-        headBranch,
-        session.repo_owner,
-        session.repo_name,
-        pushToken
-      );
+      // Generate push auth via provider app credentials (not user token)
+      // User token (if available) is only used for PR API call below
+      let pushAuth;
+      try {
+        pushAuth = await this.sourceControlProvider.generatePushAuth();
+        this.log.info("Generated fresh push auth token");
+      } catch (err) {
+        this.log.error("Failed to generate push auth", {
+          error: err instanceof Error ? err : String(err),
+        });
+        const errorMessage =
+          err instanceof SourceControlProviderError
+            ? err.message
+            : "Failed to generate push authentication";
+        return Response.json({ error: errorMessage }, { status: 500 });
+      }
+
+      // Resolve repository metadata with app auth so this still works for Slack sessions
+      const appAuth: SourceControlAuthContext = {
+        authType: "app",
+        token: pushAuth.token,
+      };
+      const repoInfo = await this.sourceControlProvider.getRepository(appAuth, {
+        owner: session.repo_owner,
+        name: session.repo_name,
+      });
+      const baseBranch = body.baseBranch || repoInfo.defaultBranch;
+      const branchResolution = resolveHeadBranchForPr({
+        requestedHeadBranch: body.headBranch,
+        sessionBranchName: session.branch_name,
+        generatedBranchName: generatedHeadBranch,
+        baseBranch,
+      });
+      const headBranch = branchResolution.headBranch;
+      this.log.info("Resolved PR head branch", {
+        requested_head_branch: body.headBranch ?? null,
+        session_branch_name: session.branch_name,
+        generated_head_branch: generatedHeadBranch,
+        resolved_head_branch: headBranch,
+        resolution_source: branchResolution.source,
+        base_branch: baseBranch,
+      });
+      const pushSpec = this.sourceControlProvider.buildGitPushSpec({
+        owner: session.repo_owner,
+        name: session.repo_name,
+        sourceRef: "HEAD",
+        targetBranch: headBranch,
+        auth: pushAuth,
+        force: true,
+      });
+
+      // Push branch to remote via sandbox (session-layer coordination)
+      const pushResult = await this.pushBranchToRemote(headBranch, pushSpec);
 
       if (!pushResult.success) {
         return Response.json({ error: pushResult.error }, { status: 500 });
+      }
+
+      // Update session with branch name after push succeeds
+      this.repository.updateSessionBranch(session.id, headBranch);
+
+      // Re-check artifacts after async work to avoid stale reads on retries/interleaving.
+      const latestArtifacts = this.repository.listArtifacts();
+      const latestPrArtifact = latestArtifacts.find((artifact) => artifact.type === "pr");
+      if (latestPrArtifact) {
+        return Response.json(
+          { error: "A pull request has already been created for this session." },
+          { status: 409 }
+        );
+      }
+
+      const authResolution = await this.resolvePromptingUserAuthForPR(promptingParticipant);
+      if ("error" in authResolution) {
+        return this.buildManualPrFallbackResponse(
+          session,
+          headBranch,
+          baseBranch,
+          latestArtifacts,
+          authResolution.error
+        );
+      }
+
+      if (!authResolution.auth) {
+        return this.buildManualPrFallbackResponse(session, headBranch, baseBranch, latestArtifacts);
       }
 
       // Append session link footer to agent's PR body
@@ -2231,19 +2293,14 @@ export class SessionDO extends DurableObject<Env> {
       const sessionUrl = `${webAppUrl}/session/${sessionId}`;
       const fullBody = body.body + `\n\n---\n*Created with [Open-Inspect](${sessionUrl})*`;
 
-      // Create the PR using GitHub API (using the prompting user's token)
-      const prResult = await createPullRequest(
-        {
-          accessTokenEncrypted: user.github_access_token_encrypted!,
-          owner: session.repo_owner,
-          repo: session.repo_name,
-          title: body.title,
-          body: fullBody,
-          head: headBranch,
-          base: baseBranch,
-        },
-        this.env.TOKEN_ENCRYPTION_KEY
-      );
+      // Create the PR via provider (using the prompting user's OAuth token)
+      const prResult = await this.sourceControlProvider.createPullRequest(authResolution.auth, {
+        repository: repoInfo,
+        title: body.title,
+        body: fullBody,
+        sourceBranch: headBranch,
+        targetBranch: baseBranch,
+      });
 
       // Store the PR as an artifact
       const artifactId = generateId();
@@ -2251,9 +2308,9 @@ export class SessionDO extends DurableObject<Env> {
       this.repository.createArtifact({
         id: artifactId,
         type: "pr",
-        url: prResult.htmlUrl,
+        url: prResult.webUrl,
         metadata: JSON.stringify({
-          number: prResult.number,
+          number: prResult.id,
           state: prResult.state,
           head: headBranch,
           base: baseBranch,
@@ -2261,34 +2318,170 @@ export class SessionDO extends DurableObject<Env> {
         createdAt: now,
       });
 
-      // Update session with branch name
-      this.repository.updateSessionBranch(session.id, headBranch);
-
       // Broadcast PR creation to all clients
       this.broadcast({
         type: "artifact_created",
         artifact: {
           id: artifactId,
           type: "pr",
-          url: prResult.htmlUrl,
-          prNumber: prResult.number,
+          url: prResult.webUrl,
+          prNumber: prResult.id,
         },
       });
 
       return Response.json({
-        prNumber: prResult.number,
-        prUrl: prResult.htmlUrl,
+        prNumber: prResult.id,
+        prUrl: prResult.webUrl,
         state: prResult.state,
       });
     } catch (error) {
       this.log.error("PR creation failed", {
         error: error instanceof Error ? error : String(error),
       });
+
+      // Handle SourceControlProviderError with HTTP status
+      if (error instanceof SourceControlProviderError) {
+        return Response.json({ error: error.message }, { status: error.httpStatus || 500 });
+      }
+
       return Response.json(
         { error: error instanceof Error ? error.message : "Failed to create PR" },
         { status: 500 }
       );
     }
+  }
+
+  private parseArtifactMetadata(
+    artifact: Pick<ArtifactRow, "id" | "metadata">
+  ): Record<string, unknown> | null {
+    if (!artifact.metadata) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(artifact.metadata) as Record<string, unknown>;
+    } catch (error) {
+      this.log.warn("Invalid artifact metadata JSON", {
+        artifact_id: artifact.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  private getExistingManualBranchArtifact(
+    artifacts: ArtifactRow[],
+    headBranch: string
+  ): { artifact: ArtifactRow; metadata: Record<string, unknown> } | null {
+    for (const artifact of artifacts) {
+      if (artifact.type !== "branch") {
+        continue;
+      }
+
+      const metadata = this.parseArtifactMetadata(artifact);
+      if (!metadata) {
+        continue;
+      }
+
+      if (metadata.mode === "manual_pr" && metadata.head === headBranch) {
+        return { artifact, metadata };
+      }
+    }
+
+    return null;
+  }
+
+  private getCreatePrUrlFromManualArtifact(
+    existing: { artifact: ArtifactRow; metadata: Record<string, unknown> },
+    fallbackUrl: string
+  ): string {
+    const metadataUrl = existing.metadata.createPrUrl;
+    if (typeof metadataUrl === "string" && metadataUrl.length > 0) {
+      return metadataUrl;
+    }
+
+    if (existing.artifact.url && existing.artifact.url.length > 0) {
+      return existing.artifact.url;
+    }
+
+    return fallbackUrl;
+  }
+
+  private buildManualPrFallbackResponse(
+    session: SessionRow,
+    headBranch: string,
+    baseBranch: string,
+    artifacts: ArtifactRow[],
+    reason?: string
+  ): Response {
+    const manualCreatePrUrl = this.sourceControlProvider.buildManualPullRequestUrl({
+      owner: session.repo_owner,
+      name: session.repo_name,
+      sourceBranch: headBranch,
+      targetBranch: baseBranch,
+    });
+
+    const existingManualArtifact = this.getExistingManualBranchArtifact(artifacts, headBranch);
+    if (existingManualArtifact) {
+      const createPrUrl = this.getCreatePrUrlFromManualArtifact(
+        existingManualArtifact,
+        manualCreatePrUrl
+      );
+      this.log.info("Using manual PR fallback", {
+        head_branch: headBranch,
+        base_branch: baseBranch,
+        session_id: session.session_name || session.id,
+        existing_artifact_id: existingManualArtifact.artifact.id,
+        reason: reason ?? "missing_oauth_token",
+      });
+      return Response.json({
+        status: "manual",
+        createPrUrl,
+        headBranch,
+        baseBranch,
+      });
+    }
+
+    const artifactId = generateId();
+    const now = Date.now();
+    const metadata: ManualPullRequestArtifactMetadata = {
+      head: headBranch,
+      base: baseBranch,
+      mode: "manual_pr",
+      createPrUrl: manualCreatePrUrl,
+      provider: this.sourceControlProvider.name,
+    };
+    this.repository.createArtifact({
+      id: artifactId,
+      type: "branch",
+      url: manualCreatePrUrl,
+      metadata: JSON.stringify(metadata),
+      createdAt: now,
+    });
+
+    this.broadcast({
+      type: "artifact_created",
+      artifact: {
+        id: artifactId,
+        type: "branch",
+        url: manualCreatePrUrl,
+      },
+    });
+
+    this.log.info("Using manual PR fallback", {
+      head_branch: headBranch,
+      base_branch: baseBranch,
+      session_id: session.session_name || session.id,
+      artifact_id: artifactId,
+      reason: reason ?? "missing_oauth_token",
+    });
+
+    return Response.json({
+      status: "manual",
+      createPrUrl: manualCreatePrUrl,
+      headBranch,
+      baseBranch,
+    });
   }
 
   /**

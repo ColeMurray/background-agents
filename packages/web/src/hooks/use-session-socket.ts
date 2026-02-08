@@ -74,10 +74,13 @@ interface UseSessionSocketReturn {
   artifacts: Artifact[];
   currentParticipantId: string | null;
   isProcessing: boolean;
+  hasMoreHistory: boolean;
+  loadingHistory: boolean;
   sendPrompt: (content: string, model?: string) => void;
   stopExecution: () => void;
   sendTyping: () => void;
   reconnect: () => void;
+  loadOlderEvents: () => void;
 }
 
 export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
@@ -109,11 +112,55 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0);
 
+  // Pagination state
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const cursorRef = useRef<{ timestamp: number; id: string } | null>(null);
+
+  // Live event buffering during replay
+  const replayCompleteRef = useRef(false);
+  const liveEventBufferRef = useRef<SandboxEvent[]>([]);
+
+  /**
+   * Process a single sandbox_event through the existing logic.
+   * Extracted so it can be called both for live events and flushed buffer.
+   */
+  const processSandboxEvent = useCallback((event: SandboxEvent) => {
+    if (event.type === "token" && event.content && event.messageId) {
+      // Accumulate text but DON'T display yet
+      pendingTextRef.current = {
+        content: event.content,
+        messageId: event.messageId,
+        timestamp: event.timestamp,
+      };
+    } else if (event.type === "execution_complete") {
+      // On completion: Add final text to events using the token's original timestamp
+      if (pendingTextRef.current) {
+        const pending = pendingTextRef.current;
+        pendingTextRef.current = null;
+        setEvents((prev) => [
+          ...prev,
+          {
+            type: "token",
+            content: pending.content,
+            messageId: pending.messageId,
+            timestamp: pending.timestamp,
+          },
+        ]);
+      }
+      setEvents((prev) => [...prev, event]);
+    } else {
+      // Other events (tool_call, user_message, git_sync, etc.) - add normally
+      setEvents((prev) => [...prev, event]);
+    }
+  }, []);
+
   const handleMessage = useCallback(
     (data: {
       type: string;
       state?: SessionState;
       event?: SandboxEvent;
+      items?: SandboxEvent[];
       participants?: Participant[];
       artifact?: Artifact;
       userId?: string;
@@ -124,6 +171,8 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
       participantId?: string;
       participant?: { participantId: string; name: string; avatar?: string };
       isProcessing?: boolean;
+      hasMore?: boolean;
+      cursor?: { timestamp: number; id: string } | null;
     }) => {
       switch (data.type) {
         case "subscribed":
@@ -133,6 +182,9 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           setEvents([]);
           setArtifacts([]);
           pendingTextRef.current = null;
+          // Reset replay buffering state
+          replayCompleteRef.current = false;
+          liveEventBufferRef.current = [];
           if (data.state) {
             setSessionState(data.state);
           }
@@ -154,35 +206,68 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           if (data.event) {
             const event = data.event;
 
-            if (event.type === "token" && event.content && event.messageId) {
-              // Accumulate text but DON'T display yet
-              pendingTextRef.current = {
-                content: event.content,
-                messageId: event.messageId,
-                timestamp: event.timestamp,
-              };
-            } else if (event.type === "execution_complete") {
-              // On completion: Add final text to events using the token's original timestamp
-              if (pendingTextRef.current) {
-                const pending = pendingTextRef.current;
-                pendingTextRef.current = null;
-                setEvents((prev) => [
-                  ...prev,
-                  {
+            // Buffer live events during initial replay to avoid interleaving
+            if (!replayCompleteRef.current) {
+              liveEventBufferRef.current.push(event);
+            } else {
+              processSandboxEvent(event);
+            }
+          }
+          break;
+
+        case "replay_complete": {
+          // Mark replay as complete
+          replayCompleteRef.current = true;
+
+          // Set pagination state
+          setHasMoreHistory(data.hasMore ?? false);
+          cursorRef.current = data.cursor ?? null;
+
+          // Flush buffered live events in a single state update
+          const buffered = liveEventBufferRef.current;
+          liveEventBufferRef.current = [];
+          if (buffered.length > 0) {
+            const toAdd: SandboxEvent[] = [];
+            for (const evt of buffered) {
+              if (evt.type === "token" && evt.content && evt.messageId) {
+                pendingTextRef.current = {
+                  content: evt.content,
+                  messageId: evt.messageId,
+                  timestamp: evt.timestamp,
+                };
+              } else if (evt.type === "execution_complete") {
+                if (pendingTextRef.current) {
+                  const pending = pendingTextRef.current;
+                  pendingTextRef.current = null;
+                  toAdd.push({
                     type: "token",
                     content: pending.content,
                     messageId: pending.messageId,
                     timestamp: pending.timestamp,
-                  },
-                ]);
+                  });
+                }
+                toAdd.push(evt);
+              } else {
+                toAdd.push(evt);
               }
-              setEvents((prev) => [...prev, event]);
-            } else {
-              // Other events (tool_call, user_message, git_sync, etc.) - add normally
-              setEvents((prev) => [...prev, event]);
+            }
+            if (toAdd.length > 0) {
+              setEvents((prev) => [...prev, ...toAdd]);
             }
           }
           break;
+        }
+
+        case "history_page": {
+          if (data.items) {
+            // Prepend older events to the beginning
+            setEvents((prev) => [...data.items!, ...prev]);
+          }
+          setHasMoreHistory(data.hasMore ?? false);
+          cursorRef.current = data.cursor ?? null;
+          setLoadingHistory(false);
+          break;
+        }
 
         case "presence_sync":
         case "presence_update":
@@ -277,10 +362,12 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
 
         case "error":
           console.error("Session error:", data);
+          // Reset loading state if a fetch_history request was rejected
+          setLoadingHistory(false);
           break;
       }
     },
-    []
+    [processSandboxEvent]
   );
 
   const fetchWsToken = useCallback(async (): Promise<string | null> => {
@@ -445,18 +532,13 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
 
     console.log("Sending prompt:", content, "with model:", model);
 
-    // Add user message to events for display with author info
-    const userMessageEvent: SandboxEvent = {
-      type: "user_message",
-      content,
-      timestamp: Date.now() / 1000, // Convert to seconds to match server timestamps
-      author: currentParticipantRef.current || undefined,
-    };
-    setEvents((prev) => [...prev, userMessageEvent]);
-
     // Optimistically set isProcessing for immediate feedback
     // Server will confirm with processing_status message
     setSessionState((prev) => (prev ? { ...prev, isProcessing: true } : null));
+
+    // Note: user_message event is NOT inserted optimistically here.
+    // The server writes a user_message event to the events table and broadcasts it
+    // to all clients (including the sender), which handles both display and multiplayer.
 
     wsRef.current.send(
       JSON.stringify({
@@ -494,6 +576,19 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
     }
     wsRef.current.send(JSON.stringify({ type: "typing" }));
   }, []);
+
+  const loadOlderEvents = useCallback(() => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (!hasMoreHistory || loadingHistory || !cursorRef.current) return;
+    setLoadingHistory(true);
+    wsRef.current.send(
+      JSON.stringify({
+        type: "fetch_history",
+        cursor: cursorRef.current,
+        limit: 200,
+      })
+    );
+  }, [hasMoreHistory, loadingHistory]);
 
   const reconnect = useCallback(() => {
     if (wsRef.current) {
@@ -551,9 +646,12 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
     artifacts,
     currentParticipantId,
     isProcessing,
+    hasMoreHistory,
+    loadingHistory,
     sendPrompt,
     stopExecution,
     sendTyping,
     reconnect,
+    loadOlderEvents,
   };
 }

@@ -114,6 +114,9 @@ built for internal use where all employees are trusted and have access to compan
 
 See **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** for deployment instructions.
 
+To understand the architecture and core concepts, read
+**[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)**.
+
 ## Key Features
 
 ### Fast Startup
@@ -144,6 +147,22 @@ await configureGitIdentity({
 });
 ```
 
+### Repository Setup Scripts
+
+Repositories can include a `.openinspect/setup.sh` script for custom environment setup:
+
+```bash
+# .openinspect/setup.sh
+#!/bin/bash
+npm install
+pip install -r requirements.txt
+```
+
+- Runs automatically after git clone, before the agent starts
+- Skipped when restoring from a snapshot (dependencies already installed)
+- Non-blocking: failures are logged but don't prevent the session from starting
+- Default timeout: 5 minutes (configurable via `SETUP_TIMEOUT_SECONDS` environment variable)
+
 ## License
 
 MIT
@@ -155,5 +174,5 @@ built with:
 
 - [Modal](https://modal.com) - Cloud sandbox infrastructure
 - [Cloudflare Workers](https://workers.cloudflare.com) - Edge computing
-- [OpenCode](https://opencode.dev) - Coding agent runtime
+- [OpenCode](https://opencode.ai) - Coding agent runtime
 - [Next.js](https://nextjs.org) - Web framework

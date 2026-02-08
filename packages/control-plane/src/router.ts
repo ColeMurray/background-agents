@@ -10,22 +10,39 @@ import {
   getInstallationRepository,
   listInstallationRepositories,
 } from "./auth/github-app";
+import {
+  resolveScmProviderFromEnv,
+  SourceControlProviderError,
+  type SourceControlProviderName,
+} from "./source-control";
 import { RepoSecretsStore, RepoSecretsValidationError } from "./db/repo-secrets";
+import { SessionIndexStore } from "./db/session-index";
+
+import { RepoMetadataStore } from "./db/repo-metadata";
+import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
+import type { RequestMetrics } from "./db/instrumented-d1";
 import type {
   EnrichedRepository,
   InstallationRepository,
   RepoMetadata,
 } from "@open-inspect/shared";
-import { getRepoMetadataKey } from "./utils/repo";
 import { createLogger } from "./logger";
 import type { CorrelationContext } from "./logger";
 
 const logger = createLogger("router");
 
+const REPOS_CACHE_KEY = "repos:list";
+const REPOS_CACHE_FRESH_MS = 5 * 60 * 1000; // Serve without revalidation for 5 minutes
+const REPOS_CACHE_KV_TTL_SECONDS = 3600; // Keep stale data in KV for 1 hour
+
 /**
- * Request context with correlation IDs propagated to downstream services.
+ * Request context with correlation IDs and per-request metrics.
  */
-export type RequestContext = CorrelationContext;
+export type RequestContext = CorrelationContext & {
+  metrics: RequestMetrics;
+  /** Worker ExecutionContext for waitUntil (background tasks). */
+  executionCtx?: ExecutionContext;
+};
 
 /**
  * Create a Request to a Durable Object stub with correlation headers.
@@ -77,6 +94,18 @@ function error(message: string, status = 400): Response {
   return json({ error: message }, status);
 }
 
+function withCorsAndTraceHeaders(response: Response, ctx: RequestContext): Response {
+  const headers = new Headers(response.headers);
+  headers.set("Access-Control-Allow-Origin", "*");
+  headers.set("x-request-id", ctx.request_id);
+  headers.set("x-trace-id", ctx.trace_id);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 /**
  * Get Durable Object stub for a session.
  * Returns the stub or null if session ID is missing.
@@ -103,6 +132,46 @@ const SANDBOX_AUTH_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/pr$/, // PR creation from sandbox
 ];
 
+type CachedScmProvider =
+  | {
+      envValue: string | undefined;
+      provider: SourceControlProviderName;
+      error?: never;
+    }
+  | {
+      envValue: string | undefined;
+      provider?: never;
+      error: SourceControlProviderError;
+    };
+
+let cachedScmProvider: CachedScmProvider | null = null;
+
+function resolveDeploymentScmProvider(env: Env): SourceControlProviderName {
+  const envValue = env.SCM_PROVIDER;
+  if (!cachedScmProvider || cachedScmProvider.envValue !== envValue) {
+    try {
+      cachedScmProvider = {
+        envValue,
+        provider: resolveScmProviderFromEnv(envValue),
+      };
+    } catch (errorValue) {
+      cachedScmProvider = {
+        envValue,
+        error:
+          errorValue instanceof SourceControlProviderError
+            ? errorValue
+            : new SourceControlProviderError("Invalid SCM provider configuration", "permanent"),
+      };
+    }
+  }
+
+  if (cachedScmProvider.error) {
+    throw cachedScmProvider.error;
+  }
+
+  return cachedScmProvider.provider;
+}
+
 /**
  * Check if a path matches any public route pattern.
  */
@@ -115,6 +184,47 @@ function isPublicRoute(path: string): boolean {
  */
 function isSandboxAuthRoute(path: string): boolean {
   return SANDBOX_AUTH_ROUTES.some((pattern) => pattern.test(path));
+}
+
+function enforceImplementedScmProvider(
+  path: string,
+  env: Env,
+  ctx: RequestContext
+): Response | null {
+  try {
+    const provider = resolveDeploymentScmProvider(env);
+    if (provider !== "github" && !isPublicRoute(path)) {
+      logger.warn("SCM provider not implemented", {
+        event: "scm.provider_not_implemented",
+        scm_provider: provider,
+        http_path: path,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      const response = error(
+        `SCM provider '${provider}' is not implemented in this deployment.`,
+        501
+      );
+      return withCorsAndTraceHeaders(response, ctx);
+    }
+
+    return null;
+  } catch (errorValue) {
+    const errorMessage =
+      errorValue instanceof SourceControlProviderError
+        ? errorValue.message
+        : "Invalid SCM provider configuration";
+
+    logger.error("Invalid SCM provider configuration", {
+      event: "scm.provider_invalid",
+      error: errorValue instanceof Error ? errorValue : String(errorValue),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+
+    const response = error(errorMessage, 500);
+    return withCorsAndTraceHeaders(response, ctx);
+  }
 }
 
 /**
@@ -341,17 +451,27 @@ const routes: Route[] = [
 /**
  * Match request to route and execute handler.
  */
-export async function handleRequest(request: Request, env: Env): Promise<Response> {
+export async function handleRequest(
+  request: Request,
+  env: Env,
+  executionCtx?: ExecutionContext
+): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method;
   const startTime = Date.now();
 
-  // Build correlation context
+  // Build correlation context with per-request metrics
+  const metrics = createRequestMetrics();
   const ctx: RequestContext = {
     trace_id: request.headers.get("x-trace-id") || crypto.randomUUID(),
     request_id: crypto.randomUUID().slice(0, 8),
+    metrics,
+    executionCtx,
   };
+
+  // Instrument D1 so all queries are automatically timed
+  const instrumentedEnv: Env = { ...env, DB: instrumentD1(env.DB, metrics) };
 
   // CORS preflight
   if (method === "OPTIONS") {
@@ -384,30 +504,19 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
             // Sandbox auth passed, continue to route handler
           } else {
             // Both HMAC and sandbox auth failed
-            const corsHeaders = new Headers(sandboxAuthError.headers);
-            corsHeaders.set("Access-Control-Allow-Origin", "*");
-            corsHeaders.set("x-request-id", ctx.request_id);
-            corsHeaders.set("x-trace-id", ctx.trace_id);
-            return new Response(sandboxAuthError.body, {
-              status: sandboxAuthError.status,
-              statusText: sandboxAuthError.statusText,
-              headers: corsHeaders,
-            });
+            return withCorsAndTraceHeaders(sandboxAuthError, ctx);
           }
         }
       } else {
         // Not a sandbox auth route, return HMAC auth error
-        const corsHeaders = new Headers(hmacAuthError.headers);
-        corsHeaders.set("Access-Control-Allow-Origin", "*");
-        corsHeaders.set("x-request-id", ctx.request_id);
-        corsHeaders.set("x-trace-id", ctx.trace_id);
-        return new Response(hmacAuthError.body, {
-          status: hmacAuthError.status,
-          statusText: hmacAuthError.statusText,
-          headers: corsHeaders,
-        });
+        return withCorsAndTraceHeaders(hmacAuthError, ctx);
       }
     }
+  }
+
+  const providerCheck = enforceImplementedScmProvider(path, env, ctx);
+  if (providerCheck) {
+    return providerCheck;
   }
 
   // Find matching route
@@ -419,7 +528,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
       let response: Response;
       let outcome: "success" | "error";
       try {
-        response = await route.handler(request, env, match, ctx);
+        response = await route.handler(request, instrumentedEnv, match, ctx);
         outcome = response.status >= 500 ? "error" : "success";
       } catch (e) {
         const durationMs = Date.now() - startTime;
@@ -433,15 +542,10 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
           duration_ms: durationMs,
           outcome: "error",
           error: e instanceof Error ? e : String(e),
+          ...ctx.metrics.summarize(),
         });
         return error("Internal server error", 500);
       }
-
-      // Create new response with CORS + correlation headers
-      const corsHeaders = new Headers(response.headers);
-      corsHeaders.set("Access-Control-Allow-Origin", "*");
-      corsHeaders.set("x-request-id", ctx.request_id);
-      corsHeaders.set("x-trace-id", ctx.trace_id);
 
       const durationMs = Date.now() - startTime;
       logger.info("http.request", {
@@ -453,13 +557,10 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
         http_status: response.status,
         duration_ms: durationMs,
         outcome,
+        ...ctx.metrics.summarize(),
       });
 
-      return new Response(response.body, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: corsHeaders,
-      });
+      return withCorsAndTraceHeaders(response, ctx);
     }
   }
 
@@ -476,27 +577,17 @@ async function handleListSessions(
 ): Promise<Response> {
   const url = new URL(request.url);
   const limit = Math.min(parseInt(url.searchParams.get("limit") || "50"), 100);
-  const cursor = url.searchParams.get("cursor") || undefined;
+  const offset = parseInt(url.searchParams.get("offset") || "0");
+  const status = url.searchParams.get("status") || undefined;
+  const excludeStatus = url.searchParams.get("excludeStatus") || undefined;
 
-  // List sessions from KV index
-  const listResult = await env.SESSION_INDEX.list({
-    prefix: "session:",
-    limit,
-    cursor,
-  });
-
-  // Fetch session data for each key
-  const sessions = await Promise.all(
-    listResult.keys.map(async (key) => {
-      const data = await env.SESSION_INDEX.get(key.name, "json");
-      return data;
-    })
-  );
+  const store = new SessionIndexStore(env.DB);
+  const result = await store.list({ status, excludeStatus, limit, offset });
 
   return json({
-    sessions: sessions.filter(Boolean),
-    cursor: listResult.list_complete ? undefined : listResult.cursor,
-    hasMore: !listResult.list_complete,
+    sessions: result.sessions,
+    total: result.total,
+    hasMore: result.hasMore,
   });
 }
 
@@ -599,21 +690,19 @@ async function handleCreateSession(
     return error("Failed to create session", 500);
   }
 
-  // Store session in KV index for listing
+  // Store session in D1 index for listing
   const now = Date.now();
-  await env.SESSION_INDEX.put(
-    `session:${sessionId}`,
-    JSON.stringify({
-      id: sessionId,
-      title: body.title || null,
-      repoOwner,
-      repoName,
-      model: body.model || "claude-haiku-4-5",
-      status: "created",
-      createdAt: now,
-      updatedAt: now,
-    })
-  );
+  const sessionStore = new SessionIndexStore(env.DB);
+  await sessionStore.create({
+    id: sessionId,
+    title: body.title || null,
+    repoOwner,
+    repoName,
+    model: body.model || "claude-haiku-4-5",
+    status: "created",
+    createdAt: now,
+    updatedAt: now,
+  });
 
   const result: CreateSessionResponse = {
     sessionId,
@@ -655,8 +744,9 @@ async function handleDeleteSession(
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
 
-  // Delete from KV index
-  await env.SESSION_INDEX.delete(`session:${sessionId}`);
+  // Delete from D1 index
+  const sessionStore = new SessionIndexStore(env.DB);
+  await sessionStore.delete(sessionId);
 
   // Note: Durable Object data will be garbage collected by Cloudflare
   // when no longer referenced. We could also call a cleanup method on the DO.
@@ -822,10 +912,24 @@ async function handleCreatePR(
     title: string;
     body: string;
     baseBranch?: string;
+    headBranch?: string;
   };
 
-  if (!body.title || !body.body) {
+  if (
+    typeof body.title !== "string" ||
+    typeof body.body !== "string" ||
+    body.title.trim().length === 0 ||
+    body.body.trim().length === 0
+  ) {
     return error("title and body are required");
+  }
+
+  if (body.baseBranch != null && typeof body.baseBranch !== "string") {
+    return error("baseBranch must be a string");
+  }
+
+  if (body.headBranch != null && typeof body.headBranch !== "string") {
+    return error("headBranch must be a string");
   }
 
   const doId = env.SESSION.idFromName(sessionId);
@@ -841,6 +945,7 @@ async function handleCreatePR(
           title: body.title,
           body: body.body,
           baseBranch: body.baseBranch,
+          headBranch: body.headBranch,
         }),
       },
       ctx
@@ -874,55 +979,61 @@ async function handleSessionWsToken(
     return error("userId is required");
   }
 
-  // Encrypt the GitHub token if provided
-  let githubTokenEncrypted: string | null = null;
-  if (body.githubToken && env.TOKEN_ENCRYPTION_KEY) {
-    try {
-      githubTokenEncrypted = await encryptToken(body.githubToken, env.TOKEN_ENCRYPTION_KEY);
-    } catch (e) {
-      logger.error("Failed to encrypt GitHub token", {
-        error: e instanceof Error ? e : String(e),
-      });
-      // Continue without token - PR creation will fail if this user triggers it
-    }
-  }
+  // Encrypt the GitHub tokens if provided
+  const { githubTokenEncrypted, githubRefreshTokenEncrypted } = await ctx.metrics.time(
+    "encrypt_tokens",
+    async () => {
+      let accessToken: string | null = null;
+      let refreshToken: string | null = null;
 
-  // Encrypt the GitHub refresh token if provided
-  let githubRefreshTokenEncrypted: string | null = null;
-  if (body.githubRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
-    try {
-      githubRefreshTokenEncrypted = await encryptToken(
-        body.githubRefreshToken,
-        env.TOKEN_ENCRYPTION_KEY
-      );
-    } catch (e) {
-      logger.error("Failed to encrypt GitHub refresh token", {
-        error: e instanceof Error ? e : String(e),
-      });
+      if (body.githubToken && env.TOKEN_ENCRYPTION_KEY) {
+        try {
+          accessToken = await encryptToken(body.githubToken, env.TOKEN_ENCRYPTION_KEY);
+        } catch (e) {
+          logger.error("Failed to encrypt GitHub token", {
+            error: e instanceof Error ? e : String(e),
+          });
+          // Continue without token - PR creation will fail if this user triggers it
+        }
+      }
+
+      if (body.githubRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
+        try {
+          refreshToken = await encryptToken(body.githubRefreshToken, env.TOKEN_ENCRYPTION_KEY);
+        } catch (e) {
+          logger.error("Failed to encrypt GitHub refresh token", {
+            error: e instanceof Error ? e : String(e),
+          });
+        }
+      }
+
+      return { githubTokenEncrypted: accessToken, githubRefreshTokenEncrypted: refreshToken };
     }
-  }
+  );
 
   const doId = env.SESSION.idFromName(sessionId);
   const stub = env.SESSION.get(doId);
 
-  const response = await stub.fetch(
-    internalRequest(
-      "http://internal/internal/ws-token",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: body.userId,
-          githubUserId: body.githubUserId,
-          githubLogin: body.githubLogin,
-          githubName: body.githubName,
-          githubEmail: body.githubEmail,
-          githubTokenEncrypted,
-          githubRefreshTokenEncrypted,
-          githubTokenExpiresAt: body.githubTokenExpiresAt,
-        }),
-      },
-      ctx
+  const response = await ctx.metrics.time("do_fetch", () =>
+    stub.fetch(
+      internalRequest(
+        "http://internal/internal/ws-token",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: body.userId,
+            githubUserId: body.githubUserId,
+            githubLogin: body.githubLogin,
+            githubName: body.githubName,
+            githubEmail: body.githubEmail,
+            githubTokenEncrypted,
+            githubRefreshTokenEncrypted,
+            githubTokenExpiresAt: body.githubTokenExpiresAt,
+          }),
+        },
+        ctx
+      )
     )
   );
 
@@ -963,22 +1074,11 @@ async function handleArchiveSession(
   );
 
   if (response.ok) {
-    // Update KV index
-    const sessionData = (await env.SESSION_INDEX.get(`session:${sessionId}`, "json")) as Record<
-      string,
-      unknown
-    > | null;
-    if (sessionData) {
-      await env.SESSION_INDEX.put(
-        `session:${sessionId}`,
-        JSON.stringify({
-          ...sessionData,
-          status: "archived",
-          updatedAt: Date.now(),
-        })
-      );
-    } else {
-      logger.warn("Session not found in KV index during archive", { session_id: sessionId });
+    // Update D1 index
+    const sessionStore = new SessionIndexStore(env.DB);
+    const updated = await sessionStore.updateStatus(sessionId, "archived");
+    if (!updated) {
+      logger.warn("Session not found in D1 index during archive", { session_id: sessionId });
     }
   }
 
@@ -1019,22 +1119,11 @@ async function handleUnarchiveSession(
   );
 
   if (response.ok) {
-    // Update KV index
-    const sessionData = (await env.SESSION_INDEX.get(`session:${sessionId}`, "json")) as Record<
-      string,
-      unknown
-    > | null;
-    if (sessionData) {
-      await env.SESSION_INDEX.put(
-        `session:${sessionId}`,
-        JSON.stringify({
-          ...sessionData,
-          status: "active",
-          updatedAt: Date.now(),
-        })
-      );
-    } else {
-      logger.warn("Session not found in KV index during unarchive", { session_id: sessionId });
+    // Update D1 index
+    const sessionStore = new SessionIndexStore(env.DB);
+    const updated = await sessionStore.updateStatus(sessionId, "active");
+    if (!updated) {
+      logger.warn("Session not found in D1 index during unarchive", { session_id: sessionId });
     }
   }
 
@@ -1066,50 +1155,149 @@ async function resolveInstalledRepo(
 }
 
 /**
- * Cached repos list structure.
+ * Cached repos list structure stored in KV.
  */
 interface CachedReposList {
   repos: EnrichedRepository[];
   cachedAt: string;
+  /** Epoch ms — cache is considered fresh until this time. Missing in entries cached before this field was added. */
+  freshUntil?: number;
+}
+
+/**
+ * Fetch repos from GitHub, enrich with D1 metadata, and write to KV cache.
+ * Runs either in the foreground (cache miss) or background (stale-while-revalidate).
+ */
+async function refreshReposCache(env: Env, traceId?: string): Promise<void> {
+  const appConfig = getGitHubAppConfig(env);
+  if (!appConfig) return;
+
+  let repos: InstallationRepository[];
+  try {
+    const result = await listInstallationRepositories(appConfig);
+    repos = result.repos;
+
+    logger.info("GitHub repo fetch completed", {
+      trace_id: traceId,
+      total_repos: result.timing.totalRepos,
+      total_pages: result.timing.totalPages,
+      token_generation_ms: result.timing.tokenGenerationMs,
+      pages: result.timing.pages,
+    });
+  } catch (e) {
+    logger.error("Failed to list installation repositories (background refresh)", {
+      trace_id: traceId,
+      error: e instanceof Error ? e : String(e),
+    });
+    return;
+  }
+
+  const metadataStore = new RepoMetadataStore(env.DB);
+  let metadataMap: Map<string, RepoMetadata>;
+  try {
+    metadataMap = await metadataStore.getBatch(
+      repos.map((r) => ({ owner: r.owner, name: r.name }))
+    );
+  } catch (e) {
+    logger.warn("Failed to fetch repo metadata batch (background refresh)", {
+      trace_id: traceId,
+      error: e instanceof Error ? e : String(e),
+    });
+    metadataMap = new Map();
+  }
+
+  const enrichedRepos: EnrichedRepository[] = repos.map((repo) => {
+    const key = `${repo.owner.toLowerCase()}/${repo.name.toLowerCase()}`;
+    const metadata = metadataMap.get(key);
+    return metadata ? { ...repo, metadata } : repo;
+  });
+
+  const cachedAt = new Date().toISOString();
+  const freshUntil = Date.now() + REPOS_CACHE_FRESH_MS;
+  try {
+    await env.REPOS_CACHE.put(
+      REPOS_CACHE_KEY,
+      JSON.stringify({ repos: enrichedRepos, cachedAt, freshUntil }),
+      { expirationTtl: REPOS_CACHE_KV_TTL_SECONDS }
+    );
+    logger.info("Repos cache refreshed", {
+      trace_id: traceId,
+      repo_count: enrichedRepos.length,
+    });
+  } catch (e) {
+    logger.warn("Failed to write repos cache", {
+      trace_id: traceId,
+      error: e instanceof Error ? e : String(e),
+    });
+  }
 }
 
 /**
  * List all repositories accessible via the GitHub App installation.
- * Results are cached in KV for 5 minutes to avoid rate limits.
+ *
+ * Uses stale-while-revalidate caching:
+ * - Fresh cache (< 5 min old): return immediately
+ * - Stale cache (5 min – 1 hr): return immediately, revalidate in background
+ * - No cache: fetch synchronously (first load or after 1 hr KV expiry)
+ *
+ * This prevents the slow GitHub API pagination from blocking the Worker
+ * isolate and causing head-of-line blocking for other requests.
  */
 async function handleListRepos(
   request: Request,
   env: Env,
   _match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
-  const CACHE_KEY = "repos:list";
-  const CACHE_TTL = 300; // 5 minutes
-
-  // Check KV cache first
+  // Read from KV cache
+  let cached: CachedReposList | null = null;
   try {
-    const cached = (await env.SESSION_INDEX.get(CACHE_KEY, "json")) as CachedReposList | null;
-    if (cached) {
-      return json({
-        repos: cached.repos,
-        cached: true,
-        cachedAt: cached.cachedAt,
-      });
-    }
+    cached = await ctx.metrics.time("kv_read", () =>
+      env.REPOS_CACHE.get<CachedReposList>(REPOS_CACHE_KEY, "json")
+    );
   } catch (e) {
     logger.warn("Failed to read repos cache", { error: e instanceof Error ? e : String(e) });
   }
 
-  // Get GitHub App config
+  if (cached) {
+    const isFresh = cached.freshUntil && Date.now() < cached.freshUntil;
+
+    if (!isFresh && ctx.executionCtx) {
+      // Stale — serve immediately but refresh in background
+      logger.info("Serving stale repos cache, refreshing in background", {
+        trace_id: ctx.trace_id,
+        cached_at: cached.cachedAt,
+      });
+      ctx.executionCtx.waitUntil(refreshReposCache(env, ctx.trace_id));
+    }
+
+    return json({
+      repos: cached.repos,
+      cached: true,
+      cachedAt: cached.cachedAt,
+    });
+  }
+
+  // No cache at all — must fetch synchronously
   const appConfig = getGitHubAppConfig(env);
   if (!appConfig) {
     return error("GitHub App not configured", 500);
   }
 
-  // Fetch repositories from GitHub App installation
   let repos: InstallationRepository[];
   try {
-    repos = await listInstallationRepositories(appConfig);
+    const result = await ctx.metrics.time("github_api", () =>
+      listInstallationRepositories(appConfig)
+    );
+    repos = result.repos;
+
+    logger.info("GitHub repo fetch completed", {
+      trace_id: ctx.trace_id,
+      total_repos: result.timing.totalRepos,
+      total_pages: result.timing.totalPages,
+      token_generation_ms: result.timing.tokenGenerationMs,
+      pages: result.timing.pages,
+    });
   } catch (e) {
     logger.error("Failed to list installation repositories", {
       error: e instanceof Error ? e : String(e),
@@ -1117,44 +1305,35 @@ async function handleListRepos(
     return error("Failed to fetch repositories from GitHub", 500);
   }
 
-  // Enrich repos with stored metadata
-  const enrichedRepos: EnrichedRepository[] = await Promise.all(
-    repos.map(async (repo) => {
-      const newKey = getRepoMetadataKey(repo.owner, repo.name);
-      const oldKey = `repo:metadata:${repo.fullName}`; // Original casing for migration
-
-      try {
-        let metadata = (await env.SESSION_INDEX.get(newKey, "json")) as RepoMetadata | null;
-
-        // Migration: check old key pattern if metadata not found at new key
-        if (!metadata && repo.fullName.toLowerCase() !== newKey.replace("repo:metadata:", "")) {
-          metadata = (await env.SESSION_INDEX.get(oldKey, "json")) as RepoMetadata | null;
-          if (metadata) {
-            // Migrate to new key
-            await env.SESSION_INDEX.put(newKey, JSON.stringify(metadata));
-            await env.SESSION_INDEX.delete(oldKey);
-            logger.info("Migrated repo metadata key", { old_key: oldKey, new_key: newKey });
-          }
-        }
-
-        return metadata ? { ...repo, metadata } : repo;
-      } catch {
-        return repo;
-      }
-    })
-  );
-
-  // Cache the results
-  const cachedAt = new Date().toISOString();
-  const cacheData: CachedReposList = {
-    repos: enrichedRepos,
-    cachedAt,
-  };
-
+  const metadataStore = new RepoMetadataStore(env.DB);
+  let metadataMap: Map<string, RepoMetadata>;
   try {
-    await env.SESSION_INDEX.put(CACHE_KEY, JSON.stringify(cacheData), {
-      expirationTtl: CACHE_TTL,
+    metadataMap = await metadataStore.getBatch(
+      repos.map((r) => ({ owner: r.owner, name: r.name }))
+    );
+  } catch (e) {
+    logger.warn("Failed to fetch repo metadata batch", {
+      error: e instanceof Error ? e : String(e),
     });
+    metadataMap = new Map();
+  }
+
+  const enrichedRepos: EnrichedRepository[] = repos.map((repo) => {
+    const key = `${repo.owner.toLowerCase()}/${repo.name.toLowerCase()}`;
+    const metadata = metadataMap.get(key);
+    return metadata ? { ...repo, metadata } : repo;
+  });
+
+  const cachedAt = new Date().toISOString();
+  const freshUntil = Date.now() + REPOS_CACHE_FRESH_MS;
+  try {
+    await ctx.metrics.time("kv_write", () =>
+      env.REPOS_CACHE.put(
+        REPOS_CACHE_KEY,
+        JSON.stringify({ repos: enrichedRepos, cachedAt, freshUntil }),
+        { expirationTtl: REPOS_CACHE_KV_TTL_SECONDS }
+      )
+    );
   } catch (e) {
     logger.warn("Failed to cache repos list", { error: e instanceof Error ? e : String(e) });
   }
@@ -1197,13 +1376,13 @@ async function handleUpdateRepoMetadata(
     }).filter(([, v]) => v !== undefined)
   ) as RepoMetadata;
 
-  const metadataKey = getRepoMetadataKey(owner, name);
+  const metadataStore = new RepoMetadataStore(env.DB);
 
   try {
-    await env.SESSION_INDEX.put(metadataKey, JSON.stringify(metadata));
+    await metadataStore.upsert(owner, name, metadata);
 
-    // Invalidate the repos cache so next fetch includes updated metadata
-    await env.SESSION_INDEX.delete("repos:list");
+    // Invalidate the KV repos cache so next fetch includes updated metadata
+    await env.REPOS_CACHE.delete(REPOS_CACHE_KEY);
 
     // Return normalized repo identifier
     const normalizedRepo = `${owner.toLowerCase()}/${name.toLowerCase()}`;
@@ -1236,22 +1415,15 @@ async function handleGetRepoMetadata(
     return error("Owner and name are required");
   }
 
-  const metadataKey = getRepoMetadataKey(owner, name);
   const normalizedRepo = `${owner.toLowerCase()}/${name.toLowerCase()}`;
+  const metadataStore = new RepoMetadataStore(env.DB);
 
   try {
-    const metadata = (await env.SESSION_INDEX.get(metadataKey, "json")) as RepoMetadata | null;
-
-    if (!metadata) {
-      return json({
-        repo: normalizedRepo,
-        metadata: null,
-      });
-    }
+    const metadata = await metadataStore.get(owner, name);
 
     return json({
       repo: normalizedRepo,
-      metadata,
+      metadata: metadata ?? null,
     });
   } catch (e) {
     logger.error("Failed to get repo metadata", { error: e instanceof Error ? e : String(e) });

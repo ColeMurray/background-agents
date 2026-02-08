@@ -206,7 +206,10 @@ Skip this step if you don't need Slack integration.
    - `app_mentions:read`
    - `chat:write`
    - `channels:history`
-3. Click **"Install to {YOUR_WORKSPACE_NAME}"**
+   - `channels:read`
+   - `groups:history`
+   - `groups:read`
+3. Click **"Install to Workspace"**
 4. Note the **Bot Token** (`xoxb-...`)
 
 > **Important**: If you update bot token scopes later, you must **reinstall the app** to your
@@ -630,6 +633,18 @@ ls packages/slack-bot/dist/index.js
 2. Ensure the bot is invited to the channel (`/invite @BotName`)
 3. Check that you're @mentioning the bot in your message
 4. If you updated bot token scopes, reinstall the app to your workspace
+
+### Slack bot ignores thread context
+
+If the bot doesn't see the original message when tagged in a thread reply:
+
+1. Verify the bot has `channels:history` scope (for public channels) and `groups:history` (for
+   private channels). These are required by the `conversations.replies` API to fetch thread
+   messages.
+2. Verify the bot has `channels:read` and `groups:read` scopes. These are required by
+   `conversations.info` to fetch channel name and description for context.
+3. If you added missing scopes, **reinstall the app** to your workspace for the new permissions to
+   take effect.
 
 ### Durable Objects / Service Binding errors
 

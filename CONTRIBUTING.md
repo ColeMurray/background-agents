@@ -67,6 +67,13 @@ Use clear, descriptive commit messages:
 4. Update documentation if needed
 5. Provide a clear description of your changes
 
+### Source Control Provider Contributions
+
+For SCM/provider changes, follow:
+
+- `docs/adr/0001-single-provider-scm-boundaries.md`
+- `docs/provider-contribution-checklist.md`
+
 ## Reporting Issues
 
 When reporting issues, please include:
