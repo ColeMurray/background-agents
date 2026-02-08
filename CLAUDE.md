@@ -157,14 +157,12 @@ PR API:              Control plane → user OAuth token → GitHub API (server-s
 
 ## CI/CD
 
-Pushing to `main` automatically deploys:
+Pushing to `main` automatically deploys all services if their files changed:
 
 - **Terraform** (control plane + D1 migrations) — runs on changes to `terraform/` or
   `packages/control-plane/`
 - **Vercel** (web app) — runs on changes to `packages/web/`
-
-**Modal is not auto-deployed by CI.** Modal infra must be deployed manually via
-`modal deploy deploy.py` from `packages/modal-infra/`.
+- **Modal** (data plane) — runs on changes to `packages/modal-infra/`
 
 ## Control Plane (Cloudflare Workers)
 
