@@ -1,12 +1,12 @@
 /**
- * Unit tests for stopExecution() and the execution_complete guard
- * in processSandboxEvent().
+ * Unit tests for the stop-execution–related repository behavior.
  *
- * These test the SessionDO's stop behavior in isolation using mocks.
- * Since stopExecution and processSandboxEvent are private methods on SessionDO,
- * we test them through the public HTTP and WebSocket interfaces via the DO stub
- * in integration tests. This file tests the repository-level interactions
- * by directly calling the repository methods and verifying state transitions.
+ * These tests exercise SessionRepository methods (e.g. getProcessingMessage()
+ * and updateMessageCompletion()) that are used by stopExecution() and the
+ * execution_complete guard in processSandboxEvent().
+ *
+ * We focus here on the repository-level interactions and state transitions
+ * by directly calling the repository methods and verifying their effects.
  */
 
 import { describe, it, expect, beforeEach } from "vitest";

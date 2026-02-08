@@ -1072,6 +1072,7 @@ export class SessionDO extends DurableObject<Env> {
           queue_duration_ms: queueDurationMs,
         });
 
+        this.broadcast({ type: "sandbox_event", event });
         this.broadcast({ type: "processing_status", isProcessing: this.getIsProcessing() });
         this.ctx.waitUntil(this.notifySlackBot(completionMessageId, event.success));
       } else {
@@ -1326,7 +1327,7 @@ export class SessionDO extends DurableObject<Env> {
           sandboxId: "",
           timestamp: now / 1000,
         },
-      } as ServerMessage);
+      });
 
       // Notify slack-bot of stopped execution (fire-and-forget)
       this.ctx.waitUntil(this.notifySlackBot(processingMessage.id, false));
