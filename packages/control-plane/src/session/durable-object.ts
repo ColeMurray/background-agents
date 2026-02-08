@@ -1042,7 +1042,8 @@ export class SessionDO extends DurableObject<Env> {
 
     // Handle specific event types
     if (event.type === "execution_complete") {
-      const completionMessageId = messageId ?? event.messageId;
+      // messageId already incorporates event.messageId (line above), so no extra fallback needed
+      const completionMessageId = messageId;
 
       // Only update message status if it's still processing (not already stopped)
       const isStillProcessing =

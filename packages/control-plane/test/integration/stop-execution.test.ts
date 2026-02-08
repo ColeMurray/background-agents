@@ -253,6 +253,72 @@ describe("POST /internal/stop", () => {
     expect(msgBStatus[0].status).toBe("pending");
   });
 
+  it("execution_complete after stop dispatches queued message when sandbox connected", async () => {
+    const name = `ws-stop-drain-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+
+    const sandboxAuth = { authToken: "sb-tok-drain", sandboxId: "sb-drain-1" };
+    await seedSandboxAuth(stub, sandboxAuth);
+
+    const participants = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants WHERE user_id = 'user-1'"
+    );
+    const participantId = participants[0].id;
+
+    const msgA = "msg-drain-a";
+    const msgB = "msg-drain-b";
+
+    await seedMessage(stub, {
+      id: msgA,
+      authorId: participantId,
+      content: "First prompt",
+      source: "web",
+      status: "processing",
+      createdAt: Date.now() - 2000,
+      startedAt: Date.now() - 1500,
+    });
+
+    await seedMessage(stub, {
+      id: msgB,
+      authorId: participantId,
+      content: "Second prompt",
+      source: "web",
+      status: "pending",
+      createdAt: Date.now() - 1000,
+    });
+
+    // Connect sandbox WS so queue drain can dispatch
+    const { ws: sandboxWs } = await openSandboxWs(name, sandboxAuth);
+    if (sandboxWs) sandboxWs.accept();
+
+    // Stop execution - marks A as failed
+    await stub.fetch("http://internal/internal/stop", { method: "POST" });
+
+    // Bridge sends late execution_complete for A → triggers queue drain
+    await stub.fetch("http://internal/internal/sandbox-event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "execution_complete",
+        messageId: msgA,
+        success: false,
+        sandboxId: sandboxAuth.sandboxId,
+        timestamp: Date.now() / 1000,
+      }),
+    });
+
+    // B should now be processing (queue drained with sandbox connected)
+    const msgBStatus = await queryDO<{ id: string; status: string }>(
+      stub,
+      "SELECT id, status FROM messages WHERE id = ?",
+      msgB
+    );
+    expect(msgBStatus[0].status).toBe("processing");
+
+    if (sandboxWs) sandboxWs.close();
+  });
+
   it("stop via WebSocket client message", async () => {
     const name = `ws-stop-client-${Date.now()}`;
     const { stub } = await initNamedSession(name);
