@@ -1042,14 +1042,17 @@ export class SessionDO extends DurableObject<Env> {
 
     // Handle specific event types
     if (event.type === "execution_complete") {
-      // Use the resolved messageId (which now correctly prioritizes event.messageId)
       const completionMessageId = messageId ?? event.messageId;
-      const status = event.success ? "completed" : "failed";
 
-      if (completionMessageId) {
+      // Only update message status if it's still processing (not already stopped)
+      const isStillProcessing =
+        completionMessageId != null && processingMessage?.id === completionMessageId;
+
+      if (isStillProcessing) {
+        // Normal path: message still processing, complete it as before
+        const status = event.success ? "completed" : "failed";
         this.repository.updateMessageCompletion(completionMessageId, status, now);
 
-        // Emit prompt.complete wide event with duration metrics
         const timestamps = this.repository.getMessageTimestamps(completionMessageId);
         const totalDurationMs = timestamps ? now - timestamps.created_at : undefined;
         const processingDurationMs =
@@ -1069,30 +1072,23 @@ export class SessionDO extends DurableObject<Env> {
           queue_duration_ms: queueDurationMs,
         });
 
-        // Broadcast processing status change (after DB update so getIsProcessing is accurate)
         this.broadcast({ type: "processing_status", isProcessing: this.getIsProcessing() });
-
-        // Notify slack-bot of completion (fire-and-forget with retry)
         this.ctx.waitUntil(this.notifySlackBot(completionMessageId, event.success));
       } else {
-        this.log.warn("prompt.complete", {
+        // Stopped path: message was already marked failed by stopExecution()
+        this.log.info("prompt.complete", {
           event: "prompt.complete",
-          outcome: "error",
-          error_reason: "no_message_id",
+          message_id: completionMessageId,
+          outcome: "already_stopped",
         });
       }
 
-      // Take snapshot after execution completes (per Ramp spec)
-      // "When the agent is finished making changes, we take another snapshot"
-      // Use fire-and-forget so snapshot doesn't block the response to the user
+      // Always run these regardless of stop (snapshot, activity, queue drain)
       this.ctx.waitUntil(this.triggerSnapshot("execution_complete"));
-
-      // Reset activity timer - give user time to review output before inactivity timeout
       this.updateLastActivity(now);
       await this.scheduleInactivityCheck();
-
-      // Process next in queue
       await this.processMessageQueue();
+      return; // execution_complete handling is done; skip the generic broadcast below
     }
 
     if (event.type === "git_sync") {
@@ -1108,7 +1104,7 @@ export class SessionDO extends DurableObject<Env> {
       this.handlePushEvent(event);
     }
 
-    // Broadcast to clients
+    // Broadcast to clients (all non-execution_complete events)
     this.broadcast({ type: "sandbox_event", event });
   }
 
@@ -1305,10 +1301,41 @@ export class SessionDO extends DurableObject<Env> {
 
   /**
    * Stop current execution.
-   * Sends stop command to sandbox, which should respond with execution_complete.
-   * The processing status will be updated when execution_complete is received.
+   * Marks the processing message as failed, broadcasts synthetic execution_complete
+   * so all clients flush buffered tokens, and forwards stop to the sandbox.
    */
   private async stopExecution(): Promise<void> {
+    const now = Date.now();
+    const processingMessage = this.repository.getProcessingMessage();
+
+    if (processingMessage) {
+      this.repository.updateMessageCompletion(processingMessage.id, "failed", now);
+      this.log.info("prompt.stopped", {
+        event: "prompt.stopped",
+        message_id: processingMessage.id,
+      });
+
+      // Broadcast synthetic execution_complete so ALL clients flush buffered tokens.
+      // (The stop-clicking client flushes locally, but other connected clients don't.)
+      this.broadcast({
+        type: "sandbox_event",
+        event: {
+          type: "execution_complete",
+          messageId: processingMessage.id,
+          success: false,
+          sandboxId: "",
+          timestamp: now / 1000,
+        },
+      } as ServerMessage);
+
+      // Notify slack-bot of stopped execution (fire-and-forget)
+      this.ctx.waitUntil(this.notifySlackBot(processingMessage.id, false));
+    }
+
+    // Immediate client feedback
+    this.broadcast({ type: "processing_status", isProcessing: false });
+
+    // Forward stop to sandbox (bridge cancels its task)
     const sandboxWs = this.wsManager.getSandboxSocket();
     if (sandboxWs) {
       this.wsManager.send(sandboxWs, { type: "stop" });
@@ -2031,8 +2058,8 @@ export class SessionDO extends DurableObject<Env> {
     }
   }
 
-  private handleStop(): Response {
-    this.stopExecution();
+  private async handleStop(): Promise<Response> {
+    await this.stopExecution();
     return Response.json({ status: "stopping" });
   }
 
