@@ -155,6 +155,17 @@ Push (PR creation):  Control plane → generate fresh token → WebSocket → sa
 PR API:              Control plane → user OAuth token → GitHub API (server-side only)
 ```
 
+## CI/CD
+
+Pushing to `main` automatically deploys:
+
+- **Terraform** (control plane + D1 migrations) — runs on changes to `terraform/` or
+  `packages/control-plane/`
+- **Vercel** (web app) — runs on changes to `packages/web/`
+
+**Modal is not auto-deployed by CI.** Modal infra must be deployed manually via
+`modal deploy deploy.py` from `packages/modal-infra/`.
+
 ## Control Plane (Cloudflare Workers)
 
 ### Deployment
