@@ -35,7 +35,13 @@ import {
 } from "../source-control";
 import { resolveHeadBranchForPr } from "../source-control/branch-resolution";
 import { generateBranchName, type ManualPullRequestArtifactMetadata } from "@open-inspect/shared";
-import { DEFAULT_MODEL, isValidModel, extractProviderAndModel } from "../utils/models";
+import {
+  DEFAULT_MODEL,
+  isValidModel,
+  isValidReasoningEffort,
+  getDefaultReasoningEffort,
+  extractProviderAndModel,
+} from "../utils/models";
 import type {
   Env,
   ClientInfo,
@@ -832,6 +838,7 @@ export class SessionDO extends DurableObject<Env> {
     data: {
       content: string;
       model?: string;
+      reasoningEffort?: string;
       attachments?: Array<{ type: string; name: string; url?: string; content?: string }>;
     }
   ): Promise<void> {
@@ -864,13 +871,21 @@ export class SessionDO extends DurableObject<Env> {
       }
     }
 
-    // Insert message with optional model override
+    // Validate per-message reasoning effort if provided
+    const effectiveModelForEffort = messageModel || this.getSession()?.model || DEFAULT_MODEL;
+    const messageReasoningEffort = this.validateReasoningEffort(
+      effectiveModelForEffort,
+      data.reasoningEffort
+    );
+
+    // Insert message with optional model and reasoning effort overrides
     this.repository.createMessage({
       id: messageId,
       authorId: participant.id,
       content: data.content,
       source: "web",
       model: messageModel,
+      reasoningEffort: messageReasoningEffort,
       attachments: data.attachments ? JSON.stringify(data.attachments) : null,
       status: "pending",
       createdAt: now,
@@ -888,6 +903,7 @@ export class SessionDO extends DurableObject<Env> {
       author_id: participant.id,
       user_id: client.userId,
       model: messageModel,
+      reasoning_effort: messageReasoningEffort,
       content_length: data.content.length,
       has_attachments: !!data.attachments?.length,
       attachments_count: data.attachments?.length ?? 0,
@@ -1263,11 +1279,19 @@ export class SessionDO extends DurableObject<Env> {
 
     // Send to sandbox with model (per-message override or session default)
     const resolvedModel = message.model || session?.model || "claude-haiku-4-5";
+
+    // Resolve reasoning effort: per-message > session default > model default
+    const resolvedEffort =
+      message.reasoning_effort ??
+      session?.reasoning_effort ??
+      getDefaultReasoningEffort(resolvedModel);
+
     const command: SandboxCommand = {
       type: "prompt",
       messageId: message.id,
       content: message.content,
       model: resolvedModel,
+      reasoningEffort: resolvedEffort,
       author: {
         userId: author?.user_id ?? "unknown",
         githubName: author?.github_name ?? null,
@@ -1283,6 +1307,7 @@ export class SessionDO extends DurableObject<Env> {
       message_id: message.id,
       outcome: sent ? "sent" : "send_failed",
       model: resolvedModel,
+      reasoning_effort: resolvedEffort,
       author_id: message.author_id,
       user_id: author?.user_id ?? "unknown",
       source: message.source,
@@ -1385,6 +1410,20 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
+   * Validate reasoning effort against a model's allowed values.
+   * Returns the validated effort string or null if invalid/absent.
+   */
+  private validateReasoningEffort(model: string, effort: string | undefined): string | null {
+    if (!effort) return null;
+    if (isValidReasoningEffort(model, effort)) return effort;
+    this.log.warn("Invalid reasoning effort for model, ignoring", {
+      model,
+      reasoning_effort: effort,
+    });
+    return null;
+  }
+
+  /**
    * Get current session state.
    */
   private getSessionState(): SessionState {
@@ -1404,6 +1443,7 @@ export class SessionDO extends DurableObject<Env> {
       messageCount,
       createdAt: session?.created_at ?? Date.now(),
       model: session?.model ?? DEFAULT_MODEL,
+      reasoningEffort: session?.reasoning_effort ?? undefined,
       isProcessing,
     };
   }
@@ -1883,6 +1923,7 @@ export class SessionDO extends DurableObject<Env> {
       repoId?: number;
       title?: string;
       model?: string; // LLM model to use
+      reasoningEffort?: string; // Reasoning effort level
       userId: string;
       githubLogin?: string;
       githubName?: string;
@@ -1918,6 +1959,9 @@ export class SessionDO extends DurableObject<Env> {
       });
     }
 
+    // Validate reasoning effort if provided
+    const reasoningEffort = this.validateReasoningEffort(model, body.reasoningEffort);
+
     // Create session (store both internal ID and external name)
     this.repository.upsertSession({
       id: sessionId,
@@ -1927,6 +1971,7 @@ export class SessionDO extends DurableObject<Env> {
       repoName: body.repoName,
       repoId: body.repoId ?? null,
       model,
+      reasoningEffort,
       status: "created",
       createdAt: now,
       updatedAt: now,
@@ -1982,6 +2027,7 @@ export class SessionDO extends DurableObject<Env> {
       opencodeSessionId: session.opencode_session_id,
       status: session.status,
       model: session.model,
+      reasoningEffort: session.reasoning_effort ?? undefined,
       createdAt: session.created_at,
       updatedAt: session.updated_at,
       sandbox: sandbox
@@ -2002,6 +2048,8 @@ export class SessionDO extends DurableObject<Env> {
         content: string;
         authorId: string;
         source: string;
+        model?: string;
+        reasoningEffort?: string;
         attachments?: Array<{ type: string; name: string; url?: string }>;
         callbackContext?: {
           channel: string;
@@ -2021,11 +2069,30 @@ export class SessionDO extends DurableObject<Env> {
       const messageId = generateId();
       const now = Date.now();
 
+      // Validate per-message model override
+      let messageModel: string | null = null;
+      if (body.model) {
+        if (isValidModel(body.model)) {
+          messageModel = body.model;
+        } else {
+          this.log.warn("Invalid message model in enqueue, ignoring", { model: body.model });
+        }
+      }
+
+      // Validate per-message reasoning effort
+      const effectiveModelForEffort = messageModel || this.getSession()?.model || DEFAULT_MODEL;
+      const messageReasoningEffort = this.validateReasoningEffort(
+        effectiveModelForEffort,
+        body.reasoningEffort
+      );
+
       this.repository.createMessage({
         id: messageId,
         authorId: participant.id, // Use the participant's row ID, not the user ID
         content: body.content,
         source: body.source as MessageSource,
+        model: messageModel,
+        reasoningEffort: messageReasoningEffort,
         attachments: body.attachments ? JSON.stringify(body.attachments) : null,
         callbackContext: body.callbackContext ? JSON.stringify(body.callbackContext) : null,
         status: "pending",
@@ -2042,7 +2109,8 @@ export class SessionDO extends DurableObject<Env> {
         source: body.source,
         author_id: participant.id,
         user_id: body.authorId,
-        model: null,
+        model: messageModel,
+        reasoning_effort: messageReasoningEffort,
         content_length: body.content.length,
         has_attachments: !!body.attachments?.length,
         attachments_count: body.attachments?.length ?? 0,

@@ -6,6 +6,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { SidebarLayout, useSidebarContext } from "@/components/sidebar-layout";
 import { formatModelNameLower } from "@/lib/format";
+import { MODEL_OPTIONS, getDefaultReasoningEffort } from "@open-inspect/shared";
+import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 
 interface Repo {
   id: number;
@@ -16,23 +18,6 @@ interface Repo {
   private: boolean;
 }
 
-interface ModelOption {
-  id: string;
-  name: string;
-  description: string;
-}
-
-const MODEL_OPTIONS: { category: string; models: ModelOption[] }[] = [
-  {
-    category: "Model",
-    models: [
-      { id: "claude-haiku-4-5", name: "claude haiku 4.5", description: "Fast and efficient" },
-      { id: "claude-sonnet-4-5", name: "claude sonnet 4.5", description: "Balanced performance" },
-      { id: "claude-opus-4-5", name: "claude opus 4.5", description: "Most capable" },
-    ],
-  },
-];
-
 export default function Home() {
   const { data: session, status } = useSession();
   const router = useRouter();
@@ -40,6 +25,9 @@ export default function Home() {
   const [loadingRepos, setLoadingRepos] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState("claude-haiku-4-5");
+  const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
+    getDefaultReasoningEffort("claude-haiku-4-5")
+  );
   const [prompt, setPrompt] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
@@ -142,6 +130,11 @@ export default function Home() {
     return promise;
   }, [selectedRepo, selectedModel, pendingSessionId]);
 
+  const handleModelChange = useCallback((model: string) => {
+    setSelectedModel(model);
+    setReasoningEffort(getDefaultReasoningEffort(model));
+  }, []);
+
   const handlePromptChange = (value: string) => {
     const wasEmpty = prompt.length === 0;
     setPrompt(value);
@@ -179,6 +172,7 @@ export default function Home() {
         body: JSON.stringify({
           content: prompt,
           model: selectedModel,
+          reasoningEffort,
         }),
       });
 
@@ -212,7 +206,9 @@ export default function Home() {
         selectedRepo={selectedRepo}
         setSelectedRepo={setSelectedRepo}
         selectedModel={selectedModel}
-        setSelectedModel={setSelectedModel}
+        setSelectedModel={handleModelChange}
+        reasoningEffort={reasoningEffort}
+        setReasoningEffort={setReasoningEffort}
         prompt={prompt}
         handlePromptChange={handlePromptChange}
         creating={creating}
@@ -232,6 +228,8 @@ function HomeContent({
   setSelectedRepo,
   selectedModel,
   setSelectedModel,
+  reasoningEffort,
+  setReasoningEffort,
   prompt,
   handlePromptChange,
   creating,
@@ -246,6 +244,8 @@ function HomeContent({
   setSelectedRepo: (value: string) => void;
   selectedModel: string;
   setSelectedModel: (value: string) => void;
+  reasoningEffort: string | undefined;
+  setReasoningEffort: (value: string | undefined) => void;
   prompt: string;
   handlePromptChange: (value: string) => void;
   creating: boolean;
@@ -468,6 +468,14 @@ function HomeContent({
                         </div>
                       )}
                     </div>
+
+                    {/* Reasoning effort pills */}
+                    <ReasoningEffortPills
+                      selectedModel={selectedModel}
+                      reasoningEffort={reasoningEffort}
+                      onSelect={setReasoningEffort}
+                      disabled={creating}
+                    />
                   </div>
 
                   {/* Right side - Agent label */}

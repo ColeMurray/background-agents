@@ -143,7 +143,13 @@ export interface SandboxEvent {
 export type ClientMessage =
   | { type: "ping" }
   | { type: "subscribe"; token: string; clientId: string }
-  | { type: "prompt"; content: string; attachments?: Attachment[] }
+  | {
+      type: "prompt";
+      content: string;
+      model?: string;
+      reasoningEffort?: string;
+      attachments?: Attachment[];
+    }
   | { type: "stop" }
   | { type: "typing" }
   | { type: "presence"; status: "active" | "idle"; cursor?: { line: number; file: string } };
@@ -177,6 +183,9 @@ export interface SessionState {
   sandboxStatus: SandboxStatus;
   messageCount: number;
   createdAt: number;
+  model?: string;
+  reasoningEffort?: string;
+  isProcessing?: boolean;
 }
 
 // Participant presence info
@@ -216,6 +225,8 @@ export interface CreateSessionRequest {
   repoOwner: string;
   repoName: string;
   title?: string;
+  model?: string;
+  reasoningEffort?: string;
 }
 
 export interface CreateSessionResponse {

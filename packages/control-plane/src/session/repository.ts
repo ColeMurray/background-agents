@@ -57,6 +57,7 @@ export interface UpsertSessionData {
   repoName: string;
   repoId?: number | null;
   model: string;
+  reasoningEffort?: string | null;
   status: SessionStatus;
   createdAt: number;
   updatedAt: number;
@@ -111,6 +112,7 @@ export interface CreateMessageData {
   content: string;
   source: MessageSource;
   model?: string | null;
+  reasoningEffort?: string | null;
   attachments?: string | null;
   callbackContext?: string | null;
   status: MessageStatus;
@@ -209,8 +211,8 @@ export class SessionRepository {
 
   upsertSession(data: UpsertSessionData): void {
     this.sql.exec(
-      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, model, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, model, reasoning_effort, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.sessionName,
       data.title,
@@ -218,6 +220,7 @@ export class SessionRepository {
       data.repoName,
       data.repoId ?? null,
       data.model,
+      data.reasoningEffort ?? null,
       data.status,
       data.createdAt,
       data.updatedAt
@@ -490,13 +493,14 @@ export class SessionRepository {
 
   createMessage(data: CreateMessageData): void {
     this.sql.exec(
-      `INSERT INTO messages (id, author_id, content, source, model, attachments, callback_context, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO messages (id, author_id, content, source, model, reasoning_effort, attachments, callback_context, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.authorId,
       data.content,
       data.source,
       data.model ?? null,
+      data.reasoningEffort ?? null,
       data.attachments ?? null,
       data.callbackContext ?? null,
       data.status,

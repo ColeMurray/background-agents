@@ -8,6 +8,7 @@ import type { Artifact } from "@/types/session";
 interface MetadataSectionProps {
   createdAt: number;
   model?: string;
+  reasoningEffort?: string;
   branchName?: string;
   repoOwner?: string;
   repoName?: string;
@@ -17,6 +18,7 @@ interface MetadataSectionProps {
 export function MetadataSection({
   createdAt,
   model,
+  reasoningEffort,
   branchName,
   repoOwner,
   repoName,
@@ -65,7 +67,10 @@ export function MetadataSection({
       {model && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <SparkleIcon className="w-4 h-4" />
-          <span>{formatModelName(model)}</span>
+          <span>
+            {formatModelName(model)}
+            {reasoningEffort && <span className="capitalize"> · {reasoningEffort}</span>}
+          </span>
         </div>
       )}
 
