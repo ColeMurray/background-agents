@@ -872,19 +872,11 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     // Validate per-message reasoning effort if provided
-    let messageReasoningEffort: string | null = null;
-    if (data.reasoningEffort) {
-      // Validate against the effective model (per-message override or session default)
-      const effectiveModel = messageModel || this.getSession()?.model || DEFAULT_MODEL;
-      if (isValidReasoningEffort(effectiveModel, data.reasoningEffort)) {
-        messageReasoningEffort = data.reasoningEffort;
-      } else {
-        this.log.warn("Invalid reasoning effort for model, ignoring", {
-          model: effectiveModel,
-          reasoning_effort: data.reasoningEffort,
-        });
-      }
-    }
+    const effectiveModelForEffort = messageModel || this.getSession()?.model || DEFAULT_MODEL;
+    const messageReasoningEffort = this.validateReasoningEffort(
+      effectiveModelForEffort,
+      data.reasoningEffort
+    );
 
     // Insert message with optional model and reasoning effort overrides
     this.repository.createMessage({
@@ -911,6 +903,7 @@ export class SessionDO extends DurableObject<Env> {
       author_id: participant.id,
       user_id: client.userId,
       model: messageModel,
+      reasoning_effort: messageReasoningEffort,
       content_length: data.content.length,
       has_attachments: !!data.attachments?.length,
       attachments_count: data.attachments?.length ?? 0,
@@ -1289,10 +1282,9 @@ export class SessionDO extends DurableObject<Env> {
 
     // Resolve reasoning effort: per-message > session default > model default
     const resolvedEffort =
-      message.reasoning_effort ||
-      session?.reasoning_effort ||
-      getDefaultReasoningEffort(resolvedModel) ||
-      undefined;
+      message.reasoning_effort ??
+      session?.reasoning_effort ??
+      getDefaultReasoningEffort(resolvedModel);
 
     const command: SandboxCommand = {
       type: "prompt",
@@ -1415,6 +1407,20 @@ export class SessionDO extends DurableObject<Env> {
       status: c.status,
       lastSeen: c.lastSeen,
     }));
+  }
+
+  /**
+   * Validate reasoning effort against a model's allowed values.
+   * Returns the validated effort string or null if invalid/absent.
+   */
+  private validateReasoningEffort(model: string, effort: string | undefined): string | null {
+    if (!effort) return null;
+    if (isValidReasoningEffort(model, effort)) return effort;
+    this.log.warn("Invalid reasoning effort for model, ignoring", {
+      model,
+      reasoning_effort: effort,
+    });
+    return null;
   }
 
   /**
@@ -1954,17 +1960,7 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     // Validate reasoning effort if provided
-    let reasoningEffort: string | null = null;
-    if (body.reasoningEffort) {
-      if (isValidReasoningEffort(model, body.reasoningEffort)) {
-        reasoningEffort = body.reasoningEffort;
-      } else {
-        this.log.warn("Invalid reasoning effort for model, ignoring", {
-          model,
-          reasoning_effort: body.reasoningEffort,
-        });
-      }
-    }
+    const reasoningEffort = this.validateReasoningEffort(model, body.reasoningEffort);
 
     // Create session (store both internal ID and external name)
     this.repository.upsertSession({
@@ -2031,6 +2027,7 @@ export class SessionDO extends DurableObject<Env> {
       opencodeSessionId: session.opencode_session_id,
       status: session.status,
       model: session.model,
+      reasoningEffort: session.reasoning_effort ?? undefined,
       createdAt: session.created_at,
       updatedAt: session.updated_at,
       sandbox: sandbox
@@ -2083,18 +2080,11 @@ export class SessionDO extends DurableObject<Env> {
       }
 
       // Validate per-message reasoning effort
-      let messageReasoningEffort: string | null = null;
-      if (body.reasoningEffort) {
-        const effectiveModel = messageModel || this.getSession()?.model || DEFAULT_MODEL;
-        if (isValidReasoningEffort(effectiveModel, body.reasoningEffort)) {
-          messageReasoningEffort = body.reasoningEffort;
-        } else {
-          this.log.warn("Invalid reasoning effort in enqueue, ignoring", {
-            model: effectiveModel,
-            reasoning_effort: body.reasoningEffort,
-          });
-        }
-      }
+      const effectiveModelForEffort = messageModel || this.getSession()?.model || DEFAULT_MODEL;
+      const messageReasoningEffort = this.validateReasoningEffort(
+        effectiveModelForEffort,
+        body.reasoningEffort
+      );
 
       this.repository.createMessage({
         id: messageId,

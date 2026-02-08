@@ -589,7 +589,9 @@ class AgentBridge:
 
         return None
 
-    # Anthropic extended thinking budget tokens by reasoning effort level
+    # Anthropic extended thinking budget tokens by reasoning effort level.
+    # "max" uses 31,999 — the API maximum for streaming responses.
+    # "high" uses 16,000 — a balanced level for faster responses with good reasoning.
     ANTHROPIC_THINKING_BUDGETS: ClassVar[dict[str, int]] = {
         "high": 16_000,
         "max": 31_999,
