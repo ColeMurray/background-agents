@@ -1,4 +1,8 @@
-import { MODEL_REASONING_CONFIG, type ValidModel } from "@open-inspect/shared";
+import {
+  MODEL_REASONING_CONFIG,
+  type ValidModel,
+  type ReasoningEffort,
+} from "@open-inspect/shared";
 
 interface ReasoningEffortPillsProps {
   selectedModel: string;
@@ -16,7 +20,10 @@ export function ReasoningEffortPills({
   const config = MODEL_REASONING_CONFIG[selectedModel as ValidModel];
   if (!config) return null;
 
-  const currentIndex = reasoningEffort ? config.efforts.indexOf(reasoningEffort as never) : -1;
+  // If effort is not in the list (e.g. model just changed), -1 wraps to index 0 on cycle
+  const currentIndex = reasoningEffort
+    ? config.efforts.indexOf(reasoningEffort as ReasoningEffort)
+    : -1;
   const handleCycle = () => {
     const nextIndex = (currentIndex + 1) % config.efforts.length;
     onSelect(config.efforts[nextIndex]);

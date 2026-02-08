@@ -35,9 +35,7 @@ export default function Home() {
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const sessionCreationPromise = useRef<Promise<string | null> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const pendingConfigRef = useRef<{ repo: string; model: string; reasoningEffort?: string } | null>(
-    null
-  );
+  const pendingConfigRef = useRef<{ repo: string; model: string } | null>(null);
 
   const fetchRepos = useCallback(async () => {
     setLoadingRepos(true);
@@ -73,7 +71,7 @@ export default function Home() {
     setIsCreatingSession(false);
     sessionCreationPromise.current = null;
     pendingConfigRef.current = null;
-  }, [selectedRepo, selectedModel, reasoningEffort]);
+  }, [selectedRepo, selectedModel]);
 
   const createSessionForWarming = useCallback(async () => {
     if (pendingSessionId) return pendingSessionId;
@@ -82,7 +80,7 @@ export default function Home() {
 
     setIsCreatingSession(true);
     const [owner, name] = selectedRepo.split("/");
-    const currentConfig = { repo: selectedRepo, model: selectedModel, reasoningEffort };
+    const currentConfig = { repo: selectedRepo, model: selectedModel };
     pendingConfigRef.current = currentConfig;
 
     const abortController = new AbortController();
@@ -97,7 +95,6 @@ export default function Home() {
             repoOwner: owner,
             repoName: name,
             model: selectedModel,
-            reasoningEffort,
           }),
           signal: abortController.signal,
         });
@@ -106,8 +103,7 @@ export default function Home() {
           const data = await res.json();
           if (
             pendingConfigRef.current?.repo === currentConfig.repo &&
-            pendingConfigRef.current?.model === currentConfig.model &&
-            pendingConfigRef.current?.reasoningEffort === currentConfig.reasoningEffort
+            pendingConfigRef.current?.model === currentConfig.model
           ) {
             setPendingSessionId(data.sessionId);
             return data.sessionId as string;
@@ -132,7 +128,7 @@ export default function Home() {
 
     sessionCreationPromise.current = promise;
     return promise;
-  }, [selectedRepo, selectedModel, reasoningEffort, pendingSessionId]);
+  }, [selectedRepo, selectedModel, pendingSessionId]);
 
   const handleModelChange = useCallback((model: string) => {
     setSelectedModel(model);
