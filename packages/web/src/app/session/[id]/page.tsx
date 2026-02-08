@@ -12,10 +12,10 @@ import { ActionBar } from "@/components/action-bar";
 import { formatModelNameLower } from "@/lib/format";
 import {
   MODEL_OPTIONS,
-  MODEL_REASONING_CONFIG,
   getDefaultReasoningEffort,
-  type ValidModel,
+  type ModelDisplayInfo,
 } from "@open-inspect/shared";
+import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 import type { SandboxEvent } from "@/lib/tool-formatters";
 
 // Event grouping types
@@ -67,13 +67,6 @@ function groupEvents(events: SandboxEvent[]): EventGroup[] {
   return groups;
 }
 
-// Model option type for dropdown buttons
-interface ModelOption {
-  id: string;
-  name: string;
-  description: string;
-}
-
 function CheckIcon() {
   return (
     <svg className="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -87,7 +80,7 @@ function ModelOptionButton({
   isSelected,
   onSelect,
 }: {
-  model: ModelOption;
+  model: ModelDisplayInfo;
   isSelected: boolean;
   onSelect: () => void;
 }) {
@@ -162,7 +155,7 @@ export default function SessionPage() {
   const [prompt, setPrompt] = useState("");
   const [selectedModel, setSelectedModel] = useState("claude-haiku-4-5");
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
-    getDefaultReasoningEffort("claude-haiku-4-5") ?? undefined
+    getDefaultReasoningEffort("claude-haiku-4-5")
   );
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -170,12 +163,17 @@ export default function SessionPage() {
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
 
+  const handleModelChange = useCallback((model: string) => {
+    setSelectedModel(model);
+    setReasoningEffort(getDefaultReasoningEffort(model));
+  }, []);
+
   // Sync selectedModel and reasoningEffort with session state when it loads
   useEffect(() => {
     if (sessionState?.model) {
       setSelectedModel(sessionState.model);
       setReasoningEffort(
-        sessionState.reasoningEffort ?? getDefaultReasoningEffort(sessionState.model) ?? undefined
+        sessionState.reasoningEffort ?? getDefaultReasoningEffort(sessionState.model)
       );
     }
   }, [sessionState?.model, sessionState?.reasoningEffort]);
@@ -258,10 +256,7 @@ export default function SessionPage() {
         handleInputChange={handleInputChange}
         handleKeyDown={handleKeyDown}
         setModelDropdownOpen={setModelDropdownOpen}
-        setSelectedModel={(model: string) => {
-          setSelectedModel(model);
-          setReasoningEffort(getDefaultReasoningEffort(model) ?? undefined);
-        }}
+        setSelectedModel={handleModelChange}
         setReasoningEffort={setReasoningEffort}
         stopExecution={stopExecution}
         handleArchive={handleArchive}
@@ -627,25 +622,12 @@ function SessionContent({
                 </div>
 
                 {/* Reasoning effort pills */}
-                {MODEL_REASONING_CONFIG[selectedModel as ValidModel] && (
-                  <div className="flex items-center gap-1">
-                    {MODEL_REASONING_CONFIG[selectedModel as ValidModel]!.efforts.map((effort) => (
-                      <button
-                        key={effort}
-                        type="button"
-                        onClick={() => setReasoningEffort(effort)}
-                        disabled={isProcessing}
-                        className={`px-2 py-0.5 text-xs transition ${
-                          reasoningEffort === effort
-                            ? "bg-accent text-accent-foreground"
-                            : "text-muted-foreground hover:bg-muted"
-                        } disabled:opacity-50 disabled:cursor-not-allowed`}
-                      >
-                        {effort}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                <ReasoningEffortPills
+                  selectedModel={selectedModel}
+                  reasoningEffort={reasoningEffort}
+                  onSelect={setReasoningEffort}
+                  disabled={isProcessing}
+                />
               </div>
 
               {/* Right side - Agent label */}

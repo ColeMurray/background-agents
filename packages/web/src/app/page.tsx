@@ -6,12 +6,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { SidebarLayout, useSidebarContext } from "@/components/sidebar-layout";
 import { formatModelNameLower } from "@/lib/format";
-import {
-  MODEL_OPTIONS,
-  MODEL_REASONING_CONFIG,
-  getDefaultReasoningEffort,
-  type ValidModel,
-} from "@open-inspect/shared";
+import { MODEL_OPTIONS, getDefaultReasoningEffort } from "@open-inspect/shared";
+import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 
 interface Repo {
   id: number;
@@ -30,7 +26,7 @@ export default function Home() {
   const [selectedRepo, setSelectedRepo] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState("claude-haiku-4-5");
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
-    getDefaultReasoningEffort("claude-haiku-4-5") ?? undefined
+    getDefaultReasoningEffort("claude-haiku-4-5")
   );
   const [prompt, setPrompt] = useState("");
   const [creating, setCreating] = useState(false);
@@ -138,6 +134,11 @@ export default function Home() {
     return promise;
   }, [selectedRepo, selectedModel, reasoningEffort, pendingSessionId]);
 
+  const handleModelChange = useCallback((model: string) => {
+    setSelectedModel(model);
+    setReasoningEffort(getDefaultReasoningEffort(model));
+  }, []);
+
   const handlePromptChange = (value: string) => {
     const wasEmpty = prompt.length === 0;
     setPrompt(value);
@@ -209,10 +210,7 @@ export default function Home() {
         selectedRepo={selectedRepo}
         setSelectedRepo={setSelectedRepo}
         selectedModel={selectedModel}
-        setSelectedModel={(model: string) => {
-          setSelectedModel(model);
-          setReasoningEffort(getDefaultReasoningEffort(model) ?? undefined);
-        }}
+        setSelectedModel={handleModelChange}
         reasoningEffort={reasoningEffort}
         setReasoningEffort={setReasoningEffort}
         prompt={prompt}
@@ -476,27 +474,12 @@ function HomeContent({
                     </div>
 
                     {/* Reasoning effort pills */}
-                    {MODEL_REASONING_CONFIG[selectedModel as ValidModel] && (
-                      <div className="flex items-center gap-1">
-                        {MODEL_REASONING_CONFIG[selectedModel as ValidModel]!.efforts.map(
-                          (effort) => (
-                            <button
-                              key={effort}
-                              type="button"
-                              onClick={() => setReasoningEffort(effort)}
-                              disabled={creating}
-                              className={`px-2 py-0.5 text-xs transition ${
-                                reasoningEffort === effort
-                                  ? "bg-accent text-accent-foreground"
-                                  : "text-muted-foreground hover:bg-muted"
-                              } disabled:opacity-50 disabled:cursor-not-allowed`}
-                            >
-                              {effort}
-                            </button>
-                          )
-                        )}
-                      </div>
-                    )}
+                    <ReasoningEffortPills
+                      selectedModel={selectedModel}
+                      reasoningEffort={reasoningEffort}
+                      onSelect={setReasoningEffort}
+                      disabled={creating}
+                    />
                   </div>
 
                   {/* Right side - Agent label */}
