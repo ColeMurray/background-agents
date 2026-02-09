@@ -1,15 +1,14 @@
 /**
- * Structured JSON logger for Cloudflare Workers.
+ * Structured JSON logger for Node.js.
  *
- * Outputs flat JSON lines which Cloudflare Workers Logs automatically indexes
- * for querying. Zero external dependencies.
+ * Outputs flat JSON lines suitable for structured log aggregation.
+ * Zero external dependencies.
  *
- * - Uses console.warn/console.error for severity semantics in tooling/alerts,
- *   while keeping the JSON `level` field for programmatic filtering.
- * - JSON.stringify is wrapped in try/catch so a logging failure never crashes
- *   a request or Durable Object event.
+ * - Uses console.warn/console.error for severity semantics.
  * - Reserved keys (`level`, `component`, `msg`, `ts`) cannot be overwritten
- *   by context or data — they are always set by the logger itself.
+ *   by context or data -- they are always set by the logger itself.
+ * - JSON.stringify is wrapped in try/catch so a logging failure never crashes
+ *   the process.
  *
  * Usage:
  *   const log = createLogger("worker");
@@ -21,7 +20,7 @@
 const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 } as const;
 type LogLevel = keyof typeof LEVELS;
 
-/** Keys that the logger owns — context and data cannot overwrite these. */
+/** Keys that the logger owns -- context and data cannot overwrite these. */
 const RESERVED_KEYS = new Set(["level", "component", "msg", "ts", "service", "event"]);
 
 /** Map log level to the appropriate console method for severity semantics. */
@@ -54,7 +53,7 @@ function stripReserved(obj: Record<string, unknown>): Record<string, unknown> {
 export function createLogger(
   component: string,
   context: Record<string, unknown> = {},
-  minLevel: LogLevel = "info"
+  minLevel: LogLevel = "info",
 ): Logger {
   // Pre-strip reserved keys from the base context once at creation time.
   const safeContext = stripReserved(context);
@@ -84,11 +83,10 @@ export function createLogger(
           ...safeContext,
           ...extra,
           ts: Date.now(),
-        })
+        }),
       );
     } catch {
       // Fallback for bigint, circular references, or other stringify failures.
-      // Use a guaranteed-serializable line so we never lose the event entirely.
       console.error(
         JSON.stringify({
           level: "error",
@@ -98,7 +96,7 @@ export function createLogger(
           original_msg: msg,
           original_level: level,
           ts: Date.now(),
-        })
+        }),
       );
     }
   };
@@ -115,7 +113,6 @@ export function createLogger(
 
 /**
  * Parse a LOG_LEVEL env var string into a valid LogLevel, defaulting to "info".
- * Uses an explicit allowlist to avoid matching Object prototype keys.
  */
 export function parseLogLevel(value?: string): LogLevel {
   if (value && Object.prototype.hasOwnProperty.call(LEVELS, value)) return value as LogLevel;
@@ -124,7 +121,6 @@ export function parseLogLevel(value?: string): LogLevel {
 
 /**
  * Correlation context propagated through request headers.
- * Used to trace a request across service boundaries.
  */
 export interface CorrelationContext {
   /** End-to-end trace ID (UUID), propagated via x-trace-id header */

@@ -1,29 +1,24 @@
 /**
  * Token encryption using AES-256-GCM.
  *
- * GitHub OAuth tokens are encrypted at rest using the Web Crypto API
- * available in Cloudflare Workers.
+ * Ported from WebCrypto API to Node.js crypto module.
  *
  * Key management:
- * - TOKEN_ENCRYPTION_KEY stored as Cloudflare Worker secret
+ * - TOKEN_ENCRYPTION_KEY stored as environment variable
  * - Generate with: openssl rand -base64 32
- * - Set via Terraform (see terraform.tfvars)
  */
 
-const ALGORITHM = "AES-GCM";
-const KEY_LENGTH = 256;
+import crypto from "node:crypto";
+
+const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 12; // 96-bit IV for GCM
+const AUTH_TAG_LENGTH = 16; // 128-bit auth tag
 
 /**
  * Import the encryption key from base64-encoded secret.
  */
-async function getEncryptionKey(keyBase64: string): Promise<CryptoKey> {
-  const keyData = Uint8Array.from(atob(keyBase64), (c) => c.charCodeAt(0));
-
-  return crypto.subtle.importKey("raw", keyData, { name: ALGORITHM, length: KEY_LENGTH }, false, [
-    "encrypt",
-    "decrypt",
-  ]);
+function getEncryptionKeyBuffer(keyBase64: string): Buffer {
+  return Buffer.from(keyBase64, "base64");
 }
 
 /**
@@ -31,40 +26,41 @@ async function getEncryptionKey(keyBase64: string): Promise<CryptoKey> {
  *
  * @param token - Plain text token to encrypt
  * @param encryptionKey - Base64-encoded encryption key
- * @returns Base64-encoded IV + ciphertext
+ * @returns Base64-encoded IV + ciphertext + authTag
  */
 export async function encryptToken(token: string, encryptionKey: string): Promise<string> {
-  const key = await getEncryptionKey(encryptionKey);
-  const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
-  const encoded = new TextEncoder().encode(token);
+  const key = getEncryptionKeyBuffer(encryptionKey);
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv(ALGORITHM, key, iv, { authTagLength: AUTH_TAG_LENGTH });
 
-  const ciphertext = await crypto.subtle.encrypt({ name: ALGORITHM, iv }, key, encoded);
+  const encrypted = Buffer.concat([cipher.update(token, "utf8"), cipher.final()]);
+  const authTag = cipher.getAuthTag();
 
-  // Combine IV + ciphertext
-  const combined = new Uint8Array(iv.length + ciphertext.byteLength);
-  combined.set(iv);
-  combined.set(new Uint8Array(ciphertext), iv.length);
-
-  return btoa(String.fromCharCode(...combined));
+  // Combine IV + ciphertext + authTag
+  const combined = Buffer.concat([iv, encrypted, authTag]);
+  return combined.toString("base64");
 }
 
 /**
  * Decrypt a token using AES-256-GCM.
  *
- * @param encrypted - Base64-encoded IV + ciphertext
+ * @param encrypted - Base64-encoded IV + ciphertext + authTag
  * @param encryptionKey - Base64-encoded encryption key
  * @returns Decrypted plain text token
  */
 export async function decryptToken(encrypted: string, encryptionKey: string): Promise<string> {
-  const key = await getEncryptionKey(encryptionKey);
-  const combined = Uint8Array.from(atob(encrypted), (c) => c.charCodeAt(0));
+  const key = getEncryptionKeyBuffer(encryptionKey);
+  const combined = Buffer.from(encrypted, "base64");
 
-  const iv = combined.slice(0, IV_LENGTH);
-  const ciphertext = combined.slice(IV_LENGTH);
+  const iv = combined.subarray(0, IV_LENGTH);
+  const authTag = combined.subarray(combined.length - AUTH_TAG_LENGTH);
+  const ciphertext = combined.subarray(IV_LENGTH, combined.length - AUTH_TAG_LENGTH);
 
-  const decrypted = await crypto.subtle.decrypt({ name: ALGORITHM, iv }, key, ciphertext);
+  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, { authTagLength: AUTH_TAG_LENGTH });
+  decipher.setAuthTag(authTag);
 
-  return new TextDecoder().decode(decrypted);
+  const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  return decrypted.toString("utf8");
 }
 
 /**
@@ -73,21 +69,17 @@ export async function decryptToken(encrypted: string, encryptionKey: string): Pr
  * @returns Base64-encoded 256-bit key
  */
 export function generateEncryptionKey(): string {
-  const key = crypto.getRandomValues(new Uint8Array(32));
-  return btoa(String.fromCharCode(...key));
+  return crypto.randomBytes(32).toString("base64");
 }
 
 /**
  * Generate a random token/ID.
  *
- * @param length - Length in bytes (default 32)
+ * @param length - Length in bytes (default 16)
  * @returns Hex-encoded random string
  */
 export function generateId(length: number = 16): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(length));
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  return crypto.randomBytes(length).toString("hex");
 }
 
 /**
@@ -100,10 +92,7 @@ export function generateId(length: number = 16): string {
  * @returns Hex-encoded SHA-256 hash
  */
 export async function hashToken(token: string): Promise<string> {
-  const encoded = new TextEncoder().encode(token);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
-  const hashArray = new Uint8Array(hashBuffer);
-  return Array.from(hashArray)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const hash = crypto.createHash("sha256");
+  hash.update(token);
+  return hash.digest("hex");
 }

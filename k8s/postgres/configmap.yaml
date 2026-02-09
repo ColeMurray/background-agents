@@ -1,0 +1,53 @@
+# PostgreSQL server configuration overrides.
+# Tuned for the Rivet Engine workload: moderate connection count,
+# WAL-based replication readiness, and reasonable memory allocation.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: open-inspect
+data:
+  # Custom postgresql.conf settings appended to the default config
+  postgresql.conf: |
+    # Connection tuning
+    max_connections = 200
+    shared_buffers = 256MB
+    effective_cache_size = 768MB
+    work_mem = 4MB
+    maintenance_work_mem = 64MB
+
+    # WAL configuration
+    wal_level = replica
+    max_wal_senders = 3
+    wal_keep_size = 256MB
+
+    # Checkpoints
+    checkpoint_completion_target = 0.9
+    max_wal_size = 1GB
+    min_wal_size = 80MB
+
+    # Logging
+    log_timezone = 'UTC'
+    log_statement = 'ddl'
+    log_min_duration_statement = 1000
+
+    # Locale
+    timezone = 'UTC'
+
+  # Initialization script: create the rivet database if it does not exist
+  init-db.sh: |
+    #!/bin/bash
+    set -e
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+      -- Create rivet database for the engine if it does not already exist
+      SELECT 'CREATE DATABASE rivet'
+        WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'rivet')\gexec
+
+      -- Create open_inspect database for the control plane
+      SELECT 'CREATE DATABASE open_inspect'
+        WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'open_inspect')\gexec
+    EOSQL

@@ -1,0 +1,89 @@
+# NATS StatefulSet for high-availability message bus.
+# 3 replicas form a cluster with JetStream enabled for durable messaging.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nats
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: nats
+    app.kubernetes.io/component: messaging
+    app.kubernetes.io/part-of: open-inspect
+spec:
+  serviceName: nats-headless
+  replicas: 3
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nats
+      app.kubernetes.io/component: messaging
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nats
+        app.kubernetes.io/component: messaging
+        app.kubernetes.io/part-of: open-inspect
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: nats
+          image: nats:2.10-alpine
+          args:
+            - "-c"
+            - "/etc/nats/nats.conf"
+          ports:
+            - name: client
+              containerPort: 4222
+              protocol: TCP
+            - name: cluster
+              containerPort: 6222
+              protocol: TCP
+            - name: monitor
+              containerPort: 8222
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nats
+              readOnly: true
+            - name: data
+              mountPath: /data
+          # Liveness: restart if the monitoring endpoint stops responding
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: monitor
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Readiness: only accept client connections once healthy
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: monitor
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 2
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: config
+          configMap:
+            name: nats-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: nats
+          app.kubernetes.io/component: messaging
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi

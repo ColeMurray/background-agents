@@ -1,7 +1,7 @@
 /**
  * GitHub App authentication for generating installation tokens.
  *
- * Uses Web Crypto API for RSA-SHA256 signing (available in Cloudflare Workers).
+ * Uses Node.js crypto for RSA-SHA256 signing.
  *
  * Token flow:
  * 1. Generate JWT signed with App's private key
@@ -9,6 +9,7 @@
  * 3. Token valid for 1 hour
  */
 
+import crypto from "node:crypto";
 import type { InstallationRepository } from "@open-inspect/shared";
 
 /** Timeout for individual GitHub API requests (ms). */
@@ -18,7 +19,7 @@ export const GITHUB_FETCH_TIMEOUT_MS = 60_000;
 export function fetchWithTimeout(
   url: string,
   init: RequestInit,
-  timeoutMs = GITHUB_FETCH_TIMEOUT_MS
+  timeoutMs = GITHUB_FETCH_TIMEOUT_MS,
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -45,7 +46,7 @@ export interface ListReposTiming {
  */
 export interface GitHubAppConfig {
   appId: string;
-  privateKey: string; // PEM format
+  privateKey: string; // PEM format (PKCS#8)
   installationId: string;
 }
 
@@ -60,67 +61,15 @@ interface InstallationTokenResponse {
 }
 
 /**
- * Base64URL encode a Uint8Array or string.
+ * Base64URL encode a Buffer or string.
  */
-function base64UrlEncode(input: Uint8Array | string): string {
-  const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;
-
-  const base64 = btoa(String.fromCharCode(...bytes));
-  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+function base64UrlEncode(input: Buffer | string): string {
+  const buf = typeof input === "string" ? Buffer.from(input, "utf8") : input;
+  return buf.toString("base64url");
 }
 
 /**
- * Parse PEM-encoded private key to raw bytes.
- */
-function parsePemPrivateKey(pem: string): Uint8Array {
-  // Remove PEM header/footer and newlines
-  const pemContents = pem
-    .replace(/-----BEGIN RSA PRIVATE KEY-----/g, "")
-    .replace(/-----END RSA PRIVATE KEY-----/g, "")
-    .replace(/-----BEGIN PRIVATE KEY-----/g, "")
-    .replace(/-----END PRIVATE KEY-----/g, "")
-    .replace(/\s/g, "");
-
-  // Decode base64
-  const binaryString = atob(pemContents);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return bytes;
-}
-
-/**
- * Import RSA private key for signing.
- */
-async function importPrivateKey(pem: string): Promise<CryptoKey> {
-  const keyData = parsePemPrivateKey(pem);
-
-  // Try PKCS#8 format first (BEGIN PRIVATE KEY)
-  try {
-    return await crypto.subtle.importKey(
-      "pkcs8",
-      keyData,
-      {
-        name: "RSASSA-PKCS1-v1_5",
-        hash: "SHA-256",
-      },
-      false,
-      ["sign"]
-    );
-  } catch {
-    // Fall back to trying as PKCS#1 (BEGIN RSA PRIVATE KEY)
-    // Cloudflare Workers may not support PKCS#1 directly,
-    // so we may need to convert or use a different approach
-    throw new Error(
-      "Unable to import private key. Ensure it is in PKCS#8 format. " +
-        "Convert with: openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in key.pem -out key-pkcs8.pem"
-    );
-  }
-}
-
-/**
- * Generate a JWT for GitHub App authentication.
+ * Generate a JWT for GitHub App authentication using Node.js crypto.
  *
  * @param appId - GitHub App ID
  * @param privateKey - PEM-encoded private key
@@ -129,34 +78,28 @@ async function importPrivateKey(pem: string): Promise<CryptoKey> {
 export async function generateAppJwt(appId: string, privateKey: string): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
 
-  // JWT header
   const header = {
     alg: "RS256",
     typ: "JWT",
   };
 
-  // JWT payload
   const payload = {
     iat: now - 60, // Issued 60 seconds ago (clock skew tolerance)
     exp: now + 600, // Expires in 10 minutes
     iss: appId,
   };
 
-  // Encode header and payload
   const encodedHeader = base64UrlEncode(JSON.stringify(header));
   const encodedPayload = base64UrlEncode(JSON.stringify(payload));
   const signingInput = `${encodedHeader}.${encodedPayload}`;
 
-  // Sign with RSA-SHA256
-  const key = await importPrivateKey(privateKey);
-  const signature = await crypto.subtle.sign(
-    "RSASSA-PKCS1-v1_5",
-    key,
-    new TextEncoder().encode(signingInput)
-  );
+  // Sign with RSA-SHA256 using Node.js crypto
+  const sign = crypto.createSign("RSA-SHA256");
+  sign.update(signingInput);
+  sign.end();
+  const signature = sign.sign(privateKey);
 
-  const encodedSignature = base64UrlEncode(new Uint8Array(signature));
-
+  const encodedSignature = signature.toString("base64url");
   return `${signingInput}.${encodedSignature}`;
 }
 
@@ -191,8 +134,6 @@ export async function getInstallationToken(jwt: string, installationId: string):
 
 /**
  * Generate a fresh GitHub App installation token.
- *
- * This is the main entry point for token generation.
  *
  * @param config - GitHub App configuration
  * @returns Installation access token (valid for 1 hour)
@@ -229,12 +170,9 @@ interface ListInstallationReposResponse {
  *
  * Fetches page 1 sequentially to learn total_count, then fetches any
  * remaining pages concurrently.
- *
- * @param config - GitHub App configuration
- * @returns repos and per-page timing breakdown for diagnostics
  */
 export async function listInstallationRepositories(
-  config: GitHubAppConfig
+  config: GitHubAppConfig,
 ): Promise<{ repos: InstallationRepository[]; timing: ListReposTiming }> {
   const tokenStart = performance.now();
   const token = await generateInstallationToken(config);
@@ -249,7 +187,7 @@ export async function listInstallationRepositories(
   };
 
   const fetchPage = async (
-    page: number
+    page: number,
   ): Promise<{ data: ListInstallationReposResponse; timing: GitHubPageTiming }> => {
     const url = `https://api.github.com/installation/repositories?per_page=${perPage}&page=${page}`;
     const pageStart = performance.now();
@@ -259,7 +197,7 @@ export async function listInstallationRepositories(
     if (!response.ok) {
       const error = await response.text();
       throw new Error(
-        `Failed to list installation repositories (page ${page}): ${response.status} ${error}`
+        `Failed to list installation repositories (page ${page}): ${response.status} ${error}`,
       );
     }
 
@@ -317,7 +255,7 @@ export async function listInstallationRepositories(
 export async function getInstallationRepository(
   config: GitHubAppConfig,
   owner: string,
-  repo: string
+  repo: string,
 ): Promise<InstallationRepository | null> {
   const token = await generateInstallationToken(config);
 
@@ -364,28 +302,28 @@ export async function getInstallationRepository(
  * Check if GitHub App credentials are configured.
  */
 export function isGitHubAppConfigured(env: {
-  GITHUB_APP_ID?: string;
-  GITHUB_APP_PRIVATE_KEY?: string;
-  GITHUB_APP_INSTALLATION_ID?: string;
+  githubAppId?: string;
+  githubAppPrivateKey?: string;
+  githubAppInstallationId?: string;
 }): boolean {
-  return !!(env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY && env.GITHUB_APP_INSTALLATION_ID);
+  return !!(env.githubAppId && env.githubAppPrivateKey && env.githubAppInstallationId);
 }
 
 /**
- * Get GitHub App config from environment.
+ * Get GitHub App config from environment config.
  */
 export function getGitHubAppConfig(env: {
-  GITHUB_APP_ID?: string;
-  GITHUB_APP_PRIVATE_KEY?: string;
-  GITHUB_APP_INSTALLATION_ID?: string;
+  githubAppId?: string;
+  githubAppPrivateKey?: string;
+  githubAppInstallationId?: string;
 }): GitHubAppConfig | null {
   if (!isGitHubAppConfigured(env)) {
     return null;
   }
 
   return {
-    appId: env.GITHUB_APP_ID!,
-    privateKey: env.GITHUB_APP_PRIVATE_KEY!,
-    installationId: env.GITHUB_APP_INSTALLATION_ID!,
+    appId: env.githubAppId!,
+    privateKey: env.githubAppPrivateKey!,
+    installationId: env.githubAppInstallationId!,
   };
 }

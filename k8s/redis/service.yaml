@@ -1,0 +1,22 @@
+# ClusterIP service for Redis.
+# Provides a stable DNS name (redis.open-inspect.svc.cluster.local)
+# for the control plane and any other components that need cache access.
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/component: cache
+    app.kubernetes.io/part-of: open-inspect
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/component: cache
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+      protocol: TCP

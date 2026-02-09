@@ -1,0 +1,29 @@
+# Web frontend configuration.
+# Non-secret environment variables for the Next.js web application.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-config
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: web
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: open-inspect
+data:
+  # Server-side control plane URL (internal cluster DNS)
+  CONTROL_PLANE_URL: "http://control-plane:3001"
+
+  # Client-side WebSocket URL -- must be reachable from the browser.
+  # Update this to your external domain in production.
+  NEXT_PUBLIC_WS_URL: "ws://control-plane:3001"
+
+  # NextAuth.js configuration.
+  # NEXTAUTH_URL must match your external-facing domain.
+  NEXTAUTH_URL: "https://open-inspect.example.com"
+
+  # NextAuth secret -- move to a Secret resource in production.
+  # Generate with: openssl rand -hex 32
+  NEXTAUTH_SECRET: "CHANGEME"
+
+  # Node environment
+  NODE_ENV: "production"

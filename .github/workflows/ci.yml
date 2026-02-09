@@ -60,7 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: packages/modal-infra
+        working-directory: packages/sandbox-runtime
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -87,7 +87,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: packages/modal-infra
+        working-directory: packages/sandbox-runtime
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -105,7 +105,7 @@ jobs:
 
       - name: Run MyPy
         run: mypy src/
-        continue-on-error: true # Allow failures initially as types are added
+        continue-on-error: true
 
   test-typescript:
     name: Test (TypeScript)
@@ -130,12 +130,6 @@ jobs:
       - name: Run control-plane tests
         run: npm test -w @open-inspect/control-plane
 
-      - name: Install workerd runtime dependency
-        run: sudo apt-get update && sudo apt-get install -y libc++1
-
-      - name: Run control-plane integration tests
-        run: npm run test:integration -w @open-inspect/control-plane
-
       - name: Run web tests
         run: npm test -w @open-inspect/web
 
@@ -145,7 +139,7 @@ jobs:
     needs: [lint-python]
     defaults:
       run:
-        working-directory: packages/modal-infra
+        working-directory: packages/sandbox-runtime
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -163,4 +157,4 @@ jobs:
 
       - name: Run tests
         run: pytest tests/ -v
-        continue-on-error: true # Allow failures if tests directory is empty
+        continue-on-error: true

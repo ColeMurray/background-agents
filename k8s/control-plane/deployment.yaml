@@ -1,0 +1,74 @@
+# Control plane deployment.
+# Replaces the Cloudflare Workers-based control plane with a containerized
+# Node.js service. Handles API requests, WebSocket sessions, and sandbox
+# lifecycle management via the Rivet Engine.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: control-plane
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: control-plane
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: open-inspect
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: control-plane
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: control-plane
+        app.kubernetes.io/component: api
+        app.kubernetes.io/part-of: open-inspect
+    spec:
+      # Use the sandbox-manager service account so the control plane can
+      # create/manage sandbox Jobs in the namespace (see sandbox/rbac.yaml).
+      serviceAccountName: sandbox-manager
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: control-plane
+          image: open-inspect-control-plane:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3001
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: control-plane-config
+            - secretRef:
+                name: control-plane-secrets
+          # Health check -- the control plane exposes /health for readiness
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 2
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi

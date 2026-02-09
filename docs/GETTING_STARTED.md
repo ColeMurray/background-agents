@@ -1,6 +1,6 @@
 # Getting Started with Open-Inspect
 
-This guide walks you through deploying your own instance of Open-Inspect using Terraform.
+This guide walks you through deploying your own instance of Open-Inspect on Kubernetes.
 
 > **Important**: This system is designed for **single-tenant deployment only**. All users share the
 > same GitHub App credentials and can access any repository the App is installed on. See the
@@ -10,16 +10,19 @@ This guide walks you through deploying your own instance of Open-Inspect using T
 
 ## Overview
 
-Open-Inspect uses Terraform to automate deployment across three cloud providers:
+Open-Inspect runs on open-source infrastructure deployed to any Kubernetes cluster:
 
-| Provider       | Purpose                          | What Terraform Creates                               |
-| -------------- | -------------------------------- | ---------------------------------------------------- |
-| **Cloudflare** | Control plane, session state     | Workers, KV namespaces, Durable Objects, D1 Database |
-| **Vercel**     | Web application                  | Project, environment variables                       |
-| **Modal**      | Sandbox execution infrastructure | App deployment, secrets, volumes                     |
+| Component        | Technology         | Purpose                                |
+| ---------------- | ------------------ | -------------------------------------- |
+| **Rivet Engine** | Rust on K8s        | Actor orchestration, state persistence |
+| **NATS**         | Message bus        | Inter-service communication            |
+| **PostgreSQL**   | Database           | Session index, repo metadata, secrets  |
+| **Redis**        | Cache              | Repository list caching                |
+| **Control Plane**| Hono + Rivet Actors| HTTP API + session management          |
+| **Web Frontend** | Next.js            | Web client UI                          |
 
-**Your job**: Create accounts, gather credentials, and configure one file (`terraform.tfvars`).
-**Terraform's job**: Create all infrastructure and configure services.
+**Your job**: Set up a K8s cluster, gather credentials, and configure secrets.
+**Kubernetes' job**: Run all infrastructure components.
 
 ---
 
@@ -27,13 +30,8 @@ Open-Inspect uses Terraform to automate deployment across three cloud providers:
 
 ### Required Accounts
 
-Create accounts on these services before continuing:
-
 | Service                                          | Purpose                   |
 | ------------------------------------------------ | ------------------------- |
-| [Cloudflare](https://dash.cloudflare.com)        | Control plane hosting     |
-| [Vercel](https://vercel.com)                     | Web application hosting   |
-| [Modal](https://modal.com)                       | Sandbox infrastructure    |
 | [GitHub](https://github.com/settings/developers) | OAuth + repository access |
 | [Anthropic](https://console.anthropic.com)       | Claude API                |
 | [Slack](https://api.slack.com/apps) _(optional)_ | Slack bot integration     |
@@ -41,112 +39,52 @@ Create accounts on these services before continuing:
 ### Required Tools
 
 ```bash
-# Terraform (1.5.0+)
-brew install terraform
+# kubectl (1.28+)
+brew install kubectl
+
+# Docker (for building images)
+brew install docker
 
 # Node.js (22+)
 brew install node@22
 
-# Python 3.12+ and Modal CLI
-pip install modal
-
-# Wrangler CLI (for initial R2 bucket setup)
-npm install -g wrangler
+# Helm (optional, for chart-based deployment)
+brew install helm
 ```
+
+### Required Infrastructure
+
+- Kubernetes cluster (1.28+) - any provider: EKS, GKE, AKS, k3s, kind, etc.
+- Docker registry for custom images (Docker Hub, ECR, GCR, etc.)
+- kubectl configured to access your cluster
 
 ---
 
-## Step 1: Fork the Repository
-
-Fork [ColeMurray/open-inspect](https://github.com/ColeMurray/open-inspect) to your GitHub account or
-organization.
+## Step 1: Clone the Repository
 
 ```bash
-# Clone your fork
 git clone https://github.com/YOUR-USERNAME/open-inspect.git
 cd open-inspect
 npm install
 
-# Build the shared package (required before Terraform deployment)
+# Build the shared package
 npm run build -w @open-inspect/shared
 ```
 
 ---
 
-## Step 2: Create Cloud Provider Credentials
+## Step 2: Create GitHub App
 
-### Cloudflare
-
-1. Go to [Cloudflare Dashboard](https://dash.cloudflare.com)
-2. **Note your Account ID** (visible in the dashboard URL or account overview)
-3. **Note your Workers subdomain**: Go to Workers & Pages → Overview, look in the **bottom-right**
-   of the panel for `*.YOUR-SUBDOMAIN.workers.dev`
-4. **Create API Token** at [API Tokens](https://dash.cloudflare.com/profile/api-tokens):
-   - Use template: "Edit Cloudflare Workers"
-   - Add permissions: Workers KV Storage (Edit), Workers R2 Storage (Edit), D1 (Edit)
-
-### Cloudflare R2 (Terraform State Backend)
-
-Terraform needs a place to store its state. We use Cloudflare R2.
-
-```bash
-# Login to Cloudflare
-wrangler login
-
-# Create the state bucket
-wrangler r2 bucket create open-inspect-terraform-state
-```
-
-Create an R2 API Token:
-
-1. Go to R2 → Overview → Manage R2 API Tokens
-2. Create token with **Object Read & Write** permission
-3. Note the **Access Key ID** and **Secret Access Key**
-
-### Vercel
-
-1. Go to [Vercel Account Settings → Tokens](https://vercel.com/account/tokens)
-2. Create a new token with full access
-3. **Note your Team/Account ID**:
-   - Go to **Settings** (Account Settings or Team Settings)
-   - Look for **"Your ID"** or find it in the URL: `vercel.com/teams/TEAM_ID/...`
-   - Even personal accounts have an ID (usually starts with `team_`)
-
-### Modal
-
-1. Go to [Modal Settings](https://modal.com/settings)
-2. Create a new API token
-3. Note the **Token ID** and **Token Secret**
-4. Note your **Workspace name** (visible in your Modal dashboard URL)
-
-### Anthropic
-
-1. Go to [Anthropic Console](https://console.anthropic.com)
-2. Create an API key
-3. Note the **API Key** (starts with `sk-ant-`)
-
----
-
-## Step 3: Create GitHub App
-
-You only need **one GitHub App** - it handles both user authentication (OAuth) and repository
-access.
+You only need **one GitHub App** - it handles both user authentication (OAuth) and repository access.
 
 1. Go to [GitHub Apps](https://github.com/settings/apps)
 2. Click **"New GitHub App"**
 3. Fill in the basics:
    - **Name**: `Open-Inspect-YourName` (must be globally unique)
-   - **Homepage URL**: `https://open-inspect-{your-deployment-name}.vercel.app` (or your custom
-     domain)
+   - **Homepage URL**: Your deployment URL
    - **Webhook**: Uncheck "Active" (not needed)
 4. Configure **Identifying and authorizing users** (OAuth):
-   - **Callback URL**:
-     `https://open-inspect-{your-deployment-name}.vercel.app/api/auth/callback/github`
-
-   > **Important**: The callback URL must match your deployed Vercel URL exactly. Terraform creates
-   > `https://open-inspect-{deployment_name}.vercel.app` where `{deployment_name}` is the unique
-   > value you set in `terraform.tfvars` (e.g., your GitHub username or company name).
-
+   - **Callback URL**: `https://YOUR-DOMAIN/api/auth/callback/github`
 5. Set **Repository permissions**:
    - Contents: **Read & Write**
    - Pull requests: **Read & Write**
@@ -156,16 +94,10 @@ access.
 8. Under **"Client secrets"**, click **"Generate a new client secret"** and note the **Client
    Secret**
 9. Scroll down to **"Private keys"** and click **"Generate a private key"** (downloads a .pem file)
-10. **Convert the key to PKCS#8 format** (required for Cloudflare Workers):
-    ```bash
-    openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt \
-      -in ~/Downloads/your-app-name.*.private-key.pem \
-      -out private-key-pkcs8.pem
-    ```
-11. **Install the app** on your account/organization:
+10. **Install the app** on your account/organization:
     - Click "Install App" in the sidebar
     - Select the repositories you want Open-Inspect to access
-12. Note the **Installation ID** from the URL after installing:
+11. Note the **Installation ID** from the URL after installing:
     ```
     https://github.com/settings/installations/INSTALLATION_ID
     ```
@@ -175,473 +107,308 @@ You should now have:
 - **App ID** (e.g., `123456`)
 - **Client ID** (e.g., `Iv1.abc123...`)
 - **Client Secret** (e.g., `abc123...`)
-- **Private Key** (PKCS#8 format, starts with `-----BEGIN PRIVATE KEY-----`)
+- **Private Key** (PEM format)
 - **Installation ID** (e.g., `12345678`)
 
 ---
 
-## Step 4: Create Slack App (Optional)
+## Step 3: Get Anthropic API Key
 
-Skip this step if you don't need Slack integration.
-
-### Create the App
-
-1. Go to [Slack API Apps](https://api.slack.com/apps)
-2. Click **"Create New App"** → **"From scratch"**
-3. Name it (e.g., `Open-Inspect`) and select your workspace
-
-### Configure OAuth & Permissions
-
-1. Go to **OAuth & Permissions** in the sidebar
-2. Add **Bot Token Scopes**:
-   - `app_mentions:read`
-   - `chat:write`
-   - `channels:history`
-   - `channels:read`
-   - `groups:history`
-   - `groups:read`
-3. Click **"Install to Workspace"**
-4. Note the **Bot Token** (`xoxb-...`)
-
-> **Important**: If you update bot token scopes later, you must **reinstall the app** to your
-> workspace for the new permissions to take effect.
-
-### Get Signing Secret
-
-1. Go to **Basic Information**
-2. Note the **Signing Secret**
-
-### Event Subscriptions (Configure After Deployment)
-
-Event Subscriptions require the Slack bot worker to be deployed first for URL verification. You'll
-configure this in **Step 7b** after running Terraform.
+1. Go to [Anthropic Console](https://console.anthropic.com)
+2. Create an API key
+3. Note the **API Key** (starts with `sk-ant-`)
 
 ---
 
-## Step 5: Generate Security Secrets
+## Step 4: Generate Security Secrets
 
-Generate these random secrets (you'll need them for `terraform.tfvars`):
+Generate these random secrets:
 
 ```bash
-# Token encryption key
-echo "token_encryption_key: $(openssl rand -base64 32)"
+# Token encryption key (for encrypting OAuth tokens at rest)
+echo "TOKEN_ENCRYPTION_KEY=$(openssl rand -base64 32)"
 
-# Repo secrets encryption key
-echo "repo_secrets_encryption_key: $(openssl rand -base64 32)"
+# Repo secrets encryption key (for encrypting repo-scoped secrets)
+echo "REPO_SECRETS_ENCRYPTION_KEY=$(openssl rand -base64 32)"
 
-# Internal callback secret
-echo "internal_callback_secret: $(openssl rand -base64 32)"
+# Internal API secret (for sandbox-to-control-plane auth)
+echo "INTERNAL_API_SECRET=$(openssl rand -hex 32)"
 
-# NextAuth secret
-echo "nextauth_secret: $(openssl rand -base64 32)"
-
-# Modal API secret (use hex for this one)
-echo "modal_api_secret: $(openssl rand -hex 32)"
+# NextAuth secret (for web session encryption)
+echo "NEXTAUTH_SECRET=$(openssl rand -base64 32)"
 ```
 
-Save these values somewhere secure—you'll need them in the next step.
+Save these values securely.
 
 ---
 
-## Step 6: Configure Terraform
+## Step 5: Build Docker Images
+
+### Sandbox Runtime Image
 
 ```bash
-cd terraform/environments/production
-
-# Copy the example files
-cp terraform.tfvars.example terraform.tfvars
-cp backend.tfvars.example backend.tfvars
+cd packages/sandbox-runtime
+docker build -t your-registry/open-inspect-sandbox:latest .
+docker push your-registry/open-inspect-sandbox:latest
 ```
 
-### Configure `backend.tfvars`
+### Control Plane Image
 
-Fill in your R2 credentials:
-
-```hcl
-access_key = "your-r2-access-key-id"
-secret_key = "your-r2-secret-access-key"
-endpoints = {
-  s3 = "https://YOUR_CLOUDFLARE_ACCOUNT_ID.r2.cloudflarestorage.com"
-}
+```bash
+cd packages/control-plane
+docker build -t your-registry/open-inspect-control-plane:latest .
+docker push your-registry/open-inspect-control-plane:latest
 ```
 
-### Configure `terraform.tfvars`
+### Web Frontend Image
 
-Fill in all the values you gathered. Here's the structure:
-
-```hcl
-# Provider Authentication
-cloudflare_api_token        = "your-cloudflare-api-token"
-cloudflare_account_id       = "your-account-id"
-cloudflare_worker_subdomain = "your-subdomain"  # from *.your-subdomain.workers.dev
-vercel_api_token            = "your-vercel-token"
-vercel_team_id              = "team_xxxxx"       # Your Vercel ID (even personal accounts have one)
-modal_token_id              = "your-modal-token-id"
-modal_token_secret          = "your-modal-token-secret"
-modal_workspace             = "your-modal-workspace"
-
-# GitHub App (used for both OAuth and repository access)
-github_client_id     = "Iv1.abc123..."           # From GitHub App settings
-github_client_secret = "your-client-secret"      # Generated in GitHub App settings
-
-github_app_id              = "123456"
-github_app_installation_id = "12345678"
-github_app_private_key     = <<-EOF
------BEGIN PRIVATE KEY-----
-... paste your PKCS#8 key here ...
------END PRIVATE KEY-----
-EOF
-
-# Slack (leave as empty strings to disable Slack integration)
-slack_bot_token      = ""
-slack_signing_secret = ""
-
-# API Keys
-anthropic_api_key = "sk-ant-..."
-
-# Security Secrets (from Step 5)
-token_encryption_key          = "your-generated-value"
-repo_secrets_encryption_key   = "your-generated-value"
-internal_callback_secret      = "your-generated-value"
-modal_api_secret         = "your-generated-value"
-nextauth_secret          = "your-generated-value"
-
-# Configuration
-# IMPORTANT: deployment_name must be globally unique for Vercel URLs
-# Use your GitHub username, company name, or a random string
-deployment_name = "your-unique-name"  # e.g., "acme", "johndoe", "mycompany"
-project_root    = "../../../"
-
-# Initial deployment: set both to false (see Step 7)
-enable_durable_object_bindings = false
-enable_service_bindings        = false
-
-# Access Control (at least one recommended for security)
-allowed_users         = "your-github-username"  # Comma-separated GitHub usernames, or empty
-allowed_email_domains = ""                      # Comma-separated domains (e.g., "example.com,corp.io")
+```bash
+cd packages/web
+docker build -t your-registry/open-inspect-web:latest .
+docker push your-registry/open-inspect-web:latest
 ```
-
-> **Note**: Review `allowed_users` and `allowed_email_domains` carefully - these control who can
-> sign in. If both are empty, any GitHub user can access your deployment.
 
 ---
 
-## Step 7: Deploy with Terraform
+## Step 6: Configure Kubernetes Secrets
 
-Deployment requires **two phases** due to Cloudflare's Durable Object and service binding
-requirements.
+Update the secret files in `k8s/` with your values:
 
-### Phase 1: Initial Deployment
+### Control Plane Secret (`k8s/control-plane/secret.yaml`)
 
-Ensure your `terraform.tfvars` has:
-
-```hcl
-enable_durable_object_bindings = false
-enable_service_bindings        = false
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: control-plane-secret
+  namespace: open-inspect
+type: Opaque
+stringData:
+  TOKEN_ENCRYPTION_KEY: "your-generated-value"
+  REPO_SECRETS_ENCRYPTION_KEY: "your-generated-value"
+  INTERNAL_API_SECRET: "your-generated-value"
+  GITHUB_CLIENT_ID: "Iv1.abc123..."
+  GITHUB_CLIENT_SECRET: "your-client-secret"
+  GITHUB_APP_ID: "123456"
+  GITHUB_APP_PRIVATE_KEY: |
+    -----BEGIN RSA PRIVATE KEY-----
+    ... your key here ...
+    -----END RSA PRIVATE KEY-----
+  GITHUB_APP_INSTALLATION_ID: "12345678"
+  ANTHROPIC_API_KEY: "sk-ant-..."
 ```
 
-**Important**: Build the workers before running Terraform (Terraform references the built bundles):
+### PostgreSQL Secret (`k8s/postgres/secret.yaml`)
 
-```bash
-# From the repository root
-npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  namespace: open-inspect
+type: Opaque
+stringData:
+  POSTGRES_USER: "openinspect"
+  POSTGRES_PASSWORD: "your-secure-password"
+  POSTGRES_DB: "openinspect"
 ```
 
-Then run:
+### Web Secret (`k8s/web/configmap.yaml`)
 
-```bash
-cd terraform/environments/production
-
-# Initialize Terraform with backend config
-terraform init -backend-config=backend.tfvars
-
-# Deploy (phase 1 - creates workers without bindings)
-terraform apply
-```
-
-### Phase 2: Enable Bindings
-
-After Phase 1 succeeds, update your `terraform.tfvars`:
-
-```hcl
-enable_durable_object_bindings = true
-enable_service_bindings        = true
-```
-
-Then run:
-
-```bash
-terraform apply
-```
-
-Terraform will update the workers with the required bindings.
+Update `NEXTAUTH_SECRET`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and URLs.
 
 ---
 
-## Step 7b: Complete Slack Setup (If Using Slack)
+## Step 7: Update ConfigMaps
 
-Now that the Slack bot worker is deployed, configure the App Home and Event Subscriptions.
+### Control Plane (`k8s/control-plane/configmap.yaml`)
 
-### Enable App Home
+Update the `SANDBOX_IMAGE` to point to your sandbox image:
 
-The App Home provides a settings interface where users can configure their preferred Claude model.
+```yaml
+SANDBOX_IMAGE: "your-registry/open-inspect-sandbox:latest"
+```
 
-1. Go to your Slack App → **App Home**
-2. Under **Show Tabs**, toggle **"Home Tab"** to On
-3. Click **Save Changes**
+### Web Frontend (`k8s/web/configmap.yaml`)
 
-### Configure Event Subscriptions
+Update URLs to match your deployment:
 
-1. Go to your Slack App → **Event Subscriptions**
-2. Toggle **"Enable Events"** to On
-3. Enter **Request URL**:
-   ```
-   https://open-inspect-slack-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/events
-   ```
-   (Replace `YOUR-SUBDOMAIN` with your Cloudflare Workers subdomain and `{deployment_name}` with
-   your deployment name from terraform.tfvars)
-4. Wait for the green **"Verified"** checkmark
-5. Under **Subscribe to bot events**, add:
-   - `app_home_opened` (required for App Home settings)
-   - `app_mention`
-   - `message.channels` (optional - if you want the bot to see all channel messages)
-6. Click **Save Changes**
-
-### Configure Interactivity
-
-1. Go to **Interactivity & Shortcuts**
-2. Toggle **"Interactivity"** to On
-3. Enter **Request URL**:
-   ```
-   https://open-inspect-slack-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/interactions
-   ```
-4. Click **Save Changes**
-
-### Invite the Bot to Channels
-
-In Slack, for each channel where you want the bot to respond:
-
-- Type `/invite @YourBotName`, or
-- Click the channel name → Integrations → Add apps
-
-The bot only responds to @mentions in channels it has been invited to.
+```yaml
+CONTROL_PLANE_URL: "http://control-plane:3001"
+NEXT_PUBLIC_WS_URL: "ws://your-domain/ws"
+NEXTAUTH_URL: "https://your-domain"
+```
 
 ---
 
-## Step 8: Deploy the Web App
-
-Terraform creates the Vercel project and configures environment variables, but does **not** deploy
-the code. You have two options:
-
-### Option A: Deploy via CLI (Recommended for First Deploy)
+## Step 8: Deploy to Kubernetes
 
 ```bash
-# From the repository root (replace {deployment_name} with your value from terraform.tfvars)
-npx vercel link --project open-inspect-{deployment_name}
-npx vercel --prod
+# Create namespace and deploy all components
+kubectl apply -k k8s/
+
+# Wait for infrastructure
+kubectl -n open-inspect wait --for=condition=ready pod -l app=postgres --timeout=300s
+kubectl -n open-inspect wait --for=condition=ready pod -l app=nats --timeout=300s
+kubectl -n open-inspect wait --for=condition=ready pod -l app=redis --timeout=300s
+
+# Wait for Rivet Engine
+kubectl -n open-inspect wait --for=condition=ready pod -l app=rivet-engine --timeout=300s
+
+# Wait for application
+kubectl -n open-inspect wait --for=condition=ready pod -l app=control-plane --timeout=300s
+kubectl -n open-inspect wait --for=condition=ready pod -l app=web --timeout=300s
+
+# Verify all pods are running
+kubectl -n open-inspect get pods
 ```
-
-> **Note**: The Vercel project is configured with custom build commands for the monorepo structure.
-> Terraform sets these automatically:
->
-> - Install: `cd ../.. && npm install && npm run build -w @open-inspect/shared`
-> - Build: `next build`
-
-### Option B: Link Git Repository (For Automatic Deployments)
-
-1. Go to [Vercel Dashboard](https://vercel.com/dashboard)
-2. Find the `open-inspect-{deployment_name}` project
-3. Go to **Settings → Git**
-4. Click **"Connect Git Repository"** and select your fork
-5. Vercel will automatically deploy on push to main
-
-> **Note**: If you link Git, ensure the build settings match those configured by Terraform (Settings
-> → General → Build & Development Settings).
 
 ---
 
-## Step 9: Verify Deployment
+## Step 9: Configure Ingress
 
-After deployment completes, verify each component:
+Update `k8s/ingress.yaml` with your domain and TLS configuration:
 
-```bash
-# Get the verification commands from Terraform
-terraform output verification_commands
+```yaml
+spec:
+  rules:
+    - host: your-domain.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: control-plane
+                port:
+                  number: 3001
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 3000
 ```
 
-Or manually:
+Apply:
 
 ```bash
-# 1. Control Plane health check (replace {deployment_name} and YOUR-SUBDOMAIN)
-curl https://open-inspect-control-plane-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/health
+kubectl apply -f k8s/ingress.yaml
+```
 
-# 2. Modal health check (replace YOUR-WORKSPACE)
-curl https://YOUR-WORKSPACE--open-inspect-api-health.modal.run
+---
 
-# 3. Web app (replace {deployment_name}, should return 200)
-curl -I https://open-inspect-{deployment_name}.vercel.app
+## Step 10: Verify Deployment
+
+```bash
+# Port-forward control plane for testing
+kubectl -n open-inspect port-forward svc/control-plane 3001:3001 &
+
+# Health check
+curl http://localhost:3001/health
+
+# Port-forward web app
+kubectl -n open-inspect port-forward svc/web 3000:3000 &
+
+# Visit http://localhost:3000
 ```
 
 ### Test the Full Flow
 
-1. Visit your web app URL
+1. Visit your web app URL (or localhost:3000)
 2. Sign in with GitHub
 3. Create a new session with a repository
 4. Send a prompt and verify the sandbox starts
 
 ---
 
-## Step 10: Set Up CI/CD (Optional)
-
-Enable automatic deployments when you push to main by adding GitHub Secrets.
-
-Go to your fork's Settings → Secrets and variables → Actions, and add:
-
-| Secret Name                   | Value                                                                        |
-| ----------------------------- | ---------------------------------------------------------------------------- |
-| `CLOUDFLARE_API_TOKEN`        | Your Cloudflare API token                                                    |
-| `CLOUDFLARE_ACCOUNT_ID`       | Your Cloudflare account ID                                                   |
-| `CLOUDFLARE_WORKER_SUBDOMAIN` | Your workers.dev subdomain                                                   |
-| `R2_ACCESS_KEY_ID`            | R2 access key ID                                                             |
-| `R2_SECRET_ACCESS_KEY`        | R2 secret access key                                                         |
-| `VERCEL_API_TOKEN`            | Vercel API token                                                             |
-| `VERCEL_TEAM_ID`              | Vercel team/account ID                                                       |
-| `VERCEL_PROJECT_ID`           | Vercel project ID (from project settings)                                    |
-| `NEXTAUTH_URL`                | Your web app URL (e.g., `https://open-inspect-{deployment_name}.vercel.app`) |
-| `MODAL_TOKEN_ID`              | Modal token ID                                                               |
-| `MODAL_TOKEN_SECRET`          | Modal token secret                                                           |
-| `MODAL_WORKSPACE`             | Modal workspace name                                                         |
-| `GH_APP_CLIENT_ID`            | GitHub App client ID                                                         |
-| `GH_APP_CLIENT_SECRET`        | GitHub App client secret                                                     |
-| `GH_APP_ID`                   | GitHub App ID                                                                |
-| `GH_APP_PRIVATE_KEY`          | GitHub App private key (PKCS#8 format)                                       |
-| `GH_APP_INSTALLATION_ID`      | GitHub App installation ID                                                   |
-| `SLACK_BOT_TOKEN`             | Slack bot token (or empty)                                                   |
-| `SLACK_SIGNING_SECRET`        | Slack signing secret (or empty)                                              |
-| `ANTHROPIC_API_KEY`           | Anthropic API key                                                            |
-| `TOKEN_ENCRYPTION_KEY`        | Generated encryption key (OAuth tokens)                                      |
-| `REPO_SECRETS_ENCRYPTION_KEY` | Generated encryption key (repo secrets)                                      |
-| `INTERNAL_CALLBACK_SECRET`    | Generated callback secret                                                    |
-| `MODAL_API_SECRET`            | Generated Modal API secret                                                   |
-| `NEXTAUTH_SECRET`             | Generated NextAuth secret                                                    |
-| `ALLOWED_USERS`               | Comma-separated GitHub usernames (or empty for all users)                    |
-| `ALLOWED_EMAIL_DOMAINS`       | Comma-separated email domains (or empty for all domains)                     |
-
-Once configured, the GitHub Actions workflow will:
-
-- Run `terraform plan` on pull requests (with PR comment)
-- Run `terraform apply` when merged to main
-
----
-
 ## Updating Your Deployment
-
-To update after pulling changes from upstream:
 
 ```bash
 # Pull latest changes
-git pull upstream main
+git pull origin main
 
-# Rebuild shared package if it changed
-npm run build -w @open-inspect/shared
+# Rebuild images
+docker build -t your-registry/open-inspect-sandbox:latest packages/sandbox-runtime/
+docker build -t your-registry/open-inspect-control-plane:latest packages/control-plane/
+docker build -t your-registry/open-inspect-web:latest packages/web/
 
-# Re-run Terraform (it only changes what's needed)
-cd terraform/environments/production
-terraform apply
+# Push images
+docker push your-registry/open-inspect-sandbox:latest
+docker push your-registry/open-inspect-control-plane:latest
+docker push your-registry/open-inspect-web:latest
+
+# Rolling restart
+kubectl -n open-inspect rollout restart deployment/control-plane
+kubectl -n open-inspect rollout restart deployment/web
 ```
 
 ---
 
 ## Troubleshooting
 
-### "Backend initialization required"
-
-Re-run init with backend config:
+### Pods not starting
 
 ```bash
-terraform init -backend-config=backend.tfvars
+# Check pod status
+kubectl -n open-inspect get pods
+
+# Check pod events
+kubectl -n open-inspect describe pod <pod-name>
+
+# Check logs
+kubectl -n open-inspect logs <pod-name>
 ```
 
 ### GitHub App authentication fails
 
-1. Verify the private key is in PKCS#8 format (starts with `-----BEGIN PRIVATE KEY-----`)
+1. Verify the private key is correct in the K8s secret
 2. Check the Installation ID matches your installation
 3. Ensure the app has required permissions on the repository
-4. Verify the callback URL matches your deployed Vercel URL exactly
 
-### GitHub OAuth "redirect_uri is not associated with this application"
+### Sandbox pods fail to connect
 
-The callback URL in your GitHub App settings doesn't match your deployed URL. Update the callback
-URL to match `https://open-inspect-{deployment_name}.vercel.app/api/auth/callback/github`.
+1. Verify CONTROL_PLANE_URL is correct in the control plane configmap
+2. Check network policies allow sandbox pods to reach the control plane
+3. Check sandbox pod logs: `kubectl -n open-inspect logs job/sandbox-<id>`
 
-### Modal deployment fails
-
-```bash
-# Check Modal CLI is working
-modal token show
-
-# View Modal logs
-modal app logs open-inspect
-```
-
-### Worker deployment fails / "no such file or directory" for dist/index.js
-
-Terraform references the built worker bundles. Build them before running `terraform apply`:
+### PostgreSQL connection errors
 
 ```bash
-# Build shared package first
-npm run build -w @open-inspect/shared
+# Check PostgreSQL is running
+kubectl -n open-inspect get pods -l app=postgres
 
-# Build workers (required before Terraform)
-npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot
-
-# Verify bundles exist
-ls packages/control-plane/dist/index.js
-ls packages/slack-bot/dist/index.js
+# Test connection
+kubectl -n open-inspect exec -it deploy/control-plane -- \
+  node -e "const pg = require('pg'); const c = new pg.Client(process.env.DATABASE_URL); c.connect().then(() => console.log('OK')).catch(console.error)"
 ```
 
-### Slack bot not responding
+### Rivet Engine health check fails
 
-1. Verify Event Subscriptions URL is verified (green checkmark)
-2. Ensure the bot is invited to the channel (`/invite @BotName`)
-3. Check that you're @mentioning the bot in your message
-4. If you updated bot token scopes, reinstall the app to your workspace
+```bash
+# Check engine logs
+kubectl -n open-inspect logs -l app=rivet-engine
 
-### Slack bot ignores thread context
-
-If the bot doesn't see the original message when tagged in a thread reply:
-
-1. Verify the bot has `channels:history` scope (for public channels) and `groups:history` (for
-   private channels). These are required by the `conversations.replies` API to fetch thread
-   messages.
-2. Verify the bot has `channels:read` and `groups:read` scopes. These are required by
-   `conversations.info` to fetch channel name and description for context.
-3. If you added missing scopes, **reinstall the app** to your workspace for the new permissions to
-   take effect.
-
-### Durable Objects / Service Binding errors
-
-This occurs on first deployment. Follow the two-phase deployment process:
-
-1. Deploy with `enable_durable_object_bindings = false` and `enable_service_bindings = false`
-2. After success, set both to `true` and run `terraform apply` again
+# Check NATS connectivity
+kubectl -n open-inspect logs -l app=nats
+```
 
 ---
 
 ## Security Notes
 
-- **Never commit** `terraform.tfvars` or `backend.tfvars` to source control
-- The `.gitignore` already excludes these files
-- Use GitHub Secrets for CI/CD, not hardcoded values
-- Rotate secrets periodically using `terraform apply` after updating `terraform.tfvars`
-- Review the [Security Model](../README.md#security-model-single-tenant-only) - this system is
-  designed for single-tenant deployment
+- **Never commit** K8s secrets to source control
+- Use a secrets manager (e.g., Sealed Secrets, External Secrets Operator) for production
+- Rotate secrets periodically by updating K8s secrets and restarting pods
+- Review the [Security Model](../README.md#security-model-single-tenant-only)
+- Deploy behind SSO/VPN for production use
 
 ---
 
 ## Architecture Reference
 
-For details on the infrastructure components, see:
+For details on how Open-Inspect works, see:
 
-- [terraform/README.md](../terraform/README.md) - Terraform module documentation
-- [README.md](../README.md) - System architecture overview
+- [HOW_IT_WORKS.md](./HOW_IT_WORKS.md) - Architecture and design overview
+- [README.md](../README.md) - System overview and quick start

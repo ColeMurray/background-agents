@@ -1,0 +1,68 @@
+# Redis deployment for caching and ephemeral state.
+# Used by the control plane for session caching, rate limiting, and pub/sub.
+# Single replica -- for production HA consider Redis Sentinel or a managed service.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/component: cache
+    app.kubernetes.io/part-of: open-inspect
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+      app.kubernetes.io/component: cache
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+        app.kubernetes.io/component: cache
+        app.kubernetes.io/part-of: open-inspect
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args:
+            - "redis-server"
+            - "--maxmemory"
+            - "256mb"
+            - "--maxmemory-policy"
+            - "allkeys-lru"
+            - "--save"
+            - ""
+            - "--appendonly"
+            - "no"
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          livenessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 2
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

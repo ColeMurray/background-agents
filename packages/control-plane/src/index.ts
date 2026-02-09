@@ -1,73 +1,113 @@
 /**
  * Open-Inspect Control Plane
  *
- * Cloudflare Workers entry point with Durable Objects for session management.
+ * Hono HTTP server entry point with Rivet Actors for session management.
+ *
+ * Replaces the Cloudflare Workers entry point. Runs as a standard
+ * Node.js HTTP server.
  */
 
-import { handleRequest } from "./router";
-import { createLogger } from "./logger";
-import type { Env } from "./types";
+import { Hono } from "hono";
+import { serve } from "@hono/node-server";
+import { loadConfig } from "./config";
+import { createLogger, parseLogLevel } from "./logger";
+import { createRouter, type AppContext } from "./router";
+import { getPool, closePool, SessionIndexStore, RepoMetadataStore, RepoSecretsStore } from "./db/postgres";
+import { runMigrations } from "./db/migrations";
+import { getRedis, closeRedis, RedisCache } from "./cache/redis";
+import { registry } from "./actors/registry";
 
-const logger = createLogger("worker");
+const log = createLogger("server");
 
-// Re-export Durable Object for Cloudflare to discover
-export { SessionDO } from "./session/durable-object";
-
-/**
- * Worker fetch handler.
- */
-export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const url = new URL(request.url);
-
-    // WebSocket upgrade for session
-    const upgradeHeader = request.headers.get("Upgrade");
-    if (upgradeHeader?.toLowerCase() === "websocket") {
-      return handleWebSocket(request, env, url);
-    }
-
-    // Regular API request — logged by the router with requestId and timing
-    return handleRequest(request, env, ctx);
-  },
-};
-
-/**
- * Handle WebSocket connections.
- */
-async function handleWebSocket(request: Request, env: Env, url: URL): Promise<Response> {
-  // Extract session ID from path: /sessions/:id/ws
-  const match = url.pathname.match(/^\/sessions\/([^/]+)\/ws$/);
-
-  if (!match) {
-    logger.warn("Invalid WebSocket path", { event: "ws.invalid_path", http_path: url.pathname });
-    return new Response("Invalid WebSocket path", { status: 400 });
-  }
-
-  const sessionId = match[1];
-  logger.info("WebSocket upgrade", {
-    event: "ws.connect",
-    http_path: url.pathname,
-    session_id: sessionId,
+async function main() {
+  // Load configuration from process.env
+  const config = loadConfig();
+  log.info("Starting control plane", {
+    port: config.port,
+    deployment: config.deploymentName,
+    logLevel: config.logLevel,
   });
 
-  // Get Durable Object and forward WebSocket
-  const doId = env.SESSION.idFromName(sessionId);
-  const stub = env.SESSION.get(doId);
+  // Initialize PostgreSQL
+  const pool = getPool(config.databaseUrl);
+  await runMigrations(pool);
 
-  // Forward the WebSocket upgrade request to the DO
-  const response = await stub.fetch(request);
+  // Initialize Redis
+  const redis = getRedis(config.redisUrl);
+  const cache = new RedisCache(redis);
 
-  // If it's a WebSocket upgrade response, return it directly
-  // Add CORS headers for the upgrade response
-  if (response.webSocket) {
-    return new Response(null, {
-      status: 101,
-      webSocket: response.webSocket,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-      },
-    });
-  }
+  // Initialize data stores
+  const sessionIndex = new SessionIndexStore(pool);
+  const repoMetadata = new RepoMetadataStore(pool);
+  const repoSecrets = new RepoSecretsStore(
+    pool,
+    config.repoSecretsEncryptionKey ?? config.tokenEncryptionKey,
+  );
 
-  return response;
+  // Build application context
+  const appContext: AppContext = {
+    config,
+    sessionIndex,
+    repoMetadata,
+    repoSecrets,
+    cache,
+    registry,
+  };
+
+  // Create the main Hono app
+  const app = new Hono();
+
+  // Mount the API router
+  const apiRouter = createRouter(appContext);
+  app.route("/", apiRouter);
+
+  // Mount Rivet actor handler for WebSocket connections
+  // Rivet actors handle their own routing under /api/rivet/*
+  app.all("/api/rivet/*", async (c) => {
+    // Rivet SDK handles WebSocket upgrade and actor routing
+    // This is a placeholder for the Rivet HTTP handler integration
+    return c.json({ error: "Rivet actor handler not yet configured" }, 501);
+  });
+
+  // Global error handler
+  app.onError((err, c) => {
+    log.error("Unhandled error", { error: err });
+    return c.json(
+      { error: "Internal server error" },
+      500,
+    );
+  });
+
+  // Start the HTTP server
+  const server = serve({
+    fetch: app.fetch,
+    port: config.port,
+  });
+
+  log.info("Control plane started", {
+    port: config.port,
+    deployment: config.deploymentName,
+  });
+
+  // Graceful shutdown
+  const shutdown = async (signal: string) => {
+    log.info("Shutting down", { signal });
+    try {
+      await closeRedis();
+      await closePool();
+      log.info("Graceful shutdown complete");
+      process.exit(0);
+    } catch (err) {
+      log.error("Shutdown error", { error: err instanceof Error ? err : String(err) });
+      process.exit(1);
+    }
+  };
+
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
+
+main().catch((err) => {
+  log.error("Fatal startup error", { error: err instanceof Error ? err : String(err) });
+  process.exit(1);
+});

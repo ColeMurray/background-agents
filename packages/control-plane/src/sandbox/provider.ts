@@ -1,8 +1,10 @@
 /**
  * Sandbox provider interface.
  *
- * Defines a pluggable abstraction for sandbox providers (Modal, Fly.io, Docker, etc.)
+ * Defines a pluggable abstraction for sandbox providers (Kubernetes, Docker, etc.)
  * enabling unit testing and future provider support.
+ *
+ * Kept as-is from the original -- this interface is provider-agnostic.
  */
 
 /** Default sandbox lifetime in seconds (2 hours). */
@@ -10,7 +12,6 @@ export const DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200;
 
 /**
  * Capabilities supported by a sandbox provider.
- * Providers can support different feature sets.
  */
 export interface SandboxProviderCapabilities {
   /** Whether the provider supports filesystem snapshots */
@@ -61,7 +62,7 @@ export interface CreateSandboxConfig {
 export interface CreateSandboxResult {
   /** The sandbox ID (should match expected ID from config) */
   sandboxId: string;
-  /** Provider's internal object ID (e.g., Modal's object ID for snapshot API) */
+  /** Provider's internal object ID (e.g., K8s pod name for future snapshot API) */
   providerObjectId?: string;
   /** Initial sandbox status */
   status: string;
@@ -109,7 +110,7 @@ export interface RestoreResult {
   success: boolean;
   /** Sandbox ID if successful */
   sandboxId?: string;
-  /** Provider's internal object ID (e.g., Modal's object ID for snapshot API) */
+  /** Provider's internal object ID */
   providerObjectId?: string;
   /** Error message if failed */
   error?: string;
@@ -119,11 +120,11 @@ export interface RestoreResult {
  * Configuration for taking a sandbox snapshot.
  */
 export interface SnapshotConfig {
-  /** Provider's internal object ID (e.g., Modal's object ID) */
+  /** Provider's internal object ID */
   providerObjectId: string;
   /** Session ID for context */
   sessionId: string;
-  /** Reason for the snapshot (e.g., "inactivity_timeout", "execution_complete") */
+  /** Reason for the snapshot */
   reason: string;
   /** Trace ID for correlation */
   traceId?: string;
@@ -145,52 +146,29 @@ export interface SnapshotResult {
 
 /**
  * Error classification for circuit breaker decisions.
- *
- * Only permanent failures should count toward the circuit breaker threshold.
- * Transient failures (network issues, timeouts) are logged but don't trip the breaker.
- *
- * Transient errors (do NOT count toward circuit breaker):
- * - ETIMEDOUT, ECONNRESET, ECONNREFUSED
- * - HTTP 502, 503, 504 (Bad Gateway, Service Unavailable, Gateway Timeout)
- * - "fetch failed" / network errors
- *
- * Permanent errors (DO count toward circuit breaker):
- * - HTTP 400, 401, 403, 422 (Bad Request, Unauthorized, Forbidden, Unprocessable)
- * - Invalid configuration
- * - Resource quota exceeded
  */
 export type SandboxErrorType = "transient" | "permanent";
 
 /**
  * Custom error class for sandbox provider operations.
- *
- * Includes error type classification for circuit breaker handling.
- * The circuit breaker only counts permanent errors toward its threshold.
  */
 export class SandboxProviderError extends Error {
   constructor(
     message: string,
     public readonly errorType: SandboxErrorType,
-    public readonly cause?: Error
+    public readonly cause?: Error,
   ) {
     super(message);
     this.name = "SandboxProviderError";
-    // Maintain proper stack trace in V8 environments
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, SandboxProviderError);
     }
   }
 
-  /**
-   * Check if an HTTP status code indicates a transient error.
-   */
   static isTransientStatus(status: number): boolean {
     return status === 502 || status === 503 || status === 504;
   }
 
-  /**
-   * Check if an error is likely a transient network error.
-   */
   static isTransientNetworkError(error: unknown): boolean {
     if (error instanceof Error) {
       const message = error.message.toLowerCase();
@@ -206,21 +184,16 @@ export class SandboxProviderError extends Error {
     return false;
   }
 
-  /**
-   * Create a SandboxProviderError from a fetch error or HTTP response.
-   */
   static fromFetchError(message: string, error: unknown, status?: number): SandboxProviderError {
-    // Classify based on HTTP status if available
     if (status !== undefined) {
       const errorType = SandboxProviderError.isTransientStatus(status) ? "transient" : "permanent";
       return new SandboxProviderError(
         message,
         errorType,
-        error instanceof Error ? error : undefined
+        error instanceof Error ? error : undefined,
       );
     }
 
-    // Classify based on error type
     const errorType = SandboxProviderError.isTransientNetworkError(error)
       ? "transient"
       : "permanent";
@@ -230,65 +203,27 @@ export class SandboxProviderError extends Error {
 
 /**
  * Sandbox provider interface.
- *
- * Defines the contract for sandbox lifecycle operations.
- * Implementations wrap provider-specific APIs (Modal, Fly.io, Docker, etc.)
- *
- * Error handling:
- * - Methods should throw SandboxProviderError with appropriate errorType
- * - "transient" errors (network issues) don't count toward circuit breaker
- * - "permanent" errors (config issues) do count toward circuit breaker
- *
- * @example
- * ```typescript
- * const provider: SandboxProvider = new ModalSandboxProvider(client, secret);
- *
- * try {
- *   const result = await provider.createSandbox(config);
- *   console.log("Created:", result.sandboxId);
- * } catch (e) {
- *   if (e instanceof SandboxProviderError && e.errorType === "permanent") {
- *     // Increment circuit breaker
- *   }
- *   // Both types set sandbox status to "failed"
- * }
- * ```
  */
 export interface SandboxProvider {
   /** Provider name for logging and debugging */
   readonly name: string;
-
   /** Provider capabilities */
   readonly capabilities: SandboxProviderCapabilities;
 
   /**
    * Create a new sandbox.
-   *
-   * @param config - Sandbox configuration
-   * @returns Creation result with sandbox ID and status
-   * @throws SandboxProviderError with errorType for circuit breaker handling
    */
   createSandbox(config: CreateSandboxConfig): Promise<CreateSandboxResult>;
 
   /**
    * Restore a sandbox from a filesystem snapshot.
-   *
-   * Only available if `capabilities.supportsRestore` is true.
-   *
-   * @param config - Restore configuration with snapshot image ID
-   * @returns Result indicating success or failure
-   * @throws SandboxProviderError with errorType for circuit breaker handling
+   * Only available if capabilities.supportsRestore is true.
    */
   restoreFromSnapshot?(config: RestoreConfig): Promise<RestoreResult>;
 
   /**
    * Take a filesystem snapshot of the sandbox.
-   *
-   * Only available if `capabilities.supportsSnapshots` is true.
-   *
-   * @param config - Snapshot configuration with provider object ID
-   * @returns Result with snapshot image ID if successful
-   * @throws SandboxProviderError with errorType for error handling
+   * Only available if capabilities.supportsSnapshots is true.
    */
   takeSnapshot?(config: SnapshotConfig): Promise<SnapshotResult>;
 }

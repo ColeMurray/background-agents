@@ -1,0 +1,47 @@
+# Horizontal Pod Autoscaler for the Rivet Engine worker pool.
+# Scales between 2 and 10 replicas based on CPU and memory utilization.
+# Requires the metrics-server to be installed in the cluster.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rivet-engine
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: rivet-engine
+    app.kubernetes.io/component: engine
+    app.kubernetes.io/part-of: open-inspect
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: rivet-engine
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    # Scale up quickly when load increases
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    # Scale down conservatively to avoid flapping
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120

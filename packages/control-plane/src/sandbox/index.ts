@@ -2,17 +2,6 @@
  * Sandbox module exports.
  */
 
-// Client
-export {
-  ModalClient,
-  createModalClient,
-  type CreateSandboxRequest,
-  type CreateSandboxResponse,
-  type WarmSandboxRequest,
-  type WarmSandboxResponse,
-  type SnapshotInfo,
-} from "./client";
-
 // Provider interface
 export {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
@@ -28,8 +17,8 @@ export {
   type SandboxErrorType,
 } from "./provider";
 
-// Modal provider
-export { ModalSandboxProvider, createModalProvider } from "./providers/modal-provider";
+// K8s provider
+export { K8sSandboxProvider, createK8sProvider, type K8sProviderConfig } from "./providers/k8s-provider";
 
 // Lifecycle decisions
 export {
@@ -56,15 +45,3 @@ export {
   type WarmState,
   type WarmAction,
 } from "./lifecycle/decisions";
-
-// Lifecycle manager
-export {
-  SandboxLifecycleManager,
-  DEFAULT_LIFECYCLE_CONFIG,
-  type SandboxStorage,
-  type SandboxBroadcaster,
-  type WebSocketManager,
-  type AlarmScheduler,
-  type IdGenerator,
-  type SandboxLifecycleConfig,
-} from "./lifecycle/manager";

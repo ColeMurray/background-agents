@@ -1,0 +1,61 @@
+# RBAC resources for sandbox job management.
+# The control plane needs permission to create, monitor, and clean up
+# Kubernetes Jobs that run sandboxed Claude Code sessions.
+---
+# ServiceAccount used by the control-plane deployment
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sandbox-manager
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: sandbox-manager
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: open-inspect
+---
+# Role granting sandbox lifecycle permissions within the open-inspect namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sandbox-manager
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: sandbox-manager
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: open-inspect
+rules:
+  # Job management -- create, inspect, and delete sandbox jobs
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete", "deletecollection"]
+  # Pod inspection -- read logs and status of sandbox pods
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete"]
+  # Pod logs -- stream logs from sandbox containers
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Pod exec -- attach to sandbox containers for interactive sessions
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+# Bind the role to the service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sandbox-manager
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: sandbox-manager
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: open-inspect
+subjects:
+  - kind: ServiceAccount
+    name: sandbox-manager
+    namespace: open-inspect
+roleRef:
+  kind: Role
+  name: sandbox-manager
+  apiGroup: rbac.authorization.k8s.io

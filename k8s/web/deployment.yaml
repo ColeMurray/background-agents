@@ -1,0 +1,59 @@
+# Web frontend deployment.
+# Runs the Next.js application that serves the Open-Inspect UI.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: web
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: open-inspect
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: web
+      app.kubernetes.io/component: frontend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: web
+        app.kubernetes.io/component: frontend
+        app.kubernetes.io/part-of: open-inspect
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: web
+          image: open-inspect-web:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: web-config
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 2
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

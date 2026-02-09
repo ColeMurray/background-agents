@@ -63,16 +63,16 @@ if needed.
 | Events        | Tool calls, token streams, status updates         |
 | Artifacts     | PRs created, screenshots captured                 |
 | Participants  | Users who have joined the session                 |
-| Sandbox state | Reference to the current sandbox and its snapshot |
+| Sandbox state | Reference to the current sandbox and its status   |
 
-Each session gets its own SQLite database in a Cloudflare Durable Object, ensuring isolation and
-high performance even with hundreds of concurrent sessions.
+Each session gets its own Rivet Actor, ensuring isolation and high performance even with hundreds of
+concurrent sessions. Actor state is automatically persisted by the Rivet Engine.
 
 ---
 
 ## Architecture
 
-Open-Inspect uses a three-tier architecture spanning multiple cloud providers:
+Open-Inspect uses a two-tier architecture running entirely on Kubernetes:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -85,25 +85,25 @@ Open-Inspect uses a three-tier architecture spanning multiple cloud providers:
                            │           │
                            ▼           ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                    Control Plane (Cloudflare)                            │
+│               Control Plane (Hono + Rivet Actors on K8s)                 │
 │  ┌────────────────────────────────────────────────────────────────────┐ │
-│  │                    Durable Objects (per session)                    │ │
+│  │                  Rivet Session Actors (per session)                 │ │
 │  │  ┌──────────┐  ┌───────────┐  ┌────────────┐  ┌────────────────┐  │ │
-│  │  │  SQLite  │  │ WebSocket │  │   Event    │  │    Sandbox     │  │ │
+│  │  │  Actor   │  │ WebSocket │  │   Event    │  │    Sandbox     │  │ │
 │  │  │   State  │  │    Hub    │  │   Stream   │  │   Lifecycle    │  │ │
 │  │  └──────────┘  └───────────┘  └────────────┘  └────────────────┘  │ │
 │  └────────────────────────────────────────────────────────────────────┘ │
 │  ┌────────────────────────────────────────────────────────────────────┐ │
-│  │                   D1 Database (shared state)                        │ │
+│  │                   PostgreSQL (shared state)                         │ │
 │  │           Sessions index, repo metadata, encrypted secrets          │ │
 │  └────────────────────────────────────────────────────────────────────┘ │
 └───────────────────────────────────┬─────────────────────────────────────┘
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                       Data Plane (Modal)                                 │
+│                    Data Plane (Kubernetes Pods)                           │
 │  ┌────────────────────────────────────────────────────────────────────┐ │
-│  │                        Session Sandbox                              │ │
+│  │                        Session Sandbox Pod                          │ │
 │  │  ┌────────────┐    ┌────────────┐    ┌────────────┐               │ │
 │  │  │ Supervisor │───▶│  OpenCode  │───▶│   Bridge   │───────────────┼─┼──▶ Control Plane
 │  │  └────────────┘    └────────────┘    └────────────┘               │ │
@@ -114,27 +114,29 @@ Open-Inspect uses a three-tier architecture spanning multiple cloud providers:
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Control Plane (Cloudflare Workers)
+### Control Plane (Rivet Actors on Kubernetes)
 
 The control plane is the coordinator. It doesn't execute code—it manages state and routes messages.
 
 **Responsibilities:**
 
-- Session state management (SQLite in Durable Objects)
+- Session state management (Rivet Actor state, auto-persisted)
 - WebSocket connections for real-time streaming
-- Sandbox lifecycle orchestration (spawn, snapshot, restore)
+- Sandbox lifecycle orchestration (spawn K8s Jobs, monitor health)
 - GitHub integration (repo listing, PR creation)
 - Authentication and access control
 
-**Why Cloudflare?** Durable Objects provide per-session isolation with SQLite storage. Each session
-gets its own lightweight database that can handle hundreds of events per second without impacting
-other sessions. The WebSocket Hibernation API keeps connections alive during idle periods without
-incurring compute costs.
+**Why Rivet Actors?** Each session gets its own isolated actor with in-memory state that's
+automatically persisted. Actors hibernate when idle and wake instantly on new requests. This provides
+the same per-session isolation as Durable Objects but runs on your own Kubernetes cluster.
 
-### Data Plane (Modal Sandboxes)
+The Rivet Engine (Rust) handles actor scheduling, state persistence to PostgreSQL, health checking,
+and failover. NATS provides the inter-service message bus.
 
-The data plane is where code actually runs. Each session gets an isolated sandbox with a full
-development environment.
+### Data Plane (Kubernetes Pods)
+
+The data plane is where code actually runs. Each session gets an isolated sandbox as a K8s Job/Pod
+with a full development environment.
 
 **What's in a sandbox:**
 
@@ -144,9 +146,9 @@ development environment.
 - Playwright + headless Chrome (for visual verification)
 - OpenCode (the coding agent)
 
-**Why Modal?** Modal sandboxes start near-instantly and support filesystem snapshots. This lets us
-freeze a sandbox's state after setup, then restore it later in seconds instead of re-cloning and
-reinstalling dependencies.
+**Why Kubernetes?** K8s provides robust container orchestration, resource limits, RBAC, and
+integrates with existing infrastructure. Sandbox pods are created as Jobs, which K8s schedules
+and monitors. No vendor lock-in—runs on any K8s cluster.
 
 ### Clients
 
@@ -165,16 +167,15 @@ works because state lives in the control plane, not the client.
 
 ## The Sandbox Lifecycle
 
-Understanding the sandbox lifecycle explains why Open-Inspect can be fast despite running in the
-cloud.
+Understanding the sandbox lifecycle explains how Open-Inspect manages code execution.
 
-### Fresh Start (No Snapshot)
+### Fresh Start
 
-When you create a session for a repo without an existing snapshot:
+When you create a session:
 
 ```
 ┌─────────┐    ┌──────────┐    ┌─────────────┐    ┌─────────────┐    ┌───────┐
-│ Sandbox │───▶│ Git Sync │───▶│ Setup Script│───▶│ Agent Start │───▶│ Ready │
+│ K8s Job │───▶│ Git Sync │───▶│ Setup Script│───▶│ Agent Start │───▶│ Ready │
 │ Created │    │ (clone)  │    │ (optional)  │    │ (OpenCode)  │    │       │
 └─────────┘    └──────────┘    └─────────────┘    └─────────────┘    └───────┘
                                      │
@@ -183,43 +184,19 @@ When you create a session for a repo without an existing snapshot:
                             (if present in repo)
 ```
 
-1. **Sandbox created**: Modal spins up a new container from the base image
+1. **K8s Job created**: Control plane creates a Job with the sandbox Docker image
 2. **Git sync**: Clones your repository using GitHub App credentials
 3. **Setup script**: Runs `.openinspect/setup.sh` if present (for `npm install`, etc.)
 4. **Agent start**: OpenCode server starts and connects back to the control plane
 5. **Ready**: Sandbox accepts prompts
 
-### Restore (From Snapshot)
-
-When restoring from a previous snapshot:
-
-```
-┌─────────────┐    ┌────────────┐    ┌───────┐
-│  Restore    │───▶│ Quick Sync │───▶│ Ready │
-│  Snapshot   │    │ (git pull) │    │       │
-└─────────────┘    └────────────┘    └───────┘
-```
-
-1. **Restore snapshot**: Modal restores the filesystem from a saved image
-2. **Quick sync**: Pulls latest changes (usually just a few commits)
-3. **Ready**: Sandbox is ready almost instantly
-
-Snapshots include installed dependencies, built artifacts, and workspace state. This is why
-follow-up prompts in an existing session are much faster than the first prompt.
-
-### When Snapshots Are Taken
-
-- **After successful prompt completion**: Preserves the workspace state
-- **Before sandbox timeout**: Saves state before the sandbox shuts down due to inactivity
-- **On explicit save**: Can be triggered by the control plane
-
 ### Sandbox Warming
 
 To minimize perceived latency, sandboxes warm proactively:
 
-- When you start typing a prompt, the control plane begins warming a sandbox
+- When you start typing a prompt, the control plane begins creating a sandbox
 - By the time you hit enter, the sandbox may already be ready
-- If restore is fast enough, you won't notice any delay
+- Pre-built Docker images include all common dependencies
 
 ---
 
@@ -244,8 +221,8 @@ Here's what happens when you send a prompt:
 
 1. **You send a prompt** via web or Slack
 
-2. **Control plane queues it**: The prompt goes to the session's Durable Object and is added to the
-   message queue. If a sandbox isn't running, one is spawned or restored.
+2. **Control plane queues it**: The prompt goes to the session's Rivet Actor and is added to the
+   message queue. If a sandbox isn't running, one is spawned via K8s Job.
 
 3. **Sandbox receives the prompt**: Via WebSocket, the control plane sends the prompt to the sandbox
    along with author information (for commit attribution).
@@ -256,7 +233,7 @@ Here's what happens when you send a prompt:
 5. **Events stream back**: Tool calls, token streams, and status updates flow back through the
    WebSocket to the control plane.
 
-6. **Control plane broadcasts**: Events are stored in the session database and broadcast to all
+6. **Control plane broadcasts**: Events are stored in the session actor's state and broadcast to all
    connected clients in real-time.
 
 7. **Artifacts are created**: If the agent creates a PR or captures a screenshot, these are stored
@@ -344,47 +321,6 @@ This makes sessions useful for pair programming, live debugging, or teaching.
 
 ---
 
-## Snapshots and Performance
-
-Speed is critical for background agents. If sessions are slow, people won't use them.
-
-### The Cold Start Problem
-
-Without optimization, starting a session would require:
-
-1. Spinning up a container (~5-10s)
-2. Cloning the repository (~10-30s for large repos)
-3. Installing dependencies (~30s-5min)
-4. Starting the agent (~5s)
-
-That's potentially minutes before the agent can start working.
-
-### How Snapshots Solve This
-
-Modal's filesystem snapshots let us capture a sandbox's state after setup:
-
-```
-First session:  Clone ─▶ Install ─▶ Build ─▶ [Snapshot] ─▶ Work
-                         (slow)
-
-Later sessions: [Restore Snapshot] ─▶ Quick sync ─▶ Work
-                     (fast)
-```
-
-The first session for a repo pays the setup cost. Subsequent sessions restore in seconds.
-
-### Image Prebuilding
-
-For frequently-used repositories, images can be prebuilt on a schedule:
-
-- Clone repo, install dependencies, run initial build
-- Save as a snapshot
-- Sessions start from this snapshot, only syncing recent changes
-
-This means even "cold" sessions (no previous snapshot) start from a recent baseline.
-
----
-
 ## Security Model
 
 Open-Inspect is designed for **single-tenant deployment** where all users are trusted members of the
@@ -415,8 +351,8 @@ was built for internal use where all employees have access to company repositori
 
 You can configure environment variables (API keys, credentials) per repository:
 
-- Stored encrypted (AES-256-GCM) in D1 database
-- Injected into sandboxes at startup
+- Stored encrypted (AES-256-GCM) in PostgreSQL
+- Injected into sandbox pods at startup
 - Never exposed to clients (only key names are visible)
 
 ### Deployment Recommendations

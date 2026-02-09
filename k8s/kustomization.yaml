@@ -1,0 +1,58 @@
+# Kustomize entry point for the Open-Inspect platform.
+# Apply the entire stack with: kubectl apply -k k8s/
+#
+# For environment-specific overrides, create an overlay directory:
+#   k8s/overlays/production/kustomization.yaml
+# that references this base and patches values as needed.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: open-inspect
+
+# Common labels applied to every resource
+commonLabels:
+  app.kubernetes.io/part-of: open-inspect
+  app.kubernetes.io/managed-by: kustomize
+
+resources:
+  # Namespace
+  - namespace.yaml
+
+  # Infrastructure: PostgreSQL
+  - postgres/configmap.yaml
+  - postgres/secret.yaml
+  - postgres/statefulset.yaml
+  - postgres/service.yaml
+
+  # Infrastructure: NATS
+  - nats/configmap.yaml
+  - nats/statefulset.yaml
+  - nats/service.yaml
+
+  # Infrastructure: Redis
+  - redis/deployment.yaml
+  - redis/service.yaml
+
+  # Rivet Engine (sandbox orchestrator)
+  - rivet-engine/configmap.yaml
+  - rivet-engine/deployment.yaml
+  - rivet-engine/singleton.yaml
+  - rivet-engine/service.yaml
+  - rivet-engine/hpa.yaml
+
+  # Control plane (API + WebSocket server)
+  - control-plane/configmap.yaml
+  - control-plane/secret.yaml
+  - control-plane/deployment.yaml
+  - control-plane/service.yaml
+
+  # Web frontend
+  - web/configmap.yaml
+  - web/deployment.yaml
+  - web/service.yaml
+
+  # Sandbox RBAC
+  - sandbox/rbac.yaml
+
+  # Ingress
+  - ingress.yaml

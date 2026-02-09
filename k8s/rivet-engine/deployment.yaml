@@ -1,0 +1,73 @@
+# Rivet Engine deployment -- the horizontally-scalable worker pool.
+# Runs all services EXCEPT singletons (those run in singleton.yaml).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rivet-engine
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: rivet-engine
+    app.kubernetes.io/component: engine
+    app.kubernetes.io/part-of: open-inspect
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rivet-engine
+      app.kubernetes.io/component: engine
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rivet-engine
+        app.kubernetes.io/component: engine
+        app.kubernetes.io/part-of: open-inspect
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: rivet-engine
+          image: ghcr.io/rivet-gg/rivet:latest
+          # Start all services except singletons so this deployment can scale freely
+          args: ["start", "--except-services", "singleton"]
+          ports:
+            - name: guard
+              containerPort: 6420
+              protocol: TCP
+            - name: peer
+              containerPort: 6421
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: rivet-engine-config
+          # Liveness probe -- restart the container if the peer API stops responding
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: peer
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Readiness probe -- only route traffic once the engine is ready
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: peer
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 2
+          # Startup probe -- give the engine time to initialize on cold start
+          startupProbe:
+            httpGet:
+              path: /health
+              port: peer
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi

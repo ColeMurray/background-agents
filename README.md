@@ -38,28 +38,9 @@ The system uses a shared GitHub App installation for all git operations (clone, 
 | User OAuth Token | Create PRs, user info  | Repos user has access to         |
 | WebSocket Token  | Real-time session auth | Single session                   |
 
-### Why Single-Tenant Only
-
-This architecture follows
-[Ramp's Inspect design](https://builders.ramp.com/post/why-we-built-our-background-agent), which was
-built for internal use where all employees are trusted and have access to company repositories.
-
-**For multi-tenant deployment**, you would need:
-
-- Per-tenant GitHub App installations
-- Access validation at session creation
-- Tenant isolation in the data model
-
-### Deployment Recommendations
-
-1. **Deploy behind your organization's SSO/VPN** - Ensure only authorized employees can access the
-   web interface
-2. **Install GitHub App only on intended repositories** - The App's installation scope defines what
-   the system can access
-3. **Use GitHub's repository selection** - When installing the App, select specific repositories
-   rather than "All repositories"
-
 ## Architecture
+
+Open-Inspect runs entirely on open-source infrastructure using Kubernetes:
 
 ```
                                     ┌──────────────────┐
@@ -73,24 +54,25 @@ built for internal use where all employees are trusted and have access to compan
                                              │
                                              ▼
 ┌────────────────────────────────────────────────────────────────────┐
-│                     Control Plane (Cloudflare)                      │
+│               Control Plane (Rivet Actors on K8s)                   │
 │  ┌──────────────────────────────────────────────────────────────┐  │
-│  │                   Durable Objects (per session)               │  │
+│  │              Rivet Session Actors (per session)               │  │
 │  │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌───────────────┐   │  │
-│  │  │ SQLite  │  │WebSocket│  │  Event  │  │   GitHub      │   │  │
-│  │  │   DB    │  │   Hub   │  │ Stream  │  │ Integration   │   │  │
+│  │  │  Actor  │  │WebSocket│  │  Event  │  │   GitHub      │   │  │
+│  │  │  State  │  │   Hub   │  │ Stream  │  │ Integration   │   │  │
 │  │  └─────────┘  └─────────┘  └─────────┘  └───────────────┘   │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 │  ┌──────────────────────────────────────────────────────────────┐  │
-│  │              D1 Database (repo-scoped secrets)                │  │
+│  │                  PostgreSQL (shared state)                     │  │
+│  │           Sessions index, repo metadata, encrypted secrets     │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 └────────────────────────────────┬───────────────────────────────────┘
                                  │
                                  ▼
 ┌────────────────────────────────────────────────────────────────────┐
-│                      Data Plane (Modal)                             │
+│                   Data Plane (Kubernetes Pods)                       │
 │  ┌──────────────────────────────────────────────────────────────┐  │
-│  │                     Session Sandbox                           │  │
+│  │                     Session Sandbox Pod                        │  │
 │  │  ┌───────────┐  ┌───────────┐  ┌───────────┐                 │  │
 │  │  │ Supervisor│──│  OpenCode │──│   Bridge  │─────────────────┼──┼──▶ Control Plane
 │  │  └───────────┘  └───────────┘  └───────────┘                 │  │
@@ -101,14 +83,25 @@ built for internal use where all employees are trusted and have access to compan
 └────────────────────────────────────────────────────────────────────┘
 ```
 
+### Infrastructure Components
+
+| Component        | Technology                  | Purpose                                |
+| ---------------- | --------------------------- | -------------------------------------- |
+| **Rivet Engine** | Rust orchestration on K8s   | Actor scheduling, state persistence    |
+| **NATS**         | Message bus                 | Inter-service communication            |
+| **PostgreSQL**   | Relational database         | Session index, repo metadata, secrets  |
+| **Redis**        | In-memory cache             | Repository list caching                |
+| **Hono**         | TypeScript HTTP framework   | API server for control plane           |
+| **Next.js**      | React framework             | Web frontend                           |
+
 ## Packages
 
-| Package                                 | Description                          |
-| --------------------------------------- | ------------------------------------ |
-| [modal-infra](packages/modal-infra)     | Modal sandbox infrastructure         |
-| [control-plane](packages/control-plane) | Cloudflare Workers + Durable Objects |
-| [web](packages/web)                     | Next.js web client                   |
-| [shared](packages/shared)               | Shared types and utilities           |
+| Package                                       | Description                          |
+| --------------------------------------------- | ------------------------------------ |
+| [control-plane](packages/control-plane)       | Hono API + Rivet Session Actors      |
+| [sandbox-runtime](packages/sandbox-runtime)   | Sandbox Docker image & runtime       |
+| [web](packages/web)                           | Next.js web client                   |
+| [shared](packages/shared)                     | Shared types and utilities           |
 
 ## Getting Started
 
@@ -121,11 +114,11 @@ To understand the architecture and core concepts, read
 
 ### Fast Startup
 
-Sessions start near-instantly using Modal filesystem snapshots:
+Sessions start quickly using pre-built container images:
 
-- Images rebuilt every 30 minutes with latest code
-- Dependencies pre-installed and cached
+- Docker images pre-built with all dependencies
 - Sandboxes warmed proactively when user starts typing
+- Kubernetes pod scheduling optimized for fast startup
 
 ### Multiplayer Sessions
 
@@ -159,9 +152,35 @@ pip install -r requirements.txt
 ```
 
 - Runs automatically after git clone, before the agent starts
-- Skipped when restoring from a snapshot (dependencies already installed)
 - Non-blocking: failures are logged but don't prevent the session from starting
 - Default timeout: 5 minutes (configurable via `SETUP_TIMEOUT_SECONDS` environment variable)
+
+## Self-Hosting
+
+Open-Inspect runs on any Kubernetes cluster. Deployment manifests are provided in the `k8s/`
+directory. See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for the full deployment guide.
+
+### Prerequisites
+
+- Kubernetes cluster (1.28+)
+- kubectl configured
+- Docker registry for custom images
+- GitHub App for repository access
+- Anthropic API key
+
+### Quick Deploy
+
+```bash
+# Apply all Kubernetes manifests
+kubectl apply -k k8s/
+
+# Wait for services
+kubectl -n open-inspect wait --for=condition=ready pod -l app=rivet-engine --timeout=300s
+kubectl -n open-inspect wait --for=condition=ready pod -l app=postgres --timeout=300s
+
+# Verify
+kubectl -n open-inspect get pods
+```
 
 ## License
 
@@ -172,7 +191,9 @@ MIT
 Inspired by [Ramp's Inspect](https://builders.ramp.com/post/why-we-built-our-background-agent) and
 built with:
 
-- [Modal](https://modal.com) - Cloud sandbox infrastructure
-- [Cloudflare Workers](https://workers.cloudflare.com) - Edge computing
+- [Rivet](https://rivet.dev) - Open-source stateful actor infrastructure
+- [Kubernetes](https://kubernetes.io) - Container orchestration
 - [OpenCode](https://opencode.ai) - Coding agent runtime
 - [Next.js](https://nextjs.org) - Web framework
+- [Hono](https://hono.dev) - TypeScript HTTP framework
+- [PostgreSQL](https://postgresql.org) - Relational database

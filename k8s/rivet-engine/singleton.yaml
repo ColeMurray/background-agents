@@ -1,0 +1,74 @@
+# Rivet Engine singleton deployment.
+# Runs exactly 1 replica to handle singleton services (leader election,
+# scheduled tasks, etc.) that must not run concurrently.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rivet-engine-singleton
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: rivet-engine
+    app.kubernetes.io/component: singleton
+    app.kubernetes.io/part-of: open-inspect
+spec:
+  # Singletons must never run more than one replica
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rivet-engine
+      app.kubernetes.io/component: singleton
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rivet-engine
+        app.kubernetes.io/component: singleton
+        app.kubernetes.io/part-of: open-inspect
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: rivet-engine
+          image: ghcr.io/rivet-gg/rivet:latest
+          # Start all services including singletons
+          args: ["start"]
+          ports:
+            - name: guard
+              containerPort: 6420
+              protocol: TCP
+            - name: peer
+              containerPort: 6421
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: rivet-engine-config
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: peer
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: peer
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 2
+          startupProbe:
+            httpGet:
+              path: /health
+              port: peer
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi

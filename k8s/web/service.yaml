@@ -1,0 +1,21 @@
+# ClusterIP service for the web frontend.
+# Exposes the Next.js application to the ingress controller.
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: web
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: open-inspect
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: web
+    app.kubernetes.io/component: frontend
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      protocol: TCP

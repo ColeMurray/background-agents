@@ -3,7 +3,7 @@
 ## Available Skills
 
 - **`/onboarding`** - Interactive guided deployment of your own Open-Inspect instance. Walks through
-  repository setup, credential collection, Terraform deployment, and verification with user handoffs
+  repository setup, credential collection, Kubernetes deployment, and verification with user handoffs
   as needed.
 
 ## Deploying Your Own Instance
@@ -13,251 +13,264 @@ For a complete guide to deploying your own instance of Open-Inspect, see
 
 Alternatively, run `/onboarding` for an interactive guided setup.
 
-## Modal Infrastructure
+## Infrastructure Overview
+
+Open-Inspect runs on fully open-source infrastructure on Kubernetes:
+
+| Component          | Technology         | Purpose                              |
+| ------------------ | ------------------ | ------------------------------------ |
+| Control Plane      | Hono + Rivet Actors | HTTP API + stateful session actors  |
+| Sandbox Runtime    | K8s Pods (Docker)  | Isolated code execution environments |
+| Actor Orchestrator | Rivet Engine       | Actor scheduling, state persistence  |
+| Message Bus        | NATS               | Inter-service communication          |
+| Database           | PostgreSQL         | Session index, repo metadata, secrets|
+| Cache              | Redis              | Repository list caching              |
+| Web Frontend       | Next.js            | Web client UI                        |
+
+## Control Plane (Hono + Rivet Actors)
 
 ### Deployment
 
-**Never deploy `src/app.py` directly** - it only defines the app and shared resources, not the
-functions.
-
-Two valid deployment methods:
-
 ```bash
-cd packages/modal-infra
-
-# Method 1: Use deploy.py wrapper (recommended)
-modal deploy deploy.py
-
-# Method 2: Deploy the src package directly
-modal deploy -m src
+# Build and deploy the control plane
+docker build -t open-inspect-control-plane packages/control-plane/
+kubectl apply -f k8s/control-plane/
 ```
 
-Both methods work because they import `src/__init__.py` which registers all function modules
-(functions, web_api, scheduler) with the app.
+### Session Actors
 
-**Common mistake**: Running `modal deploy src/app.py` will succeed but deploy nothing useful - no
-endpoints will be created because `app.py` doesn't import the function modules.
+Each session gets its own Rivet Actor instance with:
 
-### Web Endpoints
+- **Actor State**: Session metadata, participants, messages, events, artifacts, sandbox status
+- **Actions**: RPC methods called by the Hono router (getState, enqueuePrompt, stop, etc.)
+- **WebSocket**: Real-time connections from web clients and sandbox processes
+- **Hibernation**: Actors sleep when idle and wake instantly on new requests
 
-Web endpoints use the `@fastapi_endpoint` decorator and are exposed at:
+The actor replaces the previous Cloudflare Durable Object. State is automatically persisted
+by Rivet Engine to PostgreSQL.
 
-```
-https://{workspace}--{app}-{function_name}.modal.run
-```
+### API Endpoints
 
-For example (replace `<workspace>` with your Modal workspace name):
+All routes are in `packages/control-plane/src/router.ts`:
 
-- `api_create_sandbox` → `https://<workspace>--open-inspect-api-create-sandbox.modal.run`
-- `api_health` → `https://<workspace>--open-inspect-api-health.modal.run`
+- `POST /sessions` - Create session
+- `GET /sessions` - List sessions
+- `GET /sessions/:id` - Get session state
+- `DELETE /sessions/:id` - Delete session
+- `POST /sessions/:id/prompt` - Send prompt
+- `POST /sessions/:id/stop` - Stop execution
+- `GET /sessions/:id/events` - Paginated events
+- `GET /sessions/:id/artifacts` - List artifacts
+- `GET /sessions/:id/participants` - List participants
+- `GET /sessions/:id/messages` - List messages
+- `POST /sessions/:id/pr` - Create PR
+- `POST /sessions/:id/ws-token` - Generate WebSocket token
+- `POST /sessions/:id/archive` - Archive session
+- `GET /repos` - List repositories (cached in Redis)
+- `GET /repos/:owner/:name/metadata` - Get repo metadata
+- `PUT /repos/:owner/:name/metadata` - Update repo metadata
+- `GET /repos/:owner/:name/secrets` - List secret keys (values never exposed)
+- `PUT /repos/:owner/:name/secrets` - Upsert secrets (batch)
+- `DELETE /repos/:owner/:name/secrets/:key` - Delete a single secret
+- `GET /health` - Health check
 
-Function names with underscores become hyphens in URLs.
+### Database
 
-### Secrets
+PostgreSQL stores shared data across sessions:
 
-Create Modal secrets via CLI:
+- **sessions** table: Session index for listing/filtering
+- **repo_metadata** table: Custom descriptions, aliases, keywords per repo
+- **repo_secrets** table: Encrypted repository-scoped secrets (AES-256-GCM)
 
-```bash
-modal secret create <secret-name> KEY1="value1" KEY2="value2"
-```
+Managed via `packages/control-plane/src/db/postgres.ts`.
 
-Reference in code:
+### Caching
 
-```python
-my_secret = modal.Secret.from_name("secret-name", required_keys=["KEY1", "KEY2"])
-
-@app.function(secrets=[my_secret])
-def my_func():
-    os.environ.get("KEY1")
-```
+The `/repos` endpoint caches the enriched repository list in Redis with a 5-minute TTL.
+On cache miss it re-fetches from GitHub API and PostgreSQL.
 
 ### API Authentication
 
-Modal HTTP endpoints require HMAC authentication from the control plane. This prevents unauthorized
-access to sandbox creation, snapshot, and restore endpoints.
+Sandbox pods authenticate to the control plane using HMAC-signed tokens via the
+`INTERNAL_API_SECRET` shared secret. Tokens expire after 5 minutes.
 
-**Required secret**: `MODAL_API_SECRET` - A shared secret for HMAC-signed tokens.
+## Sandbox Runtime (Kubernetes Pods)
 
-The secret is managed via Terraform (`terraform/environments/production/`):
+### Building the Image
 
-- Add `modal_api_secret` to your `.tfvars` file (generate with: `openssl rand -hex 32`)
-- Terraform configures it for both services:
-  - Control plane worker: `module.control_plane_worker.secrets`
-  - Modal app: `module.modal_app.secrets` (as `internal-api` secret)
-
-The control plane generates time-limited HMAC tokens that Modal endpoints verify. Tokens expire
-after 5 minutes to prevent replay attacks.
-
-### Image Builds
-
-To force an image rebuild, update the `CACHE_BUSTER` variable in `src/images/base.py`:
-
-```python
-CACHE_BUSTER = "v24-description-of-change"
+```bash
+cd packages/sandbox-runtime
+docker build -t open-inspect-sandbox .
 ```
+
+### How Sandboxes Work
+
+When a session needs a sandbox:
+
+1. Control plane creates a K8s Job with the sandbox Docker image
+2. Pod starts the supervisor process (`entrypoint.py`)
+3. Supervisor: git clone → setup script → OpenCode server → bridge
+4. Bridge connects to control plane WebSocket
+5. Events flow bidirectionally through WebSocket
+
+### Environment Variables
+
+Sandbox pods receive configuration via K8s Job environment:
+
+| Variable            | Description                           |
+| ------------------- | ------------------------------------- |
+| CONTROL_PLANE_URL   | Base URL for control plane            |
+| SANDBOX_AUTH_TOKEN   | Auth token for this sandbox           |
+| SANDBOX_ID          | Unique sandbox identifier             |
+| SESSION_ID          | Session this sandbox belongs to       |
+| REPO_OWNER          | Repository owner                      |
+| REPO_NAME           | Repository name                       |
+| PROVIDER            | LLM provider (default: "anthropic")   |
+| MODEL               | LLM model (default: "claude-haiku-4-5") |
+| ANTHROPIC_API_KEY   | API key for Claude                    |
 
 ### Common Issues
 
-1. **"modal-http: invalid function call"** - Usually means the function isn't registered with the
-   app. Ensure:
-   - The module is imported in `deploy.py`
-   - You're deploying `deploy.py`, not just `app.py`
+1. **Sandbox can't connect to control plane** - Check that CONTROL_PLANE_URL is correct and the
+   control plane service is reachable from the sandbox namespace.
 
-2. **Import errors with relative imports** - Modal runs code in a special context. Use the
-   `deploy.py` pattern that adds `src` to sys.path.
+2. **Git clone fails** - Verify GitHub App credentials are correctly configured in
+   `k8s/control-plane/secret.yaml`.
 
-3. **Pydantic dependency issues** - Use lazy imports inside functions to avoid loading pydantic at
-   module import time:
-   ```python
-   @app.function()
-   def my_func():
-       from .sandbox.types import SessionConfig  # Lazy import
-   ```
+3. **OpenCode fails to start** - Check sandbox pod logs:
+   `kubectl -n open-inspect logs job/sandbox-{id}`
 
 ## GitHub App Authentication
 
 > **Single-Tenant Design**: The GitHub App configuration uses a single installation ID
-> (`GITHUB_APP_INSTALLATION_ID`) shared by all users. This means any user can access any repository
-> the App is installed on. This system is designed for internal/single-tenant deployment only.
+> (`GITHUB_APP_INSTALLATION_ID`) shared by all users. This system is designed for
+> internal/single-tenant deployment only.
 
 ### Required Secrets
 
 GitHub App credentials (`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_INSTALLATION_ID`) are
 needed by **two services**:
 
-1. **Modal sandbox** - for cloning repos and pushing commits
+1. **Sandbox pods** - for cloning repos and pushing commits
 2. **Control plane** - for listing installation repositories (`/repos` endpoint)
 
-The Terraform configuration (`terraform/environments/production/main.tf`) passes these to both:
-
-- `module.control_plane_worker.secrets` - for the `/repos` API endpoint
-- `module.modal_app.secrets` - for git operations in sandboxes
-
-If the control plane is missing these secrets, the `/repos` endpoint returns "GitHub App not
-configured" and the web app's repository dropdown will be empty.
+Both are configured via K8s Secrets in `k8s/control-plane/secret.yaml`.
 
 ### Token Lifetime
 
 - GitHub App installation tokens expire after **1 hour**
 - Generate fresh tokens for operations that may happen after startup
 
-### Key Format
-
-- Cloudflare Workers require **PKCS#8** format for private keys
-- Convert from PKCS#1:
-  `openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in key.pem -out key-pkcs8.pem`
-
 ### Token Flow
 
 ```
-Startup (git sync):  Modal → generate token → GITHUB_APP_TOKEN env var → sandbox
+Startup (git sync):  Sandbox pod → generate token → git clone
 Push (PR creation):  Control plane → generate fresh token → WebSocket → sandbox
 PR API:              Control plane → user OAuth token → GitHub API (server-side only)
 ```
 
-## Control Plane (Cloudflare Workers)
+## Rivet Engine
+
+### What It Does
+
+The Rivet Engine is a Rust-based orchestrator that manages actor lifecycle:
+
+- Allocates actors to runners
+- Persists actor state to PostgreSQL
+- Handles hibernation (sleep/wake)
+- Routes requests to the correct actor
+- Health checking and failover
 
 ### Deployment
 
-The control plane is deployed via Terraform. See [terraform/README.md](terraform/README.md) for
-details.
+Two K8s Deployments in `k8s/rivet-engine/`:
 
-All secrets and environment variables are configured through Terraform's `terraform.tfvars` file.
+1. **Main deployment** (2+ replicas, HPA) - `--except-services singleton`
+2. **Singleton deployment** (1 replica) - Runs all services including singletons
 
-### Durable Objects
+Dependencies: NATS (`k8s/nats/`) and PostgreSQL (`k8s/postgres/`).
 
-Sessions use Durable Objects with SQLite storage. Key patterns:
+### Health Check
 
-- Hibernation support - WebSockets survive hibernation but in-memory state is lost
-- Use `ctx.getWebSockets()` to recover WebSocket references after hibernation
-- Store critical state in SQLite, not just memory
-
-### D1 Database
-
-The control plane uses a Cloudflare D1 database (`env.DB` binding) for three data categories:
-
-**Session Index** (`sessions` table): Session metadata for listing and filtering. Managed by
-`SessionIndexStore` in `src/db/session-index.ts`. Supports server-side filtering by status and
-pagination via `limit`/`offset`.
-
-**Repository Metadata** (`repo_metadata` table): Custom descriptions, aliases, channel associations,
-and keywords per repo. Managed by `RepoMetadataStore` in `src/db/repo-metadata.ts`. Supports batch
-fetching via `db.batch()`.
-
-**Repo Secrets** (`repo_secrets` table): Encrypted repository-scoped secrets (AES-256-GCM using
-`REPO_SECRETS_ENCRYPTION_KEY`). Managed by `RepoSecretsStore` in `src/db/repo-secrets.ts`.
-
-**Repository list cache**: The `/repos` endpoint caches the enriched repository list in KV
-(`REPOS_CACHE` binding) with a 5-minute TTL. KV is shared across isolates, so cache invalidation (on
-metadata update) is consistent. On cache miss it re-fetches from GitHub and D1.
-
-**API routes** (in `src/router.ts`):
-
-- `GET /repos/:owner/:name/secrets` — list secret keys (values never exposed)
-- `PUT /repos/:owner/:name/secrets` — upsert secrets (batch)
-- `DELETE /repos/:owner/:name/secrets/:key` — delete a single secret
-
-**Sandbox injection**: At spawn time, the lifecycle manager calls `getUserEnvVars()` on the session
-DO, which decrypts secrets from D1 and passes them as environment variables. System variables
-(`CONTROL_PLANE_URL`, `SANDBOX_AUTH_TOKEN`, etc.) always take precedence.
-
-**Migrations**: D1 schema migrations live in `terraform/d1/migrations/` and are applied via
-`scripts/d1-migrate.sh` during `terraform apply`.
-
-**KV → D1 migration** (one-off): Run
-`scripts/migrate-kv-to-d1.sh <kv-namespace-id> <d1-database-name>` to copy session and repo metadata
-from the legacy `SESSION_INDEX` KV namespace to D1. Get the namespace ID from
-`terraform output session_index_kv_id`. Requires `wrangler` auth and `jq`. Idempotent — safe to
-re-run.
+```bash
+kubectl -n open-inspect port-forward svc/rivet-engine 6421:6421
+curl http://localhost:6421/health
+```
 
 ## Coding Conventions
 
 ### Durations and timeouts
 
 - **Use seconds for Python, milliseconds for TypeScript.** These match the native conventions of
-  each ecosystem (Modal's `timeout=` takes seconds; the control-plane uses `_MS` suffixes
-  throughout). Never use minutes or hours as the unit — they force fractional values for common
-  cases and require error-prone conversions at call sites.
-- **Encode the unit in the name.** Python: `timeout_seconds`, `max_age_seconds`. TypeScript:
-  `timeoutMs`, `INACTIVITY_TIMEOUT_MS`. A bare `timeout` with no unit suffix is ambiguous.
-- **Define each default value exactly once.** Extract to a named constant
-  (`DEFAULT_SANDBOX_TIMEOUT_SECONDS`) and import it everywhere. Never repeat a literal like `7200`
-  across multiple files as a default — it will drift.
-- **Don't restate literal values in comments.** Write `Defaults to DEFAULT_SANDBOX_TIMEOUT_SECONDS`
-  instead of `Default: 7200`. Comments that echo a literal become silently wrong when the constant
-  changes.
+  each ecosystem. Never use minutes or hours as the unit.
+- **Encode the unit in the name.** Python: `timeout_seconds`. TypeScript: `timeoutMs`.
+- **Define each default value exactly once.** Extract to a named constant and import everywhere.
+- **Don't restate literal values in comments.**
 
 ### Extending existing patterns
 
 - When threading an existing field through new code paths, evaluate whether the existing design
-  (naming, types, units) is correct — don't blindly propagate it. If the existing field has a bad
-  unit or name, fix it in the same change rather than spreading the problem to more files.
+  (naming, types, units) is correct — don't blindly propagate it.
+
+## Kubernetes Manifests
+
+All K8s manifests are in the `k8s/` directory:
+
+```
+k8s/
+├── namespace.yaml
+├── kustomization.yaml
+├── ingress.yaml
+├── rivet-engine/     # Actor orchestrator
+├── nats/             # Message bus
+├── postgres/         # Database
+├── redis/            # Cache
+├── control-plane/    # API + Actors
+├── web/              # Frontend
+└── sandbox/          # RBAC for sandbox pods
+```
+
+### Quick Deploy
+
+```bash
+kubectl apply -k k8s/
+kubectl -n open-inspect get pods
+```
 
 ## Testing
 
 ### End-to-End Test Flow
 
 ```bash
-# Create session (replace <your-subdomain> with your Cloudflare Workers subdomain)
-curl -X POST https://open-inspect-control-plane.<your-subdomain>.workers.dev/sessions \
+# Port-forward control plane
+kubectl -n open-inspect port-forward svc/control-plane 3001:3001
+
+# Create session
+curl -X POST http://localhost:3001/sessions \
   -H "Content-Type: application/json" \
   -d '{"repoOwner":"owner","repoName":"repo"}'
 
 # Send prompt
-curl -X POST https://.../sessions/{sessionId}/prompt \
+curl -X POST http://localhost:3001/sessions/{sessionId}/prompt \
   -H "Content-Type: application/json" \
   -d '{"content":"...","authorId":"test","source":"web"}'
 
 # Check events
-curl https://.../sessions/{sessionId}/events
+curl http://localhost:3001/sessions/{sessionId}/events
 ```
 
 ### Viewing Logs
 
 ```bash
-# Modal logs
-modal app logs open-inspect
+# Control plane logs
+kubectl -n open-inspect logs -l app=control-plane -f
 
-# Cloudflare logs (via dashboard)
-# Go to Workers & Pages → Your Worker → Logs
+# Sandbox pod logs
+kubectl -n open-inspect logs job/sandbox-{sessionId} -f
+
+# Rivet Engine logs
+kubectl -n open-inspect logs -l app=rivet-engine -f
+
+# NATS logs
+kubectl -n open-inspect logs -l app=nats -f
 ```

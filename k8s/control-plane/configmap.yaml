@@ -1,0 +1,30 @@
+# Control plane configuration.
+# Non-secret environment variables consumed by the control-plane deployment.
+# Replaces the Cloudflare Workers bindings that were previously configured via Terraform.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: control-plane-config
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: control-plane
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: open-inspect
+data:
+  # HTTP server port
+  PORT: "3001"
+
+  # PostgreSQL connection (credentials in secret; this is the connstring template)
+  DATABASE_URL: "postgres://postgres:CHANGEME@postgres:5432/open_inspect"
+
+  # Redis connection for caching and pub/sub
+  REDIS_URL: "redis://redis:6379"
+
+  # Rivet Engine API endpoint for sandbox orchestration
+  RIVET_ENDPOINT: "http://rivet-engine:6420"
+
+  # Container image used when spawning sandbox jobs via Rivet
+  SANDBOX_IMAGE: "open-inspect-sandbox:latest"
+
+  # Node environment
+  NODE_ENV: "production"

@@ -29,7 +29,7 @@ export interface StoredGitHubToken {
  */
 export async function exchangeCodeForToken(
   code: string,
-  config: GitHubOAuthConfig
+  config: GitHubOAuthConfig,
 ): Promise<GitHubTokenResponse> {
   const response = await fetch("https://github.com/login/oauth/access_token", {
     method: "POST",
@@ -61,7 +61,7 @@ export async function exchangeCodeForToken(
  */
 export async function refreshAccessToken(
   refreshToken: string,
-  config: GitHubOAuthConfig
+  config: GitHubOAuthConfig,
 ): Promise<GitHubTokenResponse> {
   const response = await fetch("https://github.com/login/oauth/access_token", {
     method: "POST",
@@ -112,7 +112,7 @@ export async function getGitHubUser(accessToken: string): Promise<GitHubUser> {
  * Get user's email addresses from GitHub.
  */
 export async function getGitHubUserEmails(
-  accessToken: string
+  accessToken: string,
 ): Promise<Array<{ email: string; primary: boolean; verified: boolean }>> {
   const response = await fetch("https://api.github.com/user/emails", {
     headers: {
@@ -134,7 +134,7 @@ export async function getGitHubUserEmails(
  */
 export async function encryptGitHubTokens(
   tokens: GitHubTokenResponse,
-  encryptionKey: string
+  encryptionKey: string,
 ): Promise<StoredGitHubToken> {
   const accessTokenEncrypted = await encryptToken(tokens.access_token, encryptionKey);
 
@@ -157,7 +157,7 @@ export async function encryptGitHubTokens(
  */
 export async function getValidAccessToken(
   stored: StoredGitHubToken,
-  config: GitHubOAuthConfig
+  config: GitHubOAuthConfig,
 ): Promise<{ accessToken: string; refreshed: boolean; newStored?: StoredGitHubToken }> {
   const now = Date.now();
   const bufferMs = 5 * 60 * 1000; // 5 minutes
@@ -201,7 +201,7 @@ export function generateNoreplyEmail(githubUser: GitHubUser): string {
  */
 export function getCommitEmail(
   githubUser: GitHubUser,
-  emails?: Array<{ email: string; primary: boolean; verified: boolean }>
+  emails?: Array<{ email: string; primary: boolean; verified: boolean }>,
 ): string {
   // Use public email if available
   if (githubUser.email) {

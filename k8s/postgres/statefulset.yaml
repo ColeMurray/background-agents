@@ -1,0 +1,117 @@
+# PostgreSQL StatefulSet with persistent storage.
+# Single replica -- for production HA, consider a PostgreSQL operator
+# (e.g., CloudNativePG or Zalando Postgres Operator).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: open-inspect
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+      app.kubernetes.io/component: database
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/component: database
+        app.kubernetes.io/part-of: open-inspect
+    spec:
+      terminationGracePeriodSeconds: 60
+      # Init container: copy the initialization script to the docker-entrypoint-initdb.d
+      # directory so PostgreSQL runs it on first start.
+      initContainers:
+        - name: init-config
+          image: busybox:1.36
+          command: ["sh", "-c"]
+          args:
+            - |
+              cp /config/init-db.sh /docker-entrypoint-initdb.d/init-db.sh
+              chmod +x /docker-entrypoint-initdb.d/init-db.sh
+              cp /config/postgresql.conf /etc/postgresql/postgresql.conf
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+            - name: pg-config
+              mountPath: /etc/postgresql
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          args:
+            - "-c"
+            - "config_file=/etc/postgresql/postgresql.conf"
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: postgres-credentials
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+              subPath: pgdata
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            - name: pg-config
+              mountPath: /etc/postgresql
+              readOnly: true
+          # Liveness: pg_isready checks that PostgreSQL is accepting connections
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - "-U"
+                - "postgres"
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - "-U"
+                - "postgres"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 2
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        - name: config
+          configMap:
+            name: postgres-config
+        # Ephemeral volumes for init artifacts (scripts/config copied from configmap)
+        - name: initdb
+          emptyDir: {}
+        - name: pg-config
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: postgres
+          app.kubernetes.io/component: database
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

@@ -1,0 +1,28 @@
+# Rivet Engine configuration.
+# Provides connection details for PostgreSQL and NATS, plus runtime tuning.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rivet-engine-config
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: rivet-engine
+    app.kubernetes.io/component: engine
+    app.kubernetes.io/part-of: open-inspect
+data:
+  # PostgreSQL connection string (credentials injected via secret env vars)
+  DATABASE_URL: "postgres://rivet:CHANGEME@postgres:5432/rivet"
+
+  # NATS connection URL for event streaming and inter-service communication
+  NATS_URL: "nats://nats:4222"
+
+  # Rivet server configuration
+  RIVET_PORT_GUARD: "6420"
+  RIVET_PORT_PEER: "6421"
+
+  # Logging
+  RUST_LOG: "info,rivet=debug"
+
+  # Guard/API endpoint advertised to clients
+  RIVET_GUARD_PUBLIC_HOSTNAME: "rivet-engine"
+  RIVET_GUARD_PUBLIC_PORT: "6420"

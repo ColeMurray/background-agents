@@ -1,0 +1,88 @@
+# Ingress for external access to the Open-Inspect platform.
+# Routes traffic to the control plane API / WebSocket and the web frontend.
+#
+# Prerequisites:
+#   - An ingress controller (e.g., ingress-nginx) must be installed in the cluster.
+#   - For TLS, configure cert-manager or provide a TLS secret.
+#   - Update "open-inspect.example.com" to your actual domain.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: open-inspect
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: open-inspect
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: open-inspect
+  annotations:
+    # nginx ingress controller annotations
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # Enable WebSocket support for /ws paths
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+    # Request body size limit (for file uploads via API)
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    # TLS -- uncomment and configure when using cert-manager
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  # TLS -- uncomment when you have a certificate
+  # tls:
+  #   - hosts:
+  #       - open-inspect.example.com
+  #     secretName: open-inspect-tls
+  rules:
+    - host: open-inspect.example.com
+      http:
+        paths:
+          # API routes -- forward to the control plane
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: control-plane
+                port:
+                  number: 3001
+          # WebSocket routes -- forward to the control plane
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service:
+                name: control-plane
+                port:
+                  number: 3001
+          # Session endpoints used by the existing API surface
+          - path: /sessions
+            pathType: Prefix
+            backend:
+              service:
+                name: control-plane
+                port:
+                  number: 3001
+          # Repository endpoints
+          - path: /repos
+            pathType: Prefix
+            backend:
+              service:
+                name: control-plane
+                port:
+                  number: 3001
+          # Health check endpoint for the control plane
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: control-plane
+                port:
+                  number: 3001
+          # Everything else goes to the web frontend (must be last)
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 3000

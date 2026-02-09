@@ -1,50 +1,8 @@
 /**
  * Type definitions for Open-Inspect Control Plane.
+ *
+ * Platform-agnostic types. All Cloudflare-specific bindings have been removed.
  */
-
-// Environment bindings
-export interface Env {
-  // Durable Objects
-  SESSION: DurableObjectNamespace;
-
-  // KV Namespaces
-  REPOS_CACHE: KVNamespace; // Short-lived cache for /repos listing
-
-  // Service bindings
-  SLACK_BOT?: Fetcher; // Optional - only if slack-bot is deployed
-
-  // D1 database
-  DB: D1Database;
-
-  // Secrets
-  GITHUB_CLIENT_ID?: string;
-  GITHUB_CLIENT_SECRET?: string;
-  TOKEN_ENCRYPTION_KEY: string;
-  REPO_SECRETS_ENCRYPTION_KEY?: string;
-  MODAL_TOKEN_ID?: string;
-  MODAL_TOKEN_SECRET?: string;
-  MODAL_API_SECRET?: string; // Shared secret for authenticating with Modal endpoints
-  INTERNAL_CALLBACK_SECRET?: string; // For signing callbacks to slack-bot
-
-  // GitHub App secrets (for git operations)
-  GITHUB_APP_ID?: string;
-  GITHUB_APP_PRIVATE_KEY?: string;
-  GITHUB_APP_INSTALLATION_ID?: string;
-
-  // Variables
-  DEPLOYMENT_NAME: string;
-  SCM_PROVIDER?: string; // Source control provider for this deployment (default: github)
-  WORKER_URL?: string; // Base URL for the worker (for callbacks)
-  WEB_APP_URL?: string; // Base URL for the web app (for PR links)
-  CF_ACCOUNT_ID?: string; // Cloudflare account ID
-  MODAL_WORKSPACE?: string; // Modal workspace name (used in Modal endpoint URLs)
-
-  // Sandbox lifecycle configuration
-  SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)
-
-  // Logging
-  LOG_LEVEL?: string; // "debug" | "info" | "warn" | "error" (default: "info")
-}
 
 // Session status
 export type SessionStatus = "created" | "active" | "completed" | "archived";
@@ -81,7 +39,7 @@ export type EventType = "tool_call" | "tool_result" | "token" | "error" | "git_s
 // Artifact types
 export type ArtifactType = "pr" | "screenshot" | "preview" | "branch";
 
-// Client → Server messages
+// Client -> Server messages
 export type ClientMessage =
   | { type: "ping" }
   | { type: "subscribe"; token: string; clientId: string }
@@ -101,7 +59,7 @@ export type ClientMessage =
     }
   | { type: "fetch_history"; cursor: { timestamp: number; id: string }; limit?: number };
 
-// Server → Client messages
+// Server -> Client messages
 export type ServerMessage =
   | { type: "pong"; timestamp: number }
   | {
@@ -143,7 +101,7 @@ export type ServerMessage =
       cursor: { timestamp: number; id: string } | null;
     };
 
-// Sandbox events (from Modal)
+// Sandbox events (from sandbox pods)
 export type SandboxEvent =
   | { type: "heartbeat"; sandboxId: string; status: string; timestamp: number }
   | {
@@ -257,26 +215,13 @@ export interface ParticipantPresence {
   lastSeen: number;
 }
 
-// Client info (stored in DO memory)
-export interface ClientInfo {
-  participantId: string;
-  userId: string;
-  name: string;
-  avatar?: string;
-  status: "active" | "idle" | "away";
-  lastSeen: number;
-  clientId: string;
-  ws: WebSocket;
-  lastFetchHistoryAt?: number;
-}
-
 // API response types
 export interface CreateSessionRequest {
   repoOwner: string;
   repoName: string;
   title?: string;
-  model?: string; // LLM model to use (e.g., "claude-haiku-4-5", "claude-sonnet-4-5")
-  reasoningEffort?: string; // Reasoning effort level (e.g., "high", "max")
+  model?: string;
+  reasoningEffort?: string;
 }
 
 export interface CreateSessionResponse {

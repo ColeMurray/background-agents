@@ -1,25 +1,35 @@
 {
   "name": "@open-inspect/control-plane",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/index.js --platform=browser --target=es2022 --external:cloudflare:* --external:node:*",
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
     "test": "vitest run",
-    "test:integration": "vitest run --config vitest.integration.config.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix"
   },
   "dependencies": {
-    "@cloudflare/workers-types": "^4.20241230.0",
-    "@open-inspect/shared": "file:../shared"
+    "@hono/node-server": "^1.12.0",
+    "@kubernetes/client-node": "^1.0.0",
+    "@open-inspect/shared": "file:../shared",
+    "hono": "^4.4.0",
+    "ioredis": "^5.4.0",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.12.0",
+    "rivetkit": "^0.4.0",
+    "uuid": "^10.0.0"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.12.10",
-    "esbuild": "^0.25.0",
+    "@types/jsonwebtoken": "^9.0.6",
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "@types/uuid": "^10.0.0",
+    "tsx": "^4.19.0",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8",
-    "wrangler": "^3.99.0"
+    "vitest": "^2.1.8"
   }
 }

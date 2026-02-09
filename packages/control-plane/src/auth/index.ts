@@ -2,13 +2,21 @@
  * Auth module exports.
  */
 
-export { encryptToken, decryptToken, generateEncryptionKey, generateId } from "./crypto";
-
+export { encryptToken, decryptToken, generateId, hashToken, generateEncryptionKey } from "./crypto";
+export { generateInternalToken, verifyInternalToken } from "./internal";
 export {
-  generateInstallationToken,
-  isGitHubAppConfigured,
   getGitHubAppConfig,
+  isGitHubAppConfigured,
+  generateInstallationToken,
+  getInstallationRepository,
+  listInstallationRepositories,
   type GitHubAppConfig,
 } from "./github-app";
-
-export { verifyInternalToken, generateInternalToken } from "./internal";
+export {
+  exchangeCodeForToken,
+  refreshAccessToken,
+  getGitHubUser,
+  getValidAccessToken,
+  type GitHubOAuthConfig,
+  type StoredGitHubToken,
+} from "./github";

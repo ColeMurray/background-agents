@@ -1,0 +1,50 @@
+# NATS server configuration for the Open-Inspect event bus.
+# Provides JetStream for durable message delivery and a 3-node cluster for HA.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-config
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: nats
+    app.kubernetes.io/component: messaging
+    app.kubernetes.io/part-of: open-inspect
+data:
+  nats.conf: |
+    # Client connections
+    port: 4222
+
+    # HTTP monitoring endpoint
+    http_port: 8222
+
+    # Cluster configuration for HA
+    cluster {
+      name: open-inspect-nats
+      port: 6222
+
+      # Peer discovery via headless service DNS
+      routes [
+        nats-route://nats-0.nats-headless.open-inspect.svc.cluster.local:6222
+        nats-route://nats-1.nats-headless.open-inspect.svc.cluster.local:6222
+        nats-route://nats-2.nats-headless.open-inspect.svc.cluster.local:6222
+      ]
+    }
+
+    # JetStream for persistent streams used by Rivet Engine
+    jetstream {
+      store_dir: /data/jetstream
+      max_mem: 256MB
+      max_file: 2GB
+    }
+
+    # Logging
+    debug: false
+    trace: false
+    logtime: true
+
+    # Connection limits
+    max_connections: 1024
+    max_payload: 1MB
+
+    # Graceful shutdown timeout in seconds
+    lame_duck_duration: 30s

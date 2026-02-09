@@ -1,0 +1,25 @@
+# ClusterIP service exposing Rivet Engine to other in-cluster components.
+# Routes to the scalable engine pods (not the singleton).
+apiVersion: v1
+kind: Service
+metadata:
+  name: rivet-engine
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: rivet-engine
+    app.kubernetes.io/component: engine
+    app.kubernetes.io/part-of: open-inspect
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rivet-engine
+    app.kubernetes.io/component: engine
+  ports:
+    - name: guard
+      port: 6420
+      targetPort: guard
+      protocol: TCP
+    - name: peer
+      port: 6421
+      targetPort: peer
+      protocol: TCP

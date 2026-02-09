@@ -40,7 +40,7 @@
     "*.{js,jsx,json,md,yaml,yml,css}": [
       "prettier --write"
     ],
-    "packages/modal-infra/**/*.py": [
+    "packages/sandbox-runtime/**/*.py": [
       "ruff check --fix",
       "ruff format"
     ]

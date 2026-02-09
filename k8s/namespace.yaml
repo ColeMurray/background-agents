@@ -1,0 +1,9 @@
+# Namespace for all Open-Inspect platform resources.
+# Isolates the platform from other workloads in the cluster.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: open-inspect
+  labels:
+    app.kubernetes.io/part-of: open-inspect
+    app.kubernetes.io/managed-by: kustomize
