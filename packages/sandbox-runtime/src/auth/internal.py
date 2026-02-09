@@ -26,7 +26,7 @@ class AuthConfigurationError(Exception):
 
 def require_secret() -> str:
     """
-    Get the MODAL_API_SECRET, raising an error if not configured.
+    Get the INTERNAL_API_SECRET, raising an error if not configured.
 
     This should be called at startup/request time to fail fast if
     authentication is not properly configured.
@@ -35,12 +35,12 @@ def require_secret() -> str:
         The secret value
 
     Raises:
-        AuthConfigurationError: If MODAL_API_SECRET is not set
+        AuthConfigurationError: If INTERNAL_API_SECRET is not set
     """
-    secret = os.environ.get("MODAL_API_SECRET")
+    secret = os.environ.get("INTERNAL_API_SECRET")
     if not secret:
         raise AuthConfigurationError(
-            "MODAL_API_SECRET environment variable is not configured. "
+            "INTERNAL_API_SECRET environment variable is not configured. "
             "This secret is required for authenticating control plane requests. "
             "Please ensure the secret is properly configured."
         )
@@ -58,13 +58,13 @@ def verify_internal_token(auth_header: str | None, secret: str | None = None) ->
     Args:
         auth_header: The Authorization header value (e.g., "Bearer timestamp.signature")
         secret: The shared secret for HMAC verification. If not provided, reads from
-                MODAL_API_SECRET environment variable.
+                INTERNAL_API_SECRET environment variable.
 
     Returns:
         True if the token is valid, False otherwise
 
     Raises:
-        AuthConfigurationError: If secret is not provided and MODAL_API_SECRET is not set
+        AuthConfigurationError: If secret is not provided and INTERNAL_API_SECRET is not set
     """
     if secret is None:
         secret = require_secret()

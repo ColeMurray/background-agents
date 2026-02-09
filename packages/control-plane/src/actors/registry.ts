@@ -15,7 +15,7 @@ import { sessionActor } from "./session";
  * and by the router to get actor references.
  */
 export const registry = setup({
-  actors: {
+  use: {
     session: sessionActor,
   },
 });

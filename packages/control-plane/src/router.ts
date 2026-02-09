@@ -29,6 +29,7 @@ import {
   type GitHubAppConfig,
 } from "./auth/github-app";
 import { generateId } from "./auth/crypto";
+import { verifyInternalToken } from "./auth/internal";
 import { createLogger, parseLogLevel } from "./logger";
 import type { RepoMetadata } from "@open-inspect/shared";
 import type { ActorRegistry } from "./actors/registry";
@@ -373,10 +374,14 @@ export function createRouter(ctx: AppContext): Hono {
    * back to the control plane. Requires internal API authentication.
    */
   app.post("/sessions/:id/sandbox-event", async (c) => {
+    const authHeader = c.req.header("Authorization") ?? null;
+    const isValid = await verifyInternalToken(authHeader, config.internalApiSecret);
+    if (!isValid) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+
     const id = c.req.param("id");
     const event = await c.req.json();
-
-    // TODO: verify internal token from Authorization header
 
     const sessionActor = registry.getActor("session", id);
     await sessionActor.handleSandboxEvent(event);

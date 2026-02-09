@@ -61,12 +61,10 @@ async function main() {
   const apiRouter = createRouter(appContext);
   app.route("/", apiRouter);
 
-  // Mount Rivet actor handler for WebSocket connections
+  // Mount Rivet actor handler for WebSocket connections and RPC
   // Rivet actors handle their own routing under /api/rivet/*
   app.all("/api/rivet/*", async (c) => {
-    // Rivet SDK handles WebSocket upgrade and actor routing
-    // This is a placeholder for the Rivet HTTP handler integration
-    return c.json({ error: "Rivet actor handler not yet configured" }, 501);
+    return await registry.handler(c.req.raw);
   });
 
   // Global error handler
