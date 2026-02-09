@@ -1947,12 +1947,12 @@ export class SessionDO extends DurableObject<Env> {
       }
     }
 
-    // Validate model name if provided
+    // Validate and normalize model name if provided
     const model = getValidModelOrDefault(body.model);
-    if (body.model && model !== body.model) {
+    if (body.model && !isValidModel(body.model)) {
       this.log.warn("Invalid model name, using default", {
         requested_model: body.model,
-        default_model: model,
+        default_model: DEFAULT_MODEL,
       });
     }
 
