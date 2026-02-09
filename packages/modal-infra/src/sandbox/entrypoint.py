@@ -243,8 +243,16 @@ class SandboxSupervisor:
                 openai_entry["accountId"] = account_id
 
             auth_file = auth_dir / "auth.json"
-            auth_file.write_text(json.dumps({"openai": openai_entry}))
-            auth_file.chmod(0o600)
+            tmp_file = auth_dir / ".auth.json.tmp"
+
+            # Write to a temp file created with 0o600 from the start, then
+            # atomically rename so the target is never world-readable.
+            fd = os.open(str(tmp_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                os.write(fd, json.dumps({"openai": openai_entry}).encode())
+            finally:
+                os.close(fd)
+            tmp_file.replace(auth_file)
 
             self.log.info("openai_oauth.setup")
         except Exception as e:

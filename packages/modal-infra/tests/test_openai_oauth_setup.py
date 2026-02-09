@@ -1,6 +1,7 @@
 """Tests for SandboxSupervisor._setup_openai_oauth()."""
 
 import json
+import os
 from unittest.mock import patch
 
 from src.sandbox.entrypoint import SandboxSupervisor
@@ -96,6 +97,26 @@ class TestOpenaiOauthSetup:
         with (
             patch.dict("os.environ", {"OPENAI_OAUTH_REFRESH_TOKEN": "rt_abc123"}, clear=False),
             patch("pathlib.Path.home", return_value=tmp_path),
-            patch("pathlib.Path.write_text", side_effect=OSError("disk full")),
+            patch("os.open", side_effect=OSError("disk full")),
         ):
             sup._setup_openai_oauth()
+
+    def test_no_temp_file_left_on_write_failure(self, tmp_path):
+        sup = _make_supervisor()
+        original_open = os.open
+
+        def fail_on_tmp(path, *args, **kwargs):
+            if ".auth.json.tmp" in path:
+                raise OSError("disk full")
+            return original_open(path, *args, **kwargs)
+
+        with (
+            patch.dict("os.environ", {"OPENAI_OAUTH_REFRESH_TOKEN": "rt_abc123"}, clear=False),
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("os.open", side_effect=fail_on_tmp),
+        ):
+            sup._setup_openai_oauth()
+
+        auth_dir = tmp_path / ".local" / "share" / "opencode"
+        tmp_file = auth_dir / ".auth.json.tmp"
+        assert not tmp_file.exists()
