@@ -6,7 +6,7 @@ const BASE_CONTEXT: CallbackContext = {
   channel: "C123",
   threadTs: "1234567890.123456",
   repoFullName: "octocat/hello-world",
-  model: "claude-haiku-4-5",
+  model: "anthropic/claude-haiku-4-5",
 };
 
 const BASE_RESPONSE: AgentResponse = {

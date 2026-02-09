@@ -6,7 +6,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { SidebarLayout, useSidebarContext } from "@/components/sidebar-layout";
 import { formatModelNameLower } from "@/lib/format";
-import { MODEL_OPTIONS, getDefaultReasoningEffort } from "@open-inspect/shared";
+import { MODEL_OPTIONS, DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 
 interface Repo {
@@ -24,9 +24,9 @@ export default function Home() {
   const [repos, setRepos] = useState<Repo[]>([]);
   const [loadingRepos, setLoadingRepos] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState<string>("");
-  const [selectedModel, setSelectedModel] = useState("claude-haiku-4-5");
+  const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
-    getDefaultReasoningEffort("claude-haiku-4-5")
+    getDefaultReasoningEffort(DEFAULT_MODEL)
   );
   const [prompt, setPrompt] = useState("");
   const [creating, setCreating] = useState(false);

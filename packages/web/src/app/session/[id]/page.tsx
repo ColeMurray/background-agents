@@ -12,6 +12,7 @@ import { ActionBar } from "@/components/action-bar";
 import { formatModelNameLower } from "@/lib/format";
 import {
   MODEL_OPTIONS,
+  DEFAULT_MODEL,
   getDefaultReasoningEffort,
   type ModelDisplayInfo,
 } from "@open-inspect/shared";
@@ -153,9 +154,9 @@ export default function SessionPage() {
   }, [sessionId]);
 
   const [prompt, setPrompt] = useState("");
-  const [selectedModel, setSelectedModel] = useState("claude-haiku-4-5");
+  const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
-    getDefaultReasoningEffort("claude-haiku-4-5")
+    getDefaultReasoningEffort(DEFAULT_MODEL)
   );
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);

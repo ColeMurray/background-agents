@@ -2,7 +2,7 @@
  * Utility functions for formatting display values
  */
 
-import { MODEL_OPTIONS } from "@open-inspect/shared";
+import { MODEL_OPTIONS, normalizeModelId } from "@open-inspect/shared";
 
 // Build a lookup map once at module level
 const MODEL_DISPLAY_NAMES = new Map<string, string>(
@@ -10,22 +10,22 @@ const MODEL_DISPLAY_NAMES = new Map<string, string>(
 );
 
 /**
- * Format model ID to display name
- * e.g., "claude-sonnet-4-5" → "Claude Sonnet 4.5"
+ * Format model ID to display name.
+ * e.g., "anthropic/claude-sonnet-4-5" → "Claude Sonnet 4.5"
  * e.g., "openai/gpt-5.2-codex" → "GPT 5.2 Codex"
  */
 export function formatModelName(modelId: string): string {
   if (!modelId) return "Unknown Model";
-  return MODEL_DISPLAY_NAMES.get(modelId) ?? modelId;
+  return MODEL_DISPLAY_NAMES.get(normalizeModelId(modelId)) ?? modelId;
 }
 
 /**
- * Format model ID to lowercase display format for footer
- * e.g., "claude-sonnet-4-5" → "claude sonnet 4.5"
+ * Format model ID to lowercase display format for footer.
+ * e.g., "anthropic/claude-sonnet-4-5" → "claude sonnet 4.5"
  */
 export function formatModelNameLower(modelId: string): string {
   if (!modelId) return "unknown model";
-  return (MODEL_DISPLAY_NAMES.get(modelId) ?? modelId).toLowerCase();
+  return (MODEL_DISPLAY_NAMES.get(normalizeModelId(modelId)) ?? modelId).toLowerCase();
 }
 
 /**

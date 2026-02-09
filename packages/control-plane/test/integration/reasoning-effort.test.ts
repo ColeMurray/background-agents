@@ -4,7 +4,7 @@ import { initSession, queryDO } from "./helpers";
 describe("reasoning effort", () => {
   describe("validation", () => {
     it("stores valid reasoning effort on the message", async () => {
-      const { stub } = await initSession({ model: "claude-sonnet-4-5" });
+      const { stub } = await initSession({ model: "anthropic/claude-sonnet-4-5" });
 
       const res = await stub.fetch("http://internal/internal/prompt", {
         method: "POST",
@@ -29,7 +29,7 @@ describe("reasoning effort", () => {
     });
 
     it("ignores invalid reasoning effort", async () => {
-      const { stub } = await initSession({ model: "claude-sonnet-4-5" });
+      const { stub } = await initSession({ model: "anthropic/claude-sonnet-4-5" });
 
       const res = await stub.fetch("http://internal/internal/prompt", {
         method: "POST",
@@ -57,7 +57,7 @@ describe("reasoning effort", () => {
   describe("session-level persistence", () => {
     it("stores reasoning effort on the session row", async () => {
       const { stub } = await initSession({
-        model: "claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-5",
         reasoningEffort: "high",
       });
 
@@ -71,7 +71,7 @@ describe("reasoning effort", () => {
 
     it("ignores invalid reasoning effort at session creation", async () => {
       const { stub } = await initSession({
-        model: "claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-5",
         reasoningEffort: "invalid",
       });
 
@@ -85,7 +85,7 @@ describe("reasoning effort", () => {
 
     it("returns reasoning effort in GET /state", async () => {
       const { stub } = await initSession({
-        model: "claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-5",
         reasoningEffort: "high",
       });
 
@@ -99,7 +99,7 @@ describe("reasoning effort", () => {
   describe("resolution fallback chain", () => {
     it("per-message effort takes priority over session default", async () => {
       const { stub } = await initSession({
-        model: "claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-5",
         reasoningEffort: "max",
       });
 
@@ -127,7 +127,7 @@ describe("reasoning effort", () => {
 
     it("falls back to session effort when message has none", async () => {
       const { stub } = await initSession({
-        model: "claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-5",
         reasoningEffort: "high",
       });
 
@@ -162,7 +162,7 @@ describe("reasoning effort", () => {
 
     it("falls back to model default when neither message nor session has effort", async () => {
       const { stub } = await initSession({
-        model: "claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-5",
         // No reasoningEffort on session
       });
 
@@ -194,7 +194,7 @@ describe("reasoning effort", () => {
       expect(sessions[0].reasoning_effort).toBeNull();
 
       // The resolution happens at dispatch time (processNextMessage), not at storage.
-      // getDefaultReasoningEffort("claude-sonnet-4-5") returns "max".
+      // getDefaultReasoningEffort("anthropic/claude-sonnet-4-5") returns "max".
       // We can't directly observe the dispatched command without a sandbox,
       // but we verify the stored values ensure the fallback chain will resolve to "max".
     });

@@ -11,6 +11,7 @@ export {
   type ReasoningEffort,
   type ModelReasoningConfig,
   MODEL_REASONING_CONFIG,
+  normalizeModelId,
   isValidModel,
   extractProviderAndModel,
   getValidModelOrDefault,

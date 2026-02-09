@@ -43,7 +43,7 @@ function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
     base_sha: null,
     current_sha: null,
     opencode_session_id: null,
-    model: "claude-sonnet-4-5",
+    model: "anthropic/claude-sonnet-4-5",
     reasoning_effort: null,
     status: "active",
     created_at: Date.now() - 60000,
@@ -236,7 +236,7 @@ function createTestConfig(): SandboxLifecycleConfig {
   return {
     ...DEFAULT_LIFECYCLE_CONFIG,
     controlPlaneUrl: "https://test.workers.dev",
-    model: "claude-sonnet-4-5",
+    model: "anthropic/claude-sonnet-4-5",
   };
 }
 

@@ -22,6 +22,7 @@ import { generateInternalToken } from "./utils/internal";
 import { createLogger } from "./logger";
 import {
   MODEL_OPTIONS,
+  DEFAULT_MODEL,
   isValidModel,
   getValidModelOrDefault,
   getReasoningConfig,
@@ -50,11 +51,6 @@ async function getAuthHeaders(env: Env, traceId?: string): Promise<Record<string
 
   return headers;
 }
-
-/**
- * Default model when no preference is set.
- */
-const DEFAULT_FALLBACK_MODEL = "claude-haiku-4-5";
 
 /**
  * Create a session via the control plane.
@@ -343,7 +339,7 @@ async function saveUserPreferences(
  */
 async function publishAppHome(env: Env, userId: string): Promise<void> {
   const prefs = await getUserPreferences(env, userId);
-  const fallback = env.DEFAULT_MODEL || DEFAULT_FALLBACK_MODEL;
+  const fallback = env.DEFAULT_MODEL || DEFAULT_MODEL;
   // Normalize model to ensure it's valid - UI and behavior will be consistent
   const currentModel = getValidModelOrDefault(prefs?.model ?? fallback);
   const currentModelInfo =
@@ -519,7 +515,7 @@ async function startSessionAndSendPrompt(
 ): Promise<{ sessionId: string } | null> {
   // Fetch user's preferred model and reasoning effort
   const userPrefs = await getUserPreferences(env, userId);
-  const fallback = env.DEFAULT_MODEL || DEFAULT_FALLBACK_MODEL;
+  const fallback = env.DEFAULT_MODEL || DEFAULT_MODEL;
   const model = getValidModelOrDefault(userPrefs?.model ?? fallback);
   const reasoningEffort =
     userPrefs?.reasoningEffort && isValidReasoningEffort(model, userPrefs.reasoningEffort)
@@ -1186,7 +1182,7 @@ async function handleSlackInteraction(
       if (selectedEffort && userId) {
         const currentPrefs = await getUserPreferences(env, userId);
         const currentModel = getValidModelOrDefault(
-          currentPrefs?.model ?? env.DEFAULT_MODEL ?? DEFAULT_FALLBACK_MODEL
+          currentPrefs?.model ?? env.DEFAULT_MODEL ?? DEFAULT_MODEL
         );
         if (isValidReasoningEffort(currentModel, selectedEffort)) {
           await saveUserPreferences(env, userId, currentModel, selectedEffort);

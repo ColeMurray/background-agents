@@ -19,6 +19,7 @@ import { RepoSecretsStore, RepoSecretsValidationError } from "./db/repo-secrets"
 import { SessionIndexStore } from "./db/session-index";
 
 import { RepoMetadataStore } from "./db/repo-metadata";
+import { getValidModelOrDefault } from "@open-inspect/shared";
 import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
 import type { RequestMetrics } from "./db/instrumented-d1";
 import type {
@@ -674,7 +675,7 @@ async function handleCreateSession(
           repoName,
           repoId,
           title: body.title,
-          model: body.model || "claude-haiku-4-5", // Default to haiku for cost efficiency
+          model: getValidModelOrDefault(body.model),
           reasoningEffort: body.reasoningEffort,
           userId,
           githubLogin,
@@ -699,7 +700,7 @@ async function handleCreateSession(
     title: body.title || null,
     repoOwner,
     repoName,
-    model: body.model || "claude-haiku-4-5",
+    model: getValidModelOrDefault(body.model),
     status: "created",
     createdAt: now,
     updatedAt: now,

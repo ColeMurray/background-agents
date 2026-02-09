@@ -40,6 +40,7 @@ import {
   isValidModel,
   isValidReasoningEffort,
   getDefaultReasoningEffort,
+  getValidModelOrDefault,
 } from "../utils/models";
 import type {
   Env,
@@ -1274,7 +1275,7 @@ export class SessionDO extends DurableObject<Env> {
     const session = this.getSession();
 
     // Send to sandbox with model (per-message override or session default)
-    const resolvedModel = message.model || session?.model || "claude-haiku-4-5";
+    const resolvedModel = getValidModelOrDefault(message.model || session?.model);
 
     // Resolve reasoning effort: per-message > session default > model default
     const resolvedEffort =
@@ -1947,11 +1948,11 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     // Validate model name if provided
-    const model = body.model && isValidModel(body.model) ? body.model : DEFAULT_MODEL;
-    if (body.model && !isValidModel(body.model)) {
+    const model = getValidModelOrDefault(body.model);
+    if (body.model && model !== body.model) {
       this.log.warn("Invalid model name, using default", {
         requested_model: body.model,
-        default_model: DEFAULT_MODEL,
+        default_model: model,
       });
     }
 

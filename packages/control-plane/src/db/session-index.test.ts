@@ -189,7 +189,7 @@ function makeSession(overrides: Partial<SessionEntry> = {}): SessionEntry {
     title: "Test Session",
     repoOwner: "owner",
     repoName: "repo",
-    model: "claude-haiku-4-5",
+    model: "anthropic/claude-haiku-4-5",
     status: "created",
     createdAt: 1000,
     updatedAt: 1000,

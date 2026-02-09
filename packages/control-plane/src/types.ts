@@ -275,7 +275,7 @@ export interface CreateSessionRequest {
   repoOwner: string;
   repoName: string;
   title?: string;
-  model?: string; // LLM model to use (e.g., "claude-haiku-4-5", "claude-sonnet-4-5")
+  model?: string; // LLM model to use (e.g., "anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-5")
   reasoningEffort?: string; // Reasoning effort level (e.g., "high", "max")
 }
 
