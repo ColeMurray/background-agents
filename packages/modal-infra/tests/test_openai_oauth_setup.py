@@ -1,7 +1,6 @@
 """Tests for SandboxSupervisor._setup_openai_oauth()."""
 
 import json
-import os
 from unittest.mock import patch
 
 from src.sandbox.entrypoint import SandboxSupervisor
@@ -68,11 +67,11 @@ class TestOpenaiOauthSetup:
         data = json.loads(_auth_file(tmp_path).read_text())
         assert data["openai"]["accountId"] == "acct_xyz"
 
-    def test_skips_when_no_refresh_token(self, tmp_path):
+    def test_skips_when_no_refresh_token(self, tmp_path, monkeypatch):
         sup = _make_supervisor()
 
         # Explicitly remove the key so it is absent regardless of test ordering
-        os.environ.pop("OPENAI_OAUTH_REFRESH_TOKEN", None)
+        monkeypatch.delenv("OPENAI_OAUTH_REFRESH_TOKEN", raising=False)
 
         with patch("pathlib.Path.home", return_value=tmp_path):
             sup._setup_openai_oauth()
