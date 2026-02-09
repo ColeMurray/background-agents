@@ -15,7 +15,8 @@ import {
   SourceControlProviderError,
   type SourceControlProviderName,
 } from "./source-control";
-import { RepoSecretsStore, RepoSecretsValidationError } from "./db/repo-secrets";
+import { RepoSecretsStore } from "./db/repo-secrets";
+import { SecretsValidationError, normalizeKey, validateKey } from "./db/secrets-validation";
 import { SessionIndexStore } from "./db/session-index";
 
 import { RepoMetadataStore } from "./db/repo-metadata";
@@ -1521,7 +1522,7 @@ async function handleSetRepoSecrets(
       updated: result.updated,
     });
   } catch (e) {
-    if (e instanceof RepoSecretsValidationError) {
+    if (e instanceof SecretsValidationError) {
       return error(e.message, 400);
     }
     logger.error("Failed to update repo secrets", {
@@ -1658,7 +1659,8 @@ async function handleDeleteRepoSecret(
   const store = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
 
   try {
-    store.validateKey(store.normalizeKey(key));
+    const normalizedKey = normalizeKey(key);
+    validateKey(normalizedKey);
 
     const deleted = await store.deleteSecret(resolved.repoId, key);
     if (!deleted) {
@@ -1677,10 +1679,10 @@ async function handleDeleteRepoSecret(
     return json({
       status: "deleted",
       repo: `${resolved.repoOwner}/${resolved.repoName}`,
-      key: store.normalizeKey(key),
+      key: normalizedKey,
     });
   } catch (e) {
-    if (e instanceof RepoSecretsValidationError) {
+    if (e instanceof SecretsValidationError) {
       return error(e.message, 400);
     }
     logger.error("Failed to delete repo secret", {
