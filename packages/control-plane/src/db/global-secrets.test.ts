@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { webcrypto } from "node:crypto";
-import { RepoSecretsStore } from "./repo-secrets";
+import { GlobalSecretsStore } from "./global-secrets";
 import { SecretsValidationError } from "./secrets-validation";
 import { generateEncryptionKey } from "../auth/crypto";
 
@@ -19,28 +19,19 @@ afterAll(() => {
   }
 });
 
-type RepoSecretRow = {
-  repo_id: number;
-  repo_owner: string;
-  repo_name: string;
+type GlobalSecretRow = {
   key: string;
   encrypted_value: string;
   created_at: number;
   updated_at: number;
 };
 
-/**
- * Query patterns for FakeD1Database routing.
- * Matches SQL operations in RepoSecretsStore by their leading clause
- * after whitespace normalization, making the fake resilient to
- * formatting changes in the SQL strings.
- */
 const QUERY_PATTERNS = {
-  SELECT_EXISTING_KEYS: /^SELECT key FROM repo_secrets/,
-  SELECT_KEYS_WITH_METADATA: /^SELECT key, created_at, updated_at FROM repo_secrets/,
-  SELECT_KEYS_WITH_VALUES: /^SELECT key, encrypted_value FROM repo_secrets/,
-  UPSERT_SECRET: /^INSERT INTO repo_secrets/,
-  DELETE_SECRET: /^DELETE FROM repo_secrets/,
+  SELECT_EXISTING_KEYS: /^SELECT key FROM global_secrets$/,
+  SELECT_KEYS_WITH_METADATA: /^SELECT key, created_at, updated_at FROM global_secrets/,
+  SELECT_KEYS_WITH_VALUES: /^SELECT key, encrypted_value FROM global_secrets$/,
+  UPSERT_SECRET: /^INSERT INTO global_secrets/,
+  DELETE_SECRET: /^DELETE FROM global_secrets/,
 } as const;
 
 function normalizeQuery(query: string): string {
@@ -48,19 +39,17 @@ function normalizeQuery(query: string): string {
 }
 
 class FakeD1Database {
-  private rows = new Map<string, RepoSecretRow>();
+  private rows = new Map<string, GlobalSecretRow>();
 
   prepare(query: string) {
     return new FakePreparedStatement(this, query);
   }
 
-  all(query: string, args: unknown[]) {
+  all(query: string, _args: unknown[]) {
     const normalized = normalizeQuery(query);
 
     if (QUERY_PATTERNS.SELECT_KEYS_WITH_METADATA.test(normalized)) {
-      const repoId = args[0] as number;
       return Array.from(this.rows.values())
-        .filter((row) => row.repo_id === repoId)
         .sort((a, b) => a.key.localeCompare(b.key))
         .map((row) => ({
           key: row.key,
@@ -70,17 +59,14 @@ class FakeD1Database {
     }
 
     if (QUERY_PATTERNS.SELECT_KEYS_WITH_VALUES.test(normalized)) {
-      const repoId = args[0] as number;
-      return Array.from(this.rows.values())
-        .filter((row) => row.repo_id === repoId)
-        .map((row) => ({ key: row.key, encrypted_value: row.encrypted_value }));
+      return Array.from(this.rows.values()).map((row) => ({
+        key: row.key,
+        encrypted_value: row.encrypted_value,
+      }));
     }
 
     if (QUERY_PATTERNS.SELECT_EXISTING_KEYS.test(normalized)) {
-      const repoId = args[0] as number;
-      return Array.from(this.rows.values())
-        .filter((row) => row.repo_id === repoId)
-        .map((row) => ({ key: row.key }));
+      return Array.from(this.rows.values()).map((row) => ({ key: row.key }));
     }
 
     throw new Error(`Unexpected SELECT query: ${query}`);
@@ -90,22 +76,10 @@ class FakeD1Database {
     const normalized = normalizeQuery(query);
 
     if (QUERY_PATTERNS.UPSERT_SECRET.test(normalized)) {
-      const [repoId, repoOwner, repoName, key, encryptedValue, createdAt, updatedAt] = args as [
-        number,
-        string,
-        string,
-        string,
-        string,
-        number,
-        number,
-      ];
-      const rowKey = `${repoId}:${key}`;
-      const existing = this.rows.get(rowKey);
+      const [key, encryptedValue, createdAt, updatedAt] = args as [string, string, number, number];
+      const existing = this.rows.get(key);
       const created_at = existing ? existing.created_at : createdAt;
-      this.rows.set(rowKey, {
-        repo_id: repoId,
-        repo_owner: repoOwner,
-        repo_name: repoName,
+      this.rows.set(key, {
         key,
         encrypted_value: encryptedValue,
         created_at,
@@ -115,9 +89,8 @@ class FakeD1Database {
     }
 
     if (QUERY_PATTERNS.DELETE_SECRET.test(normalized)) {
-      const [repoId, key] = args as [number, string];
-      const rowKey = `${repoId}:${key}`;
-      const existed = this.rows.delete(rowKey);
+      const [key] = args as [string];
+      const existed = this.rows.delete(key);
       return { meta: { changes: existed ? 1 : 0 } };
     }
 
@@ -155,49 +128,47 @@ class FakePreparedStatement {
   }
 }
 
-describe("RepoSecretsStore", () => {
+describe("GlobalSecretsStore", () => {
   let db: FakeD1Database;
-  let store: RepoSecretsStore;
+  let store: GlobalSecretsStore;
 
   beforeEach(() => {
     db = new FakeD1Database();
-    store = new RepoSecretsStore(db as unknown as D1Database, generateEncryptionKey());
+    store = new GlobalSecretsStore(db as unknown as D1Database, generateEncryptionKey());
   });
 
   it("encrypts and decrypts values", async () => {
-    await store.setSecrets(1, "Owner", "Repo", { FOO: "bar" });
-    const secrets = await store.getDecryptedSecrets(1);
+    await store.setSecrets({ FOO: "bar" });
+    const secrets = await store.getDecryptedSecrets();
     expect(secrets).toEqual({ FOO: "bar" });
   });
 
   it("normalizes keys and updates existing secrets", async () => {
-    const first = await store.setSecrets(1, "Owner", "Repo", { foo: "one" });
+    const first = await store.setSecrets({ foo: "one" });
     expect(first.created).toBe(1);
     expect(first.updated).toBe(0);
 
-    const second = await store.setSecrets(1, "Owner", "Repo", { FOO: "two" });
+    const second = await store.setSecrets({ FOO: "two" });
     expect(second.created).toBe(0);
     expect(second.updated).toBe(1);
 
-    const secrets = await store.getDecryptedSecrets(1);
+    const secrets = await store.getDecryptedSecrets();
     expect(secrets).toEqual({ FOO: "two" });
   });
 
   it("rejects reserved keys", async () => {
-    await expect(store.setSecrets(1, "Owner", "Repo", { PATH: "nope" })).rejects.toBeInstanceOf(
-      SecretsValidationError
-    );
+    await expect(store.setSecrets({ PATH: "nope" })).rejects.toBeInstanceOf(SecretsValidationError);
   });
 
   it("rejects invalid key patterns", async () => {
-    await expect(store.setSecrets(1, "Owner", "Repo", { "1BAD": "nope" })).rejects.toBeInstanceOf(
+    await expect(store.setSecrets({ "1BAD": "nope" })).rejects.toBeInstanceOf(
       SecretsValidationError
     );
   });
 
   it("enforces value size limits", async () => {
     const bigValue = "a".repeat(16385);
-    await expect(store.setSecrets(1, "Owner", "Repo", { BIG: bigValue })).rejects.toBeInstanceOf(
+    await expect(store.setSecrets({ BIG: bigValue })).rejects.toBeInstanceOf(
       SecretsValidationError
     );
   });
@@ -205,35 +176,38 @@ describe("RepoSecretsStore", () => {
   it("enforces total size limits", async () => {
     const largeA = "a".repeat(40000);
     const largeB = "b".repeat(30000);
-    await expect(
-      store.setSecrets(1, "Owner", "Repo", { A: largeA, B: largeB })
-    ).rejects.toBeInstanceOf(SecretsValidationError);
-  });
-
-  it("enforces per-repo secret limit", async () => {
-    const many: Record<string, string> = {};
-    for (let i = 0; i < 50; i++) {
-      many[`KEY_${i}`] = "x";
-    }
-    await store.setSecrets(1, "Owner", "Repo", many);
-
-    await expect(store.setSecrets(1, "Owner", "Repo", { EXTRA: "y" })).rejects.toBeInstanceOf(
+    await expect(store.setSecrets({ A: largeA, B: largeB })).rejects.toBeInstanceOf(
       SecretsValidationError
     );
   });
 
+  it("enforces per-scope secret limit", async () => {
+    const many: Record<string, string> = {};
+    for (let i = 0; i < 50; i++) {
+      many[`KEY_${i}`] = "x";
+    }
+    await store.setSecrets(many);
+
+    await expect(store.setSecrets({ EXTRA: "y" })).rejects.toBeInstanceOf(SecretsValidationError);
+  });
+
   it("lists keys with metadata", async () => {
-    await store.setSecrets(1, "Owner", "Repo", { ALPHA: "1", BETA: "2" });
-    const keys = await store.listSecretKeys(1);
+    await store.setSecrets({ ALPHA: "1", BETA: "2" });
+    const keys = await store.listSecretKeys();
     expect(keys.map((k) => k.key)).toEqual(["ALPHA", "BETA"]);
     expect(keys[0].createdAt).toBeTypeOf("number");
   });
 
   it("deletes secrets by key", async () => {
-    await store.setSecrets(1, "Owner", "Repo", { ALPHA: "1" });
-    const deleted = await store.deleteSecret(1, "alpha");
+    await store.setSecrets({ ALPHA: "1" });
+    const deleted = await store.deleteSecret("alpha");
     expect(deleted).toBe(true);
-    const secrets = await store.getDecryptedSecrets(1);
+    const secrets = await store.getDecryptedSecrets();
     expect(secrets).toEqual({});
+  });
+
+  it("returns false when deleting nonexistent key", async () => {
+    const deleted = await store.deleteSecret("NOPE");
+    expect(deleted).toBe(false);
   });
 });

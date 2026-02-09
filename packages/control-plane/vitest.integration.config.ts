@@ -1,7 +1,14 @@
 import { defineWorkersConfig, readD1Migrations } from "@cloudflare/vitest-pool-workers/config";
 import path from "path";
+import { webcrypto } from "node:crypto";
 
 const migrationsPath = path.resolve(__dirname, "../../terraform/d1/migrations");
+
+/** Generate a random base64-encoded 32-byte AES key for tests. */
+function generateTestEncryptionKey(): string {
+  const key = webcrypto.getRandomValues(new Uint8Array(32));
+  return Buffer.from(key).toString("base64");
+}
 
 export default defineWorkersConfig(async () => {
   const migrations = await readD1Migrations(migrationsPath);
@@ -27,6 +34,7 @@ export default defineWorkersConfig(async () => {
             bindings: {
               INTERNAL_CALLBACK_SECRET: "test-hmac-secret-for-integration-tests",
               TOKEN_ENCRYPTION_KEY: "test-encryption-key-32chars-long!",
+              REPO_SECRETS_ENCRYPTION_KEY: generateTestEncryptionKey(),
               DEPLOYMENT_NAME: "integration-test",
               MODAL_API_SECRET: "test-modal-api-secret",
               MODAL_WORKSPACE: "test-workspace",

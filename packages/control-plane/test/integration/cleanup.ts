@@ -5,5 +5,7 @@ import { env } from "cloudflare:test";
  * isolatedStorage is disabled (see vitest.integration.config.ts).
  */
 export async function cleanD1Tables(): Promise<void> {
-  await env.DB.exec("DELETE FROM sessions; DELETE FROM repo_metadata; DELETE FROM repo_secrets;");
+  await env.DB.exec(
+    "DELETE FROM sessions; DELETE FROM repo_metadata; DELETE FROM repo_secrets; DELETE FROM global_secrets;"
+  );
 }

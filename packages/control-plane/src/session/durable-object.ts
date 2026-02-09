@@ -58,6 +58,8 @@ import type { SessionRow, ParticipantRow, ArtifactRow, SandboxRow, SandboxComman
 import { SessionRepository } from "./repository";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
 import { RepoSecretsStore } from "../db/repo-secrets";
+import { GlobalSecretsStore } from "../db/global-secrets";
+import { mergeSecrets } from "../db/secrets-validation";
 
 /**
  * Build GitHub avatar URL from login.
@@ -1496,30 +1498,49 @@ export class SessionDO extends DurableObject<Env> {
       return undefined;
     }
 
-    let repoId: number;
+    // Fetch global secrets
+    let globalSecrets: Record<string, string> = {};
     try {
-      repoId = await this.ensureRepoId(session);
+      const globalStore = new GlobalSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+      globalSecrets = await globalStore.getDecryptedSecrets();
     } catch (e) {
-      this.log.warn("Cannot resolve repo ID for secrets, proceeding without", {
+      this.log.error("Failed to load global secrets, proceeding without", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+
+    // Fetch repo secrets
+    let repoSecrets: Record<string, string> = {};
+    try {
+      const repoId = await this.ensureRepoId(session);
+      const repoStore = new RepoSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+      repoSecrets = await repoStore.getDecryptedSecrets(repoId);
+    } catch (e) {
+      this.log.warn("Failed to load repo secrets, proceeding without", {
         repo_owner: session.repo_owner,
         repo_name: session.repo_name,
         error: e instanceof Error ? e.message : String(e),
       });
-      return undefined;
     }
 
-    const store = new RepoSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+    // Merge: repo overrides global
+    const { merged, totalBytes, exceedsLimit } = mergeSecrets(globalSecrets, repoSecrets);
+    const globalCount = Object.keys(globalSecrets).length;
+    const repoCount = Object.keys(repoSecrets).length;
+    const mergedCount = Object.keys(merged).length;
 
-    try {
-      const secrets = await store.getDecryptedSecrets(repoId);
-      return Object.keys(secrets).length === 0 ? undefined : secrets;
-    } catch (e) {
-      this.log.error("Failed to load repo secrets, proceeding without", {
-        repo_id: repoId,
-        error: e instanceof Error ? e.message : String(e),
+    if (mergedCount > 0) {
+      const logLevel = exceedsLimit ? "warn" : "info";
+      this.log[logLevel]("Secrets merged for sandbox", {
+        global_count: globalCount,
+        repo_count: repoCount,
+        merged_count: mergedCount,
+        payload_bytes: totalBytes,
+        exceeds_limit: exceedsLimit,
       });
-      return undefined;
     }
+
+    return mergedCount === 0 ? undefined : merged;
   }
 
   /**

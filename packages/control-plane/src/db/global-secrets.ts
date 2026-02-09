@@ -10,24 +10,17 @@ import {
 } from "./secrets-validation";
 import type { SecretMetadata } from "./secrets-validation";
 
-export type { SecretMetadata } from "./secrets-validation";
+const log = createLogger("global-secrets");
 
-const log = createLogger("repo-secrets");
-
-export class RepoSecretsStore {
+export class GlobalSecretsStore {
   constructor(
     private readonly db: D1Database,
     private readonly encryptionKey: string
   ) {}
 
   async setSecrets(
-    repoId: number,
-    repoOwner: string,
-    repoName: string,
     secrets: Record<string, string>
   ): Promise<{ created: number; updated: number; keys: string[] }> {
-    const owner = repoOwner.toLowerCase();
-    const name = repoName.toLowerCase();
     const now = Date.now();
 
     const normalized: Record<string, string> = {};
@@ -45,8 +38,7 @@ export class RepoSecretsStore {
     }
 
     const existingKeys = await this.db
-      .prepare("SELECT key FROM repo_secrets WHERE repo_id = ?")
-      .bind(repoId)
+      .prepare("SELECT key FROM global_secrets")
       .all<{ key: string }>();
     const existingKeySet = new Set((existingKeys.results || []).map((r) => r.key));
 
@@ -54,7 +46,7 @@ export class RepoSecretsStore {
     const netNew = incomingKeys.filter((k) => !existingKeySet.has(k)).length;
     if (existingKeySet.size + netNew > MAX_SECRETS_PER_SCOPE) {
       throw new SecretsValidationError(
-        `Repository would exceed ${MAX_SECRETS_PER_SCOPE} secrets limit ` +
+        `Global secrets would exceed ${MAX_SECRETS_PER_SCOPE} secrets limit ` +
           `(current: ${existingKeySet.size}, adding: ${netNew})`
       );
     }
@@ -72,16 +64,13 @@ export class RepoSecretsStore {
       statements.push(
         this.db
           .prepare(
-            `INSERT INTO repo_secrets
-             (repo_id, repo_owner, repo_name, key, encrypted_value, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(repo_id, key) DO UPDATE SET
-               repo_owner = excluded.repo_owner,
-               repo_name = excluded.repo_name,
+            `INSERT INTO global_secrets (key, encrypted_value, created_at, updated_at)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(key) DO UPDATE SET
                encrypted_value = excluded.encrypted_value,
                updated_at = excluded.updated_at`
           )
-          .bind(repoId, owner, name, key, encrypted, now, now)
+          .bind(key, encrypted, now, now)
       );
     }
 
@@ -92,12 +81,9 @@ export class RepoSecretsStore {
     return { created, updated, keys: incomingKeys };
   }
 
-  async listSecretKeys(repoId: number): Promise<SecretMetadata[]> {
+  async listSecretKeys(): Promise<SecretMetadata[]> {
     const result = await this.db
-      .prepare(
-        "SELECT key, created_at, updated_at FROM repo_secrets WHERE repo_id = ? ORDER BY key"
-      )
-      .bind(repoId)
+      .prepare("SELECT key, created_at, updated_at FROM global_secrets ORDER BY key")
       .all<{ key: string; created_at: number; updated_at: number }>();
 
     return (result.results || []).map((row) => ({
@@ -107,10 +93,9 @@ export class RepoSecretsStore {
     }));
   }
 
-  async getDecryptedSecrets(repoId: number): Promise<Record<string, string>> {
+  async getDecryptedSecrets(): Promise<Record<string, string>> {
     const result = await this.db
-      .prepare("SELECT key, encrypted_value FROM repo_secrets WHERE repo_id = ?")
-      .bind(repoId)
+      .prepare("SELECT key, encrypted_value FROM global_secrets")
       .all<{ key: string; encrypted_value: string }>();
 
     const secrets: Record<string, string> = {};
@@ -118,22 +103,21 @@ export class RepoSecretsStore {
       try {
         secrets[row.key] = await decryptToken(row.encrypted_value, this.encryptionKey);
       } catch (e) {
-        log.error("Failed to decrypt secret", {
-          repo_id: repoId,
+        log.error("Failed to decrypt global secret", {
           key: row.key,
           error: e instanceof Error ? e.message : String(e),
         });
-        throw new Error(`Failed to decrypt secret '${row.key}'`);
+        throw new Error(`Failed to decrypt global secret '${row.key}'`);
       }
     }
 
     return secrets;
   }
 
-  async deleteSecret(repoId: number, key: string): Promise<boolean> {
+  async deleteSecret(key: string): Promise<boolean> {
     const result = await this.db
-      .prepare("DELETE FROM repo_secrets WHERE repo_id = ? AND key = ?")
-      .bind(repoId, normalizeKey(key))
+      .prepare("DELETE FROM global_secrets WHERE key = ?")
+      .bind(normalizeKey(key))
       .run();
 
     return (result.meta?.changes ?? 0) > 0;
