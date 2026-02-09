@@ -17,15 +17,15 @@ Alternatively, run `/onboarding` for an interactive guided setup.
 
 Open-Inspect runs on fully open-source infrastructure on Kubernetes:
 
-| Component          | Technology         | Purpose                              |
-| ------------------ | ------------------ | ------------------------------------ |
-| Control Plane      | Hono + Rivet Actors | HTTP API + stateful session actors  |
-| Sandbox Runtime    | K8s Pods (Docker)  | Isolated code execution environments |
-| Actor Orchestrator | Rivet Engine       | Actor scheduling, state persistence  |
-| Message Bus        | NATS               | Inter-service communication          |
-| Database           | PostgreSQL         | Session index, repo metadata, secrets|
-| Cache              | Redis              | Repository list caching              |
-| Web Frontend       | Next.js            | Web client UI                        |
+| Component          | Technology                      | Purpose                              |
+| ------------------ | ------------------------------- | ------------------------------------ |
+| Control Plane      | Hono + Rivet Actors             | HTTP API + stateful session actors   |
+| Sandbox Runtime    | agent-sandbox CRD (K8s)         | Isolated code execution environments |
+| Actor Orchestrator | Rivet Engine                    | Actor scheduling, state persistence  |
+| Message Bus        | NATS                            | Inter-service communication          |
+| Database           | PostgreSQL                      | Session index, repo metadata, secrets|
+| Cache              | Redis                           | Repository list caching              |
+| Web Frontend       | Next.js                         | Web client UI                        |
 
 ## Control Plane (Hono + Rivet Actors)
 
@@ -94,7 +94,10 @@ On cache miss it re-fetches from GitHub API and PostgreSQL.
 Sandbox pods authenticate to the control plane using HMAC-signed tokens via the
 `INTERNAL_API_SECRET` shared secret. Tokens expire after 5 minutes.
 
-## Sandbox Runtime (Kubernetes Pods)
+## Sandbox Runtime (agent-sandbox CRD)
+
+Sandboxes are managed by the [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox)
+controller, which provides pod lifecycle, stable DNS, network isolation, warm pools, and auto-expiry.
 
 ### Building the Image
 
@@ -107,15 +110,45 @@ docker build -t open-inspect-sandbox .
 
 When a session needs a sandbox:
 
-1. Control plane creates a K8s Job with the sandbox Docker image
-2. Pod starts the supervisor process (`entrypoint.py`)
-3. Supervisor: git clone → setup script → OpenCode server → bridge
-4. Bridge connects to control plane WebSocket
-5. Events flow bidirectionally through WebSocket
+1. Control plane creates a `Sandbox` custom resource (`agents.x-k8s.io/v1alpha1`)
+2. agent-sandbox controller creates a pod + headless service (stable DNS)
+3. Pod starts the supervisor process (`entrypoint.py`)
+4. Supervisor: git clone → setup script → OpenCode server → bridge
+5. Bridge connects to control plane WebSocket
+6. Events flow bidirectionally through WebSocket
+7. Sandbox auto-expires via `shutdownTime` (controller deletes pod + service)
+
+### Warm Pools
+
+`SandboxWarmPool` pre-creates sandbox pods so new sessions start instantly:
+
+```yaml
+# k8s/sandbox/warmpool.yaml
+apiVersion: extensions.agents.x-k8s.io/v1alpha1
+kind: SandboxWarmPool
+metadata:
+  name: open-inspect-sandbox-pool
+spec:
+  replicas: 2                          # Number of pre-warmed pods
+  sandboxTemplateRef:
+    name: open-inspect-sandbox         # References the SandboxTemplate
+```
+
+### Network Isolation
+
+The `SandboxTemplate` defines a `NetworkPolicy` that restricts sandbox egress to:
+- DNS (port 53)
+- HTTPS (port 443) for GitHub/LLM APIs
+- Control plane (port 8080) within the `open-inspect` namespace
+
+### Runtime Isolation
+
+For stronger isolation, uncomment `runtimeClassName: gvisor` in the SandboxTemplate
+or set `runtimeClassName` in the provider config. Kata Containers is also supported.
 
 ### Environment Variables
 
-Sandbox pods receive configuration via K8s Job environment:
+Sandbox pods receive configuration via the Sandbox CR's embedded podTemplate:
 
 | Variable            | Description                           |
 | ------------------- | ------------------------------------- |
@@ -138,7 +171,7 @@ Sandbox pods receive configuration via K8s Job environment:
    `k8s/control-plane/secret.yaml`.
 
 3. **OpenCode fails to start** - Check sandbox pod logs:
-   `kubectl -n open-inspect logs job/sandbox-{id}`
+   `kubectl -n open-inspect logs -l open-inspect/sandbox-id={id}`
 
 ## GitHub App Authentication
 
@@ -227,7 +260,7 @@ k8s/
 ├── redis/            # Cache
 ├── control-plane/    # API + Actors
 ├── web/              # Frontend
-└── sandbox/          # RBAC for sandbox pods
+└── sandbox/          # agent-sandbox CRDs (template, warmpool, RBAC)
 ```
 
 ### Quick Deploy
@@ -266,7 +299,7 @@ curl http://localhost:3001/sessions/{sessionId}/events
 kubectl -n open-inspect logs -l app=control-plane -f
 
 # Sandbox pod logs
-kubectl -n open-inspect logs job/sandbox-{sessionId} -f
+kubectl -n open-inspect logs -l open-inspect/sandbox-id={sandboxId} -f
 
 # Rivet Engine logs
 kubectl -n open-inspect logs -l app=rivet-engine -f
