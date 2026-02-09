@@ -704,6 +704,18 @@ export class SandboxLifecycleManager {
   }
 
   /**
+   * Schedule a disconnect check alarm (heartbeat timeout from now).
+   * Used after abnormal WebSocket close to ensure dead sandboxes are detected
+   * promptly. If the bridge reconnects, scheduleInactivityCheck() will override
+   * this alarm (Cloudflare DOs support only one alarm at a time).
+   */
+  async scheduleDisconnectCheck(): Promise<void> {
+    const alarmTime = Date.now() + this.config.heartbeat.timeoutMs;
+    this.log.debug("Scheduling disconnect check", { timeout_ms: this.config.heartbeat.timeoutMs });
+    await this.alarmScheduler.scheduleAlarm(alarmTime);
+  }
+
+  /**
    * Resolve the provider and model ID from the session or config default.
    * e.g., "openai/gpt-5.2-codex" -> { provider: "openai", model: "gpt-5.2-codex" }
    */

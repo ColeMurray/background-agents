@@ -351,6 +351,43 @@ describe("SessionWebSocketManagerImpl", () => {
     });
   });
 
+  describe("clearSandboxSocketIfMatch", () => {
+    it("clears and returns true when ws matches", () => {
+      const { manager } = createManager();
+      const ws = createFakeWebSocket();
+
+      manager.acceptAndSetSandboxSocket(ws, "sb-1");
+      const result = manager.clearSandboxSocketIfMatch(ws);
+
+      expect(result).toBe(true);
+      // Verify it was actually cleared
+      Object.defineProperty(ws, "readyState", { value: WebSocket.CLOSED });
+      expect(manager.getSandboxSocket()).toBeNull();
+    });
+
+    it("returns false and does not clear when ws does not match", () => {
+      const { manager } = createManager();
+      const oldWs = createFakeWebSocket();
+      const newWs = createFakeWebSocket();
+
+      manager.acceptAndSetSandboxSocket(oldWs, "sb-1");
+      manager.acceptAndSetSandboxSocket(newWs, "sb-2");
+
+      // Try to clear with old socket — should not affect new socket
+      const result = manager.clearSandboxSocketIfMatch(oldWs);
+
+      expect(result).toBe(false);
+      expect(manager.getSandboxSocket()).toBe(newWs);
+    });
+
+    it("returns false when no sandbox socket is set", () => {
+      const { manager } = createManager();
+      const ws = createFakeWebSocket();
+
+      expect(manager.clearSandboxSocketIfMatch(ws)).toBe(false);
+    });
+  });
+
   describe("client registry", () => {
     it("setClient / getClient round-trips", () => {
       const { manager } = createManager();

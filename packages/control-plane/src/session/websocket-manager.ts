@@ -53,6 +53,9 @@ export interface SessionWebSocketManager {
   /** Clear the in-memory sandbox socket reference. */
   clearSandboxSocket(): void;
 
+  /** Clear sandbox socket only if ws matches current reference. Returns true if it was the active socket. */
+  clearSandboxSocketIfMatch(ws: WebSocket): boolean;
+
   setClient(ws: WebSocket, info: ClientInfo): void;
   getClient(ws: WebSocket): ClientInfo | null;
   removeClient(ws: WebSocket): ClientInfo | null;
@@ -172,6 +175,14 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
 
   clearSandboxSocket(): void {
     this.sandboxWs = null;
+  }
+
+  clearSandboxSocketIfMatch(ws: WebSocket): boolean {
+    if (this.sandboxWs === ws) {
+      this.sandboxWs = null;
+      return true;
+    }
+    return false;
   }
 
   // -------------------------------------------------------------------------

@@ -850,6 +850,34 @@ describe("SandboxLifecycleManager", () => {
     });
   });
 
+  describe("scheduleDisconnectCheck", () => {
+    it("schedules alarm at heartbeat timeout from now", async () => {
+      const storage = createMockStorage();
+      const alarmScheduler = createMockAlarmScheduler();
+      const config = createTestConfig();
+
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        alarmScheduler,
+        createMockIdGenerator(),
+        config
+      );
+
+      const before = Date.now();
+      await manager.scheduleDisconnectCheck();
+      const after = Date.now();
+
+      expect(alarmScheduler.alarms.length).toBe(1);
+      const alarmTime = alarmScheduler.alarms[0];
+      // Should be approximately now + heartbeat.timeoutMs (90s)
+      expect(alarmTime).toBeGreaterThanOrEqual(before + config.heartbeat.timeoutMs);
+      expect(alarmTime).toBeLessThanOrEqual(after + config.heartbeat.timeoutMs);
+    });
+  });
+
   describe("warmSandbox", () => {
     it("skips when sandbox already connected", async () => {
       const sandbox = createMockSandbox({ status: "ready" });
