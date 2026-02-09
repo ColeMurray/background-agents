@@ -454,9 +454,20 @@ function SessionContent({
             </div>
           </div>
           <div className="flex items-center gap-4">
-            <ConnectionStatus connected={connected} connecting={connecting} />
-            <SandboxStatus status={sessionState?.sandboxStatus} />
-            <ParticipantsList participants={participants} />
+            {/* Mobile: single combined status dot */}
+            <div className="md:hidden">
+              <CombinedStatusDot
+                connected={connected}
+                connecting={connecting}
+                sandboxStatus={sessionState?.sandboxStatus}
+              />
+            </div>
+            {/* Desktop: full status indicators */}
+            <div className="hidden md:contents">
+              <ConnectionStatus connected={connected} connecting={connecting} />
+              <SandboxStatus status={sessionState?.sandboxStatus} />
+              <ParticipantsList participants={participants} />
+            </div>
           </div>
         </div>
       </header>
@@ -699,6 +710,44 @@ function SandboxStatus({ status }: { status?: string }) {
   };
 
   return <span className={`text-xs ${colors[status] || colors.pending}`}>Sandbox: {status}</span>;
+}
+
+function CombinedStatusDot({
+  connected,
+  connecting,
+  sandboxStatus,
+}: {
+  connected: boolean;
+  connecting: boolean;
+  sandboxStatus?: string;
+}) {
+  let color: string;
+  let pulse = false;
+  let label: string;
+
+  if (!connected && !connecting) {
+    color = "bg-red-500";
+    label = "Disconnected";
+  } else if (connecting) {
+    color = "bg-yellow-500";
+    pulse = true;
+    label = "Connecting...";
+  } else if (sandboxStatus === "failed") {
+    color = "bg-red-500";
+    label = `Connected · Sandbox: ${sandboxStatus}`;
+  } else if (["pending", "warming", "syncing"].includes(sandboxStatus || "")) {
+    color = "bg-yellow-500";
+    label = `Connected · Sandbox: ${sandboxStatus}`;
+  } else {
+    color = "bg-success";
+    label = sandboxStatus ? `Connected · Sandbox: ${sandboxStatus}` : "Connected";
+  }
+
+  return (
+    <span title={label} className="flex items-center">
+      <span className={`w-2.5 h-2.5 rounded-full ${color}${pulse ? " animate-pulse" : ""}`} />
+    </span>
+  );
 }
 
 function ThinkingIndicator() {
