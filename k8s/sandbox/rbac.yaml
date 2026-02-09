@@ -1,6 +1,6 @@
-# RBAC resources for sandbox job management.
+# RBAC resources for sandbox management via agent-sandbox CRDs.
 # The control plane needs permission to create, monitor, and clean up
-# Kubernetes Jobs that run sandboxed Claude Code sessions.
+# sandbox resources that run sandboxed Claude Code sessions.
 ---
 # ServiceAccount used by the control-plane deployment
 apiVersion: v1
@@ -24,10 +24,22 @@ metadata:
     app.kubernetes.io/component: rbac
     app.kubernetes.io/part-of: open-inspect
 rules:
-  # Job management -- create, inspect, and delete sandbox jobs
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
-    verbs: ["create", "get", "list", "watch", "delete", "deletecollection"]
+  # Sandbox CRD -- create, inspect, and manage sandbox instances
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["create", "get", "list", "watch", "delete", "patch", "update"]
+  # SandboxClaim -- request sandboxes from warm pools
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxclaims"]
+    verbs: ["create", "get", "list", "watch", "delete", "patch", "update"]
+  # SandboxTemplate -- read template definitions
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxtemplates"]
+    verbs: ["get", "list", "watch"]
+  # SandboxWarmPool -- read and update warm pool status
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxwarmpools"]
+    verbs: ["get", "list", "watch", "patch", "update"]
   # Pod inspection -- read logs and status of sandbox pods
   - apiGroups: [""]
     resources: ["pods"]

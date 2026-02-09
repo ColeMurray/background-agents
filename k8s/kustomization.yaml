@@ -51,8 +51,10 @@ resources:
   - web/deployment.yaml
   - web/service.yaml
 
-  # Sandbox RBAC
+  # Sandbox (agent-sandbox CRDs)
   - sandbox/rbac.yaml
+  - sandbox/template.yaml
+  - sandbox/warmpool.yaml
 
   # Ingress
   - ingress.yaml

@@ -1,0 +1,16 @@
+# SandboxWarmPool maintains pre-warmed sandbox pods for fast allocation.
+# Adjust replicas based on expected concurrent session count.
+# Supports HPA for auto-scaling.
+apiVersion: extensions.agents.x-k8s.io/v1alpha1
+kind: SandboxWarmPool
+metadata:
+  name: open-inspect-sandbox-pool
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: open-inspect-sandbox-pool
+    app.kubernetes.io/component: sandbox
+    app.kubernetes.io/part-of: open-inspect
+spec:
+  replicas: 2
+  sandboxTemplateRef:
+    name: open-inspect-sandbox

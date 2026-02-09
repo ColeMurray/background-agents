@@ -1,0 +1,65 @@
+# SandboxTemplate for Open-Inspect agent sandboxes.
+# Defines the pod configuration, network isolation, and resource limits
+# used by all sandbox instances.
+apiVersion: extensions.agents.x-k8s.io/v1alpha1
+kind: SandboxTemplate
+metadata:
+  name: open-inspect-sandbox
+  namespace: open-inspect
+  labels:
+    app.kubernetes.io/name: open-inspect-sandbox
+    app.kubernetes.io/component: sandbox
+    app.kubernetes.io/part-of: open-inspect
+spec:
+  podTemplate:
+    metadata:
+      labels:
+        app.kubernetes.io/name: open-inspect-sandbox
+        app.kubernetes.io/component: sandbox
+    spec:
+      automountServiceAccountToken: false
+      # Use gVisor for kernel-level isolation (remove if not available)
+      # runtimeClassName: gvisor
+      containers:
+        - name: sandbox
+          image: open-inspect-sandbox:latest
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          ports:
+            - containerPort: 4096
+              name: opencode
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+      restartPolicy: Never
+  networkPolicy:
+    egress:
+      # Allow DNS resolution
+      - ports:
+          - protocol: UDP
+            port: 53
+          - protocol: TCP
+            port: 53
+      # Allow HTTPS for GitHub API, LLM APIs, etc.
+      - ports:
+          - protocol: TCP
+            port: 443
+      # Allow HTTP for control plane callbacks
+      - ports:
+          - protocol: TCP
+            port: 8080
+        to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: open-inspect
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: control-plane
