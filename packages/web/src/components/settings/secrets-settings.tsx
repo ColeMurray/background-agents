@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SecretsEditor } from "@/components/secrets-editor";
 
+const GLOBAL_SCOPE = "__global__";
+
 interface Repo {
   id: number;
   fullName: string;
@@ -15,7 +17,7 @@ interface Repo {
 export function SecretsSettings() {
   const [repos, setRepos] = useState<Repo[]>([]);
   const [loadingRepos, setLoadingRepos] = useState(false);
-  const [selectedRepo, setSelectedRepo] = useState("");
+  const [selectedRepo, setSelectedRepo] = useState(GLOBAL_SCOPE);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -27,9 +29,6 @@ export function SecretsSettings() {
         const data = await res.json();
         const repoList = data.repos || [];
         setRepos(repoList);
-        if (repoList.length > 0) {
-          setSelectedRepo((current) => current || repoList[0].fullName);
-        }
       }
     } catch (error) {
       console.error("Failed to fetch repos:", error);
@@ -53,11 +52,14 @@ export function SecretsSettings() {
   }, []);
 
   const selectedRepoObj = repos.find((r) => r.fullName === selectedRepo);
-  const displayRepoName = selectedRepoObj
-    ? selectedRepoObj.fullName
-    : loadingRepos
-      ? "Loading..."
-      : "Select a repository";
+  const isGlobal = selectedRepo === GLOBAL_SCOPE;
+  const displayRepoName = isGlobal
+    ? "All Repositories (Global)"
+    : selectedRepoObj
+      ? selectedRepoObj.fullName
+      : loadingRepos
+        ? "Loading..."
+        : "Select a repository";
 
   return (
     <div>
@@ -80,8 +82,30 @@ export function SecretsSettings() {
             <ChevronIcon />
           </button>
 
-          {dropdownOpen && repos.length > 0 && (
+          {dropdownOpen && (
             <div className="absolute top-full left-0 mt-1 w-full max-w-sm max-h-64 overflow-y-auto bg-background shadow-lg border border-border py-1 z-50">
+              {/* Global entry */}
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedRepo(GLOBAL_SCOPE);
+                  setDropdownOpen(false);
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
+                  isGlobal ? "text-foreground" : "text-muted-foreground"
+                }`}
+              >
+                <div className="flex flex-col items-start text-left">
+                  <span className="font-medium">All Repositories (Global)</span>
+                  <span className="text-xs text-secondary-foreground">
+                    Shared across all repositories
+                  </span>
+                </div>
+                {isGlobal && <CheckIcon />}
+              </button>
+
+              {repos.length > 0 && <div className="border-t border-border my-1" />}
+
               {repos.map((repo) => (
                 <button
                   key={repo.id}
@@ -109,11 +133,16 @@ export function SecretsSettings() {
         </div>
       </div>
 
-      <SecretsEditor
-        owner={selectedRepoObj?.owner}
-        name={selectedRepoObj?.name}
-        disabled={loadingRepos}
-      />
+      {isGlobal ? (
+        <SecretsEditor scope="global" disabled={loadingRepos} />
+      ) : (
+        <SecretsEditor
+          scope="repo"
+          owner={selectedRepoObj?.owner}
+          name={selectedRepoObj?.name}
+          disabled={loadingRepos}
+        />
+      )}
     </div>
   );
 }
