@@ -233,7 +233,7 @@ class SandboxSupervisor:
 
             openai_entry = {
                 "type": "oauth",
-                "refresh": refresh_token,
+                "refresh": "managed-by-control-plane",
                 "access": "",
                 "expires": 0,
             }
@@ -305,6 +305,14 @@ class SandboxSupervisor:
             package_json = opencode_dir / "package.json"
             if not package_json.exists():
                 package_json.write_text('{"name": "opencode-tools", "type": "module"}')
+
+        # Deploy codex auth proxy plugin if OpenAI OAuth is configured
+        plugin_source = Path("/app/sandbox/codex-auth-plugin.ts")
+        if plugin_source.exists() and os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN"):
+            plugin_dir = opencode_dir / "plugins"
+            plugin_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy(plugin_source, plugin_dir / "codex-auth-plugin.ts")
+            self.log.info("openai_oauth.plugin_deployed")
 
         env = {
             **os.environ,

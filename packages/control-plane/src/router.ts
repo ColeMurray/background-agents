@@ -133,6 +133,7 @@ const PUBLIC_ROUTES: RegExp[] = [/^\/health$/];
  */
 const SANDBOX_AUTH_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/pr$/, // PR creation from sandbox
+  /^\/sessions\/[^/]+\/openai-token-refresh$/, // OpenAI token refresh from sandbox
 ];
 
 type CachedScmProvider =
@@ -401,6 +402,11 @@ const routes: Route[] = [
     method: "POST",
     pattern: parsePattern("/sessions/:id/pr"),
     handler: handleCreatePR,
+  },
+  {
+    method: "POST",
+    pattern: parsePattern("/sessions/:id/openai-token-refresh"),
+    handler: handleOpenAITokenRefresh,
   },
   {
     method: "POST",
@@ -978,6 +984,20 @@ async function handleCreatePR(
   );
 
   return response;
+}
+
+async function handleOpenAITokenRefresh(
+  _request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const stub = getSessionStub(env, match);
+  if (!stub) return error("Session ID required");
+
+  return stub.fetch(
+    internalRequest("http://internal/internal/openai-token-refresh", { method: "POST" }, ctx)
+  );
 }
 
 async function handleSessionWsToken(

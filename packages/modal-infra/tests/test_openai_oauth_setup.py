@@ -43,7 +43,7 @@ class TestOpenaiOauthSetup:
         assert data == {
             "openai": {
                 "type": "oauth",
-                "refresh": "rt_abc123",
+                "refresh": "managed-by-control-plane",
                 "access": "",
                 "expires": 0,
             }

@@ -23,8 +23,8 @@ SANDBOX_DIR = Path(__file__).parent.parent / "sandbox"
 OPENCODE_VERSION = "latest"
 
 # Cache buster - change this to force Modal image rebuild
-# v36: OpenAI OAuth auth.json support in entrypoint
-CACHE_BUSTER = "v36-openai-oauth-authjson"
+# v37: Codex auth proxy plugin for centralized token refresh
+CACHE_BUSTER = "v37-codex-auth-proxy-plugin"
 
 # Base image with all development tools
 base_image = (
