@@ -61,9 +61,9 @@ export function extractOpenAIAccountId(tokens: OpenAITokenResponse): string | un
     try {
       const parts = tokenField.split(".");
       if (parts.length < 2) continue;
-      // JWTs use base64url encoding; atob() requires standard base64
+      // JWTs use base64url encoding; atob() requires standard base64 with padding
       const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-      const payload = JSON.parse(atob(b64));
+      const payload = JSON.parse(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, "=")));
 
       // Try different claim locations
       const accountId =

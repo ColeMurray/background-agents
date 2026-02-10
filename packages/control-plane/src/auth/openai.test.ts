@@ -156,9 +156,10 @@ describe("openai", () => {
       expect(extractOpenAIAccountId(tokens)).toBeUndefined();
     });
 
-    it("handles base64url-encoded JWT payloads with - and _ chars", () => {
-      // Build a JWT with base64url encoding (replace + with -, / with _, strip =)
-      const payload = { chatgpt_account_id: "acct_b64url" };
+    it("handles base64url-encoded JWT payloads with padding needed", () => {
+      // Use a payload whose base64 length is not a multiple of 4 after stripping padding.
+      // "ab" → base64 "YWI=" (4 chars with padding, 3 without) — requires restored padding.
+      const payload = { chatgpt_account_id: "ab" };
       const header = btoa(JSON.stringify({ alg: "RS256" }))
         .replace(/\+/g, "-")
         .replace(/\//g, "_")
@@ -175,7 +176,7 @@ describe("openai", () => {
         refresh_token: "rt",
       };
 
-      expect(extractOpenAIAccountId(tokens)).toBe("acct_b64url");
+      expect(extractOpenAIAccountId(tokens)).toBe("ab");
     });
 
     it("converts numeric account ID to string", () => {
