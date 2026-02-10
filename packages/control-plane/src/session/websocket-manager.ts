@@ -182,7 +182,9 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
       this.sandboxWs = null;
       return true;
     }
-    return false;
+    // sandboxWs is null (post-hibernation or already cleared) — treat as active.
+    // The only definitive "replaced" signal is sandboxWs pointing to a different socket.
+    return this.sandboxWs === null;
   }
 
   // -------------------------------------------------------------------------

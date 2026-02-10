@@ -547,14 +547,9 @@ export class SessionDO extends DurableObject<Env> {
     if (kind === "sandbox") {
       const wasActive = this.wsManager.clearSandboxSocketIfMatch(ws);
       if (!wasActive) {
-        // Either a replaced socket or a post-hibernation close (sandboxWs was null).
-        // Check if there's another active sandbox socket — if so, this is truly replaced.
-        if (this.wsManager.getSandboxSocket() !== null) {
-          this.log.debug("Ignoring close for replaced sandbox socket", { code });
-          return;
-        }
-        // No active sandbox socket — this was the active one (post-hibernation). Handle normally.
-        this.log.debug("Handling sandbox close after hibernation recovery", { code });
+        // sandboxWs points to a different socket — this close is for a replaced connection.
+        this.log.debug("Ignoring close for replaced sandbox socket", { code });
+        return;
       }
 
       const isNormalClose = code === 1000 || code === 1001;

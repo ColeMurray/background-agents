@@ -380,11 +380,13 @@ describe("SessionWebSocketManagerImpl", () => {
       expect(manager.getSandboxSocket()).toBe(newWs);
     });
 
-    it("returns false when no sandbox socket is set", () => {
+    it("returns true when no sandbox socket is set (post-hibernation)", () => {
       const { manager } = createManager();
       const ws = createFakeWebSocket();
 
-      expect(manager.clearSandboxSocketIfMatch(ws)).toBe(false);
+      // When sandboxWs is null (e.g., post-hibernation), the closing socket
+      // is treated as active since there's no replacement to compare against.
+      expect(manager.clearSandboxSocketIfMatch(ws)).toBe(true);
     });
   });
 
