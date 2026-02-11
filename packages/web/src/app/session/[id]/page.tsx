@@ -387,7 +387,7 @@ function SessionContent({
     if (isNearBottomRef.current && !isPrependingRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
     }
-  }, [events]);
+  }, [events, messagesEndRef]);
 
   // Deduplicate and group events for rendering
   const groupedEvents = useMemo(() => {
@@ -882,7 +882,7 @@ function EventItem({
       );
     }
 
-    case "token":
+    case "token": {
       // Display the model's text response with safe markdown rendering
       if (!event.content) return null;
       const messageContent = event.content;
@@ -910,6 +910,7 @@ function EventItem({
           <SafeMarkdown content={messageContent} className="text-sm" />
         </div>
       );
+    }
 
     case "tool_call":
       // Tool calls are handled by ToolCallGroup component
