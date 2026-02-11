@@ -121,6 +121,56 @@ export async function updateMessage(
 }
 
 /**
+ * Add a reaction to a Slack message.
+ */
+export async function addReaction(
+  token: string,
+  channel: string,
+  messageTs: string,
+  name: string
+): Promise<{ ok: boolean; error?: string }> {
+  const response = await fetch("https://slack.com/api/reactions.add", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      channel,
+      timestamp: messageTs,
+      name,
+    }),
+  });
+
+  return response.json() as Promise<{ ok: boolean; error?: string }>;
+}
+
+/**
+ * Remove a reaction from a Slack message.
+ */
+export async function removeReaction(
+  token: string,
+  channel: string,
+  messageTs: string,
+  name: string
+): Promise<{ ok: boolean; error?: string }> {
+  const response = await fetch("https://slack.com/api/reactions.remove", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      channel,
+      timestamp: messageTs,
+      name,
+    }),
+  });
+
+  return response.json() as Promise<{ ok: boolean; error?: string }>;
+}
+
+/**
  * Get channel info.
  */
 export async function getChannelInfo(

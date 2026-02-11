@@ -154,6 +154,7 @@ export interface CallbackContext {
   repoFullName: string;
   model: string;
   reasoningEffort?: string;
+  reactionMessageTs?: string;
 }
 
 /**
