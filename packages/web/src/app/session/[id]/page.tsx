@@ -841,6 +841,7 @@ function EventItem({
     case "user_message": {
       // Display user's prompt with correct author attribution
       if (!event.content) return null;
+      const messageContent = event.content;
 
       // Determine if this message is from the current user
       const isCurrentUser =
@@ -862,7 +863,7 @@ function EventItem({
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
-                onClick={() => handleCopyContent(event.content)}
+                onClick={() => handleCopyContent(messageContent)}
                 className="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted/60 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
                 title={copied ? "Copied" : "Copy markdown"}
                 aria-label={copied ? "Copied" : "Copy markdown"}
@@ -876,7 +877,7 @@ function EventItem({
               <span className="text-xs text-secondary-foreground">{time}</span>
             </div>
           </div>
-          <pre className="whitespace-pre-wrap text-sm text-foreground">{event.content}</pre>
+          <pre className="whitespace-pre-wrap text-sm text-foreground">{messageContent}</pre>
         </div>
       );
     }
@@ -884,6 +885,7 @@ function EventItem({
     case "token":
       // Display the model's text response with safe markdown rendering
       if (!event.content) return null;
+      const messageContent = event.content;
       return (
         <div className="group bg-card p-4">
           <div className="flex items-center justify-between mb-2">
@@ -891,7 +893,7 @@ function EventItem({
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
-                onClick={() => handleCopyContent(event.content)}
+                onClick={() => handleCopyContent(messageContent)}
                 className="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
                 title={copied ? "Copied" : "Copy markdown"}
                 aria-label={copied ? "Copied" : "Copy markdown"}
@@ -905,7 +907,7 @@ function EventItem({
               <span className="text-xs text-secondary-foreground">{time}</span>
             </div>
           </div>
-          <SafeMarkdown content={event.content} className="text-sm" />
+          <SafeMarkdown content={messageContent} className="text-sm" />
         </div>
       );
 
