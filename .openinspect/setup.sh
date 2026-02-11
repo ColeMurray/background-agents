@@ -76,6 +76,19 @@ setup_python() {
     return
   fi
 
+  if command -v uv &>/dev/null; then
+    info "Syncing Python dependencies with uv.lock…"
+    (
+      cd "$MODAL_DIR"
+      uv sync --frozen --extra dev
+    )
+    info "Python environment ready (activate with: source packages/modal-infra/.venv/bin/activate)"
+    return
+  fi
+
+  warn "uv not found — falling back to pip editable install."
+  warn "Install uv for lockfile-reproducible Python environments."
+
   if [ ! -d "$MODAL_DIR/.venv" ]; then
     info "Creating virtualenv at packages/modal-infra/.venv…"
     python3 -m venv "$MODAL_DIR/.venv"
