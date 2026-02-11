@@ -810,6 +810,7 @@ async function handleSessionPrompt(
       threadTs: string;
       repoFullName: string;
       model: string;
+      reactionMessageTs?: string;
     };
   };
 

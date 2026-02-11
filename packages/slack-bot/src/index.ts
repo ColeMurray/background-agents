@@ -11,6 +11,7 @@ import {
   verifySlackSignature,
   postMessage,
   updateMessage,
+  addReaction,
   getChannelInfo,
   getThreadMessages,
   publishView,
@@ -851,6 +852,7 @@ async function handleAppMention(
         repoFullName: existingSession.repoFullName,
         model: existingSession.model,
         reasoningEffort: existingSession.reasoningEffort,
+        reactionMessageTs: ts,
       };
 
       const channelContext = channelName
@@ -869,6 +871,16 @@ async function handleAppMention(
       );
 
       if (promptResult) {
+        const reactionResult = await addReaction(env.SLACK_BOT_TOKEN, channel, ts, "eyes");
+        if (!reactionResult.ok && reactionResult.error !== "already_reacted") {
+          log.warn("slack.reaction.add", {
+            trace_id: traceId,
+            channel,
+            message_ts: ts,
+            reaction: "eyes",
+            slack_error: reactionResult.error,
+          });
+        }
         return;
       }
 

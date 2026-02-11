@@ -2300,6 +2300,7 @@ export class SessionDO extends DurableObject<Env> {
           threadTs: string;
           repoFullName: string;
           model: string;
+          reactionMessageTs?: string;
         };
       };
 
