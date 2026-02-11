@@ -126,7 +126,7 @@ export async function updateMessage(
 export async function addReaction(
   token: string,
   channel: string,
-  timestamp: string,
+  messageTs: string,
   name: string
 ): Promise<{ ok: boolean; error?: string }> {
   const response = await fetch("https://slack.com/api/reactions.add", {
@@ -137,7 +137,7 @@ export async function addReaction(
     },
     body: JSON.stringify({
       channel,
-      timestamp,
+      timestamp: messageTs,
       name,
     }),
   });
@@ -151,7 +151,7 @@ export async function addReaction(
 export async function removeReaction(
   token: string,
   channel: string,
-  timestamp: string,
+  messageTs: string,
   name: string
 ): Promise<{ ok: boolean; error?: string }> {
   const response = await fetch("https://slack.com/api/reactions.remove", {
@@ -162,7 +162,7 @@ export async function removeReaction(
     },
     body: JSON.stringify({
       channel,
-      timestamp,
+      timestamp: messageTs,
       name,
     }),
   });
