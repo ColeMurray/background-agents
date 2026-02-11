@@ -812,7 +812,7 @@ function EventItem({
   currentParticipantId: string | null;
 }) {
   const [copied, setCopied] = useState(false);
-  const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const time = new Date(event.timestamp * 1000).toLocaleTimeString();
 
   useEffect(() => {
@@ -862,7 +862,7 @@ function EventItem({
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
-                onClick={() => handleCopyContent(event.content || "")}
+                onClick={() => handleCopyContent(event.content)}
                 className="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted/60 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
                 title={copied ? "Copied" : "Copy markdown"}
                 aria-label={copied ? "Copied" : "Copy markdown"}
@@ -891,7 +891,7 @@ function EventItem({
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
-                onClick={() => handleCopyContent(event.content || "")}
+                onClick={() => handleCopyContent(event.content)}
                 className="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
                 title={copied ? "Copied" : "Copy markdown"}
                 aria-label={copied ? "Copied" : "Copy markdown"}
