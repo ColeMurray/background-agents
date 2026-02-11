@@ -9,7 +9,7 @@ import { ToolCallGroup } from "@/components/tool-call-group";
 import { SidebarLayout, useSidebarContext } from "@/components/sidebar-layout";
 import { SessionRightSidebar } from "@/components/session-right-sidebar";
 import { ActionBar } from "@/components/action-bar";
-import { formatModelNameLower } from "@/lib/format";
+import { copyToClipboard, formatModelNameLower } from "@/lib/format";
 import {
   MODEL_OPTIONS,
   DEFAULT_MODEL,
@@ -387,7 +387,7 @@ function SessionContent({
     if (isNearBottomRef.current && !isPrependingRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
     }
-  }, [events]);
+  }, [events, messagesEndRef]);
 
   // Deduplicate and group events for rendering
   const groupedEvents = useMemo(() => {
@@ -811,12 +811,37 @@ function EventItem({
   };
   currentParticipantId: string | null;
 }) {
+  const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const time = new Date(event.timestamp * 1000).toLocaleTimeString();
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const handleCopyContent = useCallback(async (content: string) => {
+    const success = await copyToClipboard(content);
+    if (!success) return;
+
+    setCopied(true);
+    if (copyTimeoutRef.current) {
+      clearTimeout(copyTimeoutRef.current);
+    }
+    copyTimeoutRef.current = setTimeout(() => {
+      setCopied(false);
+      copyTimeoutRef.current = null;
+    }, 1500);
+  }, []);
 
   switch (event.type) {
     case "user_message": {
       // Display user's prompt with correct author attribution
       if (!event.content) return null;
+      const messageContent = event.content;
 
       // Determine if this message is from the current user
       const isCurrentUser =
@@ -827,7 +852,7 @@ function EventItem({
       const authorName = isCurrentUser ? "You" : event.author?.name || "Unknown User";
 
       return (
-        <div className="bg-accent-muted p-4 ml-8">
+        <div className="group bg-accent-muted p-4 ml-8">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               {!isCurrentUser && event.author?.avatar && (
@@ -835,25 +860,57 @@ function EventItem({
               )}
               <span className="text-xs text-accent">{authorName}</span>
             </div>
-            <span className="text-xs text-secondary-foreground">{time}</span>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => handleCopyContent(messageContent)}
+                className="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted/60 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
+                title={copied ? "Copied" : "Copy markdown"}
+                aria-label={copied ? "Copied" : "Copy markdown"}
+              >
+                {copied ? (
+                  <CopyCheckIcon className="w-3.5 h-3.5" />
+                ) : (
+                  <CopyIcon className="w-3.5 h-3.5" />
+                )}
+              </button>
+              <span className="text-xs text-secondary-foreground">{time}</span>
+            </div>
           </div>
-          <pre className="whitespace-pre-wrap text-sm text-foreground">{event.content}</pre>
+          <pre className="whitespace-pre-wrap text-sm text-foreground">{messageContent}</pre>
         </div>
       );
     }
 
-    case "token":
+    case "token": {
       // Display the model's text response with safe markdown rendering
       if (!event.content) return null;
+      const messageContent = event.content;
       return (
-        <div className="bg-card p-4">
+        <div className="group bg-card p-4">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs text-muted-foreground">Assistant</span>
-            <span className="text-xs text-secondary-foreground">{time}</span>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => handleCopyContent(messageContent)}
+                className="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
+                title={copied ? "Copied" : "Copy markdown"}
+                aria-label={copied ? "Copied" : "Copy markdown"}
+              >
+                {copied ? (
+                  <CopyCheckIcon className="w-3.5 h-3.5" />
+                ) : (
+                  <CopyIcon className="w-3.5 h-3.5" />
+                )}
+              </button>
+              <span className="text-xs text-secondary-foreground">{time}</span>
+            </div>
           </div>
-          <SafeMarkdown content={event.content} className="text-sm" />
+          <SafeMarkdown content={messageContent} className="text-sm" />
         </div>
       );
+    }
 
     case "tool_call":
       // Tool calls are handled by ToolCallGroup component
@@ -917,4 +974,21 @@ function EventItem({
     default:
       return null;
   }
+}
+
+function CopyIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <rect x="9" y="9" width="11" height="11" rx="2" ry="2" strokeWidth={2} />
+      <rect x="4" y="4" width="11" height="11" rx="2" ry="2" strokeWidth={2} />
+    </svg>
+  );
+}
+
+function CopyCheckIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+    </svg>
+  );
 }
