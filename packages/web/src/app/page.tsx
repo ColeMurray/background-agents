@@ -95,6 +95,7 @@ export default function Home() {
             repoOwner: owner,
             repoName: name,
             model: selectedModel,
+            reasoningEffort,
           }),
           signal: abortController.signal,
         });
@@ -128,7 +129,7 @@ export default function Home() {
 
     sessionCreationPromise.current = promise;
     return promise;
-  }, [selectedRepo, selectedModel, pendingSessionId]);
+  }, [selectedRepo, selectedModel, reasoningEffort, pendingSessionId]);
 
   const handleModelChange = useCallback((model: string) => {
     setSelectedModel(model);

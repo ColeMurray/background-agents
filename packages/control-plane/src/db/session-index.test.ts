@@ -8,6 +8,7 @@ type SessionRow = {
   repo_owner: string;
   repo_name: string;
   model: string;
+  reasoning_effort: string | null;
   status: string;
   created_at: number;
   updated_at: number;
@@ -77,16 +78,18 @@ class FakeD1Database {
     const normalized = normalizeQuery(query);
 
     if (QUERY_PATTERNS.INSERT_SESSION.test(normalized)) {
-      const [id, title, repoOwner, repoName, model, status, createdAt, updatedAt] = args as [
-        string,
-        string | null,
-        string,
-        string,
-        string,
-        string,
-        number,
-        number,
-      ];
+      const [id, title, repoOwner, repoName, model, reasoningEffort, status, createdAt, updatedAt] =
+        args as [
+          string,
+          string | null,
+          string,
+          string,
+          string,
+          string | null,
+          string,
+          number,
+          number,
+        ];
       // INSERT OR IGNORE — skip if exists
       if (!this.rows.has(id)) {
         this.rows.set(id, {
@@ -95,6 +98,7 @@ class FakeD1Database {
           repo_owner: repoOwner,
           repo_name: repoName,
           model,
+          reasoning_effort: reasoningEffort,
           status,
           created_at: createdAt,
           updated_at: updatedAt,
@@ -190,6 +194,7 @@ function makeSession(overrides: Partial<SessionEntry> = {}): SessionEntry {
     repoOwner: "owner",
     repoName: "repo",
     model: "anthropic/claude-haiku-4-5",
+    reasoningEffort: null,
     status: "created",
     createdAt: 1000,
     updatedAt: 1000,

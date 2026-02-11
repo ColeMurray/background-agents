@@ -21,7 +21,7 @@ import { SecretsValidationError, normalizeKey, validateKey } from "./db/secrets-
 import { SessionIndexStore } from "./db/session-index";
 
 import { RepoMetadataStore } from "./db/repo-metadata";
-import { getValidModelOrDefault } from "@open-inspect/shared";
+import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared";
 import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
 import type { RequestMetrics } from "./db/instrumented-d1";
 import type {
@@ -687,6 +687,13 @@ async function handleCreateSession(
   const doId = env.SESSION.idFromName(sessionId);
   const stub = env.SESSION.get(doId);
 
+  // Validate model and reasoning effort once for both DO init and D1 index
+  const model = getValidModelOrDefault(body.model);
+  const reasoningEffort =
+    body.reasoningEffort && isValidReasoningEffort(model, body.reasoningEffort)
+      ? body.reasoningEffort
+      : null;
+
   // Initialize session with user info and optional encrypted token
   const initResponse = await stub.fetch(
     internalRequest(
@@ -700,8 +707,8 @@ async function handleCreateSession(
           repoName,
           repoId,
           title: body.title,
-          model: getValidModelOrDefault(body.model),
-          reasoningEffort: body.reasoningEffort,
+          model,
+          reasoningEffort,
           userId,
           githubLogin,
           githubName,
@@ -725,7 +732,8 @@ async function handleCreateSession(
     title: body.title || null,
     repoOwner,
     repoName,
-    model: getValidModelOrDefault(body.model),
+    model,
+    reasoningEffort,
     status: "created",
     createdAt: now,
     updatedAt: now,
