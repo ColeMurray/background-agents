@@ -883,7 +883,11 @@ class AgentBridge:
                                 "sessionID"
                             )
                             is_child = event_session_id in tracked_child_session_ids
-                            if not event_session_id or event_session_id == self.opencode_session_id or is_child:
+                            if (
+                                not event_session_id
+                                or event_session_id == self.opencode_session_id
+                                or is_child
+                            ):
                                 if event_type == "message.updated":
                                     info = props.get("info", {})
                                     msg_session_id = info.get("sessionID")
@@ -929,7 +933,9 @@ class AgentBridge:
                                             if pending:
                                                 pending_parts_total -= len(pending)
                                                 for part, delta in pending:
-                                                    for ev in handle_part(part, delta, is_subtask=True):
+                                                    for ev in handle_part(
+                                                        part, delta, is_subtask=True
+                                                    ):
                                                         yield ev
 
                                 elif event_type == "message.part.updated":
@@ -939,7 +945,10 @@ class AgentBridge:
                                     part_session_id = part.get("sessionID", "")
 
                                     # Discover child sessions from task tool metadata (covers task_id resume)
-                                    if part.get("tool") == "task" and part_session_id == self.opencode_session_id:
+                                    if (
+                                        part.get("tool") == "task"
+                                        and part_session_id == self.opencode_session_id
+                                    ):
                                         metadata = part.get("metadata") or {}
                                         child_sid = metadata.get("sessionId")
                                         if child_sid and child_sid not in tracked_child_session_ids:
@@ -1005,7 +1014,9 @@ class AgentBridge:
                                 elif event_type == "session.error":
                                     error_session_id = props.get("sessionID")
                                     if error_session_id == self.opencode_session_id:
-                                        error_msg = self._extract_error_message(props.get("error", {}))
+                                        error_msg = self._extract_error_message(
+                                            props.get("error", {})
+                                        )
                                         self.log.error("bridge.session_error", error_msg=error_msg)
                                         yield {
                                             "type": "error",
@@ -1014,8 +1025,10 @@ class AgentBridge:
                                         }
                                         return
                                     elif error_session_id in tracked_child_session_ids:
-                                        error_msg = self._extract_error_message(props.get("error", {}))
-                                        self.log.warn(
+                                        error_msg = self._extract_error_message(
+                                            props.get("error", {})
+                                        )
+                                        self.log.error(
                                             "bridge.child_session_error",
                                             error_msg=error_msg,
                                             child_session_id=error_session_id,

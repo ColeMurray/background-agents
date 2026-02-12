@@ -1783,6 +1783,85 @@ class TestSubtaskStreaming:
         assert len(parent_tools) == 1
         assert len(child_tools) == 1
 
+    @pytest.mark.asyncio
+    async def test_grandchild_session_not_tracked(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """Grandchild sessions (parentID != opencode_session_id) should NOT be tracked."""
+        http_client = bridge.http_client
+
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            # Direct child
+            create_sse_event(
+                "session.created",
+                {
+                    "info": {
+                        "id": "child-1",
+                        "parentID": "oc-session-123",
+                    }
+                },
+            ),
+            # Grandchild — parentID is child-1, NOT oc-session-123
+            create_sse_event(
+                "session.created",
+                {
+                    "info": {
+                        "id": "grandchild-1",
+                        "parentID": "child-1",
+                    }
+                },
+            ),
+            # Grandchild message + tool — should be filtered out
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "gc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "grandchild-1",
+                    }
+                },
+            ),
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "id": "gc-part-1",
+                        "sessionID": "grandchild-1",
+                        "messageID": "gc-msg-1",
+                        "tool": "Bash",
+                        "callID": "gc-call-1",
+                        "state": {
+                            "status": "running",
+                            "input": {"command": "echo grandchild"},
+                            "output": "",
+                        },
+                    }
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        tool_events = [e for e in events if e["type"] == "tool_call"]
+        assert len(tool_events) == 0  # Grandchild events should be filtered out
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
