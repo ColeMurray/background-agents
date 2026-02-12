@@ -949,8 +949,12 @@ class AgentBridge:
                                         part.get("tool") == "task"
                                         and part_session_id == self.opencode_session_id
                                     ):
-                                        metadata = part.get("metadata") or {}
-                                        child_sid = metadata.get("sessionId")
+                                        metadata = part.get("metadata")
+                                        child_sid = (
+                                            metadata.get("sessionId")
+                                            if isinstance(metadata, dict)
+                                            else None
+                                        )
                                         if child_sid and child_sid not in tracked_child_session_ids:
                                             tracked_child_session_ids.add(child_sid)
                                             self.log.info(
