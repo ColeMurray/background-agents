@@ -70,6 +70,54 @@ describe("POST /internal/create-pr", () => {
     const body = await res.json<{ error: string }>();
     expect(body.error).toBe("User not found. Please re-authenticate.");
   });
+  it("returns 401 when expired OAuth token cannot be refreshed", async () => {
+    const { stub } = await initSession({ userId: "user-1" });
+
+    const participants = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants WHERE user_id = ?",
+      "user-1"
+    );
+    const ownerParticipantId = participants[0]?.id;
+    if (!ownerParticipantId) {
+      throw new Error("Expected owner participant");
+    }
+
+    await seedMessage(stub, {
+      id: "msg-processing-expired-token",
+      authorId: ownerParticipantId,
+      content: "Create a PR",
+      source: "web",
+      status: "processing",
+      createdAt: Date.now() - 1000,
+      startedAt: Date.now() - 500,
+    });
+
+    await runInDurableObject(stub, (instance: SessionDO) => {
+      instance.ctx.storage.sql.exec(
+        "UPDATE participants SET github_access_token_encrypted = ?, github_refresh_token_encrypted = ?, github_token_expires_at = ? WHERE id = ?",
+        "invalid-access-token",
+        "invalid-refresh-token",
+        Date.now() - 60_000,
+        ownerParticipantId
+      );
+    });
+
+    const res = await stub.fetch("http://internal/internal/create-pr", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "Test PR",
+        body: "Body from integration test",
+      }),
+    });
+
+    expect(res.status).toBe(401);
+    const body = await res.json<{ error: string }>();
+    expect(body.error).toBe(
+      "Your GitHub token has expired and could not be refreshed. Please re-authenticate."
+    );
+  });
 
   it("returns manual fallback and stores branch artifact when prompting user has no OAuth token", async () => {
     const { stub } = await initSession({ userId: "user-1" });

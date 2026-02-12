@@ -2087,18 +2087,21 @@ export class SessionDO extends DurableObject<Env> {
 
   /**
    * Resolve the prompting participant's OAuth credentials for API-based PR creation.
-   * Returns null when no user OAuth token is available or token handling fails.
+   * Returns auth: null only when user OAuth is not configured; returns an HTTP error for token failures.
    */
   private async resolvePromptingUserAuthForPR(
     participant: ParticipantRow
-  ): Promise<SourceControlAuthContext | null> {
+  ): Promise<
+    | { auth: SourceControlAuthContext | null; error?: never; status?: never }
+    | { auth?: never; error: string; status: number }
+  > {
     let resolvedParticipant = participant;
 
     if (!resolvedParticipant.github_access_token_encrypted) {
       this.log.info("PR creation: prompting user has no OAuth token, using manual fallback", {
         user_id: resolvedParticipant.user_id,
       });
-      return null;
+      return { auth: null };
     }
 
     if (this.isGitHubTokenExpired(resolvedParticipant)) {
@@ -2110,12 +2113,19 @@ export class SessionDO extends DurableObject<Env> {
       if (refreshed) {
         resolvedParticipant = refreshed;
       } else {
-        return null;
+        this.log.warn("GitHub token refresh failed, returning auth error", {
+          user_id: resolvedParticipant.user_id,
+        });
+        return {
+          error:
+            "Your GitHub token has expired and could not be refreshed. Please re-authenticate.",
+          status: 401,
+        };
       }
     }
 
     if (!resolvedParticipant.github_access_token_encrypted) {
-      return null;
+      return { auth: null };
     }
 
     try {
@@ -2125,15 +2135,20 @@ export class SessionDO extends DurableObject<Env> {
       );
 
       return {
-        authType: "oauth",
-        token: accessToken,
+        auth: {
+          authType: "oauth",
+          token: accessToken,
+        },
       };
     } catch (error) {
       this.log.error("Failed to decrypt GitHub token for PR creation", {
         user_id: resolvedParticipant.user_id,
         error: error instanceof Error ? error : String(error),
       });
-      return null;
+      return {
+        error: "Failed to process GitHub token for PR creation.",
+        status: 500,
+      };
     }
   }
 
@@ -2503,7 +2518,10 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     const promptingParticipant = promptingParticipantResult.participant;
-    const promptingAuth = await this.resolvePromptingUserAuthForPR(promptingParticipant);
+    const authResolution = await this.resolvePromptingUserAuthForPR(promptingParticipant);
+    if ("error" in authResolution) {
+      return Response.json({ error: authResolution.error }, { status: authResolution.status });
+    }
 
     const session = this.getSession();
     const sessionId = session?.session_name || session?.id || this.ctx.id.toString();
@@ -2527,7 +2545,7 @@ export class SessionDO extends DurableObject<Env> {
     const result = await pullRequestService.createPullRequest({
       ...body,
       promptingUserId: promptingParticipant.user_id,
-      promptingAuth,
+      promptingAuth: authResolution.auth,
       sessionUrl,
     });
 
