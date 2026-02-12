@@ -12,6 +12,7 @@ Open-Inspect provides a hosted background coding agent that can:
 - Support multiple clients (web, Slack, Chrome extension)
 - Enable multiplayer sessions where multiple people can collaborate
 - Create PRs with proper commit attribution
+- Use your choice of AI model — Anthropic Claude or OpenAI Codex via your ChatGPT subscription
 
 ## Security Model (Single-Tenant Only)
 
@@ -146,6 +147,18 @@ await configureGitIdentity({
   email: author.githubEmail || generateNoreplyEmail(author.githubId, author.githubLogin),
 });
 ```
+
+### Multi-Provider Model Support
+
+Choose the AI model that fits your task — Anthropic Claude or OpenAI Codex:
+
+| Provider  | Models                                |
+| --------- | ------------------------------------- |
+| Anthropic | Claude Haiku, Sonnet, Opus            |
+| OpenAI    | GPT 5.2, GPT 5.2 Codex, GPT 5.3 Codex |
+
+OpenAI models work with your existing ChatGPT subscription — no separate API key needed. See
+**[docs/OPENAI_MODELS.md](docs/OPENAI_MODELS.md)** for setup instructions.
 
 ### Repository Setup Scripts
 

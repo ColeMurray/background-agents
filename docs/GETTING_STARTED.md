@@ -125,6 +125,9 @@ Create an R2 API Token:
 2. Create an API key
 3. Note the **API Key** (starts with `sk-ant-`)
 
+> **Want to use your OpenAI ChatGPT subscription?** See [Using OpenAI Models](OPENAI_MODELS.md) for
+> setup instructions (can be configured after deployment).
+
 ---
 
 ## Step 3: Create GitHub App
@@ -646,3 +649,4 @@ For details on the infrastructure components, see:
 
 - [terraform/README.md](../terraform/README.md) - Terraform module documentation
 - [README.md](../README.md) - System architecture overview
+- [OPENAI_MODELS.md](OPENAI_MODELS.md) - Configuring OpenAI Codex models

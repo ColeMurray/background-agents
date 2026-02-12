@@ -33,13 +33,10 @@ import {
 import {
   createSourceControlProvider as createSourceControlProviderImpl,
   resolveScmProviderFromEnv,
-  SourceControlProviderError,
   type SourceControlProvider,
   type SourceControlAuthContext,
   type GitPushSpec,
 } from "../source-control";
-import { resolveHeadBranchForPr } from "../source-control/branch-resolution";
-import { generateBranchName, type ManualPullRequestArtifactMetadata } from "@open-inspect/shared";
 import {
   DEFAULT_MODEL,
   isValidModel,
@@ -62,6 +59,7 @@ import type {
 import type { SessionRow, ParticipantRow, ArtifactRow, SandboxRow, SandboxCommand } from "./types";
 import { SessionRepository } from "./repository";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
+import { SessionPullRequestService } from "./pull-request-service";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
@@ -1986,12 +1984,42 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
+   * Get the prompting participant for PR creation.
+   * Returns the participant who triggered the currently processing message.
+   */
+  private async getPromptingParticipantForPR(): Promise<
+    | { participant: ParticipantRow; error?: never; status?: never }
+    | { participant?: never; error: string; status: number }
+  > {
+    const processingMessage = this.repository.getProcessingMessageAuthor();
+
+    if (!processingMessage) {
+      this.log.warn("PR creation failed: no processing message found");
+      return {
+        error: "No active prompt found. PR creation must be triggered by a user prompt.",
+        status: 400,
+      };
+    }
+
+    const participant = this.repository.getParticipantById(processingMessage.author_id);
+
+    if (!participant) {
+      this.log.warn("PR creation failed: participant not found", {
+        participantId: processingMessage.author_id,
+      });
+      return { error: "User not found. Please re-authenticate.", status: 401 };
+    }
+
+    return { participant };
+  }
+
+  /**
    * Check if a participant's GitHub token is expired.
    * Returns true if expired or will expire within buffer time.
    */
   private isGitHubTokenExpired(participant: ParticipantRow, bufferMs = 60000): boolean {
     if (!participant.github_token_expires_at) {
-      return false; // No expiration set, assume valid
+      return false;
     }
     return Date.now() + bufferMs >= participant.github_token_expires_at;
   }
@@ -2058,49 +2086,14 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
-   * Get the prompting participant for PR creation.
-   * Returns the participant who triggered the currently processing message.
-   */
-  private async getPromptingParticipantForPR(): Promise<
-    | { participant: ParticipantRow; error?: never; status?: never }
-    | { participant?: never; error: string; status: number }
-  > {
-    // Find the currently processing message
-    const processingMessage = this.repository.getProcessingMessageAuthor();
-
-    if (!processingMessage) {
-      this.log.warn("PR creation failed: no processing message found");
-      return {
-        error: "No active prompt found. PR creation must be triggered by a user prompt.",
-        status: 400,
-      };
-    }
-
-    const participantId = processingMessage.author_id;
-
-    // Get the participant record
-    const participant = this.repository.getParticipantById(participantId);
-
-    if (!participant) {
-      this.log.warn("PR creation failed: participant not found", { participantId });
-      return { error: "User not found. Please re-authenticate.", status: 401 };
-    }
-
-    return { participant };
-  }
-
-  /**
    * Resolve the prompting participant's OAuth credentials for API-based PR creation.
-   * Returns `auth: null` when no user OAuth token is available (manual PR fallback).
+   * Returns auth: null only when user OAuth is not configured; returns an HTTP error for token failures.
    */
-  private async resolvePromptingUserAuthForPR(participant: ParticipantRow): Promise<
-    | {
-        participant: ParticipantRow;
-        auth: SourceControlAuthContext | null;
-        error?: never;
-        status?: never;
-      }
-    | { participant?: never; auth?: never; error: string; status: number }
+  private async resolvePromptingUserAuthForPR(
+    participant: ParticipantRow
+  ): Promise<
+    | { auth: SourceControlAuthContext | null; error?: never; status?: never }
+    | { auth?: never; error: string; status: number }
   > {
     let resolvedParticipant = participant;
 
@@ -2108,7 +2101,7 @@ export class SessionDO extends DurableObject<Env> {
       this.log.info("PR creation: prompting user has no OAuth token, using manual fallback", {
         user_id: resolvedParticipant.user_id,
       });
-      return { participant: resolvedParticipant, auth: null };
+      return { auth: null };
     }
 
     if (this.isGitHubTokenExpired(resolvedParticipant)) {
@@ -2120,6 +2113,9 @@ export class SessionDO extends DurableObject<Env> {
       if (refreshed) {
         resolvedParticipant = refreshed;
       } else {
+        this.log.warn("GitHub token refresh failed, returning auth error", {
+          user_id: resolvedParticipant.user_id,
+        });
         return {
           error:
             "Your GitHub token has expired and could not be refreshed. Please re-authenticate.",
@@ -2129,7 +2125,7 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     if (!resolvedParticipant.github_access_token_encrypted) {
-      return { participant: resolvedParticipant, auth: null };
+      return { auth: null };
     }
 
     try {
@@ -2139,7 +2135,6 @@ export class SessionDO extends DurableObject<Env> {
       );
 
       return {
-        participant: resolvedParticipant,
         auth: {
           authType: "oauth",
           token: accessToken,
@@ -2504,9 +2499,7 @@ export class SessionDO extends DurableObject<Env> {
 
   /**
    * Handle PR creation request.
-   * 1. Resolve prompting participant and branch metadata
-   * 2. Push branch to remote via provider push auth
-   * 3. Create PR via OAuth token, or return manual PR URL fallback
+   * Resolves prompting participant and auth in DO, then delegates PR orchestration.
    */
   private async handleCreatePR(request: Request): Promise<Response> {
     const body = (await request.json()) as {
@@ -2530,168 +2523,54 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     const promptingParticipant = promptingParticipantResult.participant;
-    this.log.info("Creating PR", { user_id: promptingParticipant.user_id });
-
-    try {
-      const sessionId = session.session_name || session.id;
-      const generatedHeadBranch = generateBranchName(sessionId);
-
-      const initialArtifacts = this.repository.listArtifacts();
-      const existingPrArtifact = initialArtifacts.find((artifact) => artifact.type === "pr");
-      if (existingPrArtifact) {
-        return Response.json(
-          { error: "A pull request has already been created for this session." },
-          { status: 409 }
-        );
-      }
-
-      // Generate push auth via provider app credentials (not user token)
-      // User token (if available) is only used for PR API call below
-      let pushAuth;
-      try {
-        pushAuth = await this.sourceControlProvider.generatePushAuth();
-        this.log.info("Generated fresh push auth token");
-      } catch (err) {
-        this.log.error("Failed to generate push auth", {
-          error: err instanceof Error ? err : String(err),
-        });
-        const errorMessage =
-          err instanceof SourceControlProviderError
-            ? err.message
-            : "Failed to generate push authentication";
-        return Response.json({ error: errorMessage }, { status: 500 });
-      }
-
-      // Resolve repository metadata with app auth so this still works for Slack sessions
-      const appAuth: SourceControlAuthContext = {
-        authType: "app",
-        token: pushAuth.token,
-      };
-      const repoInfo = await this.sourceControlProvider.getRepository(appAuth, {
-        owner: session.repo_owner,
-        name: session.repo_name,
-      });
-      const baseBranch = body.baseBranch || repoInfo.defaultBranch;
-      const branchResolution = resolveHeadBranchForPr({
-        requestedHeadBranch: body.headBranch,
-        sessionBranchName: session.branch_name,
-        generatedBranchName: generatedHeadBranch,
-        baseBranch,
-      });
-      const headBranch = branchResolution.headBranch;
-      this.log.info("Resolved PR head branch", {
-        requested_head_branch: body.headBranch ?? null,
-        session_branch_name: session.branch_name,
-        generated_head_branch: generatedHeadBranch,
-        resolved_head_branch: headBranch,
-        resolution_source: branchResolution.source,
-        base_branch: baseBranch,
-      });
-      const pushSpec = this.sourceControlProvider.buildGitPushSpec({
-        owner: session.repo_owner,
-        name: session.repo_name,
-        sourceRef: "HEAD",
-        targetBranch: headBranch,
-        auth: pushAuth,
-        force: true,
-      });
-
-      // Push branch to remote via sandbox (session-layer coordination)
-      const pushResult = await this.pushBranchToRemote(headBranch, pushSpec);
-
-      if (!pushResult.success) {
-        return Response.json({ error: pushResult.error }, { status: 500 });
-      }
-
-      // Update session with branch name after push succeeds
-      this.repository.updateSessionBranch(session.id, headBranch);
-
-      // Re-check artifacts after async work to avoid stale reads on retries/interleaving.
-      const latestArtifacts = this.repository.listArtifacts();
-      const latestPrArtifact = latestArtifacts.find((artifact) => artifact.type === "pr");
-      if (latestPrArtifact) {
-        return Response.json(
-          { error: "A pull request has already been created for this session." },
-          { status: 409 }
-        );
-      }
-
-      const authResolution = await this.resolvePromptingUserAuthForPR(promptingParticipant);
-      if ("error" in authResolution) {
-        return this.buildManualPrFallbackResponse(
-          session,
-          headBranch,
-          baseBranch,
-          latestArtifacts,
-          authResolution.error
-        );
-      }
-
-      if (!authResolution.auth) {
-        return this.buildManualPrFallbackResponse(session, headBranch, baseBranch, latestArtifacts);
-      }
-
-      // Append session link footer to agent's PR body
-      const webAppUrl = this.env.WEB_APP_URL || this.env.WORKER_URL || "";
-      const sessionUrl = `${webAppUrl}/session/${sessionId}`;
-      const fullBody = body.body + `\n\n---\n*Created with [Open-Inspect](${sessionUrl})*`;
-
-      // Create the PR via provider (using the prompting user's OAuth token)
-      const prResult = await this.sourceControlProvider.createPullRequest(authResolution.auth, {
-        repository: repoInfo,
-        title: body.title,
-        body: fullBody,
-        sourceBranch: headBranch,
-        targetBranch: baseBranch,
-      });
-
-      // Store the PR as an artifact
-      const artifactId = generateId();
-      const now = Date.now();
-      this.repository.createArtifact({
-        id: artifactId,
-        type: "pr",
-        url: prResult.webUrl,
-        metadata: JSON.stringify({
-          number: prResult.id,
-          state: prResult.state,
-          head: headBranch,
-          base: baseBranch,
-        }),
-        createdAt: now,
-      });
-
-      // Broadcast PR creation to all clients
-      this.broadcast({
-        type: "artifact_created",
-        artifact: {
-          id: artifactId,
-          type: "pr",
-          url: prResult.webUrl,
-          prNumber: prResult.id,
-        },
-      });
-
-      return Response.json({
-        prNumber: prResult.id,
-        prUrl: prResult.webUrl,
-        state: prResult.state,
-      });
-    } catch (error) {
-      this.log.error("PR creation failed", {
-        error: error instanceof Error ? error : String(error),
-      });
-
-      // Handle SourceControlProviderError with HTTP status
-      if (error instanceof SourceControlProviderError) {
-        return Response.json({ error: error.message }, { status: error.httpStatus || 500 });
-      }
-
-      return Response.json(
-        { error: error instanceof Error ? error.message : "Failed to create PR" },
-        { status: 500 }
-      );
+    const authResolution = await this.resolvePromptingUserAuthForPR(promptingParticipant);
+    if ("error" in authResolution) {
+      return Response.json({ error: authResolution.error }, { status: authResolution.status });
     }
+
+    const sessionId = session.session_name || session.id;
+    const webAppUrl = this.env.WEB_APP_URL || this.env.WORKER_URL || "";
+    const sessionUrl = webAppUrl + "/session/" + sessionId;
+
+    const pullRequestService = new SessionPullRequestService({
+      repository: this.repository,
+      sourceControlProvider: this.sourceControlProvider,
+      log: this.log,
+      generateId: () => generateId(),
+      pushBranchToRemote: (headBranch, pushSpec) => this.pushBranchToRemote(headBranch, pushSpec),
+      broadcastArtifactCreated: (artifact) => {
+        this.broadcast({
+          type: "artifact_created",
+          artifact,
+        });
+      },
+    });
+
+    const result = await pullRequestService.createPullRequest({
+      ...body,
+      promptingUserId: promptingParticipant.user_id,
+      promptingAuth: authResolution.auth,
+      sessionUrl,
+    });
+
+    if (result.kind === "error") {
+      return Response.json({ error: result.error }, { status: result.status });
+    }
+
+    if (result.kind === "manual") {
+      return Response.json({
+        status: "manual",
+        createPrUrl: result.createPrUrl,
+        headBranch: result.headBranch,
+        baseBranch: result.baseBranch,
+      });
+    }
+
+    return Response.json({
+      prNumber: result.prNumber,
+      prUrl: result.prUrl,
+      state: result.state,
+    });
   }
 
   private parseArtifactMetadata(
@@ -2710,121 +2589,6 @@ export class SessionDO extends DurableObject<Env> {
       });
       return null;
     }
-  }
-
-  private getExistingManualBranchArtifact(
-    artifacts: ArtifactRow[],
-    headBranch: string
-  ): { artifact: ArtifactRow; metadata: Record<string, unknown> } | null {
-    for (const artifact of artifacts) {
-      if (artifact.type !== "branch") {
-        continue;
-      }
-
-      const metadata = this.parseArtifactMetadata(artifact);
-      if (!metadata) {
-        continue;
-      }
-
-      if (metadata.mode === "manual_pr" && metadata.head === headBranch) {
-        return { artifact, metadata };
-      }
-    }
-
-    return null;
-  }
-
-  private getCreatePrUrlFromManualArtifact(
-    existing: { artifact: ArtifactRow; metadata: Record<string, unknown> },
-    fallbackUrl: string
-  ): string {
-    const metadataUrl = existing.metadata.createPrUrl;
-    if (typeof metadataUrl === "string" && metadataUrl.length > 0) {
-      return metadataUrl;
-    }
-
-    if (existing.artifact.url && existing.artifact.url.length > 0) {
-      return existing.artifact.url;
-    }
-
-    return fallbackUrl;
-  }
-
-  private buildManualPrFallbackResponse(
-    session: SessionRow,
-    headBranch: string,
-    baseBranch: string,
-    artifacts: ArtifactRow[],
-    reason?: string
-  ): Response {
-    const manualCreatePrUrl = this.sourceControlProvider.buildManualPullRequestUrl({
-      owner: session.repo_owner,
-      name: session.repo_name,
-      sourceBranch: headBranch,
-      targetBranch: baseBranch,
-    });
-
-    const existingManualArtifact = this.getExistingManualBranchArtifact(artifacts, headBranch);
-    if (existingManualArtifact) {
-      const createPrUrl = this.getCreatePrUrlFromManualArtifact(
-        existingManualArtifact,
-        manualCreatePrUrl
-      );
-      this.log.info("Using manual PR fallback", {
-        head_branch: headBranch,
-        base_branch: baseBranch,
-        session_id: session.session_name || session.id,
-        existing_artifact_id: existingManualArtifact.artifact.id,
-        reason: reason ?? "missing_oauth_token",
-      });
-      return Response.json({
-        status: "manual",
-        createPrUrl,
-        headBranch,
-        baseBranch,
-      });
-    }
-
-    const artifactId = generateId();
-    const now = Date.now();
-    const metadata: ManualPullRequestArtifactMetadata = {
-      head: headBranch,
-      base: baseBranch,
-      mode: "manual_pr",
-      createPrUrl: manualCreatePrUrl,
-      provider: this.sourceControlProvider.name,
-    };
-    this.repository.createArtifact({
-      id: artifactId,
-      type: "branch",
-      url: manualCreatePrUrl,
-      metadata: JSON.stringify(metadata),
-      createdAt: now,
-    });
-
-    this.broadcast({
-      type: "artifact_created",
-      artifact: {
-        id: artifactId,
-        type: "branch",
-        url: manualCreatePrUrl,
-      },
-    });
-
-    this.log.info("Using manual PR fallback", {
-      head_branch: headBranch,
-      base_branch: baseBranch,
-      session_id: session.session_name || session.id,
-      artifact_id: artifactId,
-      reason: reason ?? "missing_oauth_token",
-    });
-
-    return Response.json({
-      status: "manual",
-      createPrUrl: manualCreatePrUrl,
-      headBranch,
-      baseBranch,
-    });
   }
 
   /**
