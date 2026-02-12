@@ -5,6 +5,7 @@ import {
   SourceControlProviderError,
   type SourceControlProvider,
   type SourceControlAuthContext,
+  type GitPushAuthContext,
   type GitPushSpec,
 } from "../source-control";
 import type { ArtifactRow, SessionRow } from "./types";
@@ -100,7 +101,7 @@ export class SessionPullRequestService {
         };
       }
 
-      let pushAuth;
+      let pushAuth: GitPushAuthContext;
       try {
         pushAuth = await this.deps.sourceControlProvider.generatePushAuth();
         this.deps.log.info("Generated fresh push auth token");

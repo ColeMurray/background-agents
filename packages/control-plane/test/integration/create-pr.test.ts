@@ -1,10 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { runInDurableObject } from "cloudflare:test";
+import { env, runInDurableObject } from "cloudflare:test";
 import type { SourceControlProvider } from "../../src/source-control";
 import type { SessionDO } from "../../src/session/durable-object";
 import { initSession, queryDO, seedMessage } from "./helpers";
 
 describe("POST /internal/create-pr", () => {
+  it("returns 404 when session is not initialized", async () => {
+    const id = env.SESSION.newUniqueId();
+    const stub = env.SESSION.get(id);
+
+    const res = await stub.fetch("http://internal/internal/create-pr", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "Test PR",
+        body: "Body from integration test",
+      }),
+    });
+
+    expect(res.status).toBe(404);
+    const body = await res.json<{ error: string }>();
+    expect(body.error).toBe("Session not found");
+  });
+
   it("returns 400 when no processing message exists", async () => {
     const { stub } = await initSession({ userId: "user-1" });
 

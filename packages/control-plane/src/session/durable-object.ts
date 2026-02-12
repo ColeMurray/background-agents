@@ -2509,6 +2509,11 @@ export class SessionDO extends DurableObject<Env> {
       headBranch?: string;
     };
 
+    const session = this.getSession();
+    if (!session) {
+      return Response.json({ error: "Session not found" }, { status: 404 });
+    }
+
     const promptingParticipantResult = await this.getPromptingParticipantForPR();
     if (!promptingParticipantResult.participant) {
       return Response.json(
@@ -2523,8 +2528,7 @@ export class SessionDO extends DurableObject<Env> {
       return Response.json({ error: authResolution.error }, { status: authResolution.status });
     }
 
-    const session = this.getSession();
-    const sessionId = session?.session_name || session?.id || this.ctx.id.toString();
+    const sessionId = session.session_name || session.id;
     const webAppUrl = this.env.WEB_APP_URL || this.env.WORKER_URL || "";
     const sessionUrl = webAppUrl + "/session/" + sessionId;
 
