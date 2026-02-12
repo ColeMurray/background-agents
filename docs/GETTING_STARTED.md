@@ -200,6 +200,7 @@ Skip this step if you don't need Slack integration.
    - `channels:read`
    - `groups:history`
    - `groups:read`
+   - `reactions:write`
 3. Click **"Install to Workspace"**
 4. Note the **Bot Token** (`xoxb-...`)
 
