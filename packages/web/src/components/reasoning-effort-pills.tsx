@@ -34,7 +34,7 @@ export function ReasoningEffortPills({
       type="button"
       onClick={handleCycle}
       disabled={disabled}
-      className="px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground transition disabled:opacity-50 disabled:cursor-not-allowed"
+      className="px-2 py-0.5 text-xs text-ash-500 hover:text-ash-900 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       title={`Reasoning: ${reasoningEffort ?? config.default ?? "default"} (click to cycle)`}
     >
       {reasoningEffort ?? config.default ?? "default"}

@@ -60,12 +60,12 @@ export function SessionRightSidebar({
 
   if (!sessionState) {
     return (
-      <aside className="w-80 border-l border-border-muted overflow-y-auto hidden lg:block">
+      <aside className="w-80 border-l border-ash-200 overflow-y-auto hidden lg:block bg-white">
         <div className="p-4">
           <div className="animate-pulse space-y-4">
-            <div className="h-4 bg-muted w-3/4" />
-            <div className="h-4 bg-muted w-1/2" />
-            <div className="h-4 bg-muted w-2/3" />
+            <div className="h-4 bg-ash-200 rounded w-3/4" />
+            <div className="h-4 bg-ash-200 rounded w-1/2" />
+            <div className="h-4 bg-ash-200 rounded w-2/3" />
           </div>
         </div>
       </aside>
@@ -73,14 +73,14 @@ export function SessionRightSidebar({
   }
 
   return (
-    <aside className="w-80 border-l border-border-muted overflow-y-auto hidden lg:block">
-      {/* Participants */}
-      <div className="px-4 py-4 border-b border-border-muted">
+    <aside className="w-80 border-l border-ash-200 overflow-y-auto hidden lg:block bg-white">
+      {/* participants */}
+      <div className="px-4 py-4 border-b border-ash-200">
         <ParticipantsSection participants={participants} />
       </div>
 
-      {/* Metadata */}
-      <div className="px-4 py-4 border-b border-border-muted">
+      {/* metadata */}
+      <div className="px-4 py-4 border-b border-ash-200">
         <MetadataSection
           createdAt={sessionState.createdAt}
           model={sessionState.model}
@@ -109,7 +109,7 @@ export function SessionRightSidebar({
       {/* Artifacts info when no specific sections are populated */}
       {tasks.length === 0 && filesChanged.length === 0 && artifacts.length === 0 && (
         <div className="px-4 py-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm text-ash-500">
             Tasks and file changes will appear here as the agent works.
           </p>
         </div>

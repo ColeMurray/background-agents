@@ -50,7 +50,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
     }
   };
 
-  // Sort sessions by updatedAt (most recent first) and filter by search query
+  // sort sessions by updatedAt (most recent first) and filter by search query
   const { activeSessions, inactiveSessions } = useMemo(() => {
     const filtered = sessions
       .filter((session) => session.status !== "archived")
@@ -62,7 +62,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
         return title.includes(query) || repo.includes(query);
       });
 
-    // Sort by updatedAt descending
+    // sort by updatedAt descending
     const sorted = [...filtered].sort((a, b) => {
       const aTime = a.updatedAt || a.createdAt;
       const bTime = b.updatedAt || b.createdAt;
@@ -87,87 +87,53 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const currentSessionId = pathname?.startsWith("/session/") ? pathname.split("/")[2] : null;
 
   return (
-    <aside className="w-72 h-screen flex flex-col border-r border-border-muted bg-background">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border-muted">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={onToggle}
-            className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-            title="Toggle sidebar"
-          >
-            <SidebarIcon />
-          </button>
-          <Link href="/" className="flex items-center gap-2">
-            <InspectIcon />
-            <span className="font-semibold text-foreground">Inspect</span>
-          </Link>
-        </div>
-        <div className="flex items-center gap-2">
+    <aside className="w-[284px] h-screen flex flex-col bg-black">
+      {/* header */}
+      <div className="flex items-center justify-between py-5 px-5">
+        <Link href="/" className="flex items-center gap-2.5">
+          <WrenchIcon />
+          <span className="text-sm font-semibold text-white">Wrench</span>
+        </Link>
+        <div className="flex items-center gap-1">
           <button
             onClick={onNewSession}
-            className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
+            className="p-1.5 rounded-lg text-ash-400 hover:text-white hover:bg-ash-800 transition-colors"
             title="New session"
           >
             <PlusIcon />
           </button>
-          <Link
-            href="/settings"
-            className={`p-1.5 transition ${
-              pathname === "/settings"
-                ? "text-foreground bg-muted"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted"
-            }`}
-            title="Settings"
+          <button
+            onClick={onToggle}
+            className="p-1.5 rounded-lg text-ash-400 hover:text-white hover:bg-ash-800 transition-colors"
+            title="Toggle sidebar"
           >
-            <SettingsIcon />
-          </Link>
-          {authSession?.user?.image ? (
-            <button
-              onClick={() => signOut()}
-              className="w-7 h-7 rounded-full overflow-hidden"
-              title={`Signed in as ${authSession.user.name}\nClick to sign out`}
-            >
-              <img
-                src={authSession.user.image}
-                alt={authSession.user.name || "User"}
-                className="w-full h-full object-cover"
-              />
-            </button>
-          ) : (
-            <button
-              onClick={() => signOut()}
-              className="w-7 h-7 rounded-full bg-card flex items-center justify-center text-xs font-medium text-foreground"
-              title="Sign out"
-            >
-              {authSession?.user?.name?.charAt(0).toUpperCase() || "?"}
-            </button>
-          )}
+            <SidebarIcon />
+          </button>
         </div>
       </div>
 
-      {/* Search */}
-      <div className="px-3 py-2">
+      {/* search */}
+      <div className="px-4 pb-3">
         <input
           type="text"
           placeholder="Search sessions..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full px-3 py-2 text-sm bg-input border border-border focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent placeholder:text-secondary-foreground text-foreground"
+          className="w-full px-3 py-2 text-sm bg-ash-800 border border-ash-700 rounded-lg text-white placeholder:text-ash-500 focus:outline-none focus:ring-1 focus:ring-rebolt-500 focus:border-transparent"
         />
       </div>
 
-      {/* Session List */}
-      <div className="flex-1 overflow-y-auto">
+      {/* session list */}
+      <div className="flex-1 overflow-y-auto scrollbar-none">
         {loading ? (
           <div className="flex justify-center py-8">
-            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-muted-foreground" />
+            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-ash-400" />
           </div>
         ) : sessions.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm text-muted-foreground">No sessions yet</div>
+          <div className="px-4 py-8 text-center text-sm text-ash-500">No sessions yet</div>
         ) : (
           <>
-            {/* Active Sessions */}
+            {/* active sessions */}
             {activeSessions.map((session) => (
               <SessionListItem
                 key={session.id}
@@ -177,11 +143,14 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
               />
             ))}
 
-            {/* Inactive Divider */}
+            {/* inactive divider */}
             {inactiveSessions.length > 0 && (
               <>
-                <div className="px-4 py-2 mt-2">
-                  <span className="text-xs font-medium text-secondary-foreground uppercase tracking-wide">
+                <div className="px-4 py-3">
+                  <div className="h-px bg-white/15" />
+                </div>
+                <div className="px-5 pb-2">
+                  <span className="text-xs font-medium text-ash-500 uppercase tracking-wide">
                     Inactive
                   </span>
                 </div>
@@ -197,6 +166,46 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
             )}
           </>
         )}
+      </div>
+
+      {/* footer */}
+      <div className="flex items-center justify-between p-4 border-t border-ash-700">
+        <div className="flex items-center gap-2 min-w-0">
+          {authSession?.user?.image ? (
+            <img
+              src={authSession.user.image}
+              alt={authSession.user.name || "User"}
+              className="w-8 h-8 rounded-full shrink-0"
+            />
+          ) : (
+            <div className="w-8 h-8 rounded-full bg-ash-700 flex items-center justify-center text-xs font-medium text-white shrink-0">
+              {authSession?.user?.name?.charAt(0).toUpperCase() || "?"}
+            </div>
+          )}
+          <span className="text-sm font-semibold text-white truncate">
+            {authSession?.user?.name || "User"}
+          </span>
+        </div>
+        <div className="flex items-center gap-1">
+          <Link
+            href="/settings"
+            className={`p-1.5 rounded-lg transition-colors ${
+              pathname === "/settings"
+                ? "text-white bg-ash-700"
+                : "text-ash-400 hover:text-white hover:bg-ash-800"
+            }`}
+            title="Settings"
+          >
+            <SettingsIcon />
+          </Link>
+          <button
+            onClick={() => signOut()}
+            className="p-1.5 rounded-lg text-ash-400 hover:text-white hover:bg-ash-800 transition-colors"
+            title="Sign out"
+          >
+            <SignOutIcon />
+          </button>
+        </div>
       </div>
     </aside>
   );
@@ -224,24 +233,29 @@ function SessionListItem({
           onSessionSelect?.();
         }
       }}
-      className={`block px-4 py-2.5 border-l-2 transition ${
-        isActive ? "border-l-accent bg-accent-muted" : "border-l-transparent hover:bg-muted"
+      className={`block mx-2 mb-0.5 px-3 py-2.5 rounded-lg transition-colors ${
+        isActive ? "bg-ash-700 text-white" : "text-ash-400 hover:bg-ash-800 hover:text-ash-300"
       }`}
     >
-      <div className="truncate text-sm font-medium text-foreground">{displayTitle}</div>
-      <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
-        <span>{relativeTime}</span>
-        <span>·</span>
-        <span className="truncate">{repoInfo}</span>
+      <div className="flex items-center gap-2">
+        {isActive && <div className="w-1 h-4 rounded-full bg-rebolt-500 shrink-0" />}
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium">{displayTitle}</div>
+          <div className="flex items-center gap-1 mt-0.5 text-xs text-ash-500">
+            <span>{relativeTime}</span>
+            <span>·</span>
+            <span className="truncate">{repoInfo}</span>
+          </div>
+        </div>
       </div>
     </Link>
   );
 }
 
-function InspectIcon() {
+function WrenchIcon() {
   return (
     <svg
-      className="w-5 h-5"
+      className="w-5 h-5 text-rebolt-500"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -249,11 +263,7 @@ function InspectIcon() {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <polyline points="14 2 14 8 20 8" />
-      <line x1="16" y1="13" x2="8" y2="13" />
-      <line x1="16" y1="17" x2="8" y2="17" />
-      <polyline points="10 9 9 9 8 9" />
+      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
     </svg>
   );
 }
@@ -296,6 +306,24 @@ function SettingsIcon() {
     >
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
+
+function SignOutIcon() {
+  return (
+    <svg
+      className="w-4 h-4"
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 24 24"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <polyline points="16 17 21 12 16 7" />
+      <line x1="21" y1="12" x2="9" y2="12" />
     </svg>
   );
 }

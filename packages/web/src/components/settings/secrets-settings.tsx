@@ -63,27 +63,27 @@ export function SecretsSettings() {
 
   return (
     <div>
-      <h2 className="text-xl font-semibold text-foreground mb-1">Secrets</h2>
-      <p className="text-sm text-muted-foreground mb-6">
+      <h2 className="text-xl font-semibold text-ash-900 mb-1">Secrets</h2>
+      <p className="text-sm text-ash-500 mb-6">
         Manage environment variables that are injected into sandbox sessions.
       </p>
 
       {/* Repo selector */}
       <div className="mb-4">
-        <label className="block text-sm font-medium text-foreground mb-1.5">Repository</label>
+        <label className="block text-sm font-medium text-ash-900 mb-1.5">Repository</label>
         <div className="relative" ref={dropdownRef}>
           <button
             type="button"
             onClick={() => setDropdownOpen(!dropdownOpen)}
             disabled={loadingRepos}
-            className="w-full max-w-sm flex items-center justify-between px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/30 disabled:opacity-50 disabled:cursor-not-allowed transition"
+            className="w-full max-w-sm flex items-center justify-between px-3 py-2 text-sm border border-ash-300 bg-white rounded-lg text-ash-900 hover:border-ash-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             <span className="truncate">{displayRepoName}</span>
             <ChevronIcon />
           </button>
 
           {dropdownOpen && (
-            <div className="absolute top-full left-0 mt-1 w-full max-w-sm max-h-64 overflow-y-auto bg-background shadow-lg border border-border py-1 z-50">
+            <div className="absolute top-full left-0 mt-1 w-full max-w-sm max-h-64 overflow-y-auto bg-white shadow-lg border border-ash-200 rounded-lg py-1 z-50">
               {/* Global entry */}
               <button
                 type="button"
@@ -91,20 +91,18 @@ export function SecretsSettings() {
                   setSelectedRepo(GLOBAL_SCOPE);
                   setDropdownOpen(false);
                 }}
-                className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
-                  isGlobal ? "text-foreground" : "text-muted-foreground"
+                className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-ash-100 transition-colors ${
+                  isGlobal ? "text-ash-900" : "text-ash-500"
                 }`}
               >
                 <div className="flex flex-col items-start text-left">
                   <span className="font-medium">All Repositories (Global)</span>
-                  <span className="text-xs text-secondary-foreground">
-                    Shared across all repositories
-                  </span>
+                  <span className="text-xs text-ash-400">Shared across all repositories</span>
                 </div>
                 {isGlobal && <CheckIcon />}
               </button>
 
-              {repos.length > 0 && <div className="border-t border-border my-1" />}
+              {repos.length > 0 && <div className="border-t border-ash-200 my-1" />}
 
               {repos.map((repo) => (
                 <button
@@ -114,13 +112,13 @@ export function SecretsSettings() {
                     setSelectedRepo(repo.fullName);
                     setDropdownOpen(false);
                   }}
-                  className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
-                    selectedRepo === repo.fullName ? "text-foreground" : "text-muted-foreground"
+                  className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-ash-100 transition-colors ${
+                    selectedRepo === repo.fullName ? "text-ash-900" : "text-ash-500"
                   }`}
                 >
                   <div className="flex flex-col items-start text-left">
                     <span className="font-medium truncate max-w-[280px]">{repo.name}</span>
-                    <span className="text-xs text-secondary-foreground truncate max-w-[280px]">
+                    <span className="text-xs text-ash-400 truncate max-w-[280px]">
                       {repo.owner}
                       {repo.private && " \u00b7 private"}
                     </span>
@@ -157,7 +155,7 @@ function ChevronIcon() {
 
 function CheckIcon() {
   return (
-    <svg className="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <svg className="w-4 h-4 text-rebolt-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
     </svg>
   );

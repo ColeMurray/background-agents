@@ -65,12 +65,12 @@ export function DataControlsSettings() {
 
   return (
     <div>
-      <h2 className="text-xl font-semibold text-foreground mb-1">Data Controls</h2>
-      <p className="text-sm text-muted-foreground mb-6">Manage your archived chats and data.</p>
+      <h2 className="text-xl font-semibold text-ash-900 mb-1">Data Controls</h2>
+      <p className="text-sm text-ash-500 mb-6">Manage your archived chats and data.</p>
 
       <div>
-        <h3 className="text-base font-medium text-foreground mb-1">Archived chats</h3>
-        <p className="text-sm text-muted-foreground mb-4">
+        <h3 className="text-base font-medium text-ash-900 mb-1">Archived chats</h3>
+        <p className="text-sm text-ash-500 mb-4">
           {loading
             ? "Loading..."
             : sessionCount === 0
@@ -80,14 +80,14 @@ export function DataControlsSettings() {
 
         {loading ? (
           <div className="flex justify-center py-8">
-            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-muted-foreground" />
+            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-ash-400" />
           </div>
         ) : sessions.length === 0 ? (
-          <div className="py-8 text-center text-sm text-muted-foreground">
+          <div className="py-8 text-center text-sm text-ash-500">
             No archived sessions. Sessions you archive will appear here.
           </div>
         ) : (
-          <div className="border border-border rounded divide-y divide-border">
+          <div className="border border-ash-200 rounded-lg divide-y divide-ash-200">
             {sessions.map((session) => (
               <ArchivedSessionRow
                 key={session.id}
@@ -102,7 +102,7 @@ export function DataControlsSettings() {
           <button
             onClick={handleLoadMore}
             disabled={loadingMore}
-            className="mt-4 w-full py-2 text-sm text-muted-foreground hover:text-foreground border border-border rounded hover:bg-muted transition disabled:opacity-50"
+            className="mt-4 w-full py-2 text-sm text-ash-500 hover:text-ash-900 border border-ash-200 rounded-lg hover:bg-ash-100 transition-colors disabled:opacity-50"
           >
             {loadingMore ? "Loading..." : "Load more"}
           </button>
@@ -125,10 +125,10 @@ function ArchivedSessionRow({
   const relativeTime = formatRelativeTime(timestamp);
 
   return (
-    <div className="group flex items-center justify-between px-4 py-3 hover:bg-muted transition">
+    <div className="group flex items-center justify-between px-4 py-3 hover:bg-ash-100 transition-colors">
       <Link href={`/session/${session.id}`} className="flex-1 min-w-0 mr-3">
-        <div className="truncate text-sm font-medium text-foreground">{displayTitle}</div>
-        <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
+        <div className="truncate text-sm font-medium text-ash-900">{displayTitle}</div>
+        <div className="flex items-center gap-1 mt-0.5 text-xs text-ash-500">
           <span>{relativeTime}</span>
           <span>&middot;</span>
           <span className="truncate">{repoInfo}</span>
@@ -136,7 +136,7 @@ function ArchivedSessionRow({
       </Link>
       <button
         onClick={() => onUnarchive(session.id)}
-        className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground border border-border rounded hover:bg-background transition opacity-0 group-hover:opacity-100"
+        className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-ash-500 hover:text-ash-900 border border-ash-200 rounded-lg hover:bg-white transition-colors opacity-0 group-hover:opacity-100"
       >
         Unarchive
       </button>

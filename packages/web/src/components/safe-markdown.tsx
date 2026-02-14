@@ -62,7 +62,7 @@ interface SafeMarkdownProps {
 
 export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
   return (
-    <div className={`prose prose-sm dark:prose-invert max-w-none ${className}`}>
+    <div className={`prose prose-sm max-w-none ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}
@@ -73,7 +73,7 @@ export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
               href={href}
               target="_blank"
               rel="noopener noreferrer nofollow"
-              className="text-accent hover:underline"
+              className="text-rebolt-500 hover:underline"
               {...props}
             >
               {children}
@@ -81,7 +81,10 @@ export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
           ),
           // Code blocks with styling
           pre: ({ children, ...props }: ComponentPropsWithoutRef<"pre">) => (
-            <pre className="bg-card text-foreground p-3 overflow-x-auto text-sm" {...props}>
+            <pre
+              className="bg-ash-100 text-ash-900 p-3 rounded-lg overflow-x-auto text-sm"
+              {...props}
+            >
               {children}
             </pre>
           ),
@@ -97,7 +100,7 @@ export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
               );
             }
             return (
-              <code className="bg-card text-foreground px-1.5 py-0.5 text-sm" {...props}>
+              <code className="bg-ash-100 text-ash-900 px-1.5 py-0.5 rounded text-sm" {...props}>
                 {children}
               </code>
             );
@@ -121,10 +124,7 @@ export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
           ),
           // Blockquotes
           blockquote: ({ children, ...props }: ComponentPropsWithoutRef<"blockquote">) => (
-            <blockquote
-              className="border-l-4 border-border pl-4 italic text-muted-foreground"
-              {...props}
-            >
+            <blockquote className="border-l-4 border-ash-300 pl-4 italic text-ash-500" {...props}>
               {children}
             </blockquote>
           ),
@@ -137,12 +137,12 @@ export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
             </div>
           ),
           th: ({ children, ...props }: ComponentPropsWithoutRef<"th">) => (
-            <th className="border border-border px-3 py-1 bg-card font-medium" {...props}>
+            <th className="border border-ash-200 px-3 py-1 bg-ash-100 font-medium" {...props}>
               {children}
             </th>
           ),
           td: ({ children, ...props }: ComponentPropsWithoutRef<"td">) => (
-            <td className="border border-border px-3 py-1" {...props}>
+            <td className="border border-ash-200 px-3 py-1" {...props}>
               {children}
             </td>
           ),

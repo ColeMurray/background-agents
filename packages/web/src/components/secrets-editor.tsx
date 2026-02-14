@@ -294,39 +294,37 @@ export function SecretsEditor({
     : `Values are never shown after save. Secrets apply to ${repoLabel || "the selected repo"}.`;
 
   return (
-    <div className="mt-4 border border-border bg-background p-4">
+    <div className="mt-4 border border-ash-200 bg-white rounded-lg p-4">
       <div className="flex items-center justify-between mb-3">
         <div>
-          <h3 className="text-sm font-semibold text-foreground">Secrets</h3>
-          <p className="text-xs text-muted-foreground">{descriptionText}</p>
+          <h3 className="text-sm font-semibold text-ash-900">Secrets</h3>
+          <p className="text-xs text-ash-500">{descriptionText}</p>
         </div>
         <button
           type="button"
           onClick={handleAddRow}
           disabled={!ready || disabled}
-          className="text-xs px-2 py-1 border border-border-muted text-muted-foreground hover:text-foreground hover:border-border transition disabled:opacity-50"
+          className="text-xs px-2 py-1 border border-ash-300 rounded text-ash-500 hover:text-ash-900 hover:border-ash-400 transition-colors disabled:opacity-50"
         >
           Add secret
         </button>
       </div>
 
-      {!ready && (
-        <p className="text-xs text-muted-foreground">Select a repository to manage secrets.</p>
-      )}
+      {!ready && <p className="text-xs text-ash-500">Select a repository to manage secrets.</p>}
 
       {ready && (
         <>
-          {loading && <p className="text-xs text-muted-foreground">Loading secrets...</p>}
+          {loading && <p className="text-xs text-ash-500">Loading secrets...</p>}
 
           {!loading && rows.length === 0 && globalRows.length === 0 && (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-ash-500">
               {isGlobal ? "No global secrets set." : "No secrets set for this repo."}
             </p>
           )}
 
           <div className="space-y-2">
             {rows.map((row) => (
-              <div key={row.id} className="flex flex-col gap-2 border border-border-muted p-2">
+              <div key={row.id} className="flex flex-col gap-2 border border-ash-200 rounded p-2">
                 <div className="flex flex-wrap gap-2">
                   <input
                     type="text"
@@ -349,7 +347,7 @@ export function SecretsEditor({
                     }}
                     placeholder="KEY_NAME"
                     disabled={disabled || row.existing}
-                    className="flex-1 min-w-[160px] bg-input border border-border px-2 py-1 text-xs text-foreground disabled:opacity-60"
+                    className="flex-1 min-w-[160px] bg-ash-100 border border-ash-200 rounded px-2 py-1 text-xs text-ash-900 disabled:opacity-60"
                   />
                   <input
                     type="password"
@@ -362,21 +360,19 @@ export function SecretsEditor({
                     }}
                     placeholder={row.existing ? "••••••••" : "value"}
                     disabled={disabled}
-                    className="flex-1 min-w-[200px] bg-input border border-border px-2 py-1 text-xs text-foreground disabled:opacity-60"
+                    className="flex-1 min-w-[200px] bg-ash-100 border border-ash-200 rounded px-2 py-1 text-xs text-ash-900 disabled:opacity-60"
                   />
                   <button
                     type="button"
                     onClick={() => handleDeleteRow(row)}
                     disabled={disabled || deletingKey === normalizeKey(row.key)}
-                    className="text-xs px-2 py-1 border border-border-muted text-muted-foreground hover:text-red-500 hover:border-red-300 transition disabled:opacity-50"
+                    className="text-xs px-2 py-1 border border-ash-300 rounded text-ash-500 hover:text-lava-500 hover:border-lava-300 transition-colors disabled:opacity-50"
                   >
                     {deletingKey === normalizeKey(row.key) ? "Deleting..." : "Delete"}
                   </button>
                 </div>
                 {row.existing && (
-                  <p className="text-[11px] text-muted-foreground">
-                    To update, enter a new value and save.
-                  </p>
+                  <p className="text-[11px] text-ash-400">To update, enter a new value and save.</p>
                 )}
               </div>
             ))}
@@ -385,32 +381,30 @@ export function SecretsEditor({
           {/* Inherited global secrets (repo scope only) */}
           {!isGlobal && globalRows.length > 0 && (
             <div className="mt-4">
-              <p className="text-xs text-muted-foreground mb-2">Inherited from global scope</p>
+              <p className="text-xs text-ash-500 mb-2">Inherited from global scope</p>
               <div className="space-y-2">
                 {globalRows.map((g) => {
                   const overridden = existingKeySet.has(g.key);
                   return (
                     <div
                       key={g.key}
-                      className={`flex flex-wrap items-center gap-2 border border-border-muted p-2 ${
+                      className={`flex flex-wrap items-center gap-2 border border-ash-200 rounded p-2 ${
                         overridden ? "opacity-40" : "opacity-70"
                       }`}
                     >
                       <span className="text-[10px] font-medium px-1.5 py-0.5 bg-blue-500/10 text-blue-600 border border-blue-500/20">
                         Global
                       </span>
-                      <span className="text-xs text-foreground font-mono">{g.key}</span>
+                      <span className="text-xs text-ash-900 font-mono">{g.key}</span>
                       <input
                         type="password"
                         value=""
                         placeholder="••••••••"
                         disabled
-                        className="flex-1 min-w-[200px] bg-input border border-border px-2 py-1 text-xs text-foreground disabled:opacity-60"
+                        className="flex-1 min-w-[200px] bg-ash-100 border border-ash-200 rounded px-2 py-1 text-xs text-ash-900 disabled:opacity-60"
                       />
                       {overridden && (
-                        <span className="text-[10px] text-muted-foreground">
-                          (overridden by repo)
-                        </span>
+                        <span className="text-[10px] text-ash-400">(overridden by repo)</span>
                       )}
                     </div>
                   );
@@ -427,13 +421,11 @@ export function SecretsEditor({
               type="button"
               onClick={handleSave}
               disabled={disabled || saving || !ready}
-              className="text-xs px-3 py-1 border border-border-muted text-foreground hover:border-foreground transition disabled:opacity-50"
+              className="text-xs px-3 py-1 border border-ash-300 rounded text-ash-900 hover:border-ash-500 transition-colors disabled:opacity-50"
             >
               {saving ? "Saving..." : "Save secrets"}
             </button>
-            <span className="text-[11px] text-muted-foreground">
-              Keys are automatically uppercased.
-            </span>
+            <span className="text-[11px] text-ash-400">Keys are automatically uppercased.</span>
           </div>
         </>
       )}

@@ -20,24 +20,25 @@ function SettingsContent() {
 
   return (
     <div className="h-full flex flex-col">
-      {/* Header with toggle when sidebar is closed */}
-      {!isOpen && (
-        <header className="border-b border-border-muted flex-shrink-0">
-          <div className="px-4 py-3">
+      {/* header - matches DashboardPageLayout pattern */}
+      <header className="flex items-center justify-between w-full sticky top-0 z-20 backdrop-blur-md h-20 px-6 lg:px-12 xl:px-20 bg-clay-100/90 flex-shrink-0">
+        <div className="flex items-center gap-3">
+          {!isOpen && (
             <button
               onClick={toggle}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
+              className="flex items-center justify-center size-10 rounded-full transition-colors hover:bg-ash-100"
               title="Open sidebar"
             >
               <SidebarToggleIcon />
             </button>
-          </div>
-        </header>
-      )}
+          )}
+          <h1 className="text-2xl sm:text-3xl font-semibold text-ash-900 font-clash">Settings</h1>
+        </div>
+      </header>
 
       <div className="flex-1 flex overflow-hidden">
         <SettingsNav activeCategory={activeCategory} onSelect={setActiveCategory} />
-        <div className="flex-1 overflow-y-auto p-8">
+        <div className="flex-1 overflow-y-auto py-6 lg:pb-12 pt-8 px-4 lg:px-12 xl:px-20">
           <div className="max-w-2xl">
             {activeCategory === "secrets" && <SecretsSettings />}
             {activeCategory === "data-controls" && <DataControlsSettings />}

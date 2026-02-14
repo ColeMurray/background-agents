@@ -3,7 +3,7 @@
 import { createContext, useContext } from "react";
 import { useSession, signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { SessionSidebar } from "./session-sidebar";
+import { SessionSidebar } from "@/components/session-sidebar";
 import { useSidebar } from "@/hooks/use-sidebar";
 
 interface SidebarContextValue {
@@ -32,26 +32,26 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   const router = useRouter();
   const sidebar = useSidebar();
 
-  // Show loading state
+  // loading state
   if (status === "loading") {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-foreground" />
+      <div className="min-h-screen flex items-center justify-center bg-clay-100">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-ash-900" />
       </div>
     );
   }
 
-  // Show sign-in page if not authenticated
+  // sign-in page
   if (!session) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-8">
-        <h1 className="text-4xl font-bold text-foreground">Open-Inspect</h1>
-        <p className="text-muted-foreground max-w-md text-center">
+      <div className="min-h-screen flex flex-col items-center justify-center gap-8 bg-clay-100">
+        <h1 className="text-4xl font-semibold text-ash-900 font-clash tracking-tight">Wrench</h1>
+        <p className="text-ash-500 max-w-md text-center">
           Background coding agent for your team. Ship faster with AI-powered code changes.
         </p>
         <button
           onClick={() => signIn("github")}
-          className="flex items-center gap-2 bg-primary text-primary-foreground px-6 py-3 font-medium hover:opacity-90 transition"
+          className="flex items-center gap-2 bg-rebolt-500 hover:bg-rebolt-600 text-white px-6 py-3 rounded-lg font-medium transition-colors"
         >
           <GitHubIcon />
           Sign in with GitHub
@@ -66,11 +66,11 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
 
   return (
     <SidebarContext.Provider value={sidebar}>
-      <div className="flex h-screen overflow-hidden">
-        {/* Sidebar with transition */}
+      <div className="flex h-screen overflow-hidden bg-clay-100">
+        {/* sidebar with transition */}
         <div
           className={`transition-all duration-200 ease-in-out ${
-            sidebar.isOpen ? "w-72" : "w-0"
+            sidebar.isOpen ? "w-[284px]" : "w-0"
           } flex-shrink-0 overflow-hidden`}
         >
           <SessionSidebar

@@ -24,7 +24,7 @@ function TaskItem({ task }: { task: Task }) {
       <TaskStatusIcon status={task.status} />
       <span
         className={`flex-1 ${
-          task.status === "completed" ? "text-secondary-foreground line-through" : "text-foreground"
+          task.status === "completed" ? "text-ash-400 line-through" : "text-ash-900"
         }`}
       >
         {task.status === "in_progress" && task.activeForm ? task.activeForm : task.content}
@@ -38,20 +38,20 @@ function TaskStatusIcon({ status }: { status: Task["status"] }) {
     case "in_progress":
       return (
         <span className="mt-0.5 flex-shrink-0">
-          <ClockIcon className="w-4 h-4 text-accent animate-pulse" />
+          <ClockIcon className="w-4 h-4 text-rebolt-500 animate-pulse" />
         </span>
       );
     case "completed":
       return (
         <span className="mt-0.5 flex-shrink-0">
-          <CheckCircleIcon className="w-4 h-4 text-success" />
+          <CheckCircleIcon className="w-4 h-4 text-mint-500" />
         </span>
       );
     case "pending":
     default:
       return (
         <span className="mt-0.5 flex-shrink-0">
-          <EmptyCircleIcon className="w-4 h-4 text-secondary-foreground" />
+          <EmptyCircleIcon className="w-4 h-4 text-ash-400" />
         </span>
       );
   }

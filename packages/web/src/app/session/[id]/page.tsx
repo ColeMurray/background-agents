@@ -70,7 +70,7 @@ function groupEvents(events: SandboxEvent[]): EventGroup[] {
 
 function CheckIcon() {
   return (
-    <svg className="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <svg className="w-4 h-4 text-rebolt-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
     </svg>
   );
@@ -89,13 +89,13 @@ function ModelOptionButton({
     <button
       type="button"
       onClick={onSelect}
-      className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
-        isSelected ? "text-foreground" : "text-muted-foreground"
+      className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-ash-100 transition-colors ${
+        isSelected ? "text-ash-900" : "text-ash-500"
       }`}
     >
       <div className="flex flex-col items-start">
         <span className="font-medium">{model.name}</span>
-        <span className="text-xs text-secondary-foreground">{model.description}</span>
+        <span className="text-xs text-ash-400">{model.description}</span>
       </div>
       {isSelected && <CheckIcon />}
     </button>
@@ -226,8 +226,8 @@ export default function SessionPage() {
 
   if (authStatus === "loading") {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-foreground" />
+      <div className="min-h-screen flex items-center justify-center bg-clay-100">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-ash-900" />
       </div>
     );
   }
@@ -431,54 +431,55 @@ function SessionContent({
 
   return (
     <div className="h-full flex flex-col">
-      {/* Header */}
-      <header className="border-b border-border-muted flex-shrink-0">
-        <div className="px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {!isOpen && (
-              <button
-                onClick={toggle}
-                className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-                title="Open sidebar"
-              >
-                <SidebarToggleIcon />
-              </button>
-            )}
-            <div>
-              <h1 className="font-medium text-foreground">
-                {sessionState?.title || `${sessionState?.repoOwner}/${sessionState?.repoName}`}
-              </h1>
-              <p className="text-sm text-muted-foreground">
-                {sessionState?.repoOwner}/{sessionState?.repoName}
-              </p>
-            </div>
+      {/* header - matches DashboardPageLayout pattern */}
+      <header className="flex items-center justify-between w-full sticky top-0 z-20 backdrop-blur-md h-20 px-6 lg:px-12 xl:px-20 bg-clay-100/90 flex-shrink-0">
+        {/* left: sidebar toggle + page title */}
+        <div className="flex items-center gap-3">
+          {!isOpen && (
+            <button
+              onClick={toggle}
+              className="flex items-center justify-center size-10 rounded-full transition-colors hover:bg-ash-100"
+              title="Open sidebar"
+            >
+              <SidebarToggleIcon />
+            </button>
+          )}
+          <div>
+            <h1 className="text-2xl font-semibold text-ash-900 font-clash">
+              {sessionState?.title || `${sessionState?.repoOwner}/${sessionState?.repoName}`}
+            </h1>
+            <p className="text-sm text-ash-500">
+              {sessionState?.repoOwner}/{sessionState?.repoName}
+            </p>
           </div>
-          <div className="flex items-center gap-4">
-            {/* Mobile: single combined status dot */}
-            <div className="md:hidden">
-              <CombinedStatusDot
-                connected={connected}
-                connecting={connecting}
-                sandboxStatus={sessionState?.sandboxStatus}
-              />
-            </div>
-            {/* Desktop: full status indicators */}
-            <div className="hidden md:contents">
-              <ConnectionStatus connected={connected} connecting={connecting} />
-              <SandboxStatus status={sessionState?.sandboxStatus} />
-              <ParticipantsList participants={participants} />
-            </div>
+        </div>
+
+        {/* right: status indicators */}
+        <div className="flex items-center gap-4">
+          {/* mobile: single combined status dot */}
+          <div className="md:hidden">
+            <CombinedStatusDot
+              connected={connected}
+              connecting={connecting}
+              sandboxStatus={sessionState?.sandboxStatus}
+            />
+          </div>
+          {/* desktop: full status indicators */}
+          <div className="hidden md:flex items-center gap-4">
+            <ConnectionStatus connected={connected} connecting={connecting} />
+            <SandboxStatus status={sessionState?.sandboxStatus} />
+            <ParticipantsList participants={participants} />
           </div>
         </div>
       </header>
 
-      {/* Connection error banner */}
+      {/* connection error banner */}
       {(authError || connectionError) && (
-        <div className="bg-red-50 dark:bg-red-900/20 border-b border-red-200 dark:border-red-800 px-4 py-3 flex items-center justify-between">
-          <p className="text-sm text-red-700 dark:text-red-400">{authError || connectionError}</p>
+        <div className="bg-lava-100 border-b border-lava-200 px-4 py-3 flex items-center justify-between">
+          <p className="text-sm text-lava-700">{authError || connectionError}</p>
           <button
             onClick={reconnect}
-            className="px-3 py-1.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 transition"
+            className="px-3 py-1.5 text-sm font-medium text-white bg-lava-600 hover:bg-lava-700 rounded-lg transition-colors"
           >
             Reconnect
           </button>
@@ -497,7 +498,7 @@ function SessionContent({
             {/* Scroll sentinel for loading older history */}
             <div ref={topSentinelRef} className="h-1" />
             {loadingHistory && (
-              <div className="text-center text-muted-foreground text-sm py-2">Loading...</div>
+              <div className="text-center text-ash-500 text-sm py-2">Loading...</div>
             )}
             {groupedEvents.map((group) =>
               group.type === "tool_group" ? (
@@ -525,8 +526,8 @@ function SessionContent({
         />
       </main>
 
-      {/* Input */}
-      <footer className="border-t border-border-muted flex-shrink-0">
+      {/* input */}
+      <footer className="border-t border-ash-200 flex-shrink-0">
         <form onSubmit={handleSubmit} className="max-w-4xl mx-auto p-4 pb-6">
           {/* Action bar above input */}
           <div className="mb-3">
@@ -539,9 +540,9 @@ function SessionContent({
             />
           </div>
 
-          {/* Input container */}
-          <div className="border border-border bg-input">
-            {/* Text input area with floating send button */}
+          {/* input container */}
+          <div className="border border-ash-300 bg-white rounded-lg">
+            {/* text input area with floating send button */}
             <div className="relative">
               <textarea
                 ref={inputRef}
@@ -549,19 +550,19 @@ function SessionContent({
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
                 placeholder={isProcessing ? "Type your next message..." : "Ask or build anything"}
-                className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-foreground placeholder:text-secondary-foreground"
+                className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-ash-900 placeholder:text-ash-400"
                 rows={3}
               />
               {/* Floating action buttons */}
               <div className="absolute bottom-3 right-3 flex items-center gap-2">
                 {isProcessing && prompt.trim() && (
-                  <span className="text-xs text-amber-600 dark:text-amber-400">Waiting...</span>
+                  <span className="text-xs text-honey-600">Waiting...</span>
                 )}
                 {isProcessing && (
                   <button
                     type="button"
                     onClick={stopExecution}
-                    className="p-2 text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition"
+                    className="p-2 text-lava-500 hover:text-lava-600 hover:bg-lava-100 rounded-lg transition-colors"
                     title="Stop"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -572,7 +573,7 @@ function SessionContent({
                 <button
                   type="submit"
                   disabled={!prompt.trim() || isProcessing}
-                  className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
+                  className="p-2 text-ash-400 hover:text-ash-900 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                   title={isProcessing && prompt.trim() ? "Wait for execution to complete" : "Send"}
                 >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -588,15 +589,15 @@ function SessionContent({
             </div>
 
             {/* Footer row with model selector, reasoning pills, and agent label */}
-            <div className="flex items-center justify-between px-4 py-2 border-t border-border-muted">
-              {/* Left side - Model selector + Reasoning pills */}
+            <div className="flex items-center justify-between px-4 py-2 border-t border-ash-200">
+              {/* left side - model selector + reasoning pills */}
               <div className="flex items-center gap-4">
                 <div className="relative" ref={modelDropdownRef}>
                   <button
                     type="button"
                     onClick={() => !isProcessing && setModelDropdownOpen(!modelDropdownOpen)}
                     disabled={isProcessing}
-                    className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
+                    className="flex items-center gap-1 text-sm text-ash-500 hover:text-ash-900 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
                     <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
                       <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
@@ -604,14 +605,14 @@ function SessionContent({
                     <span>{formatModelNameLower(selectedModel)}</span>
                   </button>
 
-                  {/* Dropdown menu */}
+                  {/* dropdown menu */}
                   {modelDropdownOpen && (
-                    <div className="absolute bottom-full left-0 mb-2 w-56 bg-background shadow-lg border border-border py-1 z-50">
+                    <div className="absolute bottom-full left-0 mb-2 w-56 bg-white shadow-lg border border-ash-200 rounded-lg py-1 z-50">
                       {MODEL_OPTIONS.map((group, groupIdx) => (
                         <div key={group.category}>
                           <div
-                            className={`px-3 py-1.5 text-xs font-medium text-secondary-foreground uppercase tracking-wider ${
-                              groupIdx > 0 ? "border-t border-border-muted mt-1" : ""
+                            className={`px-3 py-1.5 text-xs font-medium text-ash-400 uppercase tracking-wider ${
+                              groupIdx > 0 ? "border-t border-ash-200 mt-1" : ""
                             }`}
                           >
                             {group.category}
@@ -642,8 +643,8 @@ function SessionContent({
                 />
               </div>
 
-              {/* Right side - Agent label */}
-              <span className="text-sm text-muted-foreground">build agent</span>
+              {/* right side - agent label */}
+              <span className="text-sm text-ash-400">build agent</span>
             </div>
           </div>
         </form>
@@ -672,8 +673,8 @@ function SidebarToggleIcon() {
 function ConnectionStatus({ connected, connecting }: { connected: boolean; connecting: boolean }) {
   if (connecting) {
     return (
-      <span className="flex items-center gap-1 text-xs text-yellow-600 dark:text-yellow-500">
-        <span className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
+      <span className="flex items-center gap-1 text-xs text-honey-600">
+        <span className="w-2 h-2 rounded-full bg-honey-500 animate-pulse" />
         Connecting...
       </span>
     );
@@ -681,16 +682,16 @@ function ConnectionStatus({ connected, connecting }: { connected: boolean; conne
 
   if (connected) {
     return (
-      <span className="flex items-center gap-1 text-xs text-success">
-        <span className="w-2 h-2 rounded-full bg-success" />
+      <span className="flex items-center gap-1 text-xs text-mint-500">
+        <span className="w-2 h-2 rounded-full bg-mint-400" />
         Connected
       </span>
     );
   }
 
   return (
-    <span className="flex items-center gap-1 text-xs text-red-600 dark:text-red-500">
-      <span className="w-2 h-2 rounded-full bg-red-500" />
+    <span className="flex items-center gap-1 text-xs text-lava-600">
+      <span className="w-2 h-2 rounded-full bg-lava-500" />
       Disconnected
     </span>
   );
@@ -700,13 +701,13 @@ function SandboxStatus({ status }: { status?: string }) {
   if (!status) return null;
 
   const colors: Record<string, string> = {
-    pending: "text-muted-foreground",
-    warming: "text-yellow-600 dark:text-yellow-500",
-    syncing: "text-accent",
-    ready: "text-success",
-    running: "text-accent",
-    stopped: "text-muted-foreground",
-    failed: "text-red-600 dark:text-red-500",
+    pending: "text-ash-500",
+    warming: "text-honey-600",
+    syncing: "text-rebolt-500",
+    ready: "text-mint-500",
+    running: "text-rebolt-500",
+    stopped: "text-ash-500",
+    failed: "text-lava-600",
   };
 
   return <span className={`text-xs ${colors[status] || colors.pending}`}>Sandbox: {status}</span>;
@@ -726,20 +727,20 @@ function CombinedStatusDot({
   let label: string;
 
   if (!connected && !connecting) {
-    color = "bg-red-500";
+    color = "bg-lava-500";
     label = "Disconnected";
   } else if (connecting) {
-    color = "bg-yellow-500";
+    color = "bg-honey-500";
     pulse = true;
     label = "Connecting...";
   } else if (sandboxStatus === "failed") {
-    color = "bg-red-500";
+    color = "bg-lava-500";
     label = `Connected · Sandbox: ${sandboxStatus}`;
   } else if (["pending", "warming", "syncing"].includes(sandboxStatus || "")) {
-    color = "bg-yellow-500";
+    color = "bg-honey-500";
     label = `Connected · Sandbox: ${sandboxStatus}`;
   } else {
-    color = "bg-success";
+    color = "bg-mint-400";
     label = sandboxStatus ? `Connected · Sandbox: ${sandboxStatus}` : "Connected";
   }
 
@@ -752,9 +753,9 @@ function CombinedStatusDot({
 
 function ThinkingIndicator() {
   return (
-    <div className="bg-card p-4 flex items-center gap-2">
-      <span className="inline-block w-2 h-2 bg-accent rounded-full animate-pulse" />
-      <span className="text-sm text-muted-foreground">Thinking...</span>
+    <div className="bg-white rounded-lg p-4 flex items-center gap-2">
+      <span className="inline-block w-2 h-2 bg-rebolt-500 rounded-full animate-pulse" />
+      <span className="text-sm text-ash-500">Thinking...</span>
     </div>
   );
 }
@@ -774,14 +775,14 @@ function ParticipantsList({
       {uniqueParticipants.slice(0, 3).map((p) => (
         <div
           key={p.userId}
-          className="w-8 h-8 rounded-full bg-card flex items-center justify-center text-xs font-medium text-foreground border-2 border-white"
+          className="w-8 h-8 rounded-full bg-ash-200 flex items-center justify-center text-xs font-medium text-ash-700 border-2 border-white"
           title={p.name}
         >
           {p.name.charAt(0).toUpperCase()}
         </div>
       ))}
       {uniqueParticipants.length > 3 && (
-        <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-xs font-medium text-foreground border-2 border-white">
+        <div className="w-8 h-8 rounded-full bg-ash-100 flex items-center justify-center text-xs font-medium text-ash-700 border-2 border-white">
           +{uniqueParticipants.length - 3}
         </div>
       )}
@@ -852,19 +853,19 @@ function EventItem({
       const authorName = isCurrentUser ? "You" : event.author?.name || "Unknown User";
 
       return (
-        <div className="group bg-accent-muted p-4 ml-8">
+        <div className="group bg-rebolt-100/50 rounded-lg p-4 ml-8">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               {!isCurrentUser && event.author?.avatar && (
                 <img src={event.author.avatar} alt={authorName} className="w-5 h-5 rounded-full" />
               )}
-              <span className="text-xs text-accent">{authorName}</span>
+              <span className="text-xs text-rebolt-600">{authorName}</span>
             </div>
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
                 onClick={() => handleCopyContent(messageContent)}
-                className="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted/60 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
+                className="p-1 text-ash-400 hover:text-ash-700 hover:bg-ash-100 rounded opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
                 title={copied ? "Copied" : "Copy markdown"}
                 aria-label={copied ? "Copied" : "Copy markdown"}
               >
@@ -874,10 +875,10 @@ function EventItem({
                   <CopyIcon className="w-3.5 h-3.5" />
                 )}
               </button>
-              <span className="text-xs text-secondary-foreground">{time}</span>
+              <span className="text-xs text-ash-400">{time}</span>
             </div>
           </div>
-          <pre className="whitespace-pre-wrap text-sm text-foreground">{messageContent}</pre>
+          <pre className="whitespace-pre-wrap text-sm text-ash-900">{messageContent}</pre>
         </div>
       );
     }
@@ -887,14 +888,14 @@ function EventItem({
       if (!event.content) return null;
       const messageContent = event.content;
       return (
-        <div className="group bg-card p-4">
+        <div className="group bg-white rounded-lg p-4">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-muted-foreground">Assistant</span>
+            <span className="text-xs text-ash-500">Assistant</span>
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
                 onClick={() => handleCopyContent(messageContent)}
-                className="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
+                className="p-1 text-ash-400 hover:text-ash-700 hover:bg-ash-100 rounded opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
                 title={copied ? "Copied" : "Copy markdown"}
                 aria-label={copied ? "Copied" : "Copy markdown"}
               >
@@ -904,7 +905,7 @@ function EventItem({
                   <CopyIcon className="w-3.5 h-3.5" />
                 )}
               </button>
-              <span className="text-xs text-secondary-foreground">{time}</span>
+              <span className="text-xs text-ash-400">{time}</span>
             </div>
           </div>
           <SafeMarkdown content={messageContent} className="text-sm" />
@@ -921,7 +922,7 @@ function EventItem({
       // Only show standalone results if they're errors
       if (!event.error) return null;
       return (
-        <div className="flex items-center gap-2 text-sm text-red-600 dark:text-red-400 py-1">
+        <div className="flex items-center gap-2 text-sm text-lava-600 py-1">
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
               strokeLinecap="round"
@@ -931,14 +932,14 @@ function EventItem({
             />
           </svg>
           <span className="truncate">{event.error}</span>
-          <span className="text-xs text-secondary-foreground ml-auto">{time}</span>
+          <span className="text-xs text-ash-400 ml-auto">{time}</span>
         </div>
       );
 
     case "git_sync":
       return (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span className="w-2 h-2 rounded-full bg-accent" />
+        <div className="flex items-center gap-2 text-sm text-ash-500">
+          <span className="w-2 h-2 rounded-full bg-rebolt-500" />
           Git sync: {event.status}
           <span className="text-xs">{time}</span>
         </div>
@@ -946,28 +947,28 @@ function EventItem({
 
     case "error":
       return (
-        <div className="flex items-center gap-2 text-sm text-red-600 dark:text-red-400">
-          <span className="w-2 h-2 rounded-full bg-red-500" />
+        <div className="flex items-center gap-2 text-sm text-lava-600">
+          <span className="w-2 h-2 rounded-full bg-lava-500" />
           Error{event.error ? `: ${event.error}` : ""}
-          <span className="text-xs text-secondary-foreground">{time}</span>
+          <span className="text-xs text-ash-400">{time}</span>
         </div>
       );
 
     case "execution_complete":
       if (event.success === false) {
         return (
-          <div className="flex items-center gap-2 text-sm text-red-600 dark:text-red-400">
-            <span className="w-2 h-2 rounded-full bg-red-500" />
+          <div className="flex items-center gap-2 text-sm text-lava-600">
+            <span className="w-2 h-2 rounded-full bg-lava-500" />
             Execution failed{event.error ? `: ${event.error}` : ""}
-            <span className="text-xs text-secondary-foreground">{time}</span>
+            <span className="text-xs text-ash-400">{time}</span>
           </div>
         );
       }
       return (
-        <div className="flex items-center gap-2 text-sm text-success">
-          <span className="w-2 h-2 rounded-full bg-success" />
+        <div className="flex items-center gap-2 text-sm text-mint-500">
+          <span className="w-2 h-2 rounded-full bg-mint-400" />
           Execution complete
-          <span className="text-xs text-secondary-foreground">{time}</span>
+          <span className="text-xs text-ash-400">{time}</span>
         </div>
       );
 

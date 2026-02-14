@@ -3,140 +3,63 @@
 @tailwind utilities;
 
 /*
- * Design System Color Tokens
+ * builtright design system
  *
- * All colors are defined as CSS variables that automatically switch with dark mode.
- * Components should use semantic Tailwind classes (bg-background, text-foreground, etc.)
- * instead of hardcoded hex values.
- *
- * To change the color palette, update only these variables.
+ * light mode only (dark sidebar is handled via component classes, not theme).
+ * components should use the named tailwind palette (ash, clay, mint, etc.)
+ * defined in tailwind.config.ts.
  */
 
-:root {
-  /* Core backgrounds */
-  --background: #f8f8f6;
-  --foreground: #1a1a1a;
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: #f5f5f5; /* ash-200 */
+  }
 
-  /* Card/surface backgrounds */
-  --card: #f8f8f6;
-  --card-foreground: #1a1a1a;
+  button {
+    cursor: pointer;
+  }
 
-  /* Primary (inverted button style) */
-  --primary: #1a1a1a;
-  --primary-foreground: #ffffff;
+  html,
+  body {
+    @apply antialiased;
+    scroll-behavior: smooth;
+  }
 
-  /* Accent color (warm brown) */
-  --accent: #8b7355;
-  --accent-foreground: #ffffff;
-  --accent-muted: rgba(139, 115, 85, 0.1);
+  body {
+    color: #171717; /* ash-900 */
+    background: #f6f6f3; /* clay-100 */
+    font-family:
+      var(--font-jakarta-sans),
+      ui-sans-serif,
+      system-ui,
+      -apple-system,
+      BlinkMacSystemFont,
+      "Segoe UI",
+      Roboto,
+      sans-serif;
+  }
 
-  /* Muted/secondary text */
-  --muted: rgba(0, 0, 0, 0.05);
-  --muted-foreground: #666666;
-  --secondary-foreground: #999999;
+  ::selection {
+    background-color: #ff5700; /* rebolt-500 */
+    color: white;
+  }
 
-  /* Borders */
-  --border: rgba(0, 0, 0, 0.1);
-  --border-muted: rgba(0, 0, 0, 0.05);
-
-  /* Input backgrounds */
-  --input: #ffffff;
-
-  /* Focus ring */
-  --ring: #8b7355;
-
-  /* Success (green) */
-  --success: #28c840;
-  --success-muted: rgba(40, 200, 64, 0.1);
-}
-
-/* Dark mode via system preference */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #1a1a1a;
-    --foreground: #f8f8f6;
-
-    --card: rgba(255, 255, 255, 0.05);
-    --card-foreground: #f8f8f6;
-
-    --primary: #f8f8f6;
-    --primary-foreground: #1a1a1a;
-
-    --accent: #a68b6a;
-    --accent-foreground: #ffffff;
-    --accent-muted: rgba(139, 115, 85, 0.2);
-
-    --muted: rgba(255, 255, 255, 0.05);
-    --muted-foreground: #999999;
-    --secondary-foreground: #666666;
-
-    --border: rgba(255, 255, 255, 0.1);
-    --border-muted: rgba(255, 255, 255, 0.05);
-
-    --input: #1a1a1a;
-
-    --ring: #a68b6a;
-
-    --success: #28c840;
-    --success-muted: rgba(40, 200, 64, 0.1);
+  *:focus-visible {
+    outline: 2px solid #ff5700; /* rebolt-500 */
+    outline-offset: 2px;
   }
 }
 
-/* Dark mode via class (for manual toggle support) */
-.dark {
-  --background: #1a1a1a;
-  --foreground: #f8f8f6;
-
-  --card: rgba(255, 255, 255, 0.05);
-  --card-foreground: #f8f8f6;
-
-  --primary: #f8f8f6;
-  --primary-foreground: #1a1a1a;
-
-  --accent: #a68b6a;
-  --accent-foreground: #ffffff;
-  --accent-muted: rgba(139, 115, 85, 0.2);
-
-  --muted: rgba(255, 255, 255, 0.05);
-  --muted-foreground: #999999;
-  --secondary-foreground: #666666;
-
-  --border: rgba(255, 255, 255, 0.1);
-  --border-muted: rgba(255, 255, 255, 0.05);
-
-  --input: #1a1a1a;
-
-  --ring: #a68b6a;
-
-  --success: #28c840;
-  --success-muted: rgba(40, 200, 64, 0.1);
+/* scrollbar hiding utility */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
-html {
-  scroll-behavior: smooth;
-}
-
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family:
-    var(--font-geist-sans),
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    Roboto,
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-::selection {
-  background-color: var(--accent);
-  color: white;
-}
-
-*:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
 }

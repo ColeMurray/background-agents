@@ -13,7 +13,7 @@ interface ToolCallGroupProps {
 function ChevronIcon({ rotated }: { rotated: boolean }) {
   return (
     <svg
-      className={`w-3.5 h-3.5 text-secondary-foreground transition-transform duration-200 ${
+      className={`w-3.5 h-3.5 text-ash-400 transition-transform duration-200 ${
         rotated ? "rotate-90" : ""
       }`}
       fill="none"
@@ -26,7 +26,7 @@ function ChevronIcon({ rotated }: { rotated: boolean }) {
 }
 
 function ToolIcon({ toolName }: { toolName: string }) {
-  const iconClass = "w-3.5 h-3.5 text-secondary-foreground";
+  const iconClass = "w-3.5 h-3.5 text-ash-400";
 
   switch (toolName) {
     case "Read":
@@ -116,17 +116,17 @@ export function ToolCallGroup({ events, groupId }: ToolCallGroupProps) {
     <div className="py-1">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center gap-2 text-sm text-left hover:bg-muted px-2 py-1 -mx-2 transition-colors"
+        className="w-full flex items-center gap-2 text-sm text-left hover:bg-ash-100 rounded-lg px-2 py-1 -mx-2 transition-colors"
       >
         <ChevronIcon rotated={isExpanded} />
         <ToolIcon toolName={formatted.toolName} />
-        <span className="font-medium text-foreground">{formatted.toolName}</span>
-        <span className="text-muted-foreground">{formatted.summary}</span>
-        <span className="text-xs text-secondary-foreground ml-auto flex-shrink-0">{time}</span>
+        <span className="font-medium text-ash-900">{formatted.toolName}</span>
+        <span className="text-ash-500">{formatted.summary}</span>
+        <span className="text-xs text-ash-400 ml-auto flex-shrink-0">{time}</span>
       </button>
 
       {isExpanded && (
-        <div className="ml-4 mt-1 pl-2 border-l-2 border-border">
+        <div className="ml-4 mt-1 pl-2 border-l-2 border-ash-200">
           {events.map((event, index) => (
             <ToolCallItem
               key={`${groupId}-${index}`}

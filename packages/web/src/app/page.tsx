@@ -192,8 +192,8 @@ export default function Home() {
 
   if (status === "loading") {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-foreground" />
+      <div className="min-h-screen flex items-center justify-center bg-clay-100">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-ash-900" />
       </div>
     );
   }
@@ -286,32 +286,35 @@ function HomeContent({
 
   return (
     <div className="h-full flex flex-col">
-      {/* Header with toggle when sidebar is closed */}
-      {!isOpen && (
-        <header className="border-b border-border-muted flex-shrink-0">
-          <div className="px-4 py-3">
+      {/* header - matches DashboardPageLayout pattern */}
+      <header className="flex items-center justify-between w-full sticky top-0 z-20 backdrop-blur-md h-20 px-6 lg:px-12 xl:px-20 bg-clay-100/90 flex-shrink-0">
+        <div className="flex items-center gap-3">
+          {!isOpen && (
             <button
               onClick={toggle}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
+              className="flex items-center justify-center size-10 rounded-full transition-colors hover:bg-ash-100"
               title="Open sidebar"
             >
               <SidebarToggleIcon />
             </button>
-          </div>
-        </header>
-      )}
+          )}
+          <h1 className="text-2xl sm:text-3xl font-semibold text-ash-900 font-clash">
+            New Session
+          </h1>
+        </div>
+      </header>
 
-      <div className="flex-1 flex flex-col items-center justify-center p-8">
+      <div className="flex-1 flex flex-col items-center justify-center px-4 lg:px-12 xl:px-20 pb-8">
         <div className="w-full max-w-2xl">
-          {/* Welcome text */}
+          {/* welcome text */}
           <div className="text-center mb-8">
-            <h1 className="text-3xl font-semibold text-foreground mb-2">Welcome to Open-Inspect</h1>
+            <h1 className="text-3xl font-semibold text-ash-900 font-clash tracking-tight mb-2">
+              Welcome to Wrench
+            </h1>
             {isAuthenticated ? (
-              <p className="text-muted-foreground">
-                Ask a question or describe what you want to build
-              </p>
+              <p className="text-ash-500">Ask a question or describe what you want to build</p>
             ) : (
-              <p className="text-muted-foreground">Sign in to start a new session</p>
+              <p className="text-ash-500">Sign in to start a new session</p>
             )}
           </div>
 
@@ -319,12 +322,12 @@ function HomeContent({
           {isAuthenticated && (
             <form onSubmit={handleSubmit}>
               {error && (
-                <div className="mb-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 px-4 py-3 border border-red-200 dark:border-red-800 text-sm">
+                <div className="mb-4 bg-lava-100 text-lava-600 px-4 py-3 border border-lava-200 rounded-lg text-sm">
                   {error}
                 </div>
               )}
 
-              <div className="border border-border bg-input">
+              <div className="border border-ash-300 bg-white rounded-lg">
                 {/* Text input area */}
                 <div className="relative">
                   <textarea
@@ -334,18 +337,18 @@ function HomeContent({
                     onKeyDown={handleKeyDown}
                     placeholder="What do you want to build?"
                     disabled={creating}
-                    className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-foreground placeholder:text-secondary-foreground disabled:opacity-50"
+                    className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-ash-900 placeholder:text-ash-400 disabled:opacity-50"
                     rows={3}
                   />
                   {/* Submit button */}
                   <div className="absolute bottom-3 right-3 flex items-center gap-2">
                     {isCreatingSession && (
-                      <span className="text-xs text-accent">Warming sandbox...</span>
+                      <span className="text-xs text-rebolt-500">Warming sandbox...</span>
                     )}
                     <button
                       type="submit"
                       disabled={!prompt.trim() || creating || !selectedRepo}
-                      className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
+                      className="p-2 text-ash-400 hover:text-ash-900 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                       title="Send"
                     >
                       {creating ? (
@@ -370,16 +373,16 @@ function HomeContent({
                 </div>
 
                 {/* Footer row with repo and model selectors */}
-                <div className="flex items-center justify-between px-4 py-2 border-t border-border-muted">
-                  {/* Left side - Repo selector + Model selector */}
+                <div className="flex items-center justify-between px-4 py-2 border-t border-ash-200">
+                  {/* left side - repo selector + model selector */}
                   <div className="flex items-center gap-4">
-                    {/* Repo selector */}
+                    {/* repo selector */}
                     <div className="relative" ref={repoDropdownRef}>
                       <button
                         type="button"
                         onClick={() => !creating && setRepoDropdownOpen(!repoDropdownOpen)}
                         disabled={creating || loadingRepos}
-                        className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
+                        className="flex items-center gap-1.5 text-sm text-ash-500 hover:text-ash-900 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                       >
                         <RepoIcon />
                         <span>{loadingRepos ? "Loading..." : displayRepoName}</span>
@@ -387,7 +390,7 @@ function HomeContent({
                       </button>
 
                       {repoDropdownOpen && repos.length > 0 && (
-                        <div className="absolute bottom-full left-0 mb-2 w-72 max-h-64 overflow-y-auto bg-background shadow-lg border border-border py-1 z-50">
+                        <div className="absolute bottom-full left-0 mb-2 w-72 max-h-64 overflow-y-auto bg-white shadow-lg border border-ash-200 rounded-lg py-1 z-50">
                           {repos.map((repo) => (
                             <button
                               key={repo.id}
@@ -396,17 +399,15 @@ function HomeContent({
                                 setSelectedRepo(repo.fullName);
                                 setRepoDropdownOpen(false);
                               }}
-                              className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
-                                selectedRepo === repo.fullName
-                                  ? "text-foreground"
-                                  : "text-muted-foreground"
+                              className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-ash-100 transition-colors ${
+                                selectedRepo === repo.fullName ? "text-ash-900" : "text-ash-500"
                               }`}
                             >
                               <div className="flex flex-col items-start text-left">
                                 <span className="font-medium truncate max-w-[200px]">
                                   {repo.name}
                                 </span>
-                                <span className="text-xs text-secondary-foreground truncate max-w-[200px]">
+                                <span className="text-xs text-ash-400 truncate max-w-[200px]">
                                   {repo.owner}
                                   {repo.private && " • private"}
                                 </span>
@@ -418,25 +419,25 @@ function HomeContent({
                       )}
                     </div>
 
-                    {/* Model selector */}
+                    {/* model selector */}
                     <div className="relative" ref={modelDropdownRef}>
                       <button
                         type="button"
                         onClick={() => !creating && setModelDropdownOpen(!modelDropdownOpen)}
                         disabled={creating}
-                        className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
+                        className="flex items-center gap-1 text-sm text-ash-500 hover:text-ash-900 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                       >
                         <ModelIcon />
                         <span>{formatModelNameLower(selectedModel)}</span>
                       </button>
 
                       {modelDropdownOpen && (
-                        <div className="absolute bottom-full left-0 mb-2 w-56 bg-background shadow-lg border border-border py-1 z-50">
+                        <div className="absolute bottom-full left-0 mb-2 w-56 bg-white shadow-lg border border-ash-200 rounded-lg py-1 z-50">
                           {MODEL_OPTIONS.map((group, groupIdx) => (
                             <div key={group.category}>
                               <div
-                                className={`px-3 py-1.5 text-xs font-medium text-secondary-foreground uppercase tracking-wider ${
-                                  groupIdx > 0 ? "border-t border-border-muted mt-1" : ""
+                                className={`px-3 py-1.5 text-xs font-medium text-ash-400 uppercase tracking-wider ${
+                                  groupIdx > 0 ? "border-t border-ash-200 mt-1" : ""
                                 }`}
                               >
                                 {group.category}
@@ -449,15 +450,13 @@ function HomeContent({
                                     setSelectedModel(model.id);
                                     setModelDropdownOpen(false);
                                   }}
-                                  className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
-                                    selectedModel === model.id
-                                      ? "text-foreground"
-                                      : "text-muted-foreground"
+                                  className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-ash-100 transition-colors ${
+                                    selectedModel === model.id ? "text-ash-900" : "text-ash-500"
                                   }`}
                                 >
                                   <div className="flex flex-col items-start">
                                     <span className="font-medium">{model.name}</span>
-                                    <span className="text-xs text-secondary-foreground">
+                                    <span className="text-xs text-ash-400">
                                       {model.description}
                                     </span>
                                   </div>
@@ -479,8 +478,8 @@ function HomeContent({
                     />
                   </div>
 
-                  {/* Right side - Agent label */}
-                  <span className="text-sm text-muted-foreground">build agent</span>
+                  {/* right side - agent label */}
+                  <span className="text-sm text-ash-400">build agent</span>
                 </div>
               </div>
 
@@ -488,7 +487,7 @@ function HomeContent({
                 <div className="mt-3 text-center">
                   <Link
                     href="/settings"
-                    className="text-xs text-muted-foreground hover:text-foreground transition"
+                    className="text-xs text-ash-400 hover:text-ash-900 transition-colors"
                   >
                     Manage secrets and settings
                   </Link>
@@ -496,7 +495,7 @@ function HomeContent({
               )}
 
               {repos.length === 0 && !loadingRepos && (
-                <p className="mt-3 text-sm text-muted-foreground text-center">
+                <p className="mt-3 text-sm text-ash-500 text-center">
                   No repositories found. Make sure you have granted access to your repositories.
                 </p>
               )}
@@ -551,7 +550,7 @@ function ChevronIcon() {
 
 function CheckIcon() {
   return (
-    <svg className="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <svg className="w-4 h-4 text-rebolt-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
     </svg>
   );

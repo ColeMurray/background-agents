@@ -44,28 +44,28 @@ export function MetadataSection({
   const getPrBadgeStyles = (state?: string) => {
     switch (state) {
       case "merged":
-        return "bg-success-muted text-success";
+        return "bg-mint-100 text-mint-600";
       case "closed":
-        return "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400";
+        return "bg-lava-100 text-lava-700";
       case "draft":
-        return "bg-muted text-muted-foreground";
+        return "bg-ash-100 text-ash-500";
       case "open":
       default:
-        return "bg-accent-muted text-accent";
+        return "bg-rebolt-100 text-rebolt-600";
     }
   };
 
   return (
     <div className="space-y-3">
       {/* Timestamp */}
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+      <div className="flex items-center gap-2 text-sm text-ash-500">
         <ClockIcon className="w-4 h-4" />
         <span>{formatRelativeTime(createdAt)}</span>
       </div>
 
-      {/* Model */}
+      {/* model */}
       {model && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <div className="flex items-center gap-2 text-sm text-ash-500">
           <SparkleIcon className="w-4 h-4" />
           <span>
             {formatModelName(model)}
@@ -77,18 +77,18 @@ export function MetadataSection({
       {/* PR Badge */}
       {prNumber && (
         <div className="flex items-center gap-2 text-sm">
-          <GitHubIcon className="w-4 h-4 text-muted-foreground" />
+          <GitHubIcon className="w-4 h-4 text-ash-500" />
           {prUrl ? (
             <a
               href={prUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-accent hover:underline"
+              className="text-rebolt-500 hover:underline"
             >
               #{prNumber}
             </a>
           ) : (
-            <span className="text-foreground">#{prNumber}</span>
+            <span className="text-ash-900">#{prNumber}</span>
           )}
           {prState && (
             <span
@@ -103,19 +103,19 @@ export function MetadataSection({
       {/* Branch */}
       {branchName && (
         <div className="flex items-center gap-2 text-sm">
-          <BranchIcon className="w-4 h-4 text-muted-foreground" />
-          <span className="text-foreground truncate max-w-[180px]" title={branchName}>
+          <BranchIcon className="w-4 h-4 text-ash-500" />
+          <span className="text-ash-900 truncate max-w-[180px]" title={branchName}>
             {truncateBranch(branchName)}
           </span>
           <button
             onClick={handleCopyBranch}
-            className="p-1 hover:bg-muted transition-colors"
+            className="p-1 hover:bg-ash-100 rounded transition-colors"
             title={copied ? "Copied!" : "Copy branch name"}
           >
             {copied ? (
-              <CheckIcon className="w-3.5 h-3.5 text-success" />
+              <CheckIcon className="w-3.5 h-3.5 text-mint-500" />
             ) : (
-              <CopyIcon className="w-3.5 h-3.5 text-secondary-foreground" />
+              <CopyIcon className="w-3.5 h-3.5 text-ash-400" />
             )}
           </button>
         </div>
@@ -124,12 +124,12 @@ export function MetadataSection({
       {/* Repository tag */}
       {repoOwner && repoName && (
         <div className="flex items-center gap-2 text-sm">
-          <GitHubIcon className="w-4 h-4 text-muted-foreground" />
+          <GitHubIcon className="w-4 h-4 text-ash-500" />
           <a
             href={`https://github.com/${repoOwner}/${repoName}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-accent hover:underline"
+            className="text-rebolt-500 hover:underline"
           >
             {repoOwner}/{repoName}
           </a>

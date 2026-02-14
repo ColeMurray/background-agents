@@ -30,19 +30,19 @@ export function ParticipantsSection({ participants }: ParticipantsSectionProps) 
                 className="w-6 h-6 rounded-full border-2 border-white object-cover"
               />
             ) : (
-              <div className="w-6 h-6 rounded-full border-2 border-white bg-card flex items-center justify-center text-xs font-medium text-foreground">
+              <div className="w-6 h-6 rounded-full border-2 border-white bg-ash-200 flex items-center justify-center text-xs font-medium text-ash-700">
                 {participant.name.charAt(0).toUpperCase()}
               </div>
             )}
             {/* Status indicator */}
             {participant.status === "active" && (
-              <span className="absolute bottom-0 right-0 w-2 h-2 bg-success rounded-full border border-white" />
+              <span className="absolute bottom-0 right-0 w-2 h-2 bg-mint-400 rounded-full border border-white" />
             )}
           </div>
         ))}
       </div>
       {/* Count label */}
-      <span className="text-sm text-muted-foreground">
+      <span className="text-sm text-ash-500">
         {count} {label}
       </span>
     </div>
