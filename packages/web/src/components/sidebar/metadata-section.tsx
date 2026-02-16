@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
 import { formatModelName, truncateBranch, copyToClipboard } from "@/lib/format";
 import { formatRelativeTime } from "@/lib/time";
 import type { Artifact } from "@/types/session";
@@ -107,9 +108,11 @@ export function MetadataSection({
           <span className="text-ash-900 truncate max-w-[180px]" title={branchName}>
             {truncateBranch(branchName)}
           </span>
-          <button
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={handleCopyBranch}
-            className="p-1 hover:bg-ash-100 rounded transition-colors"
+            className="p-1 h-auto"
             title={copied ? "Copied!" : "Copy branch name"}
           >
             {copied ? (
@@ -117,7 +120,7 @@ export function MetadataSection({
             ) : (
               <CopyIcon className="w-3.5 h-3.5 text-ash-400" />
             )}
-          </button>
+          </Button>
         </div>
       )}
 

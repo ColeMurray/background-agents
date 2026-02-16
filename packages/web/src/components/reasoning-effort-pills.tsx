@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import {
   MODEL_REASONING_CONFIG,
   type ValidModel,
@@ -30,14 +31,16 @@ export function ReasoningEffortPills({
   };
 
   return (
-    <button
+    <Button
+      variant="ghost"
+      size="xs"
       type="button"
       onClick={handleCycle}
       disabled={disabled}
-      className="px-2 py-0.5 text-xs text-ash-500 hover:text-ash-900 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+      className="px-2 py-0.5 h-auto"
       title={`Reasoning: ${reasoningEffort ?? config.default ?? "default"} (click to cycle)`}
     >
       {reasoningEffort ?? config.default ?? "default"}
-    </button>
+    </Button>
   );
 }

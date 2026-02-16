@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useState, useEffect, useMemo } from "react";
 import { useSession, signOut } from "next-auth/react";
 import { formatRelativeTime, isInactiveSession } from "@/lib/time";
+import { Button } from "@/components/ui/button";
 
 export interface SessionItem {
   id: string;
@@ -23,17 +24,31 @@ interface SessionSidebarProps {
 }
 
 export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: SessionSidebarProps) {
-  const { data: authSession } = useSession();
+  const { data: authSession, status } = useSession();
   const pathname = usePathname();
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
+  // use status as dep instead of authSession object (unstable reference)
+  const isAuthenticated = status === "authenticated";
   useEffect(() => {
-    if (authSession) {
+    if (isAuthenticated) {
       fetchSessions();
     }
-  }, [authSession]);
+  }, [isAuthenticated]);
+
+  // listen for real-time title updates from the session websocket
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { sessionId, title } = (e as CustomEvent).detail;
+      setSessions((prev) =>
+        prev.map((s) => (s.id === sessionId ? { ...s, title } : s))
+      );
+    };
+    window.addEventListener("session-title-updated", handler);
+    return () => window.removeEventListener("session-title-updated", handler);
+  }, []);
 
   const fetchSessions = async () => {
     setLoading(true);
@@ -95,20 +110,24 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           <span className="text-sm font-semibold text-white">Wrench</span>
         </Link>
         <div className="flex items-center gap-1">
-          <button
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={onNewSession}
-            className="p-1.5 rounded-lg text-ash-400 hover:text-white hover:bg-ash-800 transition-colors"
+            className="p-1.5 h-auto text-ash-400 hover:text-white hover:bg-ash-800"
             title="New session"
           >
             <PlusIcon />
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={onToggle}
-            className="p-1.5 rounded-lg text-ash-400 hover:text-white hover:bg-ash-800 transition-colors"
+            className="p-1.5 h-auto text-ash-400 hover:text-white hover:bg-ash-800"
             title="Toggle sidebar"
           >
             <SidebarIcon />
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -187,24 +206,29 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           </span>
         </div>
         <div className="flex items-center gap-1">
-          <Link
-            href="/settings"
-            className={`p-1.5 rounded-lg transition-colors ${
+          <Button
+            asChild
+            variant="ghost"
+            size="xs"
+            className={`p-1.5 h-auto ${
               pathname === "/settings"
                 ? "text-white bg-ash-700"
                 : "text-ash-400 hover:text-white hover:bg-ash-800"
             }`}
-            title="Settings"
           >
-            <SettingsIcon />
-          </Link>
-          <button
+            <Link href="/settings" title="Settings">
+              <SettingsIcon />
+            </Link>
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={() => signOut()}
-            className="p-1.5 rounded-lg text-ash-400 hover:text-white hover:bg-ash-800 transition-colors"
+            className="p-1.5 h-auto text-ash-400 hover:text-white hover:bg-ash-800"
             title="Sign out"
           >
             <SignOutIcon />
-          </button>
+          </Button>
         </div>
       </div>
     </aside>

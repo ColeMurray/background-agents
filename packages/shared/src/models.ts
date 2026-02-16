@@ -10,9 +10,9 @@
  * All models use "provider/model" format.
  */
 export const VALID_MODELS = [
-  "anthropic/claude-haiku-4-5",
   "anthropic/claude-sonnet-4-5",
   "anthropic/claude-opus-4-5",
+  "anthropic/claude-opus-4-6",
   "openai/gpt-5.2",
   "openai/gpt-5.2-codex",
   "openai/gpt-5.3-codex",
@@ -23,7 +23,7 @@ export type ValidModel = (typeof VALID_MODELS)[number];
 /**
  * Default model to use when none specified or invalid.
  */
-export const DEFAULT_MODEL: ValidModel = "anthropic/claude-haiku-4-5";
+export const DEFAULT_MODEL: ValidModel = "anthropic/claude-opus-4-6";
 
 /**
  * Reasoning effort levels supported across providers.
@@ -44,9 +44,9 @@ export interface ModelReasoningConfig {
  * Models not listed here do not support reasoning controls.
  */
 export const MODEL_REASONING_CONFIG: Partial<Record<ValidModel, ModelReasoningConfig>> = {
-  "anthropic/claude-haiku-4-5": { efforts: ["high", "max"], default: "max" },
   "anthropic/claude-sonnet-4-5": { efforts: ["high", "max"], default: "max" },
   "anthropic/claude-opus-4-5": { efforts: ["high", "max"], default: "max" },
+  "anthropic/claude-opus-4-6": { efforts: ["high", "max"], default: "max" },
   "openai/gpt-5.2": { efforts: ["none", "low", "medium", "high", "xhigh"], default: undefined },
   "openai/gpt-5.2-codex": { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
   "openai/gpt-5.3-codex": { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
@@ -71,18 +71,18 @@ export const MODEL_OPTIONS: ModelCategory[] = [
     category: "Anthropic",
     models: [
       {
-        id: "anthropic/claude-haiku-4-5",
-        name: "Claude Haiku 4.5",
-        description: "Fast and efficient",
-      },
-      {
         id: "anthropic/claude-sonnet-4-5",
         name: "Claude Sonnet 4.5",
-        description: "Balanced performance",
+        description: "Fast and efficient",
       },
       {
         id: "anthropic/claude-opus-4-5",
         name: "Claude Opus 4.5",
+        description: "High capability",
+      },
+      {
+        id: "anthropic/claude-opus-4-6",
+        name: "Claude Opus 4.6",
         description: "Most capable",
       },
     ],
@@ -114,7 +114,7 @@ export function normalizeModelId(modelId: string): string {
 
 /**
  * Check if a model name is valid.
- * Accepts both prefixed ("anthropic/claude-haiku-4-5") and bare ("claude-haiku-4-5") formats.
+ * Accepts both prefixed ("anthropic/claude-sonnet-4-5") and bare ("claude-sonnet-4-5") formats.
  */
 export function isValidModel(model: string): model is ValidModel {
   return VALID_MODELS.includes(normalizeModelId(model) as ValidModel);
@@ -158,8 +158,8 @@ export function isValidReasoningEffort(model: string, effort: string): boolean {
  * Normalizes bare Claude model names first, then splits on "/".
  *
  * @example
- * extractProviderAndModel("anthropic/claude-haiku-4-5") // { provider: "anthropic", model: "claude-haiku-4-5" }
- * extractProviderAndModel("claude-haiku-4-5") // { provider: "anthropic", model: "claude-haiku-4-5" }
+ * extractProviderAndModel("anthropic/claude-sonnet-4-5") // { provider: "anthropic", model: "claude-sonnet-4-5" }
+ * extractProviderAndModel("claude-sonnet-4-5") // { provider: "anthropic", model: "claude-sonnet-4-5" }
  * extractProviderAndModel("openai/gpt-5.2-codex") // { provider: "openai", model: "gpt-5.2-codex" }
  */
 export function extractProviderAndModel(modelId: string): { provider: string; model: string } {

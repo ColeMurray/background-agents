@@ -17,14 +17,26 @@ import {
   type ModelDisplayInfo,
 } from "@open-inspect/shared";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
+import { Button } from "@/components/ui/button";
 import type { SandboxEvent } from "@/lib/tool-formatters";
 
 // Event grouping types
 type EventGroup =
   | { type: "tool_group"; events: SandboxEvent[]; id: string }
-  | { type: "single"; event: SandboxEvent; id: string };
+  | { type: "single"; event: SandboxEvent; id: string }
+  | { type: "screenshot"; url: string; event: SandboxEvent; id: string };
 
-// Group consecutive tool calls of the same type
+// extract screenshot url from a completed screenshot/browser tool event
+function extractScreenshotUrlFromEvent(event: SandboxEvent): string | null {
+  if (event.status !== "completed") return null;
+  if (event.tool !== "screenshot" && event.tool !== "screenshot-tool") return null;
+  const output = event.output || event.result;
+  if (!output || typeof output !== "string") return null;
+  const match = output.match(/URL:\s*(https?:\/\/\S+)/);
+  return match ? match[1] : null;
+}
+
+// group consecutive tool calls of the same type
 function groupEvents(events: SandboxEvent[]): EventGroup[] {
   const groups: EventGroup[] = [];
   let currentToolGroup: SandboxEvent[] = [];
@@ -43,16 +55,29 @@ function groupEvents(events: SandboxEvent[]): EventGroup[] {
 
   for (const event of events) {
     if (event.type === "tool_call") {
-      // Check if same tool as current group
+      // completed screenshot tool calls render as standalone image bubbles
+      const screenshotUrl = extractScreenshotUrlFromEvent(event);
+      if (screenshotUrl) {
+        flushToolGroup();
+        groups.push({
+          type: "screenshot",
+          url: screenshotUrl,
+          event,
+          id: `screenshot-${event.callId || event.timestamp}-${groupIndex++}`,
+        });
+        continue;
+      }
+
+      // check if same tool as current group
       if (currentToolGroup.length > 0 && currentToolGroup[0].tool === event.tool) {
         currentToolGroup.push(event);
       } else {
-        // Flush previous group and start new one
+        // flush previous group and start new one
         flushToolGroup();
         currentToolGroup = [event];
       }
     } else {
-      // Flush any tool group before non-tool event
+      // flush any tool group before non-tool event
       flushToolGroup();
       groups.push({
         type: "single",
@@ -86,19 +111,19 @@ function ModelOptionButton({
   onSelect: () => void;
 }) {
   return (
-    <button
+    <Button
+      variant="ghost"
+      size="xs"
       type="button"
       onClick={onSelect}
-      className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-ash-100 transition-colors ${
-        isSelected ? "text-ash-900" : "text-ash-500"
-      }`}
+      className={`w-full justify-between ${isSelected ? "text-ash-900" : "text-ash-500"}`}
     >
       <div className="flex flex-col items-start">
         <span className="font-medium">{model.name}</span>
         <span className="text-xs text-ash-400">{model.description}</span>
       </div>
       {isSelected && <CheckIcon />}
-    </button>
+    </Button>
   );
 }
 
@@ -436,13 +461,15 @@ function SessionContent({
         {/* left: sidebar toggle + page title */}
         <div className="flex items-center gap-3">
           {!isOpen && (
-            <button
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={toggle}
-              className="flex items-center justify-center size-10 rounded-full transition-colors hover:bg-ash-100"
+              className="size-10 rounded-full"
               title="Open sidebar"
             >
               <SidebarToggleIcon />
-            </button>
+            </Button>
           )}
           <div>
             <h1 className="text-2xl font-semibold text-ash-900 font-clash">
@@ -477,44 +504,192 @@ function SessionContent({
       {(authError || connectionError) && (
         <div className="bg-lava-100 border-b border-lava-200 px-4 py-3 flex items-center justify-between">
           <p className="text-sm text-lava-700">{authError || connectionError}</p>
-          <button
-            onClick={reconnect}
-            className="px-3 py-1.5 text-sm font-medium text-white bg-lava-600 hover:bg-lava-700 rounded-lg transition-colors"
-          >
+          <Button variant="destructive" size="xs" onClick={reconnect}>
             Reconnect
-          </button>
+          </Button>
         </div>
       )}
 
       {/* Main content */}
       <main className="flex-1 flex overflow-hidden">
-        {/* Event timeline */}
-        <div
-          ref={scrollContainerRef}
-          onScroll={handleScroll}
-          className="flex-1 overflow-y-auto p-4"
-        >
-          <div className="max-w-3xl mx-auto space-y-2">
-            {/* Scroll sentinel for loading older history */}
-            <div ref={topSentinelRef} className="h-1" />
-            {loadingHistory && (
-              <div className="text-center text-ash-500 text-sm py-2">Loading...</div>
-            )}
-            {groupedEvents.map((group) =>
-              group.type === "tool_group" ? (
-                <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />
-              ) : (
-                <EventItem
-                  key={group.id}
-                  event={group.event}
-                  currentParticipantId={currentParticipantId}
-                />
-              )
-            )}
-            {isProcessing && <ThinkingIndicator />}
+        {/* left column: chat + input */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Event timeline */}
+          <div
+            ref={scrollContainerRef}
+            onScroll={handleScroll}
+            className="flex-1 overflow-y-auto p-4"
+          >
+            <div className="max-w-3xl mx-auto space-y-2">
+              {/* Scroll sentinel for loading older history */}
+              <div ref={topSentinelRef} className="h-1" />
+              {loadingHistory && (
+                <div className="text-center text-ash-500 text-sm py-2">Loading...</div>
+              )}
+              {groupedEvents.map((group) => {
+                if (group.type === "tool_group") {
+                  return <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />;
+                }
+                if (group.type === "screenshot") {
+                  return <ScreenshotBubble key={group.id} url={group.url} event={group.event} />;
+                }
+                return (
+                  <EventItem
+                    key={group.id}
+                    event={group.event}
+                    currentParticipantId={currentParticipantId}
+                  />
+                );
+              })}
+              {isProcessing && <ThinkingIndicator />}
 
-            <div ref={messagesEndRef} />
+              <div ref={messagesEndRef} />
+            </div>
           </div>
+
+          {/* input - pinned to bottom of chat column */}
+          <footer className="border-t border-ash-200 bg-clay-100 flex-shrink-0">
+            <form onSubmit={handleSubmit} className="max-w-4xl mx-auto p-4 pb-6">
+              {/* Action bar above input */}
+              <div className="mb-3">
+                <ActionBar
+                  sessionId={sessionState?.id || ""}
+                  sessionStatus={sessionState?.status || ""}
+                  artifacts={artifacts}
+                  onArchive={handleArchive}
+                  onUnarchive={handleUnarchive}
+                />
+              </div>
+
+              {/* input container */}
+              <div className="border border-ash-300 bg-white rounded-lg">
+                {/* text input area with floating send button */}
+                <div className="relative">
+                  <textarea
+                    ref={inputRef}
+                    value={prompt}
+                    onChange={handleInputChange}
+                    onKeyDown={handleKeyDown}
+                    placeholder={
+                      isProcessing ? "Type your next message..." : "Ask or build anything"
+                    }
+                    className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-ash-900 placeholder:text-ash-400"
+                    rows={3}
+                  />
+                  {/* Floating action buttons */}
+                  <div className="absolute bottom-3 right-3 flex items-center gap-2">
+                    {isProcessing && prompt.trim() && (
+                      <span className="text-xs text-honey-600">Waiting...</span>
+                    )}
+                    {isProcessing && (
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        type="button"
+                        onClick={stopExecution}
+                        className="p-2 h-auto text-lava-500 hover:text-lava-600 hover:bg-lava-100"
+                        title="Stop"
+                      >
+                        <svg
+                          className="w-5 h-5"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <rect x="6" y="6" width="12" height="12" rx="1" strokeWidth={2} />
+                        </svg>
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      type="submit"
+                      disabled={!prompt.trim() || isProcessing}
+                      className="p-2 h-auto text-ash-400"
+                      title={
+                        isProcessing && prompt.trim() ? "Wait for execution to complete" : "Send"
+                      }
+                    >
+                      <svg
+                        className="w-5 h-5"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M5 10l7-7m0 0l7 7m-7-7v18"
+                        />
+                      </svg>
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Footer row with model selector, reasoning pills, and agent label */}
+                <div className="flex items-center justify-between px-4 py-2 border-t border-ash-200">
+                  {/* left side - model selector + reasoning pills */}
+                  <div className="flex items-center gap-4">
+                    <div className="relative" ref={modelDropdownRef}>
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        type="button"
+                        onClick={() => !isProcessing && setModelDropdownOpen(!modelDropdownOpen)}
+                        disabled={isProcessing}
+                        className="gap-1 h-auto px-1 text-ash-500"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                        </svg>
+                        <span>{formatModelNameLower(selectedModel)}</span>
+                      </Button>
+
+                      {/* dropdown menu */}
+                      {modelDropdownOpen && (
+                        <div className="absolute bottom-full left-0 mb-2 w-56 bg-white shadow-lg border border-ash-200 rounded-lg py-1 z-50">
+                          {MODEL_OPTIONS.map((group, groupIdx) => (
+                            <div key={group.category}>
+                              <div
+                                className={`px-3 py-1.5 text-xs font-medium text-ash-400 uppercase tracking-wider ${
+                                  groupIdx > 0 ? "border-t border-ash-200 mt-1" : ""
+                                }`}
+                              >
+                                {group.category}
+                              </div>
+                              {group.models.map((model) => (
+                                <ModelOptionButton
+                                  key={model.id}
+                                  model={model}
+                                  isSelected={selectedModel === model.id}
+                                  onSelect={() => {
+                                    setSelectedModel(model.id);
+                                    setModelDropdownOpen(false);
+                                  }}
+                                />
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Reasoning effort pills */}
+                    <ReasoningEffortPills
+                      selectedModel={selectedModel}
+                      reasoningEffort={reasoningEffort}
+                      onSelect={setReasoningEffort}
+                      disabled={isProcessing}
+                    />
+                  </div>
+
+                  {/* right side - agent label */}
+                  <span className="text-sm text-ash-400">build agent</span>
+                </div>
+              </div>
+            </form>
+          </footer>
         </div>
 
         {/* Right sidebar */}
@@ -525,130 +700,6 @@ function SessionContent({
           artifacts={artifacts}
         />
       </main>
-
-      {/* input */}
-      <footer className="border-t border-ash-200 flex-shrink-0">
-        <form onSubmit={handleSubmit} className="max-w-4xl mx-auto p-4 pb-6">
-          {/* Action bar above input */}
-          <div className="mb-3">
-            <ActionBar
-              sessionId={sessionState?.id || ""}
-              sessionStatus={sessionState?.status || ""}
-              artifacts={artifacts}
-              onArchive={handleArchive}
-              onUnarchive={handleUnarchive}
-            />
-          </div>
-
-          {/* input container */}
-          <div className="border border-ash-300 bg-white rounded-lg">
-            {/* text input area with floating send button */}
-            <div className="relative">
-              <textarea
-                ref={inputRef}
-                value={prompt}
-                onChange={handleInputChange}
-                onKeyDown={handleKeyDown}
-                placeholder={isProcessing ? "Type your next message..." : "Ask or build anything"}
-                className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-ash-900 placeholder:text-ash-400"
-                rows={3}
-              />
-              {/* Floating action buttons */}
-              <div className="absolute bottom-3 right-3 flex items-center gap-2">
-                {isProcessing && prompt.trim() && (
-                  <span className="text-xs text-honey-600">Waiting...</span>
-                )}
-                {isProcessing && (
-                  <button
-                    type="button"
-                    onClick={stopExecution}
-                    className="p-2 text-lava-500 hover:text-lava-600 hover:bg-lava-100 rounded-lg transition-colors"
-                    title="Stop"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <rect x="6" y="6" width="12" height="12" rx="1" strokeWidth={2} />
-                    </svg>
-                  </button>
-                )}
-                <button
-                  type="submit"
-                  disabled={!prompt.trim() || isProcessing}
-                  className="p-2 text-ash-400 hover:text-ash-900 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                  title={isProcessing && prompt.trim() ? "Wait for execution to complete" : "Send"}
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M5 10l7-7m0 0l7 7m-7-7v18"
-                    />
-                  </svg>
-                </button>
-              </div>
-            </div>
-
-            {/* Footer row with model selector, reasoning pills, and agent label */}
-            <div className="flex items-center justify-between px-4 py-2 border-t border-ash-200">
-              {/* left side - model selector + reasoning pills */}
-              <div className="flex items-center gap-4">
-                <div className="relative" ref={modelDropdownRef}>
-                  <button
-                    type="button"
-                    onClick={() => !isProcessing && setModelDropdownOpen(!modelDropdownOpen)}
-                    disabled={isProcessing}
-                    className="flex items-center gap-1 text-sm text-ash-500 hover:text-ash-900 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-                    </svg>
-                    <span>{formatModelNameLower(selectedModel)}</span>
-                  </button>
-
-                  {/* dropdown menu */}
-                  {modelDropdownOpen && (
-                    <div className="absolute bottom-full left-0 mb-2 w-56 bg-white shadow-lg border border-ash-200 rounded-lg py-1 z-50">
-                      {MODEL_OPTIONS.map((group, groupIdx) => (
-                        <div key={group.category}>
-                          <div
-                            className={`px-3 py-1.5 text-xs font-medium text-ash-400 uppercase tracking-wider ${
-                              groupIdx > 0 ? "border-t border-ash-200 mt-1" : ""
-                            }`}
-                          >
-                            {group.category}
-                          </div>
-                          {group.models.map((model) => (
-                            <ModelOptionButton
-                              key={model.id}
-                              model={model}
-                              isSelected={selectedModel === model.id}
-                              onSelect={() => {
-                                setSelectedModel(model.id);
-                                setModelDropdownOpen(false);
-                              }}
-                            />
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Reasoning effort pills */}
-                <ReasoningEffortPills
-                  selectedModel={selectedModel}
-                  reasoningEffort={reasoningEffort}
-                  onSelect={setReasoningEffort}
-                  disabled={isProcessing}
-                />
-              </div>
-
-              {/* right side - agent label */}
-              <span className="text-sm text-ash-400">build agent</span>
-            </div>
-          </div>
-        </form>
-      </footer>
     </div>
   );
 }
@@ -748,6 +799,57 @@ function CombinedStatusDot({
     <span title={label} className="flex items-center">
       <span className={`w-2.5 h-2.5 rounded-full ${color}${pulse ? " animate-pulse" : ""}`} />
     </span>
+  );
+}
+
+function ScreenshotBubble({ url, event }: { url: string; event: SandboxEvent }) {
+  const [expanded, setExpanded] = useState(false);
+  const time = new Date(event.timestamp * 1000).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  return (
+    <>
+      <div className="py-1">
+        <div className="rounded-lg border border-ash-200 overflow-hidden max-w-md bg-white">
+          <button type="button" className="w-full cursor-pointer" onClick={() => setExpanded(true)}>
+            <img src={url} alt="Screenshot" className="w-full h-auto" loading="lazy" />
+          </button>
+          <div className="px-3 py-1.5 text-xs text-ash-400 flex items-center gap-1.5 border-t border-ash-100">
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"
+              />
+              <circle cx="12" cy="13" r="3" strokeWidth={2} />
+            </svg>
+            Screenshot · {time}
+          </div>
+        </div>
+      </div>
+
+      {/* lightbox */}
+      {expanded && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+          onClick={() => setExpanded(false)}
+          onKeyDown={(e) => e.key === "Escape" && setExpanded(false)}
+          role="button"
+          tabIndex={0}
+        >
+          <div className="max-w-[90vw] max-h-[90vh] relative" onClick={(e) => e.stopPropagation()}>
+            <img
+              src={url}
+              alt="Screenshot"
+              className="max-w-full max-h-[90vh] rounded-lg shadow-2xl"
+            />
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -862,10 +964,12 @@ function EventItem({
               <span className="text-xs text-rebolt-600">{authorName}</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <button
+              <Button
+                variant="ghost"
+                size="xs"
                 type="button"
                 onClick={() => handleCopyContent(messageContent)}
-                className="p-1 text-ash-400 hover:text-ash-700 hover:bg-ash-100 rounded opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
+                className="p-1 h-auto opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto"
                 title={copied ? "Copied" : "Copy markdown"}
                 aria-label={copied ? "Copied" : "Copy markdown"}
               >
@@ -874,7 +978,7 @@ function EventItem({
                 ) : (
                   <CopyIcon className="w-3.5 h-3.5" />
                 )}
-              </button>
+              </Button>
               <span className="text-xs text-ash-400">{time}</span>
             </div>
           </div>
@@ -892,10 +996,12 @@ function EventItem({
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs text-ash-500">Assistant</span>
             <div className="flex items-center gap-1.5">
-              <button
+              <Button
+                variant="ghost"
+                size="xs"
                 type="button"
                 onClick={() => handleCopyContent(messageContent)}
-                className="p-1 text-ash-400 hover:text-ash-700 hover:bg-ash-100 rounded opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
+                className="p-1 h-auto opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto"
                 title={copied ? "Copied" : "Copy markdown"}
                 aria-label={copied ? "Copied" : "Copy markdown"}
               >
@@ -904,7 +1010,7 @@ function EventItem({
                 ) : (
                   <CopyIcon className="w-3.5 h-3.5" />
                 )}
-              </button>
+              </Button>
               <span className="text-xs text-ash-400">{time}</span>
             </div>
           </div>

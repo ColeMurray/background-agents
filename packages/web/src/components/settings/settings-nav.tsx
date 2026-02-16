@@ -1,5 +1,7 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
+
 const NAV_ITEMS = [
   {
     id: "secrets",
@@ -30,17 +32,19 @@ export function SettingsNav({ activeCategory, onSelect }: SettingsNavProps) {
           const Icon = item.icon;
           return (
             <li key={item.id}>
-              <button
+              <Button
+                variant="ghost"
+                size="xs"
                 onClick={() => onSelect(item.id)}
-                className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded transition ${
+                className={`w-full justify-start gap-2 ${
                   isActive
-                    ? "text-ash-900 bg-ash-100 font-medium"
-                    : "text-ash-500 hover:text-ash-900 hover:bg-ash-100"
+                    ? "text-ash-900 bg-ash-100"
+                    : "text-ash-500"
                 }`}
               >
                 <Icon />
                 {item.label}
-              </button>
+              </Button>
             </li>
           );
         })}

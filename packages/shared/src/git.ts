@@ -7,7 +7,7 @@ import type { GitUser } from "./types";
 /**
  * Branch naming convention for Open-Inspect sessions.
  */
-export const BRANCH_PREFIX = "open-inspect";
+export const BRANCH_PREFIX = "wrench";
 
 /**
  * Generate a branch name for a session.

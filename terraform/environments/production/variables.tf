@@ -174,6 +174,32 @@ variable "project_root" {
   default     = "../../../"
 }
 
+variable "modal_app_name" {
+  description = "Modal app name (use a different name per environment to isolate sandboxes)"
+  type        = string
+  default     = "open-inspect"
+}
+
+variable "dev_deployment_name" {
+  description = "Deployment name for the dev environment (used to set Vercel 'development' env vars to dev backend URLs)"
+  type        = string
+  default     = "foundry-dev"
+}
+
+variable "dev_internal_callback_secret" {
+  description = "Internal callback secret for the dev environment (so `vercel env pull` gets the correct dev secret)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "dev_nextauth_secret" {
+  description = "NextAuth secret for the dev environment (so `vercel env pull` gets the correct dev secret)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 # =============================================================================
 # Access Control
 # =============================================================================

@@ -7,6 +7,7 @@ import {
   MetadataSection,
   TasksSection,
   FilesChangedSection,
+  ScreenshotsSection,
 } from "./sidebar";
 import { extractLatestTasks } from "@/lib/tasks";
 import type { Artifact, FileChange } from "@/types/session";
@@ -58,6 +59,12 @@ export function SessionRightSidebar({
   // Extract latest tasks from TodoWrite events
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
 
+  // Filter screenshot artifacts
+  const screenshots = useMemo(
+    () => artifacts.filter((a) => a.type === "screenshot"),
+    [artifacts]
+  );
+
   if (!sessionState) {
     return (
       <aside className="w-80 border-l border-ash-200 overflow-y-auto hidden lg:block bg-white">
@@ -96,6 +103,13 @@ export function SessionRightSidebar({
       {tasks.length > 0 && (
         <CollapsibleSection title="Tasks" defaultOpen={true}>
           <TasksSection tasks={tasks} />
+        </CollapsibleSection>
+      )}
+
+      {/* Screenshots */}
+      {screenshots.length > 0 && (
+        <CollapsibleSection title="Screenshots" defaultOpen={true}>
+          <ScreenshotsSection screenshots={screenshots} />
         </CollapsibleSection>
       )}
 

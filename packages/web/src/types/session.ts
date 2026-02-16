@@ -5,9 +5,17 @@ export interface Artifact {
   type: "pr" | "screenshot" | "preview" | "branch";
   url: string | null;
   metadata?: {
+    // pr metadata
     prNumber?: number;
     prState?: "open" | "merged" | "closed" | "draft";
+    // screenshot metadata
     filename?: string;
+    description?: string;
+    viewport?: { width: number; height: number };
+    selector?: string;
+    capturedAt?: number;
+    // preview metadata
+    port?: number;
     previewStatus?: "active" | "outdated" | "stopped";
   };
   createdAt: number;

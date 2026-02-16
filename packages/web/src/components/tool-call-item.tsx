@@ -2,6 +2,7 @@
 
 import type { SandboxEvent } from "@/lib/tool-formatters";
 import { formatToolCall } from "@/lib/tool-formatters";
+import { Button } from "@/components/ui/button";
 
 interface ToolCallItemProps {
   event: SandboxEvent;
@@ -119,6 +120,24 @@ function ToolIcon({ name }: { name: string | null }) {
   }
 }
 
+/**
+ * Extract a screenshot URL from tool output text.
+ * Matches "URL: https://..." pattern from the screenshot tool.
+ */
+function extractScreenshotUrl(output: string | null): string | null {
+  if (!output) return null;
+  const match = output.match(/URL:\s*(https?:\/\/\S+)/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Check if this is a browser-related tool (screenshot, browser, preview).
+ */
+function isBrowserTool(toolName: string): boolean {
+  const browserTools = ["screenshot", "browser", "preview"];
+  return browserTools.includes(toolName.toLowerCase());
+}
+
 export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: ToolCallItemProps) {
   const formatted = formatToolCall(event);
   const time = new Date(event.timestamp * 1000).toLocaleTimeString([], {
@@ -128,19 +147,44 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
 
   const { args, output } = formatted.getDetails();
 
+  // check if this is a preview tool that produced a url
+  const isPreview = event.tool === "preview" && event.status === "completed";
+  const previewUrl = isPreview && output ? extractScreenshotUrl(output) : null;
+
   return (
     <div className="py-0.5">
-      <button
+      <Button
+        variant="ghost"
+        size="xs"
         onClick={onToggle}
-        className="w-full flex items-center gap-1.5 text-sm text-left text-ash-500 hover:text-ash-900 transition-colors"
+        className="w-full justify-start gap-1.5 text-ash-500 h-auto px-0"
       >
         <ChevronIcon rotated={isExpanded} />
-        <ToolIcon name={formatted.icon} />
+        {isBrowserTool(event.tool || "") ? (
+          <CameraToolIcon />
+        ) : (
+          <ToolIcon name={formatted.icon} />
+        )}
         <span className="truncate">
           {formatted.toolName} {formatted.summary}
         </span>
         {showTime && <span className="text-xs text-ash-400 flex-shrink-0 ml-auto">{time}</span>}
-      </button>
+      </Button>
+
+      {/* inline preview link (shown even when collapsed) */}
+      {previewUrl && !isExpanded && (
+        <div className="mt-1.5 ml-5">
+          <a
+            href={previewUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-xs text-rebolt-500 hover:underline"
+          >
+            <ToolIcon name="globe" />
+            {previewUrl}
+          </a>
+        </div>
+      )}
 
       {isExpanded && (
         <div className="mt-2 ml-5 p-3 bg-ash-100 border border-ash-200 rounded-lg text-xs overflow-hidden">
@@ -152,6 +196,7 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
               </pre>
             </div>
           )}
+
           {output && (
             <div>
               <div className="text-ash-500 mb-1 font-medium">Output:</div>
@@ -164,5 +209,19 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
         </div>
       )}
     </div>
+  );
+}
+
+function CameraToolIcon() {
+  return (
+    <svg className="w-3.5 h-3.5 text-ash-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={2}
+        d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"
+      />
+      <circle cx="12" cy="13" r="3" strokeWidth={2} />
+    </svg>
   );
 }

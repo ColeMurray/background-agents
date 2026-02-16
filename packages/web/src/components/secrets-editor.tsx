@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
 
 const VALID_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const MAX_KEY_LENGTH = 256;
@@ -300,14 +301,15 @@ export function SecretsEditor({
           <h3 className="text-sm font-semibold text-ash-900">Secrets</h3>
           <p className="text-xs text-ash-500">{descriptionText}</p>
         </div>
-        <button
+        <Button
+          variant="rebolt-outline"
+          size="xs"
           type="button"
           onClick={handleAddRow}
           disabled={!ready || disabled}
-          className="text-xs px-2 py-1 border border-ash-300 rounded text-ash-500 hover:text-ash-900 hover:border-ash-400 transition-colors disabled:opacity-50"
         >
           Add secret
-        </button>
+        </Button>
       </div>
 
       {!ready && <p className="text-xs text-ash-500">Select a repository to manage secrets.</p>}
@@ -362,14 +364,16 @@ export function SecretsEditor({
                     disabled={disabled}
                     className="flex-1 min-w-[200px] bg-ash-100 border border-ash-200 rounded px-2 py-1 text-xs text-ash-900 disabled:opacity-60"
                   />
-                  <button
+                  <Button
+                    variant="rebolt-outline"
+                    size="xs"
                     type="button"
                     onClick={() => handleDeleteRow(row)}
                     disabled={disabled || deletingKey === normalizeKey(row.key)}
-                    className="text-xs px-2 py-1 border border-ash-300 rounded text-ash-500 hover:text-lava-500 hover:border-lava-300 transition-colors disabled:opacity-50"
+                    className="hover:text-lava-500 hover:border-lava-300"
                   >
                     {deletingKey === normalizeKey(row.key) ? "Deleting..." : "Delete"}
-                  </button>
+                  </Button>
                 </div>
                 {row.existing && (
                   <p className="text-[11px] text-ash-400">To update, enter a new value and save.</p>
@@ -417,14 +421,15 @@ export function SecretsEditor({
           {success && <p className="mt-3 text-xs text-green-600">{success}</p>}
 
           <div className="mt-3 flex items-center gap-2">
-            <button
+            <Button
+              variant="rebolt-outline"
+              size="xs"
               type="button"
               onClick={handleSave}
               disabled={disabled || saving || !ready}
-              className="text-xs px-3 py-1 border border-ash-300 rounded text-ash-900 hover:border-ash-500 transition-colors disabled:opacity-50"
             >
               {saving ? "Saving..." : "Save secrets"}
-            </button>
+            </Button>
             <span className="text-[11px] text-ash-400">Keys are automatically uppercased.</span>
           </div>
         </>

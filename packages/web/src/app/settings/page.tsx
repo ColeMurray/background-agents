@@ -5,6 +5,7 @@ import { SidebarLayout, useSidebarContext } from "@/components/sidebar-layout";
 import { SettingsNav, type SettingsCategory } from "@/components/settings/settings-nav";
 import { SecretsSettings } from "@/components/settings/secrets-settings";
 import { DataControlsSettings } from "@/components/settings/data-controls-settings";
+import { Button } from "@/components/ui/button";
 
 export default function SettingsPage() {
   return (
@@ -24,13 +25,15 @@ function SettingsContent() {
       <header className="flex items-center justify-between w-full sticky top-0 z-20 backdrop-blur-md h-20 px-6 lg:px-12 xl:px-20 bg-clay-100/90 flex-shrink-0">
         <div className="flex items-center gap-3">
           {!isOpen && (
-            <button
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={toggle}
-              className="flex items-center justify-center size-10 rounded-full transition-colors hover:bg-ash-100"
+              className="size-10 rounded-full"
               title="Open sidebar"
             >
               <SidebarToggleIcon />
-            </button>
+            </Button>
           )}
           <h1 className="text-2xl sm:text-3xl font-semibold text-ash-900 font-clash">Settings</h1>
         </div>

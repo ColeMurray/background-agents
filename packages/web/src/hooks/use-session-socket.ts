@@ -159,6 +159,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   const handleMessage = useCallback(
     (data: {
       type: string;
+      title?: string;
       state?: SessionState;
       event?: SandboxEvent;
       items?: SandboxEvent[];
@@ -335,6 +336,18 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           if (data.artifact) {
             setArtifacts((prev) =>
               prev.map((a) => (a.id === data.artifact!.id ? data.artifact! : a))
+            );
+          }
+          break;
+
+        case "session_title_updated":
+          if (data.title) {
+            setSessionState((prev) => (prev ? { ...prev, title: data.title as string } : null));
+            // notify sidebar to update the session title in its list
+            window.dispatchEvent(
+              new CustomEvent("session-title-updated", {
+                detail: { sessionId, title: data.title },
+              })
             );
           }
           break;

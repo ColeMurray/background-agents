@@ -5,6 +5,7 @@ import { useSession, signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { SessionSidebar } from "@/components/session-sidebar";
 import { useSidebar } from "@/hooks/use-sidebar";
+import { Button } from "@/components/ui/button";
 
 interface SidebarContextValue {
   isOpen: boolean;
@@ -49,13 +50,15 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
         <p className="text-ash-500 max-w-md text-center">
           Background coding agent for your team. Ship faster with AI-powered code changes.
         </p>
-        <button
+        <Button
+          variant="rebolt-primary"
+          size="xs"
           onClick={() => signIn("github")}
-          className="flex items-center gap-2 bg-rebolt-500 hover:bg-rebolt-600 text-white px-6 py-3 rounded-lg font-medium transition-colors"
+          className="gap-2"
         >
           <GitHubIcon />
           Sign in with GitHub
-        </button>
+        </Button>
       </div>
     );
   }

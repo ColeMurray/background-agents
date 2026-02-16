@@ -23,8 +23,8 @@ SANDBOX_DIR = Path(__file__).parent.parent / "sandbox"
 OPENCODE_VERSION = "latest"
 
 # Cache buster - change this to force Modal image rebuild
-# v37: Codex auth proxy plugin for centralized token refresh
-CACHE_BUSTER = "v37-codex-auth-proxy-plugin"
+# v39: add playwright npm package for browser tools
+CACHE_BUSTER = "v39-playwright-npm"
 
 # Base image with all development tools
 base_image = (
@@ -93,12 +93,19 @@ base_image = (
         "opencode --version || echo 'OpenCode installed'",
         # Install @opencode-ai/plugin globally for custom tools
         # This ensures tools can import the plugin without needing to run bun add
-        "npm install -g @opencode-ai/plugin@latest zod",
+        "npm install -g @opencode-ai/plugin@latest zod playwright",
     )
     # Install Playwright browsers (Chromium only to save space)
     .run_commands(
         "playwright install chromium",
         "playwright install-deps chromium",
+    )
+    # Install cloudflared for tunnel-based preview URLs
+    .run_commands(
+        "curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o /tmp/cloudflared.deb",
+        "dpkg -i /tmp/cloudflared.deb",
+        "rm /tmp/cloudflared.deb",
+        "cloudflared --version",
     )
     # Create working directories
     .run_commands(

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import type { SessionItem } from "@/components/session-sidebar";
 import { formatRelativeTime } from "@/lib/time";
+import { Button } from "@/components/ui/button";
 
 const PAGE_SIZE = 20;
 
@@ -99,13 +100,15 @@ export function DataControlsSettings() {
         )}
 
         {hasMore && !loading && (
-          <button
+          <Button
+            variant="rebolt-outline"
+            size="xs"
             onClick={handleLoadMore}
             disabled={loadingMore}
-            className="mt-4 w-full py-2 text-sm text-ash-500 hover:text-ash-900 border border-ash-200 rounded-lg hover:bg-ash-100 transition-colors disabled:opacity-50"
+            className="mt-4 w-full"
           >
             {loadingMore ? "Loading..." : "Load more"}
-          </button>
+          </Button>
         )}
       </div>
     </div>
@@ -134,12 +137,14 @@ function ArchivedSessionRow({
           <span className="truncate">{repoInfo}</span>
         </div>
       </Link>
-      <button
+      <Button
+        variant="rebolt-outline"
+        size="xs"
         onClick={() => onUnarchive(session.id)}
-        className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-ash-500 hover:text-ash-900 border border-ash-200 rounded-lg hover:bg-white transition-colors opacity-0 group-hover:opacity-100"
+        className="flex-shrink-0 opacity-0 group-hover:opacity-100"
       >
         Unarchive
-      </button>
+      </Button>
     </div>
   );
 }

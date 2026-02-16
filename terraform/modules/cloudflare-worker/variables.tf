@@ -46,6 +46,15 @@ variable "d1_databases" {
   default = []
 }
 
+variable "r2_buckets" {
+  description = "List of R2 bucket bindings"
+  type = list(object({
+    binding_name = string
+    bucket_name  = string
+  }))
+  default = []
+}
+
 variable "plain_text_bindings" {
   description = "List of plain text environment variable bindings"
   type = list(object({
@@ -90,6 +99,12 @@ variable "migration_tag" {
   description = "Migration tag for Durable Objects (increment when adding new DO classes)"
   type        = string
   default     = "v1"
+}
+
+variable "enable_ai" {
+  description = "Enable Workers AI binding for LLM inference"
+  type        = bool
+  default     = false
 }
 
 variable "compatibility_date" {

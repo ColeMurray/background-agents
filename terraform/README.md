@@ -26,13 +26,20 @@ terraform/
 │   └── modal-app/               # Modal CLI wrapper
 │       └── scripts/             # Deployment scripts
 ├── environments/
-│   └── production/              # Production environment config
-│       ├── main.tf              # Main configuration
-│       ├── variables.tf         # Input variables
-│       ├── outputs.tf           # Output values
-│       ├── backend.tf           # State backend (R2)
-│       ├── versions.tf          # Provider versions
-│       └── terraform.tfvars.example
+│   ├── production/              # Production environment config
+│   │   ├── main.tf              # Main configuration
+│   │   ├── variables.tf         # Input variables
+│   │   ├── outputs.tf           # Output values
+│   │   ├── backend.tf           # State backend (R2)
+│   │   ├── versions.tf          # Provider versions
+│   │   └── terraform.tfvars     # (gitignored) secrets & config
+│   └── dev/                     # Dev environment config
+│       ├── main.tf              # Same structure as production
+│       ├── variables.tf
+│       ├── outputs.tf
+│       ├── backend.tf           # State key: dev/terraform.tfstate
+│       ├── versions.tf
+│       └── terraform.tfvars     # (gitignored) fresh secrets, deployment_name=foundry-dev
 └── README.md                    # This file
 ```
 
@@ -391,25 +398,72 @@ variables.
 2. Check script exists: `ls packages/control-plane/dist/index.js`
 3. Verify API token permissions
 
-## Adding New Environments
+## Environments
 
-To add a staging environment:
+### Production (`environments/production/`)
+
+The live deployment. `deployment_name = "foundry"`.
+
+- Control plane: `open-inspect-control-plane-foundry.mitchstahl11.workers.dev`
+- Web app: `open-inspect-foundry.vercel.app`
+- Modal app: `open-inspect`
+
+### Dev (`environments/dev/`)
+
+A parallel deployment for safe iteration. `deployment_name = "foundry-dev"`.
+
+- Control plane: `open-inspect-control-plane-foundry-dev.mitchstahl11.workers.dev`
+- Modal app: `open-inspect-dev`
+- No Vercel project — use `vercel env pull` from the prod project + `pnpm dev` locally
+
+Same Cloudflare account, same Modal workspace, same GitHub App — just different resource names and fresh security secrets.
+
+### First-time dev setup
 
 ```bash
-# Copy production config
-cp -r environments/production environments/staging
+# from the wrench/ root
+npm run deploy:dev:init
 
-# Update backend key in staging/backend.tf
-# key = "staging/terraform.tfstate"
+# first apply — set enable_durable_object_bindings = false and enable_service_bindings = false
+# in terraform/environments/dev/terraform.tfvars
+npm run deploy:dev
 
-# Update environment variable in staging/terraform.tfvars
-# environment = "staging"
-
-# Initialize and apply
-cd environments/staging
-terraform init -backend-config="access_key=..." -backend-config="secret_key=..."
-terraform apply
+# then set both to true and apply again
+npm run deploy:dev
 ```
+
+### Deploy scripts
+
+All scripts live in the root `package.json` and automatically build the shared package first:
+
+| Script                | What it does                                       |
+| --------------------- | -------------------------------------------------- |
+| `npm run deploy:dev`  | Build shared → `terraform apply` on dev env        |
+| `npm run deploy:prod` | Build shared → `terraform apply` on production env |
+| `npm run deploy:dev:plan`  | Build shared → `terraform plan` on dev env    |
+| `npm run deploy:prod:plan` | Build shared → `terraform plan` on production |
+| `npm run deploy:dev:init`  | `terraform init` for dev backend              |
+| `npm run deploy:shared`    | Build `@open-inspect/shared` only             |
+
+### Local development against dev
+
+The prod Vercel project's "development" env target is automatically configured to point at the dev control plane. Just pull and go:
+
+```bash
+cd packages/web
+vercel env pull .env.local
+pnpm dev
+```
+
+This gives you `CONTROL_PLANE_URL` and `NEXT_PUBLIC_WS_URL` pointing at the dev backend. No manual overrides needed.
+
+### Adding more environments
+
+Copy an existing environment folder and change:
+
+1. `backend.tf` — use a unique state key (e.g., `"staging/terraform.tfstate"`)
+2. `terraform.tfvars` — change `deployment_name`, generate fresh security secrets, set `modal_app_name`
+3. `variables.tf` — update the `modal_app_name` default if desired
 
 ## Security Considerations
 

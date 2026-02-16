@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Wrench",
+  "version": "0.1.0",
+  "description": "Wrench — AI coding agent for your browser",
+  "permissions": ["sidePanel", "activeTab", "storage", "cookies", "scripting"],
+  "host_permissions": ["http://localhost:3000/*"],
+  "side_panel": {
+    "default_path": "src/sidepanel/index.html"
+  },
+  "background": {
+    "service_worker": "src/background/service-worker.ts",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/inspector.ts"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Open Wrench"
+  }
+}

@@ -154,6 +154,11 @@ export class SessionDO extends DurableObject<Env> {
     { method: "POST", path: "/internal/create-pr", handler: (req) => this.handleCreatePR(req) },
     {
       method: "POST",
+      path: "/internal/create-artifact",
+      handler: (req) => this.handleCreateArtifact(req),
+    },
+    {
+      method: "POST",
       path: "/internal/ws-token",
       handler: (req) => this.handleGenerateWsToken(req),
     },
@@ -625,6 +630,59 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
+   * generate a short ai title from the first user prompt if the session has no title yet.
+   * runs in ctx.waitUntil so it never blocks the response path.
+   */
+  private async maybeGenerateTitle(): Promise<void> {
+    try {
+      const session = this.repository.getSession();
+      if (!session || session.title) return;
+
+      // grab the first user message
+      const messages = this.repository.listMessages({ limit: 1 });
+      const firstMessage = messages[0];
+      if (!firstMessage?.content) return;
+
+      if (!this.env.AI) {
+        this.log.debug("title_generation.skipped", { reason: "ai_binding_not_configured" });
+        return;
+      }
+
+      const prompt = firstMessage.content.slice(0, 500);
+
+      // cast: workers ai run() returns unknown-typed response; we know the
+      // text generation model returns { response: string }. validated by
+      // cloudflare's workers ai contract for @cf/meta/llama-3.1-8b-instruct.
+      const result = (await this.env.AI.run(
+        "@cf/meta/llama-3.1-8b-instruct" as Parameters<Ai["run"]>[0],
+        {
+          messages: [
+            {
+              role: "system",
+              content:
+                "generate a concise 3-15 word title for this coding session. You are to describe the coding task this session is working on based on the users initial prompt." +
+                "respond with ONLY the title, no quotes, no punctuation, no explanation.",
+            },
+            { role: "user", content: prompt },
+          ],
+        }
+      )) as { response?: string };
+
+      const title = result?.response?.trim();
+      if (!title || title.length > 100) return;
+
+      this.repository.updateSessionTitle(title);
+      this.broadcast({ type: "session_title_updated", title } as ServerMessage);
+
+      this.log.info("title_generation.success", { title });
+    } catch (e) {
+      this.log.error("title_generation.error", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  /**
    * Handle messages from sandbox.
    */
   private async handleSandboxMessage(ws: WebSocket, message: string): Promise<void> {
@@ -769,6 +827,20 @@ export class SessionDO extends DurableObject<Env> {
     const sandbox = this.getSandbox();
     if (sandbox?.last_spawn_error) {
       this.safeSend(ws, { type: "sandbox_error", error: sandbox.last_spawn_error });
+    }
+
+    // send persisted artifacts so the client restores preview buttons, screenshots, etc.
+    const storedArtifacts = this.repository.listArtifacts();
+    for (const a of storedArtifacts) {
+      this.safeSend(ws, {
+        type: "artifact_created",
+        artifact: {
+          id: a.id,
+          type: a.type,
+          url: a.url || "",
+          metadata: this.parseArtifactMetadata(a),
+        },
+      } as ServerMessage);
     }
 
     // Send historical events (messages and sandbox events)
@@ -1131,6 +1203,10 @@ export class SessionDO extends DurableObject<Env> {
       this.updateLastActivity(now);
       await this.scheduleInactivityCheck();
       await this.processMessageQueue();
+
+      // generate a title from the first prompt if we don't have one yet
+      this.ctx.waitUntil(this.maybeGenerateTitle());
+
       return; // execution_complete handling is done; skip the generic broadcast below
     }
 
@@ -1145,6 +1221,28 @@ export class SessionDO extends DurableObject<Env> {
     // Handle push completion events
     if (event.type === "push_complete" || event.type === "push_error") {
       this.handlePushEvent(event);
+    }
+
+    // Handle artifact events from sandbox — create db record + broadcast artifact_created
+    if (event.type === "artifact" && "artifactType" in event) {
+      const artifactId = generateId();
+      this.repository.createArtifact({
+        id: artifactId,
+        type: event.artifactType as "screenshot" | "preview" | "pr" | "branch",
+        url: "url" in event ? (event.url as string) : null,
+        metadata: event.metadata ? JSON.stringify(event.metadata) : null,
+        createdAt: now,
+      });
+
+      this.broadcast({
+        type: "artifact_created",
+        artifact: {
+          id: artifactId,
+          type: event.artifactType,
+          url: "url" in event ? (event.url as string) : "",
+          metadata: event.metadata,
+        },
+      });
     }
 
     // Broadcast to clients (all non-execution_complete events)
@@ -2460,6 +2558,58 @@ export class SessionDO extends DurableObject<Env> {
         metadata: this.parseArtifactMetadata(a),
         createdAt: a.created_at,
       })),
+    });
+  }
+
+  /**
+   * Handle artifact creation from sandbox (screenshots, previews).
+   * Creates the artifact record, broadcasts to all clients, and returns the artifact.
+   */
+  private async handleCreateArtifact(request: Request): Promise<Response> {
+    const body = (await request.json()) as {
+      type: string;
+      url: string | null;
+      metadata: Record<string, unknown>;
+    };
+
+    if (!body.type) {
+      return Response.json({ error: "type is required" }, { status: 400 });
+    }
+
+    const artifactId = generateId();
+    const now = Date.now();
+
+    this.repository.createArtifact({
+      id: artifactId,
+      type: body.type as "screenshot" | "preview" | "pr" | "branch",
+      url: body.url,
+      metadata: body.metadata ? JSON.stringify(body.metadata) : null,
+      createdAt: now,
+    });
+
+    this.log.info("Artifact created", {
+      artifact_id: artifactId,
+      type: body.type,
+      url: body.url,
+    });
+
+    // broadcast to all connected clients
+    this.broadcast({
+      type: "artifact_created",
+      artifact: {
+        id: artifactId,
+        type: body.type,
+        url: body.url || "",
+        metadata: body.metadata,
+      },
+    });
+
+    return Response.json({
+      id: artifactId,
+      type: body.type,
+      url: body.url,
+      metadata: body.metadata,
+      createdAt: now,
     });
   }
 

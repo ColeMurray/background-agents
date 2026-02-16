@@ -8,6 +8,7 @@ import { SidebarLayout, useSidebarContext } from "@/components/sidebar-layout";
 import { formatModelNameLower } from "@/lib/format";
 import { MODEL_OPTIONS, DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
+import { Button } from "@/components/ui/button";
 
 interface Repo {
   id: number;
@@ -56,11 +57,13 @@ export default function Home() {
     }
   }, []);
 
+  // use status as stable dep instead of session object (unstable reference)
+  const isAuthenticated = status === "authenticated";
   useEffect(() => {
-    if (session) {
+    if (isAuthenticated) {
       fetchRepos();
     }
-  }, [session, fetchRepos]);
+  }, [isAuthenticated, fetchRepos]);
 
   useEffect(() => {
     if (abortControllerRef.current) {
@@ -290,13 +293,15 @@ function HomeContent({
       <header className="flex items-center justify-between w-full sticky top-0 z-20 backdrop-blur-md h-20 px-6 lg:px-12 xl:px-20 bg-clay-100/90 flex-shrink-0">
         <div className="flex items-center gap-3">
           {!isOpen && (
-            <button
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={toggle}
-              className="flex items-center justify-center size-10 rounded-full transition-colors hover:bg-ash-100"
+              className="size-10 rounded-full"
               title="Open sidebar"
             >
               <SidebarToggleIcon />
-            </button>
+            </Button>
           )}
           <h1 className="text-2xl sm:text-3xl font-semibold text-ash-900 font-clash">
             New Session
@@ -345,10 +350,12 @@ function HomeContent({
                     {isCreatingSession && (
                       <span className="text-xs text-rebolt-500">Warming sandbox...</span>
                     )}
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="xs"
                       type="submit"
                       disabled={!prompt.trim() || creating || !selectedRepo}
-                      className="p-2 text-ash-400 hover:text-ash-900 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                      className="p-2 h-auto text-ash-400"
                       title="Send"
                     >
                       {creating ? (
@@ -368,7 +375,7 @@ function HomeContent({
                           />
                         </svg>
                       )}
-                    </button>
+                    </Button>
                   </div>
                 </div>
 
@@ -378,28 +385,32 @@ function HomeContent({
                   <div className="flex items-center gap-4">
                     {/* repo selector */}
                     <div className="relative" ref={repoDropdownRef}>
-                      <button
+                      <Button
+                        variant="ghost"
+                        size="xs"
                         type="button"
                         onClick={() => !creating && setRepoDropdownOpen(!repoDropdownOpen)}
                         disabled={creating || loadingRepos}
-                        className="flex items-center gap-1.5 text-sm text-ash-500 hover:text-ash-900 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        className="gap-1.5 h-auto px-1 text-ash-500"
                       >
                         <RepoIcon />
                         <span>{loadingRepos ? "Loading..." : displayRepoName}</span>
                         <ChevronIcon />
-                      </button>
+                      </Button>
 
                       {repoDropdownOpen && repos.length > 0 && (
                         <div className="absolute bottom-full left-0 mb-2 w-72 max-h-64 overflow-y-auto bg-white shadow-lg border border-ash-200 rounded-lg py-1 z-50">
                           {repos.map((repo) => (
-                            <button
+                            <Button
                               key={repo.id}
+                              variant="ghost"
+                              size="xs"
                               type="button"
                               onClick={() => {
                                 setSelectedRepo(repo.fullName);
                                 setRepoDropdownOpen(false);
                               }}
-                              className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-ash-100 transition-colors ${
+                              className={`w-full justify-between ${
                                 selectedRepo === repo.fullName ? "text-ash-900" : "text-ash-500"
                               }`}
                             >
@@ -413,7 +424,7 @@ function HomeContent({
                                 </span>
                               </div>
                               {selectedRepo === repo.fullName && <CheckIcon />}
-                            </button>
+                            </Button>
                           ))}
                         </div>
                       )}
@@ -421,15 +432,17 @@ function HomeContent({
 
                     {/* model selector */}
                     <div className="relative" ref={modelDropdownRef}>
-                      <button
+                      <Button
+                        variant="ghost"
+                        size="xs"
                         type="button"
                         onClick={() => !creating && setModelDropdownOpen(!modelDropdownOpen)}
                         disabled={creating}
-                        className="flex items-center gap-1 text-sm text-ash-500 hover:text-ash-900 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        className="gap-1 h-auto px-1 text-ash-500"
                       >
                         <ModelIcon />
                         <span>{formatModelNameLower(selectedModel)}</span>
-                      </button>
+                      </Button>
 
                       {modelDropdownOpen && (
                         <div className="absolute bottom-full left-0 mb-2 w-56 bg-white shadow-lg border border-ash-200 rounded-lg py-1 z-50">
@@ -443,14 +456,16 @@ function HomeContent({
                                 {group.category}
                               </div>
                               {group.models.map((model) => (
-                                <button
+                                <Button
                                   key={model.id}
+                                  variant="ghost"
+                                  size="xs"
                                   type="button"
                                   onClick={() => {
                                     setSelectedModel(model.id);
                                     setModelDropdownOpen(false);
                                   }}
-                                  className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-ash-100 transition-colors ${
+                                  className={`w-full justify-between ${
                                     selectedModel === model.id ? "text-ash-900" : "text-ash-500"
                                   }`}
                                 >
@@ -461,7 +476,7 @@ function HomeContent({
                                     </span>
                                   </div>
                                   {selectedModel === model.id && <CheckIcon />}
-                                </button>
+                                </Button>
                               ))}
                             </div>
                           ))}

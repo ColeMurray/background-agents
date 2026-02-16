@@ -15,4 +15,13 @@
     },
   ],
   "kv_namespaces": [{ "binding": "REPOS_CACHE", "id": "00000000000000000000000000000000" }],
+  "r2_buckets": [
+    {
+      "binding": "SCREENSHOTS_BUCKET",
+      "bucket_name": "open-inspect-screenshots-test",
+    },
+  ],
+  "ai": {
+    "binding": "AI",
+  },
 }

@@ -171,6 +171,54 @@ export function formatToolCall(event: SandboxEvent): FormattedToolCall {
       };
     }
 
+    case "screenshot": {
+      const url = (args?.url as string) || "localhost:3000";
+      const description = args?.description as string | undefined;
+      return {
+        toolName: "Screenshot",
+        summary: description ? truncate(description, 40) : truncate(url, 40),
+        icon: "globe",
+        getDetails: () => ({ args, output }),
+      };
+    }
+
+    case "browser": {
+      const action = args?.action as string | undefined;
+      const selector = args?.selector as string | undefined;
+      const browserUrl = args?.url as string | undefined;
+      const summary = action === "navigate"
+        ? truncate(browserUrl, 40) || "page"
+        : action
+          ? `${action}${selector ? ` ${truncate(selector, 30)}` : ""}`
+          : "";
+      return {
+        toolName: "Browser",
+        summary,
+        icon: "globe",
+        getDetails: () => ({ args, output }),
+      };
+    }
+
+    case "preview": {
+      const port = args?.port as number | undefined;
+      return {
+        toolName: "Preview",
+        summary: port ? `port ${port}` : "dev server",
+        icon: "globe",
+        getDetails: () => ({ args, output }),
+      };
+    }
+
+    case "create-pull-request": {
+      const title = args?.title as string | undefined;
+      return {
+        toolName: "Create PR",
+        summary: title ? truncate(title, 40) : "",
+        icon: null,
+        getDetails: () => ({ args, output }),
+      };
+    }
+
     default:
       return {
         toolName,

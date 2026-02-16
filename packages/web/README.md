@@ -53,8 +53,14 @@ The web client uses a **GitHub App** (not OAuth App) for user authentication. Wh
 GitHub App:
 
 1. Go to GitHub → Settings → Developer settings → GitHub Apps → New GitHub App
-2. Set the **Callback URL** to: `https://your-domain.com/api/auth/callback/github`
+2. Add **Callback URLs** for both production and local development:
+   - `https://your-domain.com/api/auth/callback/github`
+   - `http://localhost:3000/api/auth/callback/github`
 3. Under **"Where can this GitHub App be installed?"**, select **"Any account"**
+
+> **Local development**: You must add the `http://localhost:3000` callback URL to your GitHub App,
+> otherwise you'll get a "redirect_uri is not associated with this application" error when trying
+> to sign in locally. GitHub Apps support multiple callback URLs.
 
 > **Important**: If you select "Only on this account", only users from that account will be able to
 > authenticate. Other users will experience a redirect loop when trying to sign in.
@@ -70,7 +76,23 @@ Required permissions for the GitHub App:
 
 ### Environment Variables
 
-Create `.env.local`:
+The easiest way to get env vars locally is to pull them from Vercel. The Vercel project is linked
+at the **monorepo root** (not this package), so run from there:
+
+```bash
+# from the repo root (/wrench)
+npx vercel env pull packages/web/.env.local
+npx vercel env pull packages/chrome-extension/.env.local
+```
+
+This pulls all env vars into the right `.env.local` for each package. The chrome extension's
+vite config remaps `NEXT_PUBLIC_WS_URL` → `VITE_WS_URL` and `NEXTAUTH_URL` → `VITE_WEB_APP_URL`
+at build time, so no extra env vars are needed.
+
+> **Note**: You need to be authenticated with `npx vercel login` and have access to the Vercel team
+> first.
+
+Alternatively, create `.env.local` manually:
 
 ```bash
 # GitHub App (for user authentication)
@@ -88,6 +110,10 @@ ALLOWED_EMAIL_DOMAINS=example.com,corp.io  # Comma-separated email domains
 # Control Plane
 CONTROL_PLANE_URL=http://localhost:8787
 NEXT_PUBLIC_WS_URL=ws://localhost:8787
+
+# Control Plane Authentication (must match control plane's INTERNAL_CALLBACK_SECRET)
+# Generate with: openssl rand -base64 32
+INTERNAL_CALLBACK_SECRET=your_shared_secret
 ```
 
 > **Access Control**: If both `ALLOWED_USERS` and `ALLOWED_EMAIL_DOMAINS` are empty, any
@@ -97,16 +123,16 @@ NEXT_PUBLIC_WS_URL=ws://localhost:8787
 ### Development
 
 ```bash
-# Install dependencies
+# install dependencies (from repo root)
 npm install
 
-# Run development server
+# run development server
 npm run dev
 
-# Type check
+# type check
 npm run typecheck
 
-# Build for production
+# build for production
 npm run build
 ```
 
@@ -152,11 +178,13 @@ The `useSessionSocket` hook manages:
 
 ## Styling
 
-Uses Tailwind CSS with:
+Uses Tailwind CSS v3 with the BuiltRight design system:
 
-- Dark mode support via `prefers-color-scheme`
-- Custom color variables
-- Responsive design utilities
+- Named color palette (ash, clay, mint, honey, lava, rebolt, sky)
+- Plus Jakarta Sans (body) and Clash Grotesk (headings) fonts
+- shadcn/ui Button component with BuiltRight variants (`rebolt-primary`, `rebolt-outline`, etc.)
+- Dark sidebar (`bg-black`) with warm content area (`bg-clay-100`)
+- DashboardPageLayout pattern: sticky `h-20` header with `backdrop-blur-md`
 
 ## State Management
 

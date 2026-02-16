@@ -233,7 +233,7 @@ export class RepoClassifier {
       const prompt = await buildClassificationPrompt(this.env, message, context, traceId);
 
       const response = await this.client.messages.create({
-        model: this.env.CLASSIFICATION_MODEL || "claude-haiku-4-5",
+        model: this.env.CLASSIFICATION_MODEL || "claude-sonnet-4-5",
         max_tokens: 500,
         temperature: 0,
         tools: [CLASSIFY_REPO_TOOL],

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SecretsEditor } from "@/components/secrets-editor";
+import { Button } from "@/components/ui/button";
 
 const GLOBAL_SCOPE = "__global__";
 
@@ -72,26 +73,30 @@ export function SecretsSettings() {
       <div className="mb-4">
         <label className="block text-sm font-medium text-ash-900 mb-1.5">Repository</label>
         <div className="relative" ref={dropdownRef}>
-          <button
+          <Button
+            variant="rebolt-outline"
+            size="xs"
             type="button"
             onClick={() => setDropdownOpen(!dropdownOpen)}
             disabled={loadingRepos}
-            className="w-full max-w-sm flex items-center justify-between px-3 py-2 text-sm border border-ash-300 bg-white rounded-lg text-ash-900 hover:border-ash-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="w-full max-w-sm justify-between"
           >
             <span className="truncate">{displayRepoName}</span>
             <ChevronIcon />
-          </button>
+          </Button>
 
           {dropdownOpen && (
             <div className="absolute top-full left-0 mt-1 w-full max-w-sm max-h-64 overflow-y-auto bg-white shadow-lg border border-ash-200 rounded-lg py-1 z-50">
               {/* Global entry */}
-              <button
+              <Button
+                variant="ghost"
+                size="xs"
                 type="button"
                 onClick={() => {
                   setSelectedRepo(GLOBAL_SCOPE);
                   setDropdownOpen(false);
                 }}
-                className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-ash-100 transition-colors ${
+                className={`w-full justify-between ${
                   isGlobal ? "text-ash-900" : "text-ash-500"
                 }`}
               >
@@ -100,19 +105,21 @@ export function SecretsSettings() {
                   <span className="text-xs text-ash-400">Shared across all repositories</span>
                 </div>
                 {isGlobal && <CheckIcon />}
-              </button>
+              </Button>
 
               {repos.length > 0 && <div className="border-t border-ash-200 my-1" />}
 
               {repos.map((repo) => (
-                <button
+                <Button
                   key={repo.id}
+                  variant="ghost"
+                  size="xs"
                   type="button"
                   onClick={() => {
                     setSelectedRepo(repo.fullName);
                     setDropdownOpen(false);
                   }}
-                  className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-ash-100 transition-colors ${
+                  className={`w-full justify-between ${
                     selectedRepo === repo.fullName ? "text-ash-900" : "text-ash-500"
                   }`}
                 >
@@ -124,7 +131,7 @@ export function SecretsSettings() {
                     </span>
                   </div>
                   {selectedRepo === repo.fullName && <CheckIcon />}
-                </button>
+                </Button>
               ))}
             </div>
           )}

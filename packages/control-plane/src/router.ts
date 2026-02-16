@@ -124,7 +124,10 @@ function getSessionStub(env: Env, match: RegExpMatchArray): DurableObjectStub | 
 /**
  * Routes that do not require authentication.
  */
-const PUBLIC_ROUTES: RegExp[] = [/^\/health$/];
+const PUBLIC_ROUTES: RegExp[] = [
+  /^\/health$/,
+  /^\/screenshots\//, // r2 screenshot serving (public, keyed by path)
+];
 
 /**
  * Routes that accept sandbox authentication.
@@ -133,6 +136,7 @@ const PUBLIC_ROUTES: RegExp[] = [/^\/health$/];
  */
 const SANDBOX_AUTH_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/pr$/, // PR creation from sandbox
+  /^\/sessions\/[^/]+\/artifact$/, // Artifact creation from sandbox (screenshots, previews)
   /^\/sessions\/[^/]+\/openai-token-refresh$/, // OpenAI token refresh from sandbox
 ];
 
@@ -342,6 +346,13 @@ const routes: Route[] = [
     handler: async () => json({ status: "healthy", service: "open-inspect-control-plane" }),
   },
 
+  // Screenshot serving (R2)
+  {
+    method: "GET",
+    pattern: /^\/screenshots\/(?<key>.+)$/,
+    handler: handleServeScreenshot,
+  },
+
   // Session management
   {
     method: "GET",
@@ -402,6 +413,11 @@ const routes: Route[] = [
     method: "POST",
     pattern: parsePattern("/sessions/:id/pr"),
     handler: handleCreatePR,
+  },
+  {
+    method: "POST",
+    pattern: parsePattern("/sessions/:id/artifact"),
+    handler: handleCreateArtifact,
   },
   {
     method: "POST",
@@ -993,6 +1009,131 @@ async function handleCreatePR(
   );
 
   return response;
+}
+
+/**
+ * Serve a screenshot image from R2.
+ * Route: GET /screenshots/:key (where key can contain slashes, e.g. sessions/abc/123.png)
+ */
+async function handleServeScreenshot(
+  _request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  _ctx: RequestContext
+): Promise<Response> {
+  const key = match.groups?.key;
+  if (!key) return error("Screenshot key required", 400);
+
+  if (!env.SCREENSHOTS_BUCKET) {
+    return error("Screenshot storage not configured", 503);
+  }
+
+  const object = await env.SCREENSHOTS_BUCKET.get(key);
+  if (!object) {
+    return new Response("Not found", { status: 404 });
+  }
+
+  const headers = new Headers();
+  headers.set("Content-Type", object.httpMetadata?.contentType || "image/png");
+  headers.set("Cache-Control", "public, max-age=31536000, immutable");
+  headers.set("ETag", object.httpEtag);
+
+  return new Response(object.body, { status: 200, headers });
+}
+
+/**
+ * Handle artifact creation from sandbox (screenshots, previews).
+ *
+ * Supports two content types:
+ * - multipart/form-data: for file uploads (screenshots)
+ *   Fields: type, file (Blob), metadata (JSON string)
+ * - application/json: for URL-based artifacts (previews)
+ *   Body: { type, url, metadata }
+ */
+async function handleCreateArtifact(
+  request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const sessionId = match.groups?.id;
+  if (!sessionId) return error("Session ID required");
+
+  const contentType = request.headers.get("content-type") || "";
+
+  let artifactType: string;
+  let artifactUrl: string | null = null;
+  let metadata: Record<string, unknown> = {};
+
+  if (contentType.includes("multipart/form-data")) {
+    // file upload (screenshots)
+    const formData = await request.formData();
+    artifactType = formData.get("type")?.toString() || "screenshot";
+    const file = formData.get("file");
+    const metadataStr = formData.get("metadata")?.toString();
+
+    if (metadataStr) {
+      try {
+        metadata = JSON.parse(metadataStr) as Record<string, unknown>;
+      } catch {
+        return error("Invalid metadata JSON");
+      }
+    }
+
+    if (file && typeof file === "object" && "arrayBuffer" in file) {
+      if (env.SCREENSHOTS_BUCKET) {
+        const fileBuffer = await (file as File).arrayBuffer();
+        const key = `sessions/${sessionId}/${Date.now()}-${crypto.randomUUID()}.png`;
+
+        await env.SCREENSHOTS_BUCKET.put(key, fileBuffer, {
+          httpMetadata: { contentType: "image/png" },
+          customMetadata: { sessionId, type: artifactType },
+        });
+
+        const publicBase = env.SCREENSHOTS_PUBLIC_URL || env.WORKER_URL || "";
+        artifactUrl = publicBase ? `${publicBase}/${key}` : key;
+      } else {
+        return error("File storage (R2) not configured", 503);
+      }
+    } else {
+      return error("File is required for multipart uploads");
+    }
+  } else {
+    // json body (previews, non-file artifacts)
+    const body = (await request.json()) as {
+      type: string;
+      url?: string;
+      metadata?: Record<string, unknown>;
+    };
+
+    artifactType = body.type;
+    artifactUrl = body.url || null;
+    metadata = body.metadata || {};
+
+    if (!artifactType) {
+      return error("type is required");
+    }
+  }
+
+  // forward to durable object to create the artifact record and broadcast
+  const doId = env.SESSION.idFromName(sessionId);
+  const stub = env.SESSION.get(doId);
+
+  return stub.fetch(
+    internalRequest(
+      "http://internal/internal/create-artifact",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: artifactType,
+          url: artifactUrl,
+          metadata,
+        }),
+      },
+      ctx
+    )
+  );
 }
 
 async function handleOpenAITokenRefresh(

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { Artifact } from "@/types/session";
+import { Button } from "@/components/ui/button";
 
 interface ActionBarProps {
   sessionId: string;
@@ -45,82 +46,87 @@ export function ActionBar({
     setIsMenuOpen(false);
   };
 
-  // shared button style for bordered pill buttons
-  const pillButtonClass =
-    "flex items-center gap-1.5 px-3 py-1.5 text-sm text-ash-700 border border-ash-300 rounded-lg hover:bg-ash-100 transition-colors";
-
   return (
     <div className="flex items-center gap-2">
       {/* View Preview */}
       {previewArtifact?.url && (
-        <a
-          href={previewArtifact.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={pillButtonClass}
-        >
-          <GlobeIcon className="w-4 h-4" />
-          <span>View preview</span>
-          {previewArtifact.metadata?.previewStatus === "outdated" && (
-            <span className="text-xs text-honey-600">(outdated)</span>
-          )}
-        </a>
+        <Button asChild variant="rebolt-outline" size="xs" className="gap-1.5">
+          <a
+            href={previewArtifact.url}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <GlobeIcon className="w-4 h-4" />
+            <span>View preview</span>
+            {previewArtifact.metadata?.previewStatus === "outdated" && (
+              <span className="text-xs text-honey-600">(outdated)</span>
+            )}
+          </a>
+        </Button>
       )}
 
       {/* View PR */}
       {prArtifact?.url && (
-        <a
-          href={prArtifact.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={pillButtonClass}
-        >
-          <GitPrIcon className="w-4 h-4" />
-          <span>View PR</span>
-        </a>
+        <Button asChild variant="rebolt-outline" size="xs" className="gap-1.5">
+          <a
+            href={prArtifact.url}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <GitPrIcon className="w-4 h-4" />
+            <span>View PR</span>
+          </a>
+        </Button>
       )}
 
       {/* Archive/Unarchive */}
-      <button
+      <Button
+        variant="rebolt-outline"
+        size="xs"
         onClick={handleArchiveToggle}
         disabled={isArchiving}
-        className={`${pillButtonClass} disabled:opacity-50`}
+        className="gap-1.5"
       >
         <ArchiveIcon className="w-4 h-4" />
         <span>{isArchived ? "Unarchive" : "Archive"}</span>
-      </button>
+      </Button>
 
       {/* More menu */}
       <div className="relative">
-        <button
+        <Button
+          variant="rebolt-outline"
+          size="xs"
           onClick={() => setIsMenuOpen(!isMenuOpen)}
-          className="flex items-center justify-center w-8 h-8 text-ash-500 hover:text-ash-900 border border-ash-300 rounded-lg hover:bg-ash-100 transition-colors"
+          className="w-8 h-8 p-0"
         >
           <MoreIcon className="w-4 h-4" />
-        </button>
+        </Button>
 
         {isMenuOpen && (
           <>
             <div className="fixed inset-0 z-10" onClick={() => setIsMenuOpen(false)} />
             <div className="absolute bottom-full right-0 mb-2 w-48 bg-white shadow-lg border border-ash-200 rounded-lg py-1 z-20">
-              <button
+              <Button
+                variant="ghost"
+                size="xs"
                 onClick={handleCopyLink}
-                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-ash-700 hover:bg-ash-100"
+                className="w-full justify-start gap-2"
               >
                 <LinkIcon className="w-4 h-4" />
                 Copy link
-              </button>
+              </Button>
               {prArtifact?.url && (
-                <a
-                  href={prArtifact.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-ash-700 hover:bg-ash-100"
-                  onClick={() => setIsMenuOpen(false)}
-                >
-                  <GitHubIcon className="w-4 h-4" />
-                  View in GitHub
-                </a>
+                <Button asChild variant="ghost" size="xs" className="w-full justify-start gap-2">
+                  <a
+                    href={prArtifact.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => setIsMenuOpen(false)}
+                  >
+                    <GitHubIcon className="w-4 h-4" />
+                    View in GitHub
+                  </a>
+                </Button>
               )}
             </div>
           </>

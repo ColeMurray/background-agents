@@ -246,6 +246,14 @@ export class SessionRepository {
     );
   }
 
+  updateSessionTitle(title: string): void {
+    this.sql.exec(
+      `UPDATE session SET title = ?, updated_at = ? WHERE id = (SELECT id FROM session LIMIT 1)`,
+      title,
+      Date.now()
+    );
+  }
+
   updateSessionStatus(sessionId: string, status: SessionStatus, updatedAt: number): void {
     this.sql.exec(
       `UPDATE session SET status = ?, updated_at = ? WHERE id = ?`,

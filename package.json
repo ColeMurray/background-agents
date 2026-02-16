@@ -13,7 +13,13 @@
     "format:check": "prettier --check .",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
-    "prepare": "node -e \"if (process.env.CI) process.exit(0)\" && husky"
+    "prepare": "node -e \"if (process.env.CI) process.exit(0)\" && husky",
+    "deploy:shared": "npm run build -w @open-inspect/shared",
+    "deploy:dev": "npm run deploy:shared && cd terraform/environments/dev && terraform apply -auto-approve",
+    "deploy:prod": "npm run deploy:shared && cd terraform/environments/production && terraform apply -auto-approve",
+    "deploy:dev:plan": "npm run deploy:shared && cd terraform/environments/dev && terraform plan",
+    "deploy:prod:plan": "npm run deploy:shared && cd terraform/environments/production && terraform plan",
+    "deploy:dev:init": "cd terraform/environments/dev && terraform init -backend-config=backend.tfvars"
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",

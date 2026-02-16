@@ -618,7 +618,7 @@ class AgentBridge:
 
         Args:
             content: The prompt text content
-            model: Optional model override (e.g., "claude-haiku-4-5" or "anthropic/claude-haiku-4-5")
+            model: Optional model override (e.g., "claude-sonnet-4-5" or "anthropic/claude-opus-4-6")
             opencode_message_id: OpenCode-compatible ascending message ID (e.g., "msg_...").
                                  When provided, OpenCode uses this as the user message ID,
                                  and assistant responses will have parentID pointing to it.

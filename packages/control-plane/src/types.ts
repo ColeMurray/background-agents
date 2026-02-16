@@ -10,6 +10,9 @@ export interface Env {
   // KV Namespaces
   REPOS_CACHE: KVNamespace; // Short-lived cache for /repos listing
 
+  // R2 buckets
+  SCREENSHOTS_BUCKET?: R2Bucket; // Screenshot and artifact storage
+
   // Service bindings
   SLACK_BOT?: Fetcher; // Optional - only if slack-bot is deployed
 
@@ -39,8 +42,14 @@ export interface Env {
   CF_ACCOUNT_ID?: string; // Cloudflare account ID
   MODAL_WORKSPACE?: string; // Modal workspace name (used in Modal endpoint URLs)
 
+  // Screenshots / artifacts
+  SCREENSHOTS_PUBLIC_URL?: string; // Public URL prefix for R2 bucket (e.g., https://screenshots.example.com)
+
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)
+
+  // Workers AI (for title generation)
+  AI?: Ai;
 
   // Logging
   LOG_LEVEL?: string; // "debug" | "info" | "warn" | "error" (default: "info")
@@ -124,7 +133,13 @@ export type ServerMessage =
   | { type: "error"; code: string; message: string }
   | {
       type: "artifact_created";
-      artifact: { id: string; type: string; url: string; prNumber?: number };
+      artifact: {
+        id: string;
+        type: string;
+        url: string;
+        prNumber?: number;
+        metadata?: Record<string, unknown>;
+      };
     }
   | { type: "snapshot_saved"; imageId: string; reason: string }
   | { type: "sandbox_restored"; message: string }
@@ -141,7 +156,8 @@ export type ServerMessage =
       items: SandboxEvent[];
       hasMore: boolean;
       cursor: { timestamp: number; id: string } | null;
-    };
+    }
+  | { type: "session_title_updated"; title: string };
 
 // Sandbox events (from Modal)
 export type SandboxEvent =
@@ -275,7 +291,7 @@ export interface CreateSessionRequest {
   repoOwner: string;
   repoName: string;
   title?: string;
-  model?: string; // LLM model to use (e.g., "anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-5")
+  model?: string; // LLM model to use (e.g., "anthropic/claude-sonnet-4-5", "anthropic/claude-opus-4-6")
   reasoningEffort?: string; // Reasoning effort level (e.g., "high", "max")
 }
 

@@ -154,7 +154,7 @@ Choose the AI model that fits your task — Anthropic Claude or OpenAI Codex:
 
 | Provider  | Models                                |
 | --------- | ------------------------------------- |
-| Anthropic | Claude Haiku, Sonnet, Opus            |
+| Anthropic | Sonnet, Opus                          |
 | OpenAI    | GPT 5.2, GPT 5.2 Codex, GPT 5.3 Codex |
 
 OpenAI models work with your existing ChatGPT subscription — no separate API key needed. See

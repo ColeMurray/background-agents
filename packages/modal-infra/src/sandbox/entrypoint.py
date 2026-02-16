@@ -267,8 +267,11 @@ class SandboxSupervisor:
         # Model format is "provider/model", e.g. "anthropic/claude-sonnet-4-5"
         provider = self.session_config.get("provider", "anthropic")
         model = self.session_config.get("model", "claude-sonnet-4-5")
-        opencode_config = {
+        opencode_config: dict[str, object] = {
             "model": f"{provider}/{model}",
+            # use sonnet for lightweight tasks (titles, summaries) instead of haiku
+            "small_model": f"{provider}/claude-sonnet-4-5",
+            "disabled_providers": ["opencode"],
             "permission": {
                 "*": {
                     "*": "allow",
@@ -290,6 +293,24 @@ class SandboxSupervisor:
             # Create .opencode/tool directory
             tool_dest.mkdir(parents=True, exist_ok=True)
             shutil.copy(tool_source, tool_dest / "create-pull-request.js")
+
+            # Deploy browser tools (screenshot, browser interaction, preview)
+            browser_tools = {
+                "screenshot-tool.js": Path("/app/sandbox/screenshot-tool.js"),
+                "browser-tool.js": Path("/app/sandbox/browser-tool.js"),
+                "preview-tool.js": Path("/app/sandbox/preview-tool.js"),
+            }
+            for dest_name, src_path in browser_tools.items():
+                if src_path.exists():
+                    shutil.copy(src_path, tool_dest / dest_name)
+                    self.log.debug("opencode.tool_deployed", tool=dest_name)
+
+            # deploy instructions to .opencode/ and reference via config
+            instructions_source = Path("/app/sandbox/instructions.md")
+            if instructions_source.exists():
+                shutil.copy(instructions_source, opencode_dir / "instructions.md")
+                opencode_config["instructions"] = [".opencode/instructions.md"]
+                self.log.info("opencode.instructions_deployed")
 
             # Create node_modules symlink to global modules so OpenCode doesn't try to install
             # and so imports resolve correctly via NODE_PATH
@@ -314,9 +335,18 @@ class SandboxSupervisor:
             shutil.copy(plugin_source, plugin_dir / "codex-auth-plugin.ts")
             self.log.info("openai_oauth.plugin_deployed")
 
+        # write config to disk so opencode loads instructions from the file
+        # system. the OPENCODE_CONFIG_CONTENT env var doesn't properly resolve
+        # relative paths for the `instructions` array since there's no config
+        # file to resolve against.
+        config_file = opencode_dir / "opencode.json"
+        config_file.write_text(json.dumps(opencode_config, indent=2))
+        self.log.info("opencode.config_written", path=str(config_file))
+
+        self.log.info("opencode.config", config=opencode_config)
+
         env = {
             **os.environ,
-            "OPENCODE_CONFIG_CONTENT": json.dumps(opencode_config),
             # Disable OpenCode's question tool in headless mode. The tool blocks
             # on a Promise waiting for user input via the HTTP API, but the bridge
             # has no channel to relay questions to the web client and back. Without

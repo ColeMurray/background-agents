@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { SandboxEvent } from "@/lib/tool-formatters";
 import { formatToolGroup } from "@/lib/tool-formatters";
 import { ToolCallItem } from "./tool-call-item";
+import { Button } from "@/components/ui/button";
 
 interface ToolCallGroupProps {
   events: SandboxEvent[];
@@ -114,16 +115,18 @@ export function ToolCallGroup({ events, groupId }: ToolCallGroupProps) {
 
   return (
     <div className="py-1">
-      <button
+      <Button
+        variant="ghost"
+        size="xs"
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center gap-2 text-sm text-left hover:bg-ash-100 rounded-lg px-2 py-1 -mx-2 transition-colors"
+        className="w-full justify-start gap-2 px-2 py-1 -mx-2 h-auto"
       >
         <ChevronIcon rotated={isExpanded} />
         <ToolIcon toolName={formatted.toolName} />
         <span className="font-medium text-ash-900">{formatted.toolName}</span>
         <span className="text-ash-500">{formatted.summary}</span>
         <span className="text-xs text-ash-400 ml-auto flex-shrink-0">{time}</span>
-      </button>
+      </Button>
 
       {isExpanded && (
         <div className="ml-4 mt-1 pl-2 border-l-2 border-ash-200">

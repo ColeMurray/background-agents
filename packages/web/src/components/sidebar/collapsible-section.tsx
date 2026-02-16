@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
 
 interface CollapsibleSectionProps {
   title: string;
@@ -17,9 +18,11 @@ export function CollapsibleSection({
 
   return (
     <div className="border-b border-ash-200 last:border-b-0">
-      <button
+      <Button
+        variant="ghost"
+        size="xs"
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center justify-between w-full px-4 py-3 text-sm font-medium text-ash-900 hover:bg-ash-100 transition-colors"
+        className="w-full justify-between px-4 py-3 text-ash-900"
       >
         <span>{title}</span>
         <svg
@@ -30,7 +33,7 @@ export function CollapsibleSection({
         >
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
         </svg>
-      </button>
+      </Button>
       {isOpen && <div className="px-4 pb-4">{children}</div>}
     </div>
   );
