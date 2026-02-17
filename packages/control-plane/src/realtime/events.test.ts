@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getEventCategory, shouldPersistEvent, TokenAggregator } from "./events";
+import { getEventCategory, TokenAggregator } from "./events";
 
 describe("event utilities", () => {
   describe("getEventCategory", () => {
     it("categorizes execution events", () => {
       expect(getEventCategory("token")).toBe("execution");
+      expect(getEventCategory("step_start")).toBe("execution");
+      expect(getEventCategory("step_finish")).toBe("execution");
       expect(getEventCategory("tool_call")).toBe("execution");
       expect(getEventCategory("tool_result")).toBe("execution");
       expect(getEventCategory("execution_complete")).toBe("execution");
@@ -23,23 +25,6 @@ describe("event utilities", () => {
       expect(getEventCategory("error")).toBe("system");
       expect(getEventCategory("unknown_event")).toBe("system");
       expect(getEventCategory("")).toBe("system");
-    });
-  });
-
-  describe("shouldPersistEvent", () => {
-    it("returns false for heartbeat events", () => {
-      expect(shouldPersistEvent("heartbeat")).toBe(false);
-    });
-
-    it("returns true for all other events", () => {
-      expect(shouldPersistEvent("token")).toBe(true);
-      expect(shouldPersistEvent("tool_call")).toBe(true);
-      expect(shouldPersistEvent("tool_result")).toBe(true);
-      expect(shouldPersistEvent("execution_complete")).toBe(true);
-      expect(shouldPersistEvent("git_sync")).toBe(true);
-      expect(shouldPersistEvent("artifact")).toBe(true);
-      expect(shouldPersistEvent("error")).toBe(true);
-      expect(shouldPersistEvent("unknown")).toBe(true);
     });
   });
 });
