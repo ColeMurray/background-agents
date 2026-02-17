@@ -586,12 +586,13 @@ export class SessionRepository {
     const id = `${type}:${messageId}`;
     this.sql.exec(
       `INSERT INTO events (id, type, data, message_id, created_at)
-       VALUES (?, '${type}', ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          data = excluded.data,
          message_id = excluded.message_id,
          created_at = excluded.created_at`,
       id,
+      type,
       JSON.stringify(event),
       messageId,
       createdAt
