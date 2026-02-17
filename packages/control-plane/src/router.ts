@@ -1972,16 +1972,17 @@ async function handleSetModelPreferences(
   const store = new ModelPreferencesStore(env.DB);
 
   try {
-    await store.setEnabledModels(body.enabledModels);
+    const deduplicated = [...new Set(body.enabledModels)];
+    await store.setEnabledModels(deduplicated);
 
     logger.info("model_preferences.updated", {
       event: "model_preferences.updated",
-      enabled_count: body.enabledModels.length,
+      enabled_count: deduplicated.length,
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
 
-    return json({ status: "updated", enabledModels: body.enabledModels });
+    return json({ status: "updated", enabledModels: deduplicated });
   } catch (e) {
     if (e instanceof ModelPreferencesValidationError) {
       return error(e.message, 400);
