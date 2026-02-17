@@ -124,6 +124,7 @@ export interface SandboxEvent {
   tool?: string;
   args?: Record<string, unknown>;
   callId?: string;
+  output?: string;
   result?: string;
   error?: string;
   status?: string;

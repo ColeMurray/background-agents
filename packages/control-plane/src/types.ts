@@ -158,9 +158,28 @@ export type SandboxEvent =
       tool: string;
       args: Record<string, unknown>;
       callId: string;
+      status?: string;
+      output?: string;
       messageId: string;
       sandboxId: string;
       timestamp: number;
+    }
+  | {
+      type: "step_start";
+      messageId: string;
+      sandboxId: string;
+      timestamp: number;
+      isSubtask?: boolean;
+    }
+  | {
+      type: "step_finish";
+      cost?: number;
+      tokens?: number;
+      reason?: string;
+      messageId: string;
+      sandboxId: string;
+      timestamp: number;
+      isSubtask?: boolean;
     }
   | {
       type: "tool_result";
