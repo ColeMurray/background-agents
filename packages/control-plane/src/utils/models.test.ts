@@ -23,12 +23,14 @@ describe("model utilities", () => {
       expect(isValidModel("anthropic/claude-haiku-4-5")).toBe(true);
       expect(isValidModel("anthropic/claude-sonnet-4-5")).toBe(true);
       expect(isValidModel("anthropic/claude-opus-4-5")).toBe(true);
+      expect(isValidModel("anthropic/claude-opus-4-6")).toBe(true);
     });
 
     it("accepts bare Claude model names via normalization", () => {
       expect(isValidModel("claude-haiku-4-5")).toBe(true);
       expect(isValidModel("claude-sonnet-4-5")).toBe(true);
       expect(isValidModel("claude-opus-4-5")).toBe(true);
+      expect(isValidModel("claude-opus-4-6")).toBe(true);
     });
 
     it("returns true for OpenAI models", () => {
@@ -117,6 +119,11 @@ describe("model utilities", () => {
         provider: "anthropic",
         model: "claude-opus-4-5",
       });
+
+      expect(extractProviderAndModel("anthropic/claude-opus-4-6")).toEqual({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
     });
 
     it("normalizes bare Claude models before extraction", () => {
@@ -133,6 +140,11 @@ describe("model utilities", () => {
       expect(extractProviderAndModel("claude-opus-4-5")).toEqual({
         provider: "anthropic",
         model: "claude-opus-4-5",
+      });
+
+      expect(extractProviderAndModel("claude-opus-4-6")).toEqual({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
       });
     });
 
@@ -166,12 +178,14 @@ describe("model utilities", () => {
         "anthropic/claude-sonnet-4-5"
       );
       expect(getValidModelOrDefault("anthropic/claude-opus-4-5")).toBe("anthropic/claude-opus-4-5");
+      expect(getValidModelOrDefault("anthropic/claude-opus-4-6")).toBe("anthropic/claude-opus-4-6");
     });
 
     it("normalizes bare Claude model names to prefixed format", () => {
       expect(getValidModelOrDefault("claude-haiku-4-5")).toBe("anthropic/claude-haiku-4-5");
       expect(getValidModelOrDefault("claude-sonnet-4-5")).toBe("anthropic/claude-sonnet-4-5");
       expect(getValidModelOrDefault("claude-opus-4-5")).toBe("anthropic/claude-opus-4-5");
+      expect(getValidModelOrDefault("claude-opus-4-6")).toBe("anthropic/claude-opus-4-6");
     });
 
     it("returns default for invalid model", () => {
@@ -197,12 +211,14 @@ describe("model utilities", () => {
       expect(supportsReasoning("anthropic/claude-haiku-4-5")).toBe(true);
       expect(supportsReasoning("anthropic/claude-sonnet-4-5")).toBe(true);
       expect(supportsReasoning("anthropic/claude-opus-4-5")).toBe(true);
+      expect(supportsReasoning("anthropic/claude-opus-4-6")).toBe(true);
     });
 
     it("supports bare Claude model names via normalization", () => {
       expect(supportsReasoning("claude-haiku-4-5")).toBe(true);
       expect(supportsReasoning("claude-sonnet-4-5")).toBe(true);
       expect(supportsReasoning("claude-opus-4-5")).toBe(true);
+      expect(supportsReasoning("claude-opus-4-6")).toBe(true);
     });
 
     it("returns true for OpenAI models with reasoning config", () => {
@@ -219,16 +235,18 @@ describe("model utilities", () => {
   });
 
   describe("getDefaultReasoningEffort", () => {
-    it("returns max for all Claude models", () => {
+    it("returns expected defaults for Claude models", () => {
       expect(getDefaultReasoningEffort("anthropic/claude-haiku-4-5")).toBe("max");
       expect(getDefaultReasoningEffort("anthropic/claude-sonnet-4-5")).toBe("max");
       expect(getDefaultReasoningEffort("anthropic/claude-opus-4-5")).toBe("max");
+      expect(getDefaultReasoningEffort("anthropic/claude-opus-4-6")).toBe("high");
     });
 
-    it("returns max for bare Claude model names via normalization", () => {
+    it("returns expected defaults for bare Claude model names via normalization", () => {
       expect(getDefaultReasoningEffort("claude-haiku-4-5")).toBe("max");
       expect(getDefaultReasoningEffort("claude-sonnet-4-5")).toBe("max");
       expect(getDefaultReasoningEffort("claude-opus-4-5")).toBe("max");
+      expect(getDefaultReasoningEffort("claude-opus-4-6")).toBe("high");
     });
 
     it("returns high for OpenAI codex models", () => {
@@ -252,6 +270,12 @@ describe("model utilities", () => {
       expect(config).toEqual({
         efforts: ["high", "max"],
         default: "max",
+      });
+
+      const opus46Config = getReasoningConfig("anthropic/claude-opus-4-6");
+      expect(opus46Config).toEqual({
+        efforts: ["low", "medium", "high", "max"],
+        default: "high",
       });
     });
 
@@ -297,6 +321,14 @@ describe("model utilities", () => {
       expect(isValidReasoningEffort("anthropic/claude-sonnet-4-5", "none")).toBe(false);
     });
 
+    it("supports adaptive effort levels for Opus 4.6", () => {
+      expect(isValidReasoningEffort("anthropic/claude-opus-4-6", "low")).toBe(true);
+      expect(isValidReasoningEffort("anthropic/claude-opus-4-6", "medium")).toBe(true);
+      expect(isValidReasoningEffort("anthropic/claude-opus-4-6", "high")).toBe(true);
+      expect(isValidReasoningEffort("anthropic/claude-opus-4-6", "max")).toBe(true);
+      expect(isValidReasoningEffort("anthropic/claude-opus-4-6", "xhigh")).toBe(false);
+    });
+
     it("accepts bare Claude model names via normalization", () => {
       expect(isValidReasoningEffort("claude-sonnet-4-5", "high")).toBe(true);
       expect(isValidReasoningEffort("claude-sonnet-4-5", "max")).toBe(true);
@@ -336,12 +368,14 @@ describe("model utilities", () => {
       expect(normalizeModelId("claude-haiku-4-5")).toBe("anthropic/claude-haiku-4-5");
       expect(normalizeModelId("claude-sonnet-4-5")).toBe("anthropic/claude-sonnet-4-5");
       expect(normalizeModelId("claude-opus-4-5")).toBe("anthropic/claude-opus-4-5");
+      expect(normalizeModelId("claude-opus-4-6")).toBe("anthropic/claude-opus-4-6");
     });
 
     it("passes through already-prefixed models unchanged", () => {
       expect(normalizeModelId("anthropic/claude-haiku-4-5")).toBe("anthropic/claude-haiku-4-5");
       expect(normalizeModelId("anthropic/claude-sonnet-4-5")).toBe("anthropic/claude-sonnet-4-5");
       expect(normalizeModelId("anthropic/claude-opus-4-5")).toBe("anthropic/claude-opus-4-5");
+      expect(normalizeModelId("anthropic/claude-opus-4-6")).toBe("anthropic/claude-opus-4-6");
     });
 
     it("passes through OpenAI models unchanged", () => {

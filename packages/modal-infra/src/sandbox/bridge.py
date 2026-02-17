@@ -606,6 +606,8 @@ class AgentBridge:
         "high": 16_000,
         "max": 31_999,
     }
+    ANTHROPIC_ADAPTIVE_THINKING_MODELS: ClassVar[set[str]] = {"claude-opus-4-6"}
+    ANTHROPIC_ADAPTIVE_EFFORTS: ClassVar[set[str]] = {"low", "medium", "high", "max"}
 
     def _build_prompt_request_body(
         self,
@@ -641,11 +643,19 @@ class AgentBridge:
 
             if reasoning_effort:
                 if provider_id == "anthropic":
-                    budget = self.ANTHROPIC_THINKING_BUDGETS.get(reasoning_effort)
-                    if budget is not None:
-                        model_spec["options"] = {
-                            "thinking": {"type": "enabled", "budgetTokens": budget}
+                    if model_id in self.ANTHROPIC_ADAPTIVE_THINKING_MODELS:
+                        anthropic_options: dict[str, Any] = {
+                            "thinking": {"type": "adaptive"},
                         }
+                        if reasoning_effort in self.ANTHROPIC_ADAPTIVE_EFFORTS:
+                            anthropic_options["outputConfig"] = {"effort": reasoning_effort}
+                        model_spec["options"] = anthropic_options
+                    else:
+                        budget = self.ANTHROPIC_THINKING_BUDGETS.get(reasoning_effort)
+                        if budget is not None:
+                            model_spec["options"] = {
+                                "thinking": {"type": "enabled", "budgetTokens": budget}
+                            }
                 elif provider_id == "openai":
                     model_spec["options"] = {
                         "reasoningEffort": reasoning_effort,
