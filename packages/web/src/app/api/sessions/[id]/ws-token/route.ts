@@ -35,6 +35,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const jwt = await getToken({ req: request });
     const jwtMs = Date.now() - jwtStart;
 
+    // Warn if GitHub token has expired (control plane may still proceed with app token)
+    if (jwt?.accessTokenExpiresAt && Date.now() > (jwt.accessTokenExpiresAt as number)) {
+      console.warn(`[ws-token] GitHub access token expired for session=${sessionId}`);
+    }
+
     const fetchStart = Date.now();
     const response = await controlPlaneFetch(`/sessions/${encodeURIComponent(sessionId)}/ws-token`, {
       method: "POST",
