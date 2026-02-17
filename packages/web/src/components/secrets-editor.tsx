@@ -94,7 +94,7 @@ export function SecretsEditor({
   const ready = isGlobal || Boolean(owner && name);
   const repoLabel = owner && name ? `${owner}/${name}` : "";
 
-  const apiBase = isGlobal ? "/api/secrets" : `/api/repos/${owner}/${name}/secrets`;
+  const apiBase = isGlobal ? "/api/secrets" : `/api/repos/${encodeURIComponent(owner!)}/${encodeURIComponent(name!)}/secrets`;
 
   const loadSecrets = useCallback(async () => {
     if (!ready) {
@@ -182,7 +182,7 @@ export function SecretsEditor({
     setSuccess("");
 
     try {
-      const response = await fetch(`${apiBase}/${normalizedKey}`, {
+      const response = await fetch(`${apiBase}/${encodeURIComponent(normalizedKey)}`, {
         method: "DELETE",
       });
       const data = await response.json();

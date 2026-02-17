@@ -36,7 +36,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const jwtMs = Date.now() - jwtStart;
 
     const fetchStart = Date.now();
-    const response = await controlPlaneFetch(`/sessions/${sessionId}/ws-token`, {
+    const response = await controlPlaneFetch(`/sessions/${encodeURIComponent(sessionId)}/ws-token`, {
       method: "POST",
       body: JSON.stringify({
         userId,

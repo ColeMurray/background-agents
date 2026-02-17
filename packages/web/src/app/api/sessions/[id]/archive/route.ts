@@ -15,7 +15,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const userId = session.user.id || session.user.email || "anonymous";
 
   try {
-    const response = await controlPlaneFetch(`/sessions/${id}/archive`, {
+    const response = await controlPlaneFetch(`/sessions/${encodeURIComponent(id)}/archive`, {
       method: "POST",
       body: JSON.stringify({ userId }),
     });
