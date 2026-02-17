@@ -37,6 +37,7 @@ describe("model utilities", () => {
       expect(isValidModel("openai/gpt-5.2")).toBe(true);
       expect(isValidModel("openai/gpt-5.2-codex")).toBe(true);
       expect(isValidModel("openai/gpt-5.3-codex")).toBe(true);
+      expect(isValidModel("openai/gpt-5.3-codex-spark")).toBe(true);
     });
 
     it("returns false for invalid models", () => {
@@ -101,6 +102,11 @@ describe("model utilities", () => {
       expect(extractProviderAndModel("openai/gpt-5.3-codex")).toEqual({
         provider: "openai",
         model: "gpt-5.3-codex",
+      });
+
+      expect(extractProviderAndModel("openai/gpt-5.3-codex-spark")).toEqual({
+        provider: "openai",
+        model: "gpt-5.3-codex-spark",
       });
     });
 
@@ -225,6 +231,7 @@ describe("model utilities", () => {
       expect(supportsReasoning("openai/gpt-5.2")).toBe(true);
       expect(supportsReasoning("openai/gpt-5.2-codex")).toBe(true);
       expect(supportsReasoning("openai/gpt-5.3-codex")).toBe(true);
+      expect(supportsReasoning("openai/gpt-5.3-codex-spark")).toBe(true);
     });
 
     it("returns false for invalid models", () => {
@@ -252,6 +259,7 @@ describe("model utilities", () => {
     it("returns high for OpenAI codex models", () => {
       expect(getDefaultReasoningEffort("openai/gpt-5.2-codex")).toBe("high");
       expect(getDefaultReasoningEffort("openai/gpt-5.3-codex")).toBe("high");
+      expect(getDefaultReasoningEffort("openai/gpt-5.3-codex-spark")).toBe("high");
     });
 
     it("returns undefined for GPT 5.2 (no default)", () => {
@@ -345,6 +353,7 @@ describe("model utilities", () => {
     it("returns false for max on OpenAI models (Anthropic-only)", () => {
       expect(isValidReasoningEffort("openai/gpt-5.2-codex", "max")).toBe(false);
       expect(isValidReasoningEffort("openai/gpt-5.3-codex", "max")).toBe(false);
+      expect(isValidReasoningEffort("openai/gpt-5.3-codex-spark", "max")).toBe(false);
       expect(isValidReasoningEffort("openai/gpt-5.2", "max")).toBe(false);
     });
 
@@ -382,6 +391,7 @@ describe("model utilities", () => {
       expect(normalizeModelId("openai/gpt-5.2")).toBe("openai/gpt-5.2");
       expect(normalizeModelId("openai/gpt-5.2-codex")).toBe("openai/gpt-5.2-codex");
       expect(normalizeModelId("openai/gpt-5.3-codex")).toBe("openai/gpt-5.3-codex");
+      expect(normalizeModelId("openai/gpt-5.3-codex-spark")).toBe("openai/gpt-5.3-codex-spark");
     });
 
     it("passes through unknown models without prefix", () => {

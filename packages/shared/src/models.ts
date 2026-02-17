@@ -17,6 +17,7 @@ export const VALID_MODELS = [
   "openai/gpt-5.2",
   "openai/gpt-5.2-codex",
   "openai/gpt-5.3-codex",
+  "openai/gpt-5.3-codex-spark",
   "opencode/kimi-k2.5",
   "opencode/minimax-m2.5",
   "opencode/glm-5",
@@ -55,6 +56,7 @@ export const MODEL_REASONING_CONFIG: Partial<Record<ValidModel, ModelReasoningCo
   "openai/gpt-5.2": { efforts: ["none", "low", "medium", "high", "xhigh"], default: undefined },
   "openai/gpt-5.2-codex": { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
   "openai/gpt-5.3-codex": { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
+  "openai/gpt-5.3-codex-spark": { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
 };
 
 export interface ModelDisplayInfo {
@@ -103,6 +105,11 @@ export const MODEL_OPTIONS: ModelCategory[] = [
       { id: "openai/gpt-5.2", name: "GPT 5.2", description: "400K context, fast" },
       { id: "openai/gpt-5.2-codex", name: "GPT 5.2 Codex", description: "Optimized for code" },
       { id: "openai/gpt-5.3-codex", name: "GPT 5.3 Codex", description: "Latest codex" },
+      {
+        id: "openai/gpt-5.3-codex-spark",
+        name: "GPT 5.3 Codex Spark",
+        description: "Low-latency codex variant",
+      },
     ],
   },
   {
@@ -127,6 +134,7 @@ export const DEFAULT_ENABLED_MODELS: ValidModel[] = [
   "openai/gpt-5.2",
   "openai/gpt-5.2-codex",
   "openai/gpt-5.3-codex",
+  "openai/gpt-5.3-codex-spark",
 ];
 
 // === Normalization ===

@@ -21,6 +21,7 @@ const ALLOWED_MODELS = new Set([
   "gpt-5.2",
   "gpt-5.2-codex",
   "gpt-5.3-codex",
+  "gpt-5.3-codex-spark",
   "gpt-5.1-codex",
 ])
 
@@ -137,10 +138,23 @@ export const CodexAuthProxy: Plugin = async (input) => {
           }
         }
 
-        // Inject gpt-5.3-codex if missing
+        // Inject GPT 5.3 Codex models if missing
         if (!provider.models["gpt-5.3-codex"]) {
           provider.models["gpt-5.3-codex"] = {
             name: "GPT 5.3 Codex",
+            attachment: false,
+            reasoning: false,
+            temperature: false,
+            options: {},
+            variants: {},
+            limit: { context: 1000000, output: 1000000 },
+            cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+          }
+        }
+
+        if (!provider.models["gpt-5.3-codex-spark"]) {
+          provider.models["gpt-5.3-codex-spark"] = {
+            name: "GPT 5.3 Codex Spark",
             attachment: false,
             reasoning: false,
             temperature: false,
