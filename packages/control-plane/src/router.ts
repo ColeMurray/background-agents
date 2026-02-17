@@ -21,7 +21,12 @@ import { SecretsValidationError, normalizeKey, validateKey } from "./db/secrets-
 import { SessionIndexStore } from "./db/session-index";
 
 import { RepoMetadataStore } from "./db/repo-metadata";
-import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared";
+import {
+  getValidModelOrDefault,
+  isValidReasoningEffort,
+  DEFAULT_ENABLED_MODELS,
+} from "@open-inspect/shared";
+import { ModelPreferencesStore, ModelPreferencesValidationError } from "./db/model-preferences";
 import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
 import type { RequestMetrics } from "./db/instrumented-d1";
 import type {
@@ -471,6 +476,18 @@ const routes: Route[] = [
     method: "DELETE",
     pattern: parsePattern("/secrets/:key"),
     handler: handleDeleteGlobalSecret,
+  },
+
+  // Model preferences
+  {
+    method: "GET",
+    pattern: parsePattern("/model-preferences"),
+    handler: handleGetModelPreferences,
+  },
+  {
+    method: "PUT",
+    pattern: parsePattern("/model-preferences"),
+    handler: handleSetModelPreferences,
   },
 ];
 
@@ -1900,5 +1917,80 @@ async function handleDeleteGlobalSecret(
       trace_id: ctx.trace_id,
     });
     return error("Secrets storage unavailable", 503);
+  }
+}
+
+// Model preferences handlers
+
+async function handleGetModelPreferences(
+  _request: Request,
+  env: Env,
+  _match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  if (!env.DB) {
+    return json({ enabledModels: DEFAULT_ENABLED_MODELS });
+  }
+
+  const store = new ModelPreferencesStore(env.DB);
+
+  try {
+    const enabledModels = await store.getEnabledModels();
+
+    return json({ enabledModels: enabledModels ?? DEFAULT_ENABLED_MODELS });
+  } catch (e) {
+    logger.error("Failed to get model preferences", {
+      error: e instanceof Error ? e.message : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return json({ enabledModels: DEFAULT_ENABLED_MODELS });
+  }
+}
+
+async function handleSetModelPreferences(
+  request: Request,
+  env: Env,
+  _match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  if (!env.DB) {
+    return error("Model preferences storage is not configured", 503);
+  }
+
+  let body: { enabledModels?: string[] };
+  try {
+    body = (await request.json()) as { enabledModels?: string[] };
+  } catch {
+    return error("Invalid JSON body", 400);
+  }
+
+  if (!body?.enabledModels || !Array.isArray(body.enabledModels)) {
+    return error("Request body must include enabledModels array", 400);
+  }
+
+  const store = new ModelPreferencesStore(env.DB);
+
+  try {
+    await store.setEnabledModels(body.enabledModels);
+
+    logger.info("model_preferences.updated", {
+      event: "model_preferences.updated",
+      enabled_count: body.enabledModels.length,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+
+    return json({ status: "updated", enabledModels: body.enabledModels });
+  } catch (e) {
+    if (e instanceof ModelPreferencesValidationError) {
+      return error(e.message, 400);
+    }
+    logger.error("Failed to update model preferences", {
+      error: e instanceof Error ? e.message : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Model preferences storage unavailable", 503);
   }
 }

@@ -11,11 +11,12 @@ import { SessionRightSidebar } from "@/components/session-right-sidebar";
 import { ActionBar } from "@/components/action-bar";
 import { copyToClipboard, formatModelNameLower } from "@/lib/format";
 import {
-  MODEL_OPTIONS,
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
   type ModelDisplayInfo,
+  type ModelCategory,
 } from "@open-inspect/shared";
+import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 import type { SandboxEvent } from "@/lib/tool-formatters";
 
@@ -164,10 +165,20 @@ export default function SessionPage() {
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
 
+  const { enabledModels, enabledModelOptions } = useEnabledModels();
+
   const handleModelChange = useCallback((model: string) => {
     setSelectedModel(model);
     setReasoningEffort(getDefaultReasoningEffort(model));
   }, []);
+
+  // Reset to default if the selected model is no longer enabled
+  useEffect(() => {
+    if (enabledModels.length > 0 && !enabledModels.includes(selectedModel)) {
+      setSelectedModel(DEFAULT_MODEL);
+      setReasoningEffort(getDefaultReasoningEffort(DEFAULT_MODEL));
+    }
+  }, [enabledModels, selectedModel]);
 
   // Sync selectedModel and reasoningEffort with session state when it loads
   useEffect(() => {
@@ -264,6 +275,7 @@ export default function SessionPage() {
         handleUnarchive={handleUnarchive}
         loadingHistory={loadingHistory}
         loadOlderEvents={loadOlderEvents}
+        modelOptions={enabledModelOptions}
       />
     </SidebarLayout>
   );
@@ -299,6 +311,7 @@ function SessionContent({
   handleUnarchive,
   loadingHistory,
   loadOlderEvents,
+  modelOptions,
 }: {
   sessionState: ReturnType<typeof useSessionSocket>["sessionState"];
   connected: boolean;
@@ -329,6 +342,7 @@ function SessionContent({
   handleUnarchive: () => void;
   loadingHistory: boolean;
   loadOlderEvents: () => void;
+  modelOptions: ModelCategory[];
 }) {
   const { isOpen, toggle } = useSidebarContext();
 
@@ -607,7 +621,7 @@ function SessionContent({
                   {/* Dropdown menu */}
                   {modelDropdownOpen && (
                     <div className="absolute bottom-full left-0 mb-2 w-56 bg-background shadow-lg border border-border py-1 z-50">
-                      {MODEL_OPTIONS.map((group, groupIdx) => (
+                      {modelOptions.map((group, groupIdx) => (
                         <div key={group.category}>
                           <div
                             className={`px-3 py-1.5 text-xs font-medium text-secondary-foreground uppercase tracking-wider ${

@@ -6,7 +6,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { SidebarLayout, useSidebarContext } from "@/components/sidebar-layout";
 import { formatModelNameLower } from "@/lib/format";
-import { MODEL_OPTIONS, DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared";
+import { DEFAULT_MODEL, getDefaultReasoningEffort, type ModelCategory } from "@open-inspect/shared";
+import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 
 interface Repo {
@@ -131,6 +132,16 @@ export default function Home() {
     return promise;
   }, [selectedRepo, selectedModel, reasoningEffort, pendingSessionId]);
 
+  const { enabledModels, enabledModelOptions } = useEnabledModels();
+
+  // Reset to default if the selected model is no longer enabled
+  useEffect(() => {
+    if (enabledModels.length > 0 && !enabledModels.includes(selectedModel)) {
+      setSelectedModel(DEFAULT_MODEL);
+      setReasoningEffort(getDefaultReasoningEffort(DEFAULT_MODEL));
+    }
+  }, [enabledModels, selectedModel]);
+
   const handleModelChange = useCallback((model: string) => {
     setSelectedModel(model);
     setReasoningEffort(getDefaultReasoningEffort(model));
@@ -216,6 +227,7 @@ export default function Home() {
         isCreatingSession={isCreatingSession}
         error={error}
         handleSubmit={handleSubmit}
+        modelOptions={enabledModelOptions}
       />
     </SidebarLayout>
   );
@@ -237,6 +249,7 @@ function HomeContent({
   isCreatingSession,
   error,
   handleSubmit,
+  modelOptions,
 }: {
   isAuthenticated: boolean;
   repos: Repo[];
@@ -253,6 +266,7 @@ function HomeContent({
   isCreatingSession: boolean;
   error: string;
   handleSubmit: (e: React.FormEvent) => void;
+  modelOptions: ModelCategory[];
 }) {
   const { isOpen, toggle } = useSidebarContext();
   const [repoDropdownOpen, setRepoDropdownOpen] = useState(false);
@@ -432,7 +446,7 @@ function HomeContent({
 
                       {modelDropdownOpen && (
                         <div className="absolute bottom-full left-0 mb-2 w-56 bg-background shadow-lg border border-border py-1 z-50">
-                          {MODEL_OPTIONS.map((group, groupIdx) => (
+                          {modelOptions.map((group, groupIdx) => (
                             <div key={group.category}>
                               <div
                                 className={`px-3 py-1.5 text-xs font-medium text-secondary-foreground uppercase tracking-wider ${

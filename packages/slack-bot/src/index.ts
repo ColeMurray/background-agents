@@ -24,6 +24,7 @@ import { createLogger } from "./logger";
 import {
   MODEL_OPTIONS,
   DEFAULT_MODEL,
+  DEFAULT_ENABLED_MODELS,
   isValidModel,
   getValidModelOrDefault,
   getReasoningConfig,
@@ -254,12 +255,41 @@ async function clearThreadSession(env: Env, channel: string, threadTs: string): 
 /**
  * Derive flat model options from shared MODEL_OPTIONS for Slack dropdowns.
  */
-const AVAILABLE_MODELS = MODEL_OPTIONS.flatMap((group) =>
+const ALL_MODELS = MODEL_OPTIONS.flatMap((group) =>
   group.models.map((m) => ({
     label: `${m.name} (${m.description})`,
     value: m.id,
   }))
 );
+
+/**
+ * Fetch enabled models from the control plane, falling back to defaults.
+ */
+async function getAvailableModels(
+  env: Env,
+  traceId?: string
+): Promise<{ label: string; value: string }[]> {
+  try {
+    const headers = await getAuthHeaders(env, traceId);
+    const response = await env.CONTROL_PLANE.fetch("https://internal/model-preferences", {
+      method: "GET",
+      headers,
+    });
+
+    if (response.ok) {
+      const data = (await response.json()) as { enabledModels: string[] };
+      if (data.enabledModels.length > 0) {
+        const enabledSet = new Set(data.enabledModels);
+        return ALL_MODELS.filter((m) => enabledSet.has(m.value));
+      }
+    }
+  } catch {
+    // Fall through to defaults
+  }
+
+  const defaultSet = new Set<string>(DEFAULT_ENABLED_MODELS);
+  return ALL_MODELS.filter((m) => defaultSet.has(m.value));
+}
 
 /**
  * Generate a consistent KV key for user preferences.
@@ -343,8 +373,9 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
   const fallback = env.DEFAULT_MODEL || DEFAULT_MODEL;
   // Normalize model to ensure it's valid - UI and behavior will be consistent
   const currentModel = getValidModelOrDefault(prefs?.model ?? fallback);
+  const availableModels = await getAvailableModels(env);
   const currentModelInfo =
-    AVAILABLE_MODELS.find((m) => m.value === currentModel) || AVAILABLE_MODELS[0];
+    availableModels.find((m) => m.value === currentModel) || availableModels[0];
 
   // Determine reasoning effort options for the current model
   const reasoningConfig = getReasoningConfig(currentModel);
@@ -391,7 +422,7 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
             text: { type: "plain_text", text: currentModelInfo.label },
             value: currentModelInfo.value,
           },
-          options: AVAILABLE_MODELS.map((m) => ({
+          options: availableModels.map((m) => ({
             text: { type: "plain_text", text: m.label },
             value: m.value,
           })),
