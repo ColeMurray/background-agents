@@ -16,6 +16,9 @@ export const VALID_MODELS = [
   "openai/gpt-5.2",
   "openai/gpt-5.2-codex",
   "openai/gpt-5.3-codex",
+  "opencode/kimi-k2.5",
+  "opencode/minimax-m2.5",
+  "opencode/glm-5",
 ] as const;
 
 export type ValidModel = (typeof VALID_MODELS)[number];
@@ -95,6 +98,27 @@ export const MODEL_OPTIONS: ModelCategory[] = [
       { id: "openai/gpt-5.3-codex", name: "GPT 5.3 Codex", description: "Latest codex" },
     ],
   },
+  {
+    category: "OpenCode Zen",
+    models: [
+      { id: "opencode/kimi-k2.5", name: "Kimi K2.5", description: "Moonshot AI" },
+      { id: "opencode/minimax-m2.5", name: "MiniMax M2.5", description: "MiniMax" },
+      { id: "opencode/glm-5", name: "GLM 5", description: "Z.ai 744B MoE" },
+    ],
+  },
+];
+
+/**
+ * Models enabled by default when no preferences are stored.
+ * Excludes zen models which must be opted into via settings.
+ */
+export const DEFAULT_ENABLED_MODELS: ValidModel[] = [
+  "anthropic/claude-haiku-4-5",
+  "anthropic/claude-sonnet-4-5",
+  "anthropic/claude-opus-4-5",
+  "openai/gpt-5.2",
+  "openai/gpt-5.2-codex",
+  "openai/gpt-5.3-codex",
 ];
 
 // === Normalization ===

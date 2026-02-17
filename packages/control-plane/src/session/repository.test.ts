@@ -575,9 +575,15 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("INSERT INTO events");
-      expect(mock.calls[0].query).toContain("VALUES (?, 'token', ?, ?, ?)");
+      expect(mock.calls[0].query).toContain("VALUES (?, ?, ?, ?, ?)");
       expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO UPDATE SET");
-      expect(mock.calls[0].params).toEqual(["token:msg-1", JSON.stringify(event), "msg-1", 1000]);
+      expect(mock.calls[0].params).toEqual([
+        "token:msg-1",
+        "token",
+        JSON.stringify(event),
+        "msg-1",
+        1000,
+      ]);
     });
 
     it("reuses the same deterministic ID across updates", () => {
@@ -600,8 +606,9 @@ describe("SessionRepository", () => {
       expect(mock.calls.length).toBe(2);
       expect(mock.calls[0].params[0]).toBe("token:msg-1");
       expect(mock.calls[1].params[0]).toBe("token:msg-1");
-      expect(mock.calls[1].params[1]).toBe(JSON.stringify(secondEvent));
-      expect(mock.calls[1].params[3]).toBe(2000);
+      expect(mock.calls[1].params[1]).toBe("token");
+      expect(mock.calls[1].params[2]).toBe(JSON.stringify(secondEvent));
+      expect(mock.calls[1].params[4]).toBe(2000);
     });
   });
 
@@ -619,10 +626,11 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("INSERT INTO events");
-      expect(mock.calls[0].query).toContain("VALUES (?, 'execution_complete', ?, ?, ?)");
+      expect(mock.calls[0].query).toContain("VALUES (?, ?, ?, ?, ?)");
       expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO UPDATE SET");
       expect(mock.calls[0].params).toEqual([
         "execution_complete:msg-1",
+        "execution_complete",
         JSON.stringify(event),
         "msg-1",
         2000,
@@ -649,8 +657,9 @@ describe("SessionRepository", () => {
       expect(mock.calls.length).toBe(2);
       expect(mock.calls[0].params[0]).toBe("execution_complete:msg-1");
       expect(mock.calls[1].params[0]).toBe("execution_complete:msg-1");
-      expect(mock.calls[1].params[1]).toBe(JSON.stringify(secondEvent));
-      expect(mock.calls[1].params[3]).toBe(3000);
+      expect(mock.calls[1].params[1]).toBe("execution_complete");
+      expect(mock.calls[1].params[2]).toBe(JSON.stringify(secondEvent));
+      expect(mock.calls[1].params[4]).toBe(3000);
     });
   });
 
