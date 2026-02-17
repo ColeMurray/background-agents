@@ -212,11 +212,11 @@ describe("POST /internal/sandbox-event", () => {
     expect(session[0].current_sha).toBe("abc123def456");
   });
 
-  it("multiple events maintain order via events endpoint", async () => {
+  it("multiple token events upsert to latest persisted event", async () => {
     const { stub } = await initSession();
     const now = Date.now() / 1000;
 
-    // Send 3 events sequentially
+    // Send 3 token events for the same message
     for (let i = 0; i < 3; i++) {
       await stub.fetch("http://internal/internal/sandbox-event", {
         method: "POST",
@@ -231,16 +231,22 @@ describe("POST /internal/sandbox-event", () => {
       });
     }
 
-    const eventsRes = await stub.fetch("http://internal/internal/events?type=token");
+    const eventsRes = await stub.fetch(
+      "http://internal/internal/events?type=token&message_id=msg-order"
+    );
     const { events } = await eventsRes.json<{
-      events: Array<{ type: string; data: { content: string }; createdAt: number }>;
+      events: Array<{
+        id: string;
+        type: string;
+        data: { content: string };
+        messageId: string;
+        createdAt: number;
+      }>;
     }>();
 
-    // Events endpoint returns DESC order; filter to our specific events
-    const tokenEvents = events.filter((e) => {
-      const content = e.data.content;
-      return content === "token-0" || content === "token-1" || content === "token-2";
-    });
-    expect(tokenEvents.length).toBeGreaterThanOrEqual(3);
+    expect(events).toHaveLength(1);
+    expect(events[0].id).toBe("token:msg-order");
+    expect(events[0].messageId).toBe("msg-order");
+    expect(events[0].data.content).toBe("token-2");
   });
 });

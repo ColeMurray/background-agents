@@ -55,6 +55,7 @@ import type { SessionRow, ParticipantRow, ArtifactRow, SandboxRow, SandboxComman
 import { SessionRepository } from "./repository";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
 import { SessionPullRequestService } from "./pull-request-service";
+import { shouldPersistToolCallEvent } from "./event-persistence";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
@@ -77,6 +78,8 @@ const VALID_EVENT_TYPES = [
   "token",
   "error",
   "git_sync",
+  "step_start",
+  "step_finish",
   "execution_complete",
   "heartbeat",
   "push_complete",
@@ -1059,8 +1062,6 @@ export class SessionDO extends DurableObject<Env> {
       return;
     }
 
-    const eventId = generateId();
-
     // Get messageId from the event first (sandbox sends correct messageId with every event)
     // Only fall back to DB lookup if event doesn't include messageId (legacy fallback)
     // This prevents race conditions where events from message A arrive after message B starts processing
@@ -1068,17 +1069,51 @@ export class SessionDO extends DurableObject<Env> {
     const processingMessage = this.repository.getProcessingMessage();
     const messageId = eventMessageId ?? processingMessage?.id ?? null;
 
-    // Store event
-    this.repository.createEvent({
-      id: eventId,
-      type: event.type,
-      data: JSON.stringify(event),
-      messageId,
-      createdAt: now,
-    });
+    if (event.type === "token") {
+      if (messageId) {
+        this.repository.upsertTokenEvent(messageId, event, now);
+      }
+      this.broadcast({ type: "sandbox_event", event });
+      return;
+    }
+
+    if (event.type === "step_start" || event.type === "step_finish") {
+      this.broadcast({ type: "sandbox_event", event });
+      return;
+    }
+
+    if (event.type === "tool_call") {
+      if (shouldPersistToolCallEvent(event.status)) {
+        this.repository.createEvent({
+          id: generateId(),
+          type: event.type,
+          data: JSON.stringify(event),
+          messageId,
+          createdAt: now,
+        });
+      }
+      this.broadcast({ type: "sandbox_event", event });
+      return;
+    }
+
+    if (event.type === "tool_result") {
+      this.repository.createEvent({
+        id: generateId(),
+        type: event.type,
+        data: JSON.stringify(event),
+        messageId,
+        createdAt: now,
+      });
+      this.broadcast({ type: "sandbox_event", event });
+      return;
+    }
 
     // Handle specific event types
     if (event.type === "execution_complete") {
+      if (messageId) {
+        this.repository.upsertExecutionCompleteEvent(messageId, event, now);
+      }
+
       // messageId already incorporates event.messageId (line above), so no extra fallback needed
       const completionMessageId = messageId;
 
@@ -1129,6 +1164,14 @@ export class SessionDO extends DurableObject<Env> {
       await this.processMessageQueue();
       return; // execution_complete handling is done; skip the generic broadcast below
     }
+
+    this.repository.createEvent({
+      id: generateId(),
+      type: event.type,
+      data: JSON.stringify(event),
+      messageId,
+      createdAt: now,
+    });
 
     if (event.type === "git_sync") {
       this.repository.updateSandboxGitSyncStatus(event.status);
@@ -1349,7 +1392,8 @@ export class SessionDO extends DurableObject<Env> {
 
   /**
    * Stop current execution.
-   * Marks the processing message as failed, broadcasts synthetic execution_complete
+   * Marks the processing message as failed, upserts synthetic execution_complete,
+   * broadcasts synthetic execution_complete
    * so all clients flush buffered tokens, and forwards stop to the sandbox.
    */
   private async stopExecution(): Promise<void> {
@@ -1363,17 +1407,24 @@ export class SessionDO extends DurableObject<Env> {
         message_id: processingMessage.id,
       });
 
+      const syntheticExecutionComplete: Extract<SandboxEvent, { type: "execution_complete" }> = {
+        type: "execution_complete",
+        messageId: processingMessage.id,
+        success: false,
+        sandboxId: "",
+        timestamp: now / 1000,
+      };
+      this.repository.upsertExecutionCompleteEvent(
+        processingMessage.id,
+        syntheticExecutionComplete,
+        now
+      );
+
       // Broadcast synthetic execution_complete so ALL clients flush buffered tokens.
       // (The stop-clicking client flushes locally, but other connected clients don't.)
       this.broadcast({
         type: "sandbox_event",
-        event: {
-          type: "execution_complete",
-          messageId: processingMessage.id,
-          success: false,
-          sandboxId: "",
-          timestamp: now / 1000,
-        },
+        event: syntheticExecutionComplete,
       });
 
       // Notify slack-bot now because the bridge's late execution_complete will hit

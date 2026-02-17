@@ -21,7 +21,12 @@ import type {
   MessageSource,
   ParticipantRole,
   ArtifactType,
+  SandboxEvent,
 } from "../types";
+
+type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
+type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
+type UpsertableEventType = TokenEvent["type"] | ExecutionCompleteEvent["type"];
 
 /**
  * WS client mapping result for hibernation recovery.
@@ -570,6 +575,39 @@ export class SessionRepository {
       data.messageId,
       data.createdAt
     );
+  }
+
+  private upsertEventByMessageId<TType extends UpsertableEventType>(
+    type: TType,
+    messageId: string,
+    event: Extract<SandboxEvent, { type: TType }>,
+    createdAt: number
+  ): void {
+    const id = `${type}:${messageId}`;
+    this.sql.exec(
+      `INSERT INTO events (id, type, data, message_id, created_at)
+       VALUES (?, '${type}', ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         data = excluded.data,
+         message_id = excluded.message_id,
+         created_at = excluded.created_at`,
+      id,
+      JSON.stringify(event),
+      messageId,
+      createdAt
+    );
+  }
+
+  upsertTokenEvent(messageId: string, event: TokenEvent, createdAt: number): void {
+    this.upsertEventByMessageId("token", messageId, event, createdAt);
+  }
+
+  upsertExecutionCompleteEvent(
+    messageId: string,
+    event: ExecutionCompleteEvent,
+    createdAt: number
+  ): void {
+    this.upsertEventByMessageId("execution_complete", messageId, event, createdAt);
   }
 
   listEvents(options: ListEventsOptions): EventRow[] {
