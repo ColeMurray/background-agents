@@ -127,7 +127,7 @@ describe("POST /internal/prompt", () => {
       channel: "C1234",
       threadTs: "1234567890.123456",
       repoFullName: "acme/web-app",
-      model: "claude-haiku-4-5",
+      model: "anthropic/claude-haiku-4-5",
     };
 
     const res = await stub.fetch("http://internal/internal/prompt", {

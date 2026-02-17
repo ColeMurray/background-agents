@@ -41,7 +41,7 @@ const testConfig = {
   controlPlaneUrl: "https://control-plane.test",
   sandboxAuthToken: "auth-token",
   provider: "anthropic",
-  model: "claude-sonnet-4-5",
+  model: "anthropic/claude-sonnet-4-5",
 };
 
 // ==================== Tests ====================
@@ -469,7 +469,7 @@ describe("ModalSandboxProvider", () => {
           repoOwner: "owner",
           repoName: "repo",
           provider: "anthropic",
-          model: "claude-sonnet-4-5",
+          model: "anthropic/claude-sonnet-4-5",
         });
         expect.fail("Should have thrown");
       } catch (e) {
@@ -501,7 +501,7 @@ describe("ModalSandboxProvider", () => {
           repoOwner: "owner",
           repoName: "repo",
           provider: "anthropic",
-          model: "claude-sonnet-4-5",
+          model: "anthropic/claude-sonnet-4-5",
         });
         expect.fail("Should have thrown");
       } catch (e) {
@@ -563,7 +563,7 @@ describe("ModalSandboxProvider", () => {
         repoOwner: "owner",
         repoName: "repo",
         provider: "anthropic",
-        model: "claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-5",
       });
 
       expect(result.success).toBe(true);

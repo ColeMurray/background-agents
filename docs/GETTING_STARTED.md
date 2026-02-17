@@ -134,6 +134,9 @@ Create an R2 API Token:
 2. Create an API key
 3. Note the **API Key** (starts with `sk-ant-`)
 
+> **Want to use your OpenAI ChatGPT subscription?** See [Using OpenAI Models](OPENAI_MODELS.md) for
+> setup instructions (can be configured after deployment).
+
 ---
 
 ## Step 3: Create GitHub App
@@ -209,6 +212,7 @@ Skip this step if you don't need Slack integration.
    - `channels:read`
    - `groups:history`
    - `groups:read`
+   - `reactions:write`
 3. Click **"Install to Workspace"**
 4. Note the **Bot Token** (`xoxb-...`)
 
@@ -672,3 +676,4 @@ For details on the infrastructure components, see:
 
 - [terraform/README.md](../terraform/README.md) - Terraform module documentation
 - [README.md](../README.md) - System architecture overview
+- [OPENAI_MODELS.md](OPENAI_MODELS.md) - Configuring OpenAI Codex models

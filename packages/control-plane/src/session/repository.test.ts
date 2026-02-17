@@ -98,6 +98,7 @@ describe("SessionRepository", () => {
         "repo",
         null,
         "claude-sonnet-4",
+        null,
         "created",
         1000,
         2000,
@@ -485,6 +486,7 @@ describe("SessionRepository", () => {
         "Hello",
         "web",
         "claude-sonnet-4",
+        null,
         "[]",
         '{"channel":"C123"}',
         "pending",
@@ -556,6 +558,108 @@ describe("SessionRepository", () => {
         "msg-1",
         1000,
       ]);
+    });
+  });
+
+  describe("upsertTokenEvent", () => {
+    it("upserts token event by deterministic message key", () => {
+      const event = {
+        type: "token" as const,
+        content: "partial response",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1,
+      };
+
+      repo.upsertTokenEvent("msg-1", event, 1000);
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("INSERT INTO events");
+      expect(mock.calls[0].query).toContain("VALUES (?, ?, ?, ?, ?)");
+      expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO UPDATE SET");
+      expect(mock.calls[0].params).toEqual([
+        "token:msg-1",
+        "token",
+        JSON.stringify(event),
+        "msg-1",
+        1000,
+      ]);
+    });
+
+    it("reuses the same deterministic ID across updates", () => {
+      const firstEvent = {
+        type: "token" as const,
+        content: "first",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1,
+      };
+      const secondEvent = {
+        ...firstEvent,
+        content: "second",
+        timestamp: 2,
+      };
+
+      repo.upsertTokenEvent("msg-1", firstEvent, 1000);
+      repo.upsertTokenEvent("msg-1", secondEvent, 2000);
+
+      expect(mock.calls.length).toBe(2);
+      expect(mock.calls[0].params[0]).toBe("token:msg-1");
+      expect(mock.calls[1].params[0]).toBe("token:msg-1");
+      expect(mock.calls[1].params[1]).toBe("token");
+      expect(mock.calls[1].params[2]).toBe(JSON.stringify(secondEvent));
+      expect(mock.calls[1].params[4]).toBe(2000);
+    });
+  });
+
+  describe("upsertExecutionCompleteEvent", () => {
+    it("upserts completion event by deterministic message key", () => {
+      const event = {
+        type: "execution_complete" as const,
+        messageId: "msg-1",
+        success: true,
+        sandboxId: "sb-1",
+        timestamp: 2,
+      };
+
+      repo.upsertExecutionCompleteEvent("msg-1", event, 2000);
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("INSERT INTO events");
+      expect(mock.calls[0].query).toContain("VALUES (?, ?, ?, ?, ?)");
+      expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO UPDATE SET");
+      expect(mock.calls[0].params).toEqual([
+        "execution_complete:msg-1",
+        "execution_complete",
+        JSON.stringify(event),
+        "msg-1",
+        2000,
+      ]);
+    });
+
+    it("reuses the same deterministic completion ID across updates", () => {
+      const firstEvent = {
+        type: "execution_complete" as const,
+        messageId: "msg-1",
+        success: false,
+        sandboxId: "sb-1",
+        timestamp: 2,
+      };
+      const secondEvent = {
+        ...firstEvent,
+        success: true,
+        timestamp: 3,
+      };
+
+      repo.upsertExecutionCompleteEvent("msg-1", firstEvent, 2000);
+      repo.upsertExecutionCompleteEvent("msg-1", secondEvent, 3000);
+
+      expect(mock.calls.length).toBe(2);
+      expect(mock.calls[0].params[0]).toBe("execution_complete:msg-1");
+      expect(mock.calls[1].params[0]).toBe("execution_complete:msg-1");
+      expect(mock.calls[1].params[1]).toBe("execution_complete");
+      expect(mock.calls[1].params[2]).toBe(JSON.stringify(secondEvent));
+      expect(mock.calls[1].params[4]).toBe(3000);
     });
   });
 

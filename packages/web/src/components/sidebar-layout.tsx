@@ -73,7 +73,11 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
             sidebar.isOpen ? "w-72" : "w-0"
           } flex-shrink-0 overflow-hidden`}
         >
-          <SessionSidebar onNewSession={handleNewSession} onToggle={sidebar.toggle} />
+          <SessionSidebar
+            onNewSession={handleNewSession}
+            onToggle={sidebar.toggle}
+            onSessionSelect={sidebar.close}
+          />
         </div>
         <main className="flex-1 overflow-hidden">{children}</main>
       </div>

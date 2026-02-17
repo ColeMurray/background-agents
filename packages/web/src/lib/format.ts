@@ -2,44 +2,30 @@
  * Utility functions for formatting display values
  */
 
+import { MODEL_OPTIONS, normalizeModelId } from "@open-inspect/shared";
+
+// Build a lookup map once at module level
+const MODEL_DISPLAY_NAMES = new Map<string, string>(
+  MODEL_OPTIONS.flatMap((g) => g.models.map((m) => [m.id, m.name]))
+);
+
 /**
- * Format model ID to display name
- * e.g., "claude-sonnet-4-5" → "Claude Sonnet 4.5"
- * e.g., "claude-haiku-4-5" → "Claude Haiku 4.5"
- * e.g., "claude-opus-4-5" → "Claude Opus 4.5"
+ * Format model ID to display name.
+ * e.g., "anthropic/claude-sonnet-4-5" → "Claude Sonnet 4.5"
+ * e.g., "openai/gpt-5.2-codex" → "GPT 5.2 Codex"
  */
 export function formatModelName(modelId: string): string {
   if (!modelId) return "Unknown Model";
-
-  // Handle common Claude model patterns
-  const match = modelId.match(/^claude-(\w+)-(\d+)-(\d+)$/i);
-  if (match) {
-    const [, variant, major, minor] = match;
-    const capitalizedVariant = variant.charAt(0).toUpperCase() + variant.slice(1).toLowerCase();
-    return `Claude ${capitalizedVariant} ${major}.${minor}`;
-  }
-
-  // Fallback: capitalize words and replace hyphens with spaces
-  return modelId
-    .split("-")
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
+  return MODEL_DISPLAY_NAMES.get(normalizeModelId(modelId)) ?? modelId;
 }
 
 /**
- * Format model ID to lowercase display format for footer
- * e.g., "claude-sonnet-4-5" → "claude sonnet 4.5"
+ * Format model ID to lowercase display format for footer.
+ * e.g., "anthropic/claude-sonnet-4-5" → "claude sonnet 4.5"
  */
 export function formatModelNameLower(modelId: string): string {
   if (!modelId) return "unknown model";
-
-  const match = modelId.match(/^claude-(\w+)-(\d+)-(\d+)$/i);
-  if (match) {
-    const [, variant, major, minor] = match;
-    return `claude ${variant.toLowerCase()} ${major}.${minor}`;
-  }
-
-  return modelId.replace(/-/g, " ").toLowerCase();
+  return (MODEL_DISPLAY_NAMES.get(normalizeModelId(modelId)) ?? modelId).toLowerCase();
 }
 
 /**

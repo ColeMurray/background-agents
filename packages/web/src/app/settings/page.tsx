@@ -4,6 +4,7 @@ import { useState } from "react";
 import { SidebarLayout, useSidebarContext } from "@/components/sidebar-layout";
 import { SettingsNav, type SettingsCategory } from "@/components/settings/settings-nav";
 import { SecretsSettings } from "@/components/settings/secrets-settings";
+import { ModelsSettings } from "@/components/settings/models-settings";
 import { DataControlsSettings } from "@/components/settings/data-controls-settings";
 
 export default function SettingsPage() {
@@ -40,6 +41,7 @@ function SettingsContent() {
         <div className="flex-1 overflow-y-auto p-8">
           <div className="max-w-2xl">
             {activeCategory === "secrets" && <SecretsSettings />}
+            {activeCategory === "models" && <ModelsSettings />}
             {activeCategory === "data-controls" && <DataControlsSettings />}
           </div>
         </div>

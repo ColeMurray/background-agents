@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { webcrypto } from "node:crypto";
-import { RepoSecretsStore, RepoSecretsValidationError } from "./repo-secrets";
+import { RepoSecretsStore } from "./repo-secrets";
+import { SecretsValidationError } from "./secrets-validation";
 import { generateEncryptionKey } from "../auth/crypto";
 
 let didPolyfillCrypto = false;
@@ -184,20 +185,20 @@ describe("RepoSecretsStore", () => {
 
   it("rejects reserved keys", async () => {
     await expect(store.setSecrets(1, "Owner", "Repo", { PATH: "nope" })).rejects.toBeInstanceOf(
-      RepoSecretsValidationError
+      SecretsValidationError
     );
   });
 
   it("rejects invalid key patterns", async () => {
     await expect(store.setSecrets(1, "Owner", "Repo", { "1BAD": "nope" })).rejects.toBeInstanceOf(
-      RepoSecretsValidationError
+      SecretsValidationError
     );
   });
 
   it("enforces value size limits", async () => {
     const bigValue = "a".repeat(16385);
     await expect(store.setSecrets(1, "Owner", "Repo", { BIG: bigValue })).rejects.toBeInstanceOf(
-      RepoSecretsValidationError
+      SecretsValidationError
     );
   });
 
@@ -206,7 +207,7 @@ describe("RepoSecretsStore", () => {
     const largeB = "b".repeat(30000);
     await expect(
       store.setSecrets(1, "Owner", "Repo", { A: largeA, B: largeB })
-    ).rejects.toBeInstanceOf(RepoSecretsValidationError);
+    ).rejects.toBeInstanceOf(SecretsValidationError);
   });
 
   it("enforces per-repo secret limit", async () => {
@@ -217,7 +218,7 @@ describe("RepoSecretsStore", () => {
     await store.setSecrets(1, "Owner", "Repo", many);
 
     await expect(store.setSecrets(1, "Owner", "Repo", { EXTRA: "y" })).rejects.toBeInstanceOf(
-      RepoSecretsValidationError
+      SecretsValidationError
     );
   });
 

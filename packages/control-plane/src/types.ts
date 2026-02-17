@@ -85,7 +85,13 @@ export type ArtifactType = "pr" | "screenshot" | "preview" | "branch";
 export type ClientMessage =
   | { type: "ping" }
   | { type: "subscribe"; token: string; clientId: string }
-  | { type: "prompt"; content: string; model?: string; attachments?: Attachment[] }
+  | {
+      type: "prompt";
+      content: string;
+      model?: string;
+      reasoningEffort?: string;
+      attachments?: Attachment[];
+    }
   | { type: "stop" }
   | { type: "typing" }
   | {
@@ -152,9 +158,28 @@ export type SandboxEvent =
       tool: string;
       args: Record<string, unknown>;
       callId: string;
+      status?: string;
+      output?: string;
       messageId: string;
       sandboxId: string;
       timestamp: number;
+    }
+  | {
+      type: "step_start";
+      messageId: string;
+      sandboxId: string;
+      timestamp: number;
+      isSubtask?: boolean;
+    }
+  | {
+      type: "step_finish";
+      cost?: number;
+      tokens?: number;
+      reason?: string;
+      messageId: string;
+      sandboxId: string;
+      timestamp: number;
+      isSubtask?: boolean;
     }
   | {
       type: "tool_result";
@@ -169,6 +194,13 @@ export type SandboxEvent =
       type: "git_sync";
       status: GitSyncStatus;
       sha?: string;
+      sandboxId: string;
+      timestamp: number;
+    }
+  | {
+      type: "error";
+      error: string;
+      messageId: string;
       sandboxId: string;
       timestamp: number;
     }
@@ -230,6 +262,7 @@ export interface SessionState {
   messageCount: number;
   createdAt: number;
   model?: string;
+  reasoningEffort?: string;
   isProcessing: boolean;
 }
 
@@ -261,7 +294,8 @@ export interface CreateSessionRequest {
   repoOwner: string;
   repoName: string;
   title?: string;
-  model?: string; // LLM model to use (e.g., "claude-haiku-4-5", "claude-sonnet-4-5")
+  model?: string; // LLM model to use (e.g., "anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-5")
+  reasoningEffort?: string; // Reasoning effort level (e.g., "high", "max")
 }
 
 export interface CreateSessionResponse {

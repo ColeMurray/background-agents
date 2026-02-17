@@ -19,9 +19,10 @@ export interface SessionItem {
 interface SessionSidebarProps {
   onNewSession?: () => void;
   onToggle?: () => void;
+  onSessionSelect?: () => void;
 }
 
-export function SessionSidebar({ onNewSession, onToggle }: SessionSidebarProps) {
+export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: SessionSidebarProps) {
   const { data: authSession } = useSession();
   const pathname = usePathname();
   const [sessions, setSessions] = useState<SessionItem[]>([]);
@@ -172,6 +173,7 @@ export function SessionSidebar({ onNewSession, onToggle }: SessionSidebarProps) 
                 key={session.id}
                 session={session}
                 isActive={session.id === currentSessionId}
+                onSessionSelect={onSessionSelect}
               />
             ))}
 
@@ -188,6 +190,7 @@ export function SessionSidebar({ onNewSession, onToggle }: SessionSidebarProps) 
                     key={session.id}
                     session={session}
                     isActive={session.id === currentSessionId}
+                    onSessionSelect={onSessionSelect}
                   />
                 ))}
               </>
@@ -199,7 +202,15 @@ export function SessionSidebar({ onNewSession, onToggle }: SessionSidebarProps) 
   );
 }
 
-function SessionListItem({ session, isActive }: { session: SessionItem; isActive: boolean }) {
+function SessionListItem({
+  session,
+  isActive,
+  onSessionSelect,
+}: {
+  session: SessionItem;
+  isActive: boolean;
+  onSessionSelect?: () => void;
+}) {
   const timestamp = session.updatedAt || session.createdAt;
   const relativeTime = formatRelativeTime(timestamp);
   const displayTitle = session.title || `${session.repoOwner}/${session.repoName}`;
@@ -208,6 +219,11 @@ function SessionListItem({ session, isActive }: { session: SessionItem; isActive
   return (
     <Link
       href={`/session/${session.id}`}
+      onClick={() => {
+        if (window.matchMedia("(max-width: 767px)").matches) {
+          onSessionSelect?.();
+        }
+      }}
       className={`block px-4 py-2.5 border-l-2 transition ${
         isActive ? "border-l-accent bg-accent-muted" : "border-l-transparent hover:bg-muted"
       }`}

@@ -11,6 +11,7 @@ export async function initSession(overrides?: {
   repoId?: number;
   title?: string;
   model?: string;
+  reasoningEffort?: string;
   userId?: string;
   githubLogin?: string;
 }) {

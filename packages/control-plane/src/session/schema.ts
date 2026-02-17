@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS session (
   base_sha TEXT,                                    -- SHA of base branch at session start
   current_sha TEXT,                                 -- Current HEAD SHA
   opencode_session_id TEXT,                         -- OpenCode session ID (for 1:1 mapping)
-  model TEXT DEFAULT 'claude-haiku-4-5',            -- LLM model to use
+  model TEXT DEFAULT 'anthropic/claude-haiku-4-5',   -- LLM model to use
+  reasoning_effort TEXT,                            -- Session-level reasoning effort default
   status TEXT DEFAULT 'created',                    -- 'created', 'active', 'completed', 'archived'
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
@@ -51,7 +52,9 @@ CREATE TABLE IF NOT EXISTS messages (
   content TEXT NOT NULL,
   source TEXT NOT NULL,                             -- 'web', 'slack', 'extension', 'github'
   model TEXT,                                       -- LLM model for this specific message (per-message override)
+  reasoning_effort TEXT,                            -- Per-message reasoning effort override
   attachments TEXT,                                 -- JSON array
+  callback_context TEXT,                            -- JSON callback context for Slack follow-up notifications
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
   created_at INTEGER NOT NULL,
@@ -139,7 +142,10 @@ export function initSchema(sql: SqlStorage): void {
   runMigration(sql, `ALTER TABLE session ADD COLUMN repo_id INTEGER`);
 
   // Migration: Add model column if it doesn't exist (for existing DOs)
-  runMigration(sql, `ALTER TABLE session ADD COLUMN model TEXT DEFAULT 'claude-haiku-4-5'`);
+  runMigration(
+    sql,
+    `ALTER TABLE session ADD COLUMN model TEXT DEFAULT 'anthropic/claude-haiku-4-5'`
+  );
 
   // Migration: Add model column to messages table for per-message model switching
   runMigration(sql, `ALTER TABLE messages ADD COLUMN model TEXT`);
@@ -182,4 +188,10 @@ export function initSchema(sql: SqlStorage): void {
 
   // Migration: Add callback_context column to messages table for Slack follow-up notifications
   runMigration(sql, `ALTER TABLE messages ADD COLUMN callback_context TEXT`);
+
+  // Migration: Add reasoning_effort column to session table for session-level reasoning defaults
+  runMigration(sql, `ALTER TABLE session ADD COLUMN reasoning_effort TEXT`);
+
+  // Migration: Add reasoning_effort column to messages table for per-message reasoning override
+  runMigration(sql, `ALTER TABLE messages ADD COLUMN reasoning_effort TEXT`);
 }

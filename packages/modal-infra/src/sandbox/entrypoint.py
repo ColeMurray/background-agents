@@ -221,8 +221,46 @@ class SandboxSupervisor:
             self.git_sync_complete.set()  # Allow agent to proceed anyway
             return False
 
+    def _setup_openai_oauth(self) -> None:
+        """Write OpenCode auth.json for ChatGPT OAuth if refresh token is configured."""
+        refresh_token = os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN")
+        if not refresh_token:
+            return
+
+        try:
+            auth_dir = Path.home() / ".local" / "share" / "opencode"
+            auth_dir.mkdir(parents=True, exist_ok=True)
+
+            openai_entry = {
+                "type": "oauth",
+                "refresh": "managed-by-control-plane",
+                "access": "",
+                "expires": 0,
+            }
+
+            account_id = os.environ.get("OPENAI_OAUTH_ACCOUNT_ID")
+            if account_id:
+                openai_entry["accountId"] = account_id
+
+            auth_file = auth_dir / "auth.json"
+            tmp_file = auth_dir / ".auth.json.tmp"
+
+            # Write to a temp file created with 0o600 from the start, then
+            # atomically rename so the target is never world-readable.
+            fd = os.open(str(tmp_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                os.write(fd, json.dumps({"openai": openai_entry}).encode())
+            finally:
+                os.close(fd)
+            tmp_file.replace(auth_file)
+
+            self.log.info("openai_oauth.setup")
+        except Exception as e:
+            self.log.warn("openai_oauth.setup_error", exc=e)
+
     async def start_opencode(self) -> None:
         """Start OpenCode server with configuration."""
+        self._setup_openai_oauth()
         self.log.info("opencode.start")
 
         # Build OpenCode config from session settings
@@ -268,9 +306,23 @@ class SandboxSupervisor:
             if not package_json.exists():
                 package_json.write_text('{"name": "opencode-tools", "type": "module"}')
 
+        # Deploy codex auth proxy plugin if OpenAI OAuth is configured
+        plugin_source = Path("/app/sandbox/codex-auth-plugin.ts")
+        if plugin_source.exists() and os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN"):
+            plugin_dir = opencode_dir / "plugins"
+            plugin_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy(plugin_source, plugin_dir / "codex-auth-plugin.ts")
+            self.log.info("openai_oauth.plugin_deployed")
+
         env = {
             **os.environ,
             "OPENCODE_CONFIG_CONTENT": json.dumps(opencode_config),
+            # Disable OpenCode's question tool in headless mode. The tool blocks
+            # on a Promise waiting for user input via the HTTP API, but the bridge
+            # has no channel to relay questions to the web client and back. Without
+            # this, the session hangs until the SSE inactivity timeout (120s).
+            # See: https://github.com/anomalyco/opencode/blob/19b1222cd/packages/opencode/src/tool/registry.ts#L100
+            "OPENCODE_CLIENT": "serve",
         }
 
         # Start OpenCode server in the repo directory

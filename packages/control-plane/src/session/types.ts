@@ -27,7 +27,8 @@ export interface SessionRow {
   base_sha: string | null;
   current_sha: string | null;
   opencode_session_id: string | null;
-  model: string; // LLM model to use (e.g., "claude-haiku-4-5")
+  model: string; // LLM model to use (e.g., "anthropic/claude-haiku-4-5")
+  reasoning_effort: string | null; // Reasoning effort level (e.g., "high", "max")
   status: SessionStatus;
   created_at: number;
   updated_at: number;
@@ -55,6 +56,7 @@ export interface MessageRow {
   content: string;
   source: MessageSource;
   model: string | null; // LLM model for per-message override
+  reasoning_effort: string | null; // Reasoning effort for per-message override
   attachments: string | null; // JSON
   callback_context: string | null; // JSON: { channel, threadTs, repoFullName, model }
   status: MessageStatus;
@@ -103,6 +105,7 @@ export interface PromptCommand {
   messageId: string;
   content: string;
   model?: string; // LLM model for per-message override
+  reasoningEffort?: string; // Reasoning effort level
   author: {
     userId: string;
     githubName: string | null;

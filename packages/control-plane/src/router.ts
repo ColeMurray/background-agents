@@ -15,10 +15,18 @@ import {
   SourceControlProviderError,
   type SourceControlProviderName,
 } from "./source-control";
-import { RepoSecretsStore, RepoSecretsValidationError } from "./db/repo-secrets";
+import { RepoSecretsStore } from "./db/repo-secrets";
+import { GlobalSecretsStore } from "./db/global-secrets";
+import { SecretsValidationError, normalizeKey, validateKey } from "./db/secrets-validation";
 import { SessionIndexStore } from "./db/session-index";
 
 import { RepoMetadataStore } from "./db/repo-metadata";
+import {
+  getValidModelOrDefault,
+  isValidReasoningEffort,
+  DEFAULT_ENABLED_MODELS,
+} from "@open-inspect/shared";
+import { ModelPreferencesStore, ModelPreferencesValidationError } from "./db/model-preferences";
 import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
 import type { RequestMetrics } from "./db/instrumented-d1";
 import type {
@@ -130,6 +138,7 @@ const PUBLIC_ROUTES: RegExp[] = [/^\/health$/];
  */
 const SANDBOX_AUTH_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/pr$/, // PR creation from sandbox
+  /^\/sessions\/[^/]+\/openai-token-refresh$/, // OpenAI token refresh from sandbox
 ];
 
 type CachedScmProvider =
@@ -401,6 +410,11 @@ const routes: Route[] = [
   },
   {
     method: "POST",
+    pattern: parsePattern("/sessions/:id/openai-token-refresh"),
+    handler: handleOpenAITokenRefresh,
+  },
+  {
+    method: "POST",
     pattern: parsePattern("/sessions/:id/ws-token"),
     handler: handleSessionWsToken,
   },
@@ -445,6 +459,35 @@ const routes: Route[] = [
     method: "DELETE",
     pattern: parsePattern("/repos/:owner/:name/secrets/:key"),
     handler: handleDeleteRepoSecret,
+  },
+
+  // Global secrets
+  {
+    method: "PUT",
+    pattern: parsePattern("/secrets"),
+    handler: handleSetGlobalSecrets,
+  },
+  {
+    method: "GET",
+    pattern: parsePattern("/secrets"),
+    handler: handleListGlobalSecrets,
+  },
+  {
+    method: "DELETE",
+    pattern: parsePattern("/secrets/:key"),
+    handler: handleDeleteGlobalSecret,
+  },
+
+  // Model preferences
+  {
+    method: "GET",
+    pattern: parsePattern("/model-preferences"),
+    handler: handleGetModelPreferences,
+  },
+  {
+    method: "PUT",
+    pattern: parsePattern("/model-preferences"),
+    handler: handleSetModelPreferences,
   },
 ];
 
@@ -661,6 +704,13 @@ async function handleCreateSession(
   const doId = env.SESSION.idFromName(sessionId);
   const stub = env.SESSION.get(doId);
 
+  // Validate model and reasoning effort once for both DO init and D1 index
+  const model = getValidModelOrDefault(body.model);
+  const reasoningEffort =
+    body.reasoningEffort && isValidReasoningEffort(model, body.reasoningEffort)
+      ? body.reasoningEffort
+      : null;
+
   // Initialize session with user info and optional encrypted token
   const initResponse = await stub.fetch(
     internalRequest(
@@ -674,7 +724,8 @@ async function handleCreateSession(
           repoName,
           repoId,
           title: body.title,
-          model: body.model || "claude-haiku-4-5", // Default to haiku for cost efficiency
+          model,
+          reasoningEffort,
           userId,
           githubLogin,
           githubName,
@@ -698,7 +749,8 @@ async function handleCreateSession(
     title: body.title || null,
     repoOwner,
     repoName,
-    model: body.model || "claude-haiku-4-5",
+    model,
+    reasoningEffort,
     status: "created",
     createdAt: now,
     updatedAt: now,
@@ -767,12 +819,15 @@ async function handleSessionPrompt(
     content: string;
     authorId?: string;
     source?: string;
+    model?: string;
+    reasoningEffort?: string;
     attachments?: Array<{ type: string; name: string; url?: string }>;
     callbackContext?: {
       channel: string;
       threadTs: string;
       repoFullName: string;
       model: string;
+      reactionMessageTs?: string;
     };
   };
 
@@ -793,6 +848,8 @@ async function handleSessionPrompt(
           content: body.content,
           authorId: body.authorId || "anonymous",
           source: body.source || "web",
+          model: body.model,
+          reasoningEffort: body.reasoningEffort,
           attachments: body.attachments,
           callbackContext: body.callbackContext,
         }),
@@ -953,6 +1010,20 @@ async function handleCreatePR(
   );
 
   return response;
+}
+
+async function handleOpenAITokenRefresh(
+  _request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const stub = getSessionStub(env, match);
+  if (!stub) return error("Session ID required");
+
+  return stub.fetch(
+    internalRequest("http://internal/internal/openai-token-refresh", { method: "POST" }, ctx)
+  );
 }
 
 async function handleSessionWsToken(
@@ -1515,7 +1586,7 @@ async function handleSetRepoSecrets(
       updated: result.updated,
     });
   } catch (e) {
-    if (e instanceof RepoSecretsValidationError) {
+    if (e instanceof SecretsValidationError) {
       return error(e.message, 400);
     }
     logger.error("Failed to update repo secrets", {
@@ -1574,9 +1645,18 @@ async function handleListRepoSecrets(
   }
 
   const store = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+  const globalStore = new GlobalSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
 
   try {
-    const secrets = await store.listSecretKeys(resolved.repoId);
+    const [secrets, globalSecrets] = await Promise.all([
+      store.listSecretKeys(resolved.repoId),
+      globalStore.listSecretKeys().catch((e) => {
+        logger.warn("Failed to fetch global secrets for repo list", {
+          error: e instanceof Error ? e.message : String(e),
+        });
+        return [];
+      }),
+    ]);
 
     logger.info("repo.secrets_listed", {
       event: "repo.secrets_listed",
@@ -1584,6 +1664,7 @@ async function handleListRepoSecrets(
       repo_owner: resolved.repoOwner,
       repo_name: resolved.repoName,
       keys_count: secrets.length,
+      global_keys_count: globalSecrets.length,
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
@@ -1591,6 +1672,7 @@ async function handleListRepoSecrets(
     return json({
       repo: `${resolved.repoOwner}/${resolved.repoName}`,
       secrets,
+      globalSecrets,
     });
   } catch (e) {
     logger.error("Failed to list repo secrets", {
@@ -1652,7 +1734,8 @@ async function handleDeleteRepoSecret(
   const store = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
 
   try {
-    store.validateKey(store.normalizeKey(key));
+    const normalizedKey = normalizeKey(key);
+    validateKey(normalizedKey);
 
     const deleted = await store.deleteSecret(resolved.repoId, key);
     if (!deleted) {
@@ -1671,10 +1754,10 @@ async function handleDeleteRepoSecret(
     return json({
       status: "deleted",
       repo: `${resolved.repoOwner}/${resolved.repoName}`,
-      key: store.normalizeKey(key),
+      key: normalizedKey,
     });
   } catch (e) {
-    if (e instanceof RepoSecretsValidationError) {
+    if (e instanceof SecretsValidationError) {
       return error(e.message, 400);
     }
     logger.error("Failed to delete repo secret", {
@@ -1686,5 +1769,229 @@ async function handleDeleteRepoSecret(
       trace_id: ctx.trace_id,
     });
     return error("Secrets storage unavailable", 503);
+  }
+}
+
+// Global secrets handlers
+
+async function handleSetGlobalSecrets(
+  request: Request,
+  env: Env,
+  _match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  if (!env.DB) {
+    return error("Secrets storage is not configured", 503);
+  }
+  if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
+    return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
+  }
+
+  let body: { secrets?: Record<string, string> };
+  try {
+    body = (await request.json()) as { secrets?: Record<string, string> };
+  } catch {
+    return error("Invalid JSON body", 400);
+  }
+
+  if (!body?.secrets || typeof body.secrets !== "object") {
+    return error("Request body must include secrets object", 400);
+  }
+
+  const store = new GlobalSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+
+  try {
+    const result = await store.setSecrets(body.secrets);
+
+    logger.info("global.secrets_updated", {
+      event: "global.secrets_updated",
+      keys_count: result.keys.length,
+      created: result.created,
+      updated: result.updated,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+
+    return json({
+      status: "updated",
+      keys: result.keys,
+      created: result.created,
+      updated: result.updated,
+    });
+  } catch (e) {
+    if (e instanceof SecretsValidationError) {
+      return error(e.message, 400);
+    }
+    logger.error("Failed to update global secrets", {
+      error: e instanceof Error ? e.message : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Secrets storage unavailable", 503);
+  }
+}
+
+async function handleListGlobalSecrets(
+  _request: Request,
+  env: Env,
+  _match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  if (!env.DB) {
+    return error("Secrets storage is not configured", 503);
+  }
+  if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
+    return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
+  }
+
+  const store = new GlobalSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+
+  try {
+    const secrets = await store.listSecretKeys();
+
+    logger.info("global.secrets_listed", {
+      event: "global.secrets_listed",
+      keys_count: secrets.length,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+
+    return json({ secrets });
+  } catch (e) {
+    logger.error("Failed to list global secrets", {
+      error: e instanceof Error ? e.message : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Secrets storage unavailable", 503);
+  }
+}
+
+async function handleDeleteGlobalSecret(
+  _request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  if (!env.DB) {
+    return error("Secrets storage is not configured", 503);
+  }
+  if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
+    return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
+  }
+
+  const key = match.groups?.key;
+  if (!key) {
+    return error("Key is required");
+  }
+
+  const store = new GlobalSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+
+  try {
+    const normalizedKey = normalizeKey(key);
+    validateKey(normalizedKey);
+
+    const deleted = await store.deleteSecret(key);
+    if (!deleted) {
+      return error("Secret not found", 404);
+    }
+
+    logger.info("global.secret_deleted", {
+      event: "global.secret_deleted",
+      key: normalizedKey,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+
+    return json({
+      status: "deleted",
+      key: normalizedKey,
+    });
+  } catch (e) {
+    if (e instanceof SecretsValidationError) {
+      return error(e.message, 400);
+    }
+    logger.error("Failed to delete global secret", {
+      error: e instanceof Error ? e.message : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Secrets storage unavailable", 503);
+  }
+}
+
+// Model preferences handlers
+
+async function handleGetModelPreferences(
+  _request: Request,
+  env: Env,
+  _match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  if (!env.DB) {
+    return json({ enabledModels: DEFAULT_ENABLED_MODELS });
+  }
+
+  const store = new ModelPreferencesStore(env.DB);
+
+  try {
+    const enabledModels = await store.getEnabledModels();
+
+    return json({ enabledModels: enabledModels ?? DEFAULT_ENABLED_MODELS });
+  } catch (e) {
+    logger.error("Failed to get model preferences", {
+      error: e instanceof Error ? e.message : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return json({ enabledModels: DEFAULT_ENABLED_MODELS });
+  }
+}
+
+async function handleSetModelPreferences(
+  request: Request,
+  env: Env,
+  _match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  if (!env.DB) {
+    return error("Model preferences storage is not configured", 503);
+  }
+
+  let body: { enabledModels?: string[] };
+  try {
+    body = (await request.json()) as { enabledModels?: string[] };
+  } catch {
+    return error("Invalid JSON body", 400);
+  }
+
+  if (!body?.enabledModels || !Array.isArray(body.enabledModels)) {
+    return error("Request body must include enabledModels array", 400);
+  }
+
+  const store = new ModelPreferencesStore(env.DB);
+
+  try {
+    const deduplicated = [...new Set(body.enabledModels)];
+    await store.setEnabledModels(deduplicated);
+
+    logger.info("model_preferences.updated", {
+      event: "model_preferences.updated",
+      enabled_count: deduplicated.length,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+
+    return json({ status: "updated", enabledModels: deduplicated });
+  } catch (e) {
+    if (e instanceof ModelPreferencesValidationError) {
+      return error(e.message, 400);
+    }
+    logger.error("Failed to update model preferences", {
+      error: e instanceof Error ? e.message : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Model preferences storage unavailable", 503);
   }
 }

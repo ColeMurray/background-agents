@@ -15,7 +15,8 @@ describe("D1 SessionIndexStore", () => {
       title: "Test Session",
       repoOwner: "acme",
       repoName: "web-app",
-      model: "claude-haiku-4-5",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: "max",
       status: "created",
       createdAt: now,
       updatedAt: now,
@@ -27,6 +28,7 @@ describe("D1 SessionIndexStore", () => {
     expect(session!.title).toBe("Test Session");
     expect(session!.repoOwner).toBe("acme");
     expect(session!.repoName).toBe("web-app");
+    expect(session!.reasoningEffort).toBe("max");
     expect(session!.status).toBe("created");
   });
 
@@ -39,7 +41,8 @@ describe("D1 SessionIndexStore", () => {
       title: null,
       repoOwner: "acme",
       repoName: "api",
-      model: "claude-haiku-4-5",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
       status: "active",
       createdAt: now,
       updatedAt: now,
@@ -50,7 +53,8 @@ describe("D1 SessionIndexStore", () => {
       title: null,
       repoOwner: "acme",
       repoName: "api",
-      model: "claude-haiku-4-5",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
       status: "completed",
       createdAt: now - 1000,
       updatedAt: now - 1000,
@@ -64,6 +68,50 @@ describe("D1 SessionIndexStore", () => {
     expect(allResult.total).toBe(2);
   });
 
+  it("stores and returns reasoning effort", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+
+    await store.create({
+      id: "session-with-effort",
+      title: null,
+      repoOwner: "acme",
+      repoName: "api",
+      model: "anthropic/claude-sonnet-4-5",
+      reasoningEffort: "high",
+      status: "created",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const session = await store.get("session-with-effort");
+    expect(session!.reasoningEffort).toBe("high");
+
+    const result = await store.list({});
+    const listed = result.sessions.find((s) => s.id === "session-with-effort");
+    expect(listed!.reasoningEffort).toBe("high");
+  });
+
+  it("stores null reasoning effort when not provided", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+
+    await store.create({
+      id: "session-no-effort",
+      title: null,
+      repoOwner: "acme",
+      repoName: "api",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      status: "created",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const session = await store.get("session-no-effort");
+    expect(session!.reasoningEffort).toBeNull();
+  });
+
   it("deletes a session", async () => {
     const store = new SessionIndexStore(env.DB);
     const now = Date.now();
@@ -73,7 +121,8 @@ describe("D1 SessionIndexStore", () => {
       title: null,
       repoOwner: "acme",
       repoName: "web-app",
-      model: "claude-haiku-4-5",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
       status: "created",
       createdAt: now,
       updatedAt: now,

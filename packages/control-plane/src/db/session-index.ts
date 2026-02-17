@@ -4,6 +4,7 @@ export interface SessionEntry {
   repoOwner: string;
   repoName: string;
   model: string;
+  reasoningEffort: string | null;
   status: string;
   createdAt: number;
   updatedAt: number;
@@ -15,6 +16,7 @@ interface SessionRow {
   repo_owner: string;
   repo_name: string;
   model: string;
+  reasoning_effort: string | null;
   status: string;
   created_at: number;
   updated_at: number;
@@ -42,6 +44,7 @@ function toEntry(row: SessionRow): SessionEntry {
     repoOwner: row.repo_owner,
     repoName: row.repo_name,
     model: row.model,
+    reasoningEffort: row.reasoning_effort,
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -54,8 +57,8 @@ export class SessionIndexStore {
   async create(session: SessionEntry): Promise<void> {
     await this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         session.id,
@@ -63,6 +66,7 @@ export class SessionIndexStore {
         session.repoOwner.toLowerCase(),
         session.repoName.toLowerCase(),
         session.model,
+        session.reasoningEffort,
         session.status,
         session.createdAt,
         session.updatedAt

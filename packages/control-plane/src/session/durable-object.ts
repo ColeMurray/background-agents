@@ -28,14 +28,17 @@ import {
 import {
   createSourceControlProvider as createSourceControlProviderImpl,
   resolveScmProviderFromEnv,
-  SourceControlProviderError,
   type SourceControlProvider,
   type SourceControlAuthContext,
   type GitPushSpec,
 } from "../source-control";
-import { resolveHeadBranchForPr } from "../source-control/branch-resolution";
-import { generateBranchName, type ManualPullRequestArtifactMetadata } from "@open-inspect/shared";
-import { DEFAULT_MODEL, isValidModel, extractProviderAndModel } from "../utils/models";
+import {
+  DEFAULT_MODEL,
+  isValidModel,
+  isValidReasoningEffort,
+  getDefaultReasoningEffort,
+  getValidModelOrDefault,
+} from "../utils/models";
 import type {
   Env,
   ClientInfo,
@@ -51,7 +54,12 @@ import type {
 import type { SessionRow, ParticipantRow, ArtifactRow, SandboxRow, SandboxCommand } from "./types";
 import { SessionRepository } from "./repository";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
+import { SessionPullRequestService } from "./pull-request-service";
+import { shouldPersistToolCallEvent } from "./event-persistence";
 import { RepoSecretsStore } from "../db/repo-secrets";
+import { GlobalSecretsStore } from "../db/global-secrets";
+import { mergeSecrets } from "../db/secrets-validation";
+import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 
 /**
  * Build GitHub avatar URL from login.
@@ -70,6 +78,8 @@ const VALID_EVENT_TYPES = [
   "token",
   "error",
   "git_sync",
+  "step_start",
+  "step_finish",
   "execution_complete",
   "heartbeat",
   "push_complete",
@@ -152,6 +162,11 @@ export class SessionDO extends DurableObject<Env> {
       method: "POST",
       path: "/internal/verify-sandbox-token",
       handler: (req) => this.handleVerifySandboxToken(req),
+    },
+    {
+      method: "POST",
+      path: "/internal/openai-token-refresh",
+      handler: () => this.handleOpenAITokenRefresh(),
     },
   ];
 
@@ -285,8 +300,6 @@ export class SessionDO extends DurableObject<Env> {
       this.env.WORKER_URL ||
       `https://open-inspect-control-plane.${this.env.CF_ACCOUNT_ID || "workers"}.workers.dev`;
 
-    const { provider: llmProvider, model } = extractProviderAndModel(DEFAULT_MODEL);
-
     // Resolve sessionId for lifecycle manager logging context
     const session = this.repository.getSession();
     const sessionId = session?.session_name || session?.id || this.ctx.id.toString();
@@ -294,8 +307,7 @@ export class SessionDO extends DurableObject<Env> {
     const config = {
       ...DEFAULT_LIFECYCLE_CONFIG,
       controlPlaneUrl,
-      provider: llmProvider,
-      model,
+      model: DEFAULT_MODEL,
       sessionId,
       inactivity: {
         ...DEFAULT_LIFECYCLE_CONFIG.inactivity,
@@ -535,13 +547,31 @@ export class SessionDO extends DurableObject<Env> {
   /**
    * Handle WebSocket close.
    */
-  async webSocketClose(ws: WebSocket, _code: number, _reason: string): Promise<void> {
+  async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
     this.ensureInitialized();
     const { kind } = this.wsManager.classify(ws);
 
     if (kind === "sandbox") {
-      this.wsManager.clearSandboxSocket();
-      this.updateSandboxStatus("stopped");
+      const wasActive = this.wsManager.clearSandboxSocketIfMatch(ws);
+      if (!wasActive) {
+        // sandboxWs points to a different socket — this close is for a replaced connection.
+        this.log.debug("Ignoring close for replaced sandbox socket", { code });
+        return;
+      }
+
+      const isNormalClose = code === 1000 || code === 1001;
+      if (isNormalClose) {
+        this.updateSandboxStatus("stopped");
+      } else {
+        // Abnormal close (e.g., 1006): leave status unchanged so the bridge can reconnect.
+        // Schedule a heartbeat check to detect truly dead sandboxes.
+        this.log.warn("Sandbox WebSocket abnormal close", {
+          event: "sandbox.abnormal_close",
+          code,
+          reason,
+        });
+        await this.lifecycleManager.scheduleDisconnectCheck();
+      }
     } else {
       const client = this.wsManager.removeClient(ws);
       if (client) {
@@ -832,6 +862,7 @@ export class SessionDO extends DurableObject<Env> {
     data: {
       content: string;
       model?: string;
+      reasoningEffort?: string;
       attachments?: Array<{ type: string; name: string; url?: string; content?: string }>;
     }
   ): Promise<void> {
@@ -864,13 +895,21 @@ export class SessionDO extends DurableObject<Env> {
       }
     }
 
-    // Insert message with optional model override
+    // Validate per-message reasoning effort if provided
+    const effectiveModelForEffort = messageModel || this.getSession()?.model || DEFAULT_MODEL;
+    const messageReasoningEffort = this.validateReasoningEffort(
+      effectiveModelForEffort,
+      data.reasoningEffort
+    );
+
+    // Insert message with optional model and reasoning effort overrides
     this.repository.createMessage({
       id: messageId,
       authorId: participant.id,
       content: data.content,
       source: "web",
       model: messageModel,
+      reasoningEffort: messageReasoningEffort,
       attachments: data.attachments ? JSON.stringify(data.attachments) : null,
       status: "pending",
       createdAt: now,
@@ -888,6 +927,7 @@ export class SessionDO extends DurableObject<Env> {
       author_id: participant.id,
       user_id: client.userId,
       model: messageModel,
+      reasoning_effort: messageReasoningEffort,
       content_length: data.content.length,
       has_attachments: !!data.attachments?.length,
       attachments_count: data.attachments?.length ?? 0,
@@ -1022,8 +1062,6 @@ export class SessionDO extends DurableObject<Env> {
       return;
     }
 
-    const eventId = generateId();
-
     // Get messageId from the event first (sandbox sends correct messageId with every event)
     // Only fall back to DB lookup if event doesn't include messageId (legacy fallback)
     // This prevents race conditions where events from message A arrive after message B starts processing
@@ -1031,25 +1069,63 @@ export class SessionDO extends DurableObject<Env> {
     const processingMessage = this.repository.getProcessingMessage();
     const messageId = eventMessageId ?? processingMessage?.id ?? null;
 
-    // Store event
-    this.repository.createEvent({
-      id: eventId,
-      type: event.type,
-      data: JSON.stringify(event),
-      messageId,
-      createdAt: now,
-    });
+    if (event.type === "token") {
+      if (messageId) {
+        this.repository.upsertTokenEvent(messageId, event, now);
+      }
+      this.broadcast({ type: "sandbox_event", event });
+      return;
+    }
+
+    if (event.type === "step_start" || event.type === "step_finish") {
+      this.broadcast({ type: "sandbox_event", event });
+      return;
+    }
+
+    if (event.type === "tool_call") {
+      if (shouldPersistToolCallEvent(event.status)) {
+        this.repository.createEvent({
+          id: generateId(),
+          type: event.type,
+          data: JSON.stringify(event),
+          messageId,
+          createdAt: now,
+        });
+      }
+      this.broadcast({ type: "sandbox_event", event });
+      return;
+    }
+
+    if (event.type === "tool_result") {
+      this.repository.createEvent({
+        id: generateId(),
+        type: event.type,
+        data: JSON.stringify(event),
+        messageId,
+        createdAt: now,
+      });
+      this.broadcast({ type: "sandbox_event", event });
+      return;
+    }
 
     // Handle specific event types
     if (event.type === "execution_complete") {
-      // Use the resolved messageId (which now correctly prioritizes event.messageId)
-      const completionMessageId = messageId ?? event.messageId;
-      const status = event.success ? "completed" : "failed";
+      if (messageId) {
+        this.repository.upsertExecutionCompleteEvent(messageId, event, now);
+      }
 
-      if (completionMessageId) {
+      // messageId already incorporates event.messageId (line above), so no extra fallback needed
+      const completionMessageId = messageId;
+
+      // Only update message status if it's still processing (not already stopped)
+      const isStillProcessing =
+        completionMessageId != null && processingMessage?.id === completionMessageId;
+
+      if (isStillProcessing) {
+        // Normal path: message still processing, complete it as before
+        const status = event.success ? "completed" : "failed";
         this.repository.updateMessageCompletion(completionMessageId, status, now);
 
-        // Emit prompt.complete wide event with duration metrics
         const timestamps = this.repository.getMessageTimestamps(completionMessageId);
         const totalDurationMs = timestamps ? now - timestamps.created_at : undefined;
         const processingDurationMs =
@@ -1069,31 +1145,33 @@ export class SessionDO extends DurableObject<Env> {
           queue_duration_ms: queueDurationMs,
         });
 
-        // Broadcast processing status change (after DB update so getIsProcessing is accurate)
+        this.broadcast({ type: "sandbox_event", event });
         this.broadcast({ type: "processing_status", isProcessing: this.getIsProcessing() });
-
-        // Notify slack-bot of completion (fire-and-forget with retry)
         this.ctx.waitUntil(this.notifySlackBot(completionMessageId, event.success));
       } else {
-        this.log.warn("prompt.complete", {
+        // Stopped path: message was already marked failed by stopExecution()
+        this.log.info("prompt.complete", {
           event: "prompt.complete",
-          outcome: "error",
-          error_reason: "no_message_id",
+          message_id: completionMessageId,
+          outcome: "already_stopped",
         });
       }
 
-      // Take snapshot after execution completes (per Ramp spec)
-      // "When the agent is finished making changes, we take another snapshot"
-      // Use fire-and-forget so snapshot doesn't block the response to the user
+      // Always run these regardless of stop (snapshot, activity, queue drain)
       this.ctx.waitUntil(this.triggerSnapshot("execution_complete"));
-
-      // Reset activity timer - give user time to review output before inactivity timeout
       this.updateLastActivity(now);
       await this.scheduleInactivityCheck();
-
-      // Process next in queue
       await this.processMessageQueue();
+      return; // execution_complete handling is done; skip the generic broadcast below
     }
+
+    this.repository.createEvent({
+      id: generateId(),
+      type: event.type,
+      data: JSON.stringify(event),
+      messageId,
+      createdAt: now,
+    });
 
     if (event.type === "git_sync") {
       this.repository.updateSandboxGitSyncStatus(event.status);
@@ -1108,7 +1186,7 @@ export class SessionDO extends DurableObject<Env> {
       this.handlePushEvent(event);
     }
 
-    // Broadcast to clients
+    // Broadcast to clients (all non-execution_complete events)
     this.broadcast({ type: "sandbox_event", event });
   }
 
@@ -1264,12 +1342,20 @@ export class SessionDO extends DurableObject<Env> {
     const session = this.getSession();
 
     // Send to sandbox with model (per-message override or session default)
-    const resolvedModel = message.model || session?.model || "claude-haiku-4-5";
+    const resolvedModel = getValidModelOrDefault(message.model || session?.model);
+
+    // Resolve reasoning effort: per-message > session default > model default
+    const resolvedEffort =
+      message.reasoning_effort ??
+      session?.reasoning_effort ??
+      getDefaultReasoningEffort(resolvedModel);
+
     const command: SandboxCommand = {
       type: "prompt",
       messageId: message.id,
       content: message.content,
       model: resolvedModel,
+      reasoningEffort: resolvedEffort,
       author: {
         userId: author?.user_id ?? "unknown",
         githubName: author?.github_name ?? null,
@@ -1285,6 +1371,7 @@ export class SessionDO extends DurableObject<Env> {
       message_id: message.id,
       outcome: sent ? "sent" : "send_failed",
       model: resolvedModel,
+      reasoning_effort: resolvedEffort,
       author_id: message.author_id,
       user_id: author?.user_id ?? "unknown",
       source: message.source,
@@ -1305,10 +1392,50 @@ export class SessionDO extends DurableObject<Env> {
 
   /**
    * Stop current execution.
-   * Sends stop command to sandbox, which should respond with execution_complete.
-   * The processing status will be updated when execution_complete is received.
+   * Marks the processing message as failed, upserts synthetic execution_complete,
+   * broadcasts synthetic execution_complete
+   * so all clients flush buffered tokens, and forwards stop to the sandbox.
    */
   private async stopExecution(): Promise<void> {
+    const now = Date.now();
+    const processingMessage = this.repository.getProcessingMessage();
+
+    if (processingMessage) {
+      this.repository.updateMessageCompletion(processingMessage.id, "failed", now);
+      this.log.info("prompt.stopped", {
+        event: "prompt.stopped",
+        message_id: processingMessage.id,
+      });
+
+      const syntheticExecutionComplete: Extract<SandboxEvent, { type: "execution_complete" }> = {
+        type: "execution_complete",
+        messageId: processingMessage.id,
+        success: false,
+        sandboxId: "",
+        timestamp: now / 1000,
+      };
+      this.repository.upsertExecutionCompleteEvent(
+        processingMessage.id,
+        syntheticExecutionComplete,
+        now
+      );
+
+      // Broadcast synthetic execution_complete so ALL clients flush buffered tokens.
+      // (The stop-clicking client flushes locally, but other connected clients don't.)
+      this.broadcast({
+        type: "sandbox_event",
+        event: syntheticExecutionComplete,
+      });
+
+      // Notify slack-bot now because the bridge's late execution_complete will hit
+      // the "already_stopped" branch in processSandboxEvent() which skips notification.
+      this.ctx.waitUntil(this.notifySlackBot(processingMessage.id, false));
+    }
+
+    // Immediate client feedback
+    this.broadcast({ type: "processing_status", isProcessing: false });
+
+    // Forward stop to sandbox (bridge cancels its task)
     const sandboxWs = this.wsManager.getSandboxSocket();
     if (sandboxWs) {
       this.wsManager.send(sandboxWs, { type: "stop" });
@@ -1355,6 +1482,20 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
+   * Validate reasoning effort against a model's allowed values.
+   * Returns the validated effort string or null if invalid/absent.
+   */
+  private validateReasoningEffort(model: string, effort: string | undefined): string | null {
+    if (!effort) return null;
+    if (isValidReasoningEffort(model, effort)) return effort;
+    this.log.warn("Invalid reasoning effort for model, ignoring", {
+      model,
+      reasoning_effort: effort,
+    });
+    return null;
+  }
+
+  /**
    * Get current session state.
    */
   private getSessionState(): SessionState {
@@ -1374,6 +1515,7 @@ export class SessionDO extends DurableObject<Env> {
       messageCount,
       createdAt: session?.created_at ?? Date.now(),
       model: session?.model ?? DEFAULT_MODEL,
+      reasoningEffort: session?.reasoning_effort ?? undefined,
       isProcessing,
     };
   }
@@ -1429,30 +1571,49 @@ export class SessionDO extends DurableObject<Env> {
       return undefined;
     }
 
-    let repoId: number;
+    // Fetch global secrets
+    let globalSecrets: Record<string, string> = {};
     try {
-      repoId = await this.ensureRepoId(session);
+      const globalStore = new GlobalSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+      globalSecrets = await globalStore.getDecryptedSecrets();
     } catch (e) {
-      this.log.warn("Cannot resolve repo ID for secrets, proceeding without", {
+      this.log.error("Failed to load global secrets, proceeding without", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+
+    // Fetch repo secrets
+    let repoSecrets: Record<string, string> = {};
+    try {
+      const repoId = await this.ensureRepoId(session);
+      const repoStore = new RepoSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+      repoSecrets = await repoStore.getDecryptedSecrets(repoId);
+    } catch (e) {
+      this.log.warn("Failed to load repo secrets, proceeding without", {
         repo_owner: session.repo_owner,
         repo_name: session.repo_name,
         error: e instanceof Error ? e.message : String(e),
       });
-      return undefined;
     }
 
-    const store = new RepoSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+    // Merge: repo overrides global
+    const { merged, totalBytes, exceedsLimit } = mergeSecrets(globalSecrets, repoSecrets);
+    const globalCount = Object.keys(globalSecrets).length;
+    const repoCount = Object.keys(repoSecrets).length;
+    const mergedCount = Object.keys(merged).length;
 
-    try {
-      const secrets = await store.getDecryptedSecrets(repoId);
-      return Object.keys(secrets).length === 0 ? undefined : secrets;
-    } catch (e) {
-      this.log.error("Failed to load repo secrets, proceeding without", {
-        repo_id: repoId,
-        error: e instanceof Error ? e.message : String(e),
+    if (mergedCount > 0) {
+      const logLevel = exceedsLimit ? "warn" : "info";
+      this.log[logLevel]("Secrets merged for sandbox", {
+        global_count: globalCount,
+        repo_count: repoCount,
+        merged_count: mergedCount,
+        payload_bytes: totalBytes,
+        exceeds_limit: exceedsLimit,
       });
-      return undefined;
     }
+
+    return mergedCount === 0 ? undefined : merged;
   }
 
   /**
@@ -1501,6 +1662,51 @@ export class SessionDO extends DurableObject<Env> {
     this.log.info("Sandbox token verified successfully");
     return new Response(JSON.stringify({ valid: true }), {
       status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  /**
+   * Handle OpenAI token refresh.
+   * Reads the refresh token from D1 secrets, calls OpenAI, stores the rotated
+   * token back, and returns only the access token to the sandbox.
+   */
+  private async handleOpenAITokenRefresh(): Promise<Response> {
+    const session = this.getSession();
+    if (!session) {
+      return this.openAIRefreshJsonResponse({ error: "No session" }, 404);
+    }
+
+    const encryptionKey = this.env.REPO_SECRETS_ENCRYPTION_KEY;
+    if (!this.env.DB || !encryptionKey) {
+      return this.openAIRefreshJsonResponse({ error: "Secrets not configured" }, 500);
+    }
+
+    const service = new OpenAITokenRefreshService(
+      this.env.DB,
+      encryptionKey,
+      (sessionRow) => this.ensureRepoId(sessionRow),
+      this.log
+    );
+
+    const result = await service.refresh(session);
+    if (!result.ok) {
+      return this.openAIRefreshJsonResponse({ error: result.error }, result.status);
+    }
+
+    return this.openAIRefreshJsonResponse(
+      {
+        access_token: result.accessToken,
+        expires_in: result.expiresIn,
+        account_id: result.accountId,
+      },
+      200
+    );
+  }
+
+  private openAIRefreshJsonResponse(body: unknown, status: number): Response {
+    return new Response(JSON.stringify(body), {
+      status,
       headers: { "Content-Type": "application/json" },
     });
   }
@@ -1672,12 +1878,42 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
+   * Get the prompting participant for PR creation.
+   * Returns the participant who triggered the currently processing message.
+   */
+  private async getPromptingParticipantForPR(): Promise<
+    | { participant: ParticipantRow; error?: never; status?: never }
+    | { participant?: never; error: string; status: number }
+  > {
+    const processingMessage = this.repository.getProcessingMessageAuthor();
+
+    if (!processingMessage) {
+      this.log.warn("PR creation failed: no processing message found");
+      return {
+        error: "No active prompt found. PR creation must be triggered by a user prompt.",
+        status: 400,
+      };
+    }
+
+    const participant = this.repository.getParticipantById(processingMessage.author_id);
+
+    if (!participant) {
+      this.log.warn("PR creation failed: participant not found", {
+        participantId: processingMessage.author_id,
+      });
+      return { error: "User not found. Please re-authenticate.", status: 401 };
+    }
+
+    return { participant };
+  }
+
+  /**
    * Check if a participant's GitHub token is expired.
    * Returns true if expired or will expire within buffer time.
    */
   private isGitHubTokenExpired(participant: ParticipantRow, bufferMs = 60000): boolean {
     if (!participant.github_token_expires_at) {
-      return false; // No expiration set, assume valid
+      return false;
     }
     return Date.now() + bufferMs >= participant.github_token_expires_at;
   }
@@ -1744,49 +1980,14 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
-   * Get the prompting participant for PR creation.
-   * Returns the participant who triggered the currently processing message.
-   */
-  private async getPromptingParticipantForPR(): Promise<
-    | { participant: ParticipantRow; error?: never; status?: never }
-    | { participant?: never; error: string; status: number }
-  > {
-    // Find the currently processing message
-    const processingMessage = this.repository.getProcessingMessageAuthor();
-
-    if (!processingMessage) {
-      this.log.warn("PR creation failed: no processing message found");
-      return {
-        error: "No active prompt found. PR creation must be triggered by a user prompt.",
-        status: 400,
-      };
-    }
-
-    const participantId = processingMessage.author_id;
-
-    // Get the participant record
-    const participant = this.repository.getParticipantById(participantId);
-
-    if (!participant) {
-      this.log.warn("PR creation failed: participant not found", { participantId });
-      return { error: "User not found. Please re-authenticate.", status: 401 };
-    }
-
-    return { participant };
-  }
-
-  /**
    * Resolve the prompting participant's OAuth credentials for API-based PR creation.
-   * Returns `auth: null` when no user OAuth token is available (manual PR fallback).
+   * Returns auth: null only when user OAuth is not configured; returns an HTTP error for token failures.
    */
-  private async resolvePromptingUserAuthForPR(participant: ParticipantRow): Promise<
-    | {
-        participant: ParticipantRow;
-        auth: SourceControlAuthContext | null;
-        error?: never;
-        status?: never;
-      }
-    | { participant?: never; auth?: never; error: string; status: number }
+  private async resolvePromptingUserAuthForPR(
+    participant: ParticipantRow
+  ): Promise<
+    | { auth: SourceControlAuthContext | null; error?: never; status?: never }
+    | { auth?: never; error: string; status: number }
   > {
     let resolvedParticipant = participant;
 
@@ -1794,7 +1995,7 @@ export class SessionDO extends DurableObject<Env> {
       this.log.info("PR creation: prompting user has no OAuth token, using manual fallback", {
         user_id: resolvedParticipant.user_id,
       });
-      return { participant: resolvedParticipant, auth: null };
+      return { auth: null };
     }
 
     if (this.isGitHubTokenExpired(resolvedParticipant)) {
@@ -1806,6 +2007,9 @@ export class SessionDO extends DurableObject<Env> {
       if (refreshed) {
         resolvedParticipant = refreshed;
       } else {
+        this.log.warn("GitHub token refresh failed, returning auth error", {
+          user_id: resolvedParticipant.user_id,
+        });
         return {
           error:
             "Your GitHub token has expired and could not be refreshed. Please re-authenticate.",
@@ -1815,7 +2019,7 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     if (!resolvedParticipant.github_access_token_encrypted) {
-      return { participant: resolvedParticipant, auth: null };
+      return { auth: null };
     }
 
     try {
@@ -1825,7 +2029,6 @@ export class SessionDO extends DurableObject<Env> {
       );
 
       return {
-        participant: resolvedParticipant,
         auth: {
           authType: "oauth",
           token: accessToken,
@@ -1853,6 +2056,7 @@ export class SessionDO extends DurableObject<Env> {
       repoId?: number;
       title?: string;
       model?: string; // LLM model to use
+      reasoningEffort?: string; // Reasoning effort level
       userId: string;
       githubLogin?: string;
       githubName?: string;
@@ -1879,14 +2083,17 @@ export class SessionDO extends DurableObject<Env> {
       }
     }
 
-    // Validate model name if provided
-    const model = body.model && isValidModel(body.model) ? body.model : DEFAULT_MODEL;
+    // Validate and normalize model name if provided
+    const model = getValidModelOrDefault(body.model);
     if (body.model && !isValidModel(body.model)) {
       this.log.warn("Invalid model name, using default", {
         requested_model: body.model,
         default_model: DEFAULT_MODEL,
       });
     }
+
+    // Validate reasoning effort if provided
+    const reasoningEffort = this.validateReasoningEffort(model, body.reasoningEffort);
 
     // Create session (store both internal ID and external name)
     this.repository.upsertSession({
@@ -1897,6 +2104,7 @@ export class SessionDO extends DurableObject<Env> {
       repoName: body.repoName,
       repoId: body.repoId ?? null,
       model,
+      reasoningEffort,
       status: "created",
       createdAt: now,
       updatedAt: now,
@@ -1952,6 +2160,7 @@ export class SessionDO extends DurableObject<Env> {
       opencodeSessionId: session.opencode_session_id,
       status: session.status,
       model: session.model,
+      reasoningEffort: session.reasoning_effort ?? undefined,
       createdAt: session.created_at,
       updatedAt: session.updated_at,
       sandbox: sandbox
@@ -1972,12 +2181,15 @@ export class SessionDO extends DurableObject<Env> {
         content: string;
         authorId: string;
         source: string;
+        model?: string;
+        reasoningEffort?: string;
         attachments?: Array<{ type: string; name: string; url?: string }>;
         callbackContext?: {
           channel: string;
           threadTs: string;
           repoFullName: string;
           model: string;
+          reactionMessageTs?: string;
         };
       };
 
@@ -1991,11 +2203,30 @@ export class SessionDO extends DurableObject<Env> {
       const messageId = generateId();
       const now = Date.now();
 
+      // Validate per-message model override
+      let messageModel: string | null = null;
+      if (body.model) {
+        if (isValidModel(body.model)) {
+          messageModel = body.model;
+        } else {
+          this.log.warn("Invalid message model in enqueue, ignoring", { model: body.model });
+        }
+      }
+
+      // Validate per-message reasoning effort
+      const effectiveModelForEffort = messageModel || this.getSession()?.model || DEFAULT_MODEL;
+      const messageReasoningEffort = this.validateReasoningEffort(
+        effectiveModelForEffort,
+        body.reasoningEffort
+      );
+
       this.repository.createMessage({
         id: messageId,
         authorId: participant.id, // Use the participant's row ID, not the user ID
         content: body.content,
         source: body.source as MessageSource,
+        model: messageModel,
+        reasoningEffort: messageReasoningEffort,
         attachments: body.attachments ? JSON.stringify(body.attachments) : null,
         callbackContext: body.callbackContext ? JSON.stringify(body.callbackContext) : null,
         status: "pending",
@@ -2012,7 +2243,8 @@ export class SessionDO extends DurableObject<Env> {
         source: body.source,
         author_id: participant.id,
         user_id: body.authorId,
-        model: null,
+        model: messageModel,
+        reasoning_effort: messageReasoningEffort,
         content_length: body.content.length,
         has_attachments: !!body.attachments?.length,
         attachments_count: body.attachments?.length ?? 0,
@@ -2031,8 +2263,8 @@ export class SessionDO extends DurableObject<Env> {
     }
   }
 
-  private handleStop(): Response {
-    this.stopExecution();
+  private async handleStop(): Promise<Response> {
+    await this.stopExecution();
     return Response.json({ status: "stopping" });
   }
 
@@ -2161,9 +2393,7 @@ export class SessionDO extends DurableObject<Env> {
 
   /**
    * Handle PR creation request.
-   * 1. Resolve prompting participant and branch metadata
-   * 2. Push branch to remote via provider push auth
-   * 3. Create PR via OAuth token, or return manual PR URL fallback
+   * Resolves prompting participant and auth in DO, then delegates PR orchestration.
    */
   private async handleCreatePR(request: Request): Promise<Response> {
     const body = (await request.json()) as {
@@ -2187,168 +2417,54 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     const promptingParticipant = promptingParticipantResult.participant;
-    this.log.info("Creating PR", { user_id: promptingParticipant.user_id });
-
-    try {
-      const sessionId = session.session_name || session.id;
-      const generatedHeadBranch = generateBranchName(sessionId);
-
-      const initialArtifacts = this.repository.listArtifacts();
-      const existingPrArtifact = initialArtifacts.find((artifact) => artifact.type === "pr");
-      if (existingPrArtifact) {
-        return Response.json(
-          { error: "A pull request has already been created for this session." },
-          { status: 409 }
-        );
-      }
-
-      // Generate push auth via provider app credentials (not user token)
-      // User token (if available) is only used for PR API call below
-      let pushAuth;
-      try {
-        pushAuth = await this.sourceControlProvider.generatePushAuth();
-        this.log.info("Generated fresh push auth token");
-      } catch (err) {
-        this.log.error("Failed to generate push auth", {
-          error: err instanceof Error ? err : String(err),
-        });
-        const errorMessage =
-          err instanceof SourceControlProviderError
-            ? err.message
-            : "Failed to generate push authentication";
-        return Response.json({ error: errorMessage }, { status: 500 });
-      }
-
-      // Resolve repository metadata with app auth so this still works for Slack sessions
-      const appAuth: SourceControlAuthContext = {
-        authType: "app",
-        token: pushAuth.token,
-      };
-      const repoInfo = await this.sourceControlProvider.getRepository(appAuth, {
-        owner: session.repo_owner,
-        name: session.repo_name,
-      });
-      const baseBranch = body.baseBranch || repoInfo.defaultBranch;
-      const branchResolution = resolveHeadBranchForPr({
-        requestedHeadBranch: body.headBranch,
-        sessionBranchName: session.branch_name,
-        generatedBranchName: generatedHeadBranch,
-        baseBranch,
-      });
-      const headBranch = branchResolution.headBranch;
-      this.log.info("Resolved PR head branch", {
-        requested_head_branch: body.headBranch ?? null,
-        session_branch_name: session.branch_name,
-        generated_head_branch: generatedHeadBranch,
-        resolved_head_branch: headBranch,
-        resolution_source: branchResolution.source,
-        base_branch: baseBranch,
-      });
-      const pushSpec = this.sourceControlProvider.buildGitPushSpec({
-        owner: session.repo_owner,
-        name: session.repo_name,
-        sourceRef: "HEAD",
-        targetBranch: headBranch,
-        auth: pushAuth,
-        force: true,
-      });
-
-      // Push branch to remote via sandbox (session-layer coordination)
-      const pushResult = await this.pushBranchToRemote(headBranch, pushSpec);
-
-      if (!pushResult.success) {
-        return Response.json({ error: pushResult.error }, { status: 500 });
-      }
-
-      // Update session with branch name after push succeeds
-      this.repository.updateSessionBranch(session.id, headBranch);
-
-      // Re-check artifacts after async work to avoid stale reads on retries/interleaving.
-      const latestArtifacts = this.repository.listArtifacts();
-      const latestPrArtifact = latestArtifacts.find((artifact) => artifact.type === "pr");
-      if (latestPrArtifact) {
-        return Response.json(
-          { error: "A pull request has already been created for this session." },
-          { status: 409 }
-        );
-      }
-
-      const authResolution = await this.resolvePromptingUserAuthForPR(promptingParticipant);
-      if ("error" in authResolution) {
-        return this.buildManualPrFallbackResponse(
-          session,
-          headBranch,
-          baseBranch,
-          latestArtifacts,
-          authResolution.error
-        );
-      }
-
-      if (!authResolution.auth) {
-        return this.buildManualPrFallbackResponse(session, headBranch, baseBranch, latestArtifacts);
-      }
-
-      // Append session link footer to agent's PR body
-      const webAppUrl = this.env.WEB_APP_URL || this.env.WORKER_URL || "";
-      const sessionUrl = `${webAppUrl}/session/${sessionId}`;
-      const fullBody = body.body + `\n\n---\n*Created with [Open-Inspect](${sessionUrl})*`;
-
-      // Create the PR via provider (using the prompting user's OAuth token)
-      const prResult = await this.sourceControlProvider.createPullRequest(authResolution.auth, {
-        repository: repoInfo,
-        title: body.title,
-        body: fullBody,
-        sourceBranch: headBranch,
-        targetBranch: baseBranch,
-      });
-
-      // Store the PR as an artifact
-      const artifactId = generateId();
-      const now = Date.now();
-      this.repository.createArtifact({
-        id: artifactId,
-        type: "pr",
-        url: prResult.webUrl,
-        metadata: JSON.stringify({
-          number: prResult.id,
-          state: prResult.state,
-          head: headBranch,
-          base: baseBranch,
-        }),
-        createdAt: now,
-      });
-
-      // Broadcast PR creation to all clients
-      this.broadcast({
-        type: "artifact_created",
-        artifact: {
-          id: artifactId,
-          type: "pr",
-          url: prResult.webUrl,
-          prNumber: prResult.id,
-        },
-      });
-
-      return Response.json({
-        prNumber: prResult.id,
-        prUrl: prResult.webUrl,
-        state: prResult.state,
-      });
-    } catch (error) {
-      this.log.error("PR creation failed", {
-        error: error instanceof Error ? error : String(error),
-      });
-
-      // Handle SourceControlProviderError with HTTP status
-      if (error instanceof SourceControlProviderError) {
-        return Response.json({ error: error.message }, { status: error.httpStatus || 500 });
-      }
-
-      return Response.json(
-        { error: error instanceof Error ? error.message : "Failed to create PR" },
-        { status: 500 }
-      );
+    const authResolution = await this.resolvePromptingUserAuthForPR(promptingParticipant);
+    if ("error" in authResolution) {
+      return Response.json({ error: authResolution.error }, { status: authResolution.status });
     }
+
+    const sessionId = session.session_name || session.id;
+    const webAppUrl = this.env.WEB_APP_URL || this.env.WORKER_URL || "";
+    const sessionUrl = webAppUrl + "/session/" + sessionId;
+
+    const pullRequestService = new SessionPullRequestService({
+      repository: this.repository,
+      sourceControlProvider: this.sourceControlProvider,
+      log: this.log,
+      generateId: () => generateId(),
+      pushBranchToRemote: (headBranch, pushSpec) => this.pushBranchToRemote(headBranch, pushSpec),
+      broadcastArtifactCreated: (artifact) => {
+        this.broadcast({
+          type: "artifact_created",
+          artifact,
+        });
+      },
+    });
+
+    const result = await pullRequestService.createPullRequest({
+      ...body,
+      promptingUserId: promptingParticipant.user_id,
+      promptingAuth: authResolution.auth,
+      sessionUrl,
+    });
+
+    if (result.kind === "error") {
+      return Response.json({ error: result.error }, { status: result.status });
+    }
+
+    if (result.kind === "manual") {
+      return Response.json({
+        status: "manual",
+        createPrUrl: result.createPrUrl,
+        headBranch: result.headBranch,
+        baseBranch: result.baseBranch,
+      });
+    }
+
+    return Response.json({
+      prNumber: result.prNumber,
+      prUrl: result.prUrl,
+      state: result.state,
+    });
   }
 
   private parseArtifactMetadata(
@@ -2367,121 +2483,6 @@ export class SessionDO extends DurableObject<Env> {
       });
       return null;
     }
-  }
-
-  private getExistingManualBranchArtifact(
-    artifacts: ArtifactRow[],
-    headBranch: string
-  ): { artifact: ArtifactRow; metadata: Record<string, unknown> } | null {
-    for (const artifact of artifacts) {
-      if (artifact.type !== "branch") {
-        continue;
-      }
-
-      const metadata = this.parseArtifactMetadata(artifact);
-      if (!metadata) {
-        continue;
-      }
-
-      if (metadata.mode === "manual_pr" && metadata.head === headBranch) {
-        return { artifact, metadata };
-      }
-    }
-
-    return null;
-  }
-
-  private getCreatePrUrlFromManualArtifact(
-    existing: { artifact: ArtifactRow; metadata: Record<string, unknown> },
-    fallbackUrl: string
-  ): string {
-    const metadataUrl = existing.metadata.createPrUrl;
-    if (typeof metadataUrl === "string" && metadataUrl.length > 0) {
-      return metadataUrl;
-    }
-
-    if (existing.artifact.url && existing.artifact.url.length > 0) {
-      return existing.artifact.url;
-    }
-
-    return fallbackUrl;
-  }
-
-  private buildManualPrFallbackResponse(
-    session: SessionRow,
-    headBranch: string,
-    baseBranch: string,
-    artifacts: ArtifactRow[],
-    reason?: string
-  ): Response {
-    const manualCreatePrUrl = this.sourceControlProvider.buildManualPullRequestUrl({
-      owner: session.repo_owner,
-      name: session.repo_name,
-      sourceBranch: headBranch,
-      targetBranch: baseBranch,
-    });
-
-    const existingManualArtifact = this.getExistingManualBranchArtifact(artifacts, headBranch);
-    if (existingManualArtifact) {
-      const createPrUrl = this.getCreatePrUrlFromManualArtifact(
-        existingManualArtifact,
-        manualCreatePrUrl
-      );
-      this.log.info("Using manual PR fallback", {
-        head_branch: headBranch,
-        base_branch: baseBranch,
-        session_id: session.session_name || session.id,
-        existing_artifact_id: existingManualArtifact.artifact.id,
-        reason: reason ?? "missing_oauth_token",
-      });
-      return Response.json({
-        status: "manual",
-        createPrUrl,
-        headBranch,
-        baseBranch,
-      });
-    }
-
-    const artifactId = generateId();
-    const now = Date.now();
-    const metadata: ManualPullRequestArtifactMetadata = {
-      head: headBranch,
-      base: baseBranch,
-      mode: "manual_pr",
-      createPrUrl: manualCreatePrUrl,
-      provider: this.sourceControlProvider.name,
-    };
-    this.repository.createArtifact({
-      id: artifactId,
-      type: "branch",
-      url: manualCreatePrUrl,
-      metadata: JSON.stringify(metadata),
-      createdAt: now,
-    });
-
-    this.broadcast({
-      type: "artifact_created",
-      artifact: {
-        id: artifactId,
-        type: "branch",
-        url: manualCreatePrUrl,
-      },
-    });
-
-    this.log.info("Using manual PR fallback", {
-      head_branch: headBranch,
-      base_branch: baseBranch,
-      session_id: session.session_name || session.id,
-      artifact_id: artifactId,
-      reason: reason ?? "missing_oauth_token",
-    });
-
-    return Response.json({
-      status: "manual",
-      createPrUrl: manualCreatePrUrl,
-      headBranch,
-      baseBranch,
-    });
   }
 
   /**
