@@ -2,7 +2,16 @@
 
 import { useParams, useSearchParams } from "next/navigation";
 import { mutate } from "swr";
-import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from "react";
+import {
+  Suspense,
+  memo,
+  useState,
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useCallback,
+  useMemo,
+} from "react";
 import { useSessionSocket } from "@/hooks/use-session-socket";
 import { SafeMarkdown } from "@/components/safe-markdown";
 import { ToolCallGroup } from "@/components/tool-call-group";
@@ -104,6 +113,14 @@ function ModelOptionButton({
 }
 
 export default function SessionPage() {
+  return (
+    <Suspense>
+      <SessionPageContent />
+    </Suspense>
+  );
+}
+
+function SessionPageContent() {
   const params = useParams();
   const searchParams = useSearchParams();
   const sessionId = params.id as string;

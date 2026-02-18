@@ -480,7 +480,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
       subscribedRef.current = false;
       setConnected(false);
       setConnecting(false);
-      setReplaying(true);
+      setReplaying(false);
       wsRef.current = null;
 
       // Handle authentication errors
