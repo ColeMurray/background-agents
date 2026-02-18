@@ -85,6 +85,45 @@ interface UseSessionSocketReturn {
   loadOlderEvents: () => void;
 }
 
+/**
+ * Collapse a batch of events by folding streaming token events into their
+ * final form (only the last accumulated token before execution_complete is kept).
+ */
+function collapseTokenEvents(
+  events: SandboxEvent[],
+  pendingTextRef: React.MutableRefObject<{
+    content: string;
+    messageId: string;
+    timestamp: number;
+  } | null>
+): SandboxEvent[] {
+  const result: SandboxEvent[] = [];
+  for (const evt of events) {
+    if (evt.type === "token" && evt.content && evt.messageId) {
+      pendingTextRef.current = {
+        content: evt.content,
+        messageId: evt.messageId,
+        timestamp: evt.timestamp,
+      };
+    } else if (evt.type === "execution_complete") {
+      if (pendingTextRef.current) {
+        const pending = pendingTextRef.current;
+        pendingTextRef.current = null;
+        result.push({
+          type: "token",
+          content: pending.content,
+          messageId: pending.messageId,
+          timestamp: pending.timestamp,
+        });
+      }
+      result.push(evt);
+    } else {
+      result.push(evt);
+    }
+  }
+  return result;
+}
+
 export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   const wsRef = useRef<WebSocket | null>(null);
   const connectingRef = useRef(false);
@@ -176,19 +215,20 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
       isProcessing?: boolean;
       hasMore?: boolean;
       cursor?: { timestamp: number; id: string } | null;
+      replay?: {
+        events: SandboxEvent[];
+        hasMore: boolean;
+        cursor: { timestamp: number; id: string } | null;
+      };
+      spawnError?: string | null;
     }) => {
       switch (data.type) {
-        case "subscribed":
+        case "subscribed": {
           console.log("WebSocket subscribed to session");
           subscribedRef.current = true;
           // Clear existing state since we're about to receive fresh history
-          setEvents([]);
           setArtifacts([]);
           pendingTextRef.current = null;
-          // Reset replay buffering state
-          replayCompleteRef.current = false;
-          liveEventBufferRef.current = [];
-          setReplaying(true);
           if (data.state) {
             setSessionState(data.state);
           }
@@ -200,7 +240,32 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           if (data.participant) {
             currentParticipantRef.current = data.participant;
           }
+
+          if (data.replay) {
+            // Batched replay: process all events in a single state update
+            setEvents(collapseTokenEvents(data.replay.events, pendingTextRef));
+
+            // Pagination state from the batched replay
+            setHasMoreHistory(data.replay.hasMore);
+            cursorRef.current = data.replay.cursor;
+
+            // Replay is already complete — live events flow directly through
+            replayCompleteRef.current = true;
+            liveEventBufferRef.current = [];
+            setReplaying(false);
+
+            if (data.spawnError) {
+              setSessionState((prev) => (prev ? { ...prev, sandboxStatus: "failed" } : null));
+            }
+          } else {
+            // Legacy: wait for individual sandbox_event messages + replay_complete
+            setEvents([]);
+            replayCompleteRef.current = false;
+            liveEventBufferRef.current = [];
+            setReplaying(true);
+          }
           break;
+        }
 
         case "prompt_queued":
           // Could show queue position indicator
@@ -232,32 +297,9 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           const buffered = liveEventBufferRef.current;
           liveEventBufferRef.current = [];
           if (buffered.length > 0) {
-            const toAdd: SandboxEvent[] = [];
-            for (const evt of buffered) {
-              if (evt.type === "token" && evt.content && evt.messageId) {
-                pendingTextRef.current = {
-                  content: evt.content,
-                  messageId: evt.messageId,
-                  timestamp: evt.timestamp,
-                };
-              } else if (evt.type === "execution_complete") {
-                if (pendingTextRef.current) {
-                  const pending = pendingTextRef.current;
-                  pendingTextRef.current = null;
-                  toAdd.push({
-                    type: "token",
-                    content: pending.content,
-                    messageId: pending.messageId,
-                    timestamp: pending.timestamp,
-                  });
-                }
-                toAdd.push(evt);
-              } else {
-                toAdd.push(evt);
-              }
-            }
-            if (toAdd.length > 0) {
-              setEvents((prev) => [...prev, ...toAdd]);
+            const collapsed = collapseTokenEvents(buffered, pendingTextRef);
+            if (collapsed.length > 0) {
+              setEvents((prev) => [...prev, ...collapsed]);
             }
           }
           break;

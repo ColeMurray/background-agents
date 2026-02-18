@@ -752,8 +752,11 @@ export class SessionDO extends DurableObject<Env> {
       });
     }
 
-    // Send session state with current participant info
+    // Gather session state and replay events, then send as a single message
     const state = this.getSessionState();
+    const sandbox = this.getSandbox();
+    const replay = this.getReplayData();
+
     this.safeSend(ws, {
       type: "subscribed",
       sessionId: state.id,
@@ -764,23 +767,8 @@ export class SessionDO extends DurableObject<Env> {
         name: participant.github_name || participant.github_login || participant.user_id,
         avatar: getGitHubAvatarUrl(participant.github_login),
       },
-    } as ServerMessage);
-
-    const sandbox = this.getSandbox();
-    if (sandbox?.last_spawn_error) {
-      this.safeSend(ws, { type: "sandbox_error", error: sandbox.last_spawn_error });
-    }
-
-    // Send historical events (messages and sandbox events)
-    const replay = this.sendHistoricalEvents(ws);
-
-    // Signal replay is complete with pagination cursor
-    this.safeSend(ws, {
-      type: "replay_complete",
-      hasMore: replay.hasMore,
-      cursor: replay.oldestItem
-        ? { timestamp: replay.oldestItem.created_at, id: replay.oldestItem.id }
-        : null,
+      replay,
+      spawnError: sandbox?.last_spawn_error || null,
     } as ServerMessage);
 
     // Send current presence
@@ -791,34 +779,30 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
-   * Send historical events to a newly connected client.
-   * Queries only the events table — user_message events are written at prompt time.
-   * Returns metadata about what was sent for the replay_complete message.
+   * Collect historical events for replay.
+   * Returns parsed events and pagination metadata for inclusion in the subscribed message.
    */
-  private sendHistoricalEvents(ws: WebSocket): {
+  private getReplayData(): {
+    events: SandboxEvent[];
     hasMore: boolean;
-    oldestItem: { created_at: number; id: string } | null;
+    cursor: { timestamp: number; id: string } | null;
   } {
     const REPLAY_LIMIT = 500;
-    const events = this.repository.getEventsForReplay(REPLAY_LIMIT);
-    const hasMore = events.length >= REPLAY_LIMIT;
+    const rows = this.repository.getEventsForReplay(REPLAY_LIMIT);
+    const hasMore = rows.length >= REPLAY_LIMIT;
 
-    for (const event of events) {
+    const events: SandboxEvent[] = [];
+    for (const row of rows) {
       try {
-        const eventData = JSON.parse(event.data);
-        this.safeSend(ws, {
-          type: "sandbox_event",
-          event: eventData,
-        });
+        events.push(JSON.parse(row.data));
       } catch {
         // Skip malformed events
       }
     }
 
-    const oldestItem =
-      events.length > 0 ? { created_at: events[0].created_at, id: events[0].id } : null;
+    const cursor = rows.length > 0 ? { timestamp: rows[0].created_at, id: rows[0].id } : null;
 
-    return { hasMore, oldestItem };
+    return { events, hasMore, cursor };
   }
 
   /**
