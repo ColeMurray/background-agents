@@ -1,10 +1,11 @@
 "use client";
 
-import { createContext, useContext } from "react";
+import { createContext, useCallback, useContext } from "react";
 import { useSession, signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { SessionSidebar } from "./session-sidebar";
 import { useSidebar } from "@/hooks/use-sidebar";
+import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
 
 interface SidebarContextValue {
   isOpen: boolean;
@@ -31,6 +32,15 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   const { data: session, status } = useSession();
   const router = useRouter();
   const sidebar = useSidebar();
+  const handleNewSession = useCallback(() => {
+    router.push("/");
+  }, [router]);
+
+  useGlobalShortcuts({
+    enabled: status === "authenticated" && Boolean(session),
+    onNewSession: handleNewSession,
+    onToggleSidebar: sidebar.toggle,
+  });
 
   // Show loading state
   if (status === "loading") {
@@ -59,10 +69,6 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
       </div>
     );
   }
-
-  const handleNewSession = () => {
-    router.push("/");
-  };
 
   return (
     <SidebarContext.Provider value={sidebar}>

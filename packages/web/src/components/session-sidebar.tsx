@@ -6,6 +6,7 @@ import { useState, useMemo } from "react";
 import { useSession, signOut } from "next-auth/react";
 import useSWR from "swr";
 import { formatRelativeTime, isInactiveSession } from "@/lib/time";
+import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 
 export interface SessionItem {
   id: string;
@@ -94,7 +95,8 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           <button
             onClick={onToggle}
             className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-            title="Toggle sidebar"
+            title={`Toggle sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
+            aria-label={`Toggle sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
           >
             <SidebarIcon />
           </button>
@@ -107,7 +109,8 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           <button
             onClick={onNewSession}
             className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-            title="New session"
+            title={`New session (${SHORTCUT_LABELS.NEW_SESSION})`}
+            aria-label={`New session (${SHORTCUT_LABELS.NEW_SESSION})`}
           >
             <PlusIcon />
           </button>

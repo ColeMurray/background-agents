@@ -12,6 +12,11 @@ const NAV_ITEMS = [
     icon: ModelsIcon,
   },
   {
+    id: "keyboard-shortcuts",
+    label: "Keyboard",
+    icon: KeyboardIcon,
+  },
+  {
     id: "data-controls",
     label: "Data Controls",
     icon: DataControlsIcon,
@@ -102,6 +107,23 @@ function KeyIcon() {
       strokeLinejoin="round"
     >
       <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
+    </svg>
+  );
+}
+
+function KeyboardIcon() {
+  return (
+    <svg
+      className="w-4 h-4"
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 24 24"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="2" y="6" width="20" height="12" rx="2" />
+      <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h8M16 14h2" />
     </svg>
   );
 }

@@ -6,6 +6,8 @@ import { SettingsNav, type SettingsCategory } from "@/components/settings/settin
 import { SecretsSettings } from "@/components/settings/secrets-settings";
 import { ModelsSettings } from "@/components/settings/models-settings";
 import { DataControlsSettings } from "@/components/settings/data-controls-settings";
+import { KeyboardShortcutsSettings } from "@/components/settings/keyboard-shortcuts-settings";
+import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 
 export default function SettingsPage() {
   const { isOpen, toggle } = useSidebarContext();
@@ -20,7 +22,8 @@ export default function SettingsPage() {
             <button
               onClick={toggle}
               className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-              title="Open sidebar"
+              title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
+              aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
             >
               <SidebarToggleIcon />
             </button>
@@ -34,6 +37,7 @@ export default function SettingsPage() {
           <div className="max-w-2xl">
             {activeCategory === "secrets" && <SecretsSettings />}
             {activeCategory === "models" && <ModelsSettings />}
+            {activeCategory === "keyboard-shortcuts" && <KeyboardShortcutsSettings />}
             {activeCategory === "data-controls" && <DataControlsSettings />}
           </div>
         </div>
