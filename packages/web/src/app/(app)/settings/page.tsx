@@ -1,21 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { SidebarLayout, useSidebarContext } from "@/components/sidebar-layout";
+import { useSidebarContext } from "@/components/sidebar-layout";
 import { SettingsNav, type SettingsCategory } from "@/components/settings/settings-nav";
 import { SecretsSettings } from "@/components/settings/secrets-settings";
 import { ModelsSettings } from "@/components/settings/models-settings";
 import { DataControlsSettings } from "@/components/settings/data-controls-settings";
 
 export default function SettingsPage() {
-  return (
-    <SidebarLayout>
-      <SettingsContent />
-    </SidebarLayout>
-  );
-}
-
-function SettingsContent() {
   const { isOpen, toggle } = useSidebarContext();
   const [activeCategory, setActiveCategory] = useState<SettingsCategory>("secrets");
 

@@ -2,9 +2,10 @@
 
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import { mutate } from "swr";
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
-import { SidebarLayout, useSidebarContext } from "@/components/sidebar-layout";
+import { useSidebarContext } from "@/components/sidebar-layout";
 import { formatModelNameLower } from "@/lib/format";
 import {
   DEFAULT_MODEL,
@@ -29,7 +30,7 @@ const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
 
 export default function Home() {
-  const { data: session, status } = useSession();
+  const { data: session } = useSession();
   const router = useRouter();
   const [repos, setRepos] = useState<Repo[]>([]);
   const [loadingRepos, setLoadingRepos] = useState(false);
@@ -249,6 +250,7 @@ export default function Home() {
       });
 
       if (res.ok) {
+        mutate("/api/sessions");
         router.push(`/session/${sessionId}`);
       } else {
         const data = await res.json();
@@ -261,35 +263,25 @@ export default function Home() {
     }
   };
 
-  if (status === "loading") {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-foreground" />
-      </div>
-    );
-  }
-
   return (
-    <SidebarLayout>
-      <HomeContent
-        isAuthenticated={!!session}
-        repos={repos}
-        loadingRepos={loadingRepos}
-        selectedRepo={selectedRepo}
-        setSelectedRepo={setSelectedRepo}
-        selectedModel={selectedModel}
-        setSelectedModel={handleModelChange}
-        reasoningEffort={reasoningEffort}
-        setReasoningEffort={setReasoningEffort}
-        prompt={prompt}
-        handlePromptChange={handlePromptChange}
-        creating={creating}
-        isCreatingSession={isCreatingSession}
-        error={error}
-        handleSubmit={handleSubmit}
-        modelOptions={enabledModelOptions}
-      />
-    </SidebarLayout>
+    <HomeContent
+      isAuthenticated={!!session}
+      repos={repos}
+      loadingRepos={loadingRepos}
+      selectedRepo={selectedRepo}
+      setSelectedRepo={setSelectedRepo}
+      selectedModel={selectedModel}
+      setSelectedModel={handleModelChange}
+      reasoningEffort={reasoningEffort}
+      setReasoningEffort={setReasoningEffort}
+      prompt={prompt}
+      handlePromptChange={handlePromptChange}
+      creating={creating}
+      isCreatingSession={isCreatingSession}
+      error={error}
+      handleSubmit={handleSubmit}
+      modelOptions={enabledModelOptions}
+    />
   );
 }
 

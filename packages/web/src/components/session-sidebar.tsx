@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { useSession, signOut } from "next-auth/react";
+import useSWR from "swr";
 import { formatRelativeTime, isInactiveSession } from "@/lib/time";
 
 export interface SessionItem {
@@ -25,30 +26,18 @@ interface SessionSidebarProps {
 export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: SessionSidebarProps) {
   const { data: authSession } = useSession();
   const pathname = usePathname();
-  const [sessions, setSessions] = useState<SessionItem[]>([]);
-  const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
-  useEffect(() => {
-    if (authSession) {
-      fetchSessions();
-    }
-  }, [authSession]);
-
-  const fetchSessions = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch("/api/sessions");
-      if (res.ok) {
-        const data = await res.json();
-        setSessions(data.sessions || []);
-      }
-    } catch (error) {
-      console.error("Failed to fetch sessions:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const { data: sessions = [], isLoading: loading } = useSWR<SessionItem[]>(
+    authSession ? "/api/sessions" : null,
+    async (url: string) => {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to fetch sessions");
+      const data = await res.json();
+      return data.sessions || [];
+    },
+    { revalidateOnFocus: true }
+  );
 
   // Sort sessions by updatedAt (most recent first) and filter by search query
   const { activeSessions, inactiveSessions } = useMemo(() => {
