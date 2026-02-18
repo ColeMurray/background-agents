@@ -92,6 +92,7 @@ export type ClientMessage =
   | { type: "subscribe"; token: string; clientId: string }
   | { type: "prompt"; content: string; model?: string; attachments?: Attachment[] }
   | { type: "stop" }
+  | { type: "fetch_history"; cursor: { timestamp: number; id: string }; limit?: number }
   | { type: "typing" }
   | {
       type: "presence";
@@ -108,9 +109,21 @@ export type ServerMessage =
       state: SessionState;
       participantId: string;
       participant?: { participantId: string; name: string; avatar?: string };
+      replay?: {
+        events: SandboxEvent[];
+        hasMore: boolean;
+        cursor: { timestamp: number; id: string } | null;
+      };
+      spawnError?: string | null;
     }
   | { type: "prompt_queued"; messageId: string; position: number }
   | { type: "sandbox_event"; event: SandboxEvent }
+  | {
+      type: "history_page";
+      items: SandboxEvent[];
+      hasMore: boolean;
+      cursor: { timestamp: number; id: string } | null;
+    }
   | { type: "presence_sync"; participants: ParticipantPresence[] }
   | { type: "presence_update"; participants: ParticipantPresence[] }
   | { type: "presence_leave"; userId: string }
@@ -237,6 +250,7 @@ export interface ClientInfo {
   avatar?: string;
   status: "active" | "idle" | "away";
   lastSeen: number;
+  lastFetchHistoryAt?: number;
   clientId: string;
   ws: WebSocket;
 }
