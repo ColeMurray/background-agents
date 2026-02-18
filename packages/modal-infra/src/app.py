@@ -43,10 +43,9 @@ github_app_secrets = modal.Secret.from_name(
 
 # Secrets for Bitbucket Bot - used for git operations (clone, push)
 # These are injected into sandboxes when using Bitbucket
-bitbucket_secrets = modal.Secret.from_name(
-    "bitbucket-bot",
-    required_keys=["BITBUCKET_BOT_USERNAME", "BITBUCKET_BOT_APP_PASSWORD"],
-)
+# Optional: Bitbucket credentials are only needed for Bitbucket-backed sessions.
+# Missing/empty values are handled at request time in web_api.py.
+bitbucket_secrets = modal.Secret.from_name("bitbucket-bot")
 
 # Secret for internal API authentication (control plane -> Modal)
 # Used to verify requests from the control plane to Modal endpoints
