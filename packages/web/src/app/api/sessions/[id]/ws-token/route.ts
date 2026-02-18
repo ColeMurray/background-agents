@@ -28,8 +28,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const userId = user.id || user.email || "anonymous";
 
     const jwt = await getToken({ req: request });
-    const accessToken = session.accessToken;
-    const provider = session.provider ?? "github";
+    const accessToken = jwt?.accessToken as string | undefined;
+    const accessTokenExpiresAt = jwt?.accessTokenExpiresAt as number | undefined;
+    const provider =
+      (jwt?.provider as "github" | "bitbucket" | undefined) ?? session.provider ?? "github";
 
     const tokenBody: Record<string, unknown> = {
       userId,
@@ -42,14 +44,14 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       tokenBody.bitbucketDisplayName = user.name;
       tokenBody.bitbucketEmail = user.email;
       tokenBody.bitbucketToken = accessToken;
-      tokenBody.bitbucketTokenExpiresAt = session.accessTokenExpiresAt;
+      tokenBody.bitbucketTokenExpiresAt = accessTokenExpiresAt;
     } else {
       tokenBody.githubUserId = user.id;
       tokenBody.githubLogin = user.login;
       tokenBody.githubName = user.name;
       tokenBody.githubEmail = user.email;
       tokenBody.githubToken = accessToken;
-      tokenBody.githubTokenExpiresAt = session.accessTokenExpiresAt;
+      tokenBody.githubTokenExpiresAt = accessTokenExpiresAt;
       tokenBody.githubRefreshToken = jwt?.refreshToken as string | undefined;
     }
 

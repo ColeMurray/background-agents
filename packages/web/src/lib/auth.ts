@@ -52,14 +52,11 @@ function BitbucketProvider(options: {
         }).then((res) => res.json());
 
         // Fetch email separately
-        const emails = await fetch(
-          "https://api.bitbucket.org/2.0/user/emails",
-          {
-            headers: {
-              Authorization: `Bearer ${tokens.access_token}`,
-            },
-          }
-        ).then((res) => res.json());
+        const emails = await fetch("https://api.bitbucket.org/2.0/user/emails", {
+          headers: {
+            Authorization: `Bearer ${tokens.access_token}`,
+          },
+        }).then((res) => res.json());
 
         // Find primary email
         const primaryEmail = emails.values?.find(
@@ -91,8 +88,6 @@ export type VCSProvider = "github" | "bitbucket";
 // Extend NextAuth types to include provider-specific user info
 declare module "next-auth" {
   interface Session {
-    accessToken?: string;
-    accessTokenExpiresAt?: number; // Unix timestamp in milliseconds
     provider?: VCSProvider;
     user: {
       id?: string; // Provider user ID
@@ -218,8 +213,6 @@ export const authOptions: NextAuthOptions = {
       return token;
     },
     async session({ session, token }) {
-      session.accessToken = token.accessToken;
-      session.accessTokenExpiresAt = token.accessTokenExpiresAt;
       session.provider = token.provider;
 
       if (session.user) {

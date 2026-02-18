@@ -1,5 +1,7 @@
+import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { getToken } from "next-auth/jwt";
 import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
 import type { EnrichedRepository } from "@open-inspect/shared";
@@ -10,19 +12,23 @@ interface ControlPlaneReposResponse {
   cachedAt: string;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
+    const jwt = await getToken({ req: request });
+    const provider = (jwt?.provider as "github" | "bitbucket" | undefined) ?? session.provider;
+    const accessToken = jwt?.accessToken as string | undefined;
+
     const headers: Record<string, string> = {};
-    if (session.provider) {
-      headers["X-VCS-Provider"] = session.provider;
+    if (provider) {
+      headers["X-VCS-Provider"] = provider;
     }
-    if (session.accessToken) {
-      headers["X-User-Token"] = session.accessToken;
+    if (accessToken) {
+      headers["X-User-Token"] = accessToken;
     }
 
     const response = await controlPlaneFetch("/repos", {
@@ -45,9 +51,6 @@ export async function GET() {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error("Error fetching repos:", message, error);
-    return NextResponse.json(
-      { error: "Internal server error", detail: message },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Internal server error", detail: message }, { status: 500 });
   }
 }

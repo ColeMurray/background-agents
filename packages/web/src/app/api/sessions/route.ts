@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { getToken } from "next-auth/jwt";
 import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
 
@@ -37,8 +38,10 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    const accessToken = session.accessToken;
-    const provider = session.provider ?? "github";
+    const jwt = await getToken({ req: request });
+    const accessToken = jwt?.accessToken as string | undefined;
+    const provider =
+      (jwt?.provider as "github" | "bitbucket" | undefined) ?? session.provider ?? "github";
     const user = session.user;
     const userId = user?.id || user?.email || "anonymous";
 
