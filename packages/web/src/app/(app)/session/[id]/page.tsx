@@ -2,6 +2,7 @@
 
 import { useParams, useSearchParams } from "next/navigation";
 import { mutate } from "swr";
+import useSWRMutation from "swr/mutation";
 import {
   Suspense,
   memo,
@@ -156,35 +157,23 @@ function SessionPageContent() {
     [searchParams]
   );
 
-  const handleArchive = useCallback(async () => {
-    try {
-      const response = await fetch(`/api/sessions/${sessionId}/archive`, {
-        method: "POST",
-      });
-      if (response.ok) {
-        mutate("/api/sessions");
-      } else {
-        console.error("Failed to archive session");
-      }
-    } catch (error) {
-      console.error("Failed to archive session:", error);
-    }
-  }, [sessionId]);
+  const { trigger: handleArchive } = useSWRMutation(
+    `/api/sessions/${sessionId}/archive`,
+    (url: string) =>
+      fetch(url, { method: "POST" }).then((r) => {
+        if (r.ok) mutate("/api/sessions");
+        else console.error("Failed to archive session");
+      })
+  );
 
-  const handleUnarchive = useCallback(async () => {
-    try {
-      const response = await fetch(`/api/sessions/${sessionId}/unarchive`, {
-        method: "POST",
-      });
-      if (response.ok) {
-        mutate("/api/sessions");
-      } else {
-        console.error("Failed to unarchive session");
-      }
-    } catch (error) {
-      console.error("Failed to unarchive session:", error);
-    }
-  }, [sessionId]);
+  const { trigger: handleUnarchive } = useSWRMutation(
+    `/api/sessions/${sessionId}/unarchive`,
+    (url: string) =>
+      fetch(url, { method: "POST" }).then((r) => {
+        if (r.ok) mutate("/api/sessions");
+        else console.error("Failed to unarchive session");
+      })
+  );
 
   const [prompt, setPrompt] = useState("");
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);

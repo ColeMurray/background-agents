@@ -1,28 +1,24 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import useSWR, { mutate } from "swr";
 import { MODEL_OPTIONS, DEFAULT_ENABLED_MODELS } from "@open-inspect/shared";
-import { invalidateEnabledModelsCache } from "@/hooks/use-enabled-models";
+import { MODEL_PREFERENCES_KEY } from "@/hooks/use-enabled-models";
 
 export function ModelsSettings() {
+  const { data, isLoading: loading } = useSWR<{ enabledModels: string[] }>(MODEL_PREFERENCES_KEY);
   const [enabledModels, setEnabledModels] = useState<Set<string>>(new Set(DEFAULT_ENABLED_MODELS));
-  const [loading, setLoading] = useState(true);
+  const [initialized, setInitialized] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [dirty, setDirty] = useState(false);
 
-  useEffect(() => {
-    fetch("/api/model-preferences")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data?.enabledModels) {
-          setEnabledModels(new Set(data.enabledModels));
-        }
-      })
-      .catch((err) => console.error("Failed to fetch model preferences:", err))
-      .finally(() => setLoading(false));
-  }, []);
+  // Sync SWR data into local state once on initial load
+  if (data?.enabledModels && !initialized) {
+    setEnabledModels(new Set(data.enabledModels));
+    setInitialized(true);
+  }
 
   const toggleModel = (modelId: string) => {
     setEnabledModels((prev) => {
@@ -71,7 +67,7 @@ export function ModelsSettings() {
       });
 
       if (res.ok) {
-        invalidateEnabledModelsCache();
+        mutate(MODEL_PREFERENCES_KEY);
         setSuccess("Model preferences saved.");
         setDirty(false);
       } else {

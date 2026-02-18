@@ -1,47 +1,18 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { SecretsEditor } from "@/components/secrets-editor";
+import { useRepos } from "@/hooks/use-repos";
 
 const GLOBAL_SCOPE = "__global__";
 
-interface Repo {
-  id: number;
-  fullName: string;
-  owner: string;
-  name: string;
-  description: string | null;
-  private: boolean;
-}
-
 export function SecretsSettings() {
-  const [repos, setRepos] = useState<Repo[]>([]);
-  const [loadingRepos, setLoadingRepos] = useState(false);
+  const { repos, loading: loadingRepos } = useRepos();
   const [selectedRepo, setSelectedRepo] = useState(GLOBAL_SCOPE);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [repoSearchQuery, setRepoSearchQuery] = useState("");
   const dropdownRef = useRef<HTMLDivElement>(null);
   const repoSearchInputRef = useRef<HTMLInputElement>(null);
-
-  const fetchRepos = useCallback(async () => {
-    setLoadingRepos(true);
-    try {
-      const res = await fetch("/api/repos");
-      if (res.ok) {
-        const data = await res.json();
-        const repoList = data.repos || [];
-        setRepos(repoList);
-      }
-    } catch (error) {
-      console.error("Failed to fetch repos:", error);
-    } finally {
-      setLoadingRepos(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchRepos();
-  }, [fetchRepos]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
