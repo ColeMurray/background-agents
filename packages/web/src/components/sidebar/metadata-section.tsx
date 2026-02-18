@@ -27,9 +27,16 @@ export function MetadataSection({
   const [copied, setCopied] = useState(false);
 
   const prArtifact = artifacts.find((a) => a.type === "pr");
+  const manualPrArtifact = artifacts.find(
+    (a) => a.type === "branch" && (a.metadata?.mode === "manual_pr" || a.metadata?.createPrUrl)
+  );
   const prNumber = prArtifact?.metadata?.prNumber;
   const prState = prArtifact?.metadata?.prState;
-  const prUrl = prArtifact?.url;
+  const prUrl = prArtifact?.url || manualPrArtifact?.metadata?.createPrUrl || manualPrArtifact?.url;
+  const branchUrl =
+    branchName && repoOwner && repoName
+      ? `https://github.com/${repoOwner}/${repoName}/tree/${encodeURIComponent(branchName)}`
+      : null;
 
   const handleCopyBranch = async () => {
     if (branchName) {
@@ -75,7 +82,7 @@ export function MetadataSection({
       )}
 
       {/* PR Badge */}
-      {prNumber && (
+      {(prNumber || prUrl) && (
         <div className="flex items-center gap-2 text-sm">
           <GitHubIcon className="w-4 h-4 text-muted-foreground" />
           {prUrl ? (
@@ -85,7 +92,7 @@ export function MetadataSection({
               rel="noopener noreferrer"
               className="text-accent hover:underline"
             >
-              #{prNumber}
+              {prNumber ? `#${prNumber}` : "Create PR"}
             </a>
           ) : (
             <span className="text-foreground">#{prNumber}</span>
@@ -104,9 +111,21 @@ export function MetadataSection({
       {branchName && (
         <div className="flex items-center gap-2 text-sm">
           <BranchIcon className="w-4 h-4 text-muted-foreground" />
-          <span className="text-foreground truncate max-w-[180px]" title={branchName}>
-            {truncateBranch(branchName)}
-          </span>
+          {branchUrl ? (
+            <a
+              href={branchUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-accent truncate max-w-[180px] hover:underline"
+              title={branchName}
+            >
+              {truncateBranch(branchName)}
+            </a>
+          ) : (
+            <span className="text-foreground truncate max-w-[180px]" title={branchName}>
+              {truncateBranch(branchName)}
+            </span>
+          )}
           <button
             onClick={handleCopyBranch}
             className="p-1 hover:bg-muted transition-colors"
