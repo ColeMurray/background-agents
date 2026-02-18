@@ -1,5 +1,7 @@
 "use client";
 
+import { useIsMobile } from "@/hooks/use-media-query";
+
 const NAV_ITEMS = [
   {
     id: "secrets",
@@ -28,9 +30,40 @@ export type SettingsCategory = (typeof NAV_ITEMS)[number]["id"];
 interface SettingsNavProps {
   activeCategory: SettingsCategory;
   onSelect: (category: SettingsCategory) => void;
+  onNavigate?: () => void;
 }
 
-export function SettingsNav({ activeCategory, onSelect }: SettingsNavProps) {
+export function SettingsNav({ activeCategory, onSelect, onNavigate }: SettingsNavProps) {
+  const isMobile = useIsMobile();
+
+  if (isMobile) {
+    return (
+      <nav className="p-4">
+        <h2 className="text-lg font-semibold text-foreground mb-4">Settings</h2>
+        <ul className="space-y-1">
+          {NAV_ITEMS.map((item) => {
+            const Icon = item.icon;
+            return (
+              <li key={item.id}>
+                <button
+                  onClick={() => {
+                    onSelect(item.id);
+                    onNavigate?.();
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-3 text-sm rounded transition text-foreground hover:bg-muted"
+                >
+                  <Icon />
+                  <span className="flex-1 text-left">{item.label}</span>
+                  <ChevronRightIcon />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
+    );
+  }
+
   return (
     <nav className="w-48 flex-shrink-0 border-r border-border-muted p-4">
       <h2 className="text-lg font-semibold text-foreground mb-4">Settings</h2>
@@ -124,6 +157,22 @@ function KeyboardIcon() {
     >
       <rect x="2" y="6" width="20" height="12" rx="2" />
       <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h8M16 14h2" />
+    </svg>
+  );
+}
+
+function ChevronRightIcon() {
+  return (
+    <svg
+      className="w-4 h-4 text-muted-foreground"
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 24 24"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M9 18l6-6-6-6" />
     </svg>
   );
 }
