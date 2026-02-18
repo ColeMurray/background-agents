@@ -238,6 +238,8 @@ function SessionPageContent() {
 
     sendPrompt(prompt, selectedModel, reasoningEffort);
     setPrompt("");
+    // Revalidate sidebar so this session bubbles to the top
+    mutate("/api/sessions");
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
