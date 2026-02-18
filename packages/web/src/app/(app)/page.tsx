@@ -324,8 +324,10 @@ function HomeContent({
 }) {
   const { isOpen, toggle } = useSidebarContext();
   const [repoDropdownOpen, setRepoDropdownOpen] = useState(false);
+  const [repoSearchQuery, setRepoSearchQuery] = useState("");
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const repoDropdownRef = useRef<HTMLDivElement>(null);
+  const repoSearchInputRef = useRef<HTMLInputElement>(null);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -342,6 +344,16 @@ function HomeContent({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    if (!repoDropdownOpen) {
+      setRepoSearchQuery("");
+      return;
+    }
+
+    const id = requestAnimationFrame(() => repoSearchInputRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [repoDropdownOpen]);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
 
@@ -353,6 +365,15 @@ function HomeContent({
 
   const selectedRepoObj = repos.find((r) => r.fullName === selectedRepo);
   const displayRepoName = selectedRepoObj ? selectedRepoObj.name : "Select repo";
+  const normalizedRepoSearchQuery = repoSearchQuery.trim().toLowerCase();
+  const filteredRepos = repos.filter((repo) => {
+    if (!normalizedRepoSearchQuery) return true;
+    return (
+      repo.name.toLowerCase().includes(normalizedRepoSearchQuery) ||
+      repo.owner.toLowerCase().includes(normalizedRepoSearchQuery) ||
+      repo.fullName.toLowerCase().includes(normalizedRepoSearchQuery)
+    );
+  });
 
   return (
     <div className="h-full flex flex-col">
@@ -459,33 +480,57 @@ function HomeContent({
                       </button>
 
                       {repoDropdownOpen && repos.length > 0 && (
-                        <div className="absolute bottom-full left-0 mb-2 w-72 max-h-64 overflow-y-auto bg-background shadow-lg border border-border py-1 z-50">
-                          {repos.map((repo) => (
-                            <button
-                              key={repo.id}
-                              type="button"
-                              onClick={() => {
-                                setSelectedRepo(repo.fullName);
-                                setRepoDropdownOpen(false);
+                        <div className="absolute bottom-full left-0 mb-2 w-72 bg-background shadow-lg border border-border z-50">
+                          <div className="p-2 border-b border-border-muted">
+                            <input
+                              ref={repoSearchInputRef}
+                              type="text"
+                              value={repoSearchQuery}
+                              onChange={(e) => setRepoSearchQuery(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                }
                               }}
-                              className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
-                                selectedRepo === repo.fullName
-                                  ? "text-foreground"
-                                  : "text-muted-foreground"
-                              }`}
-                            >
-                              <div className="flex flex-col items-start text-left">
-                                <span className="font-medium truncate max-w-[200px]">
-                                  {repo.name}
-                                </span>
-                                <span className="text-xs text-secondary-foreground truncate max-w-[200px]">
-                                  {repo.owner}
-                                  {repo.private && " • private"}
-                                </span>
+                              placeholder="Search repositories..."
+                              className="w-full px-2 py-1.5 text-sm bg-input border border-border focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent placeholder:text-secondary-foreground text-foreground"
+                            />
+                          </div>
+
+                          <div className="max-h-56 overflow-y-auto py-1">
+                            {filteredRepos.length === 0 ? (
+                              <div className="px-3 py-2 text-sm text-muted-foreground">
+                                No repositories match {repoSearchQuery.trim()}
                               </div>
-                              {selectedRepo === repo.fullName && <CheckIcon />}
-                            </button>
-                          ))}
+                            ) : (
+                              filteredRepos.map((repo) => (
+                                <button
+                                  key={repo.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedRepo(repo.fullName);
+                                    setRepoDropdownOpen(false);
+                                  }}
+                                  className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
+                                    selectedRepo === repo.fullName
+                                      ? "text-foreground"
+                                      : "text-muted-foreground"
+                                  }`}
+                                >
+                                  <div className="flex flex-col items-start text-left">
+                                    <span className="font-medium truncate max-w-[200px]">
+                                      {repo.name}
+                                    </span>
+                                    <span className="text-xs text-secondary-foreground truncate max-w-[200px]">
+                                      {repo.owner}
+                                      {repo.private && " • private"}
+                                    </span>
+                                  </div>
+                                  {selectedRepo === repo.fullName && <CheckIcon />}
+                                </button>
+                              ))
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
