@@ -199,9 +199,11 @@ export async function openClientWs(
     participantId: string;
   }>();
 
-  // Start collecting BEFORE sending subscribe to avoid race
+  // Start collecting BEFORE sending subscribe to avoid race.
+  // The subscribed message now includes batched replay data, so we terminate on it
+  // (presence_sync follows but is not needed for most tests).
   const collector = collectMessages(ws, {
-    until: (msg) => msg.type === "replay_complete",
+    until: (msg) => msg.type === "subscribed",
   });
 
   ws.send(

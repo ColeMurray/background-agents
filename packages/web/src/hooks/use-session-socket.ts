@@ -88,6 +88,7 @@ interface UseSessionSocketReturn {
 /**
  * Collapse a batch of events by folding streaming token events into their
  * final form (only the last accumulated token before execution_complete is kept).
+ * Mutates pendingTextRef to track in-flight tokens across calls.
  */
 function collapseTokenEvents(
   events: SandboxEvent[],
@@ -255,6 +256,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
             setReplaying(false);
 
             if (data.spawnError) {
+              console.error("Sandbox spawn error:", data.spawnError);
               setSessionState((prev) => (prev ? { ...prev, sandboxStatus: "failed" } : null));
             }
           } else {

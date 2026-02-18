@@ -752,9 +752,10 @@ export class SessionDO extends DurableObject<Env> {
       });
     }
 
-    // Gather session state and replay events, then send as a single message
-    const state = this.getSessionState();
+    // Gather session state and replay events, then send as a single message.
+    // Fetch sandbox once and thread it through to avoid a redundant SQLite read.
     const sandbox = this.getSandbox();
+    const state = this.getSessionState(sandbox);
     const replay = this.getReplayData();
 
     this.safeSend(ws, {
@@ -768,7 +769,7 @@ export class SessionDO extends DurableObject<Env> {
         avatar: getGitHubAvatarUrl(participant.github_login),
       },
       replay,
-      spawnError: sandbox?.last_spawn_error || null,
+      spawnError: sandbox?.last_spawn_error ?? null,
     } as ServerMessage);
 
     // Send current presence
@@ -1491,10 +1492,11 @@ export class SessionDO extends DurableObject<Env> {
 
   /**
    * Get current session state.
+   * Accepts an optional pre-fetched sandbox row to avoid a redundant SQLite read.
    */
-  private getSessionState(): SessionState {
+  private getSessionState(sandbox?: SandboxRow | null): SessionState {
     const session = this.getSession();
-    const sandbox = this.getSandbox();
+    sandbox ??= this.getSandbox();
     const messageCount = this.getMessageCount();
     const isProcessing = this.getIsProcessing();
 
