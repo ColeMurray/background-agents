@@ -66,6 +66,7 @@ interface Participant {
 interface UseSessionSocketReturn {
   connected: boolean;
   connecting: boolean;
+  replaying: boolean;
   authError: string | null;
   connectionError: string | null;
   sessionState: SessionState | null;
@@ -97,6 +98,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   );
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const [replaying, setReplaying] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [sessionState, setSessionState] = useState<SessionState | null>(null);
@@ -186,6 +188,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           // Reset replay buffering state
           replayCompleteRef.current = false;
           liveEventBufferRef.current = [];
+          setReplaying(true);
           if (data.state) {
             setSessionState(data.state);
           }
@@ -219,6 +222,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
         case "replay_complete": {
           // Mark replay as complete
           replayCompleteRef.current = true;
+          setReplaying(false);
 
           // Set pagination state
           setHasMoreHistory(data.hasMore ?? false);
@@ -476,6 +480,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
       subscribedRef.current = false;
       setConnected(false);
       setConnecting(false);
+      setReplaying(true);
       wsRef.current = null;
 
       // Handle authentication errors
@@ -639,6 +644,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   return {
     connected,
     connecting,
+    replaying,
     authError,
     connectionError,
     sessionState,

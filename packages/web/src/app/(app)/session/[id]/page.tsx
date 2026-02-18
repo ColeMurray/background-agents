@@ -1,6 +1,6 @@
 "use client";
 
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { mutate } from "swr";
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from "react";
 import { useSessionSocket } from "@/hooks/use-session-socket";
@@ -105,11 +105,13 @@ function ModelOptionButton({
 
 export default function SessionPage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const sessionId = params.id as string;
 
   const {
     connected,
     connecting,
+    replaying,
     authError,
     connectionError,
     sessionState,
@@ -125,6 +127,15 @@ export default function SessionPage() {
     reconnect,
     loadOlderEvents,
   } = useSessionSocket(sessionId);
+
+  const fallbackSessionInfo = useMemo(
+    () => ({
+      repoOwner: searchParams.get("repoOwner") || null,
+      repoName: searchParams.get("repoName") || null,
+      title: searchParams.get("title") || null,
+    }),
+    [searchParams]
+  );
 
   const handleArchive = useCallback(async () => {
     try {
@@ -236,6 +247,7 @@ export default function SessionPage() {
       sessionState={sessionState}
       connected={connected}
       connecting={connecting}
+      replaying={replaying}
       authError={authError}
       connectionError={connectionError}
       reconnect={reconnect}
@@ -263,6 +275,7 @@ export default function SessionPage() {
       loadingHistory={loadingHistory}
       loadOlderEvents={loadOlderEvents}
       modelOptions={enabledModelOptions}
+      fallbackSessionInfo={fallbackSessionInfo}
     />
   );
 }
@@ -271,6 +284,7 @@ function SessionContent({
   sessionState,
   connected,
   connecting,
+  replaying,
   authError,
   connectionError,
   reconnect,
@@ -298,10 +312,12 @@ function SessionContent({
   loadingHistory,
   loadOlderEvents,
   modelOptions,
+  fallbackSessionInfo,
 }: {
   sessionState: ReturnType<typeof useSessionSocket>["sessionState"];
   connected: boolean;
   connecting: boolean;
+  replaying: boolean;
   authError: string | null;
   connectionError: string | null;
   reconnect: () => void;
@@ -329,6 +345,11 @@ function SessionContent({
   loadingHistory: boolean;
   loadOlderEvents: () => void;
   modelOptions: ModelCategory[];
+  fallbackSessionInfo: {
+    repoOwner: string | null;
+    repoName: string | null;
+    title: string | null;
+  };
 }) {
   const { isOpen, toggle } = useSidebarContext();
 
@@ -429,6 +450,15 @@ function SessionContent({
     return groupEvents(filteredEvents.filter(Boolean) as SandboxEvent[]);
   }, [events]);
 
+  const resolvedRepoOwner = sessionState?.repoOwner ?? fallbackSessionInfo.repoOwner;
+  const resolvedRepoName = sessionState?.repoName ?? fallbackSessionInfo.repoName;
+  const fallbackRepoLabel =
+    resolvedRepoOwner && resolvedRepoName
+      ? `${resolvedRepoOwner}/${resolvedRepoName}`
+      : "Loading session...";
+  const resolvedTitle = sessionState?.title || fallbackSessionInfo.title || fallbackRepoLabel;
+  const showTimelineSkeleton = events.length === 0 && (connecting || replaying);
+
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
@@ -445,12 +475,8 @@ function SessionContent({
               </button>
             )}
             <div>
-              <h1 className="font-medium text-foreground">
-                {sessionState?.title || `${sessionState?.repoOwner}/${sessionState?.repoName}`}
-              </h1>
-              <p className="text-sm text-muted-foreground">
-                {sessionState?.repoOwner}/{sessionState?.repoName}
-              </p>
+              <h1 className="font-medium text-foreground">{resolvedTitle}</h1>
+              <p className="text-sm text-muted-foreground">{fallbackRepoLabel}</p>
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -499,15 +525,19 @@ function SessionContent({
             {loadingHistory && (
               <div className="text-center text-muted-foreground text-sm py-2">Loading...</div>
             )}
-            {groupedEvents.map((group) =>
-              group.type === "tool_group" ? (
-                <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />
-              ) : (
-                <EventItem
-                  key={group.id}
-                  event={group.event}
-                  currentParticipantId={currentParticipantId}
-                />
+            {showTimelineSkeleton ? (
+              <TimelineSkeleton />
+            ) : (
+              groupedEvents.map((group) =>
+                group.type === "tool_group" ? (
+                  <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />
+                ) : (
+                  <EventItem
+                    key={group.id}
+                    event={group.event}
+                    currentParticipantId={currentParticipantId}
+                  />
+                )
               )
             )}
             {isProcessing && <ThinkingIndicator />}
@@ -755,6 +785,26 @@ function ThinkingIndicator() {
     <div className="bg-card p-4 flex items-center gap-2">
       <span className="inline-block w-2 h-2 bg-accent rounded-full animate-pulse" />
       <span className="text-sm text-muted-foreground">Thinking...</span>
+    </div>
+  );
+}
+
+function TimelineSkeleton() {
+  return (
+    <div className="space-y-3 py-2 animate-pulse">
+      <div className="bg-card p-4 space-y-2">
+        <div className="h-3 w-24 bg-muted rounded" />
+        <div className="h-3 w-full bg-muted rounded" />
+        <div className="h-3 w-5/6 bg-muted rounded" />
+      </div>
+      <div className="bg-accent-muted p-4 ml-8 space-y-2">
+        <div className="h-3 w-20 bg-muted rounded" />
+        <div className="h-3 w-4/5 bg-muted rounded" />
+      </div>
+      <div className="bg-card p-4 space-y-2">
+        <div className="h-3 w-32 bg-muted rounded" />
+        <div className="h-3 w-3/4 bg-muted rounded" />
+      </div>
     </div>
   );
 }

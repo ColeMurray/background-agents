@@ -204,10 +204,18 @@ function SessionListItem({
   const relativeTime = formatRelativeTime(timestamp);
   const displayTitle = session.title || `${session.repoOwner}/${session.repoName}`;
   const repoInfo = `${session.repoOwner}/${session.repoName}`;
+  const sessionHref = {
+    pathname: `/session/${session.id}`,
+    query: {
+      repoOwner: session.repoOwner,
+      repoName: session.repoName,
+      ...(session.title ? { title: session.title } : {}),
+    },
+  };
 
   return (
     <Link
-      href={`/session/${session.id}`}
+      href={sessionHref}
       onClick={() => {
         if (window.matchMedia("(max-width: 767px)").matches) {
           onSessionSelect?.();
