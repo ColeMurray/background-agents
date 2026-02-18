@@ -18,10 +18,14 @@ import { SafeMarkdown } from "@/components/safe-markdown";
 import { ToolCallGroup } from "@/components/tool-call-group";
 import { useSidebarContext } from "@/components/sidebar-layout";
 import { SidebarToggleIcon } from "@/components/sidebar-toggle-icon";
-import { SessionRightSidebar } from "@/components/session-right-sidebar";
+import {
+  SessionRightSidebar,
+  SessionRightSidebarContent,
+} from "@/components/session-right-sidebar";
 import { ActionBar } from "@/components/action-bar";
 import { copyToClipboard, formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
@@ -366,6 +370,12 @@ function SessionContent({
   };
 }) {
   const { isOpen, toggle } = useSidebarContext();
+  const isBelowLg = useMediaQuery("(max-width: 1023px)");
+  const isPhone = useMediaQuery("(max-width: 767px)");
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+  const [sheetDragY, setSheetDragY] = useState(0);
+  const detailsButtonRef = useRef<HTMLButtonElement>(null);
+  const sheetTouchStartYRef = useRef<number | null>(null);
 
   // Scroll pagination refs
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -374,6 +384,82 @@ function SessionContent({
   const isPrependingRef = useRef(false);
   const prevScrollHeightRef = useRef(0);
   const isNearBottomRef = useRef(true);
+
+  const closeDetails = useCallback(() => {
+    setIsDetailsOpen(false);
+    setSheetDragY(0);
+    detailsButtonRef.current?.focus();
+  }, []);
+
+  const toggleDetails = useCallback(() => {
+    setIsDetailsOpen((prev) => {
+      const next = !prev;
+      if (!next) {
+        setSheetDragY(0);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleSheetTouchStart = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
+    const startY = event.touches[0]?.clientY;
+    sheetTouchStartYRef.current = startY ?? null;
+  }, []);
+
+  const handleSheetTouchMove = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
+    const startY = sheetTouchStartYRef.current;
+    const currentY = event.touches[0]?.clientY;
+
+    if (startY === null || currentY === undefined) return;
+
+    const delta = currentY - startY;
+    if (delta > 0) {
+      setSheetDragY(Math.min(delta, 180));
+    } else {
+      setSheetDragY(0);
+    }
+  }, []);
+
+  const handleSheetTouchEnd = useCallback(() => {
+    if (sheetDragY > 100) {
+      closeDetails();
+      sheetTouchStartYRef.current = null;
+      return;
+    }
+
+    setSheetDragY(0);
+    sheetTouchStartYRef.current = null;
+  }, [closeDetails, sheetDragY]);
+
+  useEffect(() => {
+    if (isBelowLg) return;
+    setIsDetailsOpen(false);
+    setSheetDragY(0);
+  }, [isBelowLg]);
+
+  useEffect(() => {
+    if (!isDetailsOpen) return;
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeDetails();
+      }
+    };
+
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [closeDetails, isDetailsOpen]);
+
+  useEffect(() => {
+    if (!isDetailsOpen) return;
+
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [isDetailsOpen]);
 
   // Track user scroll
   const handleScroll = useCallback(() => {
@@ -495,6 +581,17 @@ function SessionContent({
             </div>
           </div>
           <div className="flex items-center gap-4">
+            <button
+              ref={detailsButtonRef}
+              type="button"
+              onClick={toggleDetails}
+              className="lg:hidden px-3 py-1.5 text-sm text-muted-foreground border border-border-muted hover:text-foreground hover:bg-muted transition"
+              aria-label="Toggle session details"
+              aria-controls="session-details-dialog"
+              aria-expanded={isDetailsOpen}
+            >
+              Details
+            </button>
             {/* Mobile: single combined status dot */}
             <div className="md:hidden">
               <CombinedStatusDot
@@ -569,6 +666,89 @@ function SessionContent({
           artifacts={artifacts}
         />
       </main>
+
+      {isBelowLg && (
+        <div
+          className={`fixed inset-0 z-50 lg:hidden ${isDetailsOpen ? "" : "pointer-events-none"}`}
+        >
+          <div
+            className={`absolute inset-0 bg-black/50 transition-opacity duration-200 ${
+              isDetailsOpen ? "opacity-100" : "opacity-0"
+            }`}
+            onClick={closeDetails}
+          />
+
+          {isPhone ? (
+            <div
+              id="session-details-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Session details"
+              className="absolute inset-x-0 bottom-0 max-h-[85vh] bg-background border-t border-border-muted shadow-xl flex flex-col"
+              style={{
+                transform: isDetailsOpen ? `translateY(${sheetDragY}px)` : "translateY(100%)",
+                transition: sheetDragY > 0 ? "none" : "transform 200ms ease-in-out",
+              }}
+            >
+              <div
+                className="px-4 pt-3 pb-2 border-b border-border-muted"
+                onTouchStart={handleSheetTouchStart}
+                onTouchMove={handleSheetTouchMove}
+                onTouchEnd={handleSheetTouchEnd}
+                onTouchCancel={handleSheetTouchEnd}
+              >
+                <div className="mx-auto mb-2 h-1.5 w-12 rounded-full bg-muted" />
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-medium text-foreground">Session details</h2>
+                  <button
+                    type="button"
+                    onClick={closeDetails}
+                    className="text-sm text-muted-foreground hover:text-foreground transition"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+              <div className="overflow-y-auto">
+                <SessionRightSidebarContent
+                  sessionState={sessionState}
+                  participants={participants}
+                  events={events}
+                  artifacts={artifacts}
+                />
+              </div>
+            </div>
+          ) : (
+            <div
+              id="session-details-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Session details"
+              className="absolute inset-y-0 right-0 w-80 max-w-[85vw] bg-background border-l border-border-muted shadow-xl flex flex-col transition-transform duration-200 ease-in-out"
+              style={{ transform: isDetailsOpen ? "translateX(0)" : "translateX(100%)" }}
+            >
+              <div className="px-4 py-3 border-b border-border-muted flex items-center justify-between">
+                <h2 className="text-sm font-medium text-foreground">Session details</h2>
+                <button
+                  type="button"
+                  onClick={closeDetails}
+                  className="text-sm text-muted-foreground hover:text-foreground transition"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto">
+                <SessionRightSidebarContent
+                  sessionState={sessionState}
+                  participants={participants}
+                  events={events}
+                  artifacts={artifacts}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Input */}
       <footer className="border-t border-border-muted flex-shrink-0">
