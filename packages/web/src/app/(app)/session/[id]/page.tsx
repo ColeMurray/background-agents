@@ -1,12 +1,12 @@
 "use client";
 
-import { useSession } from "next-auth/react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
+import { mutate } from "swr";
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from "react";
 import { useSessionSocket } from "@/hooks/use-session-socket";
 import { SafeMarkdown } from "@/components/safe-markdown";
 import { ToolCallGroup } from "@/components/tool-call-group";
-import { SidebarLayout, useSidebarContext } from "@/components/sidebar-layout";
+import { useSidebarContext } from "@/components/sidebar-layout";
 import { SessionRightSidebar } from "@/components/session-right-sidebar";
 import { ActionBar } from "@/components/action-bar";
 import { copyToClipboard, formatModelNameLower } from "@/lib/format";
@@ -104,9 +104,7 @@ function ModelOptionButton({
 }
 
 export default function SessionPage() {
-  const { data: _authSession, status: authStatus } = useSession();
   const params = useParams();
-  const router = useRouter();
   const sessionId = params.id as string;
 
   const {
@@ -133,7 +131,9 @@ export default function SessionPage() {
       const response = await fetch(`/api/sessions/${sessionId}/archive`, {
         method: "POST",
       });
-      if (!response.ok) {
+      if (response.ok) {
+        mutate("/api/sessions");
+      } else {
         console.error("Failed to archive session");
       }
     } catch (error) {
@@ -146,7 +146,9 @@ export default function SessionPage() {
       const response = await fetch(`/api/sessions/${sessionId}/unarchive`, {
         method: "POST",
       });
-      if (!response.ok) {
+      if (response.ok) {
+        mutate("/api/sessions");
+      } else {
         console.error("Failed to unarchive session");
       }
     } catch (error) {
@@ -191,13 +193,6 @@ export default function SessionPage() {
     }
   }, [sessionState?.model, sessionState?.reasoningEffort]);
 
-  // Redirect if not authenticated
-  useEffect(() => {
-    if (authStatus === "unauthenticated") {
-      router.push("/");
-    }
-  }, [authStatus, router]);
-
   // Close model dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -236,49 +231,39 @@ export default function SessionPage() {
     }, 300);
   };
 
-  if (authStatus === "loading") {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-foreground" />
-      </div>
-    );
-  }
-
   return (
-    <SidebarLayout>
-      <SessionContent
-        sessionState={sessionState}
-        connected={connected}
-        connecting={connecting}
-        authError={authError}
-        connectionError={connectionError}
-        reconnect={reconnect}
-        participants={participants}
-        events={events}
-        artifacts={artifacts}
-        currentParticipantId={currentParticipantId}
-        messagesEndRef={messagesEndRef}
-        prompt={prompt}
-        isProcessing={isProcessing}
-        selectedModel={selectedModel}
-        reasoningEffort={reasoningEffort}
-        modelDropdownOpen={modelDropdownOpen}
-        modelDropdownRef={modelDropdownRef}
-        inputRef={inputRef}
-        handleSubmit={handleSubmit}
-        handleInputChange={handleInputChange}
-        handleKeyDown={handleKeyDown}
-        setModelDropdownOpen={setModelDropdownOpen}
-        setSelectedModel={handleModelChange}
-        setReasoningEffort={setReasoningEffort}
-        stopExecution={stopExecution}
-        handleArchive={handleArchive}
-        handleUnarchive={handleUnarchive}
-        loadingHistory={loadingHistory}
-        loadOlderEvents={loadOlderEvents}
-        modelOptions={enabledModelOptions}
-      />
-    </SidebarLayout>
+    <SessionContent
+      sessionState={sessionState}
+      connected={connected}
+      connecting={connecting}
+      authError={authError}
+      connectionError={connectionError}
+      reconnect={reconnect}
+      participants={participants}
+      events={events}
+      artifacts={artifacts}
+      currentParticipantId={currentParticipantId}
+      messagesEndRef={messagesEndRef}
+      prompt={prompt}
+      isProcessing={isProcessing}
+      selectedModel={selectedModel}
+      reasoningEffort={reasoningEffort}
+      modelDropdownOpen={modelDropdownOpen}
+      modelDropdownRef={modelDropdownRef}
+      inputRef={inputRef}
+      handleSubmit={handleSubmit}
+      handleInputChange={handleInputChange}
+      handleKeyDown={handleKeyDown}
+      setModelDropdownOpen={setModelDropdownOpen}
+      setSelectedModel={handleModelChange}
+      setReasoningEffort={setReasoningEffort}
+      stopExecution={stopExecution}
+      handleArchive={handleArchive}
+      handleUnarchive={handleUnarchive}
+      loadingHistory={loadingHistory}
+      loadOlderEvents={loadOlderEvents}
+      modelOptions={enabledModelOptions}
+    />
   );
 }
 

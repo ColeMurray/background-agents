@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import { mutate } from "swr";
 import type { SessionItem } from "@/components/session-sidebar";
 import { formatRelativeTime } from "@/lib/time";
 
@@ -52,7 +53,9 @@ export function DataControlsSettings() {
     setSessions((prev) => prev.filter((s) => s.id !== sessionId));
     try {
       const res = await fetch(`/api/sessions/${sessionId}/unarchive`, { method: "POST" });
-      if (!res.ok) {
+      if (res.ok) {
+        mutate("/api/sessions");
+      } else {
         // Re-fetch on failure to restore correct state
         fetchArchivedSessions(0, false);
       }
