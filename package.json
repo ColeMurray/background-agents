@@ -17,6 +17,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",
+    "node-addon-api": "^8.0.0",
+    "node-gyp": "^10.0.0",
     "@types/node": "^22.10.5",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
@@ -35,10 +37,10 @@
   "lint-staged": {
     "*.{ts,tsx}": [
       "eslint --fix",
-      "prettier --write"
+      "npx prettier --write"
     ],
     "*.{js,jsx,json,md,yaml,yml,css}": [
-      "prettier --write"
+      "npx prettier --write"
     ],
     "packages/modal-infra/**/*.py": [
       "ruff check --fix",

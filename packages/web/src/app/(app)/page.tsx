@@ -161,8 +161,6 @@ export default function Home() {
     return promise;
   }, [selectedRepo, selectedModel, reasoningEffort, pendingSessionId]);
 
-  const { enabledModels, enabledModelOptions } = useEnabledModels();
-
   // Reset selections when model preferences change
   useEffect(() => {
     if (enabledModels.length > 0 && !enabledModels.includes(selectedModel)) {

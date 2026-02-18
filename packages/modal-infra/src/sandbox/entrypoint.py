@@ -12,7 +12,7 @@ Runs as PID 1 inside the sandbox. Responsibilities:
 """
 
 import asyncio
-import base64
+import contextlib
 import json
 import os
 import shutil
@@ -95,8 +95,8 @@ class SandboxSupervisor:
         """
         if self.vcs_provider == "bitbucket":
             if self.bitbucket_bot_username and self.bitbucket_bot_app_password:
-                username = urllib.parse.quote(self.bitbucket_bot_username, safe='')
-                password = urllib.parse.quote(self.bitbucket_bot_app_password, safe='')
+                username = urllib.parse.quote(self.bitbucket_bot_username, safe="")
+                password = urllib.parse.quote(self.bitbucket_bot_app_password, safe="")
                 return (
                     f"https://{username}:{password}"
                     f"@bitbucket.org/{self.repo_owner}/{self.repo_name}.git"
@@ -132,11 +132,11 @@ class SandboxSupervisor:
         if username and username not in ("x-access-token", "x-token-auth") and username in result:
             result = result.replace(username, "[REDACTED]")
         if token:
-            encoded_token = urllib.parse.quote(token, safe='')
+            encoded_token = urllib.parse.quote(token, safe="")
             if encoded_token != token and encoded_token in result:
                 result = result.replace(encoded_token, "[REDACTED]")
         if username and username not in ("x-access-token", "x-token-auth"):
-            encoded_username = urllib.parse.quote(username, safe='')
+            encoded_username = urllib.parse.quote(username, safe="")
             if encoded_username != username and encoded_username in result:
                 result = result.replace(encoded_username, "[REDACTED]")
         return result
@@ -158,7 +158,9 @@ class SandboxSupervisor:
             repo_path=str(self.repo_path),
             vcs_provider=self.vcs_provider,
             has_github_token=bool(self.github_app_token),
-            has_bitbucket_creds=bool(self.bitbucket_bot_username and self.bitbucket_bot_app_password),
+            has_bitbucket_creds=bool(
+                self.bitbucket_bot_username and self.bitbucket_bot_app_password
+            ),
         )
 
         # Get credentials for GIT_ASKPASS
@@ -183,11 +185,11 @@ else
 fi
 """)
                 askpass_script.close()
-                os.chmod(askpass_script.name, 0o700)
+                Path(askpass_script.name).chmod(0o700)
                 git_env["GIT_ASKPASS"] = askpass_script.name
                 git_env["GIT_TERMINAL_PROMPT"] = "0"
             except Exception as e:
-                self.log.warn("git.askpass_setup_failed", error=str(e))
+                self.log.warn("git.askpass_setup_failed", error=self._redact_credentials(str(e)))
                 # Continue without askpass - will fall back to public clone
 
         try:
@@ -255,7 +257,11 @@ fi
             if self.vcs_provider == "bitbucket" and has_credentials:
                 auth_url = self._get_clone_url()  # Returns authenticated URL for Bitbucket
                 await asyncio.create_subprocess_exec(
-                    "git", "remote", "set-url", "origin", auth_url,
+                    "git",
+                    "remote",
+                    "set-url",
+                    "origin",
+                    auth_url,
                     cwd=self.repo_path,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
@@ -275,7 +281,11 @@ fi
             if self.vcs_provider == "bitbucket" and has_credentials:
                 public_url = self._get_public_clone_url()
                 await asyncio.create_subprocess_exec(
-                    "git", "remote", "set-url", "origin", public_url,
+                    "git",
+                    "remote",
+                    "set-url",
+                    "origin",
+                    public_url,
                     cwd=self.repo_path,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
@@ -343,10 +353,8 @@ fi
 
         finally:
             if askpass_script and os.path.exists(askpass_script.name):
-                try:
-                    os.unlink(askpass_script.name)
-                except OSError:
-                    pass
+                with contextlib.suppress(OSError):
+                    Path(askpass_script.name).unlink()
 
     def _setup_openai_oauth(self) -> None:
         """Write OpenCode auth.json for ChatGPT OAuth if refresh token is configured."""
@@ -381,7 +389,7 @@ fi
 
             self.log.info("openai_oauth.setup")
         except Exception as e:
-            self.log.warn("openai_oauth.setup_error", exc=e)
+            self.log.warn("openai_oauth.setup_error", exc=self._redact_credentials(str(e)))
 
     async def start_opencode(self) -> None:
         """Start OpenCode server with configuration."""
@@ -424,7 +432,7 @@ fi
                 try:
                     node_modules.symlink_to(global_modules)
                 except Exception as e:
-                    self.log.warn("opencode.symlink_error", exc=e)
+                    self.log.warn("opencode.symlink_error", exc=self._redact_credentials(str(e)))
 
             # Create a minimal package.json so OpenCode sees this as a configured directory
             package_json = opencode_dir / "package.json"
@@ -675,7 +683,7 @@ fi
                     timeout=5.0,
                 )
         except Exception as e:
-            self.log.error("supervisor.report_error_failed", exc=e)
+            self.log.error("supervisor.report_error_failed", exc=self._redact_credentials(str(e)))
 
     async def configure_git_identity(self) -> None:
         """Configure git identity from session owner."""
@@ -706,7 +714,7 @@ fi
                 git_email=git_user["email"],
             )
         except Exception as e:
-            self.log.error("git.identity_error", exc=e)
+            self.log.error("git.identity_error", exc=self._redact_credentials(str(e)))
 
     async def run_setup_script(self) -> bool:
         """
@@ -774,7 +782,11 @@ fi
                 return False
 
         except Exception as e:
-            self.log.error("setup.error", exc=e, script=str(setup_script))
+            self.log.error(
+                "setup.error",
+                exc=self._redact_credentials(str(e)),
+                script=self._redact_credentials(str(setup_script)),
+            )
             return False
 
     async def _quick_git_fetch(self) -> None:
@@ -808,11 +820,13 @@ else
 fi
 """)
                     askpass_script.close()
-                    os.chmod(askpass_script.name, 0o700)
+                    Path(askpass_script.name).chmod(0o700)
                     git_env["GIT_ASKPASS"] = askpass_script.name
                     git_env["GIT_TERMINAL_PROMPT"] = "0"
                 except Exception as e:
-                    self.log.warn("git.askpass_setup_failed", error=str(e))
+                    self.log.warn(
+                        "git.askpass_setup_failed", error=self._redact_credentials(str(e))
+                    )
 
             clone_url = self._get_clone_url()
             await asyncio.create_subprocess_exec(
@@ -842,7 +856,11 @@ fi
             if self.vcs_provider == "bitbucket" and has_credentials:
                 public_url = self._get_public_clone_url()
                 await asyncio.create_subprocess_exec(
-                    "git", "remote", "set-url", "origin", public_url,
+                    "git",
+                    "remote",
+                    "set-url",
+                    "origin",
+                    public_url,
                     cwd=self.repo_path,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
@@ -894,14 +912,12 @@ fi
                 self.log.debug("git.snapshot_status_unknown", reason="no_upstream")
 
         except Exception as e:
-            self.log.error("git.quick_fetch_error", exc=e)
+            self.log.error("git.quick_fetch_error", exc=self._redact_credentials(str(e)))
 
         finally:
             if askpass_script and os.path.exists(askpass_script.name):
-                try:
-                    os.unlink(askpass_script.name)
-                except OSError:
-                    pass
+                with contextlib.suppress(OSError):
+                    Path(askpass_script.name).unlink()
 
     async def run(self) -> None:
         """Main supervisor loop."""
@@ -968,8 +984,9 @@ fi
             await self.monitor_processes()
 
         except Exception as e:
-            self.log.error("supervisor.error", exc=e)
-            await self._report_fatal_error(str(e))
+            error_safe = self._redact_credentials(str(e))
+            self.log.error("supervisor.error", exc=error_safe)
+            await self._report_fatal_error(error_safe)
 
         finally:
             await self.shutdown()
