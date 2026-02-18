@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import useSWR, { mutate } from "swr";
 
 const VALID_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -41,6 +41,11 @@ type GlobalSecretMeta = {
   createdAt: number;
   updatedAt: number;
 };
+
+interface SecretsResponse {
+  secrets: { key: string }[];
+  globalSecrets?: GlobalSecretMeta[];
+}
 
 function normalizeKey(value: string) {
   return value.trim().toUpperCase();
@@ -95,13 +100,15 @@ export function SecretsEditor({
 
   const apiBase = isGlobal ? "/api/secrets" : `/api/repos/${owner}/${name}/secrets`;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: secretsData, isLoading: loading } = useSWR<any>(ready ? apiBase : null);
+  const {
+    data: secretsData,
+    isLoading: loading,
+    error: fetchError,
+  } = useSWR<SecretsResponse>(ready ? apiBase : null);
 
   // Sync SWR data into local editable rows
-  const secretsJson = JSON.stringify(secretsData?.secrets ?? []);
-  useMemo(() => {
-    const secrets = secretsData?.secrets;
+  const secrets = secretsData?.secrets;
+  useEffect(() => {
     if (!Array.isArray(secrets)) {
       setRows([]);
       return;
@@ -111,7 +118,14 @@ export function SecretsEditor({
         createRow({ key: secret.key, value: "", existing: true })
       )
     );
-  }, [secretsJson]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [secrets]);
+
+  // Show fetch errors to the user
+  useEffect(() => {
+    if (fetchError) {
+      setError("Failed to load secrets");
+    }
+  }, [fetchError]);
 
   const globalRows: GlobalSecretMeta[] =
     !isGlobal && Array.isArray(secretsData?.globalSecrets) ? secretsData.globalSecrets : [];

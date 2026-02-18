@@ -11,6 +11,7 @@ const ARCHIVED_SESSIONS_KEY = `/api/sessions?status=archived&limit=${PAGE_SIZE}&
 
 export function DataControlsSettings() {
   const [extraSessions, setExtraSessions] = useState<SessionItem[]>([]);
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [offset, setOffset] = useState(0);
@@ -21,11 +22,12 @@ export function DataControlsSettings() {
       setHasMore(fetched.length === PAGE_SIZE);
       setOffset(fetched.length);
       setExtraSessions([]);
+      setHiddenIds(new Set());
     },
   });
 
   const firstPageSessions = data?.sessions ?? [];
-  const sessions = [...firstPageSessions, ...extraSessions];
+  const sessions = [...firstPageSessions, ...extraSessions].filter((s) => !hiddenIds.has(s.id));
 
   const handleLoadMore = useCallback(async () => {
     setLoadingMore(true);
@@ -46,8 +48,8 @@ export function DataControlsSettings() {
   }, [offset]);
 
   const handleUnarchive = async (sessionId: string) => {
-    // Optimistically remove from list
-    setExtraSessions((prev) => prev.filter((s) => s.id !== sessionId));
+    // Optimistically hide from both first-page and extra sessions
+    setHiddenIds((prev) => new Set(prev).add(sessionId));
     try {
       const res = await fetch(`/api/sessions/${sessionId}/unarchive`, { method: "POST" });
       if (res.ok) {

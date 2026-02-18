@@ -163,7 +163,8 @@ function SessionPageContent() {
       fetch(url, { method: "POST" }).then((r) => {
         if (r.ok) mutate("/api/sessions");
         else console.error("Failed to archive session");
-      })
+      }),
+    { throwOnError: false }
   );
 
   const { trigger: handleUnarchive } = useSWRMutation(
@@ -172,7 +173,8 @@ function SessionPageContent() {
       fetch(url, { method: "POST" }).then((r) => {
         if (r.ok) mutate("/api/sessions");
         else console.error("Failed to unarchive session");
-      })
+      }),
+    { throwOnError: false }
   );
 
   const [prompt, setPrompt] = useState("");
