@@ -2,7 +2,7 @@
 
 import { useParams } from "next/navigation";
 import { mutate } from "swr";
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from "react";
+import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from "react";
 import { useSessionSocket } from "@/hooks/use-session-socket";
 import { SafeMarkdown } from "@/components/safe-markdown";
 import { ToolCallGroup } from "@/components/tool-call-group";
@@ -789,7 +789,7 @@ function ParticipantsList({
   );
 }
 
-function EventItem({
+const EventItem = memo(function EventItem({
   event,
   currentParticipantId,
 }: {
@@ -974,7 +974,7 @@ function EventItem({
     default:
       return null;
   }
-}
+});
 
 function CopyIcon({ className }: { className?: string }) {
   return (
