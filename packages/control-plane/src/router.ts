@@ -858,9 +858,9 @@ async function handleSessionPrompt(
     )
   );
 
-  // Fire-and-forget: update D1 timestamp so session bubbles to top of sidebar
+  // Background: update D1 timestamp so session bubbles to top of sidebar
   const store = new SessionIndexStore(env.DB);
-  store.touchUpdatedAt(sessionId);
+  ctx.executionCtx?.waitUntil(store.touchUpdatedAt(sessionId).catch(() => {}));
 
   return response;
 }
