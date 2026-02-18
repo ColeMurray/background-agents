@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 
-const MOBILE_BREAKPOINT = "(max-width: 767px)";
+export const MOBILE_BREAKPOINT = "(max-width: 767px)";
 
 /**
  * Subscribe to a CSS media query and return whether it currently matches.
