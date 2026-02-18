@@ -22,10 +22,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error("Failed to fetch sessions:", message, error);
-    return NextResponse.json(
-      { error: "Failed to fetch sessions", detail: message },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Failed to fetch sessions" }, { status: 500 });
   }
 }
 
@@ -89,13 +86,6 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error("Failed to create session:", message, error);
-    return NextResponse.json(
-      {
-        error: "Failed to create session",
-        detail: message,
-        provider: session.provider,
-      },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Failed to create session" }, { status: 500 });
   }
 }
