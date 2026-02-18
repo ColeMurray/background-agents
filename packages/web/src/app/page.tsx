@@ -53,7 +53,8 @@ export default function Home() {
           const hasLastSelectedRepo = repoList.some(
             (repo: Repo) => repo.fullName === lastSelectedRepo
           );
-          const defaultRepo = hasLastSelectedRepo ? lastSelectedRepo : repoList[0].fullName;
+          const defaultRepo =
+            (hasLastSelectedRepo ? lastSelectedRepo : repoList[0].fullName) ?? repoList[0].fullName;
 
           setSelectedRepo((current) => current || defaultRepo);
         }
