@@ -19,6 +19,8 @@ interface Repo {
   private: boolean;
 }
 
+const LAST_SELECTED_REPO_STORAGE_KEY = "open-inspect-last-selected-repo";
+
 export default function Home() {
   const { data: session, status } = useSession();
   const router = useRouter();
@@ -47,7 +49,13 @@ export default function Home() {
         const repoList = data.repos || [];
         setRepos(repoList);
         if (repoList.length > 0) {
-          setSelectedRepo((current) => current || repoList[0].fullName);
+          const lastSelectedRepo = localStorage.getItem(LAST_SELECTED_REPO_STORAGE_KEY);
+          const hasLastSelectedRepo = repoList.some(
+            (repo: Repo) => repo.fullName === lastSelectedRepo
+          );
+          const defaultRepo = hasLastSelectedRepo ? lastSelectedRepo : repoList[0].fullName;
+
+          setSelectedRepo((current) => current || defaultRepo);
         }
       }
     } catch (error) {
@@ -62,6 +70,11 @@ export default function Home() {
       fetchRepos();
     }
   }, [session, fetchRepos]);
+
+  useEffect(() => {
+    if (!selectedRepo) return;
+    localStorage.setItem(LAST_SELECTED_REPO_STORAGE_KEY, selectedRepo);
+  }, [selectedRepo]);
 
   useEffect(() => {
     if (abortControllerRef.current) {
