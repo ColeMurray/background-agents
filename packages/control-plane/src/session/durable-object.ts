@@ -1557,7 +1557,12 @@ export class SessionDO extends DurableObject<Env> {
       throw new Error("GitHub App not configured");
     }
 
-    const repo = await getInstallationRepository(appConfig, session.repo_owner, session.repo_name);
+    const repo = await getInstallationRepository(
+      appConfig,
+      session.repo_owner,
+      session.repo_name,
+      this.env
+    );
     if (!repo) {
       throw new Error("Repository is not installed for the GitHub App");
     }
