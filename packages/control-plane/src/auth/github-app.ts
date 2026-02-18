@@ -90,8 +90,6 @@ export interface GitHubAppConfig {
 interface InstallationTokenResponse {
   token: string;
   expires_at: string;
-  permissions: Record<string, string>;
-  repository_selection?: "all" | "selected";
 }
 
 /**
@@ -213,18 +211,6 @@ export async function generateAppJwt(appId: string, privateKey: string): Promise
 }
 
 /**
- * Exchange JWT for an installation access token.
- *
- * @param jwt - Signed JWT
- * @param installationId - GitHub App installation ID
- * @returns Installation access token (valid for 1 hour)
- */
-export async function getInstallationToken(jwt: string, installationId: string): Promise<string> {
-  const data = await getInstallationTokenWithMetadata(jwt, installationId);
-  return data.token;
-}
-
-/**
  * Exchange JWT for an installation access token and expiry metadata.
  */
 async function getInstallationTokenWithMetadata(
@@ -249,19 +235,6 @@ async function getInstallationTokenWithMetadata(
   }
 
   return (await response.json()) as InstallationTokenResponse;
-}
-
-/**
- * Generate a fresh GitHub App installation token.
- *
- * This is the main entry point for token generation.
- *
- * @param config - GitHub App configuration
- * @returns Installation access token (valid for 1 hour)
- */
-export async function generateInstallationToken(config: GitHubAppConfig): Promise<string> {
-  const jwt = await generateAppJwt(config.appId, config.privateKey);
-  return getInstallationToken(jwt, config.installationId);
 }
 
 function getInstallationTokenCacheKey(config: GitHubAppConfig): string {
@@ -382,9 +355,7 @@ export async function getCachedInstallationToken(
       installationTokenMemoryCache.set(cacheKey, kvCached);
       return kvCached.token;
     }
-  }
 
-  if (!forceRefresh) {
     const inFlight = installationTokenRefreshInFlight.get(cacheKey);
     if (inFlight) {
       const shared = await inFlight;
