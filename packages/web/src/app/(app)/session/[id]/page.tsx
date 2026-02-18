@@ -16,6 +16,7 @@ import { useSessionSocket } from "@/hooks/use-session-socket";
 import { SafeMarkdown } from "@/components/safe-markdown";
 import { ToolCallGroup } from "@/components/tool-call-group";
 import { useSidebarContext } from "@/components/sidebar-layout";
+import { SidebarToggleIcon } from "@/components/sidebar-toggle-icon";
 import { SessionRightSidebar } from "@/components/session-right-sidebar";
 import { ActionBar } from "@/components/action-bar";
 import { copyToClipboard, formatModelNameLower } from "@/lib/format";
@@ -698,23 +699,6 @@ function SessionContent({
         </form>
       </footer>
     </div>
-  );
-}
-
-function SidebarToggleIcon() {
-  return (
-    <svg
-      className="w-4 h-4"
-      fill="none"
-      stroke="currentColor"
-      viewBox="0 0 24 24"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <line x1="9" y1="3" x2="9" y2="21" />
-    </svg>
   );
 }
 
