@@ -642,20 +642,22 @@ function SessionContent({
             </div>
 
             {/* Footer row with model selector, reasoning pills, and agent label */}
-            <div className="flex items-center justify-between px-4 py-2 border-t border-border-muted">
+            <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">
               {/* Left side - Model selector + Reasoning pills */}
-              <div className="flex items-center gap-4">
-                <div className="relative" ref={modelDropdownRef}>
+              <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
+                <div className="relative min-w-0" ref={modelDropdownRef}>
                   <button
                     type="button"
                     onClick={() => !isProcessing && setModelDropdownOpen(!modelDropdownOpen)}
                     disabled={isProcessing}
-                    className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
+                    className="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
                   >
                     <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
                       <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
                     </svg>
-                    <span>{formatModelNameLower(selectedModel)}</span>
+                    <span className="truncate max-w-[9rem] sm:max-w-none">
+                      {formatModelNameLower(selectedModel)}
+                    </span>
                   </button>
 
                   {/* Dropdown menu */}
@@ -697,7 +699,7 @@ function SessionContent({
               </div>
 
               {/* Right side - Agent label */}
-              <span className="text-sm text-muted-foreground">build agent</span>
+              <span className="hidden sm:inline text-sm text-muted-foreground">build agent</span>
             </div>
           </div>
         </form>
