@@ -35,6 +35,21 @@ output "slack_bot_worker_name" {
   value       = module.slack_bot_worker.worker_name
 }
 
+output "linear_kv_id" {
+  description = "Linear KV namespace ID"
+  value       = module.linear_kv.namespace_id
+}
+
+output "linear_bot_worker_name" {
+  description = "Linear bot worker name"
+  value       = module.linear_bot_worker.worker_name
+}
+
+output "linear_bot_webhook_url" {
+  description = "Linear bot webhook URL (configure in Linear Settings → API → Webhooks)"
+  value       = "${module.linear_bot_worker.worker_url}/webhook"
+}
+
 # Vercel Web App
 output "web_app_url" {
   description = "Vercel web app URL"

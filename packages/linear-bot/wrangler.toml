@@ -1,0 +1,27 @@
+# Development wrangler config — production deployment is via Terraform.
+# Use this for local development with `wrangler dev`.
+
+name = "open-inspect-linear-bot"
+main = "dist/index.js"
+compatibility_date = "2024-12-30"
+
+# KV namespace for issue-to-session mapping and config
+[[kv_namespaces]]
+binding = "LINEAR_KV"
+id = ""  # Fill in after creating: wrangler kv namespace create LINEAR_KV
+
+# Service binding to control plane (for local dev, use fetch URL instead)
+# [[services]]
+# binding = "CONTROL_PLANE"
+# service = "open-inspect-control-plane"
+
+[vars]
+DEPLOYMENT_NAME = "dev"
+CONTROL_PLANE_URL = "https://open-inspect-control-plane.YOUR-SUBDOMAIN.workers.dev"
+WEB_APP_URL = "https://open-inspect-dev.vercel.app"
+DEFAULT_MODEL = "claude-sonnet-4-20250514"
+
+# Secrets (set via `wrangler secret put`):
+# - LINEAR_WEBHOOK_SECRET
+# - LINEAR_API_KEY
+# - INTERNAL_CALLBACK_SECRET

@@ -83,6 +83,13 @@ github_app_installation_id = ""
 slack_bot_token = ""       # e.g., "xoxb-..."
 slack_signing_secret = ""
 
+# Linear App (Optional)
+# From Linear Settings → API
+# Leave empty to disable Linear integration.
+
+linear_webhook_secret = "" # Signing secret from Linear webhook config
+linear_api_key = ""        # Personal API key for posting comments
+
 # =============================================================================
 # API Keys
 # =============================================================================

@@ -1142,7 +1142,7 @@ export class SessionDO extends DurableObject<Env> {
 
         this.broadcast({ type: "sandbox_event", event });
         this.broadcast({ type: "processing_status", isProcessing: this.getIsProcessing() });
-        this.ctx.waitUntil(this.notifySlackBot(completionMessageId, event.success));
+        this.ctx.waitUntil(this.notifyCallbackClient(completionMessageId, event.success));
       } else {
         // Stopped path: message was already marked failed by stopExecution()
         this.log.info("prompt.complete", {
@@ -1424,7 +1424,7 @@ export class SessionDO extends DurableObject<Env> {
 
       // Notify slack-bot now because the bridge's late execution_complete will hit
       // the "already_stopped" branch in processSandboxEvent() which skips notification.
-      this.ctx.waitUntil(this.notifySlackBot(processingMessage.id, false));
+      this.ctx.waitUntil(this.notifyCallbackClient(processingMessage.id, false));
     }
 
     // Immediate client feedback
@@ -1804,10 +1804,26 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
-   * Notify slack-bot of completion with retry.
-   * Uses service binding for reliable internal communication.
+   * Resolve the callback service binding based on the message source.
+   * Returns the appropriate Fetcher for the originating client.
    */
-  private async notifySlackBot(messageId: string, success: boolean): Promise<void> {
+  private getCallbackBinding(source: string | null): Fetcher | undefined {
+    switch (source) {
+      case "linear":
+        return this.env.LINEAR_BOT;
+      case "slack":
+        return this.env.SLACK_BOT;
+      default:
+        // Default to SLACK_BOT for backward compatibility (web sources, etc.)
+        return this.env.SLACK_BOT;
+    }
+  }
+
+  /**
+   * Notify the originating client of completion with retry.
+   * Routes to the correct service binding based on the message source.
+   */
+  private async notifyCallbackClient(messageId: string, success: boolean): Promise<void> {
     // Safely query for callback context
     const message = this.repository.getMessageCallbackContext(messageId);
     if (!message?.callback_context) {
@@ -1816,8 +1832,19 @@ export class SessionDO extends DurableObject<Env> {
       });
       return;
     }
-    if (!this.env.SLACK_BOT || !this.env.INTERNAL_CALLBACK_SECRET) {
-      this.log.debug("SLACK_BOT or INTERNAL_CALLBACK_SECRET not configured, skipping notification");
+    if (!this.env.INTERNAL_CALLBACK_SECRET) {
+      this.log.debug("INTERNAL_CALLBACK_SECRET not configured, skipping notification");
+      return;
+    }
+
+    // Resolve the callback binding based on message source
+    const source = message.source ?? null;
+    const binding = this.getCallbackBinding(source);
+    if (!binding) {
+      this.log.debug("No callback binding for source, skipping notification", {
+        message_id: messageId,
+        source,
+      });
       return;
     }
 
@@ -1844,26 +1871,28 @@ export class SessionDO extends DurableObject<Env> {
     // Try with retry (max 2 attempts)
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const response = await this.env.SLACK_BOT.fetch("https://internal/callbacks/complete", {
+        const response = await binding.fetch("https://internal/callbacks/complete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
 
         if (response.ok) {
-          this.log.info("Slack callback succeeded", { message_id: messageId });
+          this.log.info("Callback succeeded", { message_id: messageId, source });
           return;
         }
 
         const responseText = await response.text();
-        this.log.error("Slack callback failed", {
+        this.log.error("Callback failed", {
           message_id: messageId,
+          source,
           status: response.status,
           response_text: responseText,
         });
       } catch (e) {
-        this.log.error("Slack callback attempt failed", {
+        this.log.error("Callback attempt failed", {
           message_id: messageId,
+          source,
           attempt: attempt + 1,
           error: e instanceof Error ? e : String(e),
         });
@@ -1875,7 +1904,10 @@ export class SessionDO extends DurableObject<Env> {
       }
     }
 
-    this.log.error("Failed to notify slack-bot after retries", { message_id: messageId });
+    this.log.error("Failed to notify callback client after retries", {
+      message_id: messageId,
+      source,
+    });
   }
 
   /**
@@ -2185,13 +2217,7 @@ export class SessionDO extends DurableObject<Env> {
         model?: string;
         reasoningEffort?: string;
         attachments?: Array<{ type: string; name: string; url?: string }>;
-        callbackContext?: {
-          channel: string;
-          threadTs: string;
-          repoFullName: string;
-          model: string;
-          reactionMessageTs?: string;
-        };
+        callbackContext?: Record<string, unknown>;
       };
 
       // Get or create participant for the author

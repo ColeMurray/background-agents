@@ -104,6 +104,24 @@ variable "slack_signing_secret" {
 }
 
 # =============================================================================
+# Linear App Credentials
+# =============================================================================
+
+variable "linear_webhook_secret" {
+  description = "Linear webhook signing secret (from Linear Settings → API → Webhooks)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "linear_api_key" {
+  description = "Linear API key for posting comments (from Linear Settings → API → Personal API keys)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+# =============================================================================
 # API Keys
 # =============================================================================
 

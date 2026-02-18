@@ -12,6 +12,7 @@ export interface Env {
 
   // Service bindings
   SLACK_BOT?: Fetcher; // Optional - only if slack-bot is deployed
+  LINEAR_BOT?: Fetcher; // Optional - only if linear-bot is deployed
 
   // D1 database
   DB: D1Database;
