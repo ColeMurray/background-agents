@@ -57,6 +57,7 @@ import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./web
 import { SessionPullRequestService } from "./pull-request-service";
 import { shouldPersistToolCallEvent } from "./event-persistence";
 import { RepoSecretsStore } from "../db/repo-secrets";
+import { SessionIndexStore } from "../db/session-index";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
@@ -933,6 +934,15 @@ export class SessionDO extends DurableObject<Env> {
       attachments_count: data.attachments?.length ?? 0,
       queue_position: position,
     });
+
+    // Background: update D1 timestamp so session bubbles to top of sidebar
+    if (this.env.DB) {
+      const store = new SessionIndexStore(this.env.DB);
+      const sessionId = this.getSession()?.id;
+      if (sessionId) {
+        this.ctx.waitUntil(store.touchUpdatedAt(sessionId).catch(() => {}));
+      }
+    }
 
     // Confirm to sender
     this.safeSend(ws, {
