@@ -6,7 +6,7 @@ const VALID_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const MAX_KEY_LENGTH = 256;
 const MAX_VALUE_SIZE = 16384;
 const MAX_TOTAL_VALUE_SIZE = 65536;
-const MAX_SECRETS_PER_REPO = 50;
+const MAX_SECRETS_PER_SCOPE = 50;
 
 const RESERVED_KEYS = new Set([
   "PYTHONUNBUFFERED",
@@ -36,6 +36,12 @@ type SecretRow = {
   key: string;
   value: string;
   existing: boolean;
+};
+
+type GlobalSecretMeta = {
+  key: string;
+  createdAt: number;
+  updatedAt: number;
 };
 
 function normalizeKey(value: string) {
@@ -72,24 +78,31 @@ export function SecretsEditor({
   owner,
   name,
   disabled = false,
+  scope = "repo",
 }: {
   owner?: string;
   name?: string;
   disabled?: boolean;
+  scope?: "repo" | "global";
 }) {
   const [rows, setRows] = useState<SecretRow[]>([]);
+  const [globalRows, setGlobalRows] = useState<GlobalSecretMeta[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
 
-  const repoReady = Boolean(owner && name);
+  const isGlobal = scope === "global";
+  const ready = isGlobal || Boolean(owner && name);
   const repoLabel = owner && name ? `${owner}/${name}` : "";
 
+  const apiBase = isGlobal ? "/api/secrets" : `/api/repos/${owner}/${name}/secrets`;
+
   const loadSecrets = useCallback(async () => {
-    if (!owner || !name) {
+    if (!ready) {
       setRows([]);
+      setGlobalRows([]);
       return;
     }
 
@@ -98,12 +111,13 @@ export function SecretsEditor({
     setSuccess("");
 
     try {
-      const response = await fetch(`/api/repos/${owner}/${name}/secrets`);
+      const response = await fetch(apiBase);
       const data = await response.json();
 
       if (!response.ok) {
         setError(data?.error || "Failed to load secrets");
         setRows([]);
+        setGlobalRows([]);
         return;
       }
 
@@ -113,17 +127,25 @@ export function SecretsEditor({
           createRow({ key: secret.key, value: "", existing: true })
         )
       );
+
+      if (!isGlobal && Array.isArray(data?.globalSecrets)) {
+        setGlobalRows(data.globalSecrets);
+      } else {
+        setGlobalRows([]);
+      }
     } catch {
       setError("Failed to load secrets");
       setRows([]);
+      setGlobalRows([]);
     } finally {
       setLoading(false);
     }
-  }, [owner, name]);
+  }, [ready, apiBase, isGlobal]);
 
   useEffect(() => {
-    if (!repoReady) {
+    if (!ready) {
       setRows([]);
+      setGlobalRows([]);
       setError("");
       setSuccess("");
       return;
@@ -138,7 +160,7 @@ export function SecretsEditor({
     return () => {
       active = false;
     };
-  }, [repoReady, loadSecrets]);
+  }, [ready, loadSecrets]);
 
   const existingKeySet = useMemo(() => {
     return new Set(rows.filter((row) => row.existing).map((row) => normalizeKey(row.key)));
@@ -149,7 +171,7 @@ export function SecretsEditor({
   };
 
   const handleDeleteRow = async (row: SecretRow) => {
-    if (!owner || !name) return;
+    if (!ready) return;
 
     if (!row.existing || !row.key) {
       setRows((current) => current.filter((item) => item.id !== row.id));
@@ -162,7 +184,7 @@ export function SecretsEditor({
     setSuccess("");
 
     try {
-      const response = await fetch(`/api/repos/${owner}/${name}/secrets/${normalizedKey}`, {
+      const response = await fetch(`${apiBase}/${normalizedKey}`, {
         method: "DELETE",
       });
       const data = await response.json();
@@ -180,7 +202,7 @@ export function SecretsEditor({
   };
 
   const handleSave = async () => {
-    if (!owner || !name) return;
+    if (!ready) return;
 
     setError("");
     setSuccess("");
@@ -227,8 +249,8 @@ export function SecretsEditor({
     }
 
     const netNew = entries.filter((entry) => !existingKeySet.has(entry.key)).length;
-    if (existingKeySet.size + netNew > MAX_SECRETS_PER_REPO) {
-      setError(`Repository would exceed ${MAX_SECRETS_PER_REPO} secrets limit`);
+    if (existingKeySet.size + netNew > MAX_SECRETS_PER_SCOPE) {
+      setError(`Would exceed ${MAX_SECRETS_PER_SCOPE} secrets limit`);
       return;
     }
 
@@ -248,7 +270,7 @@ export function SecretsEditor({
         payload[entry.key] = entry.value;
       }
 
-      const response = await fetch(`/api/repos/${owner}/${name}/secrets`, {
+      const response = await fetch(apiBase, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ secrets: payload }),
@@ -269,35 +291,39 @@ export function SecretsEditor({
     }
   };
 
+  const descriptionText = isGlobal
+    ? "Secrets apply to all repositories."
+    : `Values are never shown after save. Secrets apply to ${repoLabel || "the selected repo"}.`;
+
   return (
     <div className="mt-4 border border-border bg-background p-4">
       <div className="flex items-center justify-between mb-3">
         <div>
           <h3 className="text-sm font-semibold text-foreground">Secrets</h3>
-          <p className="text-xs text-muted-foreground">
-            Values are never shown after save. Secrets apply to {repoLabel || "the selected repo"}.
-          </p>
+          <p className="text-xs text-muted-foreground">{descriptionText}</p>
         </div>
         <button
           type="button"
           onClick={handleAddRow}
-          disabled={!repoReady || disabled}
+          disabled={!ready || disabled}
           className="text-xs px-2 py-1 border border-border-muted text-muted-foreground hover:text-foreground hover:border-border transition disabled:opacity-50"
         >
           Add secret
         </button>
       </div>
 
-      {!repoReady && (
+      {!ready && (
         <p className="text-xs text-muted-foreground">Select a repository to manage secrets.</p>
       )}
 
-      {repoReady && (
+      {ready && (
         <>
           {loading && <p className="text-xs text-muted-foreground">Loading secrets...</p>}
 
-          {!loading && rows.length === 0 && (
-            <p className="text-xs text-muted-foreground">No secrets set for this repo.</p>
+          {!loading && rows.length === 0 && globalRows.length === 0 && (
+            <p className="text-xs text-muted-foreground">
+              {isGlobal ? "No global secrets set." : "No secrets set for this repo."}
+            </p>
           )}
 
           <div className="space-y-2">
@@ -358,6 +384,42 @@ export function SecretsEditor({
             ))}
           </div>
 
+          {!isGlobal && globalRows.length > 0 && (
+            <div className="mt-4">
+              <p className="text-xs text-muted-foreground mb-2">Inherited from global scope</p>
+              <div className="space-y-2">
+                {globalRows.map((g) => {
+                  const overridden = existingKeySet.has(g.key);
+                  return (
+                    <div
+                      key={g.key}
+                      className={`flex flex-wrap items-center gap-2 border border-border-muted p-2 ${
+                        overridden ? "opacity-40" : "opacity-70"
+                      }`}
+                    >
+                      <span className="text-[10px] font-medium px-1.5 py-0.5 bg-blue-500/10 text-blue-600 border border-blue-500/20">
+                        Global
+                      </span>
+                      <span className="text-xs text-foreground font-mono">{g.key}</span>
+                      <input
+                        type="password"
+                        value=""
+                        placeholder="••••••••"
+                        disabled
+                        className="flex-1 min-w-[200px] bg-input border border-border px-2 py-1 text-xs text-foreground disabled:opacity-60"
+                      />
+                      {overridden && (
+                        <span className="text-[10px] text-muted-foreground">
+                          (overridden by repo)
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {error && <p className="mt-3 text-xs text-red-500">{error}</p>}
           {success && <p className="mt-3 text-xs text-green-600">{success}</p>}
 
@@ -365,7 +427,7 @@ export function SecretsEditor({
             <button
               type="button"
               onClick={handleSave}
-              disabled={disabled || saving || !repoReady}
+              disabled={disabled || saving || !ready}
               className="text-xs px-3 py-1 border border-border-muted text-foreground hover:border-foreground transition disabled:opacity-50"
             >
               {saving ? "Saving..." : "Save secrets"}

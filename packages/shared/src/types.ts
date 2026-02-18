@@ -90,6 +90,17 @@ export interface SessionArtifact {
   createdAt: number;
 }
 
+/**
+ * Metadata stored on branch artifacts when PR creation falls back to manual flow.
+ */
+export interface ManualPullRequestArtifactMetadata {
+  mode: "manual_pr";
+  head: string;
+  base: string;
+  createPrUrl: string;
+  provider?: string;
+}
+
 // Pull request info
 export interface PullRequest {
   number: number;
@@ -113,6 +124,7 @@ export interface SandboxEvent {
   tool?: string;
   args?: Record<string, unknown>;
   callId?: string;
+  output?: string;
   result?: string;
   error?: string;
   status?: string;
@@ -132,7 +144,13 @@ export interface SandboxEvent {
 export type ClientMessage =
   | { type: "ping" }
   | { type: "subscribe"; token: string; clientId: string }
-  | { type: "prompt"; content: string; attachments?: Attachment[] }
+  | {
+      type: "prompt";
+      content: string;
+      model?: string;
+      reasoningEffort?: string;
+      attachments?: Attachment[];
+    }
   | { type: "stop" }
   | { type: "typing" }
   | { type: "presence"; status: "active" | "idle"; cursor?: { line: number; file: string } };
@@ -166,6 +184,9 @@ export interface SessionState {
   sandboxStatus: SandboxStatus;
   messageCount: number;
   createdAt: number;
+  model?: string;
+  reasoningEffort?: string;
+  isProcessing?: boolean;
 }
 
 // Participant presence info
@@ -205,6 +226,8 @@ export interface CreateSessionRequest {
   repoOwner: string;
   repoName: string;
   title?: string;
+  model?: string;
+  reasoningEffort?: string;
 }
 
 export interface CreateSessionResponse {
@@ -216,52 +239,4 @@ export interface ListSessionsResponse {
   sessions: Session[];
   cursor?: string;
   hasMore: boolean;
-}
-
-// Raygun integration types
-export interface RaygunConfig {
-  id: string;
-  repoId: string;
-  applicationId: string;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-export interface RaygunIssue {
-  id: string;
-  errorMessage: string;
-  stackTracePreview: string;
-  occurrenceCount: number;
-  firstSeenAt: Date;
-  lastSeenAt: Date;
-  status: 'active' | 'resolved' | 'ignored';
-  affectedUsers: number;
-}
-
-export interface RaygunIssueDetail extends RaygunIssue {
-  fullStackTrace: string;
-  affectedFiles: string[];
-  context: {
-    environment: string;
-    version: string;
-    customData: Record<string, unknown>;
-  };
-  recentOccurrences: Array<{
-    timestamp: Date;
-    stackTrace: string;
-    context: Record<string, unknown>;
-  }>;
-}
-
-export interface RaygunFixSessionContext {
-  type: 'raygun-fix';
-  issueId: string;
-  issueUrl: string;
-  errorMessage: string;
-  fullStackTrace: string;
-  affectedFiles: string[];
-  occurrenceCount: number;
-  environment: string;
-  version: string;
-  customData: Record<string, unknown>;
 }

@@ -720,6 +720,37 @@ class TestFetchFinalMessageState:
         assert events[0]["content"] == "Assistant response"
 
 
+class TestExtractErrorMessage:
+    """Tests for _extract_error_message static method."""
+
+    def test_named_error_with_data_message(self):
+        """Should extract message from NamedError data.message."""
+        error = {"name": "SomeError", "data": {"message": "Something broke"}}
+        assert AgentBridge._extract_error_message(error) == "Something broke"
+
+    def test_dict_with_message_key(self):
+        """Should fall back to error.message when no data.message."""
+        error = {"message": "Direct message"}
+        assert AgentBridge._extract_error_message(error) == "Direct message"
+
+    def test_dict_with_name_key_only(self):
+        """Should fall back to error.name when no message key."""
+        error = {"name": "TimeoutError"}
+        assert AgentBridge._extract_error_message(error) == "TimeoutError"
+
+    def test_non_dict_error(self):
+        """Should stringify non-dict errors."""
+        assert AgentBridge._extract_error_message("raw error string") == "raw error string"
+
+    def test_none_error(self):
+        """Should return None for falsy error."""
+        assert AgentBridge._extract_error_message(None) is None
+
+    def test_empty_dict(self):
+        """Should return None for empty dict (no message or name)."""
+        assert AgentBridge._extract_error_message({}) is None
+
+
 class TestSSEFollowUpMessageBug:
     """Integration tests for the follow-up message bug fix.
 
@@ -1159,6 +1190,677 @@ class TestPromptMaxDuration:
 
         assert any(url.endswith("/stop") for url in http_client.post_urls)
         assert any(url.endswith("/message") for url in http_client.get_urls)
+
+
+class TestSubtaskStreaming:
+    """Tests for child session (sub-task) event streaming through the bridge."""
+
+    @pytest.mark.asyncio
+    async def test_child_session_tool_events_streamed(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """Child session tool events should be forwarded with isSubtask=True."""
+        http_client = bridge.http_client
+
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            # Parent message.updated to authorize parent messages
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            # Child session created
+            create_sse_event(
+                "session.created",
+                {
+                    "info": {
+                        "id": "child-1",
+                        "parentID": "oc-session-123",
+                    }
+                },
+            ),
+            # Child message.updated
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "child-msg-1",
+                        "role": "assistant",
+                        "sessionID": "child-1",
+                    }
+                },
+            ),
+            # Child tool running
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "id": "child-part-1",
+                        "sessionID": "child-1",
+                        "messageID": "child-msg-1",
+                        "tool": "Bash",
+                        "callID": "child-call-1",
+                        "state": {
+                            "status": "running",
+                            "input": {"command": "ls"},
+                            "output": "",
+                        },
+                    }
+                },
+            ),
+            # Child tool completed
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "id": "child-part-1",
+                        "sessionID": "child-1",
+                        "messageID": "child-msg-1",
+                        "tool": "Bash",
+                        "callID": "child-call-1",
+                        "state": {
+                            "status": "completed",
+                            "input": {"command": "ls"},
+                            "output": "file.txt",
+                        },
+                    }
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        tool_events = [e for e in events if e["type"] == "tool_call"]
+        assert len(tool_events) == 2
+        assert tool_events[0]["status"] == "running"
+        assert tool_events[0]["isSubtask"] is True
+        assert tool_events[0]["messageId"] == "cp-msg-1"
+        assert tool_events[1]["status"] == "completed"
+        assert tool_events[1]["isSubtask"] is True
+
+    @pytest.mark.asyncio
+    async def test_child_text_events_not_forwarded(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """Child session text events should NOT be forwarded."""
+        http_client = bridge.http_client
+
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            create_sse_event(
+                "session.created",
+                {
+                    "info": {
+                        "id": "child-1",
+                        "parentID": "oc-session-123",
+                    }
+                },
+            ),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "child-msg-1",
+                        "role": "assistant",
+                        "sessionID": "child-1",
+                    }
+                },
+            ),
+            # Child text event — should be suppressed
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "child-text-1",
+                        "sessionID": "child-1",
+                        "messageID": "child-msg-1",
+                        "text": "I am thinking...",
+                    },
+                    "delta": "I am thinking...",
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        token_events = [e for e in events if e["type"] == "token"]
+        assert len(token_events) == 0
+
+    @pytest.mark.asyncio
+    async def test_child_idle_does_not_terminate_stream(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """Child session.idle should NOT terminate the parent stream."""
+        http_client = bridge.http_client
+
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            create_sse_event(
+                "session.created",
+                {
+                    "info": {
+                        "id": "child-1",
+                        "parentID": "oc-session-123",
+                    }
+                },
+            ),
+            # Child goes idle — should NOT terminate
+            create_sse_event("session.idle", {"sessionID": "child-1"}),
+            # Parent text event after child idle
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "part-1",
+                        "sessionID": "oc-session-123",
+                        "messageID": "oc-msg-1",
+                        "text": "Task result",
+                    }
+                },
+            ),
+            # Parent goes idle — terminates
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        token_events = [e for e in events if e["type"] == "token"]
+        assert len(token_events) == 1
+        assert token_events[0]["content"] == "Task result"
+
+    @pytest.mark.asyncio
+    async def test_child_session_status_idle_does_not_terminate_stream(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """Child session.status with type=idle should NOT terminate the parent stream."""
+        http_client = bridge.http_client
+
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            create_sse_event(
+                "session.created",
+                {
+                    "info": {
+                        "id": "child-1",
+                        "parentID": "oc-session-123",
+                    }
+                },
+            ),
+            # Child session.status idle — should NOT terminate
+            create_sse_event(
+                "session.status",
+                {"sessionID": "child-1", "status": {"type": "idle"}},
+            ),
+            # Parent text event after child status idle
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "part-1",
+                        "sessionID": "oc-session-123",
+                        "messageID": "oc-msg-1",
+                        "text": "Still going",
+                    }
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        token_events = [e for e in events if e["type"] == "token"]
+        assert len(token_events) == 1
+        assert token_events[0]["content"] == "Still going"
+
+    @pytest.mark.asyncio
+    async def test_child_session_error_forwarded_without_termination(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """Child session errors should be forwarded with isSubtask=True but not terminate stream."""
+        http_client = bridge.http_client
+
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            create_sse_event(
+                "session.created",
+                {
+                    "info": {
+                        "id": "child-1",
+                        "parentID": "oc-session-123",
+                    }
+                },
+            ),
+            # Child session error
+            create_sse_event(
+                "session.error",
+                {
+                    "sessionID": "child-1",
+                    "error": {"data": {"message": "Sub-task failed"}},
+                },
+            ),
+            # Parent text after child error — should still be received
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "part-1",
+                        "sessionID": "oc-session-123",
+                        "messageID": "oc-msg-1",
+                        "text": "Recovered from sub-task error",
+                    }
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        error_events = [e for e in events if e["type"] == "error"]
+        assert len(error_events) == 1
+        assert error_events[0]["error"] == "Sub-task failed"
+        assert error_events[0]["isSubtask"] is True
+
+        token_events = [e for e in events if e["type"] == "token"]
+        assert len(token_events) == 1
+        assert token_events[0]["content"] == "Recovered from sub-task error"
+
+    @pytest.mark.asyncio
+    async def test_child_message_buffering_race_condition(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """Child parts arriving before message.updated should be buffered and flushed."""
+        http_client = bridge.http_client
+
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            create_sse_event(
+                "session.created",
+                {
+                    "info": {
+                        "id": "child-1",
+                        "parentID": "oc-session-123",
+                    }
+                },
+            ),
+            # Child tool event BEFORE message.updated — should be buffered
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "id": "child-part-1",
+                        "sessionID": "child-1",
+                        "messageID": "child-msg-1",
+                        "tool": "Read",
+                        "callID": "child-call-1",
+                        "state": {
+                            "status": "running",
+                            "input": {"path": "/file.txt"},
+                            "output": "",
+                        },
+                    }
+                },
+            ),
+            # Now child message.updated arrives — should flush buffered part
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "child-msg-1",
+                        "role": "assistant",
+                        "sessionID": "child-1",
+                    }
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        tool_events = [e for e in events if e["type"] == "tool_call"]
+        assert len(tool_events) == 1
+        assert tool_events[0]["isSubtask"] is True
+        assert tool_events[0]["tool"] == "Read"
+
+    @pytest.mark.asyncio
+    async def test_resumed_child_session_discovered_via_metadata(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """Child sessions resumed via task_id should be discovered from task tool metadata."""
+        http_client = bridge.http_client
+
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            # NO session.created — child was resumed via task_id
+            # Parent task tool part with metadata.sessionId
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "id": "parent-part-1",
+                        "sessionID": "oc-session-123",
+                        "messageID": "oc-msg-1",
+                        "tool": "task",
+                        "callID": "task-call-1",
+                        "metadata": {"sessionId": "child-1"},
+                        "state": {
+                            "status": "running",
+                            "input": {"prompt": "do something"},
+                            "output": "",
+                        },
+                    }
+                },
+            ),
+            # Now child events arrive
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "child-msg-1",
+                        "role": "assistant",
+                        "sessionID": "child-1",
+                    }
+                },
+            ),
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "id": "child-part-1",
+                        "sessionID": "child-1",
+                        "messageID": "child-msg-1",
+                        "tool": "Bash",
+                        "callID": "child-call-1",
+                        "state": {
+                            "status": "running",
+                            "input": {"command": "echo hello"},
+                            "output": "",
+                        },
+                    }
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        tool_events = [e for e in events if e["type"] == "tool_call"]
+        # Should have: parent task tool (running) + child Bash tool (running)
+        parent_tools = [e for e in tool_events if not e.get("isSubtask")]
+        child_tools = [e for e in tool_events if e.get("isSubtask")]
+        assert len(parent_tools) == 1
+        assert parent_tools[0]["tool"] == "task"
+        assert len(child_tools) == 1
+        assert child_tools[0]["tool"] == "Bash"
+        assert child_tools[0]["isSubtask"] is True
+
+    @pytest.mark.asyncio
+    async def test_parent_child_callid_collision(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """Parent and child using same callID should both emit events (session-scoped dedupe)."""
+        http_client = bridge.http_client
+
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            create_sse_event(
+                "session.created",
+                {
+                    "info": {
+                        "id": "child-1",
+                        "parentID": "oc-session-123",
+                    }
+                },
+            ),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "child-msg-1",
+                        "role": "assistant",
+                        "sessionID": "child-1",
+                    }
+                },
+            ),
+            # Parent tool with callID "abc"
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "id": "parent-part-1",
+                        "sessionID": "oc-session-123",
+                        "messageID": "oc-msg-1",
+                        "tool": "Bash",
+                        "callID": "abc",
+                        "state": {
+                            "status": "running",
+                            "input": {"command": "echo parent"},
+                            "output": "",
+                        },
+                    }
+                },
+            ),
+            # Child tool with same callID "abc"
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "id": "child-part-1",
+                        "sessionID": "child-1",
+                        "messageID": "child-msg-1",
+                        "tool": "Bash",
+                        "callID": "abc",
+                        "state": {
+                            "status": "running",
+                            "input": {"command": "echo child"},
+                            "output": "",
+                        },
+                    }
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        tool_events = [e for e in events if e["type"] == "tool_call"]
+        # Both should be emitted despite same callID (session-scoped dedupe)
+        assert len(tool_events) == 2
+        parent_tools = [e for e in tool_events if not e.get("isSubtask")]
+        child_tools = [e for e in tool_events if e.get("isSubtask")]
+        assert len(parent_tools) == 1
+        assert len(child_tools) == 1
+
+    @pytest.mark.asyncio
+    async def test_grandchild_session_not_tracked(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """Grandchild sessions (parentID != opencode_session_id) should NOT be tracked."""
+        http_client = bridge.http_client
+
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            # Direct child
+            create_sse_event(
+                "session.created",
+                {
+                    "info": {
+                        "id": "child-1",
+                        "parentID": "oc-session-123",
+                    }
+                },
+            ),
+            # Grandchild — parentID is child-1, NOT oc-session-123
+            create_sse_event(
+                "session.created",
+                {
+                    "info": {
+                        "id": "grandchild-1",
+                        "parentID": "child-1",
+                    }
+                },
+            ),
+            # Grandchild message + tool — should be filtered out
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "gc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "grandchild-1",
+                    }
+                },
+            ),
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "id": "gc-part-1",
+                        "sessionID": "grandchild-1",
+                        "messageID": "gc-msg-1",
+                        "tool": "Bash",
+                        "callID": "gc-call-1",
+                        "state": {
+                            "status": "running",
+                            "input": {"command": "echo grandchild"},
+                            "output": "",
+                        },
+                    }
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        tool_events = [e for e in events if e["type"] == "tool_call"]
+        assert len(tool_events) == 0  # Grandchild events should be filtered out
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ export { SessionDO } from "./session/durable-object";
  * Worker fetch handler.
  */
 export default {
-  async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     // WebSocket upgrade for session
@@ -27,7 +27,7 @@ export default {
     }
 
     // Regular API request — logged by the router with requestId and timing
-    return handleRequest(request, env);
+    return handleRequest(request, env, ctx);
   },
 };
 

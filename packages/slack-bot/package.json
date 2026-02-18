@@ -14,10 +14,10 @@
     "@anthropic-ai/sdk": "^0.39.0",
     "@cloudflare/workers-types": "^4.20241230.0",
     "@open-inspect/shared": "file:../shared",
-    "hono": "^4.6.15"
+    "hono": "^4.11.7"
   },
   "devDependencies": {
-    "esbuild": "^0.24.2",
+    "esbuild": "^0.25.0",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8",
     "wrangler": "^3.99.0"

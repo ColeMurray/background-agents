@@ -205,6 +205,28 @@ class TestBuildPromptRequestBody:
             "modelID": "claude-3-opus",
         }
 
+    def test_with_anthropic_manual_thinking(self, bridge: AgentBridge):
+        """Non-Opus-4.6 Claude models should use manual thinking budgets."""
+        body = bridge._build_prompt_request_body(
+            "Hello",
+            "anthropic/claude-sonnet-4-5",
+            reasoning_effort="max",
+        )
+
+        assert body["model"]["options"] == {"thinking": {"type": "enabled", "budgetTokens": 31_999}}
+
+    def test_with_opus_4_6_adaptive_thinking(self, bridge: AgentBridge):
+        """Opus 4.6 should use adaptive thinking instead of manual budgets."""
+        body = bridge._build_prompt_request_body(
+            "Hello",
+            "anthropic/claude-opus-4-6",
+            reasoning_effort="medium",
+        )
+
+        assert body["model"]["options"] == {
+            "thinking": {"type": "adaptive"},
+            "outputConfig": {"effort": "medium"},
+        }
 
 class TestOpenCodeIdentifier:
     """Tests for OpenCode-compatible ascending ID generation."""

@@ -12,6 +12,7 @@ Open-Inspect provides a hosted background coding agent that can:
 - Support multiple clients (web, Slack, Chrome extension)
 - Enable multiplayer sessions where multiple people can collaborate
 - Create PRs with proper commit attribution
+- Use your choice of AI model — Anthropic Claude or OpenAI Codex via your ChatGPT subscription
 
 ## Security Model (Single-Tenant Only)
 
@@ -32,12 +33,12 @@ The system uses a shared GitHub App installation for all git operations (clone, 
 
 ### Token Architecture
 
-| Token Type       | Purpose                | Scope                            |
-| ---------------- | ---------------------- | -------------------------------- |
-| GitHub App Token | Clone repos, push code | All repos where App is installed |
+| Token Type            | Purpose                | Scope                            |
+| --------------------- | ---------------------- | -------------------------------- |
+| GitHub App Token      | Clone repos, push code | All repos where App is installed |
 | Bitbucket App Password | Clone repos, push code | Repos accessible to Bot account |
-| User OAuth Token | Create PRs, user info  | Repos user has access to         |
-| WebSocket Token  | Real-time session auth | Single session                   |
+| User OAuth Token      | Create PRs, user info  | Repos user has access to         |
+| WebSocket Token       | Real-time session auth | Single session                   |
 
 ### Why Single-Tenant Only
 
@@ -115,6 +116,9 @@ built for internal use where all employees are trusted and have access to compan
 
 See **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** for deployment instructions.
 
+To understand the architecture and core concepts, read
+**[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)**.
+
 ## Key Features
 
 ### Fast Startup
@@ -145,6 +149,34 @@ await configureGitIdentity({
 });
 ```
 
+### Multi-Provider Model Support
+
+Choose the AI model that fits your task — Anthropic Claude or OpenAI Codex:
+
+| Provider  | Models                                |
+| --------- | ------------------------------------- |
+| Anthropic | Claude Haiku, Sonnet, Opus            |
+| OpenAI    | GPT 5.2, GPT 5.2 Codex, GPT 5.3 Codex |
+
+OpenAI models work with your existing ChatGPT subscription — no separate API key needed. See
+**[docs/OPENAI_MODELS.md](docs/OPENAI_MODELS.md)** for setup instructions.
+
+### Repository Setup Scripts
+
+Repositories can include a `.openinspect/setup.sh` script for custom environment setup:
+
+```bash
+# .openinspect/setup.sh
+#!/bin/bash
+npm install
+pip install -r requirements.txt
+```
+
+- Runs automatically after git clone, before the agent starts
+- Skipped when restoring from a snapshot (dependencies already installed)
+- Non-blocking: failures are logged but don't prevent the session from starting
+- Default timeout: 5 minutes (configurable via `SETUP_TIMEOUT_SECONDS` environment variable)
+
 ## License
 
 MIT
@@ -156,5 +188,5 @@ built with:
 
 - [Modal](https://modal.com) - Cloud sandbox infrastructure
 - [Cloudflare Workers](https://workers.cloudflare.com) - Edge computing
-- [OpenCode](https://opencode.dev) - Coding agent runtime
+- [OpenCode](https://opencode.ai) - Coding agent runtime
 - [Next.js](https://nextjs.org) - Web framework

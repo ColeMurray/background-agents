@@ -1,12 +1,12 @@
 """Type definitions for sandbox operations."""
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel
 
 
-class SandboxStatus(str, Enum):
+class SandboxStatus(StrEnum):
     """Status of a sandbox instance."""
 
     PENDING = "pending"
@@ -22,7 +22,7 @@ class SandboxStatus(str, Enum):
     FAILED = "failed"
 
 
-class GitSyncStatus(str, Enum):
+class GitSyncStatus(StrEnum):
     """Status of git synchronization."""
 
     PENDING = "pending"

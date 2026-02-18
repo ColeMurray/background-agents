@@ -153,6 +153,8 @@ export interface CallbackContext {
   threadTs: string;
   repoFullName: string;
   model: string;
+  reasoningEffort?: string;
+  reactionMessageTs?: string;
 }
 
 /**
@@ -163,6 +165,7 @@ export interface ThreadSession {
   repoId: string;
   repoFullName: string;
   model: string;
+  reasoningEffort?: string;
   /** Unix timestamp of when the session was created. Used for debugging and observability. */
   createdAt: number;
 }
@@ -200,6 +203,24 @@ export interface ListEventsResponse {
 }
 
 /**
+ * Artifact response from control-plane artifacts API.
+ */
+export interface ArtifactResponse {
+  id: string;
+  type: string;
+  url: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: number;
+}
+
+/**
+ * List artifacts response from control-plane.
+ */
+export interface ListArtifactsResponse {
+  artifacts: ArtifactResponse[];
+}
+
+/**
  * Tool call summary for Slack display.
  */
 export interface ToolCallSummary {
@@ -214,6 +235,7 @@ export interface ArtifactInfo {
   type: string;
   url: string;
   label: string;
+  metadata?: Record<string, unknown> | null;
 }
 
 /**
@@ -232,5 +254,6 @@ export interface AgentResponse {
 export interface UserPreferences {
   userId: string;
   model: string;
+  reasoningEffort?: string;
   updatedAt: number;
 }

@@ -98,6 +98,7 @@ describe("SessionRepository", () => {
         "repo",
         null,
         "claude-sonnet-4",
+        null,
         "created",
         1000,
         2000,
@@ -485,6 +486,7 @@ describe("SessionRepository", () => {
         "Hello",
         "web",
         "claude-sonnet-4",
+        null,
         "[]",
         '{"channel":"C123"}',
         "pending",
@@ -570,6 +572,108 @@ describe("SessionRepository", () => {
     });
   });
 
+  describe("upsertTokenEvent", () => {
+    it("upserts token event by deterministic message key", () => {
+      const event = {
+        type: "token" as const,
+        content: "partial response",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1,
+      };
+
+      repo.upsertTokenEvent("msg-1", event, 1000);
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("INSERT INTO events");
+      expect(mock.calls[0].query).toContain("VALUES (?, ?, ?, ?, ?)");
+      expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO UPDATE SET");
+      expect(mock.calls[0].params).toEqual([
+        "token:msg-1",
+        "token",
+        JSON.stringify(event),
+        "msg-1",
+        1000,
+      ]);
+    });
+
+    it("reuses the same deterministic ID across updates", () => {
+      const firstEvent = {
+        type: "token" as const,
+        content: "first",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1,
+      };
+      const secondEvent = {
+        ...firstEvent,
+        content: "second",
+        timestamp: 2,
+      };
+
+      repo.upsertTokenEvent("msg-1", firstEvent, 1000);
+      repo.upsertTokenEvent("msg-1", secondEvent, 2000);
+
+      expect(mock.calls.length).toBe(2);
+      expect(mock.calls[0].params[0]).toBe("token:msg-1");
+      expect(mock.calls[1].params[0]).toBe("token:msg-1");
+      expect(mock.calls[1].params[1]).toBe("token");
+      expect(mock.calls[1].params[2]).toBe(JSON.stringify(secondEvent));
+      expect(mock.calls[1].params[4]).toBe(2000);
+    });
+  });
+
+  describe("upsertExecutionCompleteEvent", () => {
+    it("upserts completion event by deterministic message key", () => {
+      const event = {
+        type: "execution_complete" as const,
+        messageId: "msg-1",
+        success: true,
+        sandboxId: "sb-1",
+        timestamp: 2,
+      };
+
+      repo.upsertExecutionCompleteEvent("msg-1", event, 2000);
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("INSERT INTO events");
+      expect(mock.calls[0].query).toContain("VALUES (?, ?, ?, ?, ?)");
+      expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO UPDATE SET");
+      expect(mock.calls[0].params).toEqual([
+        "execution_complete:msg-1",
+        "execution_complete",
+        JSON.stringify(event),
+        "msg-1",
+        2000,
+      ]);
+    });
+
+    it("reuses the same deterministic completion ID across updates", () => {
+      const firstEvent = {
+        type: "execution_complete" as const,
+        messageId: "msg-1",
+        success: false,
+        sandboxId: "sb-1",
+        timestamp: 2,
+      };
+      const secondEvent = {
+        ...firstEvent,
+        success: true,
+        timestamp: 3,
+      };
+
+      repo.upsertExecutionCompleteEvent("msg-1", firstEvent, 2000);
+      repo.upsertExecutionCompleteEvent("msg-1", secondEvent, 3000);
+
+      expect(mock.calls.length).toBe(2);
+      expect(mock.calls[0].params[0]).toBe("execution_complete:msg-1");
+      expect(mock.calls[1].params[0]).toBe("execution_complete:msg-1");
+      expect(mock.calls[1].params[1]).toBe("execution_complete");
+      expect(mock.calls[1].params[2]).toBe(JSON.stringify(secondEvent));
+      expect(mock.calls[1].params[4]).toBe(3000);
+    });
+  });
+
   describe("listEvents", () => {
     it("returns in descending order", () => {
       repo.listEvents({ limit: 50 });
@@ -596,12 +700,83 @@ describe("SessionRepository", () => {
   });
 
   describe("getEventsForReplay", () => {
-    it("returns events in ascending order for replay", () => {
+    it("returns newest events in ascending order via DESC subquery", () => {
       repo.getEventsForReplay(500);
 
       expect(mock.calls.length).toBe(1);
-      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC");
+      // Inner subquery selects newest events via DESC
+      expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, id DESC LIMIT ?");
+      // Outer query re-sorts to chronological ASC for replay
+      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, id ASC");
       expect(mock.calls[0].params).toEqual([500]);
+    });
+  });
+
+  describe("getEventsHistoryPage", () => {
+    it("queries events with composite cursor excluding heartbeats", () => {
+      repo.getEventsHistoryPage(5000, "cursor-id", 50);
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("FROM events");
+      expect(mock.calls[0].query).toContain("type != 'heartbeat'");
+      expect(mock.calls[0].query).toContain("created_at < ?1");
+      expect(mock.calls[0].query).toContain("created_at = ?1 AND id < ?2");
+      expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, id DESC");
+      expect(mock.calls[0].params).toEqual([5000, "cursor-id", 51]); // limit + 1
+    });
+
+    it("returns hasMore=false when results fit within limit", () => {
+      const query = `SELECT * FROM events
+         WHERE type != 'heartbeat' AND ((created_at < ?1) OR (created_at = ?1 AND id < ?2))
+         ORDER BY created_at DESC, id DESC LIMIT ?3`;
+
+      mock.setData(query, [
+        { id: "e1", created_at: 4000, type: "token", data: "{}" },
+        { id: "e2", created_at: 3000, type: "tool_call", data: "{}" },
+      ]);
+
+      const result = repo.getEventsHistoryPage(5000, "cursor-id", 50);
+      expect(result.hasMore).toBe(false);
+      expect(result.events.length).toBe(2);
+    });
+
+    it("returns hasMore=true and trims overflow when results exceed limit", () => {
+      const query = `SELECT * FROM events
+         WHERE type != 'heartbeat' AND ((created_at < ?1) OR (created_at = ?1 AND id < ?2))
+         ORDER BY created_at DESC, id DESC LIMIT ?3`;
+
+      // 3 rows returned, limit = 2 → hasMore = true, last row trimmed
+      mock.setData(query, [
+        { id: "e1", created_at: 4000, type: "token", data: "{}" },
+        { id: "e2", created_at: 3000, type: "tool_call", data: "{}" },
+        { id: "e3", created_at: 2000, type: "token", data: "{}" },
+      ]);
+
+      const result = repo.getEventsHistoryPage(5000, "cursor-id", 2);
+      expect(result.hasMore).toBe(true);
+      expect(result.events.length).toBe(2);
+    });
+
+    it("returns events in chronological order (reversed from DESC query)", () => {
+      const query = `SELECT * FROM events
+         WHERE type != 'heartbeat' AND ((created_at < ?1) OR (created_at = ?1 AND id < ?2))
+         ORDER BY created_at DESC, id DESC LIMIT ?3`;
+
+      mock.setData(query, [
+        { id: "e2", created_at: 4000, type: "token", data: "{}" },
+        { id: "e1", created_at: 3000, type: "tool_call", data: "{}" },
+      ]);
+
+      const result = repo.getEventsHistoryPage(5000, "cursor-id", 50);
+      // After reverse(), oldest first
+      expect(result.events[0].id).toBe("e1");
+      expect(result.events[1].id).toBe("e2");
+    });
+
+    it("returns empty results with hasMore=false when no data matches cursor", () => {
+      const result = repo.getEventsHistoryPage(5000, "cursor-id", 50);
+      expect(result.events).toEqual([]);
+      expect(result.hasMore).toBe(false);
     });
   });
 

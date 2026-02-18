@@ -4,10 +4,11 @@ Sandbox entrypoint - manages OpenCode server and bridge lifecycle.
 
 Runs as PID 1 inside the sandbox. Responsibilities:
 1. Perform git sync with latest code
-2. Start OpenCode server
-3. Start bridge process for control plane communication
-4. Monitor processes and restart on crash with exponential backoff
-5. Handle graceful shutdown on SIGTERM/SIGINT
+2. Run repo setup script (if present, fresh clone only)
+3. Start OpenCode server
+4. Start bridge process for control plane communication
+5. Monitor processes and restart on crash with exponential backoff
+6. Handle graceful shutdown on SIGTERM/SIGINT
 """
 
 import asyncio
@@ -45,6 +46,8 @@ class SandboxSupervisor:
     MAX_RESTARTS = 5
     BACKOFF_BASE = 2.0
     BACKOFF_MAX = 60.0
+    SETUP_SCRIPT_PATH = ".openinspect/setup.sh"
+    DEFAULT_SETUP_TIMEOUT_SECONDS = 300
 
     def __init__(self):
         self.opencode_process: asyncio.subprocess.Process | None = None
@@ -61,19 +64,13 @@ class SandboxSupervisor:
         self.repo_name = os.environ.get("REPO_NAME", "")
         self.github_app_token = os.environ.get("GITHUB_APP_TOKEN", "")
 
-        # VCS provider (github or bitbucket)
         self.vcs_provider = os.environ.get("VCS_PROVIDER", "github")
-
-        # Bitbucket bot credentials
         self.bitbucket_bot_username = os.environ.get("BITBUCKET_BOT_USERNAME", "").strip()
         self.bitbucket_bot_app_password = os.environ.get("BITBUCKET_BOT_APP_PASSWORD", "").strip()
 
         # Parse session config if provided
         session_config_json = os.environ.get("SESSION_CONFIG", "{}")
         self.session_config = json.loads(session_config_json)
-
-        # Raygun Application ID (if provided in session config)
-        self.raygun_application_id = self.session_config.get("raygun_application_id", "")
 
         # Paths
         self.workspace_path = Path("/workspace")
@@ -98,7 +95,6 @@ class SandboxSupervisor:
         """
         if self.vcs_provider == "bitbucket":
             if self.bitbucket_bot_username and self.bitbucket_bot_app_password:
-                # URL encode credentials to handle special characters
                 username = urllib.parse.quote(self.bitbucket_bot_username, safe='')
                 password = urllib.parse.quote(self.bitbucket_bot_app_password, safe='')
                 return (
@@ -106,27 +102,23 @@ class SandboxSupervisor:
                     f"@bitbucket.org/{self.repo_owner}/{self.repo_name}.git"
                 )
             return f"https://bitbucket.org/{self.repo_owner}/{self.repo_name}.git"
-        else:  # github
+        else:
             return f"https://github.com/{self.repo_owner}/{self.repo_name}.git"
 
     def _get_public_clone_url(self) -> str:
         """Get public (unauthenticated) clone URL based on VCS provider."""
         if self.vcs_provider == "bitbucket":
             return f"https://bitbucket.org/{self.repo_owner}/{self.repo_name}.git"
-        else:  # github
+        else:
             return f"https://github.com/{self.repo_owner}/{self.repo_name}.git"
 
     def _get_git_credentials(self) -> tuple[str, str]:
-        """Get git credentials (username, token) based on VCS provider.
-
-        Returns:
-            Tuple of (username, token). Empty strings if no credentials available.
-        """
+        """Get git credentials (username, token) based on VCS provider."""
         if self.vcs_provider == "bitbucket":
             if self.bitbucket_bot_username and self.bitbucket_bot_app_password:
                 return (self.bitbucket_bot_username, self.bitbucket_bot_app_password)
             return ("", "")
-        else:  # github
+        else:
             if self.github_app_token:
                 return ("x-access-token", self.github_app_token)
             return ("", "")
@@ -135,24 +127,18 @@ class SandboxSupervisor:
         """Redact git credentials from text to prevent token leakage in logs."""
         result = text
         username, token = self._get_git_credentials()
-
-        # Redact raw credentials
         if token and token in result:
             result = result.replace(token, "[REDACTED]")
         if username and username not in ("x-access-token", "x-token-auth") and username in result:
             result = result.replace(username, "[REDACTED]")
-
-        # Redact URL-encoded credentials (common in URLs)
         if token:
             encoded_token = urllib.parse.quote(token, safe='')
             if encoded_token != token and encoded_token in result:
                 result = result.replace(encoded_token, "[REDACTED]")
-
         if username and username not in ("x-access-token", "x-token-auth"):
             encoded_username = urllib.parse.quote(username, safe='')
             if encoded_username != username and encoded_username in result:
                 result = result.replace(encoded_username, "[REDACTED]")
-
         return result
 
     async def perform_git_sync(self) -> bool:
@@ -286,7 +272,6 @@ fi
             )
             await result.wait()
 
-            # Reset remote URL to public version for Bitbucket
             if self.vcs_provider == "bitbucket" and has_credentials:
                 public_url = self._get_public_clone_url()
                 await asyncio.create_subprocess_exec(
@@ -351,22 +336,56 @@ fi
             return True
 
         except Exception as e:
-            # Redact credentials from exception message
             error_safe = self._redact_credentials(str(e))
             self.log.error("git.sync_error", error=error_safe)
-            self.git_sync_complete.set()  # Allow agent to proceed anyway
+            self.git_sync_complete.set()
             return False
 
         finally:
-            # Clean up askpass script
             if askpass_script and os.path.exists(askpass_script.name):
                 try:
                     os.unlink(askpass_script.name)
                 except OSError:
                     pass
 
+    def _setup_openai_oauth(self) -> None:
+        """Write OpenCode auth.json for ChatGPT OAuth if refresh token is configured."""
+        refresh_token = os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN")
+        if not refresh_token:
+            return
+
+        try:
+            auth_dir = Path.home() / ".local" / "share" / "opencode"
+            auth_dir.mkdir(parents=True, exist_ok=True)
+
+            openai_entry = {
+                "type": "oauth",
+                "refresh": "managed-by-control-plane",
+                "access": "",
+                "expires": 0,
+            }
+
+            account_id = os.environ.get("OPENAI_OAUTH_ACCOUNT_ID")
+            if account_id:
+                openai_entry["accountId"] = account_id
+
+            auth_file = auth_dir / "auth.json"
+            tmp_file = auth_dir / ".auth.json.tmp"
+
+            fd = os.open(str(tmp_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                os.write(fd, json.dumps({"openai": openai_entry}).encode())
+            finally:
+                os.close(fd)
+            tmp_file.replace(auth_file)
+
+            self.log.info("openai_oauth.setup")
+        except Exception as e:
+            self.log.warn("openai_oauth.setup_error", exc=e)
+
     async def start_opencode(self) -> None:
         """Start OpenCode server with configuration."""
+        self._setup_openai_oauth()
         self.log.info("opencode.start")
 
         # Build OpenCode config from session settings
@@ -412,15 +431,24 @@ fi
             if not package_json.exists():
                 package_json.write_text('{"name": "opencode-tools", "type": "module"}')
 
+        # Deploy codex auth proxy plugin if OpenAI OAuth is configured
+        plugin_source = Path("/app/sandbox/codex-auth-plugin.ts")
+        if plugin_source.exists() and os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN"):
+            plugin_dir = opencode_dir / "plugins"
+            plugin_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy(plugin_source, plugin_dir / "codex-auth-plugin.ts")
+            self.log.info("openai_oauth.plugin_deployed")
+
         env = {
             **os.environ,
             "OPENCODE_CONFIG_CONTENT": json.dumps(opencode_config),
+            # Disable OpenCode's question tool in headless mode. The tool blocks
+            # on a Promise waiting for user input via the HTTP API, but the bridge
+            # has no channel to relay questions to the web client and back. Without
+            # this, the session hangs until the SSE inactivity timeout (120s).
+            # See: https://github.com/anomalyco/opencode/blob/19b1222cd/packages/opencode/src/tool/registry.ts#L100
+            "OPENCODE_CLIENT": "serve",
         }
-
-        # Inject Raygun Application ID if provided (for Raygun MCP server)
-        if self.raygun_application_id:
-            env["RAYGUN_APPLICATION_ID"] = self.raygun_application_id
-            self.log.info("raygun.application_id_injected")
 
         # Start OpenCode server in the repo directory
         self.opencode_process = await asyncio.create_subprocess_exec(
@@ -633,7 +661,7 @@ fi
 
     async def _report_fatal_error(self, message: str) -> None:
         """Report a fatal error to the control plane."""
-        self.log.error("supervisor.fatal", error_detail=message)
+        self.log.error("supervisor.fatal", message=message)
 
         if not self.control_plane_url:
             return
@@ -680,6 +708,75 @@ fi
         except Exception as e:
             self.log.error("git.identity_error", exc=e)
 
+    async def run_setup_script(self) -> bool:
+        """
+        Run .openinspect/setup.sh if it exists in the cloned repo.
+
+        Non-fatal: failures are logged but don't block startup.
+
+        Returns:
+            True if script succeeded or was not present, False on failure/timeout.
+        """
+        setup_script = self.repo_path / self.SETUP_SCRIPT_PATH
+
+        if not setup_script.exists():
+            self.log.debug("setup.skip", reason="no_setup_script", path=str(setup_script))
+            return True
+
+        try:
+            timeout_seconds = int(
+                os.environ.get("SETUP_TIMEOUT_SECONDS", str(self.DEFAULT_SETUP_TIMEOUT_SECONDS))
+            )
+        except ValueError:
+            timeout_seconds = self.DEFAULT_SETUP_TIMEOUT_SECONDS
+
+        self.log.info("setup.start", script=str(setup_script), timeout_seconds=timeout_seconds)
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "bash",
+                str(setup_script),
+                cwd=self.repo_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=os.environ.copy(),
+            )
+
+            try:
+                stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
+            except TimeoutError:
+                process.kill()
+                stdout = await process.stdout.read() if process.stdout else b""
+                await process.wait()
+                output_tail = "\n".join(stdout.decode(errors="replace").splitlines()[-50:])
+                self.log.error(
+                    "setup.timeout",
+                    timeout_seconds=timeout_seconds,
+                    output_tail=output_tail,
+                    script=str(setup_script),
+                )
+                return False
+
+            output_tail = "\n".join(
+                (stdout.decode(errors="replace") if stdout else "").splitlines()[-50:]
+            )
+
+            if process.returncode == 0:
+                self.log.debug("setup.complete", exit_code=0, output_tail=output_tail)
+                return True
+            else:
+                self.log.error(
+                    "setup.failed",
+                    exit_code=process.returncode,
+                    output_tail=output_tail,
+                    script=str(setup_script),
+                )
+                return False
+
+        except Exception as e:
+            self.log.error("setup.error", exc=e, script=str(setup_script))
+            return False
+
     async def _quick_git_fetch(self) -> None:
         """
         Quick fetch to check if we're behind after snapshot restore.
@@ -698,7 +795,6 @@ fi
             has_credentials = bool(username and token)
             git_env = os.environ.copy()
 
-            # For GitHub, set up GIT_ASKPASS; for Bitbucket, use authenticated URL
             if has_credentials and self.vcs_provider != "bitbucket":
                 try:
                     askpass_script = tempfile.NamedTemporaryFile(
@@ -718,7 +814,6 @@ fi
                 except Exception as e:
                     self.log.warn("git.askpass_setup_failed", error=str(e))
 
-            # Set remote URL (authenticated for Bitbucket, public for GitHub)
             clone_url = self._get_clone_url()
             await asyncio.create_subprocess_exec(
                 "git",
@@ -744,7 +839,6 @@ fi
             )
             stdout, stderr = await result.communicate()
 
-            # Reset remote URL to public version for Bitbucket (don't persist credentials)
             if self.vcs_provider == "bitbucket" and has_credentials:
                 public_url = self._get_public_clone_url()
                 await asyncio.create_subprocess_exec(
@@ -803,7 +897,6 @@ fi
             self.log.error("git.quick_fetch_error", exc=e)
 
         finally:
-            # Clean up askpass script
             if askpass_script and os.path.exists(askpass_script.name):
                 try:
                     os.unlink(askpass_script.name)
@@ -846,6 +939,10 @@ fi
             # Phase 2: Configure git identity (if repo was cloned)
             await self.configure_git_identity()
 
+            setup_success: bool | None = None
+            if not restored_from_snapshot:
+                setup_success = await self.run_setup_script()
+
             # Phase 3: Start OpenCode server (in repo directory)
             await self.start_opencode()
             opencode_ready = True
@@ -861,6 +958,7 @@ fi
                 repo_name=self.repo_name,
                 restored_from_snapshot=restored_from_snapshot,
                 git_sync_success=git_sync_success,
+                setup_success=setup_success,
                 opencode_ready=opencode_ready,
                 duration_ms=duration_ms,
                 outcome="success",

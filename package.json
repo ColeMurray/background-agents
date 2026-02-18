@@ -44,9 +44,5 @@
       "ruff check --fix",
       "ruff format"
     ]
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.72.1",
-    "hono": "^4.11.7"
   }
 }

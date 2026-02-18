@@ -19,8 +19,10 @@ CREATE TABLE IF NOT EXISTS session (
   base_sha TEXT,                                    -- SHA of base branch at session start
   current_sha TEXT,                                 -- Current HEAD SHA
   opencode_session_id TEXT,                         -- OpenCode session ID (for 1:1 mapping)
-  model TEXT DEFAULT 'claude-haiku-4-5',            -- LLM model to use
+  model TEXT DEFAULT 'anthropic/claude-haiku-4-5',   -- LLM model to use
+  reasoning_effort TEXT,                            -- Session-level reasoning effort default
   status TEXT DEFAULT 'created',                    -- 'created', 'active', 'completed', 'archived'
+  vcs_provider TEXT DEFAULT 'github',               -- 'github' | 'bitbucket'
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -39,6 +41,7 @@ CREATE TABLE IF NOT EXISTS participants (
   bitbucket_login TEXT,                             -- Bitbucket username
   bitbucket_email TEXT,                             -- For git commit attribution
   bitbucket_display_name TEXT,                      -- Display name for git commits
+  role TEXT NOT NULL DEFAULT 'member',              -- 'owner', 'member'
   -- Token storage (AES-GCM encrypted)
   github_access_token_encrypted TEXT,
   github_refresh_token_encrypted TEXT,
@@ -47,7 +50,6 @@ CREATE TABLE IF NOT EXISTS participants (
   bitbucket_access_token_encrypted TEXT,
   bitbucket_refresh_token_encrypted TEXT,
   bitbucket_token_expires_at INTEGER,               -- Unix timestamp
-  role TEXT NOT NULL DEFAULT 'member',               -- 'owner' | 'member'
   -- WebSocket authentication
   ws_auth_token TEXT,                               -- SHA-256 hash of WebSocket auth token
   ws_token_created_at INTEGER,                      -- When the token was generated
@@ -61,7 +63,9 @@ CREATE TABLE IF NOT EXISTS messages (
   content TEXT NOT NULL,
   source TEXT NOT NULL,                             -- 'web', 'slack', 'extension', 'github'
   model TEXT,                                       -- LLM model for this specific message (per-message override)
+  reasoning_effort TEXT,                            -- Per-message reasoning effort override
   attachments TEXT,                                 -- JSON array
+  callback_context TEXT,                            -- JSON callback context for Slack follow-up notifications
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
   created_at INTEGER NOT NULL,
@@ -110,6 +114,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
 CREATE INDEX IF NOT EXISTS idx_messages_author ON messages(author_id);
 CREATE INDEX IF NOT EXISTS idx_events_message ON events(message_id);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
+CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at, id);
 CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user_id);
 `;
 
@@ -148,7 +153,10 @@ export function initSchema(sql: SqlStorage): void {
   runMigration(sql, `ALTER TABLE session ADD COLUMN repo_id INTEGER`);
 
   // Migration: Add model column if it doesn't exist (for existing DOs)
-  runMigration(sql, `ALTER TABLE session ADD COLUMN model TEXT DEFAULT 'claude-haiku-4-5'`);
+  runMigration(
+    sql,
+    `ALTER TABLE session ADD COLUMN model TEXT DEFAULT 'anthropic/claude-haiku-4-5'`
+  );
 
   // Migration: Add model column to messages table for per-message model switching
   runMigration(sql, `ALTER TABLE messages ADD COLUMN model TEXT`);
@@ -192,6 +200,12 @@ export function initSchema(sql: SqlStorage): void {
   // Migration: Add callback_context column to messages table for Slack follow-up notifications
   runMigration(sql, `ALTER TABLE messages ADD COLUMN callback_context TEXT`);
 
+  // Migration: Add reasoning_effort column to session table for session-level reasoning defaults
+  runMigration(sql, `ALTER TABLE session ADD COLUMN reasoning_effort TEXT`);
+
+  // Migration: Add reasoning_effort column to messages table for per-message reasoning override
+  runMigration(sql, `ALTER TABLE messages ADD COLUMN reasoning_effort TEXT`);
+
   // Migration: Add VCS provider discriminator for Bitbucket support
   runMigration(sql, `ALTER TABLE session ADD COLUMN vcs_provider TEXT DEFAULT 'github'`);
   runMigration(sql, `ALTER TABLE participants ADD COLUMN vcs_provider TEXT DEFAULT 'github'`);
@@ -204,9 +218,6 @@ export function initSchema(sql: SqlStorage): void {
   runMigration(sql, `ALTER TABLE participants ADD COLUMN bitbucket_login TEXT`);
   runMigration(sql, `ALTER TABLE participants ADD COLUMN bitbucket_email TEXT`);
   runMigration(sql, `ALTER TABLE participants ADD COLUMN bitbucket_display_name TEXT`);
-
-  // Migration: Add Raygun context column to session table for Raygun fix sessions
-  runMigration(sql, `ALTER TABLE session ADD COLUMN raygun_context TEXT`);
 
   // Migration: Add role column to participants table
   runMigration(sql, `ALTER TABLE participants ADD COLUMN role TEXT NOT NULL DEFAULT 'member'`);

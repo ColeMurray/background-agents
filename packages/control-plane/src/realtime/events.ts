@@ -19,6 +19,8 @@ export type EventCategory =
 export function getEventCategory(eventType: string): EventCategory {
   switch (eventType) {
     case "token":
+    case "step_start":
+    case "step_finish":
     case "tool_call":
     case "tool_result":
     case "execution_complete":

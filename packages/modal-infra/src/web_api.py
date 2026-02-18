@@ -106,7 +106,7 @@ async def api_create_sandbox(
         "git_user_email": null,
         "provider": "anthropic",
         "model": "claude-sonnet-4-5",
-        "vcs_provider": "github"  // 'github' or 'bitbucket'
+        "vcs_provider": "github",  # 'github' or 'bitbucket'
     }
     """
     start_time = time.time()
@@ -260,6 +260,7 @@ async def api_warm_sandbox(
     try:
         from .sandbox.manager import SandboxManager
         from .auth.github_app import generate_installation_token
+        from .sandbox.manager import SandboxConfig
 
         # Determine VCS provider (default to github)
         vcs_provider = request.get("vcs_provider", "github")
@@ -273,7 +274,6 @@ async def api_warm_sandbox(
             bitbucket_bot_username = os.environ.get("BITBUCKET_BOT_USERNAME")
             bitbucket_bot_app_password = os.environ.get("BITBUCKET_BOT_APP_PASSWORD")
         else:
-            # For GitHub, generate App installation token
             try:
                 app_id = os.environ.get("GITHUB_APP_ID")
                 private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
@@ -289,9 +289,6 @@ async def api_warm_sandbox(
                 log.warn("github.token_error", exc=e)
 
         manager = SandboxManager()
-        # Create a specific config for warming that includes credentials
-        from .sandbox.manager import SandboxConfig
-
         config = SandboxConfig(
             repo_owner=str(request.get("repo_owner") or ""),
             repo_name=str(request.get("repo_name") or ""),
@@ -566,7 +563,6 @@ async def api_restore_sandbox(
 
         manager = SandboxManager()
 
-        # Get credentials based on provider
         github_app_token = None
         bitbucket_bot_username = None
         bitbucket_bot_app_password = None

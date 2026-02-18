@@ -40,9 +40,7 @@ class SandboxConfig:
     timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS
     github_app_token: str | None = None  # GitHub App token for git operations
     user_env_vars: dict[str, str] | None = None  # User-provided env vars (repo secrets)
-    # VCS provider
     vcs_provider: str = "github"  # 'github' or 'bitbucket'
-    # Bitbucket credentials (for git operations when using Bitbucket)
     bitbucket_bot_username: str | None = None
     bitbucket_bot_app_password: str | None = None
 
@@ -124,14 +122,13 @@ class SandboxManager:
                 "REPO_OWNER": config.repo_owner,
                 "REPO_NAME": config.repo_name,
                 "VCS_PROVIDER": config.vcs_provider,
-        }
+            }
         )
 
         # Add GitHub App token if available (for git sync operations)
         if config.github_app_token:
             env_vars["GITHUB_APP_TOKEN"] = config.github_app_token
 
-        # Add Bitbucket bot credentials if available (for Bitbucket git operations)
         if config.bitbucket_bot_username:
             env_vars["BITBUCKET_BOT_USERNAME"] = config.bitbucket_bot_username
         if config.bitbucket_bot_app_password:
@@ -375,7 +372,6 @@ class SandboxManager:
         if github_app_token:
             env_vars["GITHUB_APP_TOKEN"] = github_app_token
 
-        # Add Bitbucket bot credentials if available
         if bitbucket_bot_username:
             env_vars["BITBUCKET_BOT_USERNAME"] = bitbucket_bot_username
         if bitbucket_bot_app_password:

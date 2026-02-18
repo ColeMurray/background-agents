@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build outputs
+dist/
+build/
+.next/
+.wrangler/
+coverage/
+
+# Python
+packages/modal-infra/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Reference code (vendored)
+opencode-reference/
+
+# Lock files
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# Generated files
+*.d.ts
+*.min.js
+*.min.css

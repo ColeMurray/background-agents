@@ -22,6 +22,7 @@ interface SessionState {
   messageCount: number;
   createdAt: number;
   model?: string;
+  reasoningEffort?: string;
 }
 
 interface Participant {
@@ -83,6 +84,7 @@ export function SessionRightSidebar({
         <MetadataSection
           createdAt={sessionState.createdAt}
           model={sessionState.model}
+          reasoningEffort={sessionState.reasoningEffort}
           branchName={sessionState.branchName || undefined}
           repoOwner={sessionState.repoOwner}
           repoName={sessionState.repoName}

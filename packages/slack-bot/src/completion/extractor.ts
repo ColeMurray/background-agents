@@ -6,6 +6,7 @@ import type {
   Env,
   EventResponse,
   ListEventsResponse,
+  ListArtifactsResponse,
   AgentResponse,
   ToolCallSummary,
   ArtifactInfo,
@@ -96,14 +97,17 @@ export async function extractAgentResponse(
       .filter((e) => e.type === "tool_call")
       .map((e) => summarizeToolCall(e.data));
 
-    // Extract artifacts (PRs, branches)
-    const artifacts: ArtifactInfo[] = allEvents
+    // Fallback artifact extraction from events (historical behavior)
+    const eventArtifacts: ArtifactInfo[] = allEvents
       .filter((e) => e.type === "artifact")
       .map((e) => ({
         type: String(e.data.artifactType ?? "unknown"),
         url: String(e.data.url ?? ""),
         label: getArtifactLabel(e.data),
       }));
+
+    const artifacts = await fetchSessionArtifacts(env, sessionId, headers, base);
+    const finalArtifacts = artifacts.length > 0 ? artifacts : eventArtifacts;
 
     // Check for completion event to get success status
     const completionEvent = allEvents.find((e) => e.type === "execution_complete");
@@ -113,7 +117,7 @@ export async function extractAgentResponse(
       outcome: "success",
       event_count: allEvents.length,
       tool_call_count: toolCalls.length,
-      artifact_count: artifacts.length,
+      artifact_count: finalArtifacts.length,
       has_text: Boolean(textContent),
       duration_ms: Date.now() - startTime,
     });
@@ -121,7 +125,7 @@ export async function extractAgentResponse(
     return {
       textContent,
       toolCalls,
-      artifacts,
+      artifacts: finalArtifacts,
       success: Boolean(completionEvent?.data.success),
     };
   } catch (error) {
@@ -132,6 +136,49 @@ export async function extractAgentResponse(
       duration_ms: Date.now() - startTime,
     });
     return { textContent: "", toolCalls: [], artifacts: [], success: false };
+  }
+}
+
+/**
+ * Fetch artifacts from the control-plane artifacts endpoint.
+ */
+async function fetchSessionArtifacts(
+  env: Env,
+  sessionId: string,
+  headers: Record<string, string>,
+  base: { trace_id: string | undefined; session_id: string; message_id: string }
+): Promise<ArtifactInfo[]> {
+  try {
+    const response = await env.CONTROL_PLANE.fetch(
+      `https://internal/sessions/${sessionId}/artifacts`,
+      {
+        headers,
+      }
+    );
+
+    if (!response.ok) {
+      log.error("control_plane.fetch_artifacts", {
+        ...base,
+        outcome: "error",
+        http_status: response.status,
+      });
+      return [];
+    }
+
+    const data = (await response.json()) as ListArtifactsResponse;
+    return data.artifacts.map((artifact) => ({
+      type: String(artifact.type ?? "unknown"),
+      url: artifact.url ? String(artifact.url) : "",
+      label: getArtifactLabelFromArtifact(artifact.type, artifact.metadata),
+      metadata: artifact.metadata ?? null,
+    }));
+  } catch (error) {
+    log.error("control_plane.fetch_artifacts", {
+      ...base,
+      outcome: "error",
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    return [];
   }
 }
 
@@ -173,6 +220,21 @@ function getArtifactLabel(data: Record<string, unknown>): string {
   if (type === "branch") {
     const metadata = data.metadata as Record<string, unknown> | undefined;
     return `Branch: ${metadata?.name ?? "branch"}`;
+  }
+  return type;
+}
+
+function getArtifactLabelFromArtifact(
+  type: string,
+  metadata: Record<string, unknown> | null
+): string {
+  if (type === "pr") {
+    const prNum = metadata?.number;
+    return prNum ? `PR #${prNum}` : "Pull Request";
+  }
+  if (type === "branch") {
+    const branchName = metadata?.head;
+    return `Branch: ${branchName ?? "branch"}`;
   }
   return type;
 }

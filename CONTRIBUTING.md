@@ -7,14 +7,23 @@ contributing to the project.
 
 1. Fork the repository
 2. Clone your fork: `git clone https://github.com/YOUR-USERNAME/open-inspect.git`
-3. Install dependencies: `npm install`
+3. Run the setup script: `bash .openinspect/setup.sh`
 4. Create a branch for your changes: `git checkout -b feature/your-feature-name`
 
 ## Development Setup
 
-See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for full setup instructions.
+The quickest way to get a working environment:
 
-For local development:
+```bash
+bash .openinspect/setup.sh
+```
+
+This handles npm dependencies, builds the shared package, configures git hooks (husky +
+lint-staged), and optionally sets up a Python virtualenv for `packages/modal-infra`.
+
+See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for full deployment instructions.
+
+For manual setup or individual steps:
 
 ```bash
 # Install dependencies
@@ -66,6 +75,13 @@ Use clear, descriptive commit messages:
 3. Ensure type checking passes: `npm run typecheck`
 4. Update documentation if needed
 5. Provide a clear description of your changes
+
+### Source Control Provider Contributions
+
+For SCM/provider changes, follow:
+
+- `docs/adr/0001-single-provider-scm-boundaries.md`
+- `docs/provider-contribution-checklist.md`
 
 ## Reporting Issues
 

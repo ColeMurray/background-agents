@@ -6,10 +6,34 @@ import { Hono } from "hono";
 import type { Env, CompletionCallback } from "./types";
 import { extractAgentResponse } from "./completion/extractor";
 import { buildCompletionBlocks, getFallbackText } from "./completion/blocks";
-import { postMessage } from "./utils/slack-client";
+import { postMessage, removeReaction } from "./utils/slack-client";
 import { createLogger } from "./logger";
 
 const log = createLogger("callback");
+
+async function clearThinkingReaction(
+  env: Env,
+  channel: string,
+  reactionMessageTs: string,
+  traceId?: string
+): Promise<void> {
+  const reactionResult = await removeReaction(
+    env.SLACK_BOT_TOKEN,
+    channel,
+    reactionMessageTs,
+    "eyes"
+  );
+
+  if (!reactionResult.ok && reactionResult.error !== "no_reaction") {
+    log.warn("slack.reaction.remove", {
+      trace_id: traceId,
+      channel,
+      message_ts: reactionMessageTs,
+      reaction: "eyes",
+      slack_error: reactionResult.error,
+    });
+  }
+}
 
 /**
  * Verify internal callback signature using shared secret.
@@ -182,6 +206,10 @@ async function handleCompletionCallback(
           ],
         }
       );
+
+      if (context.reactionMessageTs) {
+        await clearThinkingReaction(env, context.channel, context.reactionMessageTs, traceId);
+      }
       return;
     }
 
@@ -192,6 +220,10 @@ async function handleCompletionCallback(
       thread_ts: context.threadTs,
       blocks,
     });
+
+    if (context.reactionMessageTs) {
+      await clearThinkingReaction(env, context.channel, context.reactionMessageTs, traceId);
+    }
 
     log.info("callback.complete", {
       ...base,

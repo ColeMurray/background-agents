@@ -110,10 +110,8 @@ declare module "next-auth/jwt" {
     refreshToken?: string;
     accessTokenExpiresAt?: number; // Unix timestamp in milliseconds
     provider?: VCSProvider;
-    // GitHub-specific
     githubUserId?: string;
     githubLogin?: string;
-    // Bitbucket-specific
     bitbucketUuid?: string;
     bitbucketLogin?: string;
     bitbucketDisplayName?: string;
@@ -137,9 +135,6 @@ export const authOptions: NextAuthOptions = {
       clientSecret: process.env.BITBUCKET_CLIENT_SECRET!,
       authorization: {
         params: {
-          // repository:write - needed to create PRs
-          // account - needed for user profile
-          // email - needed to fetch user email from /2.0/user/emails
           scope: "repository:write account email",
         },
       },
@@ -162,10 +157,9 @@ export const authOptions: NextAuthOptions = {
       }
 
       if (account?.provider === "bitbucket") {
-        // For Bitbucket, we check by username/login or email
         const bitbucketProfile = profile as { username?: string; display_name?: string };
         const isAllowed = checkAccessAllowed(config, {
-          githubUsername: bitbucketProfile.username, // Reuse field for bitbucket username
+          githubUsername: bitbucketProfile.username,
           email: user.email ?? undefined,
         });
         return isAllowed;
@@ -180,8 +174,6 @@ export const authOptions: NextAuthOptions = {
 
         if (account.provider === "github") {
           token.provider = "github";
-          // GitHub OAuth tokens expire after 8 hours
-          // expires_at is in seconds, convert to milliseconds
           if (account.expires_at) {
             token.accessTokenExpiresAt = account.expires_at * 1000;
           } else {
@@ -189,11 +181,9 @@ export const authOptions: NextAuthOptions = {
           }
         } else if (account.provider === "bitbucket") {
           token.provider = "bitbucket";
-          // Bitbucket tokens expire after 1 hour (3600 seconds)
           if (account.expires_at) {
             token.accessTokenExpiresAt = account.expires_at * 1000;
           } else {
-            // Default to 1 hour from now if not provided
             token.accessTokenExpiresAt = Date.now() + 60 * 60 * 1000;
           }
         }
@@ -201,7 +191,6 @@ export const authOptions: NextAuthOptions = {
 
       if (profile) {
         if (token.provider === "github") {
-          // GitHub profile includes id (numeric) and login (username)
           const githubProfile = profile as { id?: number; login?: string };
           if (githubProfile.id) {
             token.githubUserId = githubProfile.id.toString();
@@ -210,7 +199,6 @@ export const authOptions: NextAuthOptions = {
             token.githubLogin = githubProfile.login;
           }
         } else if (token.provider === "bitbucket") {
-          // Bitbucket profile includes uuid and username
           const bitbucketProfile = profile as {
             uuid?: string;
             username?: string;
@@ -230,7 +218,6 @@ export const authOptions: NextAuthOptions = {
       return token;
     },
     async session({ session, token }) {
-      // Add provider info to session
       session.accessToken = token.accessToken;
       session.accessTokenExpiresAt = token.accessTokenExpiresAt;
       session.provider = token.provider;
@@ -242,7 +229,6 @@ export const authOptions: NextAuthOptions = {
         } else if (token.provider === "bitbucket") {
           session.user.id = token.bitbucketUuid;
           session.user.login = token.bitbucketLogin;
-          // Use display name as name if available
           if (token.bitbucketDisplayName) {
             session.user.name = token.bitbucketDisplayName;
           }

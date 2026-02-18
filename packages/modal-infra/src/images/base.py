@@ -23,8 +23,8 @@ SANDBOX_DIR = Path(__file__).parent.parent / "sandbox"
 OPENCODE_VERSION = "latest"
 
 # Cache buster - change this to force Modal image rebuild
-# v34: Replace print() with structured JSON logging in sandbox code
-CACHE_BUSTER = "v34-structured-logging"
+# v37: Codex auth proxy plugin for centralized token refresh
+CACHE_BUSTER = "v37-codex-auth-proxy-plugin"
 
 # Base image with all development tools
 base_image = (
@@ -37,6 +37,7 @@ base_image = (
         "ca-certificates",
         "gnupg",
         "openssh-client",
+        "jq",
         "unzip",  # Required for Bun installation
         # For Playwright
         "libnss3",
@@ -85,7 +86,9 @@ base_image = (
         "PyJWT[crypto]",  # For GitHub App token generation (includes cryptography)
     )
     # Install OpenCode CLI and plugin for custom tools
+    # CACHE_BUSTER is embedded in a no-op echo so Modal invalidates this layer on bump.
     .run_commands(
+        f"echo 'cache: {CACHE_BUSTER}' > /dev/null",
         "npm install -g opencode-ai@latest",
         "opencode --version || echo 'OpenCode installed'",
         # Install @opencode-ai/plugin globally for custom tools

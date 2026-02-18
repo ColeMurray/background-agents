@@ -1,0 +1,70 @@
+name: Deploy Web
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/web/**"
+      - "packages/shared/**"
+      - ".github/workflows/deploy-web.yml"
+  workflow_dispatch: # Allow manual trigger
+
+permissions:
+  contents: read
+
+env:
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_TEAM_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+jobs:
+  deploy:
+    name: Deploy to Vercel
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if secrets are configured
+        id: check-secrets
+        run: |
+          if [ -z "${{ secrets.VERCEL_API_TOKEN }}" ] || [ -z "${{ secrets.VERCEL_PROJECT_ID }}" ]; then
+            echo "Skipping deployment - Vercel secrets not configured"
+            echo "configured=false" >> $GITHUB_OUTPUT
+          else
+            echo "configured=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout
+        if: steps.check-secrets.outputs.configured == 'true'
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        if: steps.check-secrets.outputs.configured == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: npm ci
+
+      - name: Build shared package
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: npm run build -w @open-inspect/shared
+
+      - name: Install Vercel CLI
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: npm install -g vercel
+
+      - name: Pull Vercel Environment
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_API_TOKEN }}
+
+      - name: Build Project
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: vercel build --prod --token=${{ secrets.VERCEL_API_TOKEN }}
+        env:
+          # Required for NextAuth static generation - set via GitHub secret or Vercel will provide
+          NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL || 'https://localhost:3000' }}
+
+      - name: Deploy to Vercel
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_API_TOKEN }}

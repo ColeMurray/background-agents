@@ -82,7 +82,11 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
             sidebar.isOpen ? "w-72" : "w-0"
           } flex-shrink-0 overflow-hidden`}
         >
-          <SessionSidebar onNewSession={handleNewSession} onToggle={sidebar.toggle} />
+          <SessionSidebar
+            onNewSession={handleNewSession}
+            onToggle={sidebar.toggle}
+            onSessionSelect={sidebar.close}
+          />
         </div>
         <main className="flex-1 overflow-hidden">{children}</main>
       </div>
@@ -101,9 +105,6 @@ function GitHubIcon() {
     </svg>
   );
 }
-
-
-
 function BitbucketIcon() {
   return (
     <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">

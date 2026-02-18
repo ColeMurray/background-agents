@@ -22,7 +22,12 @@ import type {
   ParticipantRole,
   ArtifactType,
   VCSProvider,
+  SandboxEvent,
 } from "../types";
+
+type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
+type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
+type UpsertableEventType = TokenEvent["type"] | ExecutionCompleteEvent["type"];
 
 /**
  * Message row with joined participant info for author attribution.
@@ -67,9 +72,9 @@ export interface UpsertSessionData {
   repoName: string;
   repoId?: number | null;
   model: string;
+  reasoningEffort?: string | null;
   status: SessionStatus;
   vcsProvider: string;
-  raygunContext?: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -91,7 +96,6 @@ export interface CreateParticipantData {
   id: string;
   userId: string;
   vcsProvider?: VCSProvider;
-  // GitHub fields
   githubUserId?: string | null;
   githubLogin?: string | null;
   githubName?: string | null;
@@ -99,7 +103,6 @@ export interface CreateParticipantData {
   githubAccessTokenEncrypted?: string | null;
   githubRefreshTokenEncrypted?: string | null;
   githubTokenExpiresAt?: number | null;
-  // Bitbucket fields
   bitbucketUuid?: string | null;
   bitbucketLogin?: string | null;
   bitbucketDisplayName?: string | null;
@@ -116,7 +119,6 @@ export interface CreateParticipantData {
  */
 export interface UpdateParticipantData {
   vcsProvider?: VCSProvider;
-  // GitHub fields
   githubUserId?: string | null;
   githubLogin?: string | null;
   githubName?: string | null;
@@ -124,7 +126,6 @@ export interface UpdateParticipantData {
   githubAccessTokenEncrypted?: string | null;
   githubRefreshTokenEncrypted?: string | null;
   githubTokenExpiresAt?: number | null;
-  // Bitbucket fields
   bitbucketUuid?: string | null;
   bitbucketLogin?: string | null;
   bitbucketDisplayName?: string | null;
@@ -143,6 +144,7 @@ export interface CreateMessageData {
   content: string;
   source: MessageSource;
   model?: string | null;
+  reasoningEffort?: string | null;
   attachments?: string | null;
   callbackContext?: string | null;
   status: MessageStatus;
@@ -241,7 +243,7 @@ export class SessionRepository {
 
   upsertSession(data: UpsertSessionData): void {
     this.sql.exec(
-      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, model, status, vcs_provider, raygun_context, created_at, updated_at)
+      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, model, reasoning_effort, status, vcs_provider, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.sessionName,
@@ -250,9 +252,9 @@ export class SessionRepository {
       data.repoName,
       data.repoId ?? null,
       data.model,
+      data.reasoningEffort ?? null,
       data.status,
       data.vcsProvider,
-      data.raygunContext ?? null,
       data.createdAt,
       data.updatedAt
     );
@@ -574,13 +576,14 @@ export class SessionRepository {
 
   createMessage(data: CreateMessageData): void {
     this.sql.exec(
-      `INSERT INTO messages (id, author_id, content, source, model, attachments, callback_context, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO messages (id, author_id, content, source, model, reasoning_effort, attachments, callback_context, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.authorId,
       data.content,
       data.source,
       data.model ?? null,
+      data.reasoningEffort ?? null,
       data.attachments ?? null,
       data.callbackContext ?? null,
       data.status,
@@ -663,6 +666,40 @@ export class SessionRepository {
     );
   }
 
+  private upsertEventByMessageId<TType extends UpsertableEventType>(
+    type: TType,
+    messageId: string,
+    event: Extract<SandboxEvent, { type: TType }>,
+    createdAt: number
+  ): void {
+    const id = `${type}:${messageId}`;
+    this.sql.exec(
+      `INSERT INTO events (id, type, data, message_id, created_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         data = excluded.data,
+         message_id = excluded.message_id,
+         created_at = excluded.created_at`,
+      id,
+      type,
+      JSON.stringify(event),
+      messageId,
+      createdAt
+    );
+  }
+
+  upsertTokenEvent(messageId: string, event: TokenEvent, createdAt: number): void {
+    this.upsertEventByMessageId("token", messageId, event, createdAt);
+  }
+
+  upsertExecutionCompleteEvent(
+    messageId: string,
+    event: ExecutionCompleteEvent,
+    createdAt: number
+  ): void {
+    this.upsertEventByMessageId("execution_complete", messageId, event, createdAt);
+  }
+
   listEvents(options: ListEventsOptions): EventRow[] {
     let query = `SELECT * FROM events WHERE 1=1`;
     const params: (string | number)[] = [];
@@ -690,8 +727,44 @@ export class SessionRepository {
   }
 
   getEventsForReplay(limit: number): EventRow[] {
-    const result = this.sql.exec(`SELECT * FROM events ORDER BY created_at ASC LIMIT ?`, limit);
+    const result = this.sql.exec(
+      `SELECT * FROM (
+         SELECT * FROM events WHERE type != 'heartbeat'
+         ORDER BY created_at DESC, id DESC LIMIT ?
+       ) sub ORDER BY created_at ASC, id ASC`,
+      limit
+    );
     return result.toArray() as unknown as EventRow[];
+  }
+
+  /**
+   * Paginate the events timeline using a composite cursor.
+   * Returns events older than the cursor in chronological order, plus a hasMore flag.
+   */
+  getEventsHistoryPage(
+    cursorTimestamp: number,
+    cursorId: string,
+    limit: number
+  ): {
+    events: EventRow[];
+    hasMore: boolean;
+  } {
+    const rows = this.sql
+      .exec(
+        `SELECT * FROM events
+         WHERE type != 'heartbeat' AND ((created_at < ?1) OR (created_at = ?1 AND id < ?2))
+         ORDER BY created_at DESC, id DESC LIMIT ?3`,
+        cursorTimestamp,
+        cursorId,
+        limit + 1
+      )
+      .toArray() as unknown as EventRow[];
+
+    const hasMore = rows.length > limit;
+    if (hasMore) rows.pop();
+    rows.reverse(); // chronological order
+
+    return { events: rows, hasMore };
   }
 
   // === ARTIFACTS ===

@@ -17,7 +17,6 @@ export async function GET() {
   }
 
   try {
-    // Prepare headers for control plane request
     const headers: Record<string, string> = {};
     if (session.provider) {
       headers["X-VCS-Provider"] = session.provider;
@@ -26,8 +25,6 @@ export async function GET() {
       headers["X-User-Token"] = session.accessToken;
     }
 
-    // Fetch repositories from control plane using GitHub App installation token.
-    // This ensures we only show repos the App has access to, not all repos the user can see.
     const response = await controlPlaneFetch("/repos", {
       headers,
     });

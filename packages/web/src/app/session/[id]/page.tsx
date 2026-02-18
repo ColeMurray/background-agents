@@ -2,14 +2,22 @@
 
 import { useSession } from "next-auth/react";
 import { useParams, useRouter } from "next/navigation";
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from "react";
 import { useSessionSocket } from "@/hooks/use-session-socket";
 import { SafeMarkdown } from "@/components/safe-markdown";
 import { ToolCallGroup } from "@/components/tool-call-group";
 import { SidebarLayout, useSidebarContext } from "@/components/sidebar-layout";
 import { SessionRightSidebar } from "@/components/session-right-sidebar";
 import { ActionBar } from "@/components/action-bar";
-import { formatModelNameLower } from "@/lib/format";
+import { copyToClipboard, formatModelNameLower } from "@/lib/format";
+import {
+  DEFAULT_MODEL,
+  getDefaultReasoningEffort,
+  type ModelDisplayInfo,
+  type ModelCategory,
+} from "@open-inspect/shared";
+import { useEnabledModels } from "@/hooks/use-enabled-models";
+import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 import type { SandboxEvent } from "@/lib/tool-formatters";
 
 // Event grouping types
@@ -61,25 +69,6 @@ function groupEvents(events: SandboxEvent[]): EventGroup[] {
   return groups;
 }
 
-// Model options configuration
-interface ModelOption {
-  id: string;
-  name: string;
-  description: string;
-  category?: string;
-}
-
-const MODEL_OPTIONS: { category: string; models: ModelOption[] }[] = [
-  {
-    category: "Model",
-    models: [
-      { id: "claude-haiku-4-5", name: "claude haiku 4.5", description: "Fast and efficient" },
-      { id: "claude-sonnet-4-5", name: "claude sonnet 4.5", description: "Balanced performance" },
-      { id: "claude-opus-4-5", name: "claude opus 4.5", description: "Most capable" },
-    ],
-  },
-];
-
 function CheckIcon() {
   return (
     <svg className="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -93,7 +82,7 @@ function ModelOptionButton({
   isSelected,
   onSelect,
 }: {
-  model: ModelOption;
+  model: ModelDisplayInfo;
   isSelected: boolean;
   onSelect: () => void;
 }) {
@@ -131,10 +120,12 @@ export default function SessionPage() {
     artifacts,
     currentParticipantId,
     isProcessing,
+    loadingHistory,
     sendPrompt,
     stopExecution,
     sendTyping,
     reconnect,
+    loadOlderEvents,
   } = useSessionSocket(sessionId);
 
   const handleArchive = useCallback(async () => {
@@ -164,24 +155,41 @@ export default function SessionPage() {
   }, [sessionId]);
 
   const [prompt, setPrompt] = useState("");
-  const [selectedModel, setSelectedModel] = useState("claude-haiku-4-5");
+  const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
+  const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
+    getDefaultReasoningEffort(DEFAULT_MODEL)
+  );
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
 
-  // Sync selectedModel with session's model when session state loads
+  const { enabledModels, enabledModelOptions } = useEnabledModels();
+
+  const handleModelChange = useCallback((model: string) => {
+    setSelectedModel(model);
+    setReasoningEffort(getDefaultReasoningEffort(model));
+  }, []);
+
+  // Reset to default if the selected model is no longer enabled
+  useEffect(() => {
+    if (enabledModels.length > 0 && !enabledModels.includes(selectedModel)) {
+      const fallback = enabledModels[0] ?? DEFAULT_MODEL;
+      setSelectedModel(fallback);
+      setReasoningEffort(getDefaultReasoningEffort(fallback));
+    }
+  }, [enabledModels, selectedModel]);
+
+  // Sync selectedModel and reasoningEffort with session state when it loads
   useEffect(() => {
     if (sessionState?.model) {
       setSelectedModel(sessionState.model);
+      setReasoningEffort(
+        sessionState.reasoningEffort ?? getDefaultReasoningEffort(sessionState.model)
+      );
     }
-  }, [sessionState?.model]);
-
-  // Scroll to bottom when new content arrives
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [events]);
+  }, [sessionState?.model, sessionState?.reasoningEffort]);
 
   // Redirect if not authenticated
   useEffect(() => {
@@ -205,7 +213,7 @@ export default function SessionPage() {
     e.preventDefault();
     if (!prompt.trim() || isProcessing) return;
 
-    sendPrompt(prompt, selectedModel);
+    sendPrompt(prompt, selectedModel, reasoningEffort);
     setPrompt("");
   };
 
@@ -253,6 +261,7 @@ export default function SessionPage() {
         prompt={prompt}
         isProcessing={isProcessing}
         selectedModel={selectedModel}
+        reasoningEffort={reasoningEffort}
         modelDropdownOpen={modelDropdownOpen}
         modelDropdownRef={modelDropdownRef}
         inputRef={inputRef}
@@ -260,10 +269,14 @@ export default function SessionPage() {
         handleInputChange={handleInputChange}
         handleKeyDown={handleKeyDown}
         setModelDropdownOpen={setModelDropdownOpen}
-        setSelectedModel={setSelectedModel}
+        setSelectedModel={handleModelChange}
+        setReasoningEffort={setReasoningEffort}
         stopExecution={stopExecution}
         handleArchive={handleArchive}
         handleUnarchive={handleUnarchive}
+        loadingHistory={loadingHistory}
+        loadOlderEvents={loadOlderEvents}
+        modelOptions={enabledModelOptions}
       />
     </SidebarLayout>
   );
@@ -284,6 +297,7 @@ function SessionContent({
   prompt,
   isProcessing,
   selectedModel,
+  reasoningEffort,
   modelDropdownOpen,
   modelDropdownRef,
   inputRef,
@@ -292,9 +306,13 @@ function SessionContent({
   handleKeyDown,
   setModelDropdownOpen,
   setSelectedModel,
+  setReasoningEffort,
   stopExecution,
   handleArchive,
   handleUnarchive,
+  loadingHistory,
+  loadOlderEvents,
+  modelOptions,
 }: {
   sessionState: ReturnType<typeof useSessionSocket>["sessionState"];
   connected: boolean;
@@ -310,6 +328,7 @@ function SessionContent({
   prompt: string;
   isProcessing: boolean;
   selectedModel: string;
+  reasoningEffort: string | undefined;
   modelDropdownOpen: boolean;
   modelDropdownRef: React.RefObject<HTMLDivElement | null>;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -318,17 +337,79 @@ function SessionContent({
   handleKeyDown: (e: React.KeyboardEvent) => void;
   setModelDropdownOpen: (open: boolean) => void;
   setSelectedModel: (model: string) => void;
+  setReasoningEffort: (value: string | undefined) => void;
   stopExecution: () => void;
   handleArchive: () => void;
   handleUnarchive: () => void;
+  loadingHistory: boolean;
+  loadOlderEvents: () => void;
+  modelOptions: ModelCategory[];
 }) {
   const { isOpen, toggle } = useSidebarContext();
+
+  // Scroll pagination refs
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const topSentinelRef = useRef<HTMLDivElement>(null);
+  const hasScrolledRef = useRef(false);
+  const isPrependingRef = useRef(false);
+  const prevScrollHeightRef = useRef(0);
+  const isNearBottomRef = useRef(true);
+
+  // Track user scroll
+  const handleScroll = useCallback(() => {
+    hasScrolledRef.current = true;
+    const el = scrollContainerRef.current;
+    if (el) {
+      isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+    }
+  }, []);
+
+  // IntersectionObserver to trigger loading older events
+  useEffect(() => {
+    const sentinel = topSentinelRef.current;
+    const container = scrollContainerRef.current;
+    if (!sentinel || !container) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (
+          entry.isIntersecting &&
+          hasScrolledRef.current &&
+          container.scrollHeight > container.clientHeight
+        ) {
+          // Capture scroll height BEFORE triggering load
+          prevScrollHeightRef.current = container.scrollHeight;
+          isPrependingRef.current = true;
+          loadOlderEvents();
+        }
+      },
+      { root: container, threshold: 0.1 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loadOlderEvents]);
+
+  // Maintain scroll position when older events are prepended
+  useLayoutEffect(() => {
+    if (isPrependingRef.current && scrollContainerRef.current) {
+      const el = scrollContainerRef.current;
+      el.scrollTop += el.scrollHeight - prevScrollHeightRef.current;
+      isPrependingRef.current = false;
+    }
+  }, [events]);
+
+  // Auto-scroll to bottom only when near bottom (not when prepending older history)
+  useEffect(() => {
+    if (isNearBottomRef.current && !isPrependingRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+    }
+  }, [events, messagesEndRef]);
 
   // Deduplicate and group events for rendering
   const groupedEvents = useMemo(() => {
     const filteredEvents: SandboxEvent[] = [];
     const seenToolCalls = new Map<string, number>();
     const seenCompletions = new Set<string>();
+    const seenTokens = new Map<string, number>();
 
     for (const event of events as SandboxEvent[]) {
       if (event.type === "tool_call" && event.callId) {
@@ -346,13 +427,21 @@ function SessionContent({
           seenCompletions.add(event.messageId);
           filteredEvents.push(event);
         }
+      } else if (event.type === "token" && event.messageId) {
+        // Deduplicate tokens by messageId - keep latest at its chronological position
+        const existingIdx = seenTokens.get(event.messageId);
+        if (existingIdx !== undefined) {
+          filteredEvents[existingIdx] = null as unknown as SandboxEvent;
+        }
+        seenTokens.set(event.messageId, filteredEvents.length);
+        filteredEvents.push(event);
       } else {
-        // All other events (token, user_message, git_sync, etc.) - add as-is
+        // All other events (user_message, git_sync, etc.) - add as-is
         filteredEvents.push(event);
       }
     }
 
-    return groupEvents(filteredEvents);
+    return groupEvents(filteredEvents.filter(Boolean) as SandboxEvent[]);
   }, [events]);
 
   return (
@@ -380,9 +469,20 @@ function SessionContent({
             </div>
           </div>
           <div className="flex items-center gap-4">
-            <ConnectionStatus connected={connected} connecting={connecting} />
-            <SandboxStatus status={sessionState?.sandboxStatus} />
-            <ParticipantsList participants={participants} />
+            {/* Mobile: single combined status dot */}
+            <div className="md:hidden">
+              <CombinedStatusDot
+                connected={connected}
+                connecting={connecting}
+                sandboxStatus={sessionState?.sandboxStatus}
+              />
+            </div>
+            {/* Desktop: full status indicators */}
+            <div className="hidden md:contents">
+              <ConnectionStatus connected={connected} connecting={connecting} />
+              <SandboxStatus status={sessionState?.sandboxStatus} />
+              <ParticipantsList participants={participants} />
+            </div>
           </div>
         </div>
       </header>
@@ -403,8 +503,17 @@ function SessionContent({
       {/* Main content */}
       <main className="flex-1 flex overflow-hidden">
         {/* Event timeline */}
-        <div className="flex-1 overflow-y-auto p-4">
+        <div
+          ref={scrollContainerRef}
+          onScroll={handleScroll}
+          className="flex-1 overflow-y-auto p-4"
+        >
           <div className="max-w-3xl mx-auto space-y-2">
+            {/* Scroll sentinel for loading older history */}
+            <div ref={topSentinelRef} className="h-1" />
+            {loadingHistory && (
+              <div className="text-center text-muted-foreground text-sm py-2">Loading...</div>
+            )}
             {groupedEvents.map((group) =>
               group.type === "tool_group" ? (
                 <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />
@@ -493,49 +602,59 @@ function SessionContent({
               </div>
             </div>
 
-            {/* Footer row with model selector and agent label */}
+            {/* Footer row with model selector, reasoning pills, and agent label */}
             <div className="flex items-center justify-between px-4 py-2 border-t border-border-muted">
-              {/* Left side - Model selector */}
-              <div className="relative" ref={modelDropdownRef}>
-                <button
-                  type="button"
-                  onClick={() => !isProcessing && setModelDropdownOpen(!modelDropdownOpen)}
-                  disabled={isProcessing}
-                  className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
-                >
-                  <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-                  </svg>
-                  <span>{formatModelNameLower(selectedModel)}</span>
-                </button>
+              {/* Left side - Model selector + Reasoning pills */}
+              <div className="flex items-center gap-4">
+                <div className="relative" ref={modelDropdownRef}>
+                  <button
+                    type="button"
+                    onClick={() => !isProcessing && setModelDropdownOpen(!modelDropdownOpen)}
+                    disabled={isProcessing}
+                    className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                    </svg>
+                    <span>{formatModelNameLower(selectedModel)}</span>
+                  </button>
 
-                {/* Dropdown menu */}
-                {modelDropdownOpen && (
-                  <div className="absolute bottom-full left-0 mb-2 w-56 bg-background shadow-lg border border-border py-1 z-50">
-                    {MODEL_OPTIONS.map((group, groupIdx) => (
-                      <div key={group.category}>
-                        <div
-                          className={`px-3 py-1.5 text-xs font-medium text-secondary-foreground uppercase tracking-wider ${
-                            groupIdx > 0 ? "border-t border-border-muted mt-1" : ""
-                          }`}
-                        >
-                          {group.category}
+                  {/* Dropdown menu */}
+                  {modelDropdownOpen && (
+                    <div className="absolute bottom-full left-0 mb-2 w-56 bg-background shadow-lg border border-border py-1 z-50">
+                      {modelOptions.map((group, groupIdx) => (
+                        <div key={group.category}>
+                          <div
+                            className={`px-3 py-1.5 text-xs font-medium text-secondary-foreground uppercase tracking-wider ${
+                              groupIdx > 0 ? "border-t border-border-muted mt-1" : ""
+                            }`}
+                          >
+                            {group.category}
+                          </div>
+                          {group.models.map((model) => (
+                            <ModelOptionButton
+                              key={model.id}
+                              model={model}
+                              isSelected={selectedModel === model.id}
+                              onSelect={() => {
+                                setSelectedModel(model.id);
+                                setModelDropdownOpen(false);
+                              }}
+                            />
+                          ))}
                         </div>
-                        {group.models.map((model) => (
-                          <ModelOptionButton
-                            key={model.id}
-                            model={model}
-                            isSelected={selectedModel === model.id}
-                            onSelect={() => {
-                              setSelectedModel(model.id);
-                              setModelDropdownOpen(false);
-                            }}
-                          />
-                        ))}
-                      </div>
-                    ))}
-                  </div>
-                )}
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Reasoning effort pills */}
+                <ReasoningEffortPills
+                  selectedModel={selectedModel}
+                  reasoningEffort={reasoningEffort}
+                  onSelect={setReasoningEffort}
+                  disabled={isProcessing}
+                />
               </div>
 
               {/* Right side - Agent label */}
@@ -608,6 +727,44 @@ function SandboxStatus({ status }: { status?: string }) {
   return <span className={`text-xs ${colors[status] || colors.pending}`}>Sandbox: {status}</span>;
 }
 
+function CombinedStatusDot({
+  connected,
+  connecting,
+  sandboxStatus,
+}: {
+  connected: boolean;
+  connecting: boolean;
+  sandboxStatus?: string;
+}) {
+  let color: string;
+  let pulse = false;
+  let label: string;
+
+  if (!connected && !connecting) {
+    color = "bg-red-500";
+    label = "Disconnected";
+  } else if (connecting) {
+    color = "bg-yellow-500";
+    pulse = true;
+    label = "Connecting...";
+  } else if (sandboxStatus === "failed") {
+    color = "bg-red-500";
+    label = `Connected · Sandbox: ${sandboxStatus}`;
+  } else if (["pending", "warming", "syncing"].includes(sandboxStatus || "")) {
+    color = "bg-yellow-500";
+    label = `Connected · Sandbox: ${sandboxStatus}`;
+  } else {
+    color = "bg-success";
+    label = sandboxStatus ? `Connected · Sandbox: ${sandboxStatus}` : "Connected";
+  }
+
+  return (
+    <span title={label} className="flex items-center">
+      <span className={`w-2.5 h-2.5 rounded-full ${color}${pulse ? " animate-pulse" : ""}`} />
+    </span>
+  );
+}
+
 function ThinkingIndicator() {
   return (
     <div className="bg-card p-4 flex items-center gap-2">
@@ -669,12 +826,37 @@ function EventItem({
   };
   currentParticipantId: string | null;
 }) {
+  const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const time = new Date(event.timestamp * 1000).toLocaleTimeString();
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const handleCopyContent = useCallback(async (content: string) => {
+    const success = await copyToClipboard(content);
+    if (!success) return;
+
+    setCopied(true);
+    if (copyTimeoutRef.current) {
+      clearTimeout(copyTimeoutRef.current);
+    }
+    copyTimeoutRef.current = setTimeout(() => {
+      setCopied(false);
+      copyTimeoutRef.current = null;
+    }, 1500);
+  }, []);
 
   switch (event.type) {
     case "user_message": {
       // Display user's prompt with correct author attribution
       if (!event.content) return null;
+      const messageContent = event.content;
 
       // Determine if this message is from the current user
       const isCurrentUser =
@@ -685,7 +867,7 @@ function EventItem({
       const authorName = isCurrentUser ? "You" : event.author?.name || "Unknown User";
 
       return (
-        <div className="bg-accent-muted p-4 ml-8">
+        <div className="group bg-accent-muted p-4 ml-8">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               {!isCurrentUser && event.author?.avatar && (
@@ -693,25 +875,57 @@ function EventItem({
               )}
               <span className="text-xs text-accent">{authorName}</span>
             </div>
-            <span className="text-xs text-secondary-foreground">{time}</span>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => handleCopyContent(messageContent)}
+                className="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted/60 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
+                title={copied ? "Copied" : "Copy markdown"}
+                aria-label={copied ? "Copied" : "Copy markdown"}
+              >
+                {copied ? (
+                  <CopyCheckIcon className="w-3.5 h-3.5" />
+                ) : (
+                  <CopyIcon className="w-3.5 h-3.5" />
+                )}
+              </button>
+              <span className="text-xs text-secondary-foreground">{time}</span>
+            </div>
           </div>
-          <pre className="whitespace-pre-wrap text-sm text-foreground">{event.content}</pre>
+          <pre className="whitespace-pre-wrap text-sm text-foreground">{messageContent}</pre>
         </div>
       );
     }
 
-    case "token":
+    case "token": {
       // Display the model's text response with safe markdown rendering
       if (!event.content) return null;
+      const messageContent = event.content;
       return (
-        <div className="bg-card p-4">
+        <div className="group bg-card p-4">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs text-muted-foreground">Assistant</span>
-            <span className="text-xs text-secondary-foreground">{time}</span>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => handleCopyContent(messageContent)}
+                className="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
+                title={copied ? "Copied" : "Copy markdown"}
+                aria-label={copied ? "Copied" : "Copy markdown"}
+              >
+                {copied ? (
+                  <CopyCheckIcon className="w-3.5 h-3.5" />
+                ) : (
+                  <CopyIcon className="w-3.5 h-3.5" />
+                )}
+              </button>
+              <span className="text-xs text-secondary-foreground">{time}</span>
+            </div>
           </div>
-          <SafeMarkdown content={event.content} className="text-sm" />
+          <SafeMarkdown content={messageContent} className="text-sm" />
         </div>
       );
+    }
 
     case "tool_call":
       // Tool calls are handled by ToolCallGroup component
@@ -745,6 +959,15 @@ function EventItem({
         </div>
       );
 
+    case "error":
+      return (
+        <div className="flex items-center gap-2 text-sm text-red-600 dark:text-red-400">
+          <span className="w-2 h-2 rounded-full bg-red-500" />
+          Error{event.error ? `: ${event.error}` : ""}
+          <span className="text-xs text-secondary-foreground">{time}</span>
+        </div>
+      );
+
     case "execution_complete":
       if (event.success === false) {
         return (
@@ -766,4 +989,21 @@ function EventItem({
     default:
       return null;
   }
+}
+
+function CopyIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <rect x="9" y="9" width="11" height="11" rx="2" ry="2" strokeWidth={2} />
+      <rect x="4" y="4" width="11" height="11" rx="2" ry="2" strokeWidth={2} />
+    </svg>
+  );
+}
+
+function CopyCheckIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+    </svg>
+  );
 }
