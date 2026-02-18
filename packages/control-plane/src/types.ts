@@ -138,11 +138,6 @@ export type ServerMessage =
   | { type: "session_status"; status: SessionStatus }
   | { type: "processing_status"; isProcessing: boolean }
   | {
-      type: "replay_complete";
-      hasMore: boolean;
-      cursor: { timestamp: number; id: string } | null;
-    }
-  | {
       type: "history_page";
       items: SandboxEvent[];
       hasMore: boolean;

@@ -160,13 +160,8 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const cursorRef = useRef<{ timestamp: number; id: string } | null>(null);
 
-  // Live event buffering during replay
-  const replayCompleteRef = useRef(false);
-  const liveEventBufferRef = useRef<SandboxEvent[]>([]);
-
   /**
-   * Process a single sandbox_event through the existing logic.
-   * Extracted so it can be called both for live events and flushed buffer.
+   * Process a single live sandbox_event.
    */
   const processSandboxEvent = useCallback((event: SandboxEvent) => {
     if (event.type === "token" && event.content && event.messageId) {
@@ -242,29 +237,15 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
             currentParticipantRef.current = data.participant;
           }
 
-          if (data.replay) {
-            // Batched replay: process all events in a single state update
-            setEvents(collapseTokenEvents(data.replay.events, pendingTextRef));
+          // Process batched replay events in a single state update
+          setEvents(data.replay ? collapseTokenEvents(data.replay.events, pendingTextRef) : []);
+          setHasMoreHistory(data.replay?.hasMore ?? false);
+          cursorRef.current = data.replay?.cursor ?? null;
+          setReplaying(false);
 
-            // Pagination state from the batched replay
-            setHasMoreHistory(data.replay.hasMore);
-            cursorRef.current = data.replay.cursor;
-
-            // Replay is already complete — live events flow directly through
-            replayCompleteRef.current = true;
-            liveEventBufferRef.current = [];
-            setReplaying(false);
-
-            if (data.spawnError) {
-              console.error("Sandbox spawn error:", data.spawnError);
-              setSessionState((prev) => (prev ? { ...prev, sandboxStatus: "failed" } : null));
-            }
-          } else {
-            // Legacy: wait for individual sandbox_event messages + replay_complete
-            setEvents([]);
-            replayCompleteRef.current = false;
-            liveEventBufferRef.current = [];
-            setReplaying(true);
+          if (data.spawnError) {
+            console.error("Sandbox spawn error:", data.spawnError);
+            setSessionState((prev) => (prev ? { ...prev, sandboxStatus: "failed" } : null));
           }
           break;
         }
@@ -275,37 +256,9 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
 
         case "sandbox_event":
           if (data.event) {
-            const event = data.event;
-
-            // Buffer live events during initial replay to avoid interleaving
-            if (!replayCompleteRef.current) {
-              liveEventBufferRef.current.push(event);
-            } else {
-              processSandboxEvent(event);
-            }
+            processSandboxEvent(data.event);
           }
           break;
-
-        case "replay_complete": {
-          // Mark replay as complete
-          replayCompleteRef.current = true;
-          setReplaying(false);
-
-          // Set pagination state
-          setHasMoreHistory(data.hasMore ?? false);
-          cursorRef.current = data.cursor ?? null;
-
-          // Flush buffered live events in a single state update
-          const buffered = liveEventBufferRef.current;
-          liveEventBufferRef.current = [];
-          if (buffered.length > 0) {
-            const collapsed = collapseTokenEvents(buffered, pendingTextRef);
-            if (collapsed.length > 0) {
-              setEvents((prev) => [...prev, ...collapsed]);
-            }
-          }
-          break;
-        }
 
         case "history_page": {
           if (data.items) {
