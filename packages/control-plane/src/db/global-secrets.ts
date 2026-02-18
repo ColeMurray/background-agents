@@ -98,20 +98,23 @@ export class GlobalSecretsStore {
       .prepare("SELECT key, encrypted_value FROM global_secrets")
       .all<{ key: string; encrypted_value: string }>();
 
-    const secrets: Record<string, string> = {};
-    for (const row of result.results || []) {
-      try {
-        secrets[row.key] = await decryptToken(row.encrypted_value, this.encryptionKey);
-      } catch (e) {
-        log.error("Failed to decrypt global secret", {
-          key: row.key,
-          error: e instanceof Error ? e.message : String(e),
-        });
-        throw new Error(`Failed to decrypt global secret '${row.key}'`);
-      }
-    }
+    const rows = result.results || [];
+    const decryptedEntries = await Promise.all(
+      rows.map(async (row) => {
+        try {
+          const decryptedValue = await decryptToken(row.encrypted_value, this.encryptionKey);
+          return [row.key, decryptedValue] as const;
+        } catch (e) {
+          log.error("Failed to decrypt global secret", {
+            key: row.key,
+            error: e instanceof Error ? e.message : String(e),
+          });
+          throw new Error(`Failed to decrypt global secret '${row.key}'`);
+        }
+      })
+    );
 
-    return secrets;
+    return Object.fromEntries(decryptedEntries);
   }
 
   async deleteSecret(key: string): Promise<boolean> {

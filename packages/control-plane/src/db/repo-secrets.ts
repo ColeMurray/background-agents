@@ -113,21 +113,24 @@ export class RepoSecretsStore {
       .bind(repoId)
       .all<{ key: string; encrypted_value: string }>();
 
-    const secrets: Record<string, string> = {};
-    for (const row of result.results || []) {
-      try {
-        secrets[row.key] = await decryptToken(row.encrypted_value, this.encryptionKey);
-      } catch (e) {
-        log.error("Failed to decrypt secret", {
-          repo_id: repoId,
-          key: row.key,
-          error: e instanceof Error ? e.message : String(e),
-        });
-        throw new Error(`Failed to decrypt secret '${row.key}'`);
-      }
-    }
+    const rows = result.results || [];
+    const decryptedEntries = await Promise.all(
+      rows.map(async (row) => {
+        try {
+          const decryptedValue = await decryptToken(row.encrypted_value, this.encryptionKey);
+          return [row.key, decryptedValue] as const;
+        } catch (e) {
+          log.error("Failed to decrypt secret", {
+            repo_id: repoId,
+            key: row.key,
+            error: e instanceof Error ? e.message : String(e),
+          });
+          throw new Error(`Failed to decrypt secret '${row.key}'`);
+        }
+      })
+    );
 
-    return secrets;
+    return Object.fromEntries(decryptedEntries);
   }
 
   async deleteSecret(repoId: number, key: string): Promise<boolean> {
