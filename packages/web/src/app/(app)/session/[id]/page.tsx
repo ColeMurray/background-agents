@@ -374,6 +374,7 @@ function SessionContent({
   const isPhone = useMediaQuery("(max-width: 767px)");
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [sheetDragY, setSheetDragY] = useState(0);
+  const sheetDragYRef = useRef(0);
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
   const sheetTouchStartYRef = useRef<number | null>(null);
 
@@ -388,6 +389,7 @@ function SessionContent({
   const closeDetails = useCallback(() => {
     setIsDetailsOpen(false);
     setSheetDragY(0);
+    sheetDragYRef.current = 0;
     detailsButtonRef.current?.focus();
   }, []);
 
@@ -396,6 +398,7 @@ function SessionContent({
       const next = !prev;
       if (!next) {
         setSheetDragY(0);
+        sheetDragYRef.current = 0;
       }
       return next;
     });
@@ -414,27 +417,32 @@ function SessionContent({
 
     const delta = currentY - startY;
     if (delta > 0) {
-      setSheetDragY(Math.min(delta, 180));
+      const nextDragY = Math.min(delta, 180);
+      sheetDragYRef.current = nextDragY;
+      setSheetDragY(nextDragY);
     } else {
+      sheetDragYRef.current = 0;
       setSheetDragY(0);
     }
   }, []);
 
   const handleSheetTouchEnd = useCallback(() => {
-    if (sheetDragY > 100) {
+    if (sheetDragYRef.current > 100) {
       closeDetails();
       sheetTouchStartYRef.current = null;
       return;
     }
 
+    sheetDragYRef.current = 0;
     setSheetDragY(0);
     sheetTouchStartYRef.current = null;
-  }, [closeDetails, sheetDragY]);
+  }, [closeDetails]);
 
   useEffect(() => {
     if (isBelowLg) return;
     setIsDetailsOpen(false);
     setSheetDragY(0);
+    sheetDragYRef.current = 0;
   }, [isBelowLg]);
 
   useEffect(() => {
