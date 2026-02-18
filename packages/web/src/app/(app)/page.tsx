@@ -433,19 +433,21 @@ function HomeContent({
                 </div>
 
                 {/* Footer row with repo and model selectors */}
-                <div className="flex items-center justify-between px-4 py-2 border-t border-border-muted">
+                <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">
                   {/* Left side - Repo selector + Model selector */}
-                  <div className="flex items-center gap-4">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
                     {/* Repo selector */}
-                    <div className="relative" ref={repoDropdownRef}>
+                    <div className="relative min-w-0" ref={repoDropdownRef}>
                       <button
                         type="button"
                         onClick={() => !creating && setRepoDropdownOpen(!repoDropdownOpen)}
                         disabled={creating || loadingRepos}
-                        className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
+                        className="flex max-w-full items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
                       >
                         <RepoIcon />
-                        <span>{loadingRepos ? "Loading..." : displayRepoName}</span>
+                        <span className="truncate max-w-[12rem] sm:max-w-none">
+                          {loadingRepos ? "Loading..." : displayRepoName}
+                        </span>
                         <ChevronIcon />
                       </button>
 
@@ -506,15 +508,17 @@ function HomeContent({
                     </div>
 
                     {/* Model selector */}
-                    <div className="relative" ref={modelDropdownRef}>
+                    <div className="relative min-w-0" ref={modelDropdownRef}>
                       <button
                         type="button"
                         onClick={() => !creating && setModelDropdownOpen(!modelDropdownOpen)}
                         disabled={creating}
-                        className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
+                        className="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
                       >
                         <ModelIcon />
-                        <span>{formatModelNameLower(selectedModel)}</span>
+                        <span className="truncate max-w-[9rem] sm:max-w-none">
+                          {formatModelNameLower(selectedModel)}
+                        </span>
                       </button>
 
                       {modelDropdownOpen && (
@@ -567,7 +571,9 @@ function HomeContent({
                   </div>
 
                   {/* Right side - Agent label */}
-                  <span className="text-sm text-muted-foreground">build agent</span>
+                  <span className="hidden sm:inline text-sm text-muted-foreground">
+                    build agent
+                  </span>
                 </div>
               </div>
 
