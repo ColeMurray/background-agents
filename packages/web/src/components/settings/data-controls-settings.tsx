@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { mutate } from "swr";
-import type { SessionItem } from "@/components/session-sidebar";
+import { buildSessionHref, type SessionItem } from "@/components/session-sidebar";
 import { formatRelativeTime } from "@/lib/time";
 
 const PAGE_SIZE = 20;
@@ -126,18 +126,9 @@ function ArchivedSessionRow({
   const repoInfo = `${session.repoOwner}/${session.repoName}`;
   const timestamp = session.updatedAt || session.createdAt;
   const relativeTime = formatRelativeTime(timestamp);
-  const sessionHref = {
-    pathname: `/session/${session.id}`,
-    query: {
-      repoOwner: session.repoOwner,
-      repoName: session.repoName,
-      ...(session.title ? { title: session.title } : {}),
-    },
-  };
-
   return (
     <div className="group flex items-center justify-between px-4 py-3 hover:bg-muted transition">
-      <Link href={sessionHref} className="flex-1 min-w-0 mr-3">
+      <Link href={buildSessionHref(session)} className="flex-1 min-w-0 mr-3">
         <div className="truncate text-sm font-medium text-foreground">{displayTitle}</div>
         <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
           <span>{relativeTime}</span>
