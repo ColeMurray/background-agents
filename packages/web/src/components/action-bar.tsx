@@ -7,8 +7,8 @@ interface ActionBarProps {
   sessionId: string;
   sessionStatus: string;
   artifacts: Artifact[];
-  onArchive?: () => void;
-  onUnarchive?: () => void;
+  onArchive?: () => void | Promise<void>;
+  onUnarchive?: () => void | Promise<void>;
 }
 
 export function ActionBar({
@@ -30,9 +30,9 @@ export function ActionBar({
     setIsArchiving(true);
     try {
       if (isArchived && onUnarchive) {
-        onUnarchive();
+        await onUnarchive();
       } else if (!isArchived && onArchive) {
-        onArchive();
+        await onArchive();
       }
     } finally {
       setIsArchiving(false);

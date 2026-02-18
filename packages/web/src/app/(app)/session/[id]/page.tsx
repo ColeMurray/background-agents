@@ -354,8 +354,8 @@ function SessionContent({
   setSelectedModel: (model: string) => void;
   setReasoningEffort: (value: string | undefined) => void;
   stopExecution: () => void;
-  handleArchive: () => void;
-  handleUnarchive: () => void;
+  handleArchive: () => void | Promise<void>;
+  handleUnarchive: () => void | Promise<void>;
   loadingHistory: boolean;
   loadOlderEvents: () => void;
   modelOptions: ModelCategory[];
