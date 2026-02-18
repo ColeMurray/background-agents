@@ -23,8 +23,8 @@ SANDBOX_DIR = Path(__file__).parent.parent / "sandbox"
 OPENCODE_VERSION = "latest"
 
 # Cache buster - change this to force Modal image rebuild
-# v37: Codex auth proxy plugin for centralized token refresh
-CACHE_BUSTER = "v37-codex-auth-proxy-plugin"
+# v38: Rebuild to pick up latest OpenCode with GPT 5.3 Codex Spark support
+CACHE_BUSTER = "v38-opencode-codex-spark"
 
 # Base image with all development tools
 base_image = (
