@@ -7,8 +7,8 @@ interface ActionBarProps {
   sessionId: string;
   sessionStatus: string;
   artifacts: Artifact[];
-  onArchive?: () => void;
-  onUnarchive?: () => void;
+  onArchive?: () => void | Promise<void>;
+  onUnarchive?: () => void | Promise<void>;
 }
 
 export function ActionBar({
@@ -30,9 +30,9 @@ export function ActionBar({
     setIsArchiving(true);
     try {
       if (isArchived && onUnarchive) {
-        onUnarchive();
+        await onUnarchive();
       } else if (!isArchived && onArchive) {
-        onArchive();
+        await onArchive();
       }
     } finally {
       setIsArchiving(false);
@@ -47,10 +47,10 @@ export function ActionBar({
 
   // Shared button style for bordered pill buttons
   const pillButtonClass =
-    "flex items-center gap-1.5 px-3 py-1.5 text-sm text-foreground border border-border hover:bg-muted transition-colors";
+    "flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-1.5 text-sm text-foreground border border-border hover:bg-muted transition-colors";
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       {/* View Preview */}
       {previewArtifact?.url && (
         <a
@@ -91,7 +91,7 @@ export function ActionBar({
       </button>
 
       {/* More menu */}
-      <div className="relative">
+      <div className="relative shrink-0">
         <button
           onClick={() => setIsMenuOpen(!isMenuOpen)}
           className="flex items-center justify-center w-8 h-8 text-muted-foreground hover:text-foreground border border-border hover:bg-muted transition-colors"

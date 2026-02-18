@@ -18,7 +18,7 @@ import type {
   GitPushAuthContext,
 } from "../types";
 import { SourceControlProviderError } from "../errors";
-import { generateInstallationToken, fetchWithTimeout } from "../../auth/github-app";
+import { getCachedInstallationToken, fetchWithTimeout } from "../../auth/github-app";
 import type { GitHubProviderConfig } from "./types";
 import { USER_AGENT, GITHUB_API_BASE } from "./constants";
 
@@ -194,7 +194,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     }
 
     try {
-      const token = await generateInstallationToken(this.appConfig);
+      const token = await getCachedInstallationToken(this.appConfig);
       return {
         authType: "app",
         token,

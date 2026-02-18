@@ -1,45 +1,18 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { SecretsEditor } from "@/components/secrets-editor";
+import { useRepos } from "@/hooks/use-repos";
 
 const GLOBAL_SCOPE = "__global__";
 
-interface Repo {
-  id: number;
-  fullName: string;
-  owner: string;
-  name: string;
-  description: string | null;
-  private: boolean;
-}
-
 export function SecretsSettings() {
-  const [repos, setRepos] = useState<Repo[]>([]);
-  const [loadingRepos, setLoadingRepos] = useState(false);
+  const { repos, loading: loadingRepos } = useRepos();
   const [selectedRepo, setSelectedRepo] = useState(GLOBAL_SCOPE);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [repoSearchQuery, setRepoSearchQuery] = useState("");
   const dropdownRef = useRef<HTMLDivElement>(null);
-
-  const fetchRepos = useCallback(async () => {
-    setLoadingRepos(true);
-    try {
-      const res = await fetch("/api/repos");
-      if (res.ok) {
-        const data = await res.json();
-        const repoList = data.repos || [];
-        setRepos(repoList);
-      }
-    } catch (error) {
-      console.error("Failed to fetch repos:", error);
-    } finally {
-      setLoadingRepos(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchRepos();
-  }, [fetchRepos]);
+  const repoSearchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -51,6 +24,16 @@ export function SecretsSettings() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    if (!dropdownOpen) {
+      setRepoSearchQuery("");
+      return;
+    }
+
+    const id = requestAnimationFrame(() => repoSearchInputRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [dropdownOpen]);
+
   const selectedRepoObj = repos.find((r) => r.fullName === selectedRepo);
   const isGlobal = selectedRepo === GLOBAL_SCOPE;
   const displayRepoName = isGlobal
@@ -60,6 +43,15 @@ export function SecretsSettings() {
       : loadingRepos
         ? "Loading..."
         : "Select a repository";
+  const normalizedRepoSearchQuery = repoSearchQuery.trim().toLowerCase();
+  const filteredRepos = repos.filter((repo) => {
+    if (!normalizedRepoSearchQuery) return true;
+    return (
+      repo.name.toLowerCase().includes(normalizedRepoSearchQuery) ||
+      repo.owner.toLowerCase().includes(normalizedRepoSearchQuery) ||
+      repo.fullName.toLowerCase().includes(normalizedRepoSearchQuery)
+    );
+  });
 
   return (
     <div>
@@ -84,6 +76,7 @@ export function SecretsSettings() {
 
           {dropdownOpen && (
             <div className="absolute top-full left-0 mt-1 w-full max-w-sm max-h-64 overflow-y-auto bg-background shadow-lg border border-border py-1 z-50">
+              {/* Global entry */}
               <button
                 type="button"
                 onClick={() => {
@@ -103,30 +96,38 @@ export function SecretsSettings() {
                 {isGlobal && <CheckIcon />}
               </button>
 
-              {repos.length > 0 && <div className="border-t border-border my-1" />}
+              <div className="max-h-56 overflow-y-auto py-1">
+                {filteredRepos.length > 0 && <div className="border-t border-border my-1" />}
 
-              {repos.map((repo) => (
-                <button
-                  key={repo.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedRepo(repo.fullName);
-                    setDropdownOpen(false);
-                  }}
-                  className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
-                    selectedRepo === repo.fullName ? "text-foreground" : "text-muted-foreground"
-                  }`}
-                >
-                  <div className="flex flex-col items-start text-left">
-                    <span className="font-medium truncate max-w-[280px]">{repo.name}</span>
-                    <span className="text-xs text-secondary-foreground truncate max-w-[280px]">
-                      {repo.owner}
-                      {repo.private && " \u00b7 private"}
-                    </span>
+                {filteredRepos.length === 0 ? (
+                  <div className="px-3 py-2 text-sm text-muted-foreground">
+                    No repositories match {repoSearchQuery.trim()}
                   </div>
-                  {selectedRepo === repo.fullName && <CheckIcon />}
-                </button>
-              ))}
+                ) : (
+                  filteredRepos.map((repo) => (
+                    <button
+                      key={repo.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedRepo(repo.fullName);
+                        setDropdownOpen(false);
+                      }}
+                      className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
+                        selectedRepo === repo.fullName ? "text-foreground" : "text-muted-foreground"
+                      }`}
+                    >
+                      <div className="flex flex-col items-start text-left">
+                        <span className="font-medium truncate max-w-[280px]">{repo.name}</span>
+                        <span className="text-xs text-secondary-foreground truncate max-w-[280px]">
+                          {repo.owner}
+                          {repo.private && " \u00b7 private"}
+                        </span>
+                      </div>
+                      {selectedRepo === repo.fullName && <CheckIcon />}
+                    </button>
+                  ))
+                )}
+              </div>
             </div>
           )}
         </div>

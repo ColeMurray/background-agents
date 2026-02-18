@@ -858,6 +858,10 @@ async function handleSessionPrompt(
     )
   );
 
+  // Background: update D1 timestamp so session bubbles to top of sidebar
+  const store = new SessionIndexStore(env.DB);
+  ctx.executionCtx?.waitUntil(store.touchUpdatedAt(sessionId).catch(() => {}));
+
   return response;
 }
 
@@ -1213,7 +1217,7 @@ async function resolveInstalledRepo(
     throw new Error("GitHub App not configured");
   }
 
-  const repo = await getInstallationRepository(appConfig, repoOwner, repoName);
+  const repo = await getInstallationRepository(appConfig, repoOwner, repoName, env);
   if (!repo) {
     return null;
   }
@@ -1245,7 +1249,7 @@ async function refreshReposCache(env: Env, traceId?: string): Promise<void> {
 
   let repos: InstallationRepository[];
   try {
-    const result = await listInstallationRepositories(appConfig);
+    const result = await listInstallationRepositories(appConfig, env);
     repos = result.repos;
 
     logger.info("GitHub repo fetch completed", {
@@ -1358,7 +1362,7 @@ async function handleListRepos(
   let repos: InstallationRepository[];
   try {
     const result = await ctx.metrics.time("github_api", () =>
-      listInstallationRepositories(appConfig)
+      listInstallationRepositories(appConfig, env)
     );
     repos = result.repos;
 

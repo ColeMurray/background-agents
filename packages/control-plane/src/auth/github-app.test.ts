@@ -1,5 +1,34 @@
-import { describe, it, expect } from "vitest";
-import { isGitHubAppConfigured, getGitHubAppConfig } from "./github-app";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import {
+  isGitHubAppConfigured,
+  getGitHubAppConfig,
+  getCachedInstallationToken,
+  INSTALLATION_TOKEN_CACHE_MAX_AGE_MS,
+  INSTALLATION_TOKEN_MIN_REMAINING_MS,
+} from "./github-app";
+
+class FakeKvNamespace {
+  private readonly store = new Map<string, string>();
+
+  async get<T>(key: string, type?: "text" | "json"): Promise<T | string | null> {
+    const value = this.store.get(key);
+    if (value == null) {
+      return null;
+    }
+    if (type === "json") {
+      return JSON.parse(value) as T;
+    }
+    return value;
+  }
+
+  async put(key: string, value: string): Promise<void> {
+    this.store.set(key, value);
+  }
+
+  async delete(key: string): Promise<void> {
+    this.store.delete(key);
+  }
+}
 
 describe("github-app utilities", () => {
   describe("isGitHubAppConfigured", () => {
@@ -85,6 +114,40 @@ describe("github-app utilities", () => {
           GITHUB_APP_PRIVATE_KEY: "key",
         })
       ).toBeNull();
+    });
+  });
+
+  describe("getCachedInstallationToken", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("reads valid token from KV cache", async () => {
+      const fetchMock = vi.spyOn(globalThis, "fetch");
+      const kv = new FakeKvNamespace();
+
+      const config = {
+        appId: `app-kv-${Date.now()}`,
+        privateKey: "-----BEGIN PRIVATE KEY-----\nAA==\n-----END PRIVATE KEY-----",
+        installationId: "installation-2",
+      };
+
+      await kv.put(
+        `github:installation-token:v1:${config.appId}:${config.installationId}`,
+        JSON.stringify({
+          token: "token-from-kv",
+          expiresAtEpochMs:
+            Date.now() + INSTALLATION_TOKEN_CACHE_MAX_AGE_MS + INSTALLATION_TOKEN_MIN_REMAINING_MS,
+          cachedAtEpochMs: Date.now(),
+        })
+      );
+
+      const token = await getCachedInstallationToken(config, {
+        REPOS_CACHE: kv as unknown as KVNamespace,
+      });
+
+      expect(token).toBe("token-from-kv");
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 });

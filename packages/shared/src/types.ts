@@ -163,6 +163,12 @@ export type ServerMessage =
       state: SessionState;
       participantId: string;
       participant?: { participantId: string; name: string; avatar?: string };
+      replay?: {
+        events: SandboxEvent[];
+        hasMore: boolean;
+        cursor: { timestamp: number; id: string } | null;
+      };
+      spawnError?: string | null;
     }
   | { type: "prompt_queued"; messageId: string; position: number }
   | { type: "sandbox_event"; event: SandboxEvent }

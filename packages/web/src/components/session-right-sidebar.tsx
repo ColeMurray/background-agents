@@ -48,32 +48,31 @@ interface SessionRightSidebarProps {
   filesChanged?: FileChange[];
 }
 
-export function SessionRightSidebar({
+export type SessionRightSidebarContentProps = SessionRightSidebarProps;
+
+export function SessionRightSidebarContent({
   sessionState,
   participants,
   events,
   artifacts,
   filesChanged = [],
-}: SessionRightSidebarProps) {
-  // Extract latest tasks from TodoWrite events
+}: SessionRightSidebarContentProps) {
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
 
   if (!sessionState) {
     return (
-      <aside className="w-80 border-l border-border-muted overflow-y-auto hidden lg:block">
-        <div className="p-4">
-          <div className="animate-pulse space-y-4">
-            <div className="h-4 bg-muted w-3/4" />
-            <div className="h-4 bg-muted w-1/2" />
-            <div className="h-4 bg-muted w-2/3" />
-          </div>
+      <div className="p-4">
+        <div className="animate-pulse space-y-4">
+          <div className="h-4 bg-muted w-3/4" />
+          <div className="h-4 bg-muted w-1/2" />
+          <div className="h-4 bg-muted w-2/3" />
         </div>
-      </aside>
+      </div>
     );
   }
 
   return (
-    <aside className="w-80 border-l border-border-muted overflow-y-auto hidden lg:block">
+    <>
       {/* Participants */}
       <div className="px-4 py-4 border-b border-border-muted">
         <ParticipantsSection participants={participants} />
@@ -114,6 +113,26 @@ export function SessionRightSidebar({
           </p>
         </div>
       )}
+    </>
+  );
+}
+
+export function SessionRightSidebar({
+  sessionState,
+  participants,
+  events,
+  artifacts,
+  filesChanged = [],
+}: SessionRightSidebarProps) {
+  return (
+    <aside className="w-80 border-l border-border-muted overflow-y-auto hidden lg:block">
+      <SessionRightSidebarContent
+        sessionState={sessionState}
+        participants={participants}
+        events={events}
+        artifacts={artifacts}
+        filesChanged={filesChanged}
+      />
     </aside>
   );
 }

@@ -2,28 +2,31 @@
 
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import { mutate } from "swr";
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
-import { SidebarLayout, useSidebarContext } from "@/components/sidebar-layout";
+import { useSidebarContext } from "@/components/sidebar-layout";
+import { SidebarToggleIcon } from "@/components/sidebar-toggle-icon";
 import { formatModelNameLower } from "@/lib/format";
-import { DEFAULT_MODEL, getDefaultReasoningEffort, type ModelCategory } from "@open-inspect/shared";
+import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import {
+  DEFAULT_MODEL,
+  getDefaultReasoningEffort,
+  isValidReasoningEffort,
+  type ModelCategory,
+} from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
+import { useRepos, type Repo } from "@/hooks/use-repos";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 
-interface Repo {
-  id: number;
-  fullName: string;
-  owner: string;
-  name: string;
-  description: string | null;
-  private: boolean;
-}
+const LAST_SELECTED_REPO_STORAGE_KEY = "open-inspect-last-selected-repo";
+const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
+const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
 
 export default function Home() {
-  const { data: session, status } = useSession();
+  const { data: session } = useSession();
   const router = useRouter();
-  const [repos, setRepos] = useState<Repo[]>([]);
-  const [loadingRepos, setLoadingRepos] = useState(false);
+  const { repos, loading: loadingRepos } = useRepos();
   const [selectedRepo, setSelectedRepo] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
@@ -37,31 +40,57 @@ export default function Home() {
   const sessionCreationPromise = useRef<Promise<string | null> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const pendingConfigRef = useRef<{ repo: string; model: string } | null>(null);
+  const hasHydratedModelPreferences = useRef(false);
+  const { enabledModels, enabledModelOptions } = useEnabledModels();
 
-  const fetchRepos = useCallback(async () => {
-    setLoadingRepos(true);
-    try {
-      const res = await fetch("/api/repos");
-      if (res.ok) {
-        const data = await res.json();
-        const repoList = data.repos || [];
-        setRepos(repoList);
-        if (repoList.length > 0) {
-          setSelectedRepo((current) => current || repoList[0].fullName);
-        }
-      }
-    } catch (error) {
-      console.error("Failed to fetch repos:", error);
-    } finally {
-      setLoadingRepos(false);
+  // Auto-select repo when repos load
+  useEffect(() => {
+    if (repos.length > 0 && !selectedRepo) {
+      const lastSelectedRepo = localStorage.getItem(LAST_SELECTED_REPO_STORAGE_KEY);
+      const hasLastSelectedRepo = repos.some((repo) => repo.fullName === lastSelectedRepo);
+      const defaultRepo =
+        (hasLastSelectedRepo ? lastSelectedRepo : repos[0].fullName) ?? repos[0].fullName;
+      setSelectedRepo(defaultRepo);
     }
-  }, []);
+  }, [repos, selectedRepo]);
 
   useEffect(() => {
-    if (session) {
-      fetchRepos();
+    if (!selectedRepo) return;
+    localStorage.setItem(LAST_SELECTED_REPO_STORAGE_KEY, selectedRepo);
+  }, [selectedRepo]);
+
+  useEffect(() => {
+    if (enabledModels.length === 0 || hasHydratedModelPreferences.current) return;
+
+    const storedModel = localStorage.getItem(LAST_SELECTED_MODEL_STORAGE_KEY);
+    const selectedModelFromStorage =
+      storedModel && enabledModels.includes(storedModel)
+        ? storedModel
+        : (enabledModels[0] ?? DEFAULT_MODEL);
+
+    const storedReasoningEffort = localStorage.getItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
+    const reasoningEffortFromStorage =
+      storedReasoningEffort &&
+      isValidReasoningEffort(selectedModelFromStorage, storedReasoningEffort)
+        ? storedReasoningEffort
+        : getDefaultReasoningEffort(selectedModelFromStorage);
+
+    setSelectedModel(selectedModelFromStorage);
+    setReasoningEffort(reasoningEffortFromStorage);
+    hasHydratedModelPreferences.current = true;
+  }, [enabledModels]);
+
+  useEffect(() => {
+    if (!hasHydratedModelPreferences.current) return;
+    localStorage.setItem(LAST_SELECTED_MODEL_STORAGE_KEY, selectedModel);
+
+    if (reasoningEffort) {
+      localStorage.setItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY, reasoningEffort);
+      return;
     }
-  }, [session, fetchRepos]);
+
+    localStorage.removeItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
+  }, [selectedModel, reasoningEffort]);
 
   useEffect(() => {
     if (abortControllerRef.current) {
@@ -134,13 +163,19 @@ export default function Home() {
 
   const { enabledModels, enabledModelOptions } = useEnabledModels();
 
+  // Reset selections when model preferences change
   useEffect(() => {
     if (enabledModels.length > 0 && !enabledModels.includes(selectedModel)) {
       const fallback = enabledModels[0] ?? DEFAULT_MODEL;
       setSelectedModel(fallback);
       setReasoningEffort(getDefaultReasoningEffort(fallback));
+      return;
     }
-  }, [enabledModels, selectedModel]);
+
+    if (reasoningEffort && !isValidReasoningEffort(selectedModel, reasoningEffort)) {
+      setReasoningEffort(getDefaultReasoningEffort(selectedModel));
+    }
+  }, [enabledModels, selectedModel, reasoningEffort]);
 
   const handleModelChange = useCallback((model: string) => {
     setSelectedModel(model);
@@ -189,6 +224,7 @@ export default function Home() {
       });
 
       if (res.ok) {
+        mutate("/api/sessions");
         router.push(`/session/${sessionId}`);
       } else {
         const data = await res.json();
@@ -201,35 +237,25 @@ export default function Home() {
     }
   };
 
-  if (status === "loading") {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-foreground" />
-      </div>
-    );
-  }
-
   return (
-    <SidebarLayout>
-      <HomeContent
-        isAuthenticated={!!session}
-        repos={repos}
-        loadingRepos={loadingRepos}
-        selectedRepo={selectedRepo}
-        setSelectedRepo={setSelectedRepo}
-        selectedModel={selectedModel}
-        setSelectedModel={handleModelChange}
-        reasoningEffort={reasoningEffort}
-        setReasoningEffort={setReasoningEffort}
-        prompt={prompt}
-        handlePromptChange={handlePromptChange}
-        creating={creating}
-        isCreatingSession={isCreatingSession}
-        error={error}
-        handleSubmit={handleSubmit}
-        modelOptions={enabledModelOptions}
-      />
-    </SidebarLayout>
+    <HomeContent
+      isAuthenticated={!!session}
+      repos={repos}
+      loadingRepos={loadingRepos}
+      selectedRepo={selectedRepo}
+      setSelectedRepo={setSelectedRepo}
+      selectedModel={selectedModel}
+      setSelectedModel={handleModelChange}
+      reasoningEffort={reasoningEffort}
+      setReasoningEffort={setReasoningEffort}
+      prompt={prompt}
+      handlePromptChange={handlePromptChange}
+      creating={creating}
+      isCreatingSession={isCreatingSession}
+      error={error}
+      handleSubmit={handleSubmit}
+      modelOptions={enabledModelOptions}
+    />
   );
 }
 
@@ -270,8 +296,10 @@ function HomeContent({
 }) {
   const { isOpen, toggle } = useSidebarContext();
   const [repoDropdownOpen, setRepoDropdownOpen] = useState(false);
+  const [repoSearchQuery, setRepoSearchQuery] = useState("");
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const repoDropdownRef = useRef<HTMLDivElement>(null);
+  const repoSearchInputRef = useRef<HTMLInputElement>(null);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -288,7 +316,19 @@ function HomeContent({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    if (!repoDropdownOpen) {
+      setRepoSearchQuery("");
+      return;
+    }
+
+    const id = requestAnimationFrame(() => repoSearchInputRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [repoDropdownOpen]);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing) return;
+
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSubmit(e);
@@ -297,6 +337,15 @@ function HomeContent({
 
   const selectedRepoObj = repos.find((r) => r.fullName === selectedRepo);
   const displayRepoName = selectedRepoObj ? selectedRepoObj.name : "Select repo";
+  const normalizedRepoSearchQuery = repoSearchQuery.trim().toLowerCase();
+  const filteredRepos = repos.filter((repo) => {
+    if (!normalizedRepoSearchQuery) return true;
+    return (
+      repo.name.toLowerCase().includes(normalizedRepoSearchQuery) ||
+      repo.owner.toLowerCase().includes(normalizedRepoSearchQuery) ||
+      repo.fullName.toLowerCase().includes(normalizedRepoSearchQuery)
+    );
+  });
 
   return (
     <div className="h-full flex flex-col">
@@ -307,7 +356,8 @@ function HomeContent({
             <button
               onClick={toggle}
               className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-              title="Open sidebar"
+              title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
+              aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
             >
               <SidebarToggleIcon />
             </button>
@@ -360,7 +410,8 @@ function HomeContent({
                       type="submit"
                       disabled={!prompt.trim() || creating || !selectedRepo}
                       className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
-                      title="Send"
+                      title={`Send (${SHORTCUT_LABELS.SEND_PROMPT})`}
+                      aria-label={`Send (${SHORTCUT_LABELS.SEND_PROMPT})`}
                     >
                       {creating ? (
                         <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
@@ -384,64 +435,92 @@ function HomeContent({
                 </div>
 
                 {/* Footer row with repo and model selectors */}
-                <div className="flex items-center justify-between px-4 py-2 border-t border-border-muted">
+                <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">
                   {/* Left side - Repo selector + Model selector */}
-                  <div className="flex items-center gap-4">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
                     {/* Repo selector */}
-                    <div className="relative" ref={repoDropdownRef}>
+                    <div className="relative min-w-0" ref={repoDropdownRef}>
                       <button
                         type="button"
                         onClick={() => !creating && setRepoDropdownOpen(!repoDropdownOpen)}
                         disabled={creating || loadingRepos}
-                        className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
+                        className="flex max-w-full items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
                       >
                         <RepoIcon />
-                        <span>{loadingRepos ? "Loading..." : displayRepoName}</span>
+                        <span className="truncate max-w-[12rem] sm:max-w-none">
+                          {loadingRepos ? "Loading..." : displayRepoName}
+                        </span>
                         <ChevronIcon />
                       </button>
 
                       {repoDropdownOpen && repos.length > 0 && (
-                        <div className="absolute bottom-full left-0 mb-2 w-72 max-h-64 overflow-y-auto bg-background shadow-lg border border-border py-1 z-50">
-                          {repos.map((repo) => (
-                            <button
-                              key={repo.id}
-                              type="button"
-                              onClick={() => {
-                                setSelectedRepo(repo.fullName);
-                                setRepoDropdownOpen(false);
+                        <div className="absolute bottom-full left-0 mb-2 w-72 bg-background shadow-lg border border-border z-50">
+                          <div className="p-2 border-b border-border-muted">
+                            <input
+                              ref={repoSearchInputRef}
+                              type="text"
+                              value={repoSearchQuery}
+                              onChange={(e) => setRepoSearchQuery(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                }
                               }}
-                              className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
-                                selectedRepo === repo.fullName
-                                  ? "text-foreground"
-                                  : "text-muted-foreground"
-                              }`}
-                            >
-                              <div className="flex flex-col items-start text-left">
-                                <span className="font-medium truncate max-w-[200px]">
-                                  {repo.name}
-                                </span>
-                                <span className="text-xs text-secondary-foreground truncate max-w-[200px]">
-                                  {repo.owner}
-                                  {repo.private && " • private"}
-                                </span>
+                              placeholder="Search repositories..."
+                              className="w-full px-2 py-1.5 text-sm bg-input border border-border focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent placeholder:text-secondary-foreground text-foreground"
+                            />
+                          </div>
+
+                          <div className="max-h-56 overflow-y-auto py-1">
+                            {filteredRepos.length === 0 ? (
+                              <div className="px-3 py-2 text-sm text-muted-foreground">
+                                No repositories match {repoSearchQuery.trim()}
                               </div>
-                              {selectedRepo === repo.fullName && <CheckIcon />}
-                            </button>
-                          ))}
+                            ) : (
+                              filteredRepos.map((repo) => (
+                                <button
+                                  key={repo.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedRepo(repo.fullName);
+                                    setRepoDropdownOpen(false);
+                                  }}
+                                  className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
+                                    selectedRepo === repo.fullName
+                                      ? "text-foreground"
+                                      : "text-muted-foreground"
+                                  }`}
+                                >
+                                  <div className="flex flex-col items-start text-left">
+                                    <span className="font-medium truncate max-w-[200px]">
+                                      {repo.name}
+                                    </span>
+                                    <span className="text-xs text-secondary-foreground truncate max-w-[200px]">
+                                      {repo.owner}
+                                      {repo.private && " • private"}
+                                    </span>
+                                  </div>
+                                  {selectedRepo === repo.fullName && <CheckIcon />}
+                                </button>
+                              ))
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
 
                     {/* Model selector */}
-                    <div className="relative" ref={modelDropdownRef}>
+                    <div className="relative min-w-0" ref={modelDropdownRef}>
                       <button
                         type="button"
                         onClick={() => !creating && setModelDropdownOpen(!modelDropdownOpen)}
                         disabled={creating}
-                        className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
+                        className="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
                       >
                         <ModelIcon />
-                        <span>{formatModelNameLower(selectedModel)}</span>
+                        <span className="truncate max-w-[9rem] sm:max-w-none">
+                          {formatModelNameLower(selectedModel)}
+                        </span>
                       </button>
 
                       {modelDropdownOpen && (
@@ -494,7 +573,9 @@ function HomeContent({
                   </div>
 
                   {/* Right side - Agent label */}
-                  <span className="text-sm text-muted-foreground">build agent</span>
+                  <span className="hidden sm:inline text-sm text-muted-foreground">
+                    build agent
+                  </span>
                 </div>
               </div>
 
@@ -519,23 +600,6 @@ function HomeContent({
         </div>
       </div>
     </div>
-  );
-}
-
-function SidebarToggleIcon() {
-  return (
-    <svg
-      className="w-4 h-4"
-      fill="none"
-      stroke="currentColor"
-      viewBox="0 0 24 24"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <line x1="9" y1="3" x2="9" y2="21" />
-    </svg>
   );
 }
 

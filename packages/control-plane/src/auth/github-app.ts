@@ -14,6 +14,41 @@ import type { InstallationRepository } from "@open-inspect/shared";
 /** Timeout for individual GitHub API requests (ms). */
 export const GITHUB_FETCH_TIMEOUT_MS = 60_000;
 
+/** Cache installation tokens for this duration at most (ms). */
+export const INSTALLATION_TOKEN_CACHE_MAX_AGE_MS = 50 * 60 * 1000;
+
+/** Require at least this much remaining lifetime before using a cached token (ms). */
+export const INSTALLATION_TOKEN_MIN_REMAINING_MS = 5 * 60 * 1000;
+
+/** Upper bound for KV cache TTL (seconds). */
+export const INSTALLATION_TOKEN_CACHE_MAX_TTL_SECONDS = 3600;
+
+const INSTALLATION_TOKEN_CACHE_KEY_PREFIX = "github:installation-token:v1";
+
+interface InstallationTokenCacheBindings {
+  REPOS_CACHE?: KVNamespace;
+}
+
+interface CachedInstallationToken {
+  token: string;
+  expiresAtEpochMs: number;
+  cachedAtEpochMs: number;
+}
+
+interface GitHubHttpError extends Error {
+  status?: number;
+}
+
+function createHttpError(message: string, status: number): GitHubHttpError {
+  const error = new Error(message) as GitHubHttpError;
+  error.status = status;
+  return error;
+}
+
+const installationTokenMemoryCache = new Map<string, CachedInstallationToken>();
+const installationTokenRefreshInFlight = new Map<string, Promise<CachedInstallationToken>>();
+const importedPrivateKeyCache = new Map<string, Promise<CryptoKey>>();
+
 /** Fetch with an AbortController timeout. */
 export function fetchWithTimeout(
   url: string,
@@ -55,8 +90,6 @@ export interface GitHubAppConfig {
 interface InstallationTokenResponse {
   token: string;
   expires_at: string;
-  permissions: Record<string, string>;
-  repository_selection?: "all" | "selected";
 }
 
 /**
@@ -120,6 +153,23 @@ async function importPrivateKey(pem: string): Promise<CryptoKey> {
 }
 
 /**
+ * Import and cache RSA private key for signing.
+ */
+async function importPrivateKeyCached(pem: string): Promise<CryptoKey> {
+  const existing = importedPrivateKeyCache.get(pem);
+  if (existing) {
+    return existing;
+  }
+
+  const inFlight = importPrivateKey(pem).catch((error) => {
+    importedPrivateKeyCache.delete(pem);
+    throw error;
+  });
+  importedPrivateKeyCache.set(pem, inFlight);
+  return inFlight;
+}
+
+/**
  * Generate a JWT for GitHub App authentication.
  *
  * @param appId - GitHub App ID
@@ -148,7 +198,7 @@ export async function generateAppJwt(appId: string, privateKey: string): Promise
   const signingInput = `${encodedHeader}.${encodedPayload}`;
 
   // Sign with RSA-SHA256
-  const key = await importPrivateKey(privateKey);
+  const key = await importPrivateKeyCached(privateKey);
   const signature = await crypto.subtle.sign(
     "RSASSA-PKCS1-v1_5",
     key,
@@ -161,13 +211,12 @@ export async function generateAppJwt(appId: string, privateKey: string): Promise
 }
 
 /**
- * Exchange JWT for an installation access token.
- *
- * @param jwt - Signed JWT
- * @param installationId - GitHub App installation ID
- * @returns Installation access token (valid for 1 hour)
+ * Exchange JWT for an installation access token and expiry metadata.
  */
-export async function getInstallationToken(jwt: string, installationId: string): Promise<string> {
+async function getInstallationTokenWithMetadata(
+  jwt: string,
+  installationId: string
+): Promise<InstallationTokenResponse> {
   const url = `https://api.github.com/app/installations/${installationId}/access_tokens`;
 
   const response = await fetchWithTimeout(url, {
@@ -185,21 +234,142 @@ export async function getInstallationToken(jwt: string, installationId: string):
     throw new Error(`Failed to get installation token: ${response.status} ${error}`);
   }
 
-  const data = (await response.json()) as InstallationTokenResponse;
-  return data.token;
+  return (await response.json()) as InstallationTokenResponse;
+}
+
+function getInstallationTokenCacheKey(config: GitHubAppConfig): string {
+  return `${INSTALLATION_TOKEN_CACHE_KEY_PREFIX}:${config.appId}:${config.installationId}`;
+}
+
+function isTokenUsable(cached: CachedInstallationToken, nowEpochMs = Date.now()): boolean {
+  const cacheAgeMs = nowEpochMs - cached.cachedAtEpochMs;
+  if (cacheAgeMs >= INSTALLATION_TOKEN_CACHE_MAX_AGE_MS) {
+    return false;
+  }
+  return nowEpochMs < cached.expiresAtEpochMs - INSTALLATION_TOKEN_MIN_REMAINING_MS;
+}
+
+async function readInstallationTokenFromKv(
+  env: InstallationTokenCacheBindings | undefined,
+  cacheKey: string
+): Promise<CachedInstallationToken | null> {
+  if (!env?.REPOS_CACHE) {
+    return null;
+  }
+
+  try {
+    const cached = await env.REPOS_CACHE.get<CachedInstallationToken>(cacheKey, "json");
+    return cached ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeInstallationTokenToKv(
+  env: InstallationTokenCacheBindings | undefined,
+  cacheKey: string,
+  cached: CachedInstallationToken
+): Promise<void> {
+  if (!env?.REPOS_CACHE) {
+    return;
+  }
+
+  const nowEpochMs = Date.now();
+  const remainingLifetimeMs = cached.expiresAtEpochMs - nowEpochMs;
+  if (remainingLifetimeMs <= 0) {
+    return;
+  }
+
+  const cacheBoundLifetimeMs = Math.min(remainingLifetimeMs, INSTALLATION_TOKEN_CACHE_MAX_AGE_MS);
+  const ttlSeconds = Math.max(
+    1,
+    Math.min(INSTALLATION_TOKEN_CACHE_MAX_TTL_SECONDS, Math.floor(cacheBoundLifetimeMs / 1000))
+  );
+
+  try {
+    await env.REPOS_CACHE.put(cacheKey, JSON.stringify(cached), { expirationTtl: ttlSeconds });
+  } catch {
+    // Cache failures are non-fatal.
+  }
+}
+
+async function invalidateInstallationTokenCache(
+  env: InstallationTokenCacheBindings | undefined,
+  cacheKey: string
+): Promise<void> {
+  installationTokenMemoryCache.delete(cacheKey);
+  installationTokenRefreshInFlight.delete(cacheKey);
+
+  if (!env?.REPOS_CACHE) {
+    return;
+  }
+
+  try {
+    await env.REPOS_CACHE.delete(cacheKey);
+  } catch {
+    // Cache invalidation failures are non-fatal.
+  }
+}
+
+async function refreshInstallationToken(
+  config: GitHubAppConfig,
+  env: InstallationTokenCacheBindings | undefined,
+  cacheKey: string
+): Promise<CachedInstallationToken> {
+  const nowEpochMs = Date.now();
+  const jwt = await generateAppJwt(config.appId, config.privateKey);
+  const tokenData = await getInstallationTokenWithMetadata(jwt, config.installationId);
+  const parsedExpiresAtEpochMs = Date.parse(tokenData.expires_at);
+  const cached: CachedInstallationToken = {
+    token: tokenData.token,
+    expiresAtEpochMs: Number.isFinite(parsedExpiresAtEpochMs)
+      ? parsedExpiresAtEpochMs
+      : nowEpochMs + INSTALLATION_TOKEN_CACHE_MAX_AGE_MS,
+    cachedAtEpochMs: nowEpochMs,
+  };
+
+  installationTokenMemoryCache.set(cacheKey, cached);
+  await writeInstallationTokenToKv(env, cacheKey, cached);
+  return cached;
 }
 
 /**
- * Generate a fresh GitHub App installation token.
- *
- * This is the main entry point for token generation.
- *
- * @param config - GitHub App configuration
- * @returns Installation access token (valid for 1 hour)
+ * Get installation token with in-memory + KV caching.
  */
-export async function generateInstallationToken(config: GitHubAppConfig): Promise<string> {
-  const jwt = await generateAppJwt(config.appId, config.privateKey);
-  return getInstallationToken(jwt, config.installationId);
+export async function getCachedInstallationToken(
+  config: GitHubAppConfig,
+  env?: InstallationTokenCacheBindings,
+  options?: { forceRefresh?: boolean }
+): Promise<string> {
+  const cacheKey = getInstallationTokenCacheKey(config);
+  const forceRefresh = options?.forceRefresh ?? false;
+
+  if (!forceRefresh) {
+    const memoryCached = installationTokenMemoryCache.get(cacheKey);
+    if (memoryCached && isTokenUsable(memoryCached)) {
+      return memoryCached.token;
+    }
+
+    const kvCached = await readInstallationTokenFromKv(env, cacheKey);
+    if (kvCached && isTokenUsable(kvCached)) {
+      installationTokenMemoryCache.set(cacheKey, kvCached);
+      return kvCached.token;
+    }
+
+    const inFlight = installationTokenRefreshInFlight.get(cacheKey);
+    if (inFlight) {
+      const shared = await inFlight;
+      return shared.token;
+    }
+  }
+
+  const refreshPromise = refreshInstallationToken(config, env, cacheKey).finally(() => {
+    installationTokenRefreshInFlight.delete(cacheKey);
+  });
+  installationTokenRefreshInFlight.set(cacheKey, refreshPromise);
+
+  const refreshed = await refreshPromise;
+  return refreshed.token;
 }
 
 // Re-export from shared for backward compatibility
@@ -234,10 +404,11 @@ interface ListInstallationReposResponse {
  * @returns repos and per-page timing breakdown for diagnostics
  */
 export async function listInstallationRepositories(
-  config: GitHubAppConfig
+  config: GitHubAppConfig,
+  env?: InstallationTokenCacheBindings
 ): Promise<{ repos: InstallationRepository[]; timing: ListReposTiming }> {
   const tokenStart = performance.now();
-  const token = await generateInstallationToken(config);
+  let token = await getCachedInstallationToken(config, env);
   const tokenGenerationMs = performance.now() - tokenStart;
 
   const perPage = 100;
@@ -257,9 +428,10 @@ export async function listInstallationRepositories(
     const response = await fetchWithTimeout(url, { headers });
 
     if (!response.ok) {
-      const error = await response.text();
-      throw new Error(
-        `Failed to list installation repositories (page ${page}): ${response.status} ${error}`
+      const body = await response.text();
+      throw createHttpError(
+        `Failed to list installation repositories (page ${page}): ${response.status} ${body}`,
+        response.status
       );
     }
 
@@ -281,14 +453,29 @@ export async function listInstallationRepositories(
     }));
 
   // Fetch page 1 to learn total_count
-  const first = await fetchPage(1);
+  let first: { data: ListInstallationReposResponse; timing: GitHubPageTiming };
+  try {
+    first = await fetchPage(1);
+  } catch (error) {
+    const status = (error as GitHubHttpError | undefined)?.status;
+    if (status !== 401) {
+      throw error;
+    }
+
+    await invalidateInstallationTokenCache(env, getInstallationTokenCacheKey(config));
+    token = await getCachedInstallationToken(config, env, { forceRefresh: true });
+    headers.Authorization = `Bearer ${token}`;
+    first = await fetchPage(1);
+  }
   const allRepos = mapRepos(first.data);
   const pageTiming: GitHubPageTiming[] = [first.timing];
 
   const totalCount = first.data.total_count;
   const totalPages = Math.ceil(totalCount / perPage);
 
-  // Fetch remaining pages concurrently
+  // Fetch remaining pages concurrently.
+  // No 401 retry here — the token was just obtained (or refreshed) for page 1,
+  // so a mid-pagination auth failure is not expected.
   if (totalPages > 1) {
     const remaining = Array.from({ length: totalPages - 1 }, (_, i) => i + 2);
     const results = await Promise.all(remaining.map((p) => fetchPage(p)));
@@ -317,18 +504,31 @@ export async function listInstallationRepositories(
 export async function getInstallationRepository(
   config: GitHubAppConfig,
   owner: string,
-  repo: string
+  repo: string,
+  env?: InstallationTokenCacheBindings
 ): Promise<InstallationRepository | null> {
-  const token = await generateInstallationToken(config);
+  const cacheKey = getInstallationTokenCacheKey(config);
+  let forceRefresh = false;
+  let response!: Response;
 
-  const response = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "Open-Inspect",
-    },
-  });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const token = await getCachedInstallationToken(config, env, { forceRefresh });
+    response = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "Open-Inspect",
+      },
+    });
+
+    if (response.status !== 401) {
+      break;
+    }
+
+    await invalidateInstallationTokenCache(env, cacheKey);
+    forceRefresh = true;
+  }
 
   if (response.status === 404 || response.status === 403) {
     return null;

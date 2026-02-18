@@ -7,6 +7,11 @@ export interface Artifact {
   metadata?: {
     prNumber?: number;
     prState?: "open" | "merged" | "closed" | "draft";
+    mode?: "manual_pr";
+    createPrUrl?: string;
+    head?: string;
+    base?: string;
+    provider?: string;
     filename?: string;
     previewStatus?: "active" | "outdated" | "stopped";
   };

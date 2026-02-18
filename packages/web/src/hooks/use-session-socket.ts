@@ -66,6 +66,7 @@ interface Participant {
 interface UseSessionSocketReturn {
   connected: boolean;
   connecting: boolean;
+  replaying: boolean;
   authError: string | null;
   connectionError: string | null;
   sessionState: SessionState | null;
@@ -84,6 +85,46 @@ interface UseSessionSocketReturn {
   loadOlderEvents: () => void;
 }
 
+/**
+ * Collapse a batch of events by folding streaming token events into their
+ * final form (only the last accumulated token before execution_complete is kept).
+ * Mutates pendingTextRef to track in-flight tokens across calls.
+ */
+function collapseTokenEvents(
+  events: SandboxEvent[],
+  pendingTextRef: React.MutableRefObject<{
+    content: string;
+    messageId: string;
+    timestamp: number;
+  } | null>
+): SandboxEvent[] {
+  const result: SandboxEvent[] = [];
+  for (const evt of events) {
+    if (evt.type === "token" && evt.content && evt.messageId) {
+      pendingTextRef.current = {
+        content: evt.content,
+        messageId: evt.messageId,
+        timestamp: evt.timestamp,
+      };
+    } else if (evt.type === "execution_complete") {
+      if (pendingTextRef.current) {
+        const pending = pendingTextRef.current;
+        pendingTextRef.current = null;
+        result.push({
+          type: "token",
+          content: pending.content,
+          messageId: pending.messageId,
+          timestamp: pending.timestamp,
+        });
+      }
+      result.push(evt);
+    } else {
+      result.push(evt);
+    }
+  }
+  return result;
+}
+
 export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   const wsRef = useRef<WebSocket | null>(null);
   const connectingRef = useRef(false);
@@ -97,6 +138,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   );
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const [replaying, setReplaying] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [sessionState, setSessionState] = useState<SessionState | null>(null);
@@ -165,13 +207,18 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
       isProcessing?: boolean;
       hasMore?: boolean;
       cursor?: { timestamp: number; id: string } | null;
+      replay?: {
+        events: SandboxEvent[];
+        hasMore: boolean;
+        cursor: { timestamp: number; id: string } | null;
+      };
+      spawnError?: string | null;
     }) => {
       switch (data.type) {
-        case "subscribed":
+        case "subscribed": {
           console.log("WebSocket subscribed to session");
           subscribedRef.current = true;
           // Clear existing state since we're about to receive fresh history
-          setEvents([]);
           setArtifacts([]);
           pendingTextRef.current = null;
           replayCompleteRef.current = false;
@@ -187,7 +234,25 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           if (data.participant) {
             currentParticipantRef.current = data.participant;
           }
+
+          // Process batched replay events in a single state update
+          setEvents(data.replay ? collapseTokenEvents(data.replay.events, pendingTextRef) : []);
+          setHasMoreHistory(data.replay?.hasMore ?? false);
+          cursorRef.current = data.replay?.cursor ?? null;
+          setReplaying(false);
+          replayCompleteRef.current = true;
+          const buffered = liveEventBufferRef.current;
+          liveEventBufferRef.current = [];
+          for (const event of buffered) {
+            processSandboxEvent(event);
+          }
+
+          if (data.spawnError) {
+            console.error("Sandbox spawn error:", data.spawnError);
+            setSessionState((prev) => (prev ? { ...prev, sandboxStatus: "failed" } : null));
+          }
           break;
+        }
 
         case "prompt_queued":
           // Could show queue position indicator
@@ -203,49 +268,6 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
             }
           }
           break;
-
-        case "replay_complete": {
-          // Mark replay as complete
-          replayCompleteRef.current = true;
-
-          // Set pagination state
-          setHasMoreHistory(data.hasMore ?? false);
-          cursorRef.current = data.cursor ?? null;
-
-          // Flush buffered live events in a single state update
-          const buffered = liveEventBufferRef.current;
-          liveEventBufferRef.current = [];
-          if (buffered.length > 0) {
-            const toAdd: SandboxEvent[] = [];
-            for (const evt of buffered) {
-              if (evt.type === "token" && evt.content && evt.messageId) {
-                pendingTextRef.current = {
-                  content: evt.content,
-                  messageId: evt.messageId,
-                  timestamp: evt.timestamp,
-                };
-              } else if (evt.type === "execution_complete") {
-                if (pendingTextRef.current) {
-                  const pending = pendingTextRef.current;
-                  pendingTextRef.current = null;
-                  toAdd.push({
-                    type: "token",
-                    content: pending.content,
-                    messageId: pending.messageId,
-                    timestamp: pending.timestamp,
-                  });
-                }
-                toAdd.push(evt);
-              } else {
-                toAdd.push(evt);
-              }
-            }
-            if (toAdd.length > 0) {
-              setEvents((prev) => [...prev, ...toAdd]);
-            }
-          }
-          break;
-        }
 
         case "history_page": {
           if (data.items) {
@@ -462,6 +484,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
       subscribedRef.current = false;
       setConnected(false);
       setConnecting(false);
+      setReplaying(false);
       wsRef.current = null;
 
       // Handle authentication errors
@@ -620,6 +643,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   return {
     connected,
     connecting,
+    replaying,
     authError,
     connectionError,
     sessionState,

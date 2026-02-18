@@ -70,6 +70,7 @@ import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./web
 import { SessionPullRequestService } from "./pull-request-service";
 import { shouldPersistToolCallEvent } from "./event-persistence";
 import { RepoSecretsStore } from "../db/repo-secrets";
+import { SessionIndexStore } from "../db/session-index";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
@@ -764,8 +765,12 @@ export class SessionDO extends DurableObject<Env> {
       });
     }
 
-    // Send session state with current participant info
-    const state = this.getSessionState();
+    // Gather session state and replay events, then send as a single message.
+    // Fetch sandbox once and thread it through to avoid a redundant SQLite read.
+    const sandbox = this.getSandbox();
+    const state = this.getSessionState(sandbox);
+    const replay = this.getReplayData();
+
     this.safeSend(ws, {
       type: "subscribed",
       sessionId: state.id,
@@ -776,23 +781,8 @@ export class SessionDO extends DurableObject<Env> {
         name: participant.github_name || participant.github_login || participant.user_id,
         avatar: getGitHubAvatarUrl(participant.github_login),
       },
-    } as ServerMessage);
-
-    const sandbox = this.getSandbox();
-    if (sandbox?.last_spawn_error) {
-      this.safeSend(ws, { type: "sandbox_error", error: sandbox.last_spawn_error });
-    }
-
-    // Send historical events (messages and sandbox events)
-    const replay = this.sendHistoricalEvents(ws);
-
-    // Signal replay is complete with pagination cursor
-    this.safeSend(ws, {
-      type: "replay_complete",
-      hasMore: replay.hasMore,
-      cursor: replay.oldestItem
-        ? { timestamp: replay.oldestItem.created_at, id: replay.oldestItem.id }
-        : null,
+      replay,
+      spawnError: sandbox?.last_spawn_error ?? null,
     } as ServerMessage);
 
     // Send current presence
@@ -803,34 +793,30 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
-   * Send historical events to a newly connected client.
-   * Queries only the events table — user_message events are written at prompt time.
-   * Returns metadata about what was sent for the replay_complete message.
+   * Collect historical events for replay.
+   * Returns parsed events and pagination metadata for inclusion in the subscribed message.
    */
-  private sendHistoricalEvents(ws: WebSocket): {
+  private getReplayData(): {
+    events: SandboxEvent[];
     hasMore: boolean;
-    oldestItem: { created_at: number; id: string } | null;
+    cursor: { timestamp: number; id: string } | null;
   } {
     const REPLAY_LIMIT = 500;
-    const events = this.repository.getEventsForReplay(REPLAY_LIMIT);
-    const hasMore = events.length >= REPLAY_LIMIT;
+    const rows = this.repository.getEventsForReplay(REPLAY_LIMIT);
+    const hasMore = rows.length >= REPLAY_LIMIT;
 
-    for (const event of events) {
+    const events: SandboxEvent[] = [];
+    for (const row of rows) {
       try {
-        const eventData = JSON.parse(event.data);
-        this.safeSend(ws, {
-          type: "sandbox_event",
-          event: eventData,
-        });
+        events.push(JSON.parse(row.data));
       } catch {
         // Skip malformed events
       }
     }
 
-    const oldestItem =
-      events.length > 0 ? { created_at: events[0].created_at, id: events[0].id } : null;
+    const cursor = rows.length > 0 ? { timestamp: rows[0].created_at, id: rows[0].id } : null;
 
-    return { hasMore, oldestItem };
+    return { events, hasMore, cursor };
   }
 
   /**
@@ -946,6 +932,15 @@ export class SessionDO extends DurableObject<Env> {
       attachments_count: data.attachments?.length ?? 0,
       queue_position: position,
     });
+
+    // Background: update D1 timestamp so session bubbles to top of sidebar
+    if (this.env.DB) {
+      const store = new SessionIndexStore(this.env.DB);
+      const sessionId = this.getSession()?.id;
+      if (sessionId) {
+        this.ctx.waitUntil(store.touchUpdatedAt(sessionId).catch(() => {}));
+      }
+    }
 
     // Confirm to sender
     this.safeSend(ws, {
@@ -1427,10 +1422,11 @@ export class SessionDO extends DurableObject<Env> {
 
   /**
    * Get current session state.
+   * Accepts an optional pre-fetched sandbox row to avoid a redundant SQLite read.
    */
-  private getSessionState(): SessionState {
+  private getSessionState(sandbox?: SandboxRow | null): SessionState {
     const session = this.getSession();
-    const sandbox = this.getSandbox();
+    sandbox ??= this.getSandbox();
     const messageCount = this.getMessageCount();
     const isProcessing = this.getIsProcessing();
 
@@ -1481,7 +1477,12 @@ export class SessionDO extends DurableObject<Env> {
       throw new Error("GitHub App not configured");
     }
 
-    const repo = await getInstallationRepository(appConfig, session.repo_owner, session.repo_name);
+    const repo = await getInstallationRepository(
+      appConfig,
+      session.repo_owner,
+      session.repo_name,
+      this.env
+    );
     if (!repo) {
       throw new Error("Repository is not installed for the GitHub App");
     }

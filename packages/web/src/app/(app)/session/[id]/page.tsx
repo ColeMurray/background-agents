@@ -1,15 +1,31 @@
 "use client";
 
-import { useSession } from "next-auth/react";
-import { useParams, useRouter } from "next/navigation";
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from "react";
+import { useParams, useSearchParams } from "next/navigation";
+import { mutate } from "swr";
+import useSWRMutation from "swr/mutation";
+import {
+  Suspense,
+  memo,
+  useState,
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useCallback,
+  useMemo,
+} from "react";
 import { useSessionSocket } from "@/hooks/use-session-socket";
 import { SafeMarkdown } from "@/components/safe-markdown";
 import { ToolCallGroup } from "@/components/tool-call-group";
-import { SidebarLayout, useSidebarContext } from "@/components/sidebar-layout";
-import { SessionRightSidebar } from "@/components/session-right-sidebar";
+import { useSidebarContext } from "@/components/sidebar-layout";
+import { SidebarToggleIcon } from "@/components/sidebar-toggle-icon";
+import {
+  SessionRightSidebar,
+  SessionRightSidebarContent,
+} from "@/components/session-right-sidebar";
 import { ActionBar } from "@/components/action-bar";
 import { copyToClipboard, formatModelNameLower } from "@/lib/format";
+import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
@@ -104,14 +120,22 @@ function ModelOptionButton({
 }
 
 export default function SessionPage() {
-  const { data: _authSession, status: authStatus } = useSession();
+  return (
+    <Suspense>
+      <SessionPageContent />
+    </Suspense>
+  );
+}
+
+function SessionPageContent() {
   const params = useParams();
-  const router = useRouter();
+  const searchParams = useSearchParams();
   const sessionId = params.id as string;
 
   const {
     connected,
     connecting,
+    replaying,
     authError,
     connectionError,
     sessionState,
@@ -128,31 +152,34 @@ export default function SessionPage() {
     loadOlderEvents,
   } = useSessionSocket(sessionId);
 
-  const handleArchive = useCallback(async () => {
-    try {
-      const response = await fetch(`/api/sessions/${sessionId}/archive`, {
-        method: "POST",
-      });
-      if (!response.ok) {
-        console.error("Failed to archive session");
-      }
-    } catch (error) {
-      console.error("Failed to archive session:", error);
-    }
-  }, [sessionId]);
+  const fallbackSessionInfo = useMemo(
+    () => ({
+      repoOwner: searchParams.get("repoOwner") || null,
+      repoName: searchParams.get("repoName") || null,
+      title: searchParams.get("title") || null,
+    }),
+    [searchParams]
+  );
 
-  const handleUnarchive = useCallback(async () => {
-    try {
-      const response = await fetch(`/api/sessions/${sessionId}/unarchive`, {
-        method: "POST",
-      });
-      if (!response.ok) {
-        console.error("Failed to unarchive session");
-      }
-    } catch (error) {
-      console.error("Failed to unarchive session:", error);
-    }
-  }, [sessionId]);
+  const { trigger: handleArchive } = useSWRMutation(
+    `/api/sessions/${sessionId}/archive`,
+    (url: string) =>
+      fetch(url, { method: "POST" }).then((r) => {
+        if (r.ok) mutate("/api/sessions");
+        else console.error("Failed to archive session");
+      }),
+    { throwOnError: false }
+  );
+
+  const { trigger: handleUnarchive } = useSWRMutation(
+    `/api/sessions/${sessionId}/unarchive`,
+    (url: string) =>
+      fetch(url, { method: "POST" }).then((r) => {
+        if (r.ok) mutate("/api/sessions");
+        else console.error("Failed to unarchive session");
+      }),
+    { throwOnError: false }
+  );
 
   const [prompt, setPrompt] = useState("");
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
@@ -191,13 +218,6 @@ export default function SessionPage() {
     }
   }, [sessionState?.model, sessionState?.reasoningEffort]);
 
-  // Redirect if not authenticated
-  useEffect(() => {
-    if (authStatus === "unauthenticated") {
-      router.push("/");
-    }
-  }, [authStatus, router]);
-
   // Close model dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -215,9 +235,13 @@ export default function SessionPage() {
 
     sendPrompt(prompt, selectedModel, reasoningEffort);
     setPrompt("");
+    // Revalidate sidebar so this session bubbles to the top
+    mutate("/api/sessions");
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing) return;
+
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSubmit(e);
@@ -236,49 +260,41 @@ export default function SessionPage() {
     }, 300);
   };
 
-  if (authStatus === "loading") {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-foreground" />
-      </div>
-    );
-  }
-
   return (
-    <SidebarLayout>
-      <SessionContent
-        sessionState={sessionState}
-        connected={connected}
-        connecting={connecting}
-        authError={authError}
-        connectionError={connectionError}
-        reconnect={reconnect}
-        participants={participants}
-        events={events}
-        artifacts={artifacts}
-        currentParticipantId={currentParticipantId}
-        messagesEndRef={messagesEndRef}
-        prompt={prompt}
-        isProcessing={isProcessing}
-        selectedModel={selectedModel}
-        reasoningEffort={reasoningEffort}
-        modelDropdownOpen={modelDropdownOpen}
-        modelDropdownRef={modelDropdownRef}
-        inputRef={inputRef}
-        handleSubmit={handleSubmit}
-        handleInputChange={handleInputChange}
-        handleKeyDown={handleKeyDown}
-        setModelDropdownOpen={setModelDropdownOpen}
-        setSelectedModel={handleModelChange}
-        setReasoningEffort={setReasoningEffort}
-        stopExecution={stopExecution}
-        handleArchive={handleArchive}
-        handleUnarchive={handleUnarchive}
-        loadingHistory={loadingHistory}
-        loadOlderEvents={loadOlderEvents}
-        modelOptions={enabledModelOptions}
-      />
-    </SidebarLayout>
+    <SessionContent
+      sessionState={sessionState}
+      connected={connected}
+      connecting={connecting}
+      replaying={replaying}
+      authError={authError}
+      connectionError={connectionError}
+      reconnect={reconnect}
+      participants={participants}
+      events={events}
+      artifacts={artifacts}
+      currentParticipantId={currentParticipantId}
+      messagesEndRef={messagesEndRef}
+      prompt={prompt}
+      isProcessing={isProcessing}
+      selectedModel={selectedModel}
+      reasoningEffort={reasoningEffort}
+      modelDropdownOpen={modelDropdownOpen}
+      modelDropdownRef={modelDropdownRef}
+      inputRef={inputRef}
+      handleSubmit={handleSubmit}
+      handleInputChange={handleInputChange}
+      handleKeyDown={handleKeyDown}
+      setModelDropdownOpen={setModelDropdownOpen}
+      setSelectedModel={handleModelChange}
+      setReasoningEffort={setReasoningEffort}
+      stopExecution={stopExecution}
+      handleArchive={handleArchive}
+      handleUnarchive={handleUnarchive}
+      loadingHistory={loadingHistory}
+      loadOlderEvents={loadOlderEvents}
+      modelOptions={enabledModelOptions}
+      fallbackSessionInfo={fallbackSessionInfo}
+    />
   );
 }
 
@@ -286,6 +302,7 @@ function SessionContent({
   sessionState,
   connected,
   connecting,
+  replaying,
   authError,
   connectionError,
   reconnect,
@@ -313,10 +330,12 @@ function SessionContent({
   loadingHistory,
   loadOlderEvents,
   modelOptions,
+  fallbackSessionInfo,
 }: {
   sessionState: ReturnType<typeof useSessionSocket>["sessionState"];
   connected: boolean;
   connecting: boolean;
+  replaying: boolean;
   authError: string | null;
   connectionError: string | null;
   reconnect: () => void;
@@ -339,13 +358,25 @@ function SessionContent({
   setSelectedModel: (model: string) => void;
   setReasoningEffort: (value: string | undefined) => void;
   stopExecution: () => void;
-  handleArchive: () => void;
-  handleUnarchive: () => void;
+  handleArchive: () => void | Promise<void>;
+  handleUnarchive: () => void | Promise<void>;
   loadingHistory: boolean;
   loadOlderEvents: () => void;
   modelOptions: ModelCategory[];
+  fallbackSessionInfo: {
+    repoOwner: string | null;
+    repoName: string | null;
+    title: string | null;
+  };
 }) {
   const { isOpen, toggle } = useSidebarContext();
+  const isBelowLg = useMediaQuery("(max-width: 1023px)");
+  const isPhone = useMediaQuery("(max-width: 767px)");
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+  const [sheetDragY, setSheetDragY] = useState(0);
+  const sheetDragYRef = useRef(0);
+  const detailsButtonRef = useRef<HTMLButtonElement>(null);
+  const sheetTouchStartYRef = useRef<number | null>(null);
 
   // Scroll pagination refs
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -354,6 +385,89 @@ function SessionContent({
   const isPrependingRef = useRef(false);
   const prevScrollHeightRef = useRef(0);
   const isNearBottomRef = useRef(true);
+
+  const closeDetails = useCallback(() => {
+    setIsDetailsOpen(false);
+    setSheetDragY(0);
+    sheetDragYRef.current = 0;
+    detailsButtonRef.current?.focus();
+  }, []);
+
+  const toggleDetails = useCallback(() => {
+    setIsDetailsOpen((prev) => {
+      const next = !prev;
+      if (!next) {
+        setSheetDragY(0);
+        sheetDragYRef.current = 0;
+      }
+      return next;
+    });
+  }, []);
+
+  const handleSheetTouchStart = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
+    const startY = event.touches[0]?.clientY;
+    sheetTouchStartYRef.current = startY ?? null;
+  }, []);
+
+  const handleSheetTouchMove = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
+    const startY = sheetTouchStartYRef.current;
+    const currentY = event.touches[0]?.clientY;
+
+    if (startY === null || currentY === undefined) return;
+
+    const delta = currentY - startY;
+    if (delta > 0) {
+      const nextDragY = Math.min(delta, 180);
+      sheetDragYRef.current = nextDragY;
+      setSheetDragY(nextDragY);
+    } else {
+      sheetDragYRef.current = 0;
+      setSheetDragY(0);
+    }
+  }, []);
+
+  const handleSheetTouchEnd = useCallback(() => {
+    if (sheetDragYRef.current > 100) {
+      closeDetails();
+      sheetTouchStartYRef.current = null;
+      return;
+    }
+
+    sheetDragYRef.current = 0;
+    setSheetDragY(0);
+    sheetTouchStartYRef.current = null;
+  }, [closeDetails]);
+
+  useEffect(() => {
+    if (isBelowLg) return;
+    setIsDetailsOpen(false);
+    setSheetDragY(0);
+    sheetDragYRef.current = 0;
+  }, [isBelowLg]);
+
+  useEffect(() => {
+    if (!isDetailsOpen) return;
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeDetails();
+      }
+    };
+
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [closeDetails, isDetailsOpen]);
+
+  useEffect(() => {
+    if (!isDetailsOpen) return;
+
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [isDetailsOpen]);
 
   // Track user scroll
   const handleScroll = useCallback(() => {
@@ -444,6 +558,15 @@ function SessionContent({
     return groupEvents(filteredEvents.filter(Boolean) as SandboxEvent[]);
   }, [events]);
 
+  const resolvedRepoOwner = sessionState?.repoOwner ?? fallbackSessionInfo.repoOwner;
+  const resolvedRepoName = sessionState?.repoName ?? fallbackSessionInfo.repoName;
+  const fallbackRepoLabel =
+    resolvedRepoOwner && resolvedRepoName
+      ? `${resolvedRepoOwner}/${resolvedRepoName}`
+      : "Loading session...";
+  const resolvedTitle = sessionState?.title || fallbackSessionInfo.title || fallbackRepoLabel;
+  const showTimelineSkeleton = events.length === 0 && (connecting || replaying);
+
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
@@ -454,21 +577,29 @@ function SessionContent({
               <button
                 onClick={toggle}
                 className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-                title="Open sidebar"
+                title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
+                aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
               >
                 <SidebarToggleIcon />
               </button>
             )}
             <div>
-              <h1 className="font-medium text-foreground">
-                {sessionState?.title || `${sessionState?.repoOwner}/${sessionState?.repoName}`}
-              </h1>
-              <p className="text-sm text-muted-foreground">
-                {sessionState?.repoOwner}/{sessionState?.repoName}
-              </p>
+              <h1 className="font-medium text-foreground">{resolvedTitle}</h1>
+              <p className="text-sm text-muted-foreground">{fallbackRepoLabel}</p>
             </div>
           </div>
           <div className="flex items-center gap-4">
+            <button
+              ref={detailsButtonRef}
+              type="button"
+              onClick={toggleDetails}
+              className="lg:hidden px-3 py-1.5 text-sm text-muted-foreground border border-border-muted hover:text-foreground hover:bg-muted transition"
+              aria-label="Toggle session details"
+              aria-controls="session-details-dialog"
+              aria-expanded={isDetailsOpen}
+            >
+              Details
+            </button>
             {/* Mobile: single combined status dot */}
             <div className="md:hidden">
               <CombinedStatusDot
@@ -514,15 +645,19 @@ function SessionContent({
             {loadingHistory && (
               <div className="text-center text-muted-foreground text-sm py-2">Loading...</div>
             )}
-            {groupedEvents.map((group) =>
-              group.type === "tool_group" ? (
-                <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />
-              ) : (
-                <EventItem
-                  key={group.id}
-                  event={group.event}
-                  currentParticipantId={currentParticipantId}
-                />
+            {showTimelineSkeleton ? (
+              <TimelineSkeleton />
+            ) : (
+              groupedEvents.map((group) =>
+                group.type === "tool_group" ? (
+                  <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />
+                ) : (
+                  <EventItem
+                    key={group.id}
+                    event={group.event}
+                    currentParticipantId={currentParticipantId}
+                  />
+                )
               )
             )}
             {isProcessing && <ThinkingIndicator />}
@@ -539,6 +674,89 @@ function SessionContent({
           artifacts={artifacts}
         />
       </main>
+
+      {isBelowLg && (
+        <div
+          className={`fixed inset-0 z-50 lg:hidden ${isDetailsOpen ? "" : "pointer-events-none"}`}
+        >
+          <div
+            className={`absolute inset-0 bg-black/50 transition-opacity duration-200 ${
+              isDetailsOpen ? "opacity-100" : "opacity-0"
+            }`}
+            onClick={closeDetails}
+          />
+
+          {isPhone ? (
+            <div
+              id="session-details-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Session details"
+              className="absolute inset-x-0 bottom-0 max-h-[85vh] bg-background border-t border-border-muted shadow-xl flex flex-col"
+              style={{
+                transform: isDetailsOpen ? `translateY(${sheetDragY}px)` : "translateY(100%)",
+                transition: sheetDragY > 0 ? "none" : "transform 200ms ease-in-out",
+              }}
+            >
+              <div
+                className="px-4 pt-3 pb-2 border-b border-border-muted"
+                onTouchStart={handleSheetTouchStart}
+                onTouchMove={handleSheetTouchMove}
+                onTouchEnd={handleSheetTouchEnd}
+                onTouchCancel={handleSheetTouchEnd}
+              >
+                <div className="mx-auto mb-2 h-1.5 w-12 rounded-full bg-muted" />
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-medium text-foreground">Session details</h2>
+                  <button
+                    type="button"
+                    onClick={closeDetails}
+                    className="text-sm text-muted-foreground hover:text-foreground transition"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+              <div className="overflow-y-auto">
+                <SessionRightSidebarContent
+                  sessionState={sessionState}
+                  participants={participants}
+                  events={events}
+                  artifacts={artifacts}
+                />
+              </div>
+            </div>
+          ) : (
+            <div
+              id="session-details-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Session details"
+              className="absolute inset-y-0 right-0 w-80 max-w-[85vw] bg-background border-l border-border-muted shadow-xl flex flex-col transition-transform duration-200 ease-in-out"
+              style={{ transform: isDetailsOpen ? "translateX(0)" : "translateX(100%)" }}
+            >
+              <div className="px-4 py-3 border-b border-border-muted flex items-center justify-between">
+                <h2 className="text-sm font-medium text-foreground">Session details</h2>
+                <button
+                  type="button"
+                  onClick={closeDetails}
+                  className="text-sm text-muted-foreground hover:text-foreground transition"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto">
+                <SessionRightSidebarContent
+                  sessionState={sessionState}
+                  participants={participants}
+                  events={events}
+                  artifacts={artifacts}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Input */}
       <footer className="border-t border-border-muted flex-shrink-0">
@@ -588,7 +806,16 @@ function SessionContent({
                   type="submit"
                   disabled={!prompt.trim() || isProcessing}
                   className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
-                  title={isProcessing && prompt.trim() ? "Wait for execution to complete" : "Send"}
+                  title={
+                    isProcessing && prompt.trim()
+                      ? "Wait for execution to complete"
+                      : `Send (${SHORTCUT_LABELS.SEND_PROMPT})`
+                  }
+                  aria-label={
+                    isProcessing && prompt.trim()
+                      ? "Wait for execution to complete"
+                      : `Send (${SHORTCUT_LABELS.SEND_PROMPT})`
+                  }
                 >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path
@@ -603,20 +830,22 @@ function SessionContent({
             </div>
 
             {/* Footer row with model selector, reasoning pills, and agent label */}
-            <div className="flex items-center justify-between px-4 py-2 border-t border-border-muted">
+            <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">
               {/* Left side - Model selector + Reasoning pills */}
-              <div className="flex items-center gap-4">
-                <div className="relative" ref={modelDropdownRef}>
+              <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
+                <div className="relative min-w-0" ref={modelDropdownRef}>
                   <button
                     type="button"
                     onClick={() => !isProcessing && setModelDropdownOpen(!modelDropdownOpen)}
                     disabled={isProcessing}
-                    className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
+                    className="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
                   >
                     <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
                       <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
                     </svg>
-                    <span>{formatModelNameLower(selectedModel)}</span>
+                    <span className="truncate max-w-[9rem] sm:max-w-none">
+                      {formatModelNameLower(selectedModel)}
+                    </span>
                   </button>
 
                   {/* Dropdown menu */}
@@ -658,29 +887,12 @@ function SessionContent({
               </div>
 
               {/* Right side - Agent label */}
-              <span className="text-sm text-muted-foreground">build agent</span>
+              <span className="hidden sm:inline text-sm text-muted-foreground">build agent</span>
             </div>
           </div>
         </form>
       </footer>
     </div>
-  );
-}
-
-function SidebarToggleIcon() {
-  return (
-    <svg
-      className="w-4 h-4"
-      fill="none"
-      stroke="currentColor"
-      viewBox="0 0 24 24"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <line x1="9" y1="3" x2="9" y2="21" />
-    </svg>
   );
 }
 
@@ -774,6 +986,26 @@ function ThinkingIndicator() {
   );
 }
 
+function TimelineSkeleton() {
+  return (
+    <div className="space-y-3 py-2 animate-pulse">
+      <div className="bg-card p-4 space-y-2">
+        <div className="h-3 w-24 bg-muted rounded" />
+        <div className="h-3 w-full bg-muted rounded" />
+        <div className="h-3 w-5/6 bg-muted rounded" />
+      </div>
+      <div className="bg-accent-muted p-4 ml-8 space-y-2">
+        <div className="h-3 w-20 bg-muted rounded" />
+        <div className="h-3 w-4/5 bg-muted rounded" />
+      </div>
+      <div className="bg-card p-4 space-y-2">
+        <div className="h-3 w-32 bg-muted rounded" />
+        <div className="h-3 w-3/4 bg-muted rounded" />
+      </div>
+    </div>
+  );
+}
+
 function ParticipantsList({
   participants,
 }: {
@@ -804,7 +1036,7 @@ function ParticipantsList({
   );
 }
 
-function EventItem({
+const EventItem = memo(function EventItem({
   event,
   currentParticipantId,
 }: {
@@ -989,7 +1221,7 @@ function EventItem({
     default:
       return null;
   }
-}
+});
 
 function CopyIcon({ className }: { className?: string }) {
   return (

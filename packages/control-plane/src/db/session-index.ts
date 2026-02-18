@@ -143,6 +143,14 @@ export class SessionIndexStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
+  async touchUpdatedAt(id: string): Promise<boolean> {
+    const result = await this.db
+      .prepare("UPDATE sessions SET updated_at = ? WHERE id = ?")
+      .bind(Date.now(), id)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
   async delete(id: string): Promise<boolean> {
     const result = await this.db.prepare("DELETE FROM sessions WHERE id = ?").bind(id).run();
 

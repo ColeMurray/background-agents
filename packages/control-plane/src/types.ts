@@ -110,6 +110,12 @@ export type ServerMessage =
       state: SessionState;
       participantId: string;
       participant?: { participantId: string; name: string; avatar?: string };
+      replay?: {
+        events: SandboxEvent[];
+        hasMore: boolean;
+        cursor: { timestamp: number; id: string } | null;
+      };
+      spawnError?: string | null;
     }
   | { type: "prompt_queued"; messageId: string; position: number }
   | { type: "sandbox_event"; event: SandboxEvent }
@@ -131,11 +137,6 @@ export type ServerMessage =
   | { type: "sandbox_warning"; message: string }
   | { type: "session_status"; status: SessionStatus }
   | { type: "processing_status"; isProcessing: boolean }
-  | {
-      type: "replay_complete";
-      hasMore: boolean;
-      cursor: { timestamp: number; id: string } | null;
-    }
   | {
       type: "history_page";
       items: SandboxEvent[];

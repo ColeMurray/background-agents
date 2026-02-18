@@ -2,9 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { useSession, signOut } from "next-auth/react";
+import useSWR from "swr";
 import { formatRelativeTime, isInactiveSession } from "@/lib/time";
+import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { useIsMobile } from "@/hooks/use-media-query";
 
 export interface SessionItem {
   id: string;
@@ -16,6 +19,17 @@ export interface SessionItem {
   updatedAt: number;
 }
 
+export function buildSessionHref(session: SessionItem) {
+  return {
+    pathname: `/session/${session.id}`,
+    query: {
+      repoOwner: session.repoOwner,
+      repoName: session.repoName,
+      ...(session.title ? { title: session.title } : {}),
+    },
+  };
+}
+
 interface SessionSidebarProps {
   onNewSession?: () => void;
   onToggle?: () => void;
@@ -25,30 +39,13 @@ interface SessionSidebarProps {
 export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: SessionSidebarProps) {
   const { data: authSession } = useSession();
   const pathname = usePathname();
-  const [sessions, setSessions] = useState<SessionItem[]>([]);
-  const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const isMobile = useIsMobile();
 
-  useEffect(() => {
-    if (authSession) {
-      fetchSessions();
-    }
-  }, [authSession]);
-
-  const fetchSessions = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch("/api/sessions");
-      if (res.ok) {
-        const data = await res.json();
-        setSessions(data.sessions || []);
-      }
-    } catch (error) {
-      console.error("Failed to fetch sessions:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const { data, isLoading: loading } = useSWR<{ sessions: SessionItem[] }>(
+    authSession ? "/api/sessions" : null
+  );
+  const sessions = useMemo(() => data?.sessions ?? [], [data]);
 
   // Sort sessions by updatedAt (most recent first) and filter by search query
   const { activeSessions, inactiveSessions } = useMemo(() => {
@@ -87,14 +84,15 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const currentSessionId = pathname?.startsWith("/session/") ? pathname.split("/")[2] : null;
 
   return (
-    <aside className="w-72 h-screen flex flex-col border-r border-border-muted bg-background">
+    <aside className="w-72 h-dvh flex flex-col border-r border-border-muted bg-background">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border-muted">
         <div className="flex items-center gap-2">
           <button
             onClick={onToggle}
             className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-            title="Toggle sidebar"
+            title={`Toggle sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
+            aria-label={`Toggle sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
           >
             <SidebarIcon />
           </button>
@@ -107,7 +105,8 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           <button
             onClick={onNewSession}
             className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-            title="New session"
+            title={`New session (${SHORTCUT_LABELS.NEW_SESSION})`}
+            aria-label={`New session (${SHORTCUT_LABELS.NEW_SESSION})`}
           >
             <PlusIcon />
           </button>
@@ -173,6 +172,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
                 key={session.id}
                 session={session}
                 isActive={session.id === currentSessionId}
+                isMobile={isMobile}
                 onSessionSelect={onSessionSelect}
               />
             ))}
@@ -190,6 +190,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
                     key={session.id}
                     session={session}
                     isActive={session.id === currentSessionId}
+                    isMobile={isMobile}
                     onSessionSelect={onSessionSelect}
                   />
                 ))}
@@ -205,22 +206,23 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
 function SessionListItem({
   session,
   isActive,
+  isMobile,
   onSessionSelect,
 }: {
   session: SessionItem;
   isActive: boolean;
+  isMobile: boolean;
   onSessionSelect?: () => void;
 }) {
   const timestamp = session.updatedAt || session.createdAt;
   const relativeTime = formatRelativeTime(timestamp);
   const displayTitle = session.title || `${session.repoOwner}/${session.repoName}`;
   const repoInfo = `${session.repoOwner}/${session.repoName}`;
-
   return (
     <Link
-      href={`/session/${session.id}`}
+      href={buildSessionHref(session)}
       onClick={() => {
-        if (window.matchMedia("(max-width: 767px)").matches) {
+        if (isMobile) {
           onSessionSelect?.();
         }
       }}
