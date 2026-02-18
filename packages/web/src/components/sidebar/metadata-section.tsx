@@ -76,7 +76,7 @@ export function MetadataSection({
           <SparkleIcon className="w-4 h-4" />
           <span>
             {formatModelName(model)}
-            {reasoningEffort && <span className="capitalize"> · {reasoningEffort}</span>}
+            {reasoningEffort && <span> · {reasoningEffort}</span>}
           </span>
         </div>
       )}
