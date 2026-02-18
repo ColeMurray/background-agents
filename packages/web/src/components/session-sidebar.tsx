@@ -7,6 +7,7 @@ import { useSession, signOut } from "next-auth/react";
 import useSWR from "swr";
 import { formatRelativeTime, isInactiveSession } from "@/lib/time";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { useIsMobile } from "@/hooks/use-media-query";
 
 export interface SessionItem {
   id: string;
@@ -39,6 +40,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const { data: authSession } = useSession();
   const pathname = usePathname();
   const [searchQuery, setSearchQuery] = useState("");
+  const isMobile = useIsMobile();
 
   const { data: sessions = [], isLoading: loading } = useSWR<SessionItem[]>(
     authSession ? "/api/sessions" : null,
@@ -176,6 +178,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
                 key={session.id}
                 session={session}
                 isActive={session.id === currentSessionId}
+                isMobile={isMobile}
                 onSessionSelect={onSessionSelect}
               />
             ))}
@@ -193,6 +196,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
                     key={session.id}
                     session={session}
                     isActive={session.id === currentSessionId}
+                    isMobile={isMobile}
                     onSessionSelect={onSessionSelect}
                   />
                 ))}
@@ -208,10 +212,12 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
 function SessionListItem({
   session,
   isActive,
+  isMobile,
   onSessionSelect,
 }: {
   session: SessionItem;
   isActive: boolean;
+  isMobile: boolean;
   onSessionSelect?: () => void;
 }) {
   const timestamp = session.updatedAt || session.createdAt;
@@ -222,7 +228,7 @@ function SessionListItem({
     <Link
       href={buildSessionHref(session)}
       onClick={() => {
-        if (window.matchMedia("(max-width: 767px)").matches) {
+        if (isMobile) {
           onSessionSelect?.();
         }
       }}
