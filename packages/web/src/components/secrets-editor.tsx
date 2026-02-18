@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import useSWR, { mutate } from "swr";
 
 const VALID_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const MAX_KEY_LENGTH = 256;
@@ -40,6 +41,11 @@ type GlobalSecretMeta = {
   createdAt: number;
   updatedAt: number;
 };
+
+interface SecretsResponse {
+  secrets: { key: string }[];
+  globalSecrets?: GlobalSecretMeta[];
+}
 
 function normalizeKey(value: string) {
   return value.trim().toUpperCase();
@@ -83,8 +89,6 @@ export function SecretsEditor({
   scope?: "repo" | "global";
 }) {
   const [rows, setRows] = useState<SecretRow[]>([]);
-  const [globalRows, setGlobalRows] = useState<GlobalSecretMeta[]>([]);
-  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -96,69 +100,35 @@ export function SecretsEditor({
 
   const apiBase = isGlobal ? "/api/secrets" : `/api/repos/${owner}/${name}/secrets`;
 
-  const loadSecrets = useCallback(async () => {
-    if (!ready) {
-      setRows([]);
-      setGlobalRows([]);
-      return;
-    }
+  const {
+    data: secretsData,
+    isLoading: loading,
+    error: fetchError,
+  } = useSWR<SecretsResponse>(ready ? apiBase : null);
 
-    setLoading(true);
-    setError("");
-    setSuccess("");
-
-    try {
-      const response = await fetch(apiBase);
-      const data = await response.json();
-
-      if (!response.ok) {
-        setError(data?.error || "Failed to load secrets");
-        setRows([]);
-        setGlobalRows([]);
-        return;
-      }
-
-      const secrets = Array.isArray(data?.secrets) ? data.secrets : [];
-      setRows(
-        secrets.map((secret: { key: string }) =>
-          createRow({ key: secret.key, value: "", existing: true })
-        )
-      );
-
-      // Piggybacked global keys from repo secrets endpoint
-      if (!isGlobal && Array.isArray(data?.globalSecrets)) {
-        setGlobalRows(data.globalSecrets);
-      } else {
-        setGlobalRows([]);
-      }
-    } catch {
-      setError("Failed to load secrets");
-      setRows([]);
-      setGlobalRows([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [ready, apiBase, isGlobal]);
-
+  // Sync SWR data into local editable rows
+  const secrets = secretsData?.secrets;
   useEffect(() => {
-    if (!ready) {
+    if (!Array.isArray(secrets)) {
       setRows([]);
-      setGlobalRows([]);
-      setError("");
-      setSuccess("");
       return;
     }
+    setRows(
+      secrets.map((secret: { key: string }) =>
+        createRow({ key: secret.key, value: "", existing: true })
+      )
+    );
+  }, [secrets]);
 
-    let active = true;
-    (async () => {
-      await loadSecrets();
-      if (!active) return;
-    })();
+  // Show fetch errors to the user
+  useEffect(() => {
+    if (fetchError) {
+      setError("Failed to load secrets");
+    }
+  }, [fetchError]);
 
-    return () => {
-      active = false;
-    };
-  }, [ready, loadSecrets]);
+  const globalRows: GlobalSecretMeta[] =
+    !isGlobal && Array.isArray(secretsData?.globalSecrets) ? secretsData.globalSecrets : [];
 
   const existingKeySet = useMemo(() => {
     return new Set(rows.filter((row) => row.existing).map((row) => normalizeKey(row.key)));
@@ -191,7 +161,7 @@ export function SecretsEditor({
         return;
       }
       setSuccess(`Deleted ${normalizedKey}`);
-      await loadSecrets();
+      mutate(apiBase);
     } catch {
       setError("Failed to delete secret");
     } finally {
@@ -281,7 +251,7 @@ export function SecretsEditor({
       }
 
       setSuccess("Secrets updated");
-      await loadSecrets();
+      mutate(apiBase);
     } catch {
       setError("Failed to update secrets");
     } finally {

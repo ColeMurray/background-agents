@@ -9,14 +9,68 @@ import { DataControlsSettings } from "@/components/settings/data-controls-settin
 import { KeyboardShortcutsSettings } from "@/components/settings/keyboard-shortcuts-settings";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { SidebarToggleIcon } from "@/components/sidebar-toggle-icon";
+import { useIsMobile } from "@/hooks/use-media-query";
+
+const CATEGORY_LABELS: Record<SettingsCategory, string> = {
+  secrets: "Secrets",
+  models: "Models",
+  "keyboard-shortcuts": "Keyboard",
+  "data-controls": "Data Controls",
+};
 
 export default function SettingsPage() {
   const { isOpen, toggle } = useSidebarContext();
   const [activeCategory, setActiveCategory] = useState<SettingsCategory>("secrets");
+  const isMobile = useIsMobile();
+  const [mobileView, setMobileView] = useState<"list" | "detail">("list");
+
+  const content = (
+    <>
+      {activeCategory === "secrets" && <SecretsSettings />}
+      {activeCategory === "models" && <ModelsSettings />}
+      {activeCategory === "keyboard-shortcuts" && <KeyboardShortcutsSettings />}
+      {activeCategory === "data-controls" && <DataControlsSettings />}
+    </>
+  );
+
+  if (isMobile) {
+    return (
+      <div className="h-full flex flex-col">
+        {mobileView === "list" ? (
+          <div className="flex-1 overflow-y-auto">
+            <SettingsNav
+              activeCategory={activeCategory}
+              onSelect={setActiveCategory}
+              onNavigate={() => setMobileView("detail")}
+            />
+          </div>
+        ) : (
+          <>
+            <header className="border-b border-border-muted flex-shrink-0">
+              <div className="px-4 py-3 flex items-center gap-2">
+                <button
+                  onClick={() => setMobileView("list")}
+                  className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
+                  aria-label="Back to settings"
+                >
+                  <BackIcon />
+                </button>
+                <h2 className="text-sm font-medium text-foreground">
+                  {CATEGORY_LABELS[activeCategory]}
+                </h2>
+              </div>
+            </header>
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="max-w-2xl">{content}</div>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="h-full flex flex-col">
-      {/* Header with toggle when sidebar is closed */}
       {!isOpen && (
         <header className="border-b border-border-muted flex-shrink-0">
           <div className="px-4 py-3">
@@ -35,14 +89,25 @@ export default function SettingsPage() {
       <div className="flex-1 flex overflow-hidden">
         <SettingsNav activeCategory={activeCategory} onSelect={setActiveCategory} />
         <div className="flex-1 overflow-y-auto p-8">
-          <div className="max-w-2xl">
-            {activeCategory === "secrets" && <SecretsSettings />}
-            {activeCategory === "models" && <ModelsSettings />}
-            {activeCategory === "keyboard-shortcuts" && <KeyboardShortcutsSettings />}
-            {activeCategory === "data-controls" && <DataControlsSettings />}
-          </div>
+          <div className="max-w-2xl">{content}</div>
         </div>
       </div>
     </div>
+  );
+}
+
+function BackIcon() {
+  return (
+    <svg
+      className="w-4 h-4"
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 24 24"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M15 18l-6-6 6-6" />
+    </svg>
   );
 }

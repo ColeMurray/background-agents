@@ -1,41 +1,17 @@
-import { useState, useEffect, useMemo } from "react";
+import { useMemo } from "react";
+import useSWR from "swr";
 import { MODEL_OPTIONS, DEFAULT_ENABLED_MODELS, type ModelCategory } from "@open-inspect/shared";
 
-let cachedEnabledModels: string[] | null = null;
-let fetchPromise: Promise<string[]> | null = null;
+export const MODEL_PREFERENCES_KEY = "/api/model-preferences";
 
-function fetchEnabledModels(): Promise<string[]> {
-  if (fetchPromise) return fetchPromise;
-
-  fetchPromise = fetch("/api/model-preferences")
-    .then((res) => (res.ok ? res.json() : null))
-    .then((data) => {
-      const models: string[] = data?.enabledModels ?? DEFAULT_ENABLED_MODELS;
-      cachedEnabledModels = models;
-      return models;
-    })
-    .catch(() => {
-      return DEFAULT_ENABLED_MODELS as string[];
-    })
-    .finally(() => {
-      fetchPromise = null;
-    });
-
-  return fetchPromise;
+interface ModelPreferencesResponse {
+  enabledModels: string[];
 }
 
 export function useEnabledModels() {
-  const [enabledModels, setEnabledModels] = useState<string[]>(
-    cachedEnabledModels ?? (DEFAULT_ENABLED_MODELS as string[])
-  );
-  const [loading, setLoading] = useState(!cachedEnabledModels);
+  const { data, isLoading } = useSWR<ModelPreferencesResponse>(MODEL_PREFERENCES_KEY);
 
-  useEffect(() => {
-    fetchEnabledModels().then((models) => {
-      setEnabledModels(models);
-      setLoading(false);
-    });
-  }, []);
+  const enabledModels = data?.enabledModels ?? (DEFAULT_ENABLED_MODELS as string[]);
 
   const enabledModelOptions: ModelCategory[] = useMemo(() => {
     const enabledSet = new Set(enabledModels);
@@ -45,13 +21,5 @@ export function useEnabledModels() {
     })).filter((group) => group.models.length > 0);
   }, [enabledModels]);
 
-  return { enabledModels, enabledModelOptions, loading };
-}
-
-/**
- * Invalidate the cached enabled models so the next hook mount re-fetches.
- * Call after saving model preferences in the settings page.
- */
-export function invalidateEnabledModelsCache() {
-  cachedEnabledModels = null;
+  return { enabledModels, enabledModelOptions, loading: isLoading };
 }

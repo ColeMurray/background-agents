@@ -42,16 +42,10 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const [searchQuery, setSearchQuery] = useState("");
   const isMobile = useIsMobile();
 
-  const { data: sessions = [], isLoading: loading } = useSWR<SessionItem[]>(
-    authSession ? "/api/sessions" : null,
-    async (url: string) => {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Failed to fetch sessions");
-      const data = await res.json();
-      return data.sessions || [];
-    },
-    { revalidateOnFocus: true }
+  const { data, isLoading: loading } = useSWR<{ sessions: SessionItem[] }>(
+    authSession ? "/api/sessions" : null
   );
+  const sessions = useMemo(() => data?.sessions ?? [], [data]);
 
   // Sort sessions by updatedAt (most recent first) and filter by search query
   const { activeSessions, inactiveSessions } = useMemo(() => {

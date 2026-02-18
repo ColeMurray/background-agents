@@ -5,6 +5,7 @@ import { useSession, signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { SessionSidebar } from "./session-sidebar";
 import { useSidebar } from "@/hooks/use-sidebar";
+import { useIsMobile } from "@/hooks/use-media-query";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
 
 interface SidebarContextValue {
@@ -32,6 +33,7 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   const { data: session, status } = useSession();
   const router = useRouter();
   const sidebar = useSidebar();
+  const isMobile = useIsMobile();
   const handleNewSession = useCallback(() => {
     router.push("/");
   }, [router]);
@@ -73,11 +75,26 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   return (
     <SidebarContext.Provider value={sidebar}>
       <div className="flex h-dvh overflow-hidden">
-        {/* Sidebar with transition */}
+        {/* Mobile: overlay backdrop */}
+        {isMobile && (
+          <div
+            className={`fixed inset-0 z-30 bg-black/50 transition-opacity duration-200 ${
+              sidebar.isOpen ? "opacity-100" : "opacity-0 pointer-events-none"
+            }`}
+            onClick={sidebar.close}
+          />
+        )}
+        {/* Sidebar: overlay on mobile, push on desktop */}
         <div
-          className={`transition-all duration-200 ease-in-out ${
-            sidebar.isOpen ? "w-72" : "w-0"
-          } flex-shrink-0 overflow-hidden`}
+          className={
+            isMobile
+              ? `fixed inset-y-0 left-0 z-40 w-72 transition-transform duration-200 ease-in-out ${
+                  sidebar.isOpen ? "translate-x-0" : "-translate-x-full"
+                }`
+              : `transition-all duration-200 ease-in-out ${
+                  sidebar.isOpen ? "w-72" : "w-0"
+                } flex-shrink-0 overflow-hidden`
+          }
         >
           <SessionSidebar
             onNewSession={handleNewSession}

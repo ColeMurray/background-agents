@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { MOBILE_BREAKPOINT } from "./use-media-query";
 
 const SIDEBAR_STORAGE_KEY = "open-inspect-sidebar-open";
 
@@ -10,9 +11,14 @@ export function useSidebar() {
 
   // Load initial state from localStorage after hydration
   useEffect(() => {
-    const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY);
-    if (stored !== null) {
-      setIsOpen(stored === "true");
+    const isMobile = window.matchMedia(MOBILE_BREAKPOINT).matches;
+    if (isMobile) {
+      setIsOpen(false);
+    } else {
+      const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY);
+      if (stored !== null) {
+        setIsOpen(stored === "true");
+      }
     }
     setIsHydrated(true);
   }, []);

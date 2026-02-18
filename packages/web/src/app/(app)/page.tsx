@@ -16,16 +16,8 @@ import {
   type ModelCategory,
 } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
+import { useRepos, type Repo } from "@/hooks/use-repos";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
-
-interface Repo {
-  id: number;
-  fullName: string;
-  owner: string;
-  name: string;
-  description: string | null;
-  private: boolean;
-}
 
 const LAST_SELECTED_REPO_STORAGE_KEY = "open-inspect-last-selected-repo";
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
@@ -34,8 +26,7 @@ const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-r
 export default function Home() {
   const { data: session } = useSession();
   const router = useRouter();
-  const [repos, setRepos] = useState<Repo[]>([]);
-  const [loadingRepos, setLoadingRepos] = useState(false);
+  const { repos, loading: loadingRepos } = useRepos();
   const [selectedRepo, setSelectedRepo] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
@@ -52,37 +43,16 @@ export default function Home() {
   const hasHydratedModelPreferences = useRef(false);
   const { enabledModels, enabledModelOptions } = useEnabledModels();
 
-  const fetchRepos = useCallback(async () => {
-    setLoadingRepos(true);
-    try {
-      const res = await fetch("/api/repos");
-      if (res.ok) {
-        const data = await res.json();
-        const repoList = data.repos || [];
-        setRepos(repoList);
-        if (repoList.length > 0) {
-          const lastSelectedRepo = localStorage.getItem(LAST_SELECTED_REPO_STORAGE_KEY);
-          const hasLastSelectedRepo = repoList.some(
-            (repo: Repo) => repo.fullName === lastSelectedRepo
-          );
-          const defaultRepo =
-            (hasLastSelectedRepo ? lastSelectedRepo : repoList[0].fullName) ?? repoList[0].fullName;
-
-          setSelectedRepo((current) => current || defaultRepo);
-        }
-      }
-    } catch (error) {
-      console.error("Failed to fetch repos:", error);
-    } finally {
-      setLoadingRepos(false);
-    }
-  }, []);
-
+  // Auto-select repo when repos load
   useEffect(() => {
-    if (session) {
-      fetchRepos();
+    if (repos.length > 0 && !selectedRepo) {
+      const lastSelectedRepo = localStorage.getItem(LAST_SELECTED_REPO_STORAGE_KEY);
+      const hasLastSelectedRepo = repos.some((repo) => repo.fullName === lastSelectedRepo);
+      const defaultRepo =
+        (hasLastSelectedRepo ? lastSelectedRepo : repos[0].fullName) ?? repos[0].fullName;
+      setSelectedRepo(defaultRepo);
     }
-  }, [session, fetchRepos]);
+  }, [repos, selectedRepo]);
 
   useEffect(() => {
     if (!selectedRepo) return;

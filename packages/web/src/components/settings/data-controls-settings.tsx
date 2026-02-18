@@ -1,66 +1,65 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import Link from "next/link";
-import { mutate } from "swr";
+import useSWR, { mutate } from "swr";
 import { buildSessionHref, type SessionItem } from "@/components/session-sidebar";
 import { formatRelativeTime } from "@/lib/time";
 
 const PAGE_SIZE = 20;
+const ARCHIVED_SESSIONS_KEY = `/api/sessions?status=archived&limit=${PAGE_SIZE}&offset=0`;
 
 export function DataControlsSettings() {
-  const [sessions, setSessions] = useState<SessionItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [extraSessions, setExtraSessions] = useState<SessionItem[]>([]);
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [offset, setOffset] = useState(0);
 
-  const fetchArchivedSessions = useCallback(async (currentOffset: number, append: boolean) => {
-    if (append) {
-      setLoadingMore(true);
-    } else {
-      setLoading(true);
-    }
+  const { data, isLoading: loading } = useSWR<{ sessions: SessionItem[] }>(ARCHIVED_SESSIONS_KEY, {
+    onSuccess: (data) => {
+      const fetched = data.sessions || [];
+      setHasMore(fetched.length === PAGE_SIZE);
+      setOffset(fetched.length);
+      setExtraSessions([]);
+      setHiddenIds(new Set());
+    },
+  });
+
+  const firstPageSessions = data?.sessions ?? [];
+  const sessions = [...firstPageSessions, ...extraSessions].filter((s) => !hiddenIds.has(s.id));
+
+  const handleLoadMore = useCallback(async () => {
+    setLoadingMore(true);
     try {
-      const res = await fetch(
-        `/api/sessions?status=archived&limit=${PAGE_SIZE}&offset=${currentOffset}`
-      );
+      const res = await fetch(`/api/sessions?status=archived&limit=${PAGE_SIZE}&offset=${offset}`);
       if (res.ok) {
-        const data = await res.json();
-        const fetched: SessionItem[] = data.sessions || [];
-        setSessions((prev) => (append ? [...prev, ...fetched] : fetched));
+        const resData = await res.json();
+        const fetched: SessionItem[] = resData.sessions || [];
+        setExtraSessions((prev) => [...prev, ...fetched]);
         setHasMore(fetched.length === PAGE_SIZE);
-        setOffset(currentOffset + fetched.length);
+        setOffset((prev) => prev + fetched.length);
       }
     } catch (error) {
       console.error("Failed to fetch archived sessions:", error);
     } finally {
-      setLoading(false);
       setLoadingMore(false);
     }
-  }, []);
-
-  useEffect(() => {
-    fetchArchivedSessions(0, false);
-  }, [fetchArchivedSessions]);
-
-  const handleLoadMore = () => {
-    fetchArchivedSessions(offset, true);
-  };
+  }, [offset]);
 
   const handleUnarchive = async (sessionId: string) => {
-    // Optimistically remove from list
-    setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+    // Optimistically hide from both first-page and extra sessions
+    setHiddenIds((prev) => new Set(prev).add(sessionId));
     try {
       const res = await fetch(`/api/sessions/${sessionId}/unarchive`, { method: "POST" });
       if (res.ok) {
         mutate("/api/sessions");
+        mutate(ARCHIVED_SESSIONS_KEY);
       } else {
-        // Re-fetch on failure to restore correct state
-        fetchArchivedSessions(0, false);
+        mutate(ARCHIVED_SESSIONS_KEY);
       }
     } catch {
-      fetchArchivedSessions(0, false);
+      mutate(ARCHIVED_SESSIONS_KEY);
     }
   };
 
