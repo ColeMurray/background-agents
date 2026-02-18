@@ -74,7 +74,7 @@ export type ParticipantRole = "owner" | "member";
 export type MessageStatus = "pending" | "processing" | "completed" | "failed";
 
 // Message source
-export type MessageSource = "web" | "slack" | "extension" | "github";
+export type MessageSource = "web" | "slack" | "linear" | "extension" | "github";
 
 // Event types
 export type EventType = "tool_call" | "tool_result" | "token" | "error" | "git_sync";
