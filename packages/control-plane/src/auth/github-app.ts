@@ -39,6 +39,12 @@ interface GitHubHttpError extends Error {
   status?: number;
 }
 
+function createHttpError(message: string, status: number): GitHubHttpError {
+  const error = new Error(message) as GitHubHttpError;
+  error.status = status;
+  return error;
+}
+
 const installationTokenMemoryCache = new Map<string, CachedInstallationToken>();
 const installationTokenRefreshInFlight = new Map<string, Promise<CachedInstallationToken>>();
 const importedPrivateKeyCache = new Map<string, Promise<CryptoKey>>();
@@ -378,10 +384,12 @@ export async function getCachedInstallationToken(
     }
   }
 
-  const inFlight = installationTokenRefreshInFlight.get(cacheKey);
-  if (inFlight) {
-    const shared = await inFlight;
-    return shared.token;
+  if (!forceRefresh) {
+    const inFlight = installationTokenRefreshInFlight.get(cacheKey);
+    if (inFlight) {
+      const shared = await inFlight;
+      return shared.token;
+    }
   }
 
   const refreshPromise = refreshInstallationToken(config, env, cacheKey).finally(() => {
@@ -449,12 +457,11 @@ export async function listInstallationRepositories(
     const response = await fetchWithTimeout(url, { headers });
 
     if (!response.ok) {
-      const error = await response.text();
-      const fetchError = new Error(
-        `Failed to list installation repositories (page ${page}): ${response.status} ${error}`
-      ) as GitHubHttpError;
-      fetchError.status = response.status;
-      throw fetchError;
+      const body = await response.text();
+      throw createHttpError(
+        `Failed to list installation repositories (page ${page}): ${response.status} ${body}`,
+        response.status
+      );
     }
 
     const data = (await response.json()) as ListInstallationReposResponse;
@@ -495,7 +502,9 @@ export async function listInstallationRepositories(
   const totalCount = first.data.total_count;
   const totalPages = Math.ceil(totalCount / perPage);
 
-  // Fetch remaining pages concurrently
+  // Fetch remaining pages concurrently.
+  // No 401 retry here — the token was just obtained (or refreshed) for page 1,
+  // so a mid-pagination auth failure is not expected.
   if (totalPages > 1) {
     const remaining = Array.from({ length: totalPages - 1 }, (_, i) => i + 2);
     const results = await Promise.all(remaining.map((p) => fetchPage(p)));
@@ -529,7 +538,7 @@ export async function getInstallationRepository(
 ): Promise<InstallationRepository | null> {
   const cacheKey = getInstallationTokenCacheKey(config);
   let forceRefresh = false;
-  let response: Response | null = null;
+  let response!: Response;
 
   for (let attempt = 0; attempt < 2; attempt++) {
     const token = await getCachedInstallationToken(config, env, { forceRefresh });
@@ -548,10 +557,6 @@ export async function getInstallationRepository(
 
     await invalidateInstallationTokenCache(env, cacheKey);
     forceRefresh = true;
-  }
-
-  if (!response) {
-    throw new Error("Failed to fetch repository");
   }
 
   if (response.status === 404 || response.status === 403) {

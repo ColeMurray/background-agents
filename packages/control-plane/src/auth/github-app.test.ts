@@ -1,8 +1,10 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   isGitHubAppConfigured,
   getGitHubAppConfig,
   getCachedInstallationToken,
+  INSTALLATION_TOKEN_CACHE_MAX_AGE_MS,
+  INSTALLATION_TOKEN_MIN_REMAINING_MS,
 } from "./github-app";
 
 class FakeKvNamespace {
@@ -116,6 +118,10 @@ describe("github-app utilities", () => {
   });
 
   describe("getCachedInstallationToken", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
     it("reads valid token from KV cache", async () => {
       const fetchMock = vi.spyOn(globalThis, "fetch");
       const kv = new FakeKvNamespace();
@@ -130,7 +136,8 @@ describe("github-app utilities", () => {
         `github:installation-token:v1:${config.appId}:${config.installationId}`,
         JSON.stringify({
           token: "token-from-kv",
-          expiresAtEpochMs: Date.now() + 55 * 60 * 1000,
+          expiresAtEpochMs:
+            Date.now() + INSTALLATION_TOKEN_CACHE_MAX_AGE_MS + INSTALLATION_TOKEN_MIN_REMAINING_MS,
           cachedAtEpochMs: Date.now(),
         })
       );
