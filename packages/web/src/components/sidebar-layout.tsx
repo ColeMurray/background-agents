@@ -72,7 +72,7 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
 
   return (
     <SidebarContext.Provider value={sidebar}>
-      <div className="flex h-screen overflow-hidden">
+      <div className="flex h-dvh overflow-hidden">
         {/* Sidebar with transition */}
         <div
           className={`transition-all duration-200 ease-in-out ${

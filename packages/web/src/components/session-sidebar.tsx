@@ -90,7 +90,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const currentSessionId = pathname?.startsWith("/session/") ? pathname.split("/")[2] : null;
 
   return (
-    <aside className="w-72 h-screen flex flex-col border-r border-border-muted bg-background">
+    <aside className="w-72 h-dvh flex flex-col border-r border-border-muted bg-background">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border-muted">
         <div className="flex items-center gap-2">
