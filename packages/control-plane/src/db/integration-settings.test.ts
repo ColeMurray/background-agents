@@ -439,16 +439,7 @@ describe("IntegrationSettingsStore", () => {
       ).resolves.not.toThrow();
     });
 
-    it("drops stale effort after merge in getResolvedConfig", async () => {
-      // Set up: repo has effort that's invalid for the model
-      // Simulate stale data by writing effort alone (no model validation at write)
-      await store.setRepoSettings("github", "acme/widgets", {
-        model: "anthropic/claude-haiku-4-5",
-        reasoningEffort: "max",
-      });
-
-      // Now update model to one that doesn't support the stored effort
-      // We'll directly set incompatible settings to simulate staleness
+    it("preserves merged settings without domain-specific filtering", async () => {
       await store.setRepoSettings("github", "acme/widgets", {
         model: "anthropic/claude-opus-4-6",
         reasoningEffort: "low",
@@ -456,7 +447,7 @@ describe("IntegrationSettingsStore", () => {
 
       const config = await store.getResolvedConfig("github", "acme/widgets");
       expect(config.settings.model).toBe("anthropic/claude-opus-4-6");
-      expect(config.settings.reasoningEffort).toBe("low"); // valid for opus-4-6
+      expect(config.settings.reasoningEffort).toBe("low");
     });
   });
 

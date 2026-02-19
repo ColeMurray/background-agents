@@ -132,7 +132,7 @@ export class IntegrationSettingsStore {
   async getResolvedConfig<K extends IntegrationId>(
     integrationId: K,
     repo: string
-  ): Promise<ResolvedIntegrationConfig> {
+  ): Promise<ResolvedIntegrationConfig<IntegrationSettingsMap[K]["repo"]>> {
     const [globalSettings, repoSettings] = await Promise.all([
       this.getGlobal(integrationId),
       this.getRepoSettings(integrationId, repo),
@@ -142,27 +142,20 @@ export class IntegrationSettingsStore {
     const enabledRepos =
       globalSettings?.enabledRepos !== undefined ? globalSettings.enabledRepos : null;
 
-    const defaults: GitHubBotSettings = globalSettings?.defaults ?? {};
-    const overrides: GitHubBotSettings = repoSettings ?? {};
+    const defaults = globalSettings?.defaults ?? {};
+    const overrides = repoSettings ?? {};
 
-    // Merge defaults and repo overrides — only apply defined keys to avoid undefined clobbering
-    const settings: GitHubBotSettings = { ...defaults };
-    for (const key of Object.keys(overrides) as (keyof GitHubBotSettings)[]) {
-      if (overrides[key] !== undefined) {
-        (settings as Record<string, unknown>)[key] = overrides[key];
+    // Generic merge: repo overrides win, undefined keys don't clobber defaults
+    const settings: Record<string, unknown> = { ...defaults };
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value !== undefined) {
+        settings[key] = value;
       }
     }
 
-    // Re-validate effort against model after merge
-    if (
-      settings.model &&
-      settings.reasoningEffort &&
-      !isValidReasoningEffort(settings.model, settings.reasoningEffort)
-    ) {
-      settings.reasoningEffort = undefined;
-    }
-
-    return { enabledRepos, settings };
+    return { enabledRepos, settings } as ResolvedIntegrationConfig<
+      IntegrationSettingsMap[K]["repo"]
+    >;
   }
 
   private validateBotSettings(settings: GitHubBotSettings): void {
@@ -182,7 +175,7 @@ export class IntegrationSettingsStore {
   }
 }
 
-export interface ResolvedIntegrationConfig {
+export interface ResolvedIntegrationConfig<TRepo extends object = Record<string, unknown>> {
   enabledRepos: string[] | null;
-  settings: GitHubBotSettings;
+  settings: TRepo;
 }

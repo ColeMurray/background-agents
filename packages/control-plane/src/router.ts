@@ -2322,12 +2322,21 @@ async function handleGetResolvedConfig(
   const store = new IntegrationSettingsStore(env.DB);
   const repo = `${owner}/${name}`;
   const { enabledRepos, settings } = await store.getResolvedConfig(id, repo);
+
+  // GitHub-specific: drop stale reasoning effort after merge
+  const reasoningEffort =
+    settings.model &&
+    settings.reasoningEffort &&
+    !isValidReasoningEffort(settings.model, settings.reasoningEffort)
+      ? null
+      : (settings.reasoningEffort ?? null);
+
   return json({
     integrationId: id,
     repo,
     config: {
       model: settings.model ?? null,
-      reasoningEffort: settings.reasoningEffort ?? null,
+      reasoningEffort,
       autoReviewOnOpen: settings.autoReviewOnOpen ?? true,
       enabledRepos,
     },
