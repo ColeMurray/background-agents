@@ -122,7 +122,7 @@ describe("POST /webhooks/github", () => {
 
   it("returns 200 for handled event with non-matching action", async () => {
     const body = JSON.stringify({
-      action: "opened",
+      action: "closed",
       repository: { owner: { login: "test" }, name: "repo" },
     });
     const signature = await sign(SECRET, body);

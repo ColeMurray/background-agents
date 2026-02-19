@@ -38,6 +38,21 @@ export interface Env {
  * event schema containing only the fields the bot reads.
  */
 
+export interface PullRequestOpenedPayload {
+  action: "opened";
+  pull_request: {
+    number: number;
+    title: string;
+    body: string | null;
+    user: { login: string };
+    head: { ref: string; sha: string };
+    base: { ref: string };
+    draft: boolean;
+  };
+  repository: { owner: { login: string }; name: string };
+  sender: { login: string };
+}
+
 export interface ReviewRequestedPayload {
   action: "review_requested";
   pull_request: {

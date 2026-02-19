@@ -1,5 +1,6 @@
 import type {
   Env,
+  PullRequestOpenedPayload,
   ReviewRequestedPayload,
   IssueCommentPayload,
   ReviewCommentPayload,
@@ -142,6 +143,75 @@ export async function handleReviewRequested(
   });
 }
 
+export async function handlePullRequestOpened(
+  env: Env,
+  log: Logger,
+  payload: PullRequestOpenedPayload,
+  traceId: string
+): Promise<void> {
+  const { pull_request: pr, repository: repo } = payload;
+  const owner = repo.owner.login;
+  const repoName = repo.name;
+
+  if (pr.draft) {
+    log.debug("handler.draft_pr_skipped", { trace_id: traceId, pull_number: pr.number });
+    return;
+  }
+
+  if (pr.user.login === env.GITHUB_BOT_USERNAME) {
+    log.debug("handler.self_pr_ignored", { trace_id: traceId, pull_number: pr.number });
+    return;
+  }
+
+  const [ghToken, headers] = await Promise.all([
+    generateInstallationToken({
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_APP_PRIVATE_KEY,
+      installationId: env.GITHUB_APP_INSTALLATION_ID,
+    }),
+    getAuthHeaders(env, traceId),
+  ]);
+
+  const meta = { trace_id: traceId, repo: `${owner}/${repoName}`, pull_number: pr.number };
+  fireAndForgetReaction(
+    log,
+    ghToken,
+    `https://api.github.com/repos/${owner}/${repoName}/issues/${pr.number}/reactions`,
+    meta
+  );
+
+  const sessionId = await createSession(env.CONTROL_PLANE, headers, {
+    repoOwner: owner,
+    repoName,
+    title: `GitHub: Review PR #${pr.number}`,
+    model: env.DEFAULT_MODEL,
+  });
+  log.info("session.created", { ...meta, session_id: sessionId, action: "auto_review" });
+
+  const prompt = buildCodeReviewPrompt({
+    owner,
+    repo: repoName,
+    number: pr.number,
+    title: pr.title,
+    body: pr.body,
+    author: pr.user.login,
+    base: pr.base.ref,
+    head: pr.head.ref,
+  });
+
+  const messageId = await sendPrompt(env.CONTROL_PLANE, headers, sessionId, {
+    content: prompt,
+    authorId: `github:${payload.sender.login}`,
+  });
+  log.info("prompt.sent", {
+    ...meta,
+    session_id: sessionId,
+    message_id: messageId,
+    source: "github",
+    content_length: prompt.length,
+  });
+}
+
 export async function handleIssueComment(
   env: Env,
   log: Logger,
@@ -158,6 +228,11 @@ export async function handleIssueComment(
   }
 
   if (!comment.body.toLowerCase().includes(`@${env.GITHUB_BOT_USERNAME.toLowerCase()}`)) {
+    log.debug("handler.no_mention", {
+      trace_id: traceId,
+      issue_number: issue.number,
+      sender: sender.login,
+    });
     return;
   }
 
@@ -226,6 +301,11 @@ export async function handleReviewComment(
   const repoName = repo.name;
 
   if (!comment.body.toLowerCase().includes(`@${env.GITHUB_BOT_USERNAME.toLowerCase()}`)) {
+    log.debug("handler.no_mention", {
+      trace_id: traceId,
+      pull_number: pr.number,
+      sender: sender.login,
+    });
     return;
   }
 

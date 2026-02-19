@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type {
   Env,
+  PullRequestOpenedPayload,
   ReviewRequestedPayload,
   IssueCommentPayload,
   ReviewCommentPayload,
@@ -16,7 +17,12 @@ vi.mock("../src/utils/internal", () => ({
   generateInternalToken: vi.fn().mockResolvedValue("test-internal-token"),
 }));
 
-import { handleReviewRequested, handleIssueComment, handleReviewComment } from "../src/handlers";
+import {
+  handlePullRequestOpened,
+  handleReviewRequested,
+  handleIssueComment,
+  handleReviewComment,
+} from "../src/handlers";
 import { generateInstallationToken, postReaction } from "../src/github-auth";
 
 function createMockLogger(): Logger {
@@ -61,6 +67,21 @@ function createMockEnv(): Env {
 function getControlPlaneFetch(env: Env) {
   return (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
 }
+
+const pullRequestOpenedPayload: PullRequestOpenedPayload = {
+  action: "opened",
+  pull_request: {
+    number: 42,
+    title: "Add caching",
+    body: "Adds Redis caching",
+    user: { login: "alice" },
+    head: { ref: "feature/cache", sha: "abc123" },
+    base: { ref: "main" },
+    draft: false,
+  },
+  repository: { owner: { login: "acme" }, name: "widgets" },
+  sender: { login: "alice" },
+};
 
 const reviewRequestedPayload: ReviewRequestedPayload = {
   action: "review_requested",
@@ -117,6 +138,72 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(generateInstallationToken).mockResolvedValue("test-installation-token");
   vi.mocked(postReaction).mockResolvedValue(true);
+});
+
+describe("handlePullRequestOpened", () => {
+  it("creates session, posts reaction, and sends code review prompt", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-0");
+
+    expect(generateInstallationToken).toHaveBeenCalled();
+    expect(postReaction).toHaveBeenCalledWith(
+      "test-installation-token",
+      "https://api.github.com/repos/acme/widgets/issues/42/reactions",
+      "eyes"
+    );
+
+    const cpFetch = getControlPlaneFetch(env);
+    expect(cpFetch).toHaveBeenCalledTimes(2);
+
+    const sessionBody = JSON.parse(cpFetch.mock.calls[0][1].body);
+    expect(sessionBody.repoOwner).toBe("acme");
+    expect(sessionBody.repoName).toBe("widgets");
+    expect(sessionBody.title).toContain("Review PR #42");
+
+    const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
+    expect(promptBody.source).toBe("github");
+    expect(promptBody.authorId).toBe("github:alice");
+    expect(promptBody.content).toContain("Pull Request #42");
+
+    expect(log.info).toHaveBeenCalledWith(
+      "session.created",
+      expect.objectContaining({ action: "auto_review" })
+    );
+  });
+
+  it("returns early for draft PRs", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload: PullRequestOpenedPayload = {
+      ...pullRequestOpenedPayload,
+      pull_request: { ...pullRequestOpenedPayload.pull_request, draft: true },
+    };
+
+    await handlePullRequestOpened(env, log, payload, "trace-0");
+
+    expect(generateInstallationToken).not.toHaveBeenCalled();
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+    expect(log.debug).toHaveBeenCalledWith("handler.draft_pr_skipped", expect.anything());
+  });
+
+  it("returns early if PR is from the bot (loop prevention)", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload: PullRequestOpenedPayload = {
+      ...pullRequestOpenedPayload,
+      pull_request: {
+        ...pullRequestOpenedPayload.pull_request,
+        user: { login: "test-bot[bot]" },
+      },
+    };
+
+    await handlePullRequestOpened(env, log, payload, "trace-0");
+
+    expect(generateInstallationToken).not.toHaveBeenCalled();
+    expect(log.debug).toHaveBeenCalledWith("handler.self_pr_ignored", expect.anything());
+  });
 });
 
 describe("handleReviewRequested", () => {

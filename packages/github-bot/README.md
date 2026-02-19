@@ -91,16 +91,25 @@ For the agent to interact with GitHub from the sandbox, two prerequisites must b
 
 ## Webhook Events
 
-| Event                         | Action             | Trigger                     | Handler                 |
-| ----------------------------- | ------------------ | --------------------------- | ----------------------- |
-| `pull_request`                | `review_requested` | Bot assigned as reviewer    | `handleReviewRequested` |
-| `issue_comment`               | `created`          | @mention in a PR comment    | `handleIssueComment`    |
-| `pull_request_review_comment` | `created`          | @mention in a review thread | `handleReviewComment`   |
+| Event                         | Action             | Trigger                     | Handler                   |
+| ----------------------------- | ------------------ | --------------------------- | ------------------------- |
+| `pull_request`                | `opened`           | Non-draft PR opened         | `handlePullRequestOpened` |
+| `pull_request`                | `review_requested` | Bot assigned as reviewer    | `handleReviewRequested`   |
+| `issue_comment`               | `created`          | @mention in a PR comment    | `handleIssueComment`      |
+| `pull_request_review_comment` | `created`          | @mention in a review thread | `handleReviewComment`     |
 
 All events are processed asynchronously via `executionCtx.waitUntil()`. The webhook endpoint returns
 200 immediately after signature verification.
 
 ### Handler Flows
+
+**Pull Request Opened (Auto-Review):**
+
+1. Check `pull_request.draft` — skip draft PRs
+2. Check `pull_request.user.login !== GITHUB_BOT_USERNAME` — prevent loops on bot-created PRs
+3. Post eyes reaction on the PR (fire-and-forget)
+4. Create session via control plane
+5. Send code review prompt (includes PR metadata + `gh` CLI instructions)
 
 **Review Requested:**
 
@@ -195,7 +204,7 @@ npm install
 # Build
 npm run build -w @open-inspect/github-bot
 
-# Run tests (43 tests)
+# Run tests (46 tests)
 npm run test -w @open-inspect/github-bot
 
 # Type check
@@ -226,5 +235,5 @@ test/
 ├── webhook.test.ts   # Endpoint routing and integration (6 tests)
 ├── prompts.test.ts   # Prompt construction (10 tests)
 ├── github-auth.test.ts # JWT generation and reactions (7 tests)
-└── handlers.test.ts  # Event handler flows and edge cases (12 tests)
+└── handlers.test.ts  # Event handler flows and edge cases (15 tests)
 ```

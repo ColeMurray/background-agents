@@ -8,6 +8,7 @@
 import { Hono } from "hono";
 import type {
   Env,
+  PullRequestOpenedPayload,
   ReviewRequestedPayload,
   IssueCommentPayload,
   ReviewCommentPayload,
@@ -15,7 +16,12 @@ import type {
 import type { Logger } from "./logger";
 import { createLogger, parseLogLevel } from "./logger";
 import { verifyWebhookSignature } from "./verify";
-import { handleReviewRequested, handleIssueComment, handleReviewComment } from "./handlers";
+import {
+  handlePullRequestOpened,
+  handleReviewRequested,
+  handleIssueComment,
+  handleReviewComment,
+} from "./handlers";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -72,6 +78,9 @@ async function handleWebhook(
   const p = payload as Record<string, unknown>;
   switch (event) {
     case "pull_request":
+      if (p.action === "opened") {
+        return handlePullRequestOpened(env, log, payload as PullRequestOpenedPayload, traceId);
+      }
       if (p.action === "review_requested") {
         return handleReviewRequested(env, log, payload as ReviewRequestedPayload, traceId);
       }
