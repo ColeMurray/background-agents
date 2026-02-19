@@ -46,8 +46,13 @@ output "linear_bot_worker_name" {
 }
 
 output "linear_bot_webhook_url" {
-  description = "Linear bot webhook URL (configure in Linear Settings → API → Webhooks)"
+  description = "Linear bot webhook URL (set in Linear OAuth Application webhook config)"
   value       = "${module.linear_bot_worker.worker_url}/webhook"
+}
+
+output "linear_bot_oauth_authorize_url" {
+  description = "Visit this URL to install the Linear agent in your workspace (requires admin)"
+  value       = "${module.linear_bot_worker.worker_url}/oauth/authorize"
 }
 
 # Vercel Web App

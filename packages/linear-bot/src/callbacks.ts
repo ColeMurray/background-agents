@@ -1,18 +1,21 @@
 /**
- * Callback handlers for control-plane notifications.
- * When a session completes, this posts a comment back on the Linear issue.
+ * Callback handlers for control-plane completion notifications.
+ * Uses richer response extraction and formats as Linear AgentActivities.
  */
 
 import { Hono } from "hono";
 import type { Env, CompletionCallback } from "./types";
-import { postIssueComment } from "./utils/linear-client";
+import {
+  getLinearClient,
+  emitAgentActivity,
+  postIssueComment,
+  updateAgentSession,
+} from "./utils/linear-client";
+import { extractAgentResponse, formatAgentResponse } from "./completion/extractor";
 import { createLogger } from "./logger";
 
 const log = createLogger("callback");
 
-/**
- * Verify internal callback signature using shared secret.
- */
 async function verifyCallbackSignature(
   payload: CompletionCallback,
   secret: string
@@ -51,9 +54,6 @@ function isValidPayload(payload: unknown): payload is CompletionCallback {
 
 export const callbacksRouter = new Hono<{ Bindings: Env }>();
 
-/**
- * Callback endpoint for session completion notifications.
- */
 callbacksRouter.post("/complete", async (c) => {
   const startTime = Date.now();
   const traceId = c.req.header("x-trace-id") || crypto.randomUUID();
@@ -101,9 +101,6 @@ callbacksRouter.post("/complete", async (c) => {
   return c.json({ ok: true });
 });
 
-/**
- * Handle completion callback — post result as a Linear comment.
- */
 async function handleCompletionCallback(
   payload: CompletionCallback,
   env: Env,
@@ -113,67 +110,79 @@ async function handleCompletionCallback(
   const { sessionId, context } = payload;
 
   try {
-    // Fetch artifacts (PRs) from the session
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (env.INTERNAL_CALLBACK_SECRET) {
-      const { generateInternalToken } = await import("./utils/internal");
-      const authToken = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
-      headers["Authorization"] = `Bearer ${authToken}`;
-    }
-    if (traceId) headers["x-trace-id"] = traceId;
+    // Extract rich agent response from events
+    const agentResponse = await extractAgentResponse(env, sessionId, payload.messageId, traceId);
 
-    const artifactsRes = await env.CONTROL_PLANE.fetch(
-      `https://internal/sessions/${sessionId}/artifacts`,
-      { method: "GET", headers }
-    );
+    let message: string;
+    let activityType: "response" | "error";
 
-    let prUrl: string | null = null;
-    if (artifactsRes.ok) {
-      const data = (await artifactsRes.json()) as {
-        artifacts: Array<{ type: string; url: string | null }>;
-      };
-      const prArtifact = data.artifacts.find((a) => a.type === "pull_request" && a.url);
-      if (prArtifact) prUrl = prArtifact.url;
-    }
-
-    // Build the comment
-    let comment: string;
-    if (payload.success && prUrl) {
-      comment = [
-        `## 🤖 Open-Inspect completed`,
-        ``,
-        `Pull request opened: ${prUrl}`,
-        ``,
-        `[View session](${env.WEB_APP_URL}/session/${sessionId})`,
-      ].join("\n");
-    } else if (payload.success) {
-      comment = [
-        `## 🤖 Open-Inspect completed`,
-        ``,
-        `The agent finished working on this issue.`,
-        ``,
-        `[View session](${env.WEB_APP_URL}/session/${sessionId})`,
-      ].join("\n");
+    if (payload.success) {
+      activityType = "response";
+      message = formatAgentResponse(agentResponse, sessionId, env.WEB_APP_URL);
     } else {
-      comment = [
-        `## ⚠️ Open-Inspect encountered an issue`,
-        ``,
-        `The agent was unable to complete this task.`,
-        ``,
-        `[View session for details](${env.WEB_APP_URL}/session/${sessionId})`,
-      ].join("\n");
+      activityType = "error";
+      if (agentResponse.textContent) {
+        message = `The agent encountered an error.\n\n${agentResponse.textContent.slice(0, 500)}\n\n[View session](${env.WEB_APP_URL}/session/${sessionId})`;
+      } else {
+        message = `The agent was unable to complete this task.\n\n[View session for details](${env.WEB_APP_URL}/session/${sessionId})`;
+      }
     }
 
-    const result = await postIssueComment(env.LINEAR_API_KEY, context.issueId, comment);
+    // Emit via Agent API if we have session context
+    if (context.agentSessionId && context.organizationId) {
+      const client = await getLinearClient(env, context.organizationId);
+      if (client) {
+        await emitAgentActivity(client, context.agentSessionId, {
+          type: activityType,
+          body: message,
+        });
+
+        // Update externalUrls with PR link if available
+        const prArtifact = agentResponse.artifacts.find((a) => a.type === "pr" && a.url);
+        if (prArtifact) {
+          const urls = [
+            { label: "View Session", url: `${env.WEB_APP_URL}/session/${sessionId}` },
+            { label: "Pull Request", url: prArtifact.url },
+          ];
+          await updateAgentSession(client, context.agentSessionId, { externalUrls: urls });
+        }
+
+        log.info("callback.complete", {
+          trace_id: traceId,
+          session_id: sessionId,
+          issue_id: context.issueId,
+          issue_identifier: context.issueIdentifier,
+          agent_session_id: context.agentSessionId,
+          outcome: "success",
+          has_pr: agentResponse.artifacts.some((a) => a.type === "pr" && a.url),
+          agent_success: payload.success,
+          tool_call_count: agentResponse.toolCalls.length,
+          artifact_count: agentResponse.artifacts.length,
+          delivery: "agent_activity",
+          duration_ms: Date.now() - startTime,
+        });
+        return;
+      }
+      log.warn("callback.no_oauth_token", {
+        trace_id: traceId,
+        org_id: context.organizationId,
+      });
+    }
+
+    // Fallback: post a comment
+    const commentBody = payload.success
+      ? `## 🤖 Open-Inspect completed\n\n${message}`
+      : `## ⚠️ Open-Inspect encountered an issue\n\n${message}`;
+
+    const result = await postIssueComment(env.LINEAR_API_KEY, context.issueId, commentBody);
 
     log.info("callback.complete", {
       trace_id: traceId,
       session_id: sessionId,
       issue_id: context.issueId,
-      issue_identifier: context.issueIdentifier,
       outcome: result.success ? "success" : "error",
-      has_pr: Boolean(prUrl),
       agent_success: payload.success,
+      delivery: "comment_fallback",
       duration_ms: Date.now() - startTime,
     });
   } catch (error) {

@@ -12,7 +12,7 @@ locals {
   name_suffix = var.deployment_name
 
   # URLs for cross-service configuration
-  control_plane_host = "open-inspect-control-plane-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev"
+  control_plane_host = "open-inspect-control-plane-${local.name_suffix}.${var.cloudflare_worker_subdomain}"
   control_plane_url  = "https://${local.control_plane_host}"
   web_app_url        = "https://open-inspect-${local.name_suffix}.vercel.app"
   ws_url             = "wss://${local.control_plane_host}"
@@ -104,6 +104,7 @@ module "control_plane_worker" {
   source = "../../modules/cloudflare-worker"
 
   account_id  = var.cloudflare_account_id
+  worker_subdomain = var.cloudflare_worker_subdomain
   worker_name = "open-inspect-control-plane-${local.name_suffix}"
   script_path = local.control_plane_script_path
 
@@ -187,6 +188,7 @@ module "slack_bot_worker" {
   source = "../../modules/cloudflare-worker"
 
   account_id  = var.cloudflare_account_id
+  worker_subdomain = var.cloudflare_worker_subdomain
   worker_name = "open-inspect-slack-bot-${local.name_suffix}"
   script_path = local.slack_bot_script_path
 
@@ -247,6 +249,7 @@ module "linear_bot_worker" {
   source = "../../modules/cloudflare-worker"
 
   account_id  = var.cloudflare_account_id
+  worker_subdomain = var.cloudflare_worker_subdomain
   worker_name = "open-inspect-linear-bot-${local.name_suffix}"
   script_path = local.linear_bot_script_path
 
@@ -270,12 +273,14 @@ module "linear_bot_worker" {
     { name = "CONTROL_PLANE_URL", value = local.control_plane_url },
     { name = "WEB_APP_URL", value = local.web_app_url },
     { name = "DEPLOYMENT_NAME", value = var.deployment_name },
-    { name = "DEFAULT_MODEL", value = "claude-sonnet-4-20250514" },
+    { name = "DEFAULT_MODEL", value = "claude-sonnet-4-6" },
+    { name = "LINEAR_CLIENT_ID", value = var.linear_client_id },
+    { name = "WORKER_URL", value = "https://open-inspect-linear-bot-${local.name_suffix}.${var.cloudflare_worker_subdomain}" },
   ]
 
   secrets = [
     { name = "LINEAR_WEBHOOK_SECRET", value = var.linear_webhook_secret },
-    { name = "LINEAR_API_KEY", value = var.linear_api_key },
+    { name = "LINEAR_CLIENT_SECRET", value = var.linear_client_secret },
     { name = "INTERNAL_CALLBACK_SECRET", value = var.internal_callback_secret },
   ]
 

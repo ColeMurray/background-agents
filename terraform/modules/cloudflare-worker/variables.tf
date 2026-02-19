@@ -115,3 +115,9 @@ variable "route_pattern" {
   type        = string
   default     = null
 }
+
+variable "worker_subdomain" {
+  description = "Cloudflare Workers subdomain (e.g. 'myaccount.workers.dev')"
+  type        = string
+  default     = "workers.dev"
+}

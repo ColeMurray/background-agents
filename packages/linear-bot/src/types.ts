@@ -6,7 +6,7 @@
  * Cloudflare Worker environment bindings.
  */
 export interface Env {
-  // KV namespace for issue-to-session mapping
+  // KV namespace for config, OAuth tokens, and issue-to-session mapping
   LINEAR_KV: KVNamespace;
 
   // Service binding to control plane
@@ -18,110 +18,123 @@ export interface Env {
   WEB_APP_URL: string;
   DEFAULT_MODEL: string;
 
+  // OAuth app credentials
+  LINEAR_CLIENT_ID: string;
+  LINEAR_CLIENT_SECRET: string;
+
+  // Worker public URL (for OAuth callback)
+  WORKER_URL: string;
+
   // Secrets
   LINEAR_WEBHOOK_SECRET: string;
-  LINEAR_API_KEY: string;
+  LINEAR_API_KEY: string; // kept for backward compat / fallback
+  ANTHROPIC_API_KEY: string;
   INTERNAL_CALLBACK_SECRET?: string;
   LOG_LEVEL?: string;
 }
 
-/**
- * Linear webhook payload envelope.
- * https://developers.linear.app/docs/graphql/webhooks
- */
-export interface LinearWebhookPayload {
-  action: "create" | "update" | "remove";
-  type: "Issue" | "Comment" | "IssueLabel";
-  data: LinearIssueData;
-  url: string;
-  createdAt: string;
-  organizationId: string;
+// ─── OAuth Types ─────────────────────────────────────────────────────────────
+
+export interface OAuthTokenResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  refresh_token: string;
+  scope?: string;
 }
 
-/**
- * Linear issue data from webhook.
- */
-export interface LinearIssueData {
-  id: string;
-  identifier: string;
-  title: string;
-  description?: string;
-  url: string;
-  priority: number;
-  priorityLabel: string;
-  state: {
-    id: string;
-    name: string;
-    type: string;
-  };
-  team: {
-    id: string;
-    key: string;
-    name: string;
-  };
-  labels: Array<{
-    id: string;
-    name: string;
-  }>;
-  assignee?: {
-    id: string;
-    name: string;
-    email: string;
-  };
-  createdAt: string;
-  updatedAt: string;
+export interface StoredTokenData {
+  access_token: string;
+  refresh_token: string;
+  expires_at: number;
 }
+
+// ─── Repo / Config Types ─────────────────────────────────────────────────────
 
 /**
  * A single repo configuration with an optional label filter.
+ * Used for static team→repo mapping (legacy/override).
  */
-export interface RepoConfig {
+export interface StaticRepoConfig {
   owner: string;
   name: string;
-  /** If set, this repo is only selected when the issue has this label */
   label?: string;
 }
 
 /**
- * Mapping from Linear team to GitHub repos.
- * Stored in KV under key "config:team-repos".
- *
- * Each team maps to an array of repos. If a repo has a `label` field,
- * it only matches issues with that label. The first repo without a label
- * acts as the default fallback.
- *
- * Example:
- * ```json
- * {
- *   "team-id": [
- *     { "owner": "CarbonCopyInc", "name": "habakkuk", "label": "frontend" },
- *     { "owner": "CarbonCopyInc", "name": "exodus", "label": "exodus" },
- *     { "owner": "CarbonCopyInc", "name": "leviticus", "label": "leviticus" },
- *     { "owner": "CarbonCopyInc", "name": "numbers" }
- *   ]
- * }
- * ```
+ * Static team→repo mapping stored in KV under "config:team-repos".
  */
 export interface TeamRepoMapping {
-  [teamId: string]: RepoConfig[];
+  [teamId: string]: StaticRepoConfig[];
 }
 
 /**
- * Trigger configuration.
- * Stored in KV under key "config:triggers".
+ * Dynamic repo config from control plane.
+ */
+export interface RepoConfig {
+  id: string;
+  owner: string;
+  name: string;
+  fullName: string;
+  displayName: string;
+  description: string;
+  defaultBranch: string;
+  private: boolean;
+  aliases?: string[];
+  keywords?: string[];
+}
+
+/**
+ * Repository metadata from the control plane API.
+ */
+export interface RepoMetadata {
+  description?: string;
+  aliases?: string[];
+  keywords?: string[];
+}
+
+/**
+ * Repository as returned by the control plane API.
+ */
+export interface ControlPlaneRepo {
+  id: number;
+  owner: string;
+  name: string;
+  fullName: string;
+  description: string | null;
+  private: boolean;
+  defaultBranch: string;
+  metadata?: RepoMetadata;
+}
+
+/**
+ * Response from the control plane /repos endpoint.
+ */
+export interface ControlPlaneReposResponse {
+  repos: ControlPlaneRepo[];
+  cached: boolean;
+  cachedAt: string;
+}
+
+/**
+ * Project→repo mapping stored in KV under "config:project-repos".
+ */
+export interface ProjectRepoMapping {
+  [projectId: string]: { owner: string; name: string };
+}
+
+/**
+ * Trigger configuration stored in KV under "config:triggers".
  */
 export interface TriggerConfig {
-  /** Label name that triggers agent work (e.g. "agent" or "🔵agent") */
   triggerLabel: string;
-  /** Also trigger on issue assignment to a specific assignee name */
   triggerAssignee?: string;
-  /** Auto-trigger on all new issues (use with caution) */
   autoTriggerOnCreate: boolean;
+  triggerCommand?: string;
 }
 
-/**
- * Issue-to-session mapping stored in KV.
- */
+// ─── Issue-to-Session Mapping ────────────────────────────────────────────────
+
 export interface IssueSession {
   sessionId: string;
   issueId: string;
@@ -129,6 +142,7 @@ export interface IssueSession {
   repoOwner: string;
   repoName: string;
   model: string;
+  agentSessionId?: string;
   createdAt: number;
 }
 
@@ -141,6 +155,8 @@ export interface CallbackContext {
   issueUrl: string;
   repoFullName: string;
   model: string;
+  agentSessionId?: string;
+  organizationId?: string;
 }
 
 /**
@@ -153,4 +169,87 @@ export interface CompletionCallback {
   timestamp: number;
   signature: string;
   context: CallbackContext;
+}
+
+// ─── Classification Types ────────────────────────────────────────────────────
+
+export interface ClassificationResult {
+  repo: RepoConfig | null;
+  confidence: "high" | "medium" | "low";
+  reasoning: string;
+  alternatives?: RepoConfig[];
+  needsClarification: boolean;
+}
+
+// ─── Event / Artifact Types ──────────────────────────────────────────────────
+
+export interface EventResponse {
+  id: string;
+  type: string;
+  data: Record<string, unknown>;
+  messageId: string | null;
+  createdAt: number;
+}
+
+export interface ListEventsResponse {
+  events: EventResponse[];
+  cursor?: string;
+  hasMore: boolean;
+}
+
+export interface ArtifactResponse {
+  id: string;
+  type: string;
+  url: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: number;
+}
+
+export interface ListArtifactsResponse {
+  artifacts: ArtifactResponse[];
+}
+
+export interface ToolCallSummary {
+  tool: string;
+  summary: string;
+}
+
+export interface ArtifactInfo {
+  type: string;
+  url: string;
+  label: string;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface AgentResponse {
+  textContent: string;
+  toolCalls: ToolCallSummary[];
+  artifacts: ArtifactInfo[];
+  success: boolean;
+}
+
+// ─── User Preferences ────────────────────────────────────────────────────────
+
+export interface UserPreferences {
+  userId: string;
+  model: string;
+  reasoningEffort?: string;
+  updatedAt: number;
+}
+
+// ─── Linear Issue Details ────────────────────────────────────────────────────
+
+export interface LinearIssueDetails {
+  id: string;
+  identifier: string;
+  title: string;
+  description?: string | null;
+  url: string;
+  priority: number;
+  priorityLabel: string;
+  labels: Array<{ id: string; name: string }>;
+  project?: { id: string; name: string } | null;
+  assignee?: { id: string; name: string } | null;
+  team: { id: string; key: string; name: string };
+  comments: Array<{ body: string; user?: { name: string } }>;
 }

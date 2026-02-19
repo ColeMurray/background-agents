@@ -83,12 +83,20 @@ github_app_installation_id = ""
 slack_bot_token = ""       # e.g., "xoxb-..."
 slack_signing_secret = ""
 
-# Linear App (Optional)
-# From Linear Settings → API
+# Linear Agent (Optional)
+# Create an OAuth Application at: https://linear.app/settings/api/applications/new
+# - Enable webhooks, select "Agent session events" + "Issues" + "Comments"
+# - Set Callback URL to: https://<linear-bot-worker-url>/oauth/callback
+# - Set Webhook URL to: https://<linear-bot-worker-url>/webhook
+# - Enable scopes: read, write, app:assignable, app:mentionable
+# After creation, note the Client ID, Client Secret, and Webhook Signing Secret.
+# Then visit https://<linear-bot-worker-url>/oauth/authorize to install the agent
+# in your workspace (requires admin permissions).
 # Leave empty to disable Linear integration.
 
-linear_webhook_secret = "" # Signing secret from Linear webhook config
-linear_api_key = ""        # Personal API key for posting comments
+linear_client_id = ""        # OAuth Application Client ID
+linear_client_secret = ""    # OAuth Application Client Secret
+linear_webhook_secret = ""   # Webhook Signing Secret from the application config
 
 # =============================================================================
 # API Keys
