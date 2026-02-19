@@ -155,6 +155,15 @@ Push (PR creation):  Control plane → generate fresh token → WebSocket → sa
 PR API:              Control plane → user OAuth token → GitHub API (server-side only)
 ```
 
+## CI/CD
+
+Pushing to `main` automatically deploys all services if their files changed:
+
+- **Terraform** (control plane + D1 migrations) — runs on changes to `terraform/` or
+  `packages/control-plane/`
+- **Vercel** (web app) — runs on changes to `packages/web/`
+- **Modal** (data plane) — runs on changes to `packages/modal-infra/`
+
 ## Control Plane (Cloudflare Workers)
 
 ### Deployment

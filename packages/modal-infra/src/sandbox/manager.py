@@ -121,9 +121,10 @@ class SandboxManager:
             }
         )
 
-        # Add GitHub App token if available (for git sync operations)
+        # Add GitHub App token if available (for git sync operations and gh CLI)
         if config.github_app_token:
             env_vars["GITHUB_APP_TOKEN"] = config.github_app_token
+            env_vars["GITHUB_TOKEN"] = config.github_app_token
 
         if config.session_config:
             env_vars["SESSION_CONFIG"] = config.session_config.model_dump_json()
@@ -358,6 +359,7 @@ class SandboxManager:
 
         if github_app_token:
             env_vars["GITHUB_APP_TOKEN"] = github_app_token
+            env_vars["GITHUB_TOKEN"] = github_app_token
 
         # Create the sandbox from the snapshot image
         sandbox = modal.Sandbox.create(
