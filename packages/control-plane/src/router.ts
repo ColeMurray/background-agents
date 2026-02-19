@@ -25,38 +25,23 @@ import {
   getValidModelOrDefault,
   isValidReasoningEffort,
   DEFAULT_ENABLED_MODELS,
-  type IntegrationId,
 } from "@open-inspect/shared";
 import { ModelPreferencesStore, ModelPreferencesValidationError } from "./db/model-preferences";
-import {
-  IntegrationSettingsStore,
-  IntegrationSettingsValidationError,
-  isValidIntegrationId,
-} from "./db/integration-settings";
 import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
-import type { RequestMetrics } from "./db/instrumented-d1";
 import type {
   EnrichedRepository,
   InstallationRepository,
   RepoMetadata,
 } from "@open-inspect/shared";
 import { createLogger } from "./logger";
-import type { CorrelationContext } from "./logger";
+import { type Route, type RequestContext, parsePattern, json, error } from "./routes/shared";
+import { integrationSettingsRoutes } from "./routes/integration-settings";
 
 const logger = createLogger("router");
 
 const REPOS_CACHE_KEY = "repos:list";
 const REPOS_CACHE_FRESH_MS = 5 * 60 * 1000; // Serve without revalidation for 5 minutes
 const REPOS_CACHE_KV_TTL_SECONDS = 3600; // Keep stale data in KV for 1 hour
-
-/**
- * Request context with correlation IDs and per-request metrics.
- */
-export type RequestContext = CorrelationContext & {
-  metrics: RequestMetrics;
-  /** Worker ExecutionContext for waitUntil (background tasks). */
-  executionCtx?: ExecutionContext;
-};
 
 /**
  * Create a Request to a Durable Object stub with correlation headers.
@@ -67,45 +52,6 @@ function internalRequest(url: string, init: RequestInit | undefined, ctx: Reques
   headers.set("x-trace-id", ctx.trace_id);
   headers.set("x-request-id", ctx.request_id);
   return new Request(url, { ...init, headers });
-}
-
-/**
- * Route configuration.
- */
-interface Route {
-  method: string;
-  pattern: RegExp;
-  handler: (
-    request: Request,
-    env: Env,
-    match: RegExpMatchArray,
-    ctx: RequestContext
-  ) => Promise<Response>;
-}
-
-/**
- * Parse route pattern into regex.
- */
-function parsePattern(pattern: string): RegExp {
-  const regexPattern = pattern.replace(/:(\w+)/g, "(?<$1>[^/]+)");
-  return new RegExp(`^${regexPattern}$`);
-}
-
-/**
- * Create JSON response.
- */
-function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-/**
- * Create error response.
- */
-function error(message: string, status = 400): Response {
-  return json({ error: message }, status);
 }
 
 function withCorsAndTraceHeaders(response: Response, ctx: RequestContext): Response {
@@ -496,49 +442,8 @@ const routes: Route[] = [
     handler: handleSetModelPreferences,
   },
 
-  // Integration settings — global
-  {
-    method: "GET",
-    pattern: parsePattern("/integration-settings/:id"),
-    handler: handleGetIntegrationSettings,
-  },
-  {
-    method: "PUT",
-    pattern: parsePattern("/integration-settings/:id"),
-    handler: handleSetIntegrationSettings,
-  },
-  {
-    method: "DELETE",
-    pattern: parsePattern("/integration-settings/:id"),
-    handler: handleDeleteIntegrationSettings,
-  },
-  // Integration settings — per-repo
-  {
-    method: "GET",
-    pattern: parsePattern("/integration-settings/:id/repos"),
-    handler: handleListRepoSettings,
-  },
-  {
-    method: "GET",
-    pattern: parsePattern("/integration-settings/:id/repos/:owner/:name"),
-    handler: handleGetRepoSettings,
-  },
-  {
-    method: "PUT",
-    pattern: parsePattern("/integration-settings/:id/repos/:owner/:name"),
-    handler: handleSetRepoSettings,
-  },
-  {
-    method: "DELETE",
-    pattern: parsePattern("/integration-settings/:id/repos/:owner/:name"),
-    handler: handleDeleteRepoSettings,
-  },
-  // Resolved config — used by bots at runtime
-  {
-    method: "GET",
-    pattern: parsePattern("/integration-settings/:id/resolved/:owner/:name"),
-    handler: handleGetResolvedConfig,
-  },
+  // Integration settings
+  ...integrationSettingsRoutes,
 ];
 
 /**
@@ -2048,297 +1953,4 @@ async function handleSetModelPreferences(
     });
     return error("Model preferences storage unavailable", 503);
   }
-}
-
-// Integration settings handlers
-
-function extractIntegrationId(match: RegExpMatchArray): IntegrationId | null {
-  const id = match.groups?.id;
-  if (!id || !isValidIntegrationId(id)) return null;
-  return id;
-}
-
-async function handleGetIntegrationSettings(
-  _request: Request,
-  env: Env,
-  match: RegExpMatchArray,
-  _ctx: RequestContext
-): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
-
-  if (!env.DB) {
-    return json({ integrationId: id, settings: null });
-  }
-
-  const store = new IntegrationSettingsStore(env.DB);
-  const settings = await store.getGlobal(id);
-  return json({ integrationId: id, settings });
-}
-
-async function handleSetIntegrationSettings(
-  request: Request,
-  env: Env,
-  match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
-
-  if (!env.DB) {
-    return error("Integration settings storage is not configured", 503);
-  }
-
-  let body: { settings?: Record<string, unknown> };
-  try {
-    body = (await request.json()) as { settings?: Record<string, unknown> };
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
-
-  if (!body?.settings || typeof body.settings !== "object") {
-    return error("Request body must include settings object", 400);
-  }
-
-  const store = new IntegrationSettingsStore(env.DB);
-
-  try {
-    await store.setGlobal(id, body.settings);
-
-    logger.info("integration_settings.updated", {
-      event: "integration_settings.updated",
-      integration_id: id,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-
-    return json({ status: "updated", integrationId: id });
-  } catch (e) {
-    if (e instanceof IntegrationSettingsValidationError) {
-      return error(e.message, 400);
-    }
-    logger.error("Failed to update integration settings", {
-      error: e instanceof Error ? e.message : String(e),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Integration settings storage unavailable", 503);
-  }
-}
-
-async function handleDeleteIntegrationSettings(
-  _request: Request,
-  env: Env,
-  match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
-
-  if (!env.DB) {
-    return error("Integration settings storage is not configured", 503);
-  }
-
-  const store = new IntegrationSettingsStore(env.DB);
-
-  try {
-    await store.deleteGlobal(id);
-
-    logger.info("integration_settings.deleted", {
-      event: "integration_settings.deleted",
-      integration_id: id,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-
-    return json({ status: "deleted", integrationId: id });
-  } catch (e) {
-    logger.error("Failed to delete integration settings", {
-      error: e instanceof Error ? e.message : String(e),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Integration settings storage unavailable", 503);
-  }
-}
-
-async function handleListRepoSettings(
-  _request: Request,
-  env: Env,
-  match: RegExpMatchArray,
-  _ctx: RequestContext
-): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
-
-  if (!env.DB) {
-    return json({ integrationId: id, repos: [] });
-  }
-
-  const store = new IntegrationSettingsStore(env.DB);
-  const repos = await store.listRepoSettings(id);
-  return json({ integrationId: id, repos });
-}
-
-async function handleGetRepoSettings(
-  _request: Request,
-  env: Env,
-  match: RegExpMatchArray,
-  _ctx: RequestContext
-): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
-
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-  if (!owner || !name) return error("Owner and name are required", 400);
-
-  const repo = `${owner}/${name}`;
-
-  if (!env.DB) {
-    return json({ integrationId: id, repo, settings: null });
-  }
-
-  const store = new IntegrationSettingsStore(env.DB);
-  const settings = await store.getRepoSettings(id, repo);
-  return json({ integrationId: id, repo, settings });
-}
-
-async function handleSetRepoSettings(
-  request: Request,
-  env: Env,
-  match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
-
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-  if (!owner || !name) return error("Owner and name are required", 400);
-
-  if (!env.DB) {
-    return error("Integration settings storage is not configured", 503);
-  }
-
-  let body: { settings?: Record<string, unknown> };
-  try {
-    body = (await request.json()) as { settings?: Record<string, unknown> };
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
-
-  if (!body?.settings || typeof body.settings !== "object") {
-    return error("Request body must include settings object", 400);
-  }
-
-  const store = new IntegrationSettingsStore(env.DB);
-  const repo = `${owner}/${name}`;
-
-  try {
-    await store.setRepoSettings(id, repo, body.settings);
-
-    logger.info("integration_repo_settings.updated", {
-      event: "integration_repo_settings.updated",
-      integration_id: id,
-      repo,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-
-    return json({ status: "updated", integrationId: id, repo });
-  } catch (e) {
-    if (e instanceof IntegrationSettingsValidationError) {
-      return error(e.message, 400);
-    }
-    logger.error("Failed to update repo integration settings", {
-      error: e instanceof Error ? e.message : String(e),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Integration settings storage unavailable", 503);
-  }
-}
-
-async function handleDeleteRepoSettings(
-  _request: Request,
-  env: Env,
-  match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
-
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-  if (!owner || !name) return error("Owner and name are required", 400);
-
-  if (!env.DB) {
-    return error("Integration settings storage is not configured", 503);
-  }
-
-  const store = new IntegrationSettingsStore(env.DB);
-  const repo = `${owner}/${name}`;
-
-  try {
-    await store.deleteRepoSettings(id, repo);
-
-    logger.info("integration_repo_settings.deleted", {
-      event: "integration_repo_settings.deleted",
-      integration_id: id,
-      repo,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-
-    return json({ status: "deleted", integrationId: id, repo });
-  } catch (e) {
-    logger.error("Failed to delete repo integration settings", {
-      error: e instanceof Error ? e.message : String(e),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Integration settings storage unavailable", 503);
-  }
-}
-
-async function handleGetResolvedConfig(
-  _request: Request,
-  env: Env,
-  match: RegExpMatchArray,
-  _ctx: RequestContext
-): Promise<Response> {
-  const id = extractIntegrationId(match);
-  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
-
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-  if (!owner || !name) return error("Owner and name are required", 400);
-
-  if (!env.DB) {
-    return json({ integrationId: id, repo: `${owner}/${name}`, config: null });
-  }
-
-  const store = new IntegrationSettingsStore(env.DB);
-  const repo = `${owner}/${name}`;
-  const { enabledRepos, settings } = await store.getResolvedConfig(id, repo);
-
-  // GitHub-specific: drop stale reasoning effort after merge
-  const reasoningEffort =
-    settings.model &&
-    settings.reasoningEffort &&
-    !isValidReasoningEffort(settings.model, settings.reasoningEffort)
-      ? null
-      : (settings.reasoningEffort ?? null);
-
-  return json({
-    integrationId: id,
-    repo,
-    config: {
-      model: settings.model ?? null,
-      reasoningEffort,
-      autoReviewOnOpen: settings.autoReviewOnOpen ?? true,
-      enabledRepos,
-    },
-  });
 }
