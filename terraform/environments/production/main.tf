@@ -104,7 +104,6 @@ module "control_plane_worker" {
   source = "../../modules/cloudflare-worker"
 
   account_id  = var.cloudflare_account_id
-  worker_subdomain = var.cloudflare_worker_subdomain
   worker_name = "open-inspect-control-plane-${local.name_suffix}"
   script_path = local.control_plane_script_path
 
@@ -188,7 +187,6 @@ module "slack_bot_worker" {
   source = "../../modules/cloudflare-worker"
 
   account_id  = var.cloudflare_account_id
-  worker_subdomain = var.cloudflare_worker_subdomain
   worker_name = "open-inspect-slack-bot-${local.name_suffix}"
   script_path = local.slack_bot_script_path
 
@@ -249,7 +247,6 @@ module "linear_bot_worker" {
   source = "../../modules/cloudflare-worker"
 
   account_id  = var.cloudflare_account_id
-  worker_subdomain = var.cloudflare_worker_subdomain
   worker_name = "open-inspect-linear-bot-${local.name_suffix}"
   script_path = local.linear_bot_script_path
 
