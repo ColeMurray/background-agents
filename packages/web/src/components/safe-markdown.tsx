@@ -62,7 +62,7 @@ interface SafeMarkdownProps {
 
 export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
   return (
-    <div className={`prose prose-sm dark:prose-invert max-w-none ${className}`}>
+    <div className={`prose prose-sm dark:prose-invert max-w-none break-words ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}

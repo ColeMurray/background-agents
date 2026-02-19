@@ -637,7 +637,7 @@ function SessionContent({
         <div
           ref={scrollContainerRef}
           onScroll={handleScroll}
-          className="flex-1 overflow-y-auto p-4"
+          className="flex-1 overflow-y-auto overflow-x-hidden p-4"
         >
           <div className="max-w-3xl mx-auto space-y-2">
             {/* Scroll sentinel for loading older history */}
