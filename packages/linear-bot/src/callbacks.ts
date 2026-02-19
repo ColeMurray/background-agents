@@ -4,7 +4,7 @@
  */
 
 import { Hono } from "hono";
-import type { Env, CompletionCallback } from "./types";
+import type { Env, CompletionCallback, ToolCallCallback } from "./types";
 import {
   getLinearClient,
   emitAgentActivity,
@@ -12,11 +12,12 @@ import {
   updateAgentSession,
 } from "./utils/linear-client";
 import { extractAgentResponse, formatAgentResponse } from "./completion/extractor";
+import { timingSafeEqual } from "@open-inspect/shared";
 import { createLogger } from "./logger";
 
 const log = createLogger("callback");
 
-async function verifyCallbackSignature(
+export async function verifyCallbackSignature(
   payload: CompletionCallback,
   secret: string
 ): Promise<boolean> {
@@ -34,10 +35,10 @@ async function verifyCallbackSignature(
   const expectedHex = Array.from(new Uint8Array(expectedSig))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
-  return signature === expectedHex;
+  return timingSafeEqual(signature, expectedHex);
 }
 
-function isValidPayload(payload: unknown): payload is CompletionCallback {
+export function isValidPayload(payload: unknown): payload is CompletionCallback {
   if (!payload || typeof payload !== "object") return false;
   const p = payload as Record<string, unknown>;
   return (
@@ -101,6 +102,96 @@ callbacksRouter.post("/complete", async (c) => {
   return c.json({ ok: true });
 });
 
+// ─── Tool Call Callback ──────────────────────────────────────────────────────
+
+function formatToolAction(tool: string, args: Record<string, unknown>): string {
+  switch (tool) {
+    case "edit_file":
+    case "write_file":
+      return `Editing \`${args.filepath || args.path || "file"}\``;
+    case "read_file":
+      return `Reading \`${args.filepath || args.path || "file"}\``;
+    case "bash":
+    case "execute_command": {
+      const cmd = String(args.command || args.cmd || "");
+      return `Running \`${cmd.length > 80 ? cmd.slice(0, 77) + "..." : cmd}\``;
+    }
+    default:
+      return `Using tool: ${tool}`;
+  }
+}
+
+function isValidToolCallPayload(payload: unknown): payload is ToolCallCallback {
+  if (!payload || typeof payload !== "object") return false;
+  const p = payload as Record<string, unknown>;
+  return (
+    typeof p.sessionId === "string" &&
+    typeof p.tool === "string" &&
+    typeof p.timestamp === "number" &&
+    typeof p.signature === "string" &&
+    p.context !== null &&
+    typeof p.context === "object"
+  );
+}
+
+callbacksRouter.post("/tool_call", async (c) => {
+  const payload = await c.req.json();
+
+  if (!isValidToolCallPayload(payload)) {
+    return c.json({ error: "invalid payload" }, 400);
+  }
+
+  if (!c.env.INTERNAL_CALLBACK_SECRET) {
+    return c.json({ error: "not configured" }, 500);
+  }
+
+  // Verify signature (same pattern as /complete)
+  const { signature, ...data } = payload;
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(c.env.INTERNAL_CALLBACK_SECRET),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const expectedSig = await crypto.subtle.sign("HMAC", key, encoder.encode(JSON.stringify(data)));
+  const expectedHex = Array.from(new Uint8Array(expectedSig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  if (!timingSafeEqual(signature, expectedHex)) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  c.executionCtx.waitUntil(
+    (async () => {
+      try {
+        const { context } = payload;
+        if (!context.agentSessionId || !context.organizationId) return;
+
+        const client = await getLinearClient(c.env, context.organizationId);
+        if (!client) return;
+
+        const description = formatToolAction(payload.tool, payload.args);
+        await emitAgentActivity(
+          client,
+          context.agentSessionId,
+          { type: "action", body: description },
+          true
+        );
+      } catch (e) {
+        log.debug("tool_call callback processing failed", {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    })()
+  );
+
+  return c.json({ ok: true });
+});
+
+// ─── Completion Callback ─────────────────────────────────────────────────────
+
 async function handleCompletionCallback(
   payload: CompletionCallback,
   env: Env,
@@ -137,6 +228,17 @@ async function handleCompletionCallback(
           body: message,
         });
 
+        // Update plan to completed/failed
+        const prStatus = payload.success ? "completed" : "canceled";
+        const planSteps = [
+          { content: "Analyze issue", status: "completed" },
+          { content: "Resolve repository", status: "completed" },
+          { content: "Create coding session", status: "completed" },
+          { content: "Code changes", status: "completed" },
+          { content: "Open PR", status: prStatus },
+        ];
+        await updateAgentSession(client, context.agentSessionId, { plan: planSteps });
+
         // Update externalUrls with PR link if available
         const prArtifact = agentResponse.artifacts.find((a) => a.type === "pr" && a.url);
         if (prArtifact) {
@@ -169,7 +271,17 @@ async function handleCompletionCallback(
       });
     }
 
-    // Fallback: post a comment
+    // Fallback: post a comment (requires LINEAR_API_KEY)
+    if (!env.LINEAR_API_KEY) {
+      log.warn("callback.no_linear_api_key", {
+        trace_id: traceId,
+        session_id: sessionId,
+        issue_id: context.issueId,
+        message: "LINEAR_API_KEY not configured, cannot post fallback comment",
+      });
+      return;
+    }
+
     const commentBody = payload.success
       ? `## 🤖 Open-Inspect completed\n\n${message}`
       : `## ⚠️ Open-Inspect encountered an issue\n\n${message}`;

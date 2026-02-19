@@ -20,7 +20,7 @@ variable "cloudflare_zone_id" {
 }
 
 variable "cloudflare_worker_subdomain" {
-  description = "Cloudflare Workers subdomain (account-specific, found in Workers dashboard)"
+  description = "Cloudflare Workers account subdomain (e.g. 'myaccount' — .workers.dev is appended automatically)"
   type        = string
 }
 
@@ -122,6 +122,13 @@ variable "linear_client_secret" {
 
 variable "linear_webhook_secret" {
   description = "Linear webhook signing secret (from the OAuth Application config)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "linear_api_key" {
+  description = "Linear API key for fallback comment posting"
   type        = string
   default     = ""
   sensitive   = true

@@ -12,6 +12,7 @@
 export const VALID_MODELS = [
   "anthropic/claude-haiku-4-5",
   "anthropic/claude-sonnet-4-5",
+  "anthropic/claude-sonnet-4-6",
   "anthropic/claude-opus-4-5",
   "anthropic/claude-opus-4-6",
   "openai/gpt-5.2",
@@ -28,7 +29,7 @@ export type ValidModel = (typeof VALID_MODELS)[number];
 /**
  * Default model to use when none specified or invalid.
  */
-export const DEFAULT_MODEL: ValidModel = "anthropic/claude-haiku-4-5";
+export const DEFAULT_MODEL: ValidModel = "anthropic/claude-sonnet-4-6";
 
 /**
  * Reasoning effort levels supported across providers.
@@ -51,6 +52,7 @@ export interface ModelReasoningConfig {
 export const MODEL_REASONING_CONFIG: Partial<Record<ValidModel, ModelReasoningConfig>> = {
   "anthropic/claude-haiku-4-5": { efforts: ["high", "max"], default: "max" },
   "anthropic/claude-sonnet-4-5": { efforts: ["high", "max"], default: "max" },
+  "anthropic/claude-sonnet-4-6": { efforts: ["low", "medium", "high", "max"], default: "high" },
   "anthropic/claude-opus-4-5": { efforts: ["high", "max"], default: "max" },
   "anthropic/claude-opus-4-6": { efforts: ["low", "medium", "high", "max"], default: "high" },
   "openai/gpt-5.2": { efforts: ["none", "low", "medium", "high", "xhigh"], default: undefined },
@@ -86,6 +88,11 @@ export const MODEL_OPTIONS: ModelCategory[] = [
         id: "anthropic/claude-sonnet-4-5",
         name: "Claude Sonnet 4.5",
         description: "Balanced performance",
+      },
+      {
+        id: "anthropic/claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        description: "Latest balanced, fast coding",
       },
       {
         id: "anthropic/claude-opus-4-5",
@@ -129,6 +136,7 @@ export const MODEL_OPTIONS: ModelCategory[] = [
 export const DEFAULT_ENABLED_MODELS: ValidModel[] = [
   "anthropic/claude-haiku-4-5",
   "anthropic/claude-sonnet-4-5",
+  "anthropic/claude-sonnet-4-6",
   "anthropic/claude-opus-4-5",
   "anthropic/claude-opus-4-6",
   "openai/gpt-5.2",

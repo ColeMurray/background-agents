@@ -12,7 +12,7 @@ locals {
   name_suffix = var.deployment_name
 
   # URLs for cross-service configuration
-  control_plane_host = "open-inspect-control-plane-${local.name_suffix}.${var.cloudflare_worker_subdomain}"
+  control_plane_host = "open-inspect-control-plane-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev"
   control_plane_url  = "https://${local.control_plane_host}"
   web_app_url        = "https://open-inspect-${local.name_suffix}.vercel.app"
   ws_url             = "wss://${local.control_plane_host}"
@@ -275,13 +275,15 @@ module "linear_bot_worker" {
     { name = "DEPLOYMENT_NAME", value = var.deployment_name },
     { name = "DEFAULT_MODEL", value = "claude-sonnet-4-6" },
     { name = "LINEAR_CLIENT_ID", value = var.linear_client_id },
-    { name = "WORKER_URL", value = "https://open-inspect-linear-bot-${local.name_suffix}.${var.cloudflare_worker_subdomain}" },
+    { name = "WORKER_URL", value = "https://open-inspect-linear-bot-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev" },
   ]
 
   secrets = [
     { name = "LINEAR_WEBHOOK_SECRET", value = var.linear_webhook_secret },
     { name = "LINEAR_CLIENT_SECRET", value = var.linear_client_secret },
     { name = "INTERNAL_CALLBACK_SECRET", value = var.internal_callback_secret },
+    { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+    { name = "LINEAR_API_KEY", value = var.linear_api_key },
   ]
 
   compatibility_date  = "2024-09-23"

@@ -25,6 +25,7 @@ import {
   getValidModelOrDefault,
   isValidReasoningEffort,
   DEFAULT_ENABLED_MODELS,
+  type CallbackContext,
 } from "@open-inspect/shared";
 import { ModelPreferencesStore, ModelPreferencesValidationError } from "./db/model-preferences";
 import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
@@ -102,9 +103,22 @@ function error(message: string, status = 400): Response {
   return json({ error: message }, status);
 }
 
-function withCorsAndTraceHeaders(response: Response, ctx: RequestContext): Response {
+function getAllowedOrigin(requestOrigin: string | null, env: Env): string | null {
+  if (!requestOrigin) return null;
+  const allowed: string[] = ["http://localhost:3000"];
+  if (env.WEB_APP_URL) allowed.push(env.WEB_APP_URL.replace(/\/$/, ""));
+  return allowed.includes(requestOrigin) ? requestOrigin : null;
+}
+
+function withCorsAndTraceHeaders(
+  response: Response,
+  ctx: RequestContext,
+  origin?: string | null
+): Response {
   const headers = new Headers(response.headers);
-  headers.set("Access-Control-Allow-Origin", "*");
+  if (origin) {
+    headers.set("Access-Control-Allow-Origin", origin);
+  }
   headers.set("x-request-id", ctx.request_id);
   headers.set("x-trace-id", ctx.trace_id);
   return new Response(response.body, {
@@ -198,7 +212,8 @@ function isSandboxAuthRoute(path: string): boolean {
 function enforceImplementedScmProvider(
   path: string,
   env: Env,
-  ctx: RequestContext
+  ctx: RequestContext,
+  origin?: string | null
 ): Response | null {
   try {
     const provider = resolveDeploymentScmProvider(env);
@@ -214,7 +229,7 @@ function enforceImplementedScmProvider(
         `SCM provider '${provider}' is not implemented in this deployment.`,
         501
       );
-      return withCorsAndTraceHeaders(response, ctx);
+      return withCorsAndTraceHeaders(response, ctx, origin);
     }
 
     return null;
@@ -232,7 +247,7 @@ function enforceImplementedScmProvider(
     });
 
     const response = error(errorMessage, 500);
-    return withCorsAndTraceHeaders(response, ctx);
+    return withCorsAndTraceHeaders(response, ctx, origin);
   }
 }
 
@@ -516,18 +531,22 @@ export async function handleRequest(
   // Instrument D1 so all queries are automatically timed
   const instrumentedEnv: Env = { ...env, DB: instrumentD1(env.DB, metrics) };
 
+  const requestOrigin = request.headers.get("Origin");
+  const allowedOrigin = getAllowedOrigin(requestOrigin, instrumentedEnv);
+
   // CORS preflight
   if (method === "OPTIONS") {
-    return new Response(null, {
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        "Access-Control-Max-Age": "86400",
-        "x-request-id": ctx.request_id,
-        "x-trace-id": ctx.trace_id,
-      },
-    });
+    const corsHeaders: Record<string, string> = {
+      "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Max-Age": "86400",
+      "x-request-id": ctx.request_id,
+      "x-trace-id": ctx.trace_id,
+    };
+    if (allowedOrigin) {
+      corsHeaders["Access-Control-Allow-Origin"] = allowedOrigin;
+    }
+    return new Response(null, { headers: corsHeaders });
   }
 
   // Require authentication for non-public routes
@@ -547,17 +566,17 @@ export async function handleRequest(
             // Sandbox auth passed, continue to route handler
           } else {
             // Both HMAC and sandbox auth failed
-            return withCorsAndTraceHeaders(sandboxAuthError, ctx);
+            return withCorsAndTraceHeaders(sandboxAuthError, ctx, allowedOrigin);
           }
         }
       } else {
         // Not a sandbox auth route, return HMAC auth error
-        return withCorsAndTraceHeaders(hmacAuthError, ctx);
+        return withCorsAndTraceHeaders(hmacAuthError, ctx, allowedOrigin);
       }
     }
   }
 
-  const providerCheck = enforceImplementedScmProvider(path, env, ctx);
+  const providerCheck = enforceImplementedScmProvider(path, env, ctx, allowedOrigin);
   if (providerCheck) {
     return providerCheck;
   }
@@ -603,7 +622,7 @@ export async function handleRequest(
         ...ctx.metrics.summarize(),
       });
 
-      return withCorsAndTraceHeaders(response, ctx);
+      return withCorsAndTraceHeaders(response, ctx, allowedOrigin);
     }
   }
 
@@ -822,13 +841,7 @@ async function handleSessionPrompt(
     model?: string;
     reasoningEffort?: string;
     attachments?: Array<{ type: string; name: string; url?: string }>;
-    callbackContext?: {
-      channel: string;
-      threadTs: string;
-      repoFullName: string;
-      model: string;
-      reactionMessageTs?: string;
-    };
+    callbackContext?: CallbackContext;
   };
 
   if (!body.content) {

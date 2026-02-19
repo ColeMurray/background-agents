@@ -227,6 +227,31 @@ export interface EnrichedRepository extends InstallationRepository {
   metadata?: RepoMetadata;
 }
 
+// ─── Callback Context (discriminated union) ──────────────────────────────────
+
+export interface SlackCallbackContext {
+  source: "slack";
+  channel: string;
+  threadTs: string;
+  repoFullName: string;
+  model: string;
+  reasoningEffort?: string;
+  reactionMessageTs?: string;
+}
+
+export interface LinearCallbackContext {
+  source: "linear";
+  issueId: string;
+  issueIdentifier: string;
+  issueUrl: string;
+  repoFullName: string;
+  model: string;
+  agentSessionId?: string;
+  organizationId?: string;
+}
+
+export type CallbackContext = SlackCallbackContext | LinearCallbackContext;
+
 // API response types
 export interface CreateSessionRequest {
   repoOwner: string;

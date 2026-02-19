@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { buildCompletionBlocks } from "./blocks";
-import type { AgentResponse, CallbackContext } from "../types";
+import type { AgentResponse, SlackCallbackContext } from "../types";
 
-const BASE_CONTEXT: CallbackContext = {
+const BASE_CONTEXT: SlackCallbackContext = {
+  source: "slack",
   channel: "C123",
   threadTs: "1234567890.123456",
   repoFullName: "octocat/hello-world",

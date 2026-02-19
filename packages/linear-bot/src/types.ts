@@ -27,7 +27,7 @@ export interface Env {
 
   // Secrets
   LINEAR_WEBHOOK_SECRET: string;
-  LINEAR_API_KEY: string; // kept for backward compat / fallback
+  LINEAR_API_KEY?: string; // kept for backward compat / fallback
   ANTHROPIC_API_KEY: string;
   INTERNAL_CALLBACK_SECRET?: string;
   LOG_LEVEL?: string;
@@ -146,18 +146,12 @@ export interface IssueSession {
   createdAt: number;
 }
 
-/**
- * Callback context passed with prompts for follow-up notifications.
- */
-export interface CallbackContext {
-  issueId: string;
-  issueIdentifier: string;
-  issueUrl: string;
-  repoFullName: string;
-  model: string;
-  agentSessionId?: string;
-  organizationId?: string;
-}
+// Re-export CallbackContext types from shared
+export type { LinearCallbackContext, CallbackContext } from "@open-inspect/shared";
+import type { LinearCallbackContext } from "@open-inspect/shared";
+
+/** Alias for linear-bot specific callback context */
+export type LinearBotCallbackContext = LinearCallbackContext;
 
 /**
  * Completion callback payload from control-plane.
@@ -168,7 +162,21 @@ export interface CompletionCallback {
   success: boolean;
   timestamp: number;
   signature: string;
-  context: CallbackContext;
+  context: LinearCallbackContext;
+}
+
+/**
+ * Tool call callback payload from control-plane (ephemeral, best-effort).
+ */
+export interface ToolCallCallback {
+  sessionId: string;
+  tool: string;
+  args: Record<string, unknown>;
+  callId: string;
+  status?: string;
+  timestamp: number;
+  context: LinearCallbackContext;
+  signature: string;
 }
 
 // ─── Classification Types ────────────────────────────────────────────────────

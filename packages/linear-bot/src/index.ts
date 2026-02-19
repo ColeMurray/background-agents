@@ -35,9 +35,47 @@ import { classifyRepo } from "./classifier/index";
 import { getAvailableRepos } from "./classifier/repos";
 import { callbacksRouter } from "./callbacks";
 import { createLogger } from "./logger";
-import { getValidModelOrDefault } from "@open-inspect/shared";
+import { getValidModelOrDefault, verifyInternalToken } from "@open-inspect/shared";
 
 const log = createLogger("handler");
+
+// ─── Agent Plan Helpers ──────────────────────────────────────────────────────
+
+type PlanStepStatus = "pending" | "inProgress" | "completed" | "canceled";
+
+interface PlanStep {
+  content: string;
+  status: PlanStepStatus;
+}
+
+function makePlan(
+  stage: "start" | "repo_resolved" | "session_created" | "completed" | "failed"
+): PlanStep[] {
+  const steps = [
+    "Analyze issue",
+    "Resolve repository",
+    "Create coding session",
+    "Code changes",
+    "Open PR",
+  ];
+  const statusMap: Record<string, PlanStepStatus[]> = {
+    start: ["inProgress", "inProgress", "pending", "pending", "pending"],
+    repo_resolved: ["completed", "completed", "inProgress", "pending", "pending"],
+    session_created: ["completed", "completed", "completed", "inProgress", "pending"],
+    completed: ["completed", "completed", "completed", "completed", "completed"],
+    failed: ["completed", "completed", "completed", "completed", "canceled"],
+  };
+  const statuses = statusMap[stage];
+  return steps.map((content, i) => ({ content, status: statuses[i] }));
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
 
 const DEFAULT_TRIGGER_CONFIG: TriggerConfig = {
   triggerLabel: "agent",
@@ -61,8 +99,10 @@ async function getTeamRepoMapping(env: Env): Promise<TeamRepoMapping> {
   try {
     const data = await env.LINEAR_KV.get("config:team-repos", "json");
     if (data && typeof data === "object") return data as TeamRepoMapping;
-  } catch {
-    /* fall through */
+  } catch (e) {
+    log.debug("kv.get_team_repo_mapping_failed", {
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
   return {};
 }
@@ -71,8 +111,10 @@ async function getProjectRepoMapping(env: Env): Promise<ProjectRepoMapping> {
   try {
     const data = await env.LINEAR_KV.get("config:project-repos", "json");
     if (data && typeof data === "object") return data as ProjectRepoMapping;
-  } catch {
-    /* fall through */
+  } catch (e) {
+    log.debug("kv.get_project_repo_mapping_failed", {
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
   return {};
 }
@@ -83,8 +125,10 @@ async function getTriggerConfig(env: Env): Promise<TriggerConfig> {
     if (data && typeof data === "object") {
       return { ...DEFAULT_TRIGGER_CONFIG, ...(data as Partial<TriggerConfig>) };
     }
-  } catch {
-    /* fall through */
+  } catch (e) {
+    log.debug("kv.get_trigger_config_failed", {
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
   return DEFAULT_TRIGGER_CONFIG;
 }
@@ -93,8 +137,11 @@ async function getUserPreferences(env: Env, userId: string): Promise<UserPrefere
   try {
     const data = await env.LINEAR_KV.get(`user_prefs:${userId}`, "json");
     if (data && typeof data === "object") return data as UserPreferences;
-  } catch {
-    /* fall through */
+  } catch (e) {
+    log.debug("kv.get_user_preferences_failed", {
+      userId,
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
   return null;
 }
@@ -107,8 +154,11 @@ async function lookupIssueSession(env: Env, issueId: string): Promise<IssueSessi
   try {
     const data = await env.LINEAR_KV.get(getIssueSessionKey(issueId), "json");
     if (data && typeof data === "object") return data as IssueSession;
-  } catch {
-    /* fall through */
+  } catch (e) {
+    log.debug("kv.lookup_issue_session_failed", {
+      issueId,
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
   return null;
 }
@@ -132,7 +182,7 @@ async function isDuplicateEvent(env: Env, eventKey: string): Promise<boolean> {
 /**
  * Resolve repo from static team mapping (legacy/override).
  */
-function resolveStaticRepo(
+export function resolveStaticRepo(
   teamMapping: TeamRepoMapping,
   teamId: string,
   issueLabels?: string[]
@@ -151,7 +201,7 @@ function resolveStaticRepo(
 /**
  * Extract model override from issue labels (e.g., "model:opus" → "anthropic/claude-opus-4-5").
  */
-function extractModelFromLabels(labels: Array<{ name: string }>): string | null {
+export function extractModelFromLabels(labels: Array<{ name: string }>): string | null {
   const MODEL_LABEL_MAP: Record<string, string> = {
     haiku: "anthropic/claude-haiku-4-5",
     sonnet: "anthropic/claude-sonnet-4-5",
@@ -200,7 +250,7 @@ app.get("/oauth/callback", async (c) => {
         <head><title>OAuth Success</title></head>
         <body>
           <h1>Open-Inspect Agent Installed!</h1>
-          <p>Successfully connected to workspace: <strong>${orgName}</strong></p>
+          <p>Successfully connected to workspace: <strong>${escapeHtml(orgName)}</strong></p>
           <p>You can now @mention or assign the agent on Linear issues.</p>
         </body>
       </html>
@@ -268,10 +318,7 @@ app.post("/webhook", async (c) => {
 
 // ─── Config Auth Middleware ───────────────────────────────────────────────────
 
-import { verifyInternalToken } from "@open-inspect/shared";
-
 app.use("/config/*", async (c, next) => {
-  if (c.req.method === "GET") return next(); // reads are open
   const secret = c.env.INTERNAL_CALLBACK_SECRET;
   if (!secret) return c.json({ error: "Auth not configured" }, 500);
   const isValid = await verifyInternalToken(c.req.header("Authorization") ?? null, secret);
@@ -439,10 +486,15 @@ async function handleAgentSessionEvent(
     // For "prompted" action, the user's message is in agentActivity.body
     const followUpContent = agentActivity?.body || comment?.body || "Follow-up on the issue.";
 
-    await emitAgentActivity(client, agentSessionId, {
-      type: "thought",
-      body: "Processing follow-up message...",
-    });
+    await emitAgentActivity(
+      client,
+      agentSessionId,
+      {
+        type: "thought",
+        body: "Processing follow-up message...",
+      },
+      true
+    );
 
     // Fetch recent session events for context
     const headers = await getAuthHeaders(env, traceId);
@@ -505,10 +557,16 @@ async function handleAgentSessionEvent(
 
   // ─── New session ───────────────────────────────────────────────────────
 
-  await emitAgentActivity(client, agentSessionId, {
-    type: "thought",
-    body: "Analyzing issue and resolving repository...",
-  });
+  await updateAgentSession(client, agentSessionId, { plan: makePlan("start") });
+  await emitAgentActivity(
+    client,
+    agentSessionId,
+    {
+      type: "thought",
+      body: "Analyzing issue and resolving repository...",
+    },
+    true
+  );
 
   // Fetch full issue details for context
   const issueDetails = await fetchIssueDetails(client, issue.id);
@@ -573,10 +631,15 @@ async function handleAgentSessionEvent(
 
   // 4. Fall back to our LLM classification
   if (!repoOwner) {
-    await emitAgentActivity(client, agentSessionId, {
-      type: "thought",
-      body: "Classifying repository using AI...",
-    });
+    await emitAgentActivity(
+      client,
+      agentSessionId,
+      {
+        type: "thought",
+        body: "Classifying repository using AI...",
+      },
+      true
+    );
 
     const classification = await classifyRepo(
       env,
@@ -638,10 +701,16 @@ async function handleAgentSessionEvent(
 
   // ─── Create session ───────────────────────────────────────────────────
 
-  await emitAgentActivity(client, agentSessionId, {
-    type: "thought",
-    body: `Creating coding session on ${repoFullName} (model: ${model})...`,
-  });
+  await updateAgentSession(client, agentSessionId, { plan: makePlan("repo_resolved") });
+  await emitAgentActivity(
+    client,
+    agentSessionId,
+    {
+      type: "thought",
+      body: `Creating coding session on ${repoFullName} (model: ${model})...`,
+    },
+    true
+  );
 
   const headers = await getAuthHeaders(env, traceId);
 
@@ -691,11 +760,12 @@ async function handleAgentSessionEvent(
     createdAt: Date.now(),
   });
 
-  // Set externalUrls so users get an "Open" button in Linear UI
+  // Set externalUrls and update plan
   await updateAgentSession(client, agentSessionId, {
     externalUrls: [
       { label: "View Session", url: `${env.WEB_APP_URL}/session/${session.sessionId}` },
     ],
+    plan: makePlan("session_created"),
   });
 
   // ─── Build and send prompt ────────────────────────────────────────────
@@ -703,6 +773,7 @@ async function handleAgentSessionEvent(
   // Prefer Linear's promptContext (includes issue, comments, guidance)
   const prompt = agentSession.promptContext || buildPrompt(issue, issueDetails, comment);
   const callbackContext: CallbackContext = {
+    source: "linear",
     issueId: issue.id,
     issueIdentifier: issue.identifier,
     issueUrl: issue.url,

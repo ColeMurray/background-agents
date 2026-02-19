@@ -3,6 +3,7 @@
  */
 
 import type { Env, OAuthTokenResponse, StoredTokenData, LinearIssueDetails } from "../types";
+import { timingSafeEqual } from "@open-inspect/shared";
 import { createLogger } from "../logger";
 
 const log = createLogger("linear-client");
@@ -153,7 +154,8 @@ async function linearGraphQL(
 export async function emitAgentActivity(
   client: LinearApiClient,
   agentSessionId: string,
-  content: Record<string, unknown>
+  content: Record<string, unknown>,
+  ephemeral?: boolean
 ): Promise<void> {
   try {
     await linearGraphQL(
@@ -166,7 +168,7 @@ export async function emitAgentActivity(
       }
     `,
       {
-        input: { agentSessionId, content },
+        input: { agentSessionId, content, ephemeral },
       }
     );
   } catch (err) {
@@ -367,13 +369,7 @@ export async function verifyLinearWebhook(
   const expectedHex = Array.from(new Uint8Array(expectedSig))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
-  // Timing-safe comparison
-  if (signature.length !== expectedHex.length) return false;
-  let result = 0;
-  for (let i = 0; i < signature.length; i++) {
-    result |= signature.charCodeAt(i) ^ expectedHex.charCodeAt(i);
-  }
-  return result === 0;
+  return timingSafeEqual(signature, expectedHex);
 }
 
 // ─── Comment Posting (fallback) ──────────────────────────────────────────────
