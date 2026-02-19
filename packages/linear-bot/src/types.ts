@@ -73,15 +73,37 @@ export interface LinearIssueData {
 }
 
 /**
- * Mapping from Linear team to GitHub repo.
+ * A single repo configuration with an optional label filter.
+ */
+export interface RepoConfig {
+  owner: string;
+  name: string;
+  /** If set, this repo is only selected when the issue has this label */
+  label?: string;
+}
+
+/**
+ * Mapping from Linear team to GitHub repos.
  * Stored in KV under key "config:team-repos".
+ *
+ * Each team maps to an array of repos. If a repo has a `label` field,
+ * it only matches issues with that label. The first repo without a label
+ * acts as the default fallback.
+ *
+ * Example:
+ * ```json
+ * {
+ *   "team-id": [
+ *     { "owner": "CarbonCopyInc", "name": "habakkuk", "label": "frontend" },
+ *     { "owner": "CarbonCopyInc", "name": "exodus", "label": "exodus" },
+ *     { "owner": "CarbonCopyInc", "name": "leviticus", "label": "leviticus" },
+ *     { "owner": "CarbonCopyInc", "name": "numbers" }
+ *   ]
+ * }
+ * ```
  */
 export interface TeamRepoMapping {
-  /** Linear team ID → GitHub repo in "owner/name" format */
-  [teamId: string]: {
-    owner: string;
-    name: string;
-  };
+  [teamId: string]: RepoConfig[];
 }
 
 /**

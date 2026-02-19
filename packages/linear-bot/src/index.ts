@@ -393,9 +393,9 @@ async function handleLinearWebhook(
 
   // Resolve repo from team mapping
   const teamMapping = await getTeamRepoMapping(env);
-  const repoConfig = teamMapping[issue.team.id];
+  const repoConfigs = teamMapping[issue.team.id];
 
-  if (!repoConfig) {
+  if (!repoConfigs || repoConfigs.length === 0) {
     log.warn("webhook.no_repo_mapping", {
       trace_id: traceId,
       issue_identifier: issue.identifier,
@@ -409,6 +409,29 @@ async function handleLinearWebhook(
       issue.id,
       `⚠️ **Open-Inspect:** No repository mapping configured for team "${issue.team.name}". ` +
         `Please configure the team → repo mapping via \`PUT /config/team-repos\`.`
+    );
+    return;
+  }
+
+  // Resolve which repo based on issue labels
+  const issueLabels = new Set(issue.labels.map((l) => l.name.toLowerCase()));
+  const repoConfig =
+    repoConfigs.find((r) => r.label && issueLabels.has(r.label.toLowerCase())) ||
+    repoConfigs.find((r) => !r.label);
+
+  if (!repoConfig) {
+    log.warn("webhook.no_matching_repo", {
+      trace_id: traceId,
+      issue_identifier: issue.identifier,
+      team_id: issue.team.id,
+      labels: Array.from(issueLabels),
+    });
+
+    await postIssueComment(
+      env.LINEAR_API_KEY,
+      issue.id,
+      `⚠️ **Open-Inspect:** No matching repository for this issue's labels. ` +
+        `Add a repo label or configure a default repo without a label filter.`
     );
     return;
   }
