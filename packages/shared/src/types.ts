@@ -246,3 +246,40 @@ export interface ListSessionsResponse {
   cursor?: string;
   hasMore: boolean;
 }
+
+// Integration settings types
+
+export type IntegrationId = "github";
+
+/** Overridable behavior settings for the GitHub bot. Used at both global (defaults) and per-repo (overrides) levels. */
+export interface GitHubBotSettings {
+  autoReviewOnOpen?: boolean;
+  model?: string;
+  reasoningEffort?: string;
+}
+
+/** Global config for the GitHub bot integration. */
+export interface GitHubGlobalConfig {
+  enabledRepos?: string[];
+  defaults?: GitHubBotSettings;
+}
+
+/** Maps each integration ID to its global and per-repo settings types. */
+export interface IntegrationSettingsMap {
+  github: {
+    global: GitHubGlobalConfig;
+    repo: GitHubBotSettings;
+  };
+}
+
+export const INTEGRATION_DEFINITIONS: {
+  id: IntegrationId;
+  name: string;
+  description: string;
+}[] = [
+  {
+    id: "github",
+    name: "GitHub Bot",
+    description: "Automated PR reviews and comment-triggered actions",
+  },
+];

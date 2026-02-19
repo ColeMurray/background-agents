@@ -9,6 +9,7 @@ import type { Logger } from "./logger";
 import { generateInstallationToken, postReaction } from "./github-auth";
 import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
 import { generateInternalToken } from "./utils/internal";
+import { getGitHubConfig } from "./utils/integration-config";
 
 async function getAuthHeaders(env: Env, traceId: string): Promise<Record<string, string>> {
   const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
@@ -22,12 +23,27 @@ async function getAuthHeaders(env: Env, traceId: string): Promise<Record<string,
 async function createSession(
   controlPlane: Fetcher,
   headers: Record<string, string>,
-  params: { repoOwner: string; repoName: string; title: string; model: string }
+  params: {
+    repoOwner: string;
+    repoName: string;
+    title: string;
+    model: string;
+    reasoningEffort?: string | null;
+  }
 ): Promise<string> {
+  const body: Record<string, unknown> = {
+    repoOwner: params.repoOwner,
+    repoName: params.repoName,
+    title: params.title,
+    model: params.model,
+  };
+  if (params.reasoningEffort) {
+    body.reasoningEffort = params.reasoningEffort;
+  }
   const response = await controlPlane.fetch("https://internal/sessions", {
     method: "POST",
     headers,
-    body: JSON.stringify(params),
+    body: JSON.stringify(body),
   });
   if (!response.ok) {
     const body = await response.text();
@@ -85,12 +101,20 @@ export async function handleReviewRequested(
   const { pull_request: pr, repository: repo, requested_reviewer } = payload;
   const owner = repo.owner.login;
   const repoName = repo.name;
+  const repoFullName = `${owner}/${repoName}`.toLowerCase();
 
   if (requested_reviewer?.login !== env.GITHUB_BOT_USERNAME) {
     log.debug("handler.review_not_for_bot", {
       trace_id: traceId,
       requested_reviewer: requested_reviewer?.login,
     });
+    return;
+  }
+
+  const config = await getGitHubConfig(env, repoFullName);
+
+  if (config.enabledRepos !== null && !config.enabledRepos.includes(repoFullName)) {
+    log.debug("handler.repo_not_enabled", { trace_id: traceId, repo: repoFullName });
     return;
   }
 
@@ -103,7 +127,7 @@ export async function handleReviewRequested(
     getAuthHeaders(env, traceId),
   ]);
 
-  const meta = { trace_id: traceId, repo: `${owner}/${repoName}`, pull_number: pr.number };
+  const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
   fireAndForgetReaction(
     log,
     ghToken,
@@ -115,7 +139,8 @@ export async function handleReviewRequested(
     repoOwner: owner,
     repoName,
     title: `GitHub: Review PR #${pr.number}`,
-    model: env.DEFAULT_MODEL,
+    model: config.model,
+    reasoningEffort: config.reasoningEffort,
   });
   log.info("session.created", { ...meta, session_id: sessionId, action: "review" });
 
@@ -152,6 +177,7 @@ export async function handlePullRequestOpened(
   const { pull_request: pr, repository: repo } = payload;
   const owner = repo.owner.login;
   const repoName = repo.name;
+  const repoFullName = `${owner}/${repoName}`.toLowerCase();
 
   if (pr.draft) {
     log.debug("handler.draft_pr_skipped", { trace_id: traceId, pull_number: pr.number });
@@ -160,6 +186,18 @@ export async function handlePullRequestOpened(
 
   if (pr.user.login === env.GITHUB_BOT_USERNAME) {
     log.debug("handler.self_pr_ignored", { trace_id: traceId, pull_number: pr.number });
+    return;
+  }
+
+  const config = await getGitHubConfig(env, repoFullName);
+
+  if (config.enabledRepos !== null && !config.enabledRepos.includes(repoFullName)) {
+    log.debug("handler.repo_not_enabled", { trace_id: traceId, repo: repoFullName });
+    return;
+  }
+
+  if (!config.autoReviewOnOpen) {
+    log.debug("handler.auto_review_disabled", { trace_id: traceId, repo: repoFullName });
     return;
   }
 
@@ -172,7 +210,7 @@ export async function handlePullRequestOpened(
     getAuthHeaders(env, traceId),
   ]);
 
-  const meta = { trace_id: traceId, repo: `${owner}/${repoName}`, pull_number: pr.number };
+  const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
   fireAndForgetReaction(
     log,
     ghToken,
@@ -184,7 +222,8 @@ export async function handlePullRequestOpened(
     repoOwner: owner,
     repoName,
     title: `GitHub: Review PR #${pr.number}`,
-    model: env.DEFAULT_MODEL,
+    model: config.model,
+    reasoningEffort: config.reasoningEffort,
   });
   log.info("session.created", { ...meta, session_id: sessionId, action: "auto_review" });
 
@@ -221,6 +260,7 @@ export async function handleIssueComment(
   const { issue, comment, repository: repo, sender } = payload;
   const owner = repo.owner.login;
   const repoName = repo.name;
+  const repoFullName = `${owner}/${repoName}`.toLowerCase();
 
   if (!issue.pull_request) {
     log.debug("handler.not_a_pr", { trace_id: traceId, issue_number: issue.number });
@@ -241,6 +281,13 @@ export async function handleIssueComment(
     return;
   }
 
+  const config = await getGitHubConfig(env, repoFullName);
+
+  if (config.enabledRepos !== null && !config.enabledRepos.includes(repoFullName)) {
+    log.debug("handler.repo_not_enabled", { trace_id: traceId, repo: repoFullName });
+    return;
+  }
+
   const commentBody = stripMention(comment.body, env.GITHUB_BOT_USERNAME);
 
   const [ghToken, headers] = await Promise.all([
@@ -252,7 +299,7 @@ export async function handleIssueComment(
     getAuthHeaders(env, traceId),
   ]);
 
-  const meta = { trace_id: traceId, repo: `${owner}/${repoName}`, pull_number: issue.number };
+  const meta = { trace_id: traceId, repo: repoFullName, pull_number: issue.number };
   fireAndForgetReaction(
     log,
     ghToken,
@@ -264,7 +311,8 @@ export async function handleIssueComment(
     repoOwner: owner,
     repoName,
     title: `GitHub: PR #${issue.number} comment`,
-    model: env.DEFAULT_MODEL,
+    model: config.model,
+    reasoningEffort: config.reasoningEffort,
   });
   log.info("session.created", { ...meta, session_id: sessionId, action: "comment" });
 
@@ -299,6 +347,7 @@ export async function handleReviewComment(
   const { pull_request: pr, comment, repository: repo, sender } = payload;
   const owner = repo.owner.login;
   const repoName = repo.name;
+  const repoFullName = `${owner}/${repoName}`.toLowerCase();
 
   if (!comment.body.toLowerCase().includes(`@${env.GITHUB_BOT_USERNAME.toLowerCase()}`)) {
     log.debug("handler.no_mention", {
@@ -314,6 +363,13 @@ export async function handleReviewComment(
     return;
   }
 
+  const config = await getGitHubConfig(env, repoFullName);
+
+  if (config.enabledRepos !== null && !config.enabledRepos.includes(repoFullName)) {
+    log.debug("handler.repo_not_enabled", { trace_id: traceId, repo: repoFullName });
+    return;
+  }
+
   const commentBody = stripMention(comment.body, env.GITHUB_BOT_USERNAME);
 
   const [ghToken, headers] = await Promise.all([
@@ -325,7 +381,7 @@ export async function handleReviewComment(
     getAuthHeaders(env, traceId),
   ]);
 
-  const meta = { trace_id: traceId, repo: `${owner}/${repoName}`, pull_number: pr.number };
+  const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
   fireAndForgetReaction(
     log,
     ghToken,
@@ -337,7 +393,8 @@ export async function handleReviewComment(
     repoOwner: owner,
     repoName,
     title: `GitHub: PR #${pr.number} review comment`,
-    model: env.DEFAULT_MODEL,
+    model: config.model,
+    reasoningEffort: config.reasoningEffort,
   });
   log.info("session.created", { ...meta, session_id: sessionId, action: "review_comment" });
 

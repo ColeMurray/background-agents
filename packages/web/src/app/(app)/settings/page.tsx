@@ -7,6 +7,7 @@ import { SecretsSettings } from "@/components/settings/secrets-settings";
 import { ModelsSettings } from "@/components/settings/models-settings";
 import { DataControlsSettings } from "@/components/settings/data-controls-settings";
 import { KeyboardShortcutsSettings } from "@/components/settings/keyboard-shortcuts-settings";
+import { IntegrationsSettings } from "@/components/settings/integrations-settings";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { SidebarToggleIcon } from "@/components/sidebar-toggle-icon";
 import { useIsMobile } from "@/hooks/use-media-query";
@@ -16,6 +17,7 @@ const CATEGORY_LABELS: Record<SettingsCategory, string> = {
   models: "Models",
   "keyboard-shortcuts": "Keyboard",
   "data-controls": "Data Controls",
+  integrations: "Integrations",
 };
 
 export default function SettingsPage() {
@@ -30,6 +32,7 @@ export default function SettingsPage() {
       {activeCategory === "models" && <ModelsSettings />}
       {activeCategory === "keyboard-shortcuts" && <KeyboardShortcutsSettings />}
       {activeCategory === "data-controls" && <DataControlsSettings />}
+      {activeCategory === "integrations" && <IntegrationsSettings />}
     </>
   );
 

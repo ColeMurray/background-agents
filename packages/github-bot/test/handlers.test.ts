@@ -7,6 +7,7 @@ import type {
   ReviewCommentPayload,
 } from "../src/types";
 import type { Logger } from "../src/logger";
+import type { ResolvedGitHubConfig } from "../src/utils/integration-config";
 
 vi.mock("../src/github-auth", () => ({
   generateInstallationToken: vi.fn().mockResolvedValue("test-installation-token"),
@@ -17,6 +18,22 @@ vi.mock("../src/utils/internal", () => ({
   generateInternalToken: vi.fn().mockResolvedValue("test-internal-token"),
 }));
 
+vi.mock("../src/utils/integration-config", () => ({
+  getGitHubConfig: vi.fn().mockResolvedValue({
+    model: "anthropic/claude-haiku-4-5",
+    reasoningEffort: null,
+    autoReviewOnOpen: true,
+    enabledRepos: null,
+  }),
+}));
+
+const defaultConfig: ResolvedGitHubConfig = {
+  model: "anthropic/claude-haiku-4-5",
+  reasoningEffort: null,
+  autoReviewOnOpen: true,
+  enabledRepos: null,
+};
+
 import {
   handlePullRequestOpened,
   handleReviewRequested,
@@ -24,6 +41,7 @@ import {
   handleReviewComment,
 } from "../src/handlers";
 import { generateInstallationToken, postReaction } from "../src/github-auth";
+import { getGitHubConfig } from "../src/utils/integration-config";
 
 function createMockLogger(): Logger {
   return {
@@ -138,6 +156,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(generateInstallationToken).mockResolvedValue("test-installation-token");
   vi.mocked(postReaction).mockResolvedValue(true);
+  vi.mocked(getGitHubConfig).mockResolvedValue({ ...defaultConfig });
 });
 
 describe("handlePullRequestOpened", () => {
@@ -203,6 +222,82 @@ describe("handlePullRequestOpened", () => {
 
     expect(generateInstallationToken).not.toHaveBeenCalled();
     expect(log.debug).toHaveBeenCalledWith("handler.self_pr_ignored", expect.anything());
+  });
+
+  it("returns early when autoReviewOnOpen is false", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      autoReviewOnOpen: false,
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-0");
+
+    expect(generateInstallationToken).not.toHaveBeenCalled();
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+    expect(log.debug).toHaveBeenCalledWith("handler.auto_review_disabled", expect.anything());
+  });
+
+  it("returns early when repo not in enabledRepos", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      enabledRepos: ["other/repo"],
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-0");
+
+    expect(generateInstallationToken).not.toHaveBeenCalled();
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+    expect(log.debug).toHaveBeenCalledWith("handler.repo_not_enabled", expect.anything());
+  });
+
+  it("fail-closed config skips auto-review (autoReviewOnOpen: false)", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      autoReviewOnOpen: false,
+      enabledRepos: null,
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-failclosed");
+
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+    expect(log.debug).toHaveBeenCalledWith("handler.auto_review_disabled", expect.anything());
+  });
+
+  it("uses config.model instead of env.DEFAULT_MODEL", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      model: "anthropic/claude-opus-4-6",
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-0");
+
+    const cpFetch = getControlPlaneFetch(env);
+    const sessionBody = JSON.parse(cpFetch.mock.calls[0][1].body);
+    expect(sessionBody.model).toBe("anthropic/claude-opus-4-6");
+  });
+
+  it("passes reasoningEffort from config to session creation", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      model: "anthropic/claude-opus-4-6",
+      reasoningEffort: "high",
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-0");
+
+    const cpFetch = getControlPlaneFetch(env);
+    const sessionBody = JSON.parse(cpFetch.mock.calls[0][1].body);
+    expect(sessionBody.reasoningEffort).toBe("high");
   });
 });
 
@@ -284,6 +379,21 @@ describe("handleReviewRequested", () => {
 
     expect(generateInstallationToken).not.toHaveBeenCalled();
   });
+
+  it("returns early when repo not in enabledRepos", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      enabledRepos: ["other/repo"],
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleReviewRequested(env, log, reviewRequestedPayload, "trace-1");
+
+    expect(generateInstallationToken).not.toHaveBeenCalled();
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+    expect(log.debug).toHaveBeenCalledWith("handler.repo_not_enabled", expect.anything());
+  });
 });
 
 describe("handleIssueComment", () => {
@@ -348,6 +458,20 @@ describe("handleIssueComment", () => {
     expect(generateInstallationToken).not.toHaveBeenCalled();
     expect(log.debug).toHaveBeenCalledWith("handler.self_comment_ignored", expect.anything());
   });
+
+  it("returns early when repo not in enabledRepos", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      enabledRepos: ["other/repo"],
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleIssueComment(env, log, issueCommentPayload, "trace-2");
+
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+    expect(log.debug).toHaveBeenCalledWith("handler.repo_not_enabled", expect.anything());
+  });
 });
 
 describe("handleReviewComment", () => {
@@ -396,6 +520,20 @@ describe("handleReviewComment", () => {
 
     expect(generateInstallationToken).not.toHaveBeenCalled();
   });
+
+  it("returns early when repo not in enabledRepos", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      enabledRepos: ["other/repo"],
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleReviewComment(env, log, reviewCommentPayload, "trace-3");
+
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+    expect(log.debug).toHaveBeenCalledWith("handler.repo_not_enabled", expect.anything());
+  });
 });
 
 describe("error handling", () => {
@@ -420,5 +558,79 @@ describe("error handling", () => {
 
     // Session should still be created despite reaction failure
     expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("integration config", () => {
+  it("fetches config with the correct repo", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleReviewRequested(env, log, reviewRequestedPayload, "trace-config");
+
+    expect(getGitHubConfig).toHaveBeenCalledWith(env, "acme/widgets");
+  });
+
+  it("uses config.model in session creation", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      model: "anthropic/claude-opus-4-6",
+      reasoningEffort: "low",
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleReviewRequested(env, log, reviewRequestedPayload, "trace-model");
+
+    const cpFetch = getControlPlaneFetch(env);
+    const sessionBody = JSON.parse(cpFetch.mock.calls[0][1].body);
+    expect(sessionBody.model).toBe("anthropic/claude-opus-4-6");
+    expect(sessionBody.reasoningEffort).toBe("low");
+  });
+
+  it("fail-closed config skips webhook (empty enabledRepos)", async () => {
+    // Fail-closed defaults (enabledRepos: [], autoReviewOnOpen: false) cause the
+    // handler to return early — no session created, no webhook processed.
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      autoReviewOnOpen: false,
+      enabledRepos: [],
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleReviewRequested(env, log, reviewRequestedPayload, "trace-failclosed");
+
+    // No session should have been created
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+    expect(log.debug).toHaveBeenCalledWith("handler.repo_not_enabled", expect.anything());
+  });
+
+  it("null enabledRepos (no settings configured) allows all repos", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      enabledRepos: null,
+      model: "anthropic/claude-haiku-4-5",
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleReviewRequested(env, log, reviewRequestedPayload, "trace-null");
+
+    // Should proceed normally — null means all repos allowed
+    const cpFetch = getControlPlaneFetch(env);
+    expect(cpFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("config fetch called after cheap early exit (not-for-bot)", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload = { ...reviewRequestedPayload, requested_reviewer: { login: "someone-else" } };
+
+    await handleReviewRequested(env, log, payload, "trace-early");
+
+    // Config fetch should NOT happen for cheap early exits
+    expect(getGitHubConfig).not.toHaveBeenCalled();
   });
 });
