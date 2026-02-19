@@ -209,13 +209,13 @@ async function handleCompletionCallback(
 
     if (payload.success) {
       activityType = "response";
-      message = formatAgentResponse(agentResponse, sessionId, env.WEB_APP_URL);
+      message = formatAgentResponse(agentResponse);
     } else {
       activityType = "error";
       if (agentResponse.textContent) {
-        message = `The agent encountered an error.\n\n${agentResponse.textContent.slice(0, 500)}\n\n[View session](${env.WEB_APP_URL}/session/${sessionId})`;
+        message = `The agent encountered an error.\n\n${agentResponse.textContent.slice(0, 500)}`;
       } else {
-        message = `The agent was unable to complete this task.\n\n[View session for details](${env.WEB_APP_URL}/session/${sessionId})`;
+        message = `The agent was unable to complete this task.`;
       }
     }
 

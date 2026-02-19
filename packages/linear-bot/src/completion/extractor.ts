@@ -192,11 +192,7 @@ function getArtifactLabelFromArtifact(
 /**
  * Format an AgentResponse into a markdown string for Linear AgentActivity.
  */
-export function formatAgentResponse(
-  agentResponse: AgentResponse,
-  sessionId: string,
-  webAppUrl: string
-): string {
+export function formatAgentResponse(agentResponse: AgentResponse): string {
   const parts: string[] = [];
 
   // PR / artifacts
@@ -223,8 +219,6 @@ export function formatAgentResponse(
         : agentResponse.textContent;
     parts.push(`\n${summary}`);
   }
-
-  parts.push(`\n[View session](${webAppUrl}/session/${sessionId})`);
 
   return parts.join("\n");
 }
