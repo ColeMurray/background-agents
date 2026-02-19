@@ -55,6 +55,11 @@ output "linear_bot_oauth_authorize_url" {
   value       = "${module.linear_bot_worker.worker_url}/oauth/authorize"
 }
 
+output "github_bot_worker_name" {
+  description = "GitHub bot worker name"
+  value       = var.enable_github_bot ? module.github_bot_worker[0].worker_name : null
+}
+
 # Vercel Web App
 output "web_app_url" {
   description = "Vercel web app URL"

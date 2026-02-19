@@ -26,9 +26,10 @@ Use TodoWrite to create a checklist tracking these phases:
 7. Terraform configuration
 8. Terraform deployment (two phases)
 9. Post-deployment Slack setup (if enabled)
-10. Web app deployment
-11. Verification
-12. CI/CD setup (optional)
+10. Post-deployment GitHub Bot setup (if enabled)
+11. Web app deployment
+12. Verification
+13. CI/CD setup (optional)
 
 ## Phase 1: Initial Questions
 
@@ -47,7 +48,8 @@ Use AskUserQuestion to gather:
    name, or the random suffix generated above). Explain this creates URLs like
    `open-inspect-{deployment_name}.vercel.app` and must be unique across all Vercel users.
 4. **Slack integration** - Yes or No
-5. **Prerequisites confirmation** - Confirm they have accounts on Cloudflare, Vercel, Modal,
+5. **GitHub bot integration** - Yes or No (automated PR reviews and comment-triggered actions)
+6. **Prerequisites confirmation** - Confirm they have accounts on Cloudflare, Vercel, Modal,
    Anthropic
 
 ## Phase 2: Repository Setup
@@ -126,8 +128,8 @@ Guide user through creating a GitHub App (handles both OAuth and repo access):
 5. **Callback URL** (under "Identifying and authorizing users"):
    `https://open-inspect-{deployment_name}.vercel.app/api/auth/callback/github`
    - **CRITICAL**: Must match deployed Vercel URL exactly!
-6. **Repository permissions**: Contents (Read & Write), Pull requests (Read & Write), Metadata
-   (Read-only)
+6. **Repository permissions**: Contents (Read & Write), Issues (Read & Write), Pull requests (Read &
+   Write), Metadata (Read-only)
 7. Create app, note **App ID**
 8. Generate **Client Secret**, note **Client ID** and **Client Secret**
 9. Generate **Private Key** (downloads .pem file)
@@ -160,6 +162,7 @@ echo "repo_secrets_encryption_key: $(openssl rand -base64 32)"
 echo "internal_callback_secret: $(openssl rand -base64 32)"
 echo "nextauth_secret: $(openssl rand -base64 32)"
 echo "modal_api_secret: $(openssl rand -hex 32)"
+echo "github_webhook_secret: $(openssl rand -hex 32)"  # Only if GitHub bot enabled
 ```
 
 ## Phase 7: Terraform Configuration
@@ -182,12 +185,20 @@ enable_durable_object_bindings = false
 enable_service_bindings        = false
 ```
 
+If GitHub bot is enabled, also set:
+
+```hcl
+enable_github_bot     = true
+github_webhook_secret = "{generated_value}"
+github_bot_username   = "{app-slug}[bot]"
+```
+
 ## Phase 8: Terraform Deployment (Two-Phase)
 
 **Important**: Build the workers before running Terraform (Terraform references the built bundles):
 
 ```bash
-npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot
+npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot -w @open-inspect/github-bot
 ```
 
 **Phase 1** (bindings disabled):
@@ -231,14 +242,40 @@ The App Home provides a settings interface where users can configure their prefe
 
 5. Invite bot to channels: `/invite @BotName`
 
-## Phase 10: Web App Deployment
+## Phase 10: Complete GitHub Bot Setup (If Enabled)
+
+After Terraform deployment, guide user:
+
+### Configure Webhook on GitHub App
+
+1. Go to GitHub App settings → your app
+2. Under **Webhook**: check **"Active"**
+3. **Webhook URL**:
+   `https://open-inspect-github-bot-{deployment_name}.{subdomain}.workers.dev/webhooks/github`
+4. **Webhook secret**: Enter the `github_webhook_secret` value
+5. Under **Subscribe to events**, check: **Pull requests**, **Issue comments**, **Pull request
+   review comments**
+6. Save changes
+
+### Find Bot Username
+
+The bot username is the App's slug with `[bot]` appended. E.g., if the app is `My-Inspect-App`, the
+bot username is `my-inspect-app[bot]`. Confirm this matches `github_bot_username` in
+terraform.tfvars.
+
+### Usage
+
+- **Code Review**: Assign the bot as a PR reviewer
+- **Comment Actions**: @mention the bot in a PR comment with instructions
+
+## Phase 11: Web App Deployment
 
 ```bash
 npx vercel link --project open-inspect-{deployment_name}
 npx vercel --prod
 ```
 
-## Phase 11: Verification
+## Phase 12: Verification
 
 ```bash
 curl https://open-inspect-control-plane-{deployment_name}.{subdomain}.workers.dev/health
@@ -249,7 +286,7 @@ curl -I https://open-inspect-{deployment_name}.vercel.app
 Present deployment summary table. Instruct user to test: visit web app, sign in with GitHub, create
 session, send prompt.
 
-## Phase 12: CI/CD Setup (Optional)
+## Phase 13: CI/CD Setup (Optional)
 
 Ask if user wants GitHub Actions CI/CD. If yes, use `gh secret set` for all required secrets.
 
@@ -259,9 +296,11 @@ Ask if user wants GitHub Actions CI/CD. If yes, use `gh secret set` for all requ
 - **Durable Object errors**: Must follow two-phase deployment
 - **Slack bot not responding**: Check Event Subscriptions URL verified, bot invited to channel,
   reinstall if scopes changed
+- **GitHub bot not responding**: Check webhook URL, secret, `enable_github_bot = true`, and
+  `github_bot_username` matches the App's bot login
 - **Vercel build fails**: Terraform configures the monorepo build commands automatically
 - **"no such file or directory" for dist/index.js**: Build workers before Terraform:
-  `npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot`
+  `npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot -w @open-inspect/github-bot`
 - **Worker deployment fails**: Build shared package first: `npm run build -w @open-inspect/shared`
 
 ## Important Notes

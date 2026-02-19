@@ -29,29 +29,20 @@ import {
 } from "@open-inspect/shared";
 import { ModelPreferencesStore, ModelPreferencesValidationError } from "./db/model-preferences";
 import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
-import type { RequestMetrics } from "./db/instrumented-d1";
 import type {
   EnrichedRepository,
   InstallationRepository,
   RepoMetadata,
 } from "@open-inspect/shared";
 import { createLogger } from "./logger";
-import type { CorrelationContext } from "./logger";
+import { type Route, type RequestContext, parsePattern, json, error } from "./routes/shared";
+import { integrationSettingsRoutes } from "./routes/integration-settings";
 
 const logger = createLogger("router");
 
 const REPOS_CACHE_KEY = "repos:list";
 const REPOS_CACHE_FRESH_MS = 5 * 60 * 1000; // Serve without revalidation for 5 minutes
 const REPOS_CACHE_KV_TTL_SECONDS = 3600; // Keep stale data in KV for 1 hour
-
-/**
- * Request context with correlation IDs and per-request metrics.
- */
-export type RequestContext = CorrelationContext & {
-  metrics: RequestMetrics;
-  /** Worker ExecutionContext for waitUntil (background tasks). */
-  executionCtx?: ExecutionContext;
-};
 
 /**
  * Create a Request to a Durable Object stub with correlation headers.
@@ -64,61 +55,9 @@ function internalRequest(url: string, init: RequestInit | undefined, ctx: Reques
   return new Request(url, { ...init, headers });
 }
 
-/**
- * Route configuration.
- */
-interface Route {
-  method: string;
-  pattern: RegExp;
-  handler: (
-    request: Request,
-    env: Env,
-    match: RegExpMatchArray,
-    ctx: RequestContext
-  ) => Promise<Response>;
-}
-
-/**
- * Parse route pattern into regex.
- */
-function parsePattern(pattern: string): RegExp {
-  const regexPattern = pattern.replace(/:(\w+)/g, "(?<$1>[^/]+)");
-  return new RegExp(`^${regexPattern}$`);
-}
-
-/**
- * Create JSON response.
- */
-function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-/**
- * Create error response.
- */
-function error(message: string, status = 400): Response {
-  return json({ error: message }, status);
-}
-
-function getAllowedOrigin(requestOrigin: string | null, env: Env): string | null {
-  if (!requestOrigin) return null;
-  const allowed: string[] = ["http://localhost:3000"];
-  if (env.WEB_APP_URL) allowed.push(env.WEB_APP_URL.replace(/\/$/, ""));
-  return allowed.includes(requestOrigin) ? requestOrigin : null;
-}
-
-function withCorsAndTraceHeaders(
-  response: Response,
-  ctx: RequestContext,
-  origin?: string | null
-): Response {
+function withCorsAndTraceHeaders(response: Response, ctx: RequestContext): Response {
   const headers = new Headers(response.headers);
-  if (origin) {
-    headers.set("Access-Control-Allow-Origin", origin);
-  }
+  headers.set("Access-Control-Allow-Origin", "*");
   headers.set("x-request-id", ctx.request_id);
   headers.set("x-trace-id", ctx.trace_id);
   return new Response(response.body, {
@@ -212,8 +151,7 @@ function isSandboxAuthRoute(path: string): boolean {
 function enforceImplementedScmProvider(
   path: string,
   env: Env,
-  ctx: RequestContext,
-  origin?: string | null
+  ctx: RequestContext
 ): Response | null {
   try {
     const provider = resolveDeploymentScmProvider(env);
@@ -229,7 +167,7 @@ function enforceImplementedScmProvider(
         `SCM provider '${provider}' is not implemented in this deployment.`,
         501
       );
-      return withCorsAndTraceHeaders(response, ctx, origin);
+      return withCorsAndTraceHeaders(response, ctx);
     }
 
     return null;
@@ -247,7 +185,7 @@ function enforceImplementedScmProvider(
     });
 
     const response = error(errorMessage, 500);
-    return withCorsAndTraceHeaders(response, ctx, origin);
+    return withCorsAndTraceHeaders(response, ctx);
   }
 }
 
@@ -504,6 +442,9 @@ const routes: Route[] = [
     pattern: parsePattern("/model-preferences"),
     handler: handleSetModelPreferences,
   },
+
+  // Integration settings
+  ...integrationSettingsRoutes,
 ];
 
 /**
@@ -531,22 +472,18 @@ export async function handleRequest(
   // Instrument D1 so all queries are automatically timed
   const instrumentedEnv: Env = { ...env, DB: instrumentD1(env.DB, metrics) };
 
-  const requestOrigin = request.headers.get("Origin");
-  const allowedOrigin = getAllowedOrigin(requestOrigin, instrumentedEnv);
-
   // CORS preflight
   if (method === "OPTIONS") {
-    const corsHeaders: Record<string, string> = {
-      "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
-      "Access-Control-Max-Age": "86400",
-      "x-request-id": ctx.request_id,
-      "x-trace-id": ctx.trace_id,
-    };
-    if (allowedOrigin) {
-      corsHeaders["Access-Control-Allow-Origin"] = allowedOrigin;
-    }
-    return new Response(null, { headers: corsHeaders });
+    return new Response(null, {
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        "Access-Control-Max-Age": "86400",
+        "x-request-id": ctx.request_id,
+        "x-trace-id": ctx.trace_id,
+      },
+    });
   }
 
   // Require authentication for non-public routes
@@ -566,17 +503,17 @@ export async function handleRequest(
             // Sandbox auth passed, continue to route handler
           } else {
             // Both HMAC and sandbox auth failed
-            return withCorsAndTraceHeaders(sandboxAuthError, ctx, allowedOrigin);
+            return withCorsAndTraceHeaders(sandboxAuthError, ctx);
           }
         }
       } else {
         // Not a sandbox auth route, return HMAC auth error
-        return withCorsAndTraceHeaders(hmacAuthError, ctx, allowedOrigin);
+        return withCorsAndTraceHeaders(hmacAuthError, ctx);
       }
     }
   }
 
-  const providerCheck = enforceImplementedScmProvider(path, env, ctx, allowedOrigin);
+  const providerCheck = enforceImplementedScmProvider(path, env, ctx);
   if (providerCheck) {
     return providerCheck;
   }
@@ -622,7 +559,7 @@ export async function handleRequest(
         ...ctx.metrics.summarize(),
       });
 
-      return withCorsAndTraceHeaders(response, ctx, allowedOrigin);
+      return withCorsAndTraceHeaders(response, ctx);
     }
   }
 

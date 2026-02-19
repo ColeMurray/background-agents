@@ -88,6 +88,34 @@ variable "github_app_installation_id" {
 }
 
 # =============================================================================
+# GitHub Bot Configuration
+# =============================================================================
+
+variable "enable_github_bot" {
+  description = "Enable the GitHub bot worker. Requires github_webhook_secret and github_bot_username."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = var.enable_github_bot == false || (length(var.github_webhook_secret) > 0 && length(var.github_bot_username) > 0)
+    error_message = "When enable_github_bot is true, github_webhook_secret and github_bot_username must be non-empty."
+  }
+}
+
+variable "github_webhook_secret" {
+  description = "Shared secret for verifying GitHub webhook signatures (generate with: openssl rand -hex 32)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "github_bot_username" {
+  description = "GitHub App bot username for @mention detection (e.g., 'my-app[bot]')"
+  type        = string
+  default     = ""
+}
+
+# =============================================================================
 # Slack App Credentials
 # =============================================================================
 

@@ -37,6 +37,7 @@ Create accounts on these services before continuing:
 | [GitHub](https://github.com/settings/developers) | OAuth + repository access |
 | [Anthropic](https://console.anthropic.com)       | Claude API                |
 | [Slack](https://api.slack.com/apps) _(optional)_ | Slack bot integration     |
+| GitHub App Webhooks _(optional)_                 | GitHub bot (PR reviews)   |
 
 ### Required Tools
 
@@ -161,6 +162,7 @@ access.
 
 5. Set **Repository permissions**:
    - Contents: **Read & Write**
+   - Issues: **Read & Write** _(required if enabling GitHub bot)_
    - Pull requests: **Read & Write**
    - Metadata: **Read-only**
 6. Click **"Create GitHub App"**
@@ -250,6 +252,9 @@ echo "modal_api_secret: $(openssl rand -hex 32)"
 
 # NextAuth secret
 echo "nextauth_secret: $(openssl rand -base64 32)"
+
+# GitHub webhook secret (only if enabling GitHub bot)
+echo "github_webhook_secret: $(openssl rand -hex 32)"
 ```
 
 Save these values somewhere secure—you'll need them in the next step.
@@ -310,6 +315,11 @@ EOF
 slack_bot_token      = ""
 slack_signing_secret = ""
 
+# GitHub Bot (set enable_github_bot = true to deploy the webhook worker)
+enable_github_bot      = false
+github_webhook_secret  = ""          # From Step 5 (required if enabled)
+github_bot_username    = ""          # e.g., "my-app[bot]" (your GitHub App's bot login)
+
 # API Keys
 anthropic_api_key = "sk-ant-..."
 
@@ -358,7 +368,7 @@ enable_service_bindings        = false
 
 ```bash
 # From the repository root
-npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot
+npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot -w @open-inspect/github-bot
 ```
 
 Then run:
@@ -441,6 +451,47 @@ The bot only responds to @mentions in channels it has been invited to.
 
 ---
 
+## Step 7c: Complete GitHub Bot Setup (If Using GitHub Bot)
+
+Now that the GitHub bot worker is deployed, configure the GitHub App for webhook delivery.
+
+### Configure Webhook on GitHub App
+
+1. Go to your [GitHub App settings](https://github.com/settings/apps)
+2. Select your Open-Inspect app
+3. Under **Webhook**:
+   - Check **"Active"**
+   - **Webhook URL**:
+     ```
+     https://open-inspect-github-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/webhooks/github
+     ```
+     (Replace `YOUR-SUBDOMAIN` with your Cloudflare Workers subdomain and `{deployment_name}` with
+     your deployment name from terraform.tfvars)
+   - **Webhook secret**: Enter the `github_webhook_secret` value from your terraform.tfvars
+4. Under **Subscribe to events**, check:
+   - **Pull requests**
+   - **Issue comments**
+   - **Pull request review comments**
+5. Click **Save changes**
+
+### Find Your Bot Username
+
+Your GitHub App's bot username is its slug with `[bot]` appended. You can find it by:
+
+1. Having the bot perform any action (e.g., a PR review)
+2. Checking the actor's login in the webhook payload
+
+Or construct it from your App's slug: if your app is named `My-Inspect-App`, the bot username is
+`my-inspect-app[bot]`. Ensure this matches the `github_bot_username` value in your terraform.tfvars.
+
+### Usage
+
+- **Code Review**: Assign the bot as a PR reviewer — it performs an automated review
+- **Comment Actions**: @mention the bot in a PR comment with instructions (e.g.,
+  `@my-app[bot] fix the failing test`)
+
+---
+
 ## Step 8: Deploy the Web App
 
 Terraform creates the Vercel project and configures environment variables, but does **not** deploy
@@ -510,35 +561,38 @@ Enable automatic deployments when you push to main by adding GitHub Secrets.
 
 Go to your fork's Settings → Secrets and variables → Actions, and add:
 
-| Secret Name                   | Value                                                                        |
-| ----------------------------- | ---------------------------------------------------------------------------- |
-| `CLOUDFLARE_API_TOKEN`        | Your Cloudflare API token                                                    |
-| `CLOUDFLARE_ACCOUNT_ID`       | Your Cloudflare account ID                                                   |
-| `CLOUDFLARE_WORKER_SUBDOMAIN` | Your workers.dev subdomain                                                   |
-| `R2_ACCESS_KEY_ID`            | R2 access key ID                                                             |
-| `R2_SECRET_ACCESS_KEY`        | R2 secret access key                                                         |
-| `VERCEL_API_TOKEN`            | Vercel API token                                                             |
-| `VERCEL_TEAM_ID`              | Vercel team/account ID                                                       |
-| `VERCEL_PROJECT_ID`           | Vercel project ID (from project settings)                                    |
-| `NEXTAUTH_URL`                | Your web app URL (e.g., `https://open-inspect-{deployment_name}.vercel.app`) |
-| `MODAL_TOKEN_ID`              | Modal token ID                                                               |
-| `MODAL_TOKEN_SECRET`          | Modal token secret                                                           |
-| `MODAL_WORKSPACE`             | Modal workspace name                                                         |
-| `GH_APP_CLIENT_ID`            | GitHub App client ID                                                         |
-| `GH_APP_CLIENT_SECRET`        | GitHub App client secret                                                     |
-| `GH_APP_ID`                   | GitHub App ID                                                                |
-| `GH_APP_PRIVATE_KEY`          | GitHub App private key (PKCS#8 format)                                       |
-| `GH_APP_INSTALLATION_ID`      | GitHub App installation ID                                                   |
-| `SLACK_BOT_TOKEN`             | Slack bot token (or empty)                                                   |
-| `SLACK_SIGNING_SECRET`        | Slack signing secret (or empty)                                              |
-| `ANTHROPIC_API_KEY`           | Anthropic API key                                                            |
-| `TOKEN_ENCRYPTION_KEY`        | Generated encryption key (OAuth tokens)                                      |
-| `REPO_SECRETS_ENCRYPTION_KEY` | Generated encryption key (repo secrets)                                      |
-| `INTERNAL_CALLBACK_SECRET`    | Generated callback secret                                                    |
-| `MODAL_API_SECRET`            | Generated Modal API secret                                                   |
-| `NEXTAUTH_SECRET`             | Generated NextAuth secret                                                    |
-| `ALLOWED_USERS`               | Comma-separated GitHub usernames (or empty for all users)                    |
-| `ALLOWED_EMAIL_DOMAINS`       | Comma-separated email domains (or empty for all domains)                     |
+| Secret Name                   | Value                                                                         |
+| ----------------------------- | ----------------------------------------------------------------------------- |
+| `CLOUDFLARE_API_TOKEN`        | Your Cloudflare API token                                                     |
+| `CLOUDFLARE_ACCOUNT_ID`       | Your Cloudflare account ID                                                    |
+| `CLOUDFLARE_WORKER_SUBDOMAIN` | Your workers.dev subdomain                                                    |
+| `R2_ACCESS_KEY_ID`            | R2 access key ID                                                              |
+| `R2_SECRET_ACCESS_KEY`        | R2 secret access key                                                          |
+| `VERCEL_API_TOKEN`            | Vercel API token                                                              |
+| `VERCEL_TEAM_ID`              | Vercel team/account ID                                                        |
+| `VERCEL_PROJECT_ID`           | Vercel project ID (from project settings)                                     |
+| `NEXTAUTH_URL`                | Your web app URL (e.g., `https://open-inspect-{deployment_name}.vercel.app`)  |
+| `MODAL_TOKEN_ID`              | Modal token ID                                                                |
+| `MODAL_TOKEN_SECRET`          | Modal token secret                                                            |
+| `MODAL_WORKSPACE`             | Modal workspace name                                                          |
+| `GH_APP_CLIENT_ID`            | GitHub App client ID                                                          |
+| `GH_APP_CLIENT_SECRET`        | GitHub App client secret                                                      |
+| `GH_APP_ID`                   | GitHub App ID                                                                 |
+| `GH_APP_PRIVATE_KEY`          | GitHub App private key (PKCS#8 format)                                        |
+| `GH_APP_INSTALLATION_ID`      | GitHub App installation ID                                                    |
+| `SLACK_BOT_TOKEN`             | Slack bot token (or empty)                                                    |
+| `SLACK_SIGNING_SECRET`        | Slack signing secret (or empty)                                               |
+| `ANTHROPIC_API_KEY`           | Anthropic API key                                                             |
+| `TOKEN_ENCRYPTION_KEY`        | Generated encryption key (OAuth tokens)                                       |
+| `REPO_SECRETS_ENCRYPTION_KEY` | Generated encryption key (repo secrets)                                       |
+| `INTERNAL_CALLBACK_SECRET`    | Generated callback secret                                                     |
+| `MODAL_API_SECRET`            | Generated Modal API secret                                                    |
+| `NEXTAUTH_SECRET`             | Generated NextAuth secret                                                     |
+| `ALLOWED_USERS`               | Comma-separated GitHub usernames (or empty for all users)                     |
+| `ALLOWED_EMAIL_DOMAINS`       | Comma-separated email domains (or empty for all domains)                      |
+| `ENABLE_GITHUB_BOT`           | `true` to deploy GitHub bot worker (or empty to skip)                         |
+| `GH_WEBHOOK_SECRET`           | GitHub webhook secret (required if GitHub bot enabled)                        |
+| `GH_BOT_USERNAME`             | GitHub App bot username, e.g., `my-app[bot]` (required if GitHub bot enabled) |
 
 **Bulk upload secrets with `gh` CLI:**
 
@@ -624,11 +678,12 @@ Terraform references the built worker bundles. Build them before running `terraf
 npm run build -w @open-inspect/shared
 
 # Build workers (required before Terraform)
-npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot
+npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot -w @open-inspect/github-bot
 
 # Verify bundles exist
 ls packages/control-plane/dist/index.js
 ls packages/slack-bot/dist/index.js
+ls packages/github-bot/dist/index.js  # Only if enable_github_bot = true
 ```
 
 ### Slack bot not responding
@@ -649,6 +704,16 @@ If the bot doesn't see the original message when tagged in a thread reply:
    `conversations.info` to fetch channel name and description for context.
 3. If you added missing scopes, **reinstall the app** to your workspace for the new permissions to
    take effect.
+
+### GitHub bot not responding to webhooks
+
+1. Verify the webhook URL matches
+   `https://open-inspect-github-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/webhooks/github`
+2. Check the webhook secret matches `github_webhook_secret` in terraform.tfvars
+3. Confirm `enable_github_bot = true` in terraform.tfvars and the worker is deployed
+4. Check that `github_bot_username` matches your App's bot login (e.g., `my-app[bot]`)
+5. For PR reviews, ensure the bot is assigned as a reviewer (not just mentioned)
+6. For comment actions, ensure the bot is @mentioned in a **PR** comment (not an issue)
 
 ### Durable Objects / Service Binding errors
 
