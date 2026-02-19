@@ -17,7 +17,7 @@ const nextConfig: NextConfig = {
             "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
             "style-src 'self' 'unsafe-inline'",
             "img-src 'self' data: https://avatars.githubusercontent.com",
-            "font-src 'self' https://fonts.gstatic.com",
+            "font-src 'self'",
             `connect-src 'self' ${process.env.NEXT_PUBLIC_WS_URL || ""} ${process.env.CONTROL_PLANE_URL || ""}`,
             "frame-ancestors 'none'",
             "base-uri 'self'",
