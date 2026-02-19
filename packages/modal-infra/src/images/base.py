@@ -23,8 +23,8 @@ SANDBOX_DIR = Path(__file__).parent.parent / "sandbox"
 OPENCODE_VERSION = "latest"
 
 # Cache buster - change this to force Modal image rebuild
-# v38: Rebuild to pick up latest OpenCode with GPT 5.3 Codex Spark support
-CACHE_BUSTER = "v38-opencode-codex-spark"
+# v39: Install gh CLI for agent-direct GitHub interaction
+CACHE_BUSTER = "v39-gh-cli"
 
 # Base image with all development tools
 base_image = (
@@ -55,6 +55,15 @@ base_image = (
         "libasound2",
         "libpango-1.0-0",
         "libcairo2",
+    )
+    # Install GitHub CLI (for agent-direct GitHub interaction via gh API)
+    .run_commands(
+        "curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg"
+        " | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg",
+        "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg]"
+        " https://cli.github.com/packages stable main'"
+        " > /etc/apt/sources.list.d/github-cli.list",
+        "apt-get update && apt-get install -y gh && rm -rf /var/lib/apt/lists/*",
     )
     # Install Node.js 22 LTS
     .run_commands(

@@ -158,6 +158,9 @@ jobs:
       - name: Run control-plane integration tests
         run: npm run test:integration -w @open-inspect/control-plane
 
+      - name: Run github-bot tests
+        run: npm test -w @open-inspect/github-bot
+
       - name: Run web tests
         run: npm test -w @open-inspect/web
 
