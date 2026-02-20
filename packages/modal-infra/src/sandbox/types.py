@@ -116,5 +116,5 @@ class SessionConfig(BaseModel):
     base_sha: str | None = None
     opencode_session_id: str | None = None
     provider: str = "anthropic"
-    model: str = "claude-sonnet-4-5"
+    model: str = "claude-sonnet-4-6"
     git_user: GitUser | None = None
