@@ -148,14 +148,11 @@ export interface SlackAppMentionEvent {
 /**
  * Callback context passed with prompts for follow-up notifications.
  */
-export interface CallbackContext {
-  channel: string;
-  threadTs: string;
-  repoFullName: string;
-  model: string;
-  reasoningEffort?: string;
-  reactionMessageTs?: string;
-}
+export type { SlackCallbackContext, CallbackContext } from "@open-inspect/shared";
+import type { SlackCallbackContext } from "@open-inspect/shared";
+
+// Keep backward-compatible alias
+export type SlackBotCallbackContext = SlackCallbackContext;
 
 /**
  * Thread-to-session mapping stored in KV for conversation continuity.
@@ -179,7 +176,7 @@ export interface CompletionCallback {
   success: boolean;
   timestamp: number;
   signature: string;
-  context: CallbackContext;
+  context: SlackCallbackContext;
 }
 
 /**

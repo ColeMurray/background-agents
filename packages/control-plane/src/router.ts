@@ -18,6 +18,7 @@ import {
   getValidModelOrDefault,
   isValidReasoningEffort,
   DEFAULT_ENABLED_MODELS,
+  type CallbackContext,
 } from "@open-inspect/shared";
 import { ModelPreferencesStore, ModelPreferencesValidationError } from "./db/model-preferences";
 import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
@@ -749,13 +750,7 @@ async function handleSessionPrompt(
     model?: string;
     reasoningEffort?: string;
     attachments?: Array<{ type: string; name: string; url?: string }>;
-    callbackContext?: {
-      channel: string;
-      threadTs: string;
-      repoFullName: string;
-      model: string;
-      reactionMessageTs?: string;
-    };
+    callbackContext?: CallbackContext;
   };
 
   if (!body.content) {

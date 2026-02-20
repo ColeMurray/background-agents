@@ -2,7 +2,7 @@
  * Build Slack Block Kit messages for completion notifications.
  */
 
-import type { AgentResponse, CallbackContext } from "../types";
+import type { AgentResponse, SlackCallbackContext } from "../types";
 import type { ManualPullRequestArtifactMetadata } from "@open-inspect/shared";
 
 /**
@@ -34,7 +34,7 @@ const FALLBACK_TEXT_LIMIT = 150;
 export function buildCompletionBlocks(
   sessionId: string,
   response: AgentResponse,
-  context: CallbackContext,
+  context: SlackCallbackContext,
   webAppUrl: string
 ): SlackBlock[] {
   const blocks: SlackBlock[] = [];

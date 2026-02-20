@@ -264,9 +264,9 @@ class SandboxSupervisor:
         self.log.info("opencode.start")
 
         # Build OpenCode config from session settings
-        # Model format is "provider/model", e.g. "anthropic/claude-sonnet-4-5"
+        # Model format is "provider/model", e.g. "anthropic/claude-sonnet-4-6"
         provider = self.session_config.get("provider", "anthropic")
-        model = self.session_config.get("model", "claude-sonnet-4-5")
+        model = self.session_config.get("model", "claude-sonnet-4-6")
         opencode_config = {
             "model": f"{provider}/{model}",
             "permission": {

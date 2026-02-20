@@ -12,6 +12,7 @@ export interface Env {
 
   // Service bindings
   SLACK_BOT?: Fetcher; // Optional - only if slack-bot is deployed
+  LINEAR_BOT?: Fetcher; // Optional - only if linear-bot is deployed
 
   // D1 database
   DB: D1Database;
@@ -73,7 +74,7 @@ export type ParticipantRole = "owner" | "member";
 export type MessageStatus = "pending" | "processing" | "completed" | "failed";
 
 // Message source
-export type MessageSource = "web" | "slack" | "extension" | "github";
+export type MessageSource = "web" | "slack" | "linear" | "extension" | "github";
 
 // Event types
 export type EventType = "tool_call" | "tool_result" | "token" | "error" | "git_sync";

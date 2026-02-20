@@ -186,7 +186,7 @@ export class ModalClient {
           git_user_name: request.gitUserName || null,
           git_user_email: request.gitUserEmail || null,
           provider: request.provider || "anthropic",
-          model: request.model || "claude-sonnet-4-5",
+          model: request.model || "claude-sonnet-4-6",
           user_env_vars: request.userEnvVars || null,
         }),
       });

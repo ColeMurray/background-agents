@@ -35,6 +35,26 @@ output "slack_bot_worker_name" {
   value       = module.slack_bot_worker.worker_name
 }
 
+output "linear_kv_id" {
+  description = "Linear KV namespace ID"
+  value       = module.linear_kv.namespace_id
+}
+
+output "linear_bot_worker_name" {
+  description = "Linear bot worker name"
+  value       = module.linear_bot_worker.worker_name
+}
+
+output "linear_bot_webhook_url" {
+  description = "Linear bot webhook URL (set in Linear OAuth Application webhook config)"
+  value       = "${module.linear_bot_worker.worker_url}/webhook"
+}
+
+output "linear_bot_oauth_authorize_url" {
+  description = "Visit this URL to install the Linear agent in your workspace (requires admin)"
+  value       = "${module.linear_bot_worker.worker_url}/oauth/authorize"
+}
+
 output "github_bot_worker_name" {
   description = "GitHub bot worker name"
   value       = var.enable_github_bot ? module.github_bot_worker[0].worker_name : null

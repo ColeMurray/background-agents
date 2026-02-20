@@ -606,7 +606,10 @@ class AgentBridge:
         "high": 16_000,
         "max": 31_999,
     }
-    ANTHROPIC_ADAPTIVE_THINKING_MODELS: ClassVar[set[str]] = {"claude-opus-4-6"}
+    ANTHROPIC_ADAPTIVE_THINKING_MODELS: ClassVar[set[str]] = {
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+    }
     ANTHROPIC_ADAPTIVE_EFFORTS: ClassVar[set[str]] = {"low", "medium", "high", "max"}
 
     def _build_prompt_request_body(

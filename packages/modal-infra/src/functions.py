@@ -38,7 +38,7 @@ async def create_sandbox(
     git_user_name: str | None = None,
     git_user_email: str | None = None,
     provider: str = "anthropic",
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-sonnet-4-6",
 ) -> dict:
     """
     Create a new sandbox for a session.

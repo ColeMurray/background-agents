@@ -228,6 +228,19 @@ class TestBuildPromptRequestBody:
             "outputConfig": {"effort": "medium"},
         }
 
+    def test_with_sonnet_4_6_adaptive_thinking(self, bridge: AgentBridge):
+        """Sonnet 4.6 should use adaptive thinking instead of manual budgets."""
+        body = bridge._build_prompt_request_body(
+            "Hello",
+            "anthropic/claude-sonnet-4-6",
+            reasoning_effort="high",
+        )
+
+        assert body["model"]["options"] == {
+            "thinking": {"type": "adaptive"},
+            "outputConfig": {"effort": "high"},
+        }
+
 
 class TestOpenCodeIdentifier:
     """Tests for OpenCode-compatible ascending ID generation."""
