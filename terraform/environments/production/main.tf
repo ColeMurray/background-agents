@@ -281,7 +281,7 @@ module "github_bot_worker" {
   compatibility_date  = "2024-09-23"
   compatibility_flags = ["nodejs_compat"]
 
-  depends_on = [null_resource.github_bot_build, module.control_plane_worker]
+  depends_on = [null_resource.github_bot_build[0], module.control_plane_worker]
 }
 
 # =============================================================================
