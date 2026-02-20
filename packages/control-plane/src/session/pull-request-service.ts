@@ -170,22 +170,19 @@ export class SessionPullRequestService {
         };
       }
 
-      if (!input.promptingAuth) {
-        return this.buildManualPrFallbackResult(session, headBranch, baseBranch, latestArtifacts);
-      }
+      // Use user OAuth if available, otherwise fall back to GitHub App token
+      // (e.g. sessions triggered from Linear or other integrations without user GitHub OAuth)
+      const prAuth = input.promptingAuth ?? appAuth;
 
       const fullBody = input.body + `\n\n---\n*Created with [Open-Inspect](${input.sessionUrl})*`;
 
-      const prResult = await this.deps.sourceControlProvider.createPullRequest(
-        input.promptingAuth,
-        {
-          repository: repoInfo,
-          title: input.title,
-          body: fullBody,
-          sourceBranch: headBranch,
-          targetBranch: baseBranch,
-        }
-      );
+      const prResult = await this.deps.sourceControlProvider.createPullRequest(prAuth, {
+        repository: repoInfo,
+        title: input.title,
+        body: fullBody,
+        sourceBranch: headBranch,
+        targetBranch: baseBranch,
+      });
 
       const artifactId = this.deps.generateId();
       const now = Date.now();

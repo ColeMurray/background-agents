@@ -5,6 +5,7 @@
 import type { CorrelationContext } from "../logger";
 import type { RequestMetrics } from "../db/instrumented-d1";
 import type { Env } from "../types";
+import { getGitHubAppConfig, getInstallationRepository } from "../auth/github-app";
 
 /**
  * Request context with correlation IDs and per-request metrics.
@@ -52,4 +53,26 @@ export function json(data: unknown, status = 200): Response {
  */
 export function error(message: string, status = 400): Response {
   return json({ error: message }, status);
+}
+
+export async function resolveInstalledRepo(
+  env: Env,
+  repoOwner: string,
+  repoName: string
+): Promise<{ repoId: number; repoOwner: string; repoName: string } | null> {
+  const appConfig = getGitHubAppConfig(env);
+  if (!appConfig) {
+    throw new Error("GitHub App not configured");
+  }
+
+  const repo = await getInstallationRepository(appConfig, repoOwner, repoName, env);
+  if (!repo) {
+    return null;
+  }
+
+  return {
+    repoId: repo.id,
+    repoOwner: repoOwner.toLowerCase(),
+    repoName: repoName.toLowerCase(),
+  };
 }

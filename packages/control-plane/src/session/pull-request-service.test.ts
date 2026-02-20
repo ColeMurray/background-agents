@@ -186,15 +186,18 @@ describe("SessionPullRequestService", () => {
     });
   });
 
-  it("returns manual fallback when prompting auth is unavailable", async () => {
+  it("creates PR with app auth when prompting auth is unavailable", async () => {
     const result = await harness.service.createPullRequest(createInput({ promptingAuth: null }));
 
-    expect(result.kind).toBe("manual");
-    if (result.kind === "manual") {
-      expect(result.createPrUrl).toContain("/pull/new/");
-      expect(result.headBranch).toBe("open-inspect/session-name-1");
-      expect(result.baseBranch).toBe("main");
-    }
+    expect(result).toEqual({
+      kind: "created",
+      prNumber: 42,
+      prUrl: "https://github.com/acme/web/pull/42",
+      state: "open",
+    });
+    const createPrCall = (harness.provider.createPullRequest as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    expect(createPrCall[0]).toEqual({ authType: "app", token: "app-token" });
     expect(harness.deps.broadcastArtifactCreated).toHaveBeenCalledTimes(1);
   });
 
@@ -224,7 +227,7 @@ describe("SessionPullRequestService", () => {
     });
   });
 
-  it("reuses existing manual artifact URL for same branch", async () => {
+  it("ignores prior manual branch artifact and creates PR", async () => {
     harness.artifacts.push({
       id: "branch-artifact-1",
       type: "branch",
@@ -240,11 +243,11 @@ describe("SessionPullRequestService", () => {
     const result = await harness.service.createPullRequest(createInput({ promptingAuth: null }));
 
     expect(result).toEqual({
-      kind: "manual",
-      createPrUrl: "https://existing.example.com/manual-pr",
-      headBranch: "open-inspect/session-name-1",
-      baseBranch: "main",
+      kind: "created",
+      prNumber: 42,
+      prUrl: "https://github.com/acme/web/pull/42",
+      state: "open",
     });
-    expect(harness.deps.broadcastArtifactCreated).not.toHaveBeenCalled();
+    expect(harness.provider.createPullRequest).toHaveBeenCalledTimes(1);
   });
 });

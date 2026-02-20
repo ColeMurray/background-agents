@@ -137,7 +137,7 @@ describe("POST /internal/create-pr", () => {
     );
   });
 
-  it("returns manual fallback and stores branch artifact when prompting user has no OAuth token", async () => {
+  it("creates PR with app auth when prompting user has no OAuth token", async () => {
     const { stub } = await initSession({ userId: "user-1" });
 
     const participants = await queryDO<{ id: string }>(
@@ -172,9 +172,14 @@ describe("POST /internal/create-pr", () => {
           isPrivate: true,
           providerRepoId: 12345,
         }),
-        createPullRequest: async () => {
-          throw new Error("createPullRequest should not be called for manual fallback");
-        },
+        createPullRequest: async () => ({
+          id: 42,
+          webUrl: "https://github.com/acme/web-app/pull/42",
+          apiUrl: "https://api.github.com/repos/acme/web-app/pulls/42",
+          state: "open" as const,
+          sourceBranch: "open-inspect/test-session",
+          targetBranch: "main",
+        }),
         buildManualPullRequestUrl: (config: {
           owner: string;
           name: string;
@@ -207,22 +212,20 @@ describe("POST /internal/create-pr", () => {
 
     expect(res.status).toBe(200);
     const body = await res.json<{
-      status: string;
-      createPrUrl: string;
-      headBranch: string;
-      baseBranch: string;
+      prNumber: number;
+      prUrl: string;
+      state: string;
     }>();
-    expect(body.status).toBe("manual");
-    expect(body.createPrUrl).toContain("/pull/new/");
-    expect(body.headBranch.length).toBeGreaterThan(0);
-    expect(body.baseBranch).toBe("main");
+    expect(body.prNumber).toBe(42);
+    expect(body.prUrl).toBe("https://github.com/acme/web-app/pull/42");
+    expect(body.state).toBe("open");
 
     const artifacts = await queryDO<{ type: string; metadata: string | null }>(
       stub,
       "SELECT type, metadata FROM artifacts ORDER BY created_at DESC LIMIT 1"
     );
-    expect(artifacts[0]?.type).toBe("branch");
-    expect(artifacts[0]?.metadata).toContain('"mode":"manual_pr"');
+    expect(artifacts[0]?.type).toBe("pr");
+    expect(artifacts[0]?.metadata).toContain('"number":42');
   });
 
   it("returns 409 when a PR artifact already exists", async () => {

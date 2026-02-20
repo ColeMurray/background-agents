@@ -868,16 +868,17 @@ describe("SessionRepository", () => {
 
   describe("getMessageCallbackContext", () => {
     it("returns null for unknown message", () => {
-      mock.setData(`SELECT callback_context FROM messages WHERE id = ?`, []);
+      mock.setData(`SELECT callback_context, source FROM messages WHERE id = ?`, []);
       expect(repo.getMessageCallbackContext("unknown")).toBeNull();
     });
 
     it("returns callback context", () => {
-      mock.setData(`SELECT callback_context FROM messages WHERE id = ?`, [
-        { callback_context: '{"channel":"C123"}' },
+      mock.setData(`SELECT callback_context, source FROM messages WHERE id = ?`, [
+        { callback_context: '{"channel":"C123"}', source: "slack" },
       ]);
       expect(repo.getMessageCallbackContext("msg-1")).toEqual({
         callback_context: '{"channel":"C123"}',
+        source: "slack",
       });
     });
   });

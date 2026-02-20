@@ -20,6 +20,7 @@ locals {
   # Worker script paths (deterministic output locations)
   control_plane_script_path = "${var.project_root}/packages/control-plane/dist/index.js"
   slack_bot_script_path     = "${var.project_root}/packages/slack-bot/dist/index.js"
+  linear_bot_script_path    = "${var.project_root}/packages/linear-bot/dist/index.js"
   github_bot_script_path    = "${var.project_root}/packages/github-bot/dist/index.js"
 }
 
@@ -39,6 +40,13 @@ module "slack_kv" {
 
   account_id     = var.cloudflare_account_id
   namespace_name = "open-inspect-slack-kv-${local.name_suffix}"
+}
+
+module "linear_kv" {
+  source = "../../modules/cloudflare-kv"
+
+  account_id     = var.cloudflare_account_id
+  namespace_name = "open-inspect-linear-kv-${local.name_suffix}"
 }
 
 # =============================================================================
@@ -118,6 +126,10 @@ module "control_plane_worker" {
     {
       binding_name = "SLACK_BOT"
       service_name = "open-inspect-slack-bot-${local.name_suffix}"
+    },
+    {
+      binding_name = "LINEAR_BOT"
+      service_name = "open-inspect-linear-bot-${local.name_suffix}"
     }
   ]
 
@@ -265,6 +277,68 @@ module "github_bot_worker" {
   compatibility_flags = ["nodejs_compat"]
 
   depends_on = [null_resource.github_bot_build, module.control_plane_worker]
+}
+
+# =============================================================================
+# Linear Bot Worker
+# =============================================================================
+
+# Build linear-bot worker bundle (only runs during apply, not plan)
+resource "null_resource" "linear_bot_build" {
+  triggers = {
+    always_run = timestamp()
+  }
+
+  provisioner "local-exec" {
+    command     = "npm run build"
+    working_dir = "${var.project_root}/packages/linear-bot"
+  }
+}
+
+module "linear_bot_worker" {
+  source = "../../modules/cloudflare-worker"
+
+  account_id  = var.cloudflare_account_id
+  worker_name = "open-inspect-linear-bot-${local.name_suffix}"
+  script_path = local.linear_bot_script_path
+
+  kv_namespaces = [
+    {
+      binding_name = "LINEAR_KV"
+      namespace_id = module.linear_kv.namespace_id
+    }
+  ]
+
+  service_bindings = [
+    {
+      binding_name = "CONTROL_PLANE"
+      service_name = "open-inspect-control-plane-${local.name_suffix}"
+    }
+  ]
+
+  enable_service_bindings = var.enable_service_bindings
+
+  plain_text_bindings = [
+    { name = "CONTROL_PLANE_URL", value = local.control_plane_url },
+    { name = "WEB_APP_URL", value = local.web_app_url },
+    { name = "DEPLOYMENT_NAME", value = var.deployment_name },
+    { name = "DEFAULT_MODEL", value = "claude-sonnet-4-6" },
+    { name = "LINEAR_CLIENT_ID", value = var.linear_client_id },
+    { name = "WORKER_URL", value = "https://open-inspect-linear-bot-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev" },
+  ]
+
+  secrets = [
+    { name = "LINEAR_WEBHOOK_SECRET", value = var.linear_webhook_secret },
+    { name = "LINEAR_CLIENT_SECRET", value = var.linear_client_secret },
+    { name = "INTERNAL_CALLBACK_SECRET", value = var.internal_callback_secret },
+    { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+    { name = "LINEAR_API_KEY", value = var.linear_api_key },
+  ]
+
+  compatibility_date  = "2024-09-23"
+  compatibility_flags = ["nodejs_compat"]
+
+  depends_on = [null_resource.linear_bot_build, module.linear_kv, module.control_plane_worker]
 }
 
 # =============================================================================

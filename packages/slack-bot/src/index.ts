@@ -583,6 +583,7 @@ async function startSessionAndSendPrompt(
 
   // Build callback context for follow-up notification
   const callbackContext: CallbackContext = {
+    source: "slack",
     channel,
     threadTs,
     repoFullName: repo.fullName,
@@ -878,6 +879,7 @@ async function handleAppMention(
     const existingSession = await lookupThreadSession(env, channel, thread_ts);
     if (existingSession) {
       const callbackContext: CallbackContext = {
+        source: "slack",
         channel,
         threadTs: thread_ts,
         repoFullName: existingSession.repoFullName,

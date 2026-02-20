@@ -490,9 +490,17 @@ export class SessionRepository {
     return rows[0] ?? null;
   }
 
-  getMessageCallbackContext(messageId: string): { callback_context: string | null } | null {
-    const result = this.sql.exec(`SELECT callback_context FROM messages WHERE id = ?`, messageId);
-    const rows = result.toArray() as Array<{ callback_context: string | null }>;
+  getMessageCallbackContext(
+    messageId: string
+  ): { callback_context: string | null; source: string | null } | null {
+    const result = this.sql.exec(
+      `SELECT callback_context, source FROM messages WHERE id = ?`,
+      messageId
+    );
+    const rows = result.toArray() as Array<{
+      callback_context: string | null;
+      source: string | null;
+    }>;
     return rows[0] ?? null;
   }
 
