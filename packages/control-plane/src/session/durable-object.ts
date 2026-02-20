@@ -562,32 +562,37 @@ export class SessionDO extends DurableObject<Env> {
     this.ensureInitialized();
     const { kind } = this.wsManager.classify(ws);
 
-    if (kind === "sandbox") {
-      const wasActive = this.wsManager.clearSandboxSocketIfMatch(ws);
-      if (!wasActive) {
-        // sandboxWs points to a different socket — this close is for a replaced connection.
-        this.log.debug("Ignoring close for replaced sandbox socket", { code });
-        return;
-      }
+    try {
+      if (kind === "sandbox") {
+        const wasActive = this.wsManager.clearSandboxSocketIfMatch(ws);
+        if (!wasActive) {
+          // sandboxWs points to a different socket — this close is for a replaced connection.
+          this.log.debug("Ignoring close for replaced sandbox socket", { code });
+          return;
+        }
 
-      const isNormalClose = code === 1000 || code === 1001;
-      if (isNormalClose) {
-        this.updateSandboxStatus("stopped");
+        const isNormalClose = code === 1000 || code === 1001;
+        if (isNormalClose) {
+          this.updateSandboxStatus("stopped");
+        } else {
+          // Abnormal close (e.g., 1006): leave status unchanged so the bridge can reconnect.
+          // Schedule a heartbeat check to detect truly dead sandboxes.
+          this.log.warn("Sandbox WebSocket abnormal close", {
+            event: "sandbox.abnormal_close",
+            code,
+            reason,
+          });
+          await this.lifecycleManager.scheduleDisconnectCheck();
+        }
       } else {
-        // Abnormal close (e.g., 1006): leave status unchanged so the bridge can reconnect.
-        // Schedule a heartbeat check to detect truly dead sandboxes.
-        this.log.warn("Sandbox WebSocket abnormal close", {
-          event: "sandbox.abnormal_close",
-          code,
-          reason,
-        });
-        await this.lifecycleManager.scheduleDisconnectCheck();
+        const client = this.wsManager.removeClient(ws);
+        if (client) {
+          this.broadcast({ type: "presence_leave", userId: client.userId });
+        }
       }
-    } else {
-      const client = this.wsManager.removeClient(ws);
-      if (client) {
-        this.broadcast({ type: "presence_leave", userId: client.userId });
-      }
+    } finally {
+      // Reciprocate the peer close to complete the WebSocket close handshake.
+      this.wsManager.close(ws, code, reason);
     }
   }
 
