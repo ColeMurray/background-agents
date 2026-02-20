@@ -255,12 +255,13 @@ async function handleCompletionCallback(
           issue_id: context.issueId,
           issue_identifier: context.issueIdentifier,
           agent_session_id: context.agentSessionId,
-          outcome: "success",
+          outcome: payload.success ? "success" : "failed",
           has_pr: agentResponse.artifacts.some((a) => a.type === "pr" && a.url),
           agent_success: payload.success,
           tool_call_count: agentResponse.toolCalls.length,
           artifact_count: agentResponse.artifacts.length,
           delivery: "agent_activity",
+          delivery_outcome: "success",
           duration_ms: Date.now() - startTime,
         });
         return;
@@ -292,9 +293,10 @@ async function handleCompletionCallback(
       trace_id: traceId,
       session_id: sessionId,
       issue_id: context.issueId,
-      outcome: result.success ? "success" : "error",
+      outcome: payload.success ? "success" : "failed",
       agent_success: payload.success,
       delivery: "comment_fallback",
+      delivery_outcome: result.success ? "success" : "error",
       duration_ms: Date.now() - startTime,
     });
   } catch (error) {
