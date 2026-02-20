@@ -34,7 +34,6 @@ import {
   DEFAULT_MODEL,
   isValidModel,
   isValidReasoningEffort,
-  getDefaultReasoningEffort,
   getValidModelOrDefault,
 } from "../utils/models";
 import type {
@@ -45,22 +44,22 @@ import type {
   SandboxEvent,
   SessionState,
   SandboxStatus,
-  MessageSource,
   ParticipantRole,
 } from "../types";
-import type { SessionRow, ParticipantRow, ArtifactRow, SandboxRow, SandboxCommand } from "./types";
+import type { SessionRow, ParticipantRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
 import { SessionPullRequestService } from "./pull-request-service";
-import { shouldPersistToolCallEvent } from "./event-persistence";
 import { RepoSecretsStore } from "../db/repo-secrets";
-import { SessionIndexStore } from "../db/session-index";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { ParticipantService, getGitHubAvatarUrl } from "./participant-service";
 import { CallbackNotificationService } from "./callback-notification-service";
 import { PresenceService } from "./presence-service";
+import { SessionMessageQueue } from "./message-queue";
+import { SessionSandboxEventProcessor } from "./sandbox-events";
+import type { SessionContext } from "./session-context";
 
 /**
  * Valid event types for filtering.
@@ -110,11 +109,6 @@ export class SessionDO extends DurableObject<Env> {
   private log: Logger;
   // WebSocket manager (lazily initialized like lifecycleManager)
   private _wsManager: SessionWebSocketManager | null = null;
-  // Track pending push operations by branch name
-  private pendingPushResolvers = new Map<
-    string,
-    { resolve: () => void; reject: (err: Error) => void }
-  >();
   // Lifecycle manager (lazily initialized)
   private _lifecycleManager: SandboxLifecycleManager | null = null;
   // Source control provider (lazily initialized)
@@ -125,6 +119,10 @@ export class SessionDO extends DurableObject<Env> {
   private _callbackService: CallbackNotificationService | null = null;
   // Presence service (lazily initialized)
   private _presenceService: PresenceService | null = null;
+  // Message queue service (lazily initialized)
+  private _messageQueue: SessionMessageQueue | null = null;
+  // Sandbox event processor (lazily initialized)
+  private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
 
   // Route table for internal API endpoints
   private readonly routes: InternalRoute[] = [
@@ -265,6 +263,65 @@ export class SessionDO extends DurableObject<Env> {
     return this._wsManager;
   }
 
+  private get messageQueue(): SessionMessageQueue {
+    if (!this._messageQueue) {
+      this._messageQueue = new SessionMessageQueue({
+        env: this.env,
+        ctx: this.ctx,
+        log: this.log,
+        repository: this.repository,
+        wsManager: this.wsManager,
+        participantService: this.participantService,
+        callbackService: this.callbackService,
+        getClientInfo: (ws) => this.getClientInfo(ws),
+        validateReasoningEffort: (model, effort) => this.validateReasoningEffort(model, effort),
+        getSession: () => this.getSession(),
+        updateLastActivity: (timestamp) => this.updateLastActivity(timestamp),
+        spawnSandbox: () => this.spawnSandbox(),
+        broadcast: (message) => this.broadcast(message),
+      });
+    }
+
+    return this._messageQueue;
+  }
+
+  private get sandboxEventProcessor(): SessionSandboxEventProcessor {
+    if (!this._sandboxEventProcessor) {
+      this._sandboxEventProcessor = new SessionSandboxEventProcessor({
+        ctx: this.ctx,
+        log: this.log,
+        repository: this.repository,
+        callbackService: this.callbackService,
+        wsManager: this.wsManager,
+        broadcast: (message) => this.broadcast(message),
+        getIsProcessing: () => this.getIsProcessing(),
+        triggerSnapshot: (reason) => this.triggerSnapshot(reason),
+        updateLastActivity: (timestamp) => this.updateLastActivity(timestamp),
+        scheduleInactivityCheck: () => this.scheduleInactivityCheck(),
+        processMessageQueue: () => this.messageQueue.processMessageQueue(),
+      });
+    }
+
+    return this._sandboxEventProcessor;
+  }
+
+  private createSessionContext(): SessionContext {
+    return {
+      env: this.env,
+      ctx: this.ctx,
+      log: this.log,
+      repository: this.repository,
+      wsManager: this.wsManager,
+      lifecycleManager: this.lifecycleManager,
+      sourceControlProvider: this.sourceControlProvider,
+      participantService: this.participantService,
+      callbackService: this.callbackService,
+      presenceService: this.presenceService,
+      now: () => Date.now(),
+      generateId: (bytes?: number) => generateId(bytes),
+    };
+  }
+
   /**
    * Create the source control provider.
    */
@@ -383,13 +440,6 @@ export class SessionDO extends DurableObject<Env> {
    */
   private safeSend(ws: WebSocket, message: string | object): boolean {
     return this.wsManager.send(ws, message);
-  }
-
-  /**
-   * Normalize branch name for comparison to handle case and whitespace differences.
-   */
-  private normalizeBranchName(name: string): string {
-    return name.trim().toLowerCase();
   }
 
   /**
@@ -908,92 +958,7 @@ export class SessionDO extends DurableObject<Env> {
       attachments?: Array<{ type: string; name: string; url?: string; content?: string }>;
     }
   ): Promise<void> {
-    const client = this.getClientInfo(ws);
-    if (!client) {
-      this.safeSend(ws, {
-        type: "error",
-        code: "NOT_SUBSCRIBED",
-        message: "Must subscribe first",
-      });
-      return;
-    }
-
-    const messageId = generateId();
-    const now = Date.now();
-
-    // Get or create participant
-    let participant = this.participantService.getByUserId(client.userId);
-    if (!participant) {
-      participant = this.participantService.create(client.userId, client.name);
-    }
-
-    // Validate per-message model override if provided
-    let messageModel: string | null = null;
-    if (data.model) {
-      if (isValidModel(data.model)) {
-        messageModel = data.model;
-      } else {
-        this.log.warn("Invalid message model, ignoring override", { model: data.model });
-      }
-    }
-
-    // Validate per-message reasoning effort if provided
-    const effectiveModelForEffort = messageModel || this.getSession()?.model || DEFAULT_MODEL;
-    const messageReasoningEffort = this.validateReasoningEffort(
-      effectiveModelForEffort,
-      data.reasoningEffort
-    );
-
-    // Insert message with optional model and reasoning effort overrides
-    this.repository.createMessage({
-      id: messageId,
-      authorId: participant.id,
-      content: data.content,
-      source: "web",
-      model: messageModel,
-      reasoningEffort: messageReasoningEffort,
-      attachments: data.attachments ? JSON.stringify(data.attachments) : null,
-      status: "pending",
-      createdAt: now,
-    });
-
-    this.writeUserMessageEvent(participant, data.content, messageId, now);
-
-    // Get queue position
-    const position = this.repository.getPendingOrProcessingCount();
-
-    this.log.info("prompt.enqueue", {
-      event: "prompt.enqueue",
-      message_id: messageId,
-      source: "web",
-      author_id: participant.id,
-      user_id: client.userId,
-      model: messageModel,
-      reasoning_effort: messageReasoningEffort,
-      content_length: data.content.length,
-      has_attachments: !!data.attachments?.length,
-      attachments_count: data.attachments?.length ?? 0,
-      queue_position: position,
-    });
-
-    // Background: update D1 timestamp so session bubbles to top of sidebar
-    if (this.env.DB) {
-      const store = new SessionIndexStore(this.env.DB);
-      const sessionId = this.getSession()?.id;
-      if (sessionId) {
-        this.ctx.waitUntil(store.touchUpdatedAt(sessionId).catch(() => {}));
-      }
-    }
-
-    // Confirm to sender
-    this.safeSend(ws, {
-      type: "prompt_queued",
-      messageId,
-      position,
-    } as ServerMessage);
-
-    // Process queue
-    await this.processMessageQueue();
+    await this.messageQueue.handlePromptMessage(ws, data);
   }
 
   /**
@@ -1067,154 +1032,7 @@ export class SessionDO extends DurableObject<Env> {
    * Process sandbox event.
    */
   private async processSandboxEvent(event: SandboxEvent): Promise<void> {
-    // Heartbeats and token streams are high-frequency — keep at debug to avoid noise
-    // execution_complete is covered by the prompt.complete wide event below
-    if (event.type === "heartbeat" || event.type === "token") {
-      this.log.debug("Sandbox event", { event_type: event.type });
-    } else if (event.type !== "execution_complete") {
-      this.log.info("Sandbox event", { event_type: event.type });
-    }
-    const now = Date.now();
-
-    // Heartbeats update the sandbox table (for health monitoring) but are not
-    // stored as events — they are high-frequency noise that drowns out real
-    // content in replay and pagination queries.
-    if (event.type === "heartbeat") {
-      this.repository.updateSandboxHeartbeat(now);
-      return;
-    }
-
-    // Get messageId from the event first (sandbox sends correct messageId with every event)
-    // Only fall back to DB lookup if event doesn't include messageId (legacy fallback)
-    // This prevents race conditions where events from message A arrive after message B starts processing
-    const eventMessageId = "messageId" in event ? event.messageId : null;
-    const processingMessage = this.repository.getProcessingMessage();
-    const messageId = eventMessageId ?? processingMessage?.id ?? null;
-
-    if (event.type === "token") {
-      if (messageId) {
-        this.repository.upsertTokenEvent(messageId, event, now);
-      }
-      this.broadcast({ type: "sandbox_event", event });
-      return;
-    }
-
-    if (event.type === "step_start" || event.type === "step_finish") {
-      this.broadcast({ type: "sandbox_event", event });
-      return;
-    }
-
-    if (event.type === "tool_call") {
-      if (shouldPersistToolCallEvent(event.status)) {
-        this.repository.createEvent({
-          id: generateId(),
-          type: event.type,
-          data: JSON.stringify(event),
-          messageId,
-          createdAt: now,
-        });
-      }
-      this.broadcast({ type: "sandbox_event", event });
-
-      // Fire-and-forget tool_call callback to originating client (e.g. linear-bot)
-      if (messageId && event.status === "running") {
-        this.ctx.waitUntil(this.callbackService.notifyToolCall(messageId, event).catch(() => {}));
-      }
-      return;
-    }
-
-    if (event.type === "tool_result") {
-      this.repository.createEvent({
-        id: generateId(),
-        type: event.type,
-        data: JSON.stringify(event),
-        messageId,
-        createdAt: now,
-      });
-      this.broadcast({ type: "sandbox_event", event });
-      return;
-    }
-
-    // Handle specific event types
-    if (event.type === "execution_complete") {
-      if (messageId) {
-        this.repository.upsertExecutionCompleteEvent(messageId, event, now);
-      }
-
-      // messageId already incorporates event.messageId (line above), so no extra fallback needed
-      const completionMessageId = messageId;
-
-      // Only update message status if it's still processing (not already stopped)
-      const isStillProcessing =
-        completionMessageId != null && processingMessage?.id === completionMessageId;
-
-      if (isStillProcessing) {
-        // Normal path: message still processing, complete it as before
-        const status = event.success ? "completed" : "failed";
-        this.repository.updateMessageCompletion(completionMessageId, status, now);
-
-        const timestamps = this.repository.getMessageTimestamps(completionMessageId);
-        const totalDurationMs = timestamps ? now - timestamps.created_at : undefined;
-        const processingDurationMs =
-          timestamps?.started_at != null ? now - timestamps.started_at : undefined;
-        const queueDurationMs =
-          timestamps?.started_at != null
-            ? timestamps.started_at - timestamps.created_at
-            : undefined;
-
-        this.log.info("prompt.complete", {
-          event: "prompt.complete",
-          message_id: completionMessageId,
-          outcome: event.success ? "success" : "failure",
-          message_status: status,
-          total_duration_ms: totalDurationMs,
-          processing_duration_ms: processingDurationMs,
-          queue_duration_ms: queueDurationMs,
-        });
-
-        this.broadcast({ type: "sandbox_event", event });
-        this.broadcast({ type: "processing_status", isProcessing: this.getIsProcessing() });
-        this.ctx.waitUntil(this.callbackService.notifyComplete(completionMessageId, event.success));
-      } else {
-        // Stopped path: message was already marked failed by stopExecution()
-        this.log.info("prompt.complete", {
-          event: "prompt.complete",
-          message_id: completionMessageId,
-          outcome: "already_stopped",
-        });
-      }
-
-      // Always run these regardless of stop (snapshot, activity, queue drain)
-      this.ctx.waitUntil(this.triggerSnapshot("execution_complete"));
-      this.updateLastActivity(now);
-      await this.scheduleInactivityCheck();
-      await this.processMessageQueue();
-      return; // execution_complete handling is done; skip the generic broadcast below
-    }
-
-    this.repository.createEvent({
-      id: generateId(),
-      type: event.type,
-      data: JSON.stringify(event),
-      messageId,
-      createdAt: now,
-    });
-
-    if (event.type === "git_sync") {
-      this.repository.updateSandboxGitSyncStatus(event.status);
-
-      if (event.sha) {
-        this.repository.updateSessionCurrentSha(event.sha);
-      }
-    }
-
-    // Handle push completion events
-    if (event.type === "push_complete" || event.type === "push_error") {
-      this.handlePushEvent(event);
-    }
-
-    // Broadcast to clients (all non-execution_complete events)
-    this.broadcast({ type: "sandbox_event", event });
+    await this.sandboxEventProcessor.processSandboxEvent(event);
   }
 
   /**
@@ -1227,88 +1045,7 @@ export class SessionDO extends DurableObject<Env> {
     branchName: string,
     pushSpec: GitPushSpec
   ): Promise<{ success: true } | { success: false; error: string }> {
-    const sandboxWs = this.wsManager.getSandboxSocket();
-
-    if (!sandboxWs) {
-      // No sandbox connected - user may have already pushed manually
-      this.log.info("No sandbox connected, assuming branch was pushed manually");
-      return { success: true };
-    }
-
-    // Create a promise that will be resolved when push_complete event arrives
-    // Use normalized branch name for map key to handle case/whitespace differences
-    const normalizedBranch = this.normalizeBranchName(branchName);
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-
-    const pushPromise = new Promise<void>((resolve, reject) => {
-      this.pendingPushResolvers.set(normalizedBranch, { resolve, reject });
-
-      // Timeout after 180 seconds (3 minutes) - git push can take a while
-      timeoutId = setTimeout(() => {
-        if (this.pendingPushResolvers.has(normalizedBranch)) {
-          this.pendingPushResolvers.delete(normalizedBranch);
-          reject(new Error("Push operation timed out after 180 seconds"));
-        }
-      }, 180000);
-    });
-
-    // Tell sandbox to push the branch using provider-generated transport details.
-    this.log.info("Sending push command", { branch_name: branchName });
-    this.safeSend(sandboxWs, {
-      type: "push",
-      pushSpec,
-    });
-
-    // Wait for push_complete or push_error event
-    try {
-      await pushPromise;
-      this.log.info("Push completed successfully", { branch_name: branchName });
-      return { success: true };
-    } catch (pushError) {
-      this.log.error("Push failed", {
-        branch_name: branchName,
-        error: pushError instanceof Error ? pushError : String(pushError),
-      });
-      return { success: false, error: `Failed to push branch: ${pushError}` };
-    } finally {
-      // Clean up timeout to prevent memory leaks
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-    }
-  }
-
-  /**
-   * Handle push completion or error events from sandbox.
-   * Resolves or rejects the pending push promise for the branch.
-   */
-  private handlePushEvent(event: SandboxEvent): void {
-    const branchName = (event as { branchName?: string }).branchName;
-
-    if (!branchName) {
-      return;
-    }
-
-    const normalizedBranch = this.normalizeBranchName(branchName);
-    const resolver = this.pendingPushResolvers.get(normalizedBranch);
-
-    if (!resolver) {
-      return;
-    }
-
-    if (event.type === "push_complete") {
-      this.log.info("Push completed, resolving promise", {
-        branch_name: branchName,
-        pending_resolvers: Array.from(this.pendingPushResolvers.keys()),
-      });
-      resolver.resolve();
-    } else if (event.type === "push_error") {
-      const error = (event as { error?: string }).error || "Push failed";
-      this.log.warn("Push failed for branch", { branch_name: branchName, error });
-      resolver.reject(new Error(error));
-    }
-
-    this.pendingPushResolvers.delete(normalizedBranch);
+    return await this.sandboxEventProcessor.pushBranchToRemote(branchName, pushSpec);
   }
 
   /**
@@ -1323,90 +1060,7 @@ export class SessionDO extends DurableObject<Env> {
    * Process message queue.
    */
   private async processMessageQueue(): Promise<void> {
-    // Check if already processing
-    if (this.repository.getProcessingMessage()) {
-      this.log.debug("processMessageQueue: already processing, returning");
-      return;
-    }
-
-    // Get next pending message
-    const message = this.repository.getNextPendingMessage();
-    if (!message) {
-      return;
-    }
-    const now = Date.now();
-
-    // Check if sandbox is connected (with hibernation recovery)
-    const sandboxWs = this.wsManager.getSandboxSocket();
-    if (!sandboxWs) {
-      // No sandbox connected - spawn one if not already spawning
-      // spawnSandbox has its own persisted status check
-      this.log.info("prompt.dispatch", {
-        event: "prompt.dispatch",
-        message_id: message.id,
-        outcome: "deferred",
-        reason: "no_sandbox",
-      });
-      this.broadcast({ type: "sandbox_spawning" });
-      await this.spawnSandbox();
-      // Don't mark as processing yet - wait for sandbox to connect
-      return;
-    }
-
-    // Mark as processing
-    this.repository.updateMessageToProcessing(message.id, now);
-
-    // Broadcast processing status change (hardcoded true since we just set status above)
-    this.broadcast({ type: "processing_status", isProcessing: true });
-
-    // Reset activity timer - user is actively using the sandbox
-    this.updateLastActivity(now);
-
-    // Get author info (use toArray since author may not exist in participants table)
-    const author = this.repository.getParticipantById(message.author_id);
-
-    // Get session for default model
-    const session = this.getSession();
-
-    // Send to sandbox with model (per-message override or session default)
-    const resolvedModel = getValidModelOrDefault(message.model || session?.model);
-
-    // Resolve reasoning effort: per-message > session default > model default
-    const resolvedEffort =
-      message.reasoning_effort ??
-      session?.reasoning_effort ??
-      getDefaultReasoningEffort(resolvedModel);
-
-    const command: SandboxCommand = {
-      type: "prompt",
-      messageId: message.id,
-      content: message.content,
-      model: resolvedModel,
-      reasoningEffort: resolvedEffort,
-      author: {
-        userId: author?.user_id ?? "unknown",
-        githubName: author?.github_name ?? null,
-        githubEmail: author?.github_email ?? null,
-      },
-      attachments: message.attachments ? JSON.parse(message.attachments) : undefined,
-    };
-
-    const sent = this.safeSend(sandboxWs, command);
-
-    this.log.info("prompt.dispatch", {
-      event: "prompt.dispatch",
-      message_id: message.id,
-      outcome: sent ? "sent" : "send_failed",
-      model: resolvedModel,
-      reasoning_effort: resolvedEffort,
-      author_id: message.author_id,
-      user_id: author?.user_id ?? "unknown",
-      source: message.source,
-      has_sandbox_ws: true,
-      sandbox_ready_state: sandboxWs.readyState,
-      queue_wait_ms: now - message.created_at,
-      has_attachments: !!message.attachments,
-    });
+    await this.messageQueue.processMessageQueue();
   }
 
   /**
@@ -1424,49 +1078,7 @@ export class SessionDO extends DurableObject<Env> {
    * so all clients flush buffered tokens, and forwards stop to the sandbox.
    */
   private async stopExecution(): Promise<void> {
-    const now = Date.now();
-    const processingMessage = this.repository.getProcessingMessage();
-
-    if (processingMessage) {
-      this.repository.updateMessageCompletion(processingMessage.id, "failed", now);
-      this.log.info("prompt.stopped", {
-        event: "prompt.stopped",
-        message_id: processingMessage.id,
-      });
-
-      const syntheticExecutionComplete: Extract<SandboxEvent, { type: "execution_complete" }> = {
-        type: "execution_complete",
-        messageId: processingMessage.id,
-        success: false,
-        sandboxId: "",
-        timestamp: now / 1000,
-      };
-      this.repository.upsertExecutionCompleteEvent(
-        processingMessage.id,
-        syntheticExecutionComplete,
-        now
-      );
-
-      // Broadcast synthetic execution_complete so ALL clients flush buffered tokens.
-      // (The stop-clicking client flushes locally, but other connected clients don't.)
-      this.broadcast({
-        type: "sandbox_event",
-        event: syntheticExecutionComplete,
-      });
-
-      // Notify slack-bot now because the bridge's late execution_complete will hit
-      // the "already_stopped" branch in processSandboxEvent() which skips notification.
-      this.ctx.waitUntil(this.callbackService.notifyComplete(processingMessage.id, false));
-    }
-
-    // Immediate client feedback
-    this.broadcast({ type: "processing_status", isProcessing: false });
-
-    // Forward stop to sandbox (bridge cancels its task)
-    const sandboxWs = this.wsManager.getSandboxSocket();
-    if (sandboxWs) {
-      this.wsManager.send(sandboxWs, { type: "stop" });
-    }
+    await this.messageQueue.stopExecution();
   }
 
   /**
@@ -1728,25 +1340,7 @@ export class SessionDO extends DurableObject<Env> {
     messageId: string,
     now: number
   ): void {
-    const userMessageEvent: SandboxEvent = {
-      type: "user_message",
-      content,
-      messageId,
-      timestamp: now / 1000, // Convert to seconds to match other events
-      author: {
-        participantId: participant.id,
-        name: participant.github_name || participant.github_login || participant.user_id,
-        avatar: getGitHubAvatarUrl(participant.github_login),
-      },
-    };
-    this.repository.createEvent({
-      id: generateId(),
-      type: "user_message",
-      data: JSON.stringify(userMessageEvent),
-      messageId,
-      createdAt: now,
-    });
-    this.broadcast({ type: "sandbox_event", event: userMessageEvent });
+    this.messageQueue.writeUserMessageEvent(participant, content, messageId, now);
   }
 
   private updateSandboxStatus(status: string): void {
@@ -1894,68 +1488,7 @@ export class SessionDO extends DurableObject<Env> {
         callbackContext?: Record<string, unknown>;
       };
 
-      // Get or create participant for the author
-      // The authorId here is a user ID (like "anonymous"), not a participant row ID
-      let participant = this.participantService.getByUserId(body.authorId);
-      if (!participant) {
-        participant = this.participantService.create(body.authorId, body.authorId);
-      }
-
-      const messageId = generateId();
-      const now = Date.now();
-
-      // Validate per-message model override
-      let messageModel: string | null = null;
-      if (body.model) {
-        if (isValidModel(body.model)) {
-          messageModel = body.model;
-        } else {
-          this.log.warn("Invalid message model in enqueue, ignoring", { model: body.model });
-        }
-      }
-
-      // Validate per-message reasoning effort
-      const effectiveModelForEffort = messageModel || this.getSession()?.model || DEFAULT_MODEL;
-      const messageReasoningEffort = this.validateReasoningEffort(
-        effectiveModelForEffort,
-        body.reasoningEffort
-      );
-
-      this.repository.createMessage({
-        id: messageId,
-        authorId: participant.id, // Use the participant's row ID, not the user ID
-        content: body.content,
-        source: body.source as MessageSource,
-        model: messageModel,
-        reasoningEffort: messageReasoningEffort,
-        attachments: body.attachments ? JSON.stringify(body.attachments) : null,
-        callbackContext: body.callbackContext ? JSON.stringify(body.callbackContext) : null,
-        status: "pending",
-        createdAt: now,
-      });
-
-      this.writeUserMessageEvent(participant, body.content, messageId, now);
-
-      const queuePosition = this.repository.getPendingOrProcessingCount();
-
-      this.log.info("prompt.enqueue", {
-        event: "prompt.enqueue",
-        message_id: messageId,
-        source: body.source,
-        author_id: participant.id,
-        user_id: body.authorId,
-        model: messageModel,
-        reasoning_effort: messageReasoningEffort,
-        content_length: body.content.length,
-        has_attachments: !!body.attachments?.length,
-        attachments_count: body.attachments?.length ?? 0,
-        has_callback_context: !!body.callbackContext,
-        queue_position: queuePosition,
-      });
-
-      await this.processMessageQueue();
-
-      return Response.json({ messageId, status: "queued" });
+      return Response.json(await this.messageQueue.enqueuePromptFromApi(body));
     } catch (error) {
       this.log.error("handleEnqueuePrompt error", {
         error: error instanceof Error ? error : String(error),
