@@ -60,6 +60,7 @@ import { GlobalSecretsStore } from "../db/global-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { ParticipantService, getGitHubAvatarUrl } from "./participant-service";
+import { CallbackNotificationService } from "./callback-notification-service";
 
 /**
  * Valid event types for filtering.
@@ -120,7 +121,8 @@ export class SessionDO extends DurableObject<Env> {
   private _sourceControlProvider: SourceControlProvider | null = null;
   // Participant service (lazily initialized)
   private _participantService: ParticipantService | null = null;
-  private _lastToolCallCallbackTs = 0;
+  // Callback notification service (lazily initialized)
+  private _callbackService: CallbackNotificationService | null = null;
 
   // Route table for internal API endpoints
   private readonly routes: InternalRoute[] = [
@@ -208,6 +210,24 @@ export class SessionDO extends DurableObject<Env> {
       });
     }
     return this._participantService;
+  }
+
+  /**
+   * Get the callback notification service, creating it lazily if needed.
+   */
+  private get callbackService(): CallbackNotificationService {
+    if (!this._callbackService) {
+      this._callbackService = new CallbackNotificationService({
+        repository: this.repository,
+        env: this.env,
+        log: this.log,
+        getSessionId: () => {
+          const session = this.getSession();
+          return session?.session_name || session?.id || this.ctx.id.toString();
+        },
+      });
+    }
+    return this._callbackService;
   }
 
   /**
@@ -1106,7 +1126,7 @@ export class SessionDO extends DurableObject<Env> {
 
       // Fire-and-forget tool_call callback to originating client (e.g. linear-bot)
       if (messageId && event.status === "running") {
-        this.ctx.waitUntil(this.notifyCallbackToolCall(messageId, event).catch(() => {}));
+        this.ctx.waitUntil(this.callbackService.notifyToolCall(messageId, event).catch(() => {}));
       }
       return;
     }
@@ -1162,7 +1182,7 @@ export class SessionDO extends DurableObject<Env> {
 
         this.broadcast({ type: "sandbox_event", event });
         this.broadcast({ type: "processing_status", isProcessing: this.getIsProcessing() });
-        this.ctx.waitUntil(this.notifyCallbackClient(completionMessageId, event.success));
+        this.ctx.waitUntil(this.callbackService.notifyComplete(completionMessageId, event.success));
       } else {
         // Stopped path: message was already marked failed by stopExecution()
         this.log.info("prompt.complete", {
@@ -1444,7 +1464,7 @@ export class SessionDO extends DurableObject<Env> {
 
       // Notify slack-bot now because the bridge's late execution_complete will hit
       // the "already_stopped" branch in processSandboxEvent() which skips notification.
-      this.ctx.waitUntil(this.notifyCallbackClient(processingMessage.id, false));
+      this.ctx.waitUntil(this.callbackService.notifyComplete(processingMessage.id, false));
     }
 
     // Immediate client feedback
@@ -1769,190 +1789,6 @@ export class SessionDO extends DurableObject<Env> {
 
   private updateSandboxStatus(status: string): void {
     this.repository.updateSandboxStatus(status as SandboxStatus);
-  }
-
-  /**
-   * Generate HMAC signature for callback payload.
-   */
-  private async signCallback(data: object, secret: string): Promise<string> {
-    const encoder = new TextEncoder();
-    const key = await crypto.subtle.importKey(
-      "raw",
-      encoder.encode(secret),
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["sign"]
-    );
-    const signatureData = encoder.encode(JSON.stringify(data));
-    const sig = await crypto.subtle.sign("HMAC", key, signatureData);
-    return Array.from(new Uint8Array(sig))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-  }
-
-  /**
-   * Resolve the callback service binding based on the message source.
-   * Returns the appropriate Fetcher for the originating client.
-   */
-  private getCallbackBinding(source: string | null): Fetcher | undefined {
-    switch (source) {
-      case "linear":
-        return this.env.LINEAR_BOT;
-      case "slack":
-        return this.env.SLACK_BOT;
-      default:
-        // Default to SLACK_BOT for backward compatibility (web sources, etc.)
-        return this.env.SLACK_BOT;
-    }
-  }
-
-  /**
-   * Notify the originating client of completion with retry.
-   * Routes to the correct service binding based on the message source.
-   */
-  private async notifyCallbackClient(messageId: string, success: boolean): Promise<void> {
-    // Safely query for callback context
-    const message = this.repository.getMessageCallbackContext(messageId);
-    if (!message?.callback_context) {
-      this.log.debug("No callback context for message, skipping notification", {
-        message_id: messageId,
-      });
-      return;
-    }
-    if (!this.env.INTERNAL_CALLBACK_SECRET) {
-      this.log.debug("INTERNAL_CALLBACK_SECRET not configured, skipping notification");
-      return;
-    }
-
-    // Resolve the callback binding based on message source
-    const source = message.source ?? null;
-    const binding = this.getCallbackBinding(source);
-    if (!binding) {
-      this.log.debug("No callback binding for source, skipping notification", {
-        message_id: messageId,
-        source,
-      });
-      return;
-    }
-
-    const session = this.getSession();
-    const sessionId = session?.session_name || session?.id || this.ctx.id.toString();
-
-    const context = JSON.parse(message.callback_context);
-    const timestamp = Date.now();
-
-    // Build payload without signature
-    const payloadData = {
-      sessionId,
-      messageId,
-      success,
-      timestamp,
-      context,
-    };
-
-    // Sign the payload
-    const signature = await this.signCallback(payloadData, this.env.INTERNAL_CALLBACK_SECRET);
-
-    const payload = { ...payloadData, signature };
-
-    // Try with retry (max 2 attempts)
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const response = await binding.fetch("https://internal/callbacks/complete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-
-        if (response.ok) {
-          this.log.info("Callback succeeded", { message_id: messageId, source });
-          return;
-        }
-
-        const responseText = await response.text();
-        this.log.error("Callback failed", {
-          message_id: messageId,
-          source,
-          status: response.status,
-          response_text: responseText,
-        });
-      } catch (e) {
-        this.log.error("Callback attempt failed", {
-          message_id: messageId,
-          source,
-          attempt: attempt + 1,
-          error: e instanceof Error ? e : String(e),
-        });
-      }
-
-      // Wait before retry
-      if (attempt < 1) {
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-    }
-
-    this.log.error("Failed to notify callback client after retries", {
-      message_id: messageId,
-      source,
-    });
-  }
-
-  /**
-   * Notify the originating client of a tool_call event (best-effort, throttled).
-   * Max 1 callback per 3 seconds per session.
-   */
-  private async notifyCallbackToolCall(
-    messageId: string,
-    event: {
-      type: string;
-      tool?: string;
-      args?: Record<string, unknown>;
-      call_id?: string;
-      status?: string;
-    }
-  ): Promise<void> {
-    // Throttle: max 1 per 3 seconds
-    const now = Date.now();
-    if (now - this._lastToolCallCallbackTs < 3000) return;
-    this._lastToolCallCallbackTs = now;
-
-    const message = this.repository.getMessageCallbackContext(messageId);
-    if (!message?.callback_context) return;
-    if (!this.env.INTERNAL_CALLBACK_SECRET) return;
-
-    const source = message.source ?? null;
-    const binding = this.getCallbackBinding(source);
-    if (!binding) return;
-
-    const session = this.getSession();
-    const sessionId = session?.session_name || session?.id || this.ctx.id.toString();
-    const context = JSON.parse(message.callback_context);
-
-    const payloadData = {
-      sessionId,
-      tool: event.tool ?? "unknown",
-      args: event.args ?? {},
-      callId: event.call_id ?? "",
-      status: event.status,
-      timestamp: now,
-      context,
-    };
-
-    const signature = await this.signCallback(payloadData, this.env.INTERNAL_CALLBACK_SECRET);
-    const payload = { ...payloadData, signature };
-
-    try {
-      await binding.fetch("https://internal/callbacks/tool_call", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-    } catch (e) {
-      this.log.debug("Tool call callback failed (best-effort)", {
-        message_id: messageId,
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
   }
 
   // HTTP handlers
