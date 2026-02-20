@@ -9,9 +9,8 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
-import { generateId, decryptToken, encryptToken, hashToken } from "../auth/crypto";
+import { generateId, hashToken } from "../auth/crypto";
 import { getGitHubAppConfig, getInstallationRepository } from "../auth/github-app";
-import { refreshAccessToken } from "../auth/github";
 import { createModalClient } from "../sandbox/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
 import { createLogger, parseLogLevel } from "../logger";
@@ -29,7 +28,6 @@ import {
   createSourceControlProvider as createSourceControlProviderImpl,
   resolveScmProviderFromEnv,
   type SourceControlProvider,
-  type SourceControlAuthContext,
   type GitPushSpec,
 } from "../source-control";
 import {
@@ -61,13 +59,7 @@ import { SessionIndexStore } from "../db/session-index";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
-
-/**
- * Build GitHub avatar URL from login.
- */
-function getGitHubAvatarUrl(githubLogin: string | null | undefined): string | undefined {
-  return githubLogin ? `https://github.com/${githubLogin}.png` : undefined;
-}
+import { ParticipantService, getGitHubAvatarUrl } from "./participant-service";
 
 /**
  * Valid event types for filtering.
@@ -126,6 +118,8 @@ export class SessionDO extends DurableObject<Env> {
   private _lifecycleManager: SandboxLifecycleManager | null = null;
   // Source control provider (lazily initialized)
   private _sourceControlProvider: SourceControlProvider | null = null;
+  // Participant service (lazily initialized)
+  private _participantService: ParticipantService | null = null;
   private _lastToolCallCallbackTs = 0;
 
   // Route table for internal API endpoints
@@ -199,6 +193,21 @@ export class SessionDO extends DurableObject<Env> {
       this._sourceControlProvider = this.createSourceControlProvider();
     }
     return this._sourceControlProvider;
+  }
+
+  /**
+   * Get the participant service, creating it lazily if needed.
+   */
+  private get participantService(): ParticipantService {
+    if (!this._participantService) {
+      this._participantService = new ParticipantService({
+        repository: this.repository,
+        env: this.env,
+        log: this.log,
+        generateId: () => generateId(),
+      });
+    }
+    return this._participantService;
   }
 
   /**
@@ -708,7 +717,7 @@ export class SessionDO extends DurableObject<Env> {
 
     // Hash the incoming token and look up participant
     const tokenHash = await hashToken(data.token);
-    const participant = this.getParticipantByWsTokenHash(tokenHash);
+    const participant = this.participantService.getByWsTokenHash(tokenHash);
 
     if (!participant) {
       this.log.warn("ws.connect", {
@@ -867,9 +876,9 @@ export class SessionDO extends DurableObject<Env> {
     const now = Date.now();
 
     // Get or create participant
-    let participant = this.getParticipantByUserId(client.userId);
+    let participant = this.participantService.getByUserId(client.userId);
     if (!participant) {
-      participant = this.createParticipant(client.userId, client.name);
+      participant = this.participantService.create(client.userId, client.name);
     }
 
     // Validate per-message model override if provided
@@ -1722,10 +1731,6 @@ export class SessionDO extends DurableObject<Env> {
     return this.repository.getMessageCount();
   }
 
-  private getParticipantByUserId(userId: string): ParticipantRow | null {
-    return this.repository.getParticipantByUserId(userId);
-  }
-
   /**
    * Write a user_message event to the events table and broadcast to connected clients.
    * Used by both WebSocket and HTTP prompt handlers for unified timeline replay.
@@ -1755,35 +1760,6 @@ export class SessionDO extends DurableObject<Env> {
       createdAt: now,
     });
     this.broadcast({ type: "sandbox_event", event: userMessageEvent });
-  }
-
-  private createParticipant(userId: string, name: string): ParticipantRow {
-    const id = generateId();
-    const now = Date.now();
-
-    this.repository.createParticipant({
-      id,
-      userId,
-      githubName: name,
-      role: "member",
-      joinedAt: now,
-    });
-
-    return {
-      id,
-      user_id: userId,
-      github_user_id: null,
-      github_login: null,
-      github_email: null,
-      github_name: name,
-      role: "member",
-      github_access_token_encrypted: null,
-      github_refresh_token_encrypted: null,
-      github_token_expires_at: null,
-      ws_auth_token: null,
-      ws_token_created_at: null,
-      joined_at: now,
-    };
   }
 
   private updateSandboxStatus(status: string): void {
@@ -1974,175 +1950,6 @@ export class SessionDO extends DurableObject<Env> {
     }
   }
 
-  /**
-   * Get the prompting participant for PR creation.
-   * Returns the participant who triggered the currently processing message.
-   */
-  private async getPromptingParticipantForPR(): Promise<
-    | { participant: ParticipantRow; error?: never; status?: never }
-    | { participant?: never; error: string; status: number }
-  > {
-    const processingMessage = this.repository.getProcessingMessageAuthor();
-
-    if (!processingMessage) {
-      this.log.warn("PR creation failed: no processing message found");
-      return {
-        error: "No active prompt found. PR creation must be triggered by a user prompt.",
-        status: 400,
-      };
-    }
-
-    const participant = this.repository.getParticipantById(processingMessage.author_id);
-
-    if (!participant) {
-      this.log.warn("PR creation failed: participant not found", {
-        participantId: processingMessage.author_id,
-      });
-      return { error: "User not found. Please re-authenticate.", status: 401 };
-    }
-
-    return { participant };
-  }
-
-  /**
-   * Check if a participant's GitHub token is expired.
-   * Returns true if expired or will expire within buffer time.
-   */
-  private isGitHubTokenExpired(participant: ParticipantRow, bufferMs = 60000): boolean {
-    if (!participant.github_token_expires_at) {
-      return false;
-    }
-    return Date.now() + bufferMs >= participant.github_token_expires_at;
-  }
-
-  /**
-   * Refresh an expired GitHub access token using the stored refresh token.
-   *
-   * Returns the updated participant row, or null if refresh cannot be performed.
-   */
-  private async refreshParticipantToken(
-    participant: ParticipantRow
-  ): Promise<ParticipantRow | null> {
-    if (!participant.github_refresh_token_encrypted) {
-      this.log.warn("Cannot refresh: no refresh token stored", { user_id: participant.user_id });
-      return null;
-    }
-
-    if (!this.env.GITHUB_CLIENT_ID || !this.env.GITHUB_CLIENT_SECRET) {
-      this.log.warn("Cannot refresh: GitHub OAuth credentials not configured");
-      return null;
-    }
-
-    try {
-      const refreshToken = await decryptToken(
-        participant.github_refresh_token_encrypted,
-        this.env.TOKEN_ENCRYPTION_KEY
-      );
-
-      const newTokens = await refreshAccessToken(refreshToken, {
-        clientId: this.env.GITHUB_CLIENT_ID,
-        clientSecret: this.env.GITHUB_CLIENT_SECRET,
-        encryptionKey: this.env.TOKEN_ENCRYPTION_KEY,
-      });
-
-      const newAccessTokenEncrypted = await encryptToken(
-        newTokens.access_token,
-        this.env.TOKEN_ENCRYPTION_KEY
-      );
-
-      const newRefreshTokenEncrypted = newTokens.refresh_token
-        ? await encryptToken(newTokens.refresh_token, this.env.TOKEN_ENCRYPTION_KEY)
-        : null;
-
-      const newExpiresAt = newTokens.expires_in
-        ? Date.now() + newTokens.expires_in * 1000
-        : Date.now() + 8 * 60 * 60 * 1000;
-
-      this.repository.updateParticipantTokens(participant.id, {
-        githubAccessTokenEncrypted: newAccessTokenEncrypted,
-        githubRefreshTokenEncrypted: newRefreshTokenEncrypted,
-        githubTokenExpiresAt: newExpiresAt,
-      });
-
-      this.log.info("Server-side token refresh succeeded", { user_id: participant.user_id });
-
-      return this.repository.getParticipantById(participant.id);
-    } catch (error) {
-      this.log.error("Server-side token refresh failed", {
-        user_id: participant.user_id,
-        error: error instanceof Error ? error : String(error),
-      });
-      return null;
-    }
-  }
-
-  /**
-   * Resolve the prompting participant's OAuth credentials for API-based PR creation.
-   * Returns auth: null only when user OAuth is not configured; returns an HTTP error for token failures.
-   */
-  private async resolvePromptingUserAuthForPR(
-    participant: ParticipantRow
-  ): Promise<
-    | { auth: SourceControlAuthContext | null; error?: never; status?: never }
-    | { auth?: never; error: string; status: number }
-  > {
-    let resolvedParticipant = participant;
-
-    if (!resolvedParticipant.github_access_token_encrypted) {
-      this.log.info("PR creation: prompting user has no OAuth token, using manual fallback", {
-        user_id: resolvedParticipant.user_id,
-      });
-      return { auth: null };
-    }
-
-    if (this.isGitHubTokenExpired(resolvedParticipant)) {
-      this.log.warn("GitHub token expired, attempting server-side refresh", {
-        userId: resolvedParticipant.user_id,
-      });
-
-      const refreshed = await this.refreshParticipantToken(resolvedParticipant);
-      if (refreshed) {
-        resolvedParticipant = refreshed;
-      } else {
-        this.log.warn("GitHub token refresh failed, returning auth error", {
-          user_id: resolvedParticipant.user_id,
-        });
-        return {
-          error:
-            "Your GitHub token has expired and could not be refreshed. Please re-authenticate.",
-          status: 401,
-        };
-      }
-    }
-
-    if (!resolvedParticipant.github_access_token_encrypted) {
-      return { auth: null };
-    }
-
-    try {
-      const accessToken = await decryptToken(
-        resolvedParticipant.github_access_token_encrypted,
-        this.env.TOKEN_ENCRYPTION_KEY
-      );
-
-      return {
-        auth: {
-          authType: "oauth",
-          token: accessToken,
-        },
-      };
-    } catch (error) {
-      this.log.error("Failed to decrypt GitHub token for PR creation", {
-        user_id: resolvedParticipant.user_id,
-        error: error instanceof Error ? error : String(error),
-      });
-      return {
-        error: "Failed to process GitHub token for PR creation.",
-        status: 500,
-      };
-    }
-  }
-
   // HTTP handlers
 
   private async handleInit(request: Request): Promise<Response> {
@@ -2286,9 +2093,9 @@ export class SessionDO extends DurableObject<Env> {
 
       // Get or create participant for the author
       // The authorId here is a user ID (like "anonymous"), not a participant row ID
-      let participant = this.getParticipantByUserId(body.authorId);
+      let participant = this.participantService.getByUserId(body.authorId);
       if (!participant) {
-        participant = this.createParticipant(body.authorId, body.authorId);
+        participant = this.participantService.create(body.authorId, body.authorId);
       }
 
       const messageId = generateId();
@@ -2499,7 +2306,7 @@ export class SessionDO extends DurableObject<Env> {
       return Response.json({ error: "Session not found" }, { status: 404 });
     }
 
-    const promptingParticipantResult = await this.getPromptingParticipantForPR();
+    const promptingParticipantResult = await this.participantService.getPromptingParticipantForPR();
     if (!promptingParticipantResult.participant) {
       return Response.json(
         { error: promptingParticipantResult.error },
@@ -2508,7 +2315,7 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     const promptingParticipant = promptingParticipantResult.participant;
-    const authResolution = await this.resolvePromptingUserAuthForPR(promptingParticipant);
+    const authResolution = await this.participantService.resolveAuthForPR(promptingParticipant);
     if ("error" in authResolution) {
       return Response.json({ error: authResolution.error }, { status: authResolution.status });
     }
@@ -2605,7 +2412,7 @@ export class SessionDO extends DurableObject<Env> {
     const now = Date.now();
 
     // Check if participant exists
-    let participant = this.getParticipantByUserId(body.userId);
+    let participant = this.participantService.getByUserId(body.userId);
 
     if (participant) {
       // Only accept client tokens if they're newer than what we have in the DB.
@@ -2654,7 +2461,7 @@ export class SessionDO extends DurableObject<Env> {
         role: "member",
         joinedAt: now,
       });
-      participant = this.getParticipantByUserId(body.userId)!;
+      participant = this.participantService.getByUserId(body.userId)!;
     }
 
     // Generate a new WebSocket token (32 bytes = 256 bits)
@@ -2670,13 +2477,6 @@ export class SessionDO extends DurableObject<Env> {
       token: plainToken,
       participantId: participant.id,
     });
-  }
-
-  /**
-   * Get participant by WebSocket token hash.
-   */
-  private getParticipantByWsTokenHash(tokenHash: string): ParticipantRow | null {
-    return this.repository.getParticipantByWsTokenHash(tokenHash);
   }
 
   /**
@@ -2702,7 +2502,7 @@ export class SessionDO extends DurableObject<Env> {
       return Response.json({ error: "userId is required" }, { status: 400 });
     }
 
-    const participant = this.getParticipantByUserId(body.userId);
+    const participant = this.participantService.getByUserId(body.userId);
     if (!participant) {
       return Response.json({ error: "Not authorized to archive this session" }, { status: 403 });
     }
@@ -2742,7 +2542,7 @@ export class SessionDO extends DurableObject<Env> {
       return Response.json({ error: "userId is required" }, { status: 400 });
     }
 
-    const participant = this.getParticipantByUserId(body.userId);
+    const participant = this.participantService.getByUserId(body.userId);
     if (!participant) {
       return Response.json({ error: "Not authorized to unarchive this session" }, { status: 403 });
     }
