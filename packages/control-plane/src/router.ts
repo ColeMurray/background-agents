@@ -5,18 +5,13 @@
 import type { Env, CreateSessionRequest, CreateSessionResponse } from "./types";
 import { generateId, encryptToken } from "./auth/crypto";
 import { verifyInternalToken } from "./auth/internal";
-import { getGitHubAppConfig } from "./auth/github-app";
 import {
   resolveScmProviderFromEnv,
   SourceControlProviderError,
   type SourceControlProviderName,
 } from "./source-control";
 import { SessionIndexStore } from "./db/session-index";
-import {
-  getValidModelOrDefault,
-  isValidReasoningEffort,
-  type CallbackContext,
-} from "@open-inspect/shared";
+import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared";
 import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
 import { createLogger } from "./logger";
 import {
@@ -716,7 +711,13 @@ async function handleSessionPrompt(
     model?: string;
     reasoningEffort?: string;
     attachments?: Array<{ type: string; name: string; url?: string }>;
-    callbackContext?: CallbackContext;
+    callbackContext?: {
+      channel: string;
+      threadTs: string;
+      repoFullName: string;
+      model: string;
+      reactionMessageTs?: string;
+    };
   };
 
   if (!body.content) {
