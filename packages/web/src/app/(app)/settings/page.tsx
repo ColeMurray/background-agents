@@ -40,17 +40,39 @@ export default function SettingsPage() {
     return (
       <div className="h-full flex flex-col">
         {mobileView === "list" ? (
-          <div className="flex-1 overflow-y-auto">
-            <SettingsNav
-              activeCategory={activeCategory}
-              onSelect={setActiveCategory}
-              onNavigate={() => setMobileView("detail")}
-            />
-          </div>
+          <>
+            <header className="border-b border-border-muted flex-shrink-0">
+              <div className="px-4 py-3">
+                <button
+                  onClick={toggle}
+                  className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
+                  title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
+                  aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
+                >
+                  <SidebarToggleIcon />
+                </button>
+              </div>
+            </header>
+            <div className="flex-1 overflow-y-auto">
+              <SettingsNav
+                activeCategory={activeCategory}
+                onSelect={setActiveCategory}
+                onNavigate={() => setMobileView("detail")}
+              />
+            </div>
+          </>
         ) : (
           <>
             <header className="border-b border-border-muted flex-shrink-0">
               <div className="px-4 py-3 flex items-center gap-2">
+                <button
+                  onClick={toggle}
+                  className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
+                  title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
+                  aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
+                >
+                  <SidebarToggleIcon />
+                </button>
                 <button
                   onClick={() => setMobileView("list")}
                   className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
