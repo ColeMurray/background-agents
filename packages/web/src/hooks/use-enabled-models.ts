@@ -11,7 +11,10 @@ interface ModelPreferencesResponse {
 export function useEnabledModels() {
   const { data, isLoading } = useSWR<ModelPreferencesResponse>(MODEL_PREFERENCES_KEY);
 
-  const enabledModels = data?.enabledModels ?? (DEFAULT_ENABLED_MODELS as string[]);
+  const enabledModels = useMemo(
+    () => data?.enabledModels ?? (isLoading ? [] : (DEFAULT_ENABLED_MODELS as string[])),
+    [data?.enabledModels, isLoading]
+  );
 
   const enabledModelOptions: ModelCategory[] = useMemo(() => {
     const enabledSet = new Set(enabledModels);
