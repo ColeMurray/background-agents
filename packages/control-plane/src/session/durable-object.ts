@@ -44,7 +44,6 @@ import type {
   ServerMessage,
   SandboxEvent,
   SessionState,
-  ParticipantPresence,
   SandboxStatus,
   MessageSource,
   ParticipantRole,
@@ -61,6 +60,7 @@ import { mergeSecrets } from "../db/secrets-validation";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { ParticipantService, getGitHubAvatarUrl } from "./participant-service";
 import { CallbackNotificationService } from "./callback-notification-service";
+import { PresenceService } from "./presence-service";
 
 /**
  * Valid event types for filtering.
@@ -123,6 +123,8 @@ export class SessionDO extends DurableObject<Env> {
   private _participantService: ParticipantService | null = null;
   // Callback notification service (lazily initialized)
   private _callbackService: CallbackNotificationService | null = null;
+  // Presence service (lazily initialized)
+  private _presenceService: PresenceService | null = null;
 
   // Route table for internal API endpoints
   private readonly routes: InternalRoute[] = [
@@ -228,6 +230,25 @@ export class SessionDO extends DurableObject<Env> {
       });
     }
     return this._callbackService;
+  }
+
+  /**
+   * Get the presence service, creating it lazily if needed.
+   */
+  private get presenceService(): PresenceService {
+    if (!this._presenceService) {
+      this._presenceService = new PresenceService({
+        getAuthenticatedClients: () => this.wsManager.getAuthenticatedClients(),
+        getClientInfo: (ws) => this.getClientInfo(ws),
+        broadcast: (msg) => this.broadcast(msg),
+        send: (ws, msg) => this.safeSend(ws, msg),
+        getSandboxSocket: () => this.wsManager.getSandboxSocket(),
+        isSpawning: () => this.lifecycleManager.isSpawning(),
+        spawnSandbox: () => this.spawnSandbox(),
+        log: this.log,
+      });
+    }
+    return this._presenceService;
   }
 
   /**
@@ -698,7 +719,7 @@ export class SessionDO extends DurableObject<Env> {
           break;
 
         case "typing":
-          await this.handleTyping();
+          await this.presenceService.handleTyping();
           break;
 
         case "fetch_history":
@@ -706,7 +727,7 @@ export class SessionDO extends DurableObject<Env> {
           break;
 
         case "presence":
-          await this.updatePresence(ws, data);
+          this.presenceService.updatePresence(ws, data);
           break;
       }
     } catch (e) {
@@ -808,10 +829,10 @@ export class SessionDO extends DurableObject<Env> {
     } as ServerMessage);
 
     // Send current presence
-    this.sendPresence(ws);
+    this.presenceService.sendPresence(ws);
 
     // Notify others
-    this.broadcastPresence();
+    this.presenceService.broadcastPresence();
   }
 
   /**
@@ -973,35 +994,6 @@ export class SessionDO extends DurableObject<Env> {
 
     // Process queue
     await this.processMessageQueue();
-  }
-
-  /**
-   * Handle typing indicator (warm sandbox).
-   */
-  private async handleTyping(): Promise<void> {
-    // If no sandbox or not connected, try to warm/spawn one
-    if (!this.wsManager.getSandboxSocket()) {
-      if (!this.lifecycleManager.isSpawning()) {
-        this.broadcast({ type: "sandbox_warming" });
-        // Proactively spawn sandbox when user starts typing
-        await this.spawnSandbox();
-      }
-    }
-  }
-
-  /**
-   * Update client presence.
-   */
-  private async updatePresence(
-    ws: WebSocket,
-    data: { status: "active" | "idle"; cursor?: { line: number; file: string } }
-  ): Promise<void> {
-    const client = this.getClientInfo(ws);
-    if (client) {
-      client.status = data.status;
-      client.lastSeen = Date.now();
-      this.broadcastPresence();
-    }
   }
 
   /**
@@ -1484,36 +1476,6 @@ export class SessionDO extends DurableObject<Env> {
     this.wsManager.forEachClientSocket("authenticated_only", (ws) => {
       this.wsManager.send(ws, message);
     });
-  }
-
-  /**
-   * Send presence info to a specific client.
-   */
-  private sendPresence(ws: WebSocket): void {
-    const participants = this.getPresenceList();
-    this.safeSend(ws, { type: "presence_sync", participants });
-  }
-
-  /**
-   * Broadcast presence to all clients.
-   */
-  private broadcastPresence(): void {
-    const participants = this.getPresenceList();
-    this.broadcast({ type: "presence_update", participants });
-  }
-
-  /**
-   * Get list of present participants.
-   */
-  private getPresenceList(): ParticipantPresence[] {
-    return Array.from(this.wsManager.getAuthenticatedClients()).map((c) => ({
-      participantId: c.participantId,
-      userId: c.userId,
-      name: c.name,
-      avatar: c.avatar,
-      status: c.status,
-      lastSeen: c.lastSeen,
-    }));
   }
 
   /**
