@@ -104,7 +104,7 @@ async def api_create_sandbox(
         "git_user_name": null,
         "git_user_email": null,
         "provider": "anthropic",
-        "model": "claude-sonnet-4-5"
+        "model": "claude-sonnet-4-6"
     }
     """
     start_time = time.time()
@@ -153,7 +153,7 @@ async def api_create_sandbox(
             repo_name=request.get("repo_name"),
             opencode_session_id=request.get("opencode_session_id"),
             provider=request.get("provider", "anthropic"),
-            model=request.get("model", "claude-sonnet-4-5"),
+            model=request.get("model", "claude-sonnet-4-6"),
             git_user=git_user,
         )
 
@@ -467,7 +467,7 @@ async def api_restore_sandbox(
             "repo_owner": "...",
             "repo_name": "...",
             "provider": "anthropic",
-            "model": "claude-sonnet-4-5"
+            "model": "claude-sonnet-4-6"
         },
         "sandbox_id": "...",
         "control_plane_url": "...",
