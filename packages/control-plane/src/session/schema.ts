@@ -95,7 +95,18 @@ CREATE TABLE IF NOT EXISTS sandbox (
   last_activity INTEGER,                            -- Last activity timestamp for inactivity-based snapshot
   last_spawn_error TEXT,                            -- Last sandbox spawn error (if any)
   last_spawn_error_at INTEGER,                      -- Timestamp of last spawn error
+  spawn_failure_count INTEGER DEFAULT 0,            -- Circuit breaker: consecutive spawn failures
+  last_spawn_failure INTEGER,                       -- Timestamp of last spawn failure
   created_at INTEGER NOT NULL
+);
+
+-- WebSocket client mapping for hibernation recovery
+CREATE TABLE IF NOT EXISTS ws_client_mapping (
+  ws_id TEXT PRIMARY KEY,
+  participant_id TEXT NOT NULL,
+  client_id TEXT,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (participant_id) REFERENCES participants(id)
 );
 
 -- Indexes for common queries
@@ -108,8 +119,134 @@ CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user_id);
 `;
 
 import { createLogger } from "../logger";
+import type { SqlStorage } from "./repository";
 
 const schemaLog = createLogger("schema");
+
+/**
+ * A numbered, tracked migration.
+ *
+ * - `string` runs are ALTER TABLE statements processed through runMigration()
+ *   (errors for "duplicate column" / "already exists" are swallowed).
+ * - `function` runs execute directly and must be written idempotently,
+ *   since they may re-run if the process crashes between execution and recording.
+ */
+export interface SchemaMigration {
+  readonly id: number;
+  readonly description: string;
+  readonly run: string | ((sql: SqlStorage) => void);
+}
+
+/**
+ * Ordered list of all schema migrations.
+ *
+ * To add a new migration:
+ * 1. Add the column/table to SCHEMA_SQL above (so new DOs get the full schema)
+ * 2. Append an entry here with the next sequential ID
+ * 3. For data transforms, use a function-type `run`
+ */
+export const MIGRATIONS: readonly SchemaMigration[] = [
+  {
+    id: 1,
+    description: "Add session_name to session",
+    run: `ALTER TABLE session ADD COLUMN session_name TEXT`,
+  },
+  {
+    id: 2,
+    description: "Add repo_id to session",
+    run: `ALTER TABLE session ADD COLUMN repo_id INTEGER`,
+  },
+  {
+    id: 3,
+    description: "Add model to session",
+    run: `ALTER TABLE session ADD COLUMN model TEXT DEFAULT 'anthropic/claude-haiku-4-5'`,
+  },
+  {
+    id: 4,
+    description: "Add model to messages",
+    run: `ALTER TABLE messages ADD COLUMN model TEXT`,
+  },
+  {
+    id: 5,
+    description: "Add ws_auth_token to participants",
+    run: `ALTER TABLE participants ADD COLUMN ws_auth_token TEXT`,
+  },
+  {
+    id: 6,
+    description: "Add ws_token_created_at to participants",
+    run: `ALTER TABLE participants ADD COLUMN ws_token_created_at INTEGER`,
+  },
+  {
+    id: 7,
+    description: "Add github_refresh_token_encrypted to participants",
+    run: `ALTER TABLE participants ADD COLUMN github_refresh_token_encrypted TEXT`,
+  },
+  {
+    id: 8,
+    description: "Add snapshot_image_id to sandbox",
+    run: `ALTER TABLE sandbox ADD COLUMN snapshot_image_id TEXT`,
+  },
+  {
+    id: 9,
+    description: "Add last_activity to sandbox",
+    run: `ALTER TABLE sandbox ADD COLUMN last_activity INTEGER`,
+  },
+  {
+    id: 10,
+    description: "Add last_spawn_error to sandbox",
+    run: `ALTER TABLE sandbox ADD COLUMN last_spawn_error TEXT`,
+  },
+  {
+    id: 11,
+    description: "Add last_spawn_error_at to sandbox",
+    run: `ALTER TABLE sandbox ADD COLUMN last_spawn_error_at INTEGER`,
+  },
+  {
+    id: 12,
+    description: "Add modal_object_id to sandbox",
+    run: `ALTER TABLE sandbox ADD COLUMN modal_object_id TEXT`,
+  },
+  {
+    id: 13,
+    description: "Create ws_client_mapping table",
+    run: (sql) => {
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS ws_client_mapping (
+          ws_id TEXT PRIMARY KEY,
+          participant_id TEXT NOT NULL,
+          client_id TEXT,
+          created_at INTEGER NOT NULL,
+          FOREIGN KEY (participant_id) REFERENCES participants(id)
+        )
+      `);
+    },
+  },
+  {
+    id: 14,
+    description: "Add spawn_failure_count to sandbox",
+    run: `ALTER TABLE sandbox ADD COLUMN spawn_failure_count INTEGER DEFAULT 0`,
+  },
+  {
+    id: 15,
+    description: "Add last_spawn_failure to sandbox",
+    run: `ALTER TABLE sandbox ADD COLUMN last_spawn_failure INTEGER`,
+  },
+  {
+    id: 16,
+    description: "Add callback_context to messages",
+    run: `ALTER TABLE messages ADD COLUMN callback_context TEXT`,
+  },
+  {
+    id: 17,
+    description: "Add reasoning_effort to session",
+    run: `ALTER TABLE session ADD COLUMN reasoning_effort TEXT`,
+  },
+  {
+    id: 18,
+    description: "Add reasoning_effort to messages",
+    run: `ALTER TABLE messages ADD COLUMN reasoning_effort TEXT`,
+  },
+];
 
 /**
  * Run a migration statement, only ignoring "column already exists" errors.
@@ -130,68 +267,37 @@ function runMigration(sql: SqlStorage, statement: string): void {
 }
 
 /**
+ * Apply pending migrations, tracking which have already run via _schema_migrations.
+ */
+export function applyMigrations(sql: SqlStorage): void {
+  sql.exec(
+    `CREATE TABLE IF NOT EXISTS _schema_migrations (id INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`
+  );
+
+  const rows = sql.exec(`SELECT id FROM _schema_migrations`).toArray() as Array<{ id: number }>;
+  const applied = new Set(rows.map((r) => r.id));
+
+  for (const migration of MIGRATIONS) {
+    if (applied.has(migration.id)) continue;
+
+    if (typeof migration.run === "string") {
+      runMigration(sql, migration.run);
+    } else {
+      migration.run(sql);
+    }
+
+    sql.exec(
+      `INSERT OR IGNORE INTO _schema_migrations (id, applied_at) VALUES (?, ?)`,
+      migration.id,
+      Date.now()
+    );
+  }
+}
+
+/**
  * Initialize schema on a SQLite storage instance.
  */
 export function initSchema(sql: SqlStorage): void {
   sql.exec(SCHEMA_SQL);
-
-  // Migration: Add session_name column if it doesn't exist (for existing DOs)
-  runMigration(sql, `ALTER TABLE session ADD COLUMN session_name TEXT`);
-
-  // Migration: Add repo_id column if it doesn't exist (for existing DOs)
-  runMigration(sql, `ALTER TABLE session ADD COLUMN repo_id INTEGER`);
-
-  // Migration: Add model column if it doesn't exist (for existing DOs)
-  runMigration(
-    sql,
-    `ALTER TABLE session ADD COLUMN model TEXT DEFAULT 'anthropic/claude-haiku-4-5'`
-  );
-
-  // Migration: Add model column to messages table for per-message model switching
-  runMigration(sql, `ALTER TABLE messages ADD COLUMN model TEXT`);
-
-  // Migration: Add WebSocket auth columns to participants table
-  runMigration(sql, `ALTER TABLE participants ADD COLUMN ws_auth_token TEXT`);
-  runMigration(sql, `ALTER TABLE participants ADD COLUMN ws_token_created_at INTEGER`);
-
-  // Migration: Add GitHub refresh token column to participants table
-  runMigration(sql, `ALTER TABLE participants ADD COLUMN github_refresh_token_encrypted TEXT`);
-
-  // Migration: Add snapshot_image_id column to sandbox table for Modal filesystem snapshots
-  runMigration(sql, `ALTER TABLE sandbox ADD COLUMN snapshot_image_id TEXT`);
-
-  // Migration: Add last_activity column to sandbox table for inactivity-based snapshot
-  runMigration(sql, `ALTER TABLE sandbox ADD COLUMN last_activity INTEGER`);
-
-  // Migration: Add last_spawn_error columns to sandbox table
-  runMigration(sql, `ALTER TABLE sandbox ADD COLUMN last_spawn_error TEXT`);
-  runMigration(sql, `ALTER TABLE sandbox ADD COLUMN last_spawn_error_at INTEGER`);
-
-  // Migration: Add modal_object_id column for Modal's internal sandbox ID
-  runMigration(sql, `ALTER TABLE sandbox ADD COLUMN modal_object_id TEXT`);
-
-  // Migration: Add ws_client_mapping table for hibernation recovery
-  // This table maps WebSocket IDs to participant IDs so we can recover client identity after hibernation
-  sql.exec(`
-    CREATE TABLE IF NOT EXISTS ws_client_mapping (
-      ws_id TEXT PRIMARY KEY,
-      participant_id TEXT NOT NULL,
-      client_id TEXT,
-      created_at INTEGER NOT NULL,
-      FOREIGN KEY (participant_id) REFERENCES participants(id)
-    )
-  `);
-
-  // Migration: Add circuit breaker columns to sandbox table for spawn failure tracking
-  runMigration(sql, `ALTER TABLE sandbox ADD COLUMN spawn_failure_count INTEGER DEFAULT 0`);
-  runMigration(sql, `ALTER TABLE sandbox ADD COLUMN last_spawn_failure INTEGER`);
-
-  // Migration: Add callback_context column to messages table for Slack follow-up notifications
-  runMigration(sql, `ALTER TABLE messages ADD COLUMN callback_context TEXT`);
-
-  // Migration: Add reasoning_effort column to session table for session-level reasoning defaults
-  runMigration(sql, `ALTER TABLE session ADD COLUMN reasoning_effort TEXT`);
-
-  // Migration: Add reasoning_effort column to messages table for per-message reasoning override
-  runMigration(sql, `ALTER TABLE messages ADD COLUMN reasoning_effort TEXT`);
+  applyMigrations(sql);
 }

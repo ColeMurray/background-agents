@@ -10,5 +10,6 @@ export type {
   WsKind,
   WebSocketManagerConfig,
 } from "./websocket-manager";
-export { initSchema, SCHEMA_SQL } from "./schema";
+export { initSchema, SCHEMA_SQL, applyMigrations, MIGRATIONS } from "./schema";
+export type { SchemaMigration } from "./schema";
 export type * from "./types";

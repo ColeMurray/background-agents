@@ -1,0 +1,176 @@
+/**
+ * Unit tests for schema migration tracking.
+ */
+
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { applyMigrations, MIGRATIONS } from "./schema";
+import type { SqlStorage, SqlResult } from "./repository";
+
+/**
+ * Create a mock SqlStorage that tracks calls and supports per-query data.
+ */
+function createMockSql() {
+  const calls: Array<{ query: string; params: unknown[] }> = [];
+  const queryData: Map<string, unknown[]> = new Map();
+
+  const sql: SqlStorage = {
+    exec(query: string, ...params: unknown[]): SqlResult {
+      calls.push({ query, params });
+      const data = queryData.get(query) ?? [];
+      return {
+        toArray: () => data,
+        one: () => null,
+      };
+    },
+  };
+
+  return {
+    sql,
+    calls,
+    setData(query: string, data: unknown[]) {
+      queryData.set(query, data);
+    },
+    reset() {
+      calls.length = 0;
+      queryData.clear();
+    },
+  };
+}
+
+describe("applyMigrations", () => {
+  let mock: ReturnType<typeof createMockSql>;
+
+  beforeEach(() => {
+    mock = createMockSql();
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+  });
+
+  it("runs all 18 migrations on a fresh DO", () => {
+    // No applied IDs → SELECT returns empty
+    applyMigrations(mock.sql);
+
+    // Should have: CREATE TABLE + SELECT + 18 migration execs + 18 INSERT OR IGNORE
+    const createTable = mock.calls.find((c) =>
+      c.query.includes("CREATE TABLE IF NOT EXISTS _schema_migrations")
+    );
+    expect(createTable).toBeDefined();
+
+    const selectCall = mock.calls.find((c) => c.query === "SELECT id FROM _schema_migrations");
+    expect(selectCall).toBeDefined();
+
+    // Each migration produces an exec call + an INSERT
+    const inserts = mock.calls.filter((c) =>
+      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
+    );
+    expect(inserts).toHaveLength(18);
+
+    // Verify all 18 IDs are recorded
+    const recordedIds = inserts.map((c) => c.params[0]);
+    expect(recordedIds).toEqual(MIGRATIONS.map((m) => m.id));
+  });
+
+  it("skips all migrations when fully migrated", () => {
+    // All 18 IDs already applied
+    const appliedRows = MIGRATIONS.map((m) => ({ id: m.id }));
+    mock.setData("SELECT id FROM _schema_migrations", appliedRows);
+
+    applyMigrations(mock.sql);
+
+    // Should only have CREATE TABLE + SELECT, no migration execs or inserts
+    const inserts = mock.calls.filter((c) =>
+      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
+    );
+    expect(inserts).toHaveLength(0);
+
+    const alterCalls = mock.calls.filter((c) => c.query.includes("ALTER TABLE"));
+    expect(alterCalls).toHaveLength(0);
+  });
+
+  it("runs only unapplied migrations when partially migrated", () => {
+    // IDs 1-10 already applied
+    const appliedRows = Array.from({ length: 10 }, (_, i) => ({ id: i + 1 }));
+    mock.setData("SELECT id FROM _schema_migrations", appliedRows);
+
+    applyMigrations(mock.sql);
+
+    const inserts = mock.calls.filter((c) =>
+      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
+    );
+    expect(inserts).toHaveLength(8); // migrations 11-18
+
+    const recordedIds = inserts.map((c) => c.params[0]);
+    expect(recordedIds).toEqual([11, 12, 13, 14, 15, 16, 17, 18]);
+  });
+
+  it("rethrows non-duplicate-column errors from string migrations", () => {
+    // Make the exec throw a non-duplicate-column error for ALTER statements
+    const originalExec = mock.sql.exec.bind(mock.sql);
+    mock.sql.exec = (query: string, ...params: unknown[]): SqlResult => {
+      if (query.includes("ALTER TABLE")) {
+        throw new Error("disk I/O error");
+      }
+      return originalExec(query, ...params);
+    };
+
+    expect(() => applyMigrations(mock.sql)).toThrow("disk I/O error");
+  });
+
+  it("swallows duplicate column errors from string migrations", () => {
+    const originalExec = mock.sql.exec.bind(mock.sql);
+    mock.sql.exec = (query: string, ...params: unknown[]): SqlResult => {
+      if (query.includes("ALTER TABLE")) {
+        throw new Error("duplicate column name: session_name");
+      }
+      return originalExec(query, ...params);
+    };
+
+    // Should not throw — duplicate column errors are expected
+    expect(() => applyMigrations(mock.sql)).not.toThrow();
+
+    // All 18 migrations should still be recorded
+    const inserts = mock.calls.filter((c) =>
+      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
+    );
+    expect(inserts).toHaveLength(18);
+  });
+
+  it("is idempotent — calling twice produces no duplicate rows", () => {
+    applyMigrations(mock.sql);
+
+    // Now simulate a second call where all IDs are applied
+    mock.reset();
+    const appliedRows = MIGRATIONS.map((m) => ({ id: m.id }));
+    mock.setData("SELECT id FROM _schema_migrations", appliedRows);
+
+    applyMigrations(mock.sql);
+
+    const inserts = mock.calls.filter((c) =>
+      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
+    );
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("executes function-type migrations directly", () => {
+    // Migration 13 is a function (CREATE TABLE ws_client_mapping)
+    applyMigrations(mock.sql);
+
+    // The function migration should have created the ws_client_mapping table
+    const wsTableCreate = mock.calls.find((c) =>
+      c.query.includes("CREATE TABLE IF NOT EXISTS ws_client_mapping")
+    );
+    expect(wsTableCreate).toBeDefined();
+  });
+
+  it("records applied_at timestamp", () => {
+    applyMigrations(mock.sql);
+
+    const inserts = mock.calls.filter((c) =>
+      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
+    );
+    // Second param should be the timestamp
+    for (const insert of inserts) {
+      expect(insert.params[1]).toBe(1000);
+    }
+  });
+});
