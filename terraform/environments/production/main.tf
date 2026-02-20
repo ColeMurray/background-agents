@@ -43,6 +43,7 @@ module "slack_kv" {
 }
 
 module "linear_kv" {
+  count  = var.enable_linear_bot ? 1 : 0
   source = "../../modules/cloudflare-kv"
 
   account_id     = var.cloudflare_account_id
@@ -122,16 +123,20 @@ module "control_plane_worker" {
     }
   ]
 
-  service_bindings = [
-    {
-      binding_name = "SLACK_BOT"
-      service_name = "open-inspect-slack-bot-${local.name_suffix}"
-    },
-    {
-      binding_name = "LINEAR_BOT"
-      service_name = "open-inspect-linear-bot-${local.name_suffix}"
-    }
-  ]
+  service_bindings = concat(
+    [
+      {
+        binding_name = "SLACK_BOT"
+        service_name = "open-inspect-slack-bot-${local.name_suffix}"
+      }
+    ],
+    var.enable_linear_bot ? [
+      {
+        binding_name = "LINEAR_BOT"
+        service_name = "open-inspect-linear-bot-${local.name_suffix}"
+      }
+    ] : []
+  )
 
   enable_service_bindings = var.enable_service_bindings
 
@@ -285,6 +290,8 @@ module "github_bot_worker" {
 
 # Build linear-bot worker bundle (only runs during apply, not plan)
 resource "null_resource" "linear_bot_build" {
+  count = var.enable_linear_bot ? 1 : 0
+
   triggers = {
     always_run = timestamp()
   }
@@ -296,6 +303,7 @@ resource "null_resource" "linear_bot_build" {
 }
 
 module "linear_bot_worker" {
+  count  = var.enable_linear_bot ? 1 : 0
   source = "../../modules/cloudflare-worker"
 
   account_id  = var.cloudflare_account_id
@@ -305,7 +313,7 @@ module "linear_bot_worker" {
   kv_namespaces = [
     {
       binding_name = "LINEAR_KV"
-      namespace_id = module.linear_kv.namespace_id
+      namespace_id = module.linear_kv[0].namespace_id
     }
   ]
 
@@ -338,7 +346,7 @@ module "linear_bot_worker" {
   compatibility_date  = "2024-09-23"
   compatibility_flags = ["nodejs_compat"]
 
-  depends_on = [null_resource.linear_bot_build, module.linear_kv, module.control_plane_worker]
+  depends_on = [null_resource.linear_bot_build[0], module.linear_kv[0], module.control_plane_worker]
 }
 
 # =============================================================================

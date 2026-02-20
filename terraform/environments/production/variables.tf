@@ -135,6 +135,21 @@ variable "slack_signing_secret" {
 # Linear Agent Credentials
 # =============================================================================
 
+variable "enable_linear_bot" {
+  description = "Enable the Linear bot worker. Requires linear_client_id, linear_client_secret, and linear_webhook_secret."
+  type        = bool
+  default     = false
+
+  validation {
+    condition = var.enable_linear_bot == false || (
+      length(var.linear_client_id) > 0 &&
+      length(var.linear_client_secret) > 0 &&
+      length(var.linear_webhook_secret) > 0
+    )
+    error_message = "When enable_linear_bot is true, linear_client_id, linear_client_secret, and linear_webhook_secret must be non-empty."
+  }
+}
+
 variable "linear_client_id" {
   description = "Linear OAuth Application Client ID (from Settings → API → Applications)"
   type        = string
