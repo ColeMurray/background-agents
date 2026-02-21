@@ -36,6 +36,13 @@ export function ActionBar({
   const isArchived = sessionStatus === "archived";
 
   const handleArchiveToggle = async () => {
+    if (!isArchived) {
+      const confirmed = window.confirm(
+        "Archive this session? You can restore archived sessions from Settings > Data Controls."
+      );
+      if (!confirmed) return;
+    }
+
     setIsArchiving(true);
     try {
       if (isArchived && onUnarchive) {

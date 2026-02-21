@@ -1,6 +1,6 @@
 "use client";
 
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { mutate } from "swr";
 import useSWRMutation from "swr/mutation";
 import {
@@ -99,6 +99,7 @@ export default function SessionPage() {
 
 function SessionPageContent() {
   const params = useParams();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const sessionId = params.id as string;
 
@@ -131,15 +132,27 @@ function SessionPageContent() {
     [searchParams]
   );
 
-  const { trigger: handleArchive } = useSWRMutation(
+  const { trigger: triggerArchive } = useSWRMutation(
     `/api/sessions/${sessionId}/archive`,
     (url: string) =>
       fetch(url, { method: "POST" }).then((r) => {
-        if (r.ok) mutate("/api/sessions");
-        else console.error("Failed to archive session");
+        if (r.ok) {
+          mutate("/api/sessions");
+          return true;
+        }
+
+        console.error("Failed to archive session");
+        return false;
       }),
     { throwOnError: false }
   );
+
+  const handleArchive = useCallback(async () => {
+    const didArchive = await triggerArchive();
+    if (didArchive) {
+      router.push("/");
+    }
+  }, [router, triggerArchive]);
 
   const { trigger: handleUnarchive } = useSWRMutation(
     `/api/sessions/${sessionId}/unarchive`,

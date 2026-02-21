@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useSidebarContext } from "@/components/sidebar-layout";
 import { SettingsNav, type SettingsCategory } from "@/components/settings/settings-nav";
 import { SecretsSettings } from "@/components/settings/secrets-settings";
@@ -20,11 +21,36 @@ const CATEGORY_LABELS: Record<SettingsCategory, string> = {
   integrations: "Integrations",
 };
 
+const VALID_CATEGORIES = new Set<string>([
+  "secrets",
+  "models",
+  "keyboard-shortcuts",
+  "data-controls",
+  "integrations",
+]);
+
+function isValidCategory(tab: string | null): tab is SettingsCategory {
+  return tab !== null && VALID_CATEGORIES.has(tab);
+}
+
 export default function SettingsPage() {
   const { isOpen, toggle } = useSidebarContext();
-  const [activeCategory, setActiveCategory] = useState<SettingsCategory>("secrets");
+  const searchParams = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const initialCategory = isValidCategory(tabParam) ? tabParam : "secrets";
+  const [activeCategory, setActiveCategory] = useState<SettingsCategory>(initialCategory);
   const isMobile = useIsMobile();
-  const [mobileView, setMobileView] = useState<"list" | "detail">("list");
+  const [mobileView, setMobileView] = useState<"list" | "detail">(
+    isValidCategory(tabParam) ? "detail" : "list"
+  );
+
+  // Sync state when searchParams change via client-side navigation
+  useEffect(() => {
+    if (isValidCategory(tabParam)) {
+      setActiveCategory(tabParam);
+      setMobileView("detail");
+    }
+  }, [tabParam]);
 
   const content = (
     <>
@@ -114,9 +140,7 @@ export default function SettingsPage() {
       <div className="flex-1 flex overflow-hidden">
         <SettingsNav activeCategory={activeCategory} onSelect={setActiveCategory} />
         <div className="flex-1 overflow-y-auto p-8">
-          <div className={activeCategory === "integrations" ? "max-w-4xl" : "max-w-2xl"}>
-            {content}
-          </div>
+          <div className="max-w-2xl">{content}</div>
         </div>
       </div>
     </div>

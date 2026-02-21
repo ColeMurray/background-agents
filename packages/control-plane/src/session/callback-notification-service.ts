@@ -197,20 +197,47 @@ export class CallbackNotificationService {
     if (now - this._lastToolCallCallbackTs < 3000) return;
     this._lastToolCallCallbackTs = now;
 
+    const tool = event.tool ?? "unknown";
+
     const message = this.repository.getMessageCallbackContext(messageId);
-    if (!message?.callback_context) return;
-    if (!this.env.INTERNAL_CALLBACK_SECRET) return;
+    if (!message?.callback_context) {
+      this.log.debug("callback.tool_call", {
+        message_id: messageId,
+        tool,
+        outcome: "skipped",
+        skip_reason: "no_callback_context",
+      });
+      return;
+    }
+    if (!this.env.INTERNAL_CALLBACK_SECRET) {
+      this.log.debug("callback.tool_call", {
+        message_id: messageId,
+        tool,
+        outcome: "skipped",
+        skip_reason: "no_secret",
+      });
+      return;
+    }
 
     const source = message.source ?? null;
     const binding = this.getBinding(source);
-    if (!binding) return;
+    if (!binding) {
+      this.log.debug("callback.tool_call", {
+        message_id: messageId,
+        source,
+        tool,
+        outcome: "skipped",
+        skip_reason: "no_binding",
+      });
+      return;
+    }
 
     const sessionId = this.getSessionId();
     const context = JSON.parse(message.callback_context);
 
     const payloadData = {
       sessionId,
-      tool: event.tool ?? "unknown",
+      tool,
       args: event.args ?? {},
       callId: event.call_id ?? "",
       status: event.status,
@@ -222,15 +249,44 @@ export class CallbackNotificationService {
     const payload = { ...payloadData, signature };
 
     try {
-      await binding.fetch("https://internal/callbacks/tool_call", {
+      const response = await binding.fetch("https://internal/callbacks/tool_call", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+
+      if (response.ok) {
+        this.log.info("callback.tool_call", {
+          message_id: messageId,
+          session_id: sessionId,
+          source,
+          tool,
+          outcome: "success",
+          http_status: response.status,
+          duration_ms: Date.now() - now,
+        });
+      } else {
+        const responseText = await response.text().catch(() => "");
+        this.log.warn("callback.tool_call", {
+          message_id: messageId,
+          session_id: sessionId,
+          source,
+          tool,
+          outcome: "error",
+          http_status: response.status,
+          response_body: responseText.slice(0, 500),
+          duration_ms: Date.now() - now,
+        });
+      }
     } catch (e) {
-      this.log.debug("Tool call callback failed (best-effort)", {
+      this.log.warn("callback.tool_call", {
         message_id: messageId,
-        error: e instanceof Error ? e.message : String(e),
+        session_id: sessionId,
+        source,
+        tool,
+        outcome: "error",
+        error: e instanceof Error ? e : new Error(String(e)),
+        duration_ms: Date.now() - now,
       });
     }
   }
