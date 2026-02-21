@@ -25,12 +25,7 @@ import { ActionBar } from "@/components/action-bar";
 import { copyToClipboard, formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import {
-  DEFAULT_MODEL,
-  getDefaultReasoningEffort,
-  type ModelDisplayInfo,
-  type ModelCategory,
-} from "@open-inspect/shared";
+import { DEFAULT_MODEL, getDefaultReasoningEffort, type ModelCategory } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 import type { SandboxEvent } from "@/lib/tool-formatters";
@@ -43,6 +38,7 @@ import {
   CopyIcon,
   ErrorIcon,
 } from "@/components/ui/icons";
+import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 
 // Event grouping types
 type EventGroup =
@@ -91,32 +87,6 @@ function groupEvents(events: SandboxEvent[]): EventGroup[] {
   flushToolGroup();
 
   return groups;
-}
-
-function ModelOptionButton({
-  model,
-  isSelected,
-  onSelect,
-}: {
-  model: ModelDisplayInfo;
-  isSelected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
-        isSelected ? "text-foreground" : "text-muted-foreground"
-      }`}
-    >
-      <div className="flex flex-col items-start">
-        <span className="font-medium">{model.name}</span>
-        <span className="text-xs text-secondary-foreground">{model.description}</span>
-      </div>
-      {isSelected && <CheckIcon className="w-4 h-4 text-accent" />}
-    </button>
-  );
 }
 
 export default function SessionPage() {
@@ -186,11 +156,9 @@ function SessionPageContent() {
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
     getDefaultReasoningEffort(DEFAULT_MODEL)
   );
-  const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const modelDropdownRef = useRef<HTMLDivElement>(null);
 
   const { enabledModels, enabledModelOptions } = useEnabledModels();
 
@@ -217,17 +185,6 @@ function SessionPageContent() {
       );
     }
   }, [sessionState?.model, sessionState?.reasoningEffort]);
-
-  // Close model dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (modelDropdownRef.current && !modelDropdownRef.current.contains(event.target as Node)) {
-        setModelDropdownOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -278,13 +235,10 @@ function SessionPageContent() {
       isProcessing={isProcessing}
       selectedModel={selectedModel}
       reasoningEffort={reasoningEffort}
-      modelDropdownOpen={modelDropdownOpen}
-      modelDropdownRef={modelDropdownRef}
       inputRef={inputRef}
       handleSubmit={handleSubmit}
       handleInputChange={handleInputChange}
       handleKeyDown={handleKeyDown}
-      setModelDropdownOpen={setModelDropdownOpen}
       setSelectedModel={handleModelChange}
       setReasoningEffort={setReasoningEffort}
       stopExecution={stopExecution}
@@ -315,13 +269,10 @@ function SessionContent({
   isProcessing,
   selectedModel,
   reasoningEffort,
-  modelDropdownOpen,
-  modelDropdownRef,
   inputRef,
   handleSubmit,
   handleInputChange,
   handleKeyDown,
-  setModelDropdownOpen,
   setSelectedModel,
   setReasoningEffort,
   stopExecution,
@@ -348,13 +299,10 @@ function SessionContent({
   isProcessing: boolean;
   selectedModel: string;
   reasoningEffort: string | undefined;
-  modelDropdownOpen: boolean;
-  modelDropdownRef: React.RefObject<HTMLDivElement | null>;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
   handleSubmit: (e: React.FormEvent) => void;
   handleInputChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
   handleKeyDown: (e: React.KeyboardEvent) => void;
-  setModelDropdownOpen: (open: boolean) => void;
   setSelectedModel: (model: string) => void;
   setReasoningEffort: (value: string | undefined) => void;
   stopExecution: () => void;
@@ -824,47 +772,29 @@ function SessionContent({
             <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">
               {/* Left side - Model selector + Reasoning pills */}
               <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
-                <div className="relative min-w-0" ref={modelDropdownRef}>
-                  <button
-                    type="button"
-                    onClick={() => !isProcessing && setModelDropdownOpen(!modelDropdownOpen)}
-                    disabled={isProcessing}
-                    className="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
-                  >
-                    <ModelIcon className="w-3.5 h-3.5" />
-                    <span className="truncate max-w-[9rem] sm:max-w-none">
-                      {formatModelNameLower(selectedModel)}
-                    </span>
-                  </button>
-
-                  {/* Dropdown menu */}
-                  {modelDropdownOpen && (
-                    <div className="absolute bottom-full left-0 mb-2 w-56 bg-background shadow-lg border border-border py-1 z-50">
-                      {modelOptions.map((group, groupIdx) => (
-                        <div key={group.category}>
-                          <div
-                            className={`px-3 py-1.5 text-xs font-medium text-secondary-foreground uppercase tracking-wider ${
-                              groupIdx > 0 ? "border-t border-border-muted mt-1" : ""
-                            }`}
-                          >
-                            {group.category}
-                          </div>
-                          {group.models.map((model) => (
-                            <ModelOptionButton
-                              key={model.id}
-                              model={model}
-                              isSelected={selectedModel === model.id}
-                              onSelect={() => {
-                                setSelectedModel(model.id);
-                                setModelDropdownOpen(false);
-                              }}
-                            />
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <Combobox
+                  value={selectedModel}
+                  onChange={setSelectedModel}
+                  items={
+                    modelOptions.map((group) => ({
+                      category: group.category,
+                      options: group.models.map((model) => ({
+                        value: model.id,
+                        label: model.name,
+                        description: model.description,
+                      })),
+                    })) as ComboboxGroup[]
+                  }
+                  direction="up"
+                  dropdownWidth="w-56"
+                  disabled={isProcessing}
+                  triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
+                >
+                  <ModelIcon className="w-3.5 h-3.5" />
+                  <span className="truncate max-w-[9rem] sm:max-w-none">
+                    {formatModelNameLower(selectedModel)}
+                  </span>
+                </Combobox>
 
                 {/* Reasoning effort pills */}
                 <ReasoningEffortPills

@@ -17,14 +17,8 @@ import {
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { useRepos, type Repo } from "@/hooks/use-repos";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
-import {
-  SidebarIcon,
-  RepoIcon,
-  ModelIcon,
-  ChevronDownIcon,
-  CheckIcon,
-  SendIcon,
-} from "@/components/ui/icons";
+import { SidebarIcon, RepoIcon, ModelIcon, ChevronDownIcon, SendIcon } from "@/components/ui/icons";
+import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 
 const LAST_SELECTED_REPO_STORAGE_KEY = "open-inspect-last-selected-repo";
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
@@ -300,36 +294,7 @@ function HomeContent({
   modelOptions: ModelCategory[];
 }) {
   const { isOpen, toggle } = useSidebarContext();
-  const [repoDropdownOpen, setRepoDropdownOpen] = useState(false);
-  const [repoSearchQuery, setRepoSearchQuery] = useState("");
-  const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
-  const repoDropdownRef = useRef<HTMLDivElement>(null);
-  const repoSearchInputRef = useRef<HTMLInputElement>(null);
-  const modelDropdownRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (repoDropdownRef.current && !repoDropdownRef.current.contains(event.target as Node)) {
-        setRepoDropdownOpen(false);
-      }
-      if (modelDropdownRef.current && !modelDropdownRef.current.contains(event.target as Node)) {
-        setModelDropdownOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  useEffect(() => {
-    if (!repoDropdownOpen) {
-      setRepoSearchQuery("");
-      return;
-    }
-
-    const id = requestAnimationFrame(() => repoSearchInputRef.current?.focus());
-    return () => cancelAnimationFrame(id);
-  }, [repoDropdownOpen]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
@@ -342,15 +307,6 @@ function HomeContent({
 
   const selectedRepoObj = repos.find((r) => r.fullName === selectedRepo);
   const displayRepoName = selectedRepoObj ? selectedRepoObj.name : "Select repo";
-  const normalizedRepoSearchQuery = repoSearchQuery.trim().toLowerCase();
-  const filteredRepos = repos.filter((repo) => {
-    if (!normalizedRepoSearchQuery) return true;
-    return (
-      repo.name.toLowerCase().includes(normalizedRepoSearchQuery) ||
-      repo.owner.toLowerCase().includes(normalizedRepoSearchQuery) ||
-      repo.fullName.toLowerCase().includes(normalizedRepoSearchQuery)
-    );
-  });
 
   return (
     <div className="h-full flex flex-col">
@@ -432,133 +388,57 @@ function HomeContent({
                   {/* Left side - Repo selector + Model selector */}
                   <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
                     {/* Repo selector */}
-                    <div className="relative min-w-0" ref={repoDropdownRef}>
-                      <button
-                        type="button"
-                        onClick={() => !creating && setRepoDropdownOpen(!repoDropdownOpen)}
-                        disabled={creating || loadingRepos}
-                        className="flex max-w-full items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
-                      >
-                        <RepoIcon className="w-4 h-4" />
-                        <span className="truncate max-w-[12rem] sm:max-w-none">
-                          {loadingRepos ? "Loading..." : displayRepoName}
-                        </span>
-                        <ChevronDownIcon className="w-3 h-3" />
-                      </button>
-
-                      {repoDropdownOpen && repos.length > 0 && (
-                        <div className="absolute bottom-full left-0 mb-2 w-72 bg-background shadow-lg border border-border z-50">
-                          <div className="p-2 border-b border-border-muted">
-                            <input
-                              ref={repoSearchInputRef}
-                              type="text"
-                              value={repoSearchQuery}
-                              onChange={(e) => setRepoSearchQuery(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  e.preventDefault();
-                                }
-                              }}
-                              placeholder="Search repositories..."
-                              className="w-full px-2 py-1.5 text-sm bg-input border border-border focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent placeholder:text-secondary-foreground text-foreground"
-                            />
-                          </div>
-
-                          <div className="max-h-56 overflow-y-auto py-1">
-                            {filteredRepos.length === 0 ? (
-                              <div className="px-3 py-2 text-sm text-muted-foreground">
-                                No repositories match {repoSearchQuery.trim()}
-                              </div>
-                            ) : (
-                              filteredRepos.map((repo) => (
-                                <button
-                                  key={repo.id}
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedRepo(repo.fullName);
-                                    setRepoDropdownOpen(false);
-                                  }}
-                                  className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
-                                    selectedRepo === repo.fullName
-                                      ? "text-foreground"
-                                      : "text-muted-foreground"
-                                  }`}
-                                >
-                                  <div className="flex flex-col items-start text-left">
-                                    <span className="font-medium truncate max-w-[200px]">
-                                      {repo.name}
-                                    </span>
-                                    <span className="text-xs text-secondary-foreground truncate max-w-[200px]">
-                                      {repo.owner}
-                                      {repo.private && " \u2022 private"}
-                                    </span>
-                                  </div>
-                                  {selectedRepo === repo.fullName && (
-                                    <CheckIcon className="w-4 h-4 text-accent" />
-                                  )}
-                                </button>
-                              ))
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    <Combobox
+                      value={selectedRepo}
+                      onChange={(value) => setSelectedRepo(value)}
+                      items={repos.map((repo) => ({
+                        value: repo.fullName,
+                        label: repo.name,
+                        description: `${repo.owner}${repo.private ? " \u2022 private" : ""}`,
+                      }))}
+                      searchable
+                      searchPlaceholder="Search repositories..."
+                      filterFn={(option, query) =>
+                        option.label.toLowerCase().includes(query) ||
+                        (option.description?.toLowerCase().includes(query) ?? false) ||
+                        String(option.value).toLowerCase().includes(query)
+                      }
+                      direction="up"
+                      dropdownWidth="w-72"
+                      disabled={creating || loadingRepos}
+                      triggerClassName="flex max-w-full items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
+                    >
+                      <RepoIcon className="w-4 h-4" />
+                      <span className="truncate max-w-[12rem] sm:max-w-none">
+                        {loadingRepos ? "Loading..." : displayRepoName}
+                      </span>
+                      <ChevronDownIcon className="w-3 h-3" />
+                    </Combobox>
 
                     {/* Model selector */}
-                    <div className="relative min-w-0" ref={modelDropdownRef}>
-                      <button
-                        type="button"
-                        onClick={() => !creating && setModelDropdownOpen(!modelDropdownOpen)}
-                        disabled={creating}
-                        className="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
-                      >
-                        <ModelIcon className="w-3.5 h-3.5" />
-                        <span className="truncate max-w-[9rem] sm:max-w-none">
-                          {formatModelNameLower(selectedModel)}
-                        </span>
-                      </button>
-
-                      {modelDropdownOpen && (
-                        <div className="absolute bottom-full left-0 mb-2 w-56 bg-background shadow-lg border border-border py-1 z-50">
-                          {modelOptions.map((group, groupIdx) => (
-                            <div key={group.category}>
-                              <div
-                                className={`px-3 py-1.5 text-xs font-medium text-secondary-foreground uppercase tracking-wider ${
-                                  groupIdx > 0 ? "border-t border-border-muted mt-1" : ""
-                                }`}
-                              >
-                                {group.category}
-                              </div>
-                              {group.models.map((model) => (
-                                <button
-                                  key={model.id}
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedModel(model.id);
-                                    setModelDropdownOpen(false);
-                                  }}
-                                  className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
-                                    selectedModel === model.id
-                                      ? "text-foreground"
-                                      : "text-muted-foreground"
-                                  }`}
-                                >
-                                  <div className="flex flex-col items-start">
-                                    <span className="font-medium">{model.name}</span>
-                                    <span className="text-xs text-secondary-foreground">
-                                      {model.description}
-                                    </span>
-                                  </div>
-                                  {selectedModel === model.id && (
-                                    <CheckIcon className="w-4 h-4 text-accent" />
-                                  )}
-                                </button>
-                              ))}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                    <Combobox
+                      value={selectedModel}
+                      onChange={(value) => setSelectedModel(value)}
+                      items={
+                        modelOptions.map((group) => ({
+                          category: group.category,
+                          options: group.models.map((model) => ({
+                            value: model.id,
+                            label: model.name,
+                            description: model.description,
+                          })),
+                        })) as ComboboxGroup[]
+                      }
+                      direction="up"
+                      dropdownWidth="w-56"
+                      disabled={creating}
+                      triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
+                    >
+                      <ModelIcon className="w-3.5 h-3.5" />
+                      <span className="truncate max-w-[9rem] sm:max-w-none">
+                        {formatModelNameLower(selectedModel)}
+                      </span>
+                    </Combobox>
 
                     {/* Reasoning effort pills */}
                     <ReasoningEffortPills
