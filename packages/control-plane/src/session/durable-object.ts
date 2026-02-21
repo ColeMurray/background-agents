@@ -25,6 +25,10 @@ import {
   type IdGenerator,
 } from "../sandbox/lifecycle/manager";
 import {
+  evaluateExecutionTimeout,
+  DEFAULT_EXECUTION_TIMEOUT_MS,
+} from "../sandbox/lifecycle/decisions";
+import {
   createSourceControlProvider as createSourceControlProviderImpl,
   resolveScmProviderFromEnv,
   type SourceControlProvider,
@@ -279,6 +283,17 @@ export class SessionDO extends DurableObject<Env> {
         updateLastActivity: (timestamp) => this.updateLastActivity(timestamp),
         spawnSandbox: () => this.spawnSandbox(),
         broadcast: (message) => this.broadcast(message),
+        scheduleExecutionTimeout: async (startedAtMs: number) => {
+          const timeoutMs = parseInt(
+            this.env.EXECUTION_TIMEOUT_MS || String(DEFAULT_EXECUTION_TIMEOUT_MS),
+            10
+          );
+          const deadline = startedAtMs + timeoutMs;
+          const currentAlarm = await this.ctx.storage.getAlarm();
+          if (!currentAlarm || deadline < currentAlarm) {
+            await this.ctx.storage.setAlarm(deadline);
+          }
+        },
       });
     }
 
@@ -431,7 +446,10 @@ export class SessionDO extends DurableObject<Env> {
       wsManager,
       alarmScheduler,
       idGenerator,
-      config
+      config,
+      {
+        onSandboxTerminating: () => this.messageQueue.failStuckProcessingMessage(),
+      }
     );
   }
 
@@ -699,10 +717,33 @@ export class SessionDO extends DurableObject<Env> {
   /**
    * Durable Object alarm handler.
    *
-   * Delegates to the lifecycle manager for inactivity and heartbeat monitoring.
+   * Checks for stuck processing messages (defense-in-depth execution timeout)
+   * BEFORE delegating to the lifecycle manager for inactivity and heartbeat
+   * monitoring. This ensures stuck messages are failed even when the sandbox
+   * is already dead and handleAlarm() returns early.
    */
   async alarm(): Promise<void> {
     this.ensureInitialized();
+
+    const processing = this.repository.getProcessingMessageWithStartedAt();
+    if (processing?.started_at) {
+      const now = Date.now();
+      const timeoutMs = parseInt(
+        this.env.EXECUTION_TIMEOUT_MS || String(DEFAULT_EXECUTION_TIMEOUT_MS),
+        10
+      );
+      const result = evaluateExecutionTimeout(processing.started_at, { timeoutMs }, now);
+      if (result.isTimedOut) {
+        this.log.warn("Execution timeout: message stuck in processing", {
+          event: "execution.timeout",
+          message_id: processing.id,
+          elapsed_ms: result.elapsedMs,
+          timeout_ms: timeoutMs,
+        });
+        await this.messageQueue.failStuckProcessingMessage();
+      }
+    }
+
     await this.lifecycleManager.handleAlarm();
   }
 

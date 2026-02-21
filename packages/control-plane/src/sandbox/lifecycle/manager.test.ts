@@ -848,6 +848,80 @@ describe("SandboxLifecycleManager", () => {
 
       expect(provider.takeSnapshot).toHaveBeenCalled();
     });
+
+    it("calls onSandboxTerminating callback on heartbeat stale", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "ready",
+        last_heartbeat: now - 100000, // Past 90s timeout
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const onSandboxTerminating = vi.fn().mockResolvedValue(undefined);
+
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig(),
+        { onSandboxTerminating }
+      );
+
+      await manager.handleAlarm();
+
+      expect(onSandboxTerminating).toHaveBeenCalledOnce();
+    });
+
+    it("calls onSandboxTerminating callback on inactivity timeout", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "ready",
+        last_heartbeat: now - 10000, // Recent heartbeat
+        last_activity: now - 11 * 60 * 1000, // Past 10 min timeout
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const onSandboxTerminating = vi.fn().mockResolvedValue(undefined);
+
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false, 0), // No clients
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig(),
+        { onSandboxTerminating }
+      );
+
+      await manager.handleAlarm();
+
+      expect(onSandboxTerminating).toHaveBeenCalledOnce();
+    });
+
+    it("does not call onSandboxTerminating when no callback provided", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "ready",
+        last_heartbeat: now - 100000, // Past timeout
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+
+      // No callbacks - should not throw
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.handleAlarm();
+      expect(storage.calls).toContain("updateSandboxStatus:stale");
+    });
   });
 
   describe("scheduleDisconnectCheck", () => {

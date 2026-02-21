@@ -148,6 +148,17 @@ export const DEFAULT_LIFECYCLE_CONFIG: Omit<SandboxLifecycleConfig, "controlPlan
   heartbeat: DEFAULT_HEARTBEAT_CONFIG,
 };
 
+// ==================== Callbacks ====================
+
+/**
+ * Optional callbacks from the lifecycle manager to the session DO.
+ * Lightweight callback interface — the manager doesn't know what the callbacks do.
+ */
+export interface LifecycleCallbacks {
+  /** Called when the sandbox is being terminated (heartbeat stale, inactivity timeout). */
+  onSandboxTerminating?: () => Promise<void>;
+}
+
 // ==================== Manager ====================
 
 /**
@@ -174,7 +185,8 @@ export class SandboxLifecycleManager {
     private readonly wsManager: WebSocketManager,
     private readonly alarmScheduler: AlarmScheduler,
     private readonly idGenerator: IdGenerator,
-    private readonly config: SandboxLifecycleConfig
+    private readonly config: SandboxLifecycleConfig,
+    private readonly callbacks: LifecycleCallbacks = {}
   ) {
     this.log = config.sessionId ? log.child({ session_id: config.sessionId }) : log;
   }
@@ -588,6 +600,8 @@ export class SandboxLifecycleManager {
         last_heartbeat_ms: heartbeatHealth.ageMs || 0,
         threshold_ms: this.config.heartbeat.timeoutMs,
       });
+      // Fail any stuck processing message before terminating
+      await this.callbacks.onSandboxTerminating?.();
       // Fire-and-forget snapshot so status broadcast isn't delayed
       this.triggerSnapshot("heartbeat_timeout").catch((e) =>
         this.log.error("Heartbeat snapshot failed", { error: e instanceof Error ? e : String(e) })
@@ -624,6 +638,8 @@ export class SandboxLifecycleManager {
           last_activity: sandbox.last_activity,
           timeout_ms: this.config.inactivity.timeoutMs,
         });
+        // Fail any stuck processing message before terminating
+        await this.callbacks.onSandboxTerminating?.();
         // Set status to stopped FIRST to block reconnection attempts
         this.storage.updateSandboxStatus("stopped");
         this.broadcaster.broadcast({ type: "sandbox_status", status: "stopped" });

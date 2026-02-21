@@ -482,6 +482,14 @@ export class SessionRepository {
     return rows[0] ?? null;
   }
 
+  getProcessingMessageWithStartedAt(): { id: string; started_at: number } | null {
+    const result = this.sql.exec(
+      `SELECT id, started_at FROM messages WHERE status = 'processing' LIMIT 1`
+    );
+    const rows = result.toArray() as Array<{ id: string; started_at: number }>;
+    return rows[0] ?? null;
+  }
+
   getNextPendingMessage(): MessageRow | null {
     const result = this.sql.exec(
       `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1`

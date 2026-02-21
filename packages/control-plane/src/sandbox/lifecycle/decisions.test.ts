@@ -11,10 +11,12 @@ import {
   evaluateInactivityTimeout,
   evaluateHeartbeatHealth,
   evaluateWarmDecision,
+  evaluateExecutionTimeout,
   DEFAULT_CIRCUIT_BREAKER_CONFIG,
   DEFAULT_SPAWN_CONFIG,
   DEFAULT_INACTIVITY_CONFIG,
   DEFAULT_HEARTBEAT_CONFIG,
+  DEFAULT_EXECUTION_TIMEOUT_MS,
   type CircuitBreakerState,
   type CircuitBreakerConfig,
   type SandboxState,
@@ -23,6 +25,7 @@ import {
   type InactivityConfig,
   type HeartbeatConfig,
   type WarmState,
+  type ExecutionTimeoutConfig,
 } from "./decisions";
 
 // ==================== Circuit Breaker Tests ====================
@@ -647,5 +650,54 @@ describe("evaluateWarmDecision", () => {
     const decision = evaluateWarmDecision(state);
 
     expect(decision.action).toBe("spawn");
+  });
+});
+
+// ==================== Execution Timeout Tests ====================
+
+describe("evaluateExecutionTimeout", () => {
+  const config: ExecutionTimeoutConfig = {
+    timeoutMs: DEFAULT_EXECUTION_TIMEOUT_MS, // 90 minutes
+  };
+
+  it("returns not timed out within threshold", () => {
+    const now = Date.now();
+    const startedAt = now - 60000; // 1 minute ago
+
+    const result = evaluateExecutionTimeout(startedAt, config, now);
+
+    expect(result.isTimedOut).toBe(false);
+    expect(result.elapsedMs).toBe(60000);
+  });
+
+  it("returns timed out past threshold", () => {
+    const now = Date.now();
+    const startedAt = now - DEFAULT_EXECUTION_TIMEOUT_MS - 1000; // Just past 90 minutes
+
+    const result = evaluateExecutionTimeout(startedAt, config, now);
+
+    expect(result.isTimedOut).toBe(true);
+    expect(result.elapsedMs).toBe(DEFAULT_EXECUTION_TIMEOUT_MS + 1000);
+  });
+
+  it("returns timed out at exact threshold", () => {
+    const now = Date.now();
+    const startedAt = now - DEFAULT_EXECUTION_TIMEOUT_MS;
+
+    const result = evaluateExecutionTimeout(startedAt, config, now);
+
+    expect(result.isTimedOut).toBe(true);
+    expect(result.elapsedMs).toBe(DEFAULT_EXECUTION_TIMEOUT_MS);
+  });
+
+  it("works with custom timeout config", () => {
+    const customConfig: ExecutionTimeoutConfig = { timeoutMs: 5000 };
+    const now = Date.now();
+    const startedAt = now - 6000;
+
+    const result = evaluateExecutionTimeout(startedAt, customConfig, now);
+
+    expect(result.isTimedOut).toBe(true);
+    expect(result.elapsedMs).toBe(6000);
   });
 });
