@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { SecretsEditor } from "@/components/secrets-editor";
 import { useRepos } from "@/hooks/use-repos";
+import { ChevronDownIcon, CheckIcon } from "@/components/ui/icons";
 
 const GLOBAL_SCOPE = "__global__";
 
@@ -71,7 +72,7 @@ export function SecretsSettings() {
             className="w-full max-w-sm flex items-center justify-between px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/30 disabled:opacity-50 disabled:cursor-not-allowed transition"
           >
             <span className="truncate">{displayRepoName}</span>
-            <ChevronIcon />
+            <ChevronDownIcon className="w-3 h-3 flex-shrink-0" />
           </button>
 
           {dropdownOpen && (
@@ -105,7 +106,7 @@ export function SecretsSettings() {
                       Shared across all repositories
                     </span>
                   </div>
-                  {isGlobal && <CheckIcon />}
+                  {isGlobal && <CheckIcon className="w-4 h-4 text-accent" />}
                 </button>
 
                 {filteredRepos.length > 0 && <div className="border-t border-border my-1" />}
@@ -134,7 +135,9 @@ export function SecretsSettings() {
                           {repo.private && " \u00b7 private"}
                         </span>
                       </div>
-                      {selectedRepo === repo.fullName && <CheckIcon />}
+                      {selectedRepo === repo.fullName && (
+                        <CheckIcon className="w-4 h-4 text-accent" />
+                      )}
                     </button>
                   ))
                 )}
@@ -155,21 +158,5 @@ export function SecretsSettings() {
         />
       )}
     </div>
-  );
-}
-
-function ChevronIcon() {
-  return (
-    <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-    </svg>
-  );
-}
-
-function CheckIcon() {
-  return (
-    <svg className="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-    </svg>
   );
 }

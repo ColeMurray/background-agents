@@ -6,7 +6,6 @@ import { mutate } from "swr";
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { useSidebarContext } from "@/components/sidebar-layout";
-import { SidebarToggleIcon } from "@/components/sidebar-toggle-icon";
 import { formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import {
@@ -18,6 +17,14 @@ import {
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { useRepos, type Repo } from "@/hooks/use-repos";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
+import {
+  SidebarIcon,
+  RepoIcon,
+  ModelIcon,
+  ChevronDownIcon,
+  CheckIcon,
+  SendIcon,
+} from "@/components/ui/icons";
 
 const LAST_SELECTED_REPO_STORAGE_KEY = "open-inspect-last-selected-repo";
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
@@ -357,7 +364,7 @@ function HomeContent({
               title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
               aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
             >
-              <SidebarToggleIcon />
+              <SidebarIcon className="w-4 h-4" />
             </button>
           </div>
         </header>
@@ -414,19 +421,7 @@ function HomeContent({
                       {creating ? (
                         <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
                       ) : (
-                        <svg
-                          className="w-5 h-5"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M5 10l7-7m0 0l7 7m-7-7v18"
-                          />
-                        </svg>
+                        <SendIcon className="w-5 h-5" />
                       )}
                     </button>
                   </div>
@@ -444,11 +439,11 @@ function HomeContent({
                         disabled={creating || loadingRepos}
                         className="flex max-w-full items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
                       >
-                        <RepoIcon />
+                        <RepoIcon className="w-4 h-4" />
                         <span className="truncate max-w-[12rem] sm:max-w-none">
                           {loadingRepos ? "Loading..." : displayRepoName}
                         </span>
-                        <ChevronIcon />
+                        <ChevronDownIcon className="w-3 h-3" />
                       </button>
 
                       {repoDropdownOpen && repos.length > 0 && (
@@ -495,10 +490,12 @@ function HomeContent({
                                     </span>
                                     <span className="text-xs text-secondary-foreground truncate max-w-[200px]">
                                       {repo.owner}
-                                      {repo.private && " • private"}
+                                      {repo.private && " \u2022 private"}
                                     </span>
                                   </div>
-                                  {selectedRepo === repo.fullName && <CheckIcon />}
+                                  {selectedRepo === repo.fullName && (
+                                    <CheckIcon className="w-4 h-4 text-accent" />
+                                  )}
                                 </button>
                               ))
                             )}
@@ -515,7 +512,7 @@ function HomeContent({
                         disabled={creating}
                         className="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
                       >
-                        <ModelIcon />
+                        <ModelIcon className="w-3.5 h-3.5" />
                         <span className="truncate max-w-[9rem] sm:max-w-none">
                           {formatModelNameLower(selectedModel)}
                         </span>
@@ -552,7 +549,9 @@ function HomeContent({
                                       {model.description}
                                     </span>
                                   </div>
-                                  {selectedModel === model.id && <CheckIcon />}
+                                  {selectedModel === model.id && (
+                                    <CheckIcon className="w-4 h-4 text-accent" />
+                                  )}
                                 </button>
                               ))}
                             </div>
@@ -598,37 +597,5 @@ function HomeContent({
         </div>
       </div>
     </div>
-  );
-}
-
-function RepoIcon() {
-  return (
-    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 16 16">
-      <path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.45-1.087a.249.249 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z" />
-    </svg>
-  );
-}
-
-function ModelIcon() {
-  return (
-    <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-      <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-    </svg>
-  );
-}
-
-function ChevronIcon() {
-  return (
-    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-    </svg>
-  );
-}
-
-function CheckIcon() {
-  return (
-    <svg className="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-    </svg>
   );
 }

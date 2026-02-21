@@ -5,6 +5,7 @@ import { INTEGRATION_DEFINITIONS, type IntegrationId } from "@open-inspect/share
 import { useIsMobile } from "@/hooks/use-media-query";
 import { GitHubIntegrationSettings } from "@/components/settings/integrations/github-integration-settings";
 import { LinearIntegrationSettings } from "@/components/settings/integrations/linear-integration-settings";
+import { BackIcon, ChevronRightIcon } from "@/components/ui/icons";
 
 export function IntegrationsSettings() {
   const isMobile = useIsMobile();
@@ -30,7 +31,7 @@ export function IntegrationsSettings() {
               onClick={() => setSelectedIntegrationId(null)}
               className="mb-4 flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition"
             >
-              <BackIcon />
+              <BackIcon className="w-4 h-4" />
               Back to integrations
             </button>
             <IntegrationDetail integrationId={activeIntegrationId} />
@@ -102,7 +103,9 @@ function IntegrationList({
                     <p className="text-sm font-medium">{integration.name}</p>
                     <p className="text-xs mt-1">{integration.description}</p>
                   </div>
-                  <ChevronRightIcon className={isSelected ? "text-foreground" : undefined} />
+                  <ChevronRightIcon
+                    className={`w-4 h-4 mt-0.5 ${isSelected ? "text-foreground" : "text-muted-foreground"}`}
+                  />
                 </div>
               </button>
             </li>
@@ -130,37 +133,5 @@ function EmptyState() {
     <div className="border border-dashed border-border-muted rounded-md px-6 py-8 text-sm text-muted-foreground">
       Select an integration to manage its settings.
     </div>
-  );
-}
-
-function BackIcon() {
-  return (
-    <svg
-      className="w-4 h-4"
-      fill="none"
-      stroke="currentColor"
-      viewBox="0 0 24 24"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M15 18l-6-6 6-6" />
-    </svg>
-  );
-}
-
-function ChevronRightIcon({ className = "text-muted-foreground" }: { className?: string }) {
-  return (
-    <svg
-      className={`w-4 h-4 mt-0.5 ${className}`}
-      fill="none"
-      stroke="currentColor"
-      viewBox="0 0 24 24"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M9 18l6-6-6-6" />
-    </svg>
   );
 }
