@@ -1188,7 +1188,7 @@ class TestPromptMaxDuration:
             async for _event in bridge._stream_opencode_response_sse("msg-1", "test"):
                 pass
 
-        assert any(url.endswith("/stop") for url in http_client.post_urls)
+        assert any(url.endswith("/abort") for url in http_client.post_urls)
         assert any(url.endswith("/message") for url in http_client.get_urls)
 
 

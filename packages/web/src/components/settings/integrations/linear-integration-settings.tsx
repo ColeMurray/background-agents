@@ -13,6 +13,7 @@ import {
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { Button } from "@/components/ui/button";
+import { RadioCard, Select } from "@/components/ui/form-controls";
 
 const GLOBAL_SETTINGS_KEY = "/api/integration-settings/linear";
 const REPO_SETTINGS_KEY = "/api/integration-settings/linear/repos";
@@ -239,7 +240,7 @@ function GlobalSettingsSection({
       <div className="grid sm:grid-cols-2 gap-3 mb-4">
         <label className="text-sm">
           <span className="block text-foreground font-medium mb-1">Default model</span>
-          <select
+          <Select
             value={model}
             onChange={(e) => {
               const nextModel = e.target.value;
@@ -251,7 +252,7 @@ function GlobalSettingsSection({
               setError("");
               setSuccess("");
             }}
-            className="w-full px-3 py-2 text-sm border border-border bg-background text-foreground rounded-sm"
+            className="w-full"
           >
             <option value="">Use system default</option>
             {enabledModelOptions.map((group) => (
@@ -263,12 +264,12 @@ function GlobalSettingsSection({
                 ))}
               </optgroup>
             ))}
-          </select>
+          </Select>
         </label>
 
         <label className="text-sm">
           <span className="block text-foreground font-medium mb-1">Default reasoning effort</span>
-          <select
+          <Select
             value={effort}
             onChange={(e) => {
               setEffort(e.target.value);
@@ -277,7 +278,7 @@ function GlobalSettingsSection({
               setSuccess("");
             }}
             disabled={!reasoningConfig}
-            className="w-full px-3 py-2 text-sm border border-border bg-background text-foreground rounded-sm disabled:opacity-50"
+            className="w-full"
           >
             <option value="">Use model default</option>
             {(reasoningConfig?.efforts ?? []).map((value) => (
@@ -285,7 +286,7 @@ function GlobalSettingsSection({
                 {value}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
       </div>
 
@@ -340,34 +341,30 @@ function GlobalSettingsSection({
       <div className="mb-4">
         <p className="text-sm font-medium text-foreground mb-2">Repository Scope</p>
         <div className="grid sm:grid-cols-2 gap-2 mb-3">
-          <label className="flex items-center gap-2 px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
-            <input
-              type="radio"
-              name="linear-repo-scope"
-              checked={repoScopeMode === "all"}
-              onChange={() => {
-                setRepoScopeMode("all");
-                setDirty(true);
-                setError("");
-                setSuccess("");
-              }}
-            />
-            All repositories
-          </label>
-          <label className="flex items-center gap-2 px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
-            <input
-              type="radio"
-              name="linear-repo-scope"
-              checked={repoScopeMode === "selected"}
-              onChange={() => {
-                setRepoScopeMode("selected");
-                setDirty(true);
-                setError("");
-                setSuccess("");
-              }}
-            />
-            Selected repositories
-          </label>
+          <RadioCard
+            name="linear-repo-scope"
+            checked={repoScopeMode === "all"}
+            onChange={() => {
+              setRepoScopeMode("all");
+              setDirty(true);
+              setError("");
+              setSuccess("");
+            }}
+            label="All repositories"
+            description="Linear events can run against every accessible repository."
+          />
+          <RadioCard
+            name="linear-repo-scope"
+            checked={repoScopeMode === "selected"}
+            onChange={() => {
+              setRepoScopeMode("selected");
+              setDirty(true);
+              setError("");
+              setSuccess("");
+            }}
+            label="Selected repositories"
+            description="Linear events run only for repositories in the allowlist."
+          />
         </div>
 
         {repoScopeMode === "selected" && (
@@ -492,10 +489,10 @@ function RepoOverridesSection({
       )}
 
       <div className="flex items-center gap-2">
-        <select
+        <Select
           value={addingRepo}
           onChange={(e) => setAddingRepo(e.target.value)}
-          className="flex-1 px-3 py-2 text-sm border border-border bg-background text-foreground rounded-sm"
+          className="flex-1"
         >
           <option value="">Select a repository...</option>
           {availableForOverride.map((repo) => (
@@ -503,7 +500,7 @@ function RepoOverridesSection({
               {repo.fullName}
             </option>
           ))}
-        </select>
+        </Select>
         <Button onClick={handleAdd} disabled={!addingRepo}>
           Add Override
         </Button>
@@ -611,11 +608,7 @@ function RepoOverrideRow({
       <div className="text-sm font-medium text-foreground">{entry.repo}</div>
 
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
-        <select
-          value={model}
-          onChange={(e) => handleModelChange(e.target.value)}
-          className="px-2 py-1 text-sm border border-border bg-background text-foreground rounded-sm"
-        >
+        <Select value={model} onChange={(e) => handleModelChange(e.target.value)} density="compact">
           <option value="">Default model</option>
           {enabledModelOptions.map((group) => (
             <optgroup key={group.category} label={group.category}>
@@ -626,16 +619,16 @@ function RepoOverrideRow({
               ))}
             </optgroup>
           ))}
-        </select>
+        </Select>
 
-        <select
+        <Select
           value={effort}
           onChange={(e) => {
             setEffort(e.target.value);
             setDirty(true);
           }}
           disabled={!reasoningConfig}
-          className="px-2 py-1 text-sm border border-border bg-background text-foreground rounded-sm disabled:opacity-50"
+          density="compact"
         >
           <option value="">Default effort</option>
           {(reasoningConfig?.efforts ?? []).map((value) => (
@@ -643,7 +636,7 @@ function RepoOverrideRow({
               {value}
             </option>
           ))}
-        </select>
+        </Select>
 
         <label className="flex items-center justify-between px-2 py-1 text-sm border border-border rounded-sm">
           <span>Tool updates</span>

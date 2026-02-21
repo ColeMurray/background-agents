@@ -94,6 +94,13 @@ const VALID_MESSAGE_STATUSES = ["pending", "processing", "completed", "failed"] 
 const WS_AUTH_TIMEOUT_MS = 30000; // 30 seconds
 
 /**
+ * Maximum age of a WebSocket authentication token (in milliseconds).
+ * Tokens older than this are rejected with close code 4001, forcing
+ * the client to fetch a fresh token on reconnect.
+ */
+const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
  * Route definition for internal API endpoints.
  */
 interface InternalRoute {
@@ -823,6 +830,23 @@ export class SessionDO extends DurableObject<Env> {
         reject_reason: "invalid_token",
       });
       ws.close(4001, "Invalid authentication token");
+      return;
+    }
+
+    // Reject tokens older than the TTL
+    if (
+      participant.ws_token_created_at === null ||
+      Date.now() - participant.ws_token_created_at > WS_TOKEN_TTL_MS
+    ) {
+      this.log.warn("ws.connect", {
+        event: "ws.connect",
+        ws_type: "client",
+        outcome: "auth_failed",
+        reject_reason: "token_expired",
+        participant_id: participant.id,
+        user_id: participant.user_id,
+      });
+      ws.close(4001, "Token expired");
       return;
     }
 
