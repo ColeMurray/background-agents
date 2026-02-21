@@ -342,22 +342,19 @@ function HomeContent({
 
   const selectedRepoObj = repos.find((r) => r.fullName === selectedRepo);
   const displayRepoName = selectedRepoObj ? selectedRepoObj.name : "Select repo";
-  const normalizedRepoSearchQuery = repoSearchQuery.trim().toLowerCase();
-  const filteredRepos = repos.filter((repo) => {
-    if (!normalizedRepoSearchQuery) return true;
-    return (
-      repo.name.toLowerCase().includes(normalizedRepoSearchQuery) ||
-      repo.owner.toLowerCase().includes(normalizedRepoSearchQuery) ||
-      repo.fullName.toLowerCase().includes(normalizedRepoSearchQuery)
+  const filteredRepos = useMemo(() => {
+    const query = repoSearchQuery.trim().toLowerCase();
+    if (!query) return repos;
+    return repos.filter(
+      (repo) =>
+        repo.name.toLowerCase().includes(query) ||
+        repo.owner.toLowerCase().includes(query) ||
+        repo.fullName.toLowerCase().includes(query)
     );
-  });
+  }, [repos, repoSearchQuery]);
   const flatModelOptions = useMemo(
     () => modelOptions.flatMap((group) => group.models),
     [modelOptions]
-  );
-  const modelOptionIndexById = useMemo(
-    () => new Map(flatModelOptions.map((model, index) => [model.id, index])),
-    [flatModelOptions]
   );
 
   useEffect(() => {
@@ -391,49 +388,102 @@ function HomeContent({
     return () => cancelAnimationFrame(id);
   }, [modelDropdownOpen, flatModelOptions, selectedModel]);
 
-  const selectRepo = useCallback(
-    (repoFullName: string) => {
-      setSelectedRepo(repoFullName);
+  useEffect(() => {
+    if (activeRepoIndex >= 0) {
+      document
+        .getElementById(`${repoListboxId}-option-${activeRepoIndex}`)
+        ?.scrollIntoView({ block: "nearest" });
+    }
+    if (activeModelIndex >= 0) {
+      document
+        .getElementById(`${modelListboxId}-option-${activeModelIndex}`)
+        ?.scrollIntoView({ block: "nearest" });
+    }
+  }, [activeRepoIndex, activeModelIndex, repoListboxId, modelListboxId]);
+
+  function selectRepo(repoFullName: string): void {
+    setSelectedRepo(repoFullName);
+    setRepoDropdownOpen(false);
+    requestAnimationFrame(() => repoButtonRef.current?.focus());
+  }
+
+  function selectModel(modelId: string): void {
+    setSelectedModel(modelId);
+    setModelDropdownOpen(false);
+    requestAnimationFrame(() => modelButtonRef.current?.focus());
+  }
+
+  function moveActiveRepoIndex(direction: 1 | -1): void {
+    if (filteredRepos.length === 0) return;
+    setActiveRepoIndex((currentIndex) => {
+      if (currentIndex < 0) {
+        return direction === 1 ? 0 : filteredRepos.length - 1;
+      }
+      return (currentIndex + direction + filteredRepos.length) % filteredRepos.length;
+    });
+  }
+
+  function moveActiveModelIndex(direction: 1 | -1): void {
+    if (flatModelOptions.length === 0) return;
+    setActiveModelIndex((currentIndex) => {
+      if (currentIndex < 0) {
+        return direction === 1 ? 0 : flatModelOptions.length - 1;
+      }
+      return (currentIndex + direction + flatModelOptions.length) % flatModelOptions.length;
+    });
+  }
+
+  function handleRepoSearchKeyDown(e: React.KeyboardEvent): void {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      moveActiveRepoIndex(1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      moveActiveRepoIndex(-1);
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      setActiveRepoIndex(0);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      setActiveRepoIndex(filteredRepos.length - 1);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const activeRepo = filteredRepos[activeRepoIndex];
+      if (activeRepo) {
+        selectRepo(activeRepo.fullName);
+      }
+    } else if (e.key === "Escape") {
+      e.preventDefault();
       setRepoDropdownOpen(false);
-      requestAnimationFrame(() => repoButtonRef.current?.focus());
-    },
-    [setSelectedRepo]
-  );
+      repoButtonRef.current?.focus();
+    }
+  }
 
-  const selectModel = useCallback(
-    (modelId: string) => {
-      setSelectedModel(modelId);
+  function handleModelListKeyDown(e: React.KeyboardEvent): void {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      moveActiveModelIndex(1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      moveActiveModelIndex(-1);
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      setActiveModelIndex(0);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      setActiveModelIndex(flatModelOptions.length - 1);
+    } else if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      const activeModel = flatModelOptions[activeModelIndex];
+      if (activeModel) {
+        selectModel(activeModel.id);
+      }
+    } else if (e.key === "Escape") {
+      e.preventDefault();
       setModelDropdownOpen(false);
-      requestAnimationFrame(() => modelButtonRef.current?.focus());
-    },
-    [setSelectedModel]
-  );
-
-  const moveActiveRepoIndex = useCallback(
-    (direction: 1 | -1) => {
-      if (filteredRepos.length === 0) return;
-      setActiveRepoIndex((currentIndex) => {
-        if (currentIndex < 0) {
-          return direction === 1 ? 0 : filteredRepos.length - 1;
-        }
-        return (currentIndex + direction + filteredRepos.length) % filteredRepos.length;
-      });
-    },
-    [filteredRepos]
-  );
-
-  const moveActiveModelIndex = useCallback(
-    (direction: 1 | -1) => {
-      if (flatModelOptions.length === 0) return;
-      setActiveModelIndex((currentIndex) => {
-        if (currentIndex < 0) {
-          return direction === 1 ? 0 : flatModelOptions.length - 1;
-        }
-        return (currentIndex + direction + flatModelOptions.length) % flatModelOptions.length;
-      });
-    },
-    [flatModelOptions]
-  );
+      modelButtonRef.current?.focus();
+    }
+  }
 
   return (
     <div className="h-full flex flex-col">
@@ -534,23 +584,9 @@ function HomeContent({
                         onClick={() => !creating && setRepoDropdownOpen(!repoDropdownOpen)}
                         onKeyDown={(e) => {
                           if (creating || loadingRepos) return;
-
-                          if (e.key === "ArrowDown") {
+                          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
                             e.preventDefault();
                             setRepoDropdownOpen(true);
-                            setActiveRepoIndex((currentIndex) =>
-                              currentIndex < 0
-                                ? 0
-                                : Math.min(currentIndex + 1, filteredRepos.length - 1)
-                            );
-                          } else if (e.key === "ArrowUp") {
-                            e.preventDefault();
-                            setRepoDropdownOpen(true);
-                            setActiveRepoIndex((currentIndex) =>
-                              currentIndex < 0
-                                ? Math.max(filteredRepos.length - 1, 0)
-                                : currentIndex - 1
-                            );
                           } else if (e.key === "Escape") {
                             e.preventDefault();
                             setRepoDropdownOpen(false);
@@ -575,33 +611,12 @@ function HomeContent({
                             <input
                               ref={repoSearchInputRef}
                               type="text"
+                              role="combobox"
+                              aria-autocomplete="list"
+                              aria-label="Search repositories"
                               value={repoSearchQuery}
                               onChange={(e) => setRepoSearchQuery(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "ArrowDown") {
-                                  e.preventDefault();
-                                  moveActiveRepoIndex(1);
-                                } else if (e.key === "ArrowUp") {
-                                  e.preventDefault();
-                                  moveActiveRepoIndex(-1);
-                                } else if (e.key === "Home") {
-                                  e.preventDefault();
-                                  setActiveRepoIndex(0);
-                                } else if (e.key === "End") {
-                                  e.preventDefault();
-                                  setActiveRepoIndex(filteredRepos.length - 1);
-                                } else if (e.key === "Enter") {
-                                  e.preventDefault();
-                                  const activeRepo = filteredRepos[activeRepoIndex];
-                                  if (activeRepo) {
-                                    selectRepo(activeRepo.fullName);
-                                  }
-                                } else if (e.key === "Escape") {
-                                  e.preventDefault();
-                                  setRepoDropdownOpen(false);
-                                  repoButtonRef.current?.focus();
-                                }
-                              }}
+                              onKeyDown={handleRepoSearchKeyDown}
                               aria-controls={repoListboxId}
                               aria-activedescendant={
                                 activeRepoIndex >= 0
@@ -667,23 +682,9 @@ function HomeContent({
                         onClick={() => !creating && setModelDropdownOpen(!modelDropdownOpen)}
                         onKeyDown={(e) => {
                           if (creating) return;
-
-                          if (e.key === "ArrowDown") {
+                          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
                             e.preventDefault();
                             setModelDropdownOpen(true);
-                            setActiveModelIndex((currentIndex) =>
-                              currentIndex < 0
-                                ? 0
-                                : Math.min(currentIndex + 1, flatModelOptions.length - 1)
-                            );
-                          } else if (e.key === "ArrowUp") {
-                            e.preventDefault();
-                            setModelDropdownOpen(true);
-                            setActiveModelIndex((currentIndex) =>
-                              currentIndex < 0
-                                ? Math.max(flatModelOptions.length - 1, 0)
-                                : currentIndex - 1
-                            );
                           } else if (e.key === "Escape") {
                             e.preventDefault();
                             setModelDropdownOpen(false);
@@ -713,31 +714,7 @@ function HomeContent({
                               ? `${modelListboxId}-option-${activeModelIndex}`
                               : undefined
                           }
-                          onKeyDown={(e) => {
-                            if (e.key === "ArrowDown") {
-                              e.preventDefault();
-                              moveActiveModelIndex(1);
-                            } else if (e.key === "ArrowUp") {
-                              e.preventDefault();
-                              moveActiveModelIndex(-1);
-                            } else if (e.key === "Home") {
-                              e.preventDefault();
-                              setActiveModelIndex(0);
-                            } else if (e.key === "End") {
-                              e.preventDefault();
-                              setActiveModelIndex(flatModelOptions.length - 1);
-                            } else if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              const activeModel = flatModelOptions[activeModelIndex];
-                              if (activeModel) {
-                                selectModel(activeModel.id);
-                              }
-                            } else if (e.key === "Escape") {
-                              e.preventDefault();
-                              setModelDropdownOpen(false);
-                              modelButtonRef.current?.focus();
-                            }
-                          }}
+                          onKeyDown={handleModelListKeyDown}
                           className="absolute bottom-full left-0 mb-2 w-56 bg-background shadow-lg border border-border py-1 z-50"
                         >
                           {modelOptions.map((group, groupIdx) => (
@@ -751,18 +728,18 @@ function HomeContent({
                                 {group.category}
                               </div>
                               {group.models.map((model) => {
-                                const optionIndex = modelOptionIndexById.get(model.id) ?? -1;
+                                const flatIndex = flatModelOptions.indexOf(model);
                                 return (
                                   <button
                                     key={model.id}
-                                    id={`${modelListboxId}-option-${optionIndex}`}
+                                    id={`${modelListboxId}-option-${flatIndex}`}
                                     type="button"
                                     role="option"
                                     aria-selected={selectedModel === model.id}
                                     onClick={() => selectModel(model.id)}
-                                    onMouseEnter={() => setActiveModelIndex(optionIndex)}
+                                    onMouseEnter={() => setActiveModelIndex(flatIndex)}
                                     className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
-                                      activeModelIndex === optionIndex
+                                      activeModelIndex === flatIndex
                                         ? "bg-muted text-foreground"
                                         : ""
                                     } ${
