@@ -20,6 +20,7 @@ jobs:
   deploy:
     name: Deploy to Vercel
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Check if secrets are configured
         id: check-secrets

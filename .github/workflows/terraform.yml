@@ -44,6 +44,7 @@ jobs:
   check-secrets:
     name: Check Secrets
     runs-on: ubuntu-latest
+    timeout-minutes: 2
     outputs:
       has-secrets: ${{ steps.check.outputs.has-secrets }}
     steps:
@@ -60,6 +61,7 @@ jobs:
   validate:
     name: Validate
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: [check-secrets]
     steps:
       - name: Checkout
@@ -118,6 +120,7 @@ jobs:
   plan:
     name: Plan
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [validate, check-secrets]
     if: github.event_name == 'pull_request' && needs.check-secrets.outputs.has-secrets == 'true'
     steps:
@@ -235,6 +238,7 @@ jobs:
   apply:
     name: Apply
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [validate, check-secrets]
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && needs.check-secrets.outputs.has-secrets == 'true'
     environment: production
