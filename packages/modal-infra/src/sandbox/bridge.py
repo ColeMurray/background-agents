@@ -11,6 +11,7 @@ This module handles:
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import secrets
@@ -131,6 +132,14 @@ class AgentBridge:
     OPENCODE_REQUEST_TIMEOUT = 10.0
     PROMPT_MAX_DURATION = 5400.0
     MAX_PENDING_PART_EVENTS = 2000
+    MAX_EVENT_BUFFER_SIZE = 1000
+    CRITICAL_EVENT_TYPES: ClassVar[set[str]] = {
+        "execution_complete",
+        "error",
+        "snapshot_ready",
+        "push_complete",
+        "push_error",
+    }
 
     def __init__(
         self,
@@ -176,6 +185,12 @@ class AgentBridge:
 
         # Track the current prompt task so _handle_stop can cancel it
         self._current_prompt_task: asyncio.Task[None] | None = None
+
+        # Event buffer: survives WS reconnection, flushed on reconnect
+        self._event_buffer: list[dict[str, Any]] = []
+
+        # Tracks the message ID of the currently executing prompt
+        self._inflight_message_id: str | None = None
 
     @property
     def ws_url(self) -> str:
@@ -254,6 +269,11 @@ class AgentBridge:
                 await asyncio.sleep(delay)
 
         finally:
+            # Cancel any in-flight prompt task before closing resources
+            if self._current_prompt_task and not self._current_prompt_task.done():
+                self._current_prompt_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await self._current_prompt_task
             if self.http_client:
                 await self.http_client.aclose()
 
@@ -308,6 +328,8 @@ class AgentBridge:
                     }
                 )
 
+                await self._flush_event_buffer()
+
                 heartbeat_task = asyncio.create_task(self._heartbeat_loop())
                 background_tasks: set[asyncio.Task[None]] = set()
 
@@ -357,27 +379,65 @@ class AgentBridge:
                 )
 
     async def _send_event(self, event: dict[str, Any]) -> None:
-        """Send event to control plane."""
+        """Send event to control plane, buffering if WS is unavailable."""
         event_type = event.get("type", "unknown")
-
-        if not self.ws:
-            self.log.debug("bridge.send_failed", event_type=event_type, reason="ws_none")
-            return
-        if self.ws.state != State.OPEN:
-            self.log.debug(
-                "bridge.send_failed",
-                event_type=event_type,
-                reason=f"ws_state_{self.ws.state}",
-            )
-            return
-
         event["sandboxId"] = self.sandbox_id
         event["timestamp"] = event.get("timestamp", time.time())
+
+        if not self.ws or self.ws.state != State.OPEN:
+            self._buffer_event(event)
+            return
 
         try:
             await self.ws.send(json.dumps(event))
         except Exception as e:
-            self.log.error("bridge.send_error", event_type=event_type, exc=e)
+            self.log.warn("bridge.send_error", event_type=event_type, exc=e)
+            self._buffer_event(event)
+
+    async def _flush_event_buffer(self) -> None:
+        """Flush buffered events to the control plane after reconnect."""
+        if not self._event_buffer:
+            return
+
+        self.log.info("bridge.flush_buffer_start", buffer_size=len(self._event_buffer))
+        flushed = 0
+        while self._event_buffer:
+            event = self._event_buffer[0]
+            if not self.ws or self.ws.state != State.OPEN:
+                break
+            try:
+                await self.ws.send(json.dumps(event))
+                self._event_buffer.pop(0)
+                flushed += 1
+            except Exception as e:
+                self.log.warn("bridge.flush_send_error", exc=e)
+                break
+
+        self.log.info(
+            "bridge.flush_buffer_complete",
+            flushed=flushed,
+            remaining=len(self._event_buffer),
+        )
+
+    def _buffer_event(self, event: dict[str, Any]) -> None:
+        """Buffer an event for later delivery after WS reconnect."""
+        if len(self._event_buffer) >= self.MAX_EVENT_BUFFER_SIZE:
+            # Evict oldest non-critical event; fall back to oldest if all critical
+            evicted = False
+            for i, buffered in enumerate(self._event_buffer):
+                if buffered.get("type") not in self.CRITICAL_EVENT_TYPES:
+                    self._event_buffer.pop(i)
+                    evicted = True
+                    break
+            if not evicted:
+                self._event_buffer.pop(0)
+
+        self._event_buffer.append(event)
+        self.log.debug(
+            "bridge.event_buffered",
+            event_type=event.get("type", "unknown"),
+            buffer_size=len(self._event_buffer),
+        )
 
     async def _handle_command(self, cmd: dict[str, Any]) -> asyncio.Task[None] | None:
         """Handle command from control plane.
@@ -422,7 +482,10 @@ class AgentBridge:
                     )
 
             task.add_done_callback(handle_task_exception)
-            return task
+            # Don't return the task — prompt tasks must survive WS disconnects.
+            # Returning it would add it to background_tasks, which gets cancelled
+            # in the _connect_and_run finally block on WS close.
+            return None
         elif cmd_type == "stop":
             await self._handle_stop()
         elif cmd_type == "snapshot":
@@ -440,6 +503,7 @@ class AgentBridge:
     async def _handle_prompt(self, cmd: dict[str, Any]) -> None:
         """Handle prompt command - send to OpenCode and stream response."""
         message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
+        self._inflight_message_id = message_id
         content = cmd.get("content", "")
         model = cmd.get("model")
         reasoning_effort = cmd.get("reasoningEffort")
@@ -1207,6 +1271,8 @@ class AgentBridge:
     async def _handle_shutdown(self) -> None:
         """Handle shutdown command - graceful shutdown."""
         self.log.info("bridge.shutdown_requested")
+        if self._current_prompt_task and not self._current_prompt_task.done():
+            self._current_prompt_task.cancel()
         self.shutdown_event.set()
 
     async def _handle_push(self, cmd: dict[str, Any]) -> None:

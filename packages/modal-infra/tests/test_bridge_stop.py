@@ -131,17 +131,21 @@ class TestHandleStop:
             create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
         ]
 
-        # Run a prompt command
-        task = await bridge._handle_command(
+        # _handle_command returns None for prompts (decoupled from WS lifecycle)
+        result = await bridge._handle_command(
             {
                 "type": "prompt",
                 "messageId": "msg-1",
                 "content": "hello",
             }
         )
+        assert result is None
+
+        # But _current_prompt_task should be set
+        task = bridge._current_prompt_task
+        assert task is not None
 
         # Wait for task to complete
-        assert task is not None
         await task
 
         # Give the done callback a chance to fire
@@ -160,7 +164,7 @@ class TestHandleStop:
             create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
         ]
 
-        task = await bridge._handle_command(
+        result = await bridge._handle_command(
             {
                 "type": "prompt",
                 "messageId": "msg-1",
@@ -168,8 +172,11 @@ class TestHandleStop:
             }
         )
 
-        # Task should be set before completion
-        assert bridge._current_prompt_task is task
+        # _handle_command returns None for prompts (not added to background_tasks)
+        assert result is None
+
+        # But _current_prompt_task should be set
+        task = bridge._current_prompt_task
         assert task is not None
 
         # Clean up
@@ -193,22 +200,24 @@ class TestHandleStop:
 
         bridge._handle_prompt = fake_handle_prompt
 
-        old_task = await bridge._handle_command(
+        await bridge._handle_command(
             {
                 "type": "prompt",
                 "messageId": "msg-old",
                 "content": "old",
             }
         )
+        old_task = bridge._current_prompt_task
         assert old_task is not None
 
-        new_task = await bridge._handle_command(
+        await bridge._handle_command(
             {
                 "type": "prompt",
                 "messageId": "msg-new",
                 "content": "new",
             }
         )
+        new_task = bridge._current_prompt_task
         assert new_task is not None
         assert bridge._current_prompt_task is new_task
 
@@ -250,7 +259,7 @@ class TestHandleStop:
 
         http_client.stream = lambda *a, **kw: HangingSSEResponse()
 
-        task = await bridge._handle_command(
+        await bridge._handle_command(
             {
                 "type": "prompt",
                 "messageId": "msg-cancel-test",
@@ -258,6 +267,7 @@ class TestHandleStop:
             }
         )
 
+        task = bridge._current_prompt_task
         assert task is not None
 
         # Let the task start
