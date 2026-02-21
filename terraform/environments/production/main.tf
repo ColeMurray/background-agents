@@ -109,6 +109,8 @@ module "control_plane_worker" {
   worker_name = "open-inspect-control-plane-${local.name_suffix}"
   script_path = local.control_plane_script_path
 
+  depends_on = [module.linear_bot_worker]
+
   kv_namespaces = [
     {
       binding_name = "REPOS_CACHE"
