@@ -28,7 +28,7 @@ JWT='token==abc'
     ]);
   });
 
-  it("does not treat single-line paste as env block import", () => {
-    expect(parseMaybeEnvContent("ONE=1")).toEqual([]);
+  it("parses single-line key/value pastes", () => {
+    expect(parseMaybeEnvContent("ONE=1")).toEqual([{ key: "ONE", value: "1" }]);
   });
 });

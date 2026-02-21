@@ -11,10 +11,6 @@ function normalizeKey(value: string): string {
 
 export function parseMaybeEnvContent(content: string): ParsedEnvEntry[] {
   const normalizedContent = content.replace(/\r\n?/g, "\n");
-  if (!normalizedContent.includes("\n")) {
-    return [];
-  }
-
   const parsed: ParsedEnvEntry[] = [];
 
   for (const rawLine of normalizedContent.split("\n")) {
