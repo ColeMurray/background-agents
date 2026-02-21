@@ -14,9 +14,9 @@ interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
 
 export function Select({ className = "", density = "default", children, ...props }: SelectProps) {
   return (
-    <div className="relative">
+    <div className={`relative ${className}`.trim()}>
       <select
-        className={`w-full appearance-none rounded-sm border border-border bg-input pr-8 text-foreground transition hover:border-foreground/20 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50 ${selectDensityClasses[density]} ${className}`.trim()}
+        className={`w-full appearance-none rounded-sm border border-border bg-input pr-8 text-foreground transition hover:border-foreground/20 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50 ${selectDensityClasses[density]}`.trim()}
         {...props}
       >
         {children}
