@@ -1389,7 +1389,7 @@ class AgentBridge:
 
         try:
             await self.http_client.post(
-                f"{self.opencode_base_url}/session/{self.opencode_session_id}/stop",
+                f"{self.opencode_base_url}/session/{self.opencode_session_id}/abort",
                 timeout=self.OPENCODE_REQUEST_TIMEOUT,
             )
             self.log.info("bridge.stop_requested", reason=reason)

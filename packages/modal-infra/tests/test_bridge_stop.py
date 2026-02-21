@@ -106,9 +106,9 @@ class TestHandleStop:
         # Should not raise
         await bridge._handle_stop()
 
-        # Still calls opencode stop (best-effort)
+        # Still calls opencode abort (best-effort)
         http_client = bridge.http_client
-        assert any(url.endswith("/stop") for url in http_client.post_urls)
+        assert any(url.endswith("/abort") for url in http_client.post_urls)
 
     @pytest.mark.asyncio
     async def test_handle_stop_with_completed_task(self, bridge: AgentBridge):
