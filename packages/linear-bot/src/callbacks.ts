@@ -169,6 +169,9 @@ callbacksRouter.post("/tool_call", async (c) => {
         const { context } = payload;
         if (!context.agentSessionId || !context.organizationId) return;
 
+        // Default to true for backward compat with sessions created before this field existed
+        if (context.emitToolProgressActivities === false) return;
+
         const client = await getLinearClient(c.env, context.organizationId);
         if (!client) return;
 
