@@ -109,6 +109,8 @@ module "control_plane_worker" {
   worker_name = "open-inspect-control-plane-${local.name_suffix}"
   script_path = local.control_plane_script_path
 
+  depends_on = [module.linear_bot_worker]
+
   kv_namespaces = [
     {
       binding_name = "REPOS_CACHE"
@@ -133,7 +135,7 @@ module "control_plane_worker" {
     var.enable_linear_bot ? [
       {
         binding_name = "LINEAR_BOT"
-        service_name = "open-inspect-linear-bot-${local.name_suffix}"
+        service_name = module.linear_bot_worker[0].worker_name
       }
     ] : []
   )
@@ -346,7 +348,7 @@ module "linear_bot_worker" {
   compatibility_date  = "2024-09-23"
   compatibility_flags = ["nodejs_compat"]
 
-  depends_on = [null_resource.linear_bot_build[0], module.linear_kv[0], module.control_plane_worker]
+  depends_on = [null_resource.linear_bot_build[0], module.linear_kv[0]]
 }
 
 # =============================================================================
