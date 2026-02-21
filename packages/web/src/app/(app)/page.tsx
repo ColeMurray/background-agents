@@ -522,7 +522,7 @@ function HomeContent({
                       </button>
 
                       {modelDropdownOpen && (
-                        <div className="absolute bottom-full left-0 mb-2 w-56 bg-background shadow-lg border border-border py-1 z-50">
+                        <div className="absolute bottom-full left-0 mb-2 w-56 max-h-72 overflow-y-auto bg-background shadow-lg border border-border py-1 z-50">
                           {modelOptions.map((group, groupIdx) => (
                             <div key={group.category}>
                               <div
