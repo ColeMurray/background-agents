@@ -88,6 +88,21 @@ describe("resolveSessionModelSettings", () => {
     expect(result.reasoningEffort).toBe("xhigh");
   });
 
+  it("does not let config effort override user effort when user model wins", () => {
+    const result = resolveSessionModelSettings({
+      envDefaultModel: "anthropic/claude-haiku-4-5",
+      configModel: "anthropic/claude-sonnet-4-6",
+      configReasoningEffort: "low",
+      allowUserPreferenceOverride: true,
+      allowLabelModelOverride: false,
+      userModel: "openai/gpt-5.3-codex",
+      userReasoningEffort: "xhigh",
+    });
+
+    expect(result.model).toBe("openai/gpt-5.3-codex");
+    expect(result.reasoningEffort).toBe("xhigh");
+  });
+
   it("applies label override over user preference when enabled", () => {
     const result = resolveSessionModelSettings({
       envDefaultModel: "anthropic/claude-haiku-4-5",
@@ -116,6 +131,20 @@ describe("resolveSessionModelSettings", () => {
 
     expect(result.model).toBe("anthropic/claude-opus-4-6");
     expect(result.reasoningEffort).toBe("high");
+  });
+
+  it("uses config reasoning effort when config model is selected", () => {
+    const result = resolveSessionModelSettings({
+      envDefaultModel: "anthropic/claude-haiku-4-5",
+      configModel: "anthropic/claude-opus-4-6",
+      configReasoningEffort: "max",
+      allowUserPreferenceOverride: false,
+      allowLabelModelOverride: false,
+      userReasoningEffort: "low",
+    });
+
+    expect(result.model).toBe("anthropic/claude-opus-4-6");
+    expect(result.reasoningEffort).toBe("max");
   });
 });
 

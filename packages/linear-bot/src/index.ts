@@ -244,23 +244,19 @@ export function resolveSessionModelSettings(input: ResolveSessionModelInput): {
   reasoningEffort: string | undefined;
 } {
   let model = input.configModel ?? input.envDefaultModel;
+  let modelSource: "config" | "env" | "user" | "label" = input.configModel ? "config" : "env";
 
   if (input.allowUserPreferenceOverride && input.userModel) {
     model = input.userModel;
+    modelSource = "user";
   }
 
   if (input.allowLabelModelOverride && input.labelModel) {
     model = input.labelModel;
+    modelSource = "label";
   }
 
   const normalizedModel = getValidModelOrDefault(model);
-
-  if (
-    input.configReasoningEffort &&
-    isValidReasoningEffort(normalizedModel, input.configReasoningEffort)
-  ) {
-    return { model: normalizedModel, reasoningEffort: input.configReasoningEffort };
-  }
 
   if (
     input.allowUserPreferenceOverride &&
@@ -268,6 +264,15 @@ export function resolveSessionModelSettings(input: ResolveSessionModelInput): {
     isValidReasoningEffort(normalizedModel, input.userReasoningEffort)
   ) {
     return { model: normalizedModel, reasoningEffort: input.userReasoningEffort };
+  }
+
+  if (
+    modelSource !== "user" &&
+    modelSource !== "label" &&
+    input.configReasoningEffort &&
+    isValidReasoningEffort(normalizedModel, input.configReasoningEffort)
+  ) {
+    return { model: normalizedModel, reasoningEffort: input.configReasoningEffort };
   }
 
   return { model: normalizedModel, reasoningEffort: getDefaultReasoningEffort(normalizedModel) };
