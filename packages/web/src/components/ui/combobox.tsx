@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, type ReactNode } from "react";
+import { useState, useRef, useEffect, useCallback, useId, type ReactNode } from "react";
 import { CheckIcon } from "@/components/ui/icons";
 
 export interface ComboboxOption<T = string> {
@@ -18,6 +18,13 @@ function isGrouped<T>(
   items: ComboboxOption<T>[] | ComboboxGroup<T>[]
 ): items is ComboboxGroup<T>[] {
   return items.length > 0 && "category" in items[0];
+}
+
+function flattenOptions<T>(items: ComboboxOption<T>[] | ComboboxGroup<T>[]): ComboboxOption<T>[] {
+  if (isGrouped(items)) {
+    return items.flatMap((group) => group.options);
+  }
+  return items;
 }
 
 interface ComboboxProps<T = string> {
@@ -51,8 +58,13 @@ export function Combobox<T = string>({
 }: ComboboxProps<T>) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(-1);
   const containerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const instanceId = useId();
+  const listboxId = `${instanceId}-listbox`;
+  const optionIdPrefix = `${instanceId}-option`;
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -67,6 +79,7 @@ export function Combobox<T = string>({
   useEffect(() => {
     if (!open) {
       setQuery("");
+      setActiveIndex(-1);
       return;
     }
     if (searchable) {
@@ -74,11 +87,6 @@ export function Combobox<T = string>({
       return () => cancelAnimationFrame(id);
     }
   }, [open, searchable]);
-
-  const handleSelect = (optionValue: T) => {
-    onChange(optionValue);
-    setOpen(false);
-  };
 
   const normalizedQuery = query.trim().toLowerCase();
 
@@ -103,19 +111,115 @@ export function Combobox<T = string>({
     return items.filter((opt) => filterOption(opt, normalizedQuery));
   })();
 
-  const hasResults = isGrouped(filteredItems)
-    ? filteredItems.some((g) => g.options.length > 0)
-    : filteredItems.length > 0;
+  const flatOptions = flattenOptions(filteredItems);
+
+  const hasResults = flatOptions.length > 0;
+
+  // Reset active index when filtered results change (e.g. typing in search)
+  useEffect(() => {
+    if (open && flatOptions.length > 0) {
+      setActiveIndex(0);
+    } else {
+      setActiveIndex(-1);
+    }
+    // Use normalizedQuery as dependency instead of flatOptions to avoid reference issues
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [normalizedQuery, open]);
+
+  // Set initial active index to the selected value when opening
+  useEffect(() => {
+    if (!open) return;
+    const selectedIdx = flatOptions.findIndex((opt) => opt.value === value);
+    if (selectedIdx >= 0) {
+      setActiveIndex(selectedIdx);
+    }
+    // Only run when dropdown opens
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  // Scroll active option into view
+  useEffect(() => {
+    if (activeIndex < 0 || !listRef.current) return;
+    const activeEl = listRef.current.querySelector(`[data-option-index="${activeIndex}"]`);
+    activeEl?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex]);
+
+  const handleSelect = useCallback(
+    (optionValue: T) => {
+      onChange(optionValue);
+      setOpen(false);
+    },
+    [onChange]
+  );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (!open) {
+        if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          setOpen(true);
+        }
+        return;
+      }
+
+      switch (e.key) {
+        case "ArrowDown": {
+          e.preventDefault();
+          if (flatOptions.length === 0) return;
+          setActiveIndex((prev) => (prev + 1) % flatOptions.length);
+          break;
+        }
+        case "ArrowUp": {
+          e.preventDefault();
+          if (flatOptions.length === 0) return;
+          setActiveIndex((prev) => (prev <= 0 ? flatOptions.length - 1 : prev - 1));
+          break;
+        }
+        case "Home": {
+          e.preventDefault();
+          if (flatOptions.length > 0) setActiveIndex(0);
+          break;
+        }
+        case "End": {
+          e.preventDefault();
+          if (flatOptions.length > 0) setActiveIndex(flatOptions.length - 1);
+          break;
+        }
+        case "Enter": {
+          e.preventDefault();
+          if (activeIndex >= 0 && activeIndex < flatOptions.length) {
+            handleSelect(flatOptions[activeIndex].value);
+          }
+          break;
+        }
+        case "Escape": {
+          e.preventDefault();
+          setOpen(false);
+          break;
+        }
+        case "Tab": {
+          setOpen(false);
+          break;
+        }
+      }
+    },
+    [open, flatOptions, activeIndex, handleSelect]
+  );
 
   const directionClasses = direction === "up" ? "bottom-full mb-2" : "top-full mt-1";
 
+  const activeOptionId = activeIndex >= 0 ? `${optionIdPrefix}-${activeIndex}` : undefined;
+
   return (
-    <div className="relative" ref={containerRef}>
+    <div className="relative" ref={containerRef} onKeyDown={handleKeyDown}>
       <button
         type="button"
         onClick={() => !disabled && setOpen(!open)}
         disabled={disabled}
         className={triggerClassName}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-activedescendant={open ? activeOptionId : undefined}
       >
         {children}
       </button>
@@ -131,16 +235,23 @@ export function Combobox<T = string>({
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") e.preventDefault();
-                }}
                 placeholder={searchPlaceholder}
                 className="w-full px-2 py-1.5 text-sm bg-input border border-border focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent placeholder:text-secondary-foreground text-foreground"
+                role="combobox"
+                aria-expanded={open}
+                aria-controls={listboxId}
+                aria-activedescendant={activeOptionId}
+                aria-autocomplete="list"
               />
             </div>
           )}
 
-          <div className="max-h-56 overflow-y-auto py-1">
+          <div
+            ref={listRef}
+            className="max-h-56 overflow-y-auto py-1"
+            role="listbox"
+            id={listboxId}
+          >
             {prependContent?.({ select: handleSelect })}
 
             {!hasResults && normalizedQuery ? (
@@ -148,32 +259,48 @@ export function Combobox<T = string>({
                 No results match {query.trim()}
               </div>
             ) : isGrouped(filteredItems) ? (
-              filteredItems.map((group, groupIdx) => (
-                <div key={group.category}>
-                  <div
-                    className={`px-3 py-1.5 text-xs font-medium text-secondary-foreground uppercase tracking-wider ${
-                      groupIdx > 0 ? "border-t border-border-muted mt-1" : ""
-                    }`}
-                  >
-                    {group.category}
+              filteredItems.map((group, groupIdx) => {
+                const groupOffset = filteredItems
+                  .slice(0, groupIdx)
+                  .reduce((sum, g) => sum + g.options.length, 0);
+                return (
+                  <div key={group.category} role="group" aria-label={group.category}>
+                    <div
+                      className={`px-3 py-1.5 text-xs font-medium text-secondary-foreground uppercase tracking-wider ${
+                        groupIdx > 0 ? "border-t border-border-muted mt-1" : ""
+                      }`}
+                    >
+                      {group.category}
+                    </div>
+                    {group.options.map((option, optIdx) => {
+                      const idx = groupOffset + optIdx;
+                      return (
+                        <OptionButton
+                          key={String(option.value)}
+                          option={option}
+                          isSelected={option.value === value}
+                          isActive={idx === activeIndex}
+                          onSelect={() => handleSelect(option.value)}
+                          onMouseEnter={() => setActiveIndex(idx)}
+                          id={`${optionIdPrefix}-${idx}`}
+                          dataIndex={idx}
+                        />
+                      );
+                    })}
                   </div>
-                  {group.options.map((option) => (
-                    <OptionButton
-                      key={String(option.value)}
-                      option={option}
-                      isSelected={option.value === value}
-                      onSelect={() => handleSelect(option.value)}
-                    />
-                  ))}
-                </div>
-              ))
+                );
+              })
             ) : (
-              (filteredItems as ComboboxOption<T>[]).map((option) => (
+              (filteredItems as ComboboxOption<T>[]).map((option, idx) => (
                 <OptionButton
                   key={String(option.value)}
                   option={option}
                   isSelected={option.value === value}
+                  isActive={idx === activeIndex}
                   onSelect={() => handleSelect(option.value)}
+                  onMouseEnter={() => setActiveIndex(idx)}
+                  id={`${optionIdPrefix}-${idx}`}
+                  dataIndex={idx}
                 />
               ))
             )}
@@ -187,19 +314,32 @@ export function Combobox<T = string>({
 function OptionButton<T>({
   option,
   isSelected,
+  isActive,
   onSelect,
+  onMouseEnter,
+  id,
+  dataIndex,
 }: {
   option: ComboboxOption<T>;
   isSelected: boolean;
+  isActive: boolean;
   onSelect: () => void;
+  onMouseEnter: () => void;
+  id: string;
+  dataIndex: number;
 }) {
   return (
     <button
       type="button"
+      id={id}
+      role="option"
+      aria-selected={isSelected}
       onClick={onSelect}
-      className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
-        isSelected ? "text-foreground" : "text-muted-foreground"
-      }`}
+      onMouseEnter={onMouseEnter}
+      data-option-index={dataIndex}
+      className={`w-full flex items-center justify-between px-3 py-2 text-sm transition ${
+        isActive ? "bg-muted" : ""
+      } ${isSelected ? "text-foreground" : "text-muted-foreground"}`}
     >
       <div className="flex flex-col items-start text-left min-w-0">
         <span className="font-medium truncate max-w-full">{option.label}</span>
