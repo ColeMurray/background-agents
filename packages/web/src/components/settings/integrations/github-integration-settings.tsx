@@ -11,6 +11,7 @@ import {
   type ValidModel,
 } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
+import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 
 const GLOBAL_SETTINGS_KEY = "/api/integration-settings/github";
 const REPO_SETTINGS_KEY = "/api/integration-settings/github/repos";
@@ -41,12 +42,7 @@ export function GitHubIntegrationSettings() {
   const { enabledModelOptions } = useEnabledModels();
 
   if (globalLoading || repoSettingsLoading) {
-    return (
-      <div className="flex items-center gap-2 text-muted-foreground">
-        <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-        Loading GitHub settings...
-      </div>
-    );
+    return <IntegrationSettingsSkeleton />;
   }
 
   const settings = globalData?.settings;
