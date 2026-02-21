@@ -13,10 +13,10 @@
   "dependencies": {
     "@cloudflare/workers-types": "^4.20241230.0",
     "@open-inspect/shared": "file:../shared",
-    "hono": "^4.11.7"
+    "hono": "^4.11.10"
   },
   "devDependencies": {
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.25.1",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8",
     "wrangler": "^3.99.0"
