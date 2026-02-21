@@ -60,6 +60,10 @@ class SandboxSupervisor:
         self.repo_owner = os.environ.get("REPO_OWNER", "")
         self.repo_name = os.environ.get("REPO_NAME", "")
         self.github_app_token = os.environ.get("GITHUB_APP_TOKEN", "")
+        self.vcs_provider = os.environ.get("VCS_PROVIDER", "github").lower()
+        self.vcs_host = os.environ.get("VCS_HOST", "github.com")
+        self.vcs_clone_username = os.environ.get("VCS_CLONE_USERNAME", "")
+        self.vcs_clone_token = os.environ.get("VCS_CLONE_TOKEN", "")
 
         # Parse session config if provided
         session_config_json = os.environ.get("SESSION_CONFIG", "{}")
@@ -79,6 +83,20 @@ class SandboxSupervisor:
             session_id=session_id,
         )
 
+    def _build_repo_http_url(self) -> str:
+        return f"https://{self.vcs_host}/{self.repo_owner}/{self.repo_name}.git"
+
+    def _build_authenticated_repo_http_url(self) -> str:
+        token = self.vcs_clone_token or self.github_app_token
+        if not token:
+            return self._build_repo_http_url()
+
+        username = self.vcs_clone_username
+        if not username:
+            username = "x-access-token" if self.vcs_provider == "github" else "x-token-auth"
+
+        return f"https://{username}:{token}@{self.vcs_host}/{self.repo_owner}/{self.repo_name}.git"
+
     async def perform_git_sync(self) -> bool:
         """
         Clone repository if needed, then synchronize with latest changes.
@@ -91,7 +109,7 @@ class SandboxSupervisor:
             repo_owner=self.repo_owner,
             repo_name=self.repo_name,
             repo_path=str(self.repo_path),
-            has_github_token=bool(self.github_app_token),
+            has_vcs_token=bool(self.vcs_clone_token or self.github_app_token),
         )
 
         # Clone the repository if it doesn't exist
@@ -105,14 +123,10 @@ class SandboxSupervisor:
                 "git.clone_start",
                 repo_owner=self.repo_owner,
                 repo_name=self.repo_name,
-                authenticated=bool(self.github_app_token),
+                authenticated=bool(self.vcs_clone_token or self.github_app_token),
             )
 
-            # Use authenticated URL if GitHub App token is available
-            if self.github_app_token:
-                clone_url = f"https://x-access-token:{self.github_app_token}@github.com/{self.repo_owner}/{self.repo_name}.git"
-            else:
-                clone_url = f"https://github.com/{self.repo_owner}/{self.repo_name}.git"
+            clone_url = self._build_authenticated_repo_http_url()
 
             result = await asyncio.create_subprocess_exec(
                 "git",
@@ -139,8 +153,8 @@ class SandboxSupervisor:
 
         try:
             # Configure remote URL with auth token if available
-            if self.github_app_token:
-                auth_url = f"https://x-access-token:{self.github_app_token}@github.com/{self.repo_owner}/{self.repo_name}.git"
+            if self.vcs_clone_token or self.github_app_token:
+                auth_url = self._build_authenticated_repo_http_url()
                 await asyncio.create_subprocess_exec(
                     "git",
                     "remote",
@@ -665,8 +679,8 @@ class SandboxSupervisor:
 
         try:
             # Configure remote URL with auth token if available
-            if self.github_app_token:
-                auth_url = f"https://x-access-token:{self.github_app_token}@github.com/{self.repo_owner}/{self.repo_name}.git"
+            if self.vcs_clone_token or self.github_app_token:
+                auth_url = self._build_authenticated_repo_http_url()
                 await asyncio.create_subprocess_exec(
                     "git",
                     "remote",

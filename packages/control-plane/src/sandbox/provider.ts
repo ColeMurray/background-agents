@@ -33,6 +33,8 @@ export interface CreateSandboxConfig {
   repoOwner: string;
   /** Repository name */
   repoName: string;
+  /** VCS provider for repository operations */
+  vcsProvider?: "github" | "bitbucket";
   /** Control plane URL for sandbox callbacks */
   controlPlaneUrl: string;
   /** Authentication token for sandbox */
@@ -87,6 +89,8 @@ export interface RestoreConfig {
   repoOwner: string;
   /** Repository name */
   repoName: string;
+  /** VCS provider for repository operations */
+  vcsProvider?: "github" | "bitbucket";
   /** LLM provider (e.g., "anthropic") */
   provider: string;
   /** LLM model (e.g., "claude-sonnet-4-5") */

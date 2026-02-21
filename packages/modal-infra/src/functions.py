@@ -32,6 +32,7 @@ async def create_sandbox(
     repo_name: str,
     control_plane_url: str,
     sandbox_auth_token: str,
+    vcs_provider: str = "github",
     sandbox_id: str | None = None,
     snapshot_id: str | None = None,
     opencode_session_id: str | None = None,
@@ -93,6 +94,7 @@ async def create_sandbox(
         session_id=session_id,
         repo_owner=repo_owner,
         repo_name=repo_name,
+        vcs_provider=vcs_provider,
         opencode_session_id=opencode_session_id,
         provider=provider,
         model=model,
@@ -102,6 +104,7 @@ async def create_sandbox(
     config = SandboxConfig(
         repo_owner=repo_owner,
         repo_name=repo_name,
+        vcs_provider=vcs_provider,
         sandbox_id=sandbox_id,  # Use control-plane-provided ID for auth validation
         snapshot_id=snapshot_id,
         session_config=session_config,

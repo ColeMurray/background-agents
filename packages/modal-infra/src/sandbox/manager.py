@@ -11,6 +11,7 @@ Updated: 2026-01-15 to fix Sandbox.create API
 """
 
 import json
+import os
 import time
 from dataclasses import dataclass
 
@@ -32,6 +33,7 @@ class SandboxConfig:
 
     repo_owner: str
     repo_name: str
+    vcs_provider: str = "github"
     sandbox_id: str | None = None  # Expected sandbox ID from control plane
     snapshot_id: str | None = None
     session_config: SessionConfig | None = None
@@ -118,13 +120,24 @@ class SandboxManager:
                 "SANDBOX_AUTH_TOKEN": config.sandbox_auth_token,
                 "REPO_OWNER": config.repo_owner,
                 "REPO_NAME": config.repo_name,
+                "VCS_PROVIDER": config.vcs_provider,
             }
         )
 
-        # Add GitHub App token if available (for git sync operations and gh CLI)
-        if config.github_app_token:
+        if config.vcs_provider == "bitbucket":
+            bitbucket_username = os.environ.get("BITBUCKET_BOT_USERNAME", "")
+            bitbucket_app_password = os.environ.get("BITBUCKET_BOT_APP_PASSWORD", "")
+            if bitbucket_username and bitbucket_app_password:
+                env_vars["VCS_HOST"] = "bitbucket.org"
+                env_vars["VCS_CLONE_USERNAME"] = bitbucket_username
+                env_vars["VCS_CLONE_TOKEN"] = bitbucket_app_password
+        elif config.github_app_token:
+            # Backward-compatible GitHub variables
             env_vars["GITHUB_APP_TOKEN"] = config.github_app_token
             env_vars["GITHUB_TOKEN"] = config.github_app_token
+            env_vars["VCS_HOST"] = "github.com"
+            env_vars["VCS_CLONE_USERNAME"] = "x-access-token"
+            env_vars["VCS_CLONE_TOKEN"] = config.github_app_token
 
         if config.session_config:
             env_vars["SESSION_CONFIG"] = config.session_config.model_dump_json()
@@ -315,12 +328,14 @@ class SandboxManager:
             repo_name = session_config.get("repo_name", "")
             provider = session_config.get("provider", "anthropic")
             model = session_config.get("model", "claude-sonnet-4-6")
+            vcs_provider = session_config.get("vcs_provider", "github")
             session_id = session_config.get("session_id", "")
         else:
             repo_owner = session_config.repo_owner
             repo_name = session_config.repo_name
             provider = session_config.provider
             model = session_config.model
+            vcs_provider = session_config.vcs_provider
             session_id = session_config.session_id
 
         # Use provided sandbox_id or generate one
@@ -344,12 +359,14 @@ class SandboxManager:
                 "SANDBOX_AUTH_TOKEN": sandbox_auth_token,
                 "REPO_OWNER": repo_owner,
                 "REPO_NAME": repo_name,
+                "VCS_PROVIDER": vcs_provider,
                 "RESTORED_FROM_SNAPSHOT": "true",  # Signal to skip git clone
                 "SESSION_CONFIG": json.dumps(
                     {
                         "session_id": session_id,
                         "repo_owner": repo_owner,
                         "repo_name": repo_name,
+                        "vcs_provider": vcs_provider,
                         "provider": provider,
                         "model": model,
                     }
@@ -357,9 +374,19 @@ class SandboxManager:
             }
         )
 
-        if github_app_token:
+        if vcs_provider == "bitbucket":
+            bitbucket_username = os.environ.get("BITBUCKET_BOT_USERNAME", "")
+            bitbucket_app_password = os.environ.get("BITBUCKET_BOT_APP_PASSWORD", "")
+            if bitbucket_username and bitbucket_app_password:
+                env_vars["VCS_HOST"] = "bitbucket.org"
+                env_vars["VCS_CLONE_USERNAME"] = bitbucket_username
+                env_vars["VCS_CLONE_TOKEN"] = bitbucket_app_password
+        elif github_app_token:
             env_vars["GITHUB_APP_TOKEN"] = github_app_token
             env_vars["GITHUB_TOKEN"] = github_app_token
+            env_vars["VCS_HOST"] = "github.com"
+            env_vars["VCS_CLONE_USERNAME"] = "x-access-token"
+            env_vars["VCS_CLONE_TOKEN"] = github_app_token
 
         # Create the sandbox from the snapshot image
         sandbox = modal.Sandbox.create(

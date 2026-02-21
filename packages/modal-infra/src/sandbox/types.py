@@ -112,6 +112,7 @@ class SessionConfig(BaseModel):
     session_id: str
     repo_owner: str
     repo_name: str
+    vcs_provider: str = "github"
     branch: str | None = None
     base_sha: str | None = None
     opencode_session_id: str | None = None

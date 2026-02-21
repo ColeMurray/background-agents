@@ -110,7 +110,7 @@ export default tool({
         // Provide helpful messages based on status code
         let userMessage = `Failed to create pull request: ${errorMessage}`
         if (response.status === 401) {
-          userMessage = `Authentication failed: ${errorMessage}. The GitHub token may have expired - please re-authenticate.`
+          userMessage = `Authentication failed: ${errorMessage}. Your source-control token may have expired - please re-authenticate.`
         } else if (response.status === 404) {
           userMessage = `Session not found: ${errorMessage}. The session may have been deleted or the ID is incorrect.`
         } else if (response.status === 409) {
@@ -124,8 +124,9 @@ export default tool({
       const result = await response.json()
 
       if (result?.status === "manual" && result?.createPrUrl) {
+        const providerName = typeof result?.provider === "string" ? result.provider : "source control"
         console.log("[create-pull-request] SUCCESS: branch pushed, manual PR URL generated")
-        return `Branch pushed successfully.\n\nCreate the pull request in GitHub:\n${result.createPrUrl}\n\nUse your logged-in GitHub account to finish creating the PR.`
+        return `Branch pushed successfully.\n\nCreate the pull request in ${providerName}:\n${result.createPrUrl}\n\nUse your logged-in account to finish creating the PR.`
       }
 
       console.log(`[create-pull-request] SUCCESS: PR #${result.prNumber} created`)
