@@ -5,6 +5,7 @@ import {
   type IntegrationId,
   type IntegrationSettingsMap,
   type GitHubBotSettings,
+  type LinearBotSettings,
 } from "@open-inspect/shared";
 
 export class IntegrationSettingsValidationError extends Error {
@@ -50,7 +51,7 @@ export class IntegrationSettingsStore {
     }
 
     if (settings.defaults) {
-      this.validateBotSettings(settings.defaults);
+      this.validateSettings(integrationId, settings.defaults);
     }
 
     const now = Date.now();
@@ -93,7 +94,7 @@ export class IntegrationSettingsStore {
     repo: string,
     settings: IntegrationSettingsMap[K]["repo"]
   ): Promise<void> {
-    this.validateBotSettings(settings);
+    this.validateSettings(integrationId, settings);
 
     const now = Date.now();
     await this.db
@@ -158,7 +159,22 @@ export class IntegrationSettingsStore {
     >;
   }
 
-  private validateBotSettings(settings: GitHubBotSettings): void {
+  private validateSettings<K extends IntegrationId>(
+    integrationId: K,
+    settings: IntegrationSettingsMap[K]["repo"]
+  ): void {
+    if (integrationId === "github") {
+      this.validateGitHubSettings(settings as GitHubBotSettings);
+      return;
+    }
+
+    if (integrationId === "linear") {
+      this.validateLinearSettings(settings as LinearBotSettings);
+      return;
+    }
+  }
+
+  private validateGitHubSettings(settings: GitHubBotSettings): void {
     if (settings.model !== undefined && !isValidModel(settings.model)) {
       throw new IntegrationSettingsValidationError(`Invalid model ID: ${settings.model}`);
     }
@@ -171,6 +187,53 @@ export class IntegrationSettingsStore {
       throw new IntegrationSettingsValidationError(
         `Invalid reasoning effort "${settings.reasoningEffort}" for model "${settings.model}"`
       );
+    }
+  }
+
+  private validateLinearSettings(settings: LinearBotSettings): void {
+    if (settings.model !== undefined && !isValidModel(settings.model)) {
+      throw new IntegrationSettingsValidationError(`Invalid model ID: ${settings.model}`);
+    }
+
+    if (
+      settings.model !== undefined &&
+      settings.reasoningEffort !== undefined &&
+      !isValidReasoningEffort(settings.model, settings.reasoningEffort)
+    ) {
+      throw new IntegrationSettingsValidationError(
+        `Invalid reasoning effort "${settings.reasoningEffort}" for model "${settings.model}"`
+      );
+    }
+
+    if (
+      settings.repoResolutionMode !== undefined &&
+      settings.repoResolutionMode !== "assisted" &&
+      settings.repoResolutionMode !== "strict"
+    ) {
+      throw new IntegrationSettingsValidationError(
+        `Invalid repoResolutionMode: ${settings.repoResolutionMode}`
+      );
+    }
+
+    if (
+      settings.allowUserPreferenceOverride !== undefined &&
+      typeof settings.allowUserPreferenceOverride !== "boolean"
+    ) {
+      throw new IntegrationSettingsValidationError("allowUserPreferenceOverride must be a boolean");
+    }
+
+    if (
+      settings.allowLabelModelOverride !== undefined &&
+      typeof settings.allowLabelModelOverride !== "boolean"
+    ) {
+      throw new IntegrationSettingsValidationError("allowLabelModelOverride must be a boolean");
+    }
+
+    if (
+      settings.emitToolProgressActivities !== undefined &&
+      typeof settings.emitToolProgressActivities !== "boolean"
+    ) {
+      throw new IntegrationSettingsValidationError("emitToolProgressActivities must be a boolean");
     }
   }
 }

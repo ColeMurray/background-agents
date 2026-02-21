@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractModelFromLabels, resolveStaticRepo } from "../index";
+import { extractModelFromLabels, resolveSessionModelSettings, resolveStaticRepo } from "../index";
 import { isValidPayload, verifyCallbackSignature } from "../callbacks";
 import type { CompletionCallback } from "../types";
 
@@ -54,6 +54,68 @@ describe("resolveStaticRepo", () => {
 
   it("returns null for unknown team", () => {
     expect(resolveStaticRepo(mapping, "team-unknown")).toBeNull();
+  });
+});
+
+describe("resolveSessionModelSettings", () => {
+  it("uses integration model when overrides are disabled", () => {
+    const result = resolveSessionModelSettings({
+      envDefaultModel: "anthropic/claude-haiku-4-5",
+      configModel: "anthropic/claude-sonnet-4-6",
+      configReasoningEffort: "high",
+      allowUserPreferenceOverride: false,
+      allowLabelModelOverride: false,
+      userModel: "openai/gpt-5.3-codex",
+      labelModel: "anthropic/claude-opus-4-6",
+    });
+
+    expect(result.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(result.reasoningEffort).toBe("high");
+  });
+
+  it("applies user preference when enabled", () => {
+    const result = resolveSessionModelSettings({
+      envDefaultModel: "anthropic/claude-haiku-4-5",
+      configModel: "anthropic/claude-sonnet-4-6",
+      configReasoningEffort: null,
+      allowUserPreferenceOverride: true,
+      allowLabelModelOverride: false,
+      userModel: "openai/gpt-5.3-codex",
+      userReasoningEffort: "xhigh",
+    });
+
+    expect(result.model).toBe("openai/gpt-5.3-codex");
+    expect(result.reasoningEffort).toBe("xhigh");
+  });
+
+  it("applies label override over user preference when enabled", () => {
+    const result = resolveSessionModelSettings({
+      envDefaultModel: "anthropic/claude-haiku-4-5",
+      configModel: null,
+      configReasoningEffort: null,
+      allowUserPreferenceOverride: true,
+      allowLabelModelOverride: true,
+      userModel: "openai/gpt-5.3-codex",
+      labelModel: "anthropic/claude-opus-4-6",
+      userReasoningEffort: "xhigh",
+    });
+
+    expect(result.model).toBe("anthropic/claude-opus-4-6");
+    expect(result.reasoningEffort).toBe("high");
+  });
+
+  it("falls back to model default reasoning effort when invalid", () => {
+    const result = resolveSessionModelSettings({
+      envDefaultModel: "anthropic/claude-haiku-4-5",
+      configModel: "anthropic/claude-opus-4-6",
+      configReasoningEffort: "xhigh",
+      allowUserPreferenceOverride: true,
+      allowLabelModelOverride: false,
+      userReasoningEffort: "xhigh",
+    });
+
+    expect(result.model).toBe("anthropic/claude-opus-4-6");
+    expect(result.reasoningEffort).toBe("high");
   });
 });
 

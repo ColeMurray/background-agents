@@ -35,7 +35,13 @@ import { classifyRepo } from "./classifier/index";
 import { getAvailableRepos } from "./classifier/repos";
 import { callbacksRouter } from "./callbacks";
 import { createLogger } from "./logger";
-import { getValidModelOrDefault, verifyInternalToken } from "@open-inspect/shared";
+import {
+  getDefaultReasoningEffort,
+  getValidModelOrDefault,
+  isValidReasoningEffort,
+  verifyInternalToken,
+} from "@open-inspect/shared";
+import { getLinearConfig, getLinearGlobalResolutionMode } from "./utils/integration-config";
 
 const log = createLogger("handler");
 
@@ -220,6 +226,51 @@ export function extractModelFromLabels(labels: Array<{ name: string }>): string 
     }
   }
   return null;
+}
+
+interface ResolveSessionModelInput {
+  envDefaultModel: string;
+  configModel: string | null;
+  configReasoningEffort: string | null;
+  allowUserPreferenceOverride: boolean;
+  allowLabelModelOverride: boolean;
+  userModel?: string;
+  userReasoningEffort?: string;
+  labelModel?: string | null;
+}
+
+export function resolveSessionModelSettings(input: ResolveSessionModelInput): {
+  model: string;
+  reasoningEffort: string | undefined;
+} {
+  let model = input.configModel ?? input.envDefaultModel;
+
+  if (input.allowUserPreferenceOverride && input.userModel) {
+    model = input.userModel;
+  }
+
+  if (input.allowLabelModelOverride && input.labelModel) {
+    model = input.labelModel;
+  }
+
+  const normalizedModel = getValidModelOrDefault(model);
+
+  if (
+    input.configReasoningEffort &&
+    isValidReasoningEffort(normalizedModel, input.configReasoningEffort)
+  ) {
+    return { model: normalizedModel, reasoningEffort: input.configReasoningEffort };
+  }
+
+  if (
+    input.allowUserPreferenceOverride &&
+    input.userReasoningEffort &&
+    isValidReasoningEffort(normalizedModel, input.userReasoningEffort)
+  ) {
+    return { model: normalizedModel, reasoningEffort: input.userReasoningEffort };
+  }
+
+  return { model: normalizedModel, reasoningEffort: getDefaultReasoningEffort(normalizedModel) };
 }
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
@@ -573,6 +624,7 @@ async function handleAgentSessionEvent(
   const labels = issueDetails?.labels || issue.labels || [];
   const labelNames = labels.map((l) => l.name);
   const projectInfo = issueDetails?.project || issue.project;
+  const repoResolutionMode = await getLinearGlobalResolutionMode(env);
 
   // ─── Resolve repo ─────────────────────────────────────────────────────
 
@@ -609,7 +661,7 @@ async function handleAgentSessionEvent(
   }
 
   // 3. Try Linear's built-in issueRepositorySuggestions API
-  if (!repoOwner) {
+  if (!repoOwner && repoResolutionMode === "assisted") {
     const repos = await getAvailableRepos(env, traceId);
     if (repos.length > 0) {
       const candidates = repos.map((r) => ({
@@ -630,7 +682,7 @@ async function handleAgentSessionEvent(
   }
 
   // 4. Fall back to our LLM classification
-  if (!repoOwner) {
+  if (!repoOwner && repoResolutionMode === "assisted") {
     await emitAgentActivity(
       client,
       agentSessionId,
@@ -676,28 +728,60 @@ async function handleAgentSessionEvent(
     classificationReasoning = classification.reasoning;
   }
 
+  if (!repoOwner || !repoName || !repoFullName) {
+    await emitAgentActivity(client, agentSessionId, {
+      type: "elicitation",
+      body: "I couldn't determine which repository to work on in strict mode. Please configure a project→repo or team→repo mapping and try again.",
+    });
+    log.warn("agent_session.repo_resolution_failed", {
+      trace_id: traceId,
+      issue_identifier: issue.identifier,
+      mode: repoResolutionMode,
+    });
+    return;
+  }
+
+  const integrationConfig = await getLinearConfig(env, repoFullName.toLowerCase());
+  if (
+    integrationConfig.enabledRepos !== null &&
+    !integrationConfig.enabledRepos.includes(repoFullName.toLowerCase())
+  ) {
+    await emitAgentActivity(client, agentSessionId, {
+      type: "error",
+      body: `The Linear integration is not enabled for \`${repoFullName}\`.`,
+    });
+    log.info("agent_session.repo_not_enabled", {
+      trace_id: traceId,
+      issue_identifier: issue.identifier,
+      repo: repoFullName,
+    });
+    return;
+  }
+
   // ─── Resolve model ────────────────────────────────────────────────────
 
-  // Priority: label override > user preference > env default
-  let model = env.DEFAULT_MODEL;
-
-  // Check user preferences
+  let userModel: string | undefined;
+  let userReasoningEffort: string | undefined;
   const appUserId = webhook.appUserId as string | undefined;
   if (appUserId) {
     const prefs = await getUserPreferences(env, appUserId);
     if (prefs?.model) {
-      model = prefs.model;
+      userModel = prefs.model;
     }
+    userReasoningEffort = prefs?.reasoningEffort;
   }
 
-  // Check label overrides (highest priority)
   const labelModel = extractModelFromLabels(labels);
-  if (labelModel) {
-    model = labelModel;
-  }
-
-  // Validate model
-  model = getValidModelOrDefault(model);
+  const { model, reasoningEffort } = resolveSessionModelSettings({
+    envDefaultModel: env.DEFAULT_MODEL,
+    configModel: integrationConfig.model,
+    configReasoningEffort: integrationConfig.reasoningEffort,
+    allowUserPreferenceOverride: integrationConfig.allowUserPreferenceOverride,
+    allowLabelModelOverride: integrationConfig.allowLabelModelOverride,
+    userModel,
+    userReasoningEffort,
+    labelModel,
+  });
 
   // ─── Create session ───────────────────────────────────────────────────
 
@@ -722,6 +806,7 @@ async function handleAgentSessionEvent(
       repoName,
       title: `${issue.identifier}: ${issue.title}`,
       model,
+      reasoningEffort,
     }),
   });
 

@@ -2,7 +2,12 @@
  * Integration-settings routes and handlers.
  */
 
-import { isValidReasoningEffort, type IntegrationId } from "@open-inspect/shared";
+import {
+  isValidReasoningEffort,
+  type GitHubBotSettings,
+  type IntegrationId,
+  type LinearBotSettings,
+} from "@open-inspect/shared";
 import {
   IntegrationSettingsStore,
   IntegrationSettingsValidationError,
@@ -285,21 +290,45 @@ async function handleGetResolvedConfig(
   const repo = `${owner}/${name}`;
   const { enabledRepos, settings } = await store.getResolvedConfig(id, repo);
 
-  // GitHub-specific: drop stale reasoning effort after merge
-  const reasoningEffort =
-    settings.model &&
-    settings.reasoningEffort &&
-    !isValidReasoningEffort(settings.model, settings.reasoningEffort)
+  if (id === "github") {
+    const githubSettings = settings as GitHubBotSettings;
+    const reasoningEffort =
+      githubSettings.model &&
+      githubSettings.reasoningEffort &&
+      !isValidReasoningEffort(githubSettings.model, githubSettings.reasoningEffort)
+        ? null
+        : (githubSettings.reasoningEffort ?? null);
+
+    return json({
+      integrationId: id,
+      repo,
+      config: {
+        model: githubSettings.model ?? null,
+        reasoningEffort,
+        autoReviewOnOpen: githubSettings.autoReviewOnOpen ?? true,
+        enabledRepos,
+      },
+    });
+  }
+
+  const linearSettings = settings as LinearBotSettings;
+  const linearReasoningEffort =
+    linearSettings.model &&
+    linearSettings.reasoningEffort &&
+    !isValidReasoningEffort(linearSettings.model, linearSettings.reasoningEffort)
       ? null
-      : (settings.reasoningEffort ?? null);
+      : (linearSettings.reasoningEffort ?? null);
 
   return json({
     integrationId: id,
     repo,
     config: {
-      model: settings.model ?? null,
-      reasoningEffort,
-      autoReviewOnOpen: settings.autoReviewOnOpen ?? true,
+      model: linearSettings.model ?? null,
+      reasoningEffort: linearReasoningEffort,
+      allowUserPreferenceOverride: linearSettings.allowUserPreferenceOverride ?? true,
+      allowLabelModelOverride: linearSettings.allowLabelModelOverride ?? true,
+      repoResolutionMode: linearSettings.repoResolutionMode ?? "assisted",
+      emitToolProgressActivities: linearSettings.emitToolProgressActivities ?? true,
       enabledRepos,
     },
   });

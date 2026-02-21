@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { INTEGRATION_DEFINITIONS, type IntegrationId } from "@open-inspect/shared";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { GitHubIntegrationSettings } from "@/components/settings/integrations/github-integration-settings";
+import { LinearIntegrationSettings } from "@/components/settings/integrations/linear-integration-settings";
 
 export function IntegrationsSettings() {
   const isMobile = useIsMobile();
@@ -115,6 +116,10 @@ function IntegrationList({
 function IntegrationDetail({ integrationId }: { integrationId: IntegrationId }) {
   if (integrationId === "github") {
     return <GitHubIntegrationSettings />;
+  }
+
+  if (integrationId === "linear") {
+    return <LinearIntegrationSettings />;
   }
 
   return <EmptyState />;
