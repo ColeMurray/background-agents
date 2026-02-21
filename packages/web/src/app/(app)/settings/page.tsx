@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useSidebarContext } from "@/components/sidebar-layout";
 import { SettingsNav, type SettingsCategory } from "@/components/settings/settings-nav";
@@ -43,6 +43,14 @@ export default function SettingsPage() {
   const [mobileView, setMobileView] = useState<"list" | "detail">(
     isValidCategory(tabParam) ? "detail" : "list"
   );
+
+  // Sync state when searchParams change via client-side navigation
+  useEffect(() => {
+    if (isValidCategory(tabParam)) {
+      setActiveCategory(tabParam);
+      setMobileView("detail");
+    }
+  }, [tabParam]);
 
   const content = (
     <>
