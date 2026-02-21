@@ -1,6 +1,6 @@
 "use client";
 
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { mutate } from "swr";
 import useSWRMutation from "swr/mutation";
 import {
@@ -17,7 +17,6 @@ import { useSessionSocket } from "@/hooks/use-session-socket";
 import { SafeMarkdown } from "@/components/safe-markdown";
 import { ToolCallGroup } from "@/components/tool-call-group";
 import { useSidebarContext } from "@/components/sidebar-layout";
-import { SidebarToggleIcon } from "@/components/sidebar-toggle-icon";
 import {
   SessionRightSidebar,
   SessionRightSidebarContent,
@@ -26,15 +25,20 @@ import { ActionBar } from "@/components/action-bar";
 import { copyToClipboard, formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import {
-  DEFAULT_MODEL,
-  getDefaultReasoningEffort,
-  type ModelDisplayInfo,
-  type ModelCategory,
-} from "@open-inspect/shared";
+import { DEFAULT_MODEL, getDefaultReasoningEffort, type ModelCategory } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 import type { SandboxEvent } from "@/lib/tool-formatters";
+import {
+  SidebarIcon,
+  ModelIcon,
+  CheckIcon,
+  SendIcon,
+  StopIcon,
+  CopyIcon,
+  ErrorIcon,
+} from "@/components/ui/icons";
+import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 
 // Event grouping types
 type EventGroup =
@@ -85,40 +89,6 @@ function groupEvents(events: SandboxEvent[]): EventGroup[] {
   return groups;
 }
 
-function CheckIcon() {
-  return (
-    <svg className="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-    </svg>
-  );
-}
-
-function ModelOptionButton({
-  model,
-  isSelected,
-  onSelect,
-}: {
-  model: ModelDisplayInfo;
-  isSelected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
-        isSelected ? "text-foreground" : "text-muted-foreground"
-      }`}
-    >
-      <div className="flex flex-col items-start">
-        <span className="font-medium">{model.name}</span>
-        <span className="text-xs text-secondary-foreground">{model.description}</span>
-      </div>
-      {isSelected && <CheckIcon />}
-    </button>
-  );
-}
-
 export default function SessionPage() {
   return (
     <Suspense>
@@ -129,6 +99,7 @@ export default function SessionPage() {
 
 function SessionPageContent() {
   const params = useParams();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const sessionId = params.id as string;
 
@@ -161,15 +132,27 @@ function SessionPageContent() {
     [searchParams]
   );
 
-  const { trigger: handleArchive } = useSWRMutation(
+  const { trigger: triggerArchive } = useSWRMutation(
     `/api/sessions/${sessionId}/archive`,
     (url: string) =>
       fetch(url, { method: "POST" }).then((r) => {
-        if (r.ok) mutate("/api/sessions");
-        else console.error("Failed to archive session");
+        if (r.ok) {
+          mutate("/api/sessions");
+          return true;
+        }
+
+        console.error("Failed to archive session");
+        return false;
       }),
     { throwOnError: false }
   );
+
+  const handleArchive = useCallback(async () => {
+    const didArchive = await triggerArchive();
+    if (didArchive) {
+      router.push("/");
+    }
+  }, [router, triggerArchive]);
 
   const { trigger: handleUnarchive } = useSWRMutation(
     `/api/sessions/${sessionId}/unarchive`,
@@ -186,11 +169,9 @@ function SessionPageContent() {
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
     getDefaultReasoningEffort(DEFAULT_MODEL)
   );
-  const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const modelDropdownRef = useRef<HTMLDivElement>(null);
 
   const { enabledModels, enabledModelOptions } = useEnabledModels();
 
@@ -217,17 +198,6 @@ function SessionPageContent() {
       );
     }
   }, [sessionState?.model, sessionState?.reasoningEffort]);
-
-  // Close model dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (modelDropdownRef.current && !modelDropdownRef.current.contains(event.target as Node)) {
-        setModelDropdownOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -278,13 +248,10 @@ function SessionPageContent() {
       isProcessing={isProcessing}
       selectedModel={selectedModel}
       reasoningEffort={reasoningEffort}
-      modelDropdownOpen={modelDropdownOpen}
-      modelDropdownRef={modelDropdownRef}
       inputRef={inputRef}
       handleSubmit={handleSubmit}
       handleInputChange={handleInputChange}
       handleKeyDown={handleKeyDown}
-      setModelDropdownOpen={setModelDropdownOpen}
       setSelectedModel={handleModelChange}
       setReasoningEffort={setReasoningEffort}
       stopExecution={stopExecution}
@@ -315,13 +282,10 @@ function SessionContent({
   isProcessing,
   selectedModel,
   reasoningEffort,
-  modelDropdownOpen,
-  modelDropdownRef,
   inputRef,
   handleSubmit,
   handleInputChange,
   handleKeyDown,
-  setModelDropdownOpen,
   setSelectedModel,
   setReasoningEffort,
   stopExecution,
@@ -348,13 +312,10 @@ function SessionContent({
   isProcessing: boolean;
   selectedModel: string;
   reasoningEffort: string | undefined;
-  modelDropdownOpen: boolean;
-  modelDropdownRef: React.RefObject<HTMLDivElement | null>;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
   handleSubmit: (e: React.FormEvent) => void;
   handleInputChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
   handleKeyDown: (e: React.KeyboardEvent) => void;
-  setModelDropdownOpen: (open: boolean) => void;
   setSelectedModel: (model: string) => void;
   setReasoningEffort: (value: string | undefined) => void;
   stopExecution: () => void;
@@ -580,7 +541,7 @@ function SessionContent({
                 title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
                 aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
               >
-                <SidebarToggleIcon />
+                <SidebarIcon className="w-4 h-4" />
               </button>
             )}
             <div>
@@ -797,9 +758,7 @@ function SessionContent({
                     className="p-2 text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition"
                     title="Stop"
                   >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <rect x="6" y="6" width="12" height="12" rx="1" strokeWidth={2} />
-                    </svg>
+                    <StopIcon className="w-5 h-5" />
                   </button>
                 )}
                 <button
@@ -817,14 +776,7 @@ function SessionContent({
                       : `Send (${SHORTCUT_LABELS.SEND_PROMPT})`
                   }
                 >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M5 10l7-7m0 0l7 7m-7-7v18"
-                    />
-                  </svg>
+                  <SendIcon className="w-5 h-5" />
                 </button>
               </div>
             </div>
@@ -833,49 +785,29 @@ function SessionContent({
             <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">
               {/* Left side - Model selector + Reasoning pills */}
               <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
-                <div className="relative min-w-0" ref={modelDropdownRef}>
-                  <button
-                    type="button"
-                    onClick={() => !isProcessing && setModelDropdownOpen(!modelDropdownOpen)}
-                    disabled={isProcessing}
-                    className="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-                    </svg>
-                    <span className="truncate max-w-[9rem] sm:max-w-none">
-                      {formatModelNameLower(selectedModel)}
-                    </span>
-                  </button>
-
-                  {/* Dropdown menu */}
-                  {modelDropdownOpen && (
-                    <div className="absolute bottom-full left-0 mb-2 w-56 bg-background shadow-lg border border-border py-1 z-50">
-                      {modelOptions.map((group, groupIdx) => (
-                        <div key={group.category}>
-                          <div
-                            className={`px-3 py-1.5 text-xs font-medium text-secondary-foreground uppercase tracking-wider ${
-                              groupIdx > 0 ? "border-t border-border-muted mt-1" : ""
-                            }`}
-                          >
-                            {group.category}
-                          </div>
-                          {group.models.map((model) => (
-                            <ModelOptionButton
-                              key={model.id}
-                              model={model}
-                              isSelected={selectedModel === model.id}
-                              onSelect={() => {
-                                setSelectedModel(model.id);
-                                setModelDropdownOpen(false);
-                              }}
-                            />
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <Combobox
+                  value={selectedModel}
+                  onChange={setSelectedModel}
+                  items={
+                    modelOptions.map((group) => ({
+                      category: group.category,
+                      options: group.models.map((model) => ({
+                        value: model.id,
+                        label: model.name,
+                        description: model.description,
+                      })),
+                    })) as ComboboxGroup[]
+                  }
+                  direction="up"
+                  dropdownWidth="w-56"
+                  disabled={isProcessing}
+                  triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
+                >
+                  <ModelIcon className="w-3.5 h-3.5" />
+                  <span className="truncate max-w-[9rem] sm:max-w-none">
+                    {formatModelNameLower(selectedModel)}
+                  </span>
+                </Combobox>
 
                 {/* Reasoning effort pills */}
                 <ReasoningEffortPills
@@ -961,13 +893,13 @@ function CombinedStatusDot({
     label = "Connecting...";
   } else if (sandboxStatus === "failed") {
     color = "bg-red-500";
-    label = `Connected · Sandbox: ${sandboxStatus}`;
+    label = `Connected \u00b7 Sandbox: ${sandboxStatus}`;
   } else if (["pending", "warming", "syncing"].includes(sandboxStatus || "")) {
     color = "bg-yellow-500";
-    label = `Connected · Sandbox: ${sandboxStatus}`;
+    label = `Connected \u00b7 Sandbox: ${sandboxStatus}`;
   } else {
     color = "bg-success";
-    label = sandboxStatus ? `Connected · Sandbox: ${sandboxStatus}` : "Connected";
+    label = sandboxStatus ? `Connected \u00b7 Sandbox: ${sandboxStatus}` : "Connected";
   }
 
   return (
@@ -1116,7 +1048,7 @@ const EventItem = memo(function EventItem({
                 aria-label={copied ? "Copied" : "Copy markdown"}
               >
                 {copied ? (
-                  <CopyCheckIcon className="w-3.5 h-3.5" />
+                  <CheckIcon className="w-3.5 h-3.5" />
                 ) : (
                   <CopyIcon className="w-3.5 h-3.5" />
                 )}
@@ -1146,7 +1078,7 @@ const EventItem = memo(function EventItem({
                 aria-label={copied ? "Copied" : "Copy markdown"}
               >
                 {copied ? (
-                  <CopyCheckIcon className="w-3.5 h-3.5" />
+                  <CheckIcon className="w-3.5 h-3.5" />
                 ) : (
                   <CopyIcon className="w-3.5 h-3.5" />
                 )}
@@ -1169,14 +1101,7 @@ const EventItem = memo(function EventItem({
       if (!event.error) return null;
       return (
         <div className="flex items-center gap-2 text-sm text-red-600 dark:text-red-400 py-1">
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-            />
-          </svg>
+          <ErrorIcon className="w-4 h-4" />
           <span className="truncate">{event.error}</span>
           <span className="text-xs text-secondary-foreground ml-auto">{time}</span>
         </div>
@@ -1222,20 +1147,3 @@ const EventItem = memo(function EventItem({
       return null;
   }
 });
-
-function CopyIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <rect x="9" y="9" width="11" height="11" rx="2" ry="2" strokeWidth={2} />
-      <rect x="4" y="4" width="11" height="11" rx="2" ry="2" strokeWidth={2} />
-    </svg>
-  );
-}
-
-function CopyCheckIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-    </svg>
-  );
-}

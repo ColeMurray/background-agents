@@ -77,6 +77,33 @@ describe("SessionDO Durable Object", () => {
       expect(tableNames).toContain("events");
       expect(tableNames).toContain("artifacts");
       expect(tableNames).toContain("sandbox");
+      expect(tableNames).toContain("ws_client_mapping");
+      expect(tableNames).toContain("_schema_migrations");
+    });
+  });
+
+  it("records all migration IDs in _schema_migrations", async () => {
+    const id = env.SESSION.newUniqueId();
+    const stub = env.SESSION.get(id);
+
+    await stub.fetch("http://internal/internal/init", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionName: "test-session-migrations",
+        repoOwner: "acme",
+        repoName: "api",
+        userId: "user-3",
+      }),
+    });
+
+    await runInDurableObject(stub, (instance: SessionDO) => {
+      const rows = instance.ctx.storage.sql
+        .exec("SELECT id FROM _schema_migrations ORDER BY id")
+        .toArray() as Array<{ id: number }>;
+
+      const ids = rows.map((r) => r.id);
+      expect(ids).toEqual(Array.from({ length: 18 }, (_, i) => i + 1));
     });
   });
 });

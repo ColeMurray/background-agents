@@ -94,6 +94,8 @@ slack_signing_secret = ""
 # in your workspace (requires admin permissions).
 # Leave empty to disable Linear integration.
 
+enable_linear_bot = false
+
 linear_client_id = ""        # OAuth Application Client ID
 linear_client_secret = ""    # OAuth Application Client Secret
 linear_webhook_secret = ""   # Webhook Signing Secret from the application config
