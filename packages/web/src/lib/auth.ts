@@ -2,6 +2,14 @@ import type { NextAuthOptions } from "next-auth";
 import GitHubProvider from "next-auth/providers/github";
 import { checkAccessAllowed, parseAllowlist } from "./access-control";
 
+// Validate critical secrets at module load time to fail fast
+if (!process.env.NEXTAUTH_SECRET) {
+  throw new Error(
+    "NEXTAUTH_SECRET is not set. This is required for secure session encryption. " +
+      "Generate one with: openssl rand -base64 32"
+  );
+}
+
 // Extend NextAuth types to include GitHub-specific user info
 declare module "next-auth" {
   interface Session {

@@ -47,7 +47,16 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
 
     const jwt = await getToken({ req: request });
+
+    // Check if the GitHub token has expired
     const githubToken = jwt?.accessToken as string | undefined;
+    if (jwt?.accessTokenExpiresAt && Date.now() > (jwt.accessTokenExpiresAt as number)) {
+      console.warn("[sessions:POST] GitHub access token has expired");
+      return NextResponse.json(
+        { error: "GitHub token expired. Please sign out and sign in again." },
+        { status: 401 }
+      );
+    }
 
     // Explicitly pick allowed fields from client body and derive identity
     // from the server-side NextAuth session (not client-supplied data)

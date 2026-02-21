@@ -23,7 +23,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const user = session.user;
     const userId = user.id || user.email || "anonymous";
 
-    const response = await controlPlaneFetch(`/sessions/${sessionId}/prompt`, {
+    const response = await controlPlaneFetch(`/sessions/${encodeURIComponent(sessionId)}/prompt`, {
       method: "POST",
       body: JSON.stringify({
         content,
