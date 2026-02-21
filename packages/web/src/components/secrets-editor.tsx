@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ClipboardEvent } from "react";
 import useSWR, { mutate } from "swr";
+
+import { parseMaybeEnvContent, type ParsedEnvEntry } from "@/lib/env-paste";
 
 const VALID_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const MAX_KEY_LENGTH = 256;
@@ -133,6 +135,69 @@ export function SecretsEditor({
   const existingKeySet = useMemo(() => {
     return new Set(rows.filter((row) => row.existing).map((row) => normalizeKey(row.key)));
   }, [rows]);
+
+  const applyEnvEntries = useCallback((entries: ParsedEnvEntry[]) => {
+    setRows((current) => {
+      const next = [...current];
+      const keyToIndex = new Map<string, number>();
+
+      next.forEach((row, index) => {
+        const normalized = normalizeKey(row.key);
+        if (normalized) {
+          keyToIndex.set(normalized, index);
+        }
+      });
+
+      for (const entry of entries) {
+        const normalizedKey = normalizeKey(entry.key);
+        const existingIndex = keyToIndex.get(normalizedKey);
+
+        if (existingIndex !== undefined) {
+          next[existingIndex] = {
+            ...next[existingIndex],
+            key: normalizedKey,
+            value: entry.value,
+          };
+          continue;
+        }
+
+        const emptyRowIndex = next.findIndex(
+          (row) => !row.existing && row.key.trim() === "" && row.value.trim() === ""
+        );
+
+        if (emptyRowIndex >= 0) {
+          next[emptyRowIndex] = {
+            ...next[emptyRowIndex],
+            key: normalizedKey,
+            value: entry.value,
+          };
+          keyToIndex.set(normalizedKey, emptyRowIndex);
+          continue;
+        }
+
+        next.push(createRow({ key: normalizedKey, value: entry.value }));
+        keyToIndex.set(normalizedKey, next.length - 1);
+      }
+
+      return next;
+    });
+  }, []);
+
+  const handlePasteIntoRow = useCallback(
+    (event: ClipboardEvent<HTMLInputElement>) => {
+      const pastedText = event.clipboardData.getData("text");
+      const parsed = parseMaybeEnvContent(pastedText);
+      if (parsed.length === 0) {
+        return;
+      }
+
+      event.preventDefault();
+      applyEnvEntries(parsed);
+      setError("");
+      setSuccess(`Imported ${parsed.length} secret${parsed.length === 1 ? "" : "s"} from paste`);
+    },
+    [applyEnvEntries]
+  );
 
   const handleAddRow = () => {
     setRows((current) => [...current, createRow()]);
@@ -319,6 +384,7 @@ export function SecretsEditor({
                     }}
                     placeholder="KEY_NAME"
                     disabled={disabled || row.existing}
+                    onPaste={handlePasteIntoRow}
                     className="flex-1 min-w-[160px] bg-input border border-border px-2 py-1 text-xs text-foreground disabled:opacity-60"
                   />
                   <input
@@ -332,6 +398,7 @@ export function SecretsEditor({
                     }}
                     placeholder={row.existing ? "••••••••" : "value"}
                     disabled={disabled}
+                    onPaste={handlePasteIntoRow}
                     className="flex-1 min-w-[200px] bg-input border border-border px-2 py-1 text-xs text-foreground disabled:opacity-60"
                   />
                   <button
@@ -402,7 +469,7 @@ export function SecretsEditor({
               {saving ? "Saving..." : "Save secrets"}
             </button>
             <span className="text-[11px] text-muted-foreground">
-              Keys are automatically uppercased.
+              Keys are automatically uppercased. Paste a `.env` block into either field to import.
             </span>
           </div>
         </>
