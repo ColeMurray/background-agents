@@ -274,6 +274,10 @@ export class SessionDO extends DurableObject<Env> {
     return this._wsManager;
   }
 
+  private get executionTimeoutMs(): number {
+    return parseInt(this.env.EXECUTION_TIMEOUT_MS || String(DEFAULT_EXECUTION_TIMEOUT_MS), 10);
+  }
+
   private get messageQueue(): SessionMessageQueue {
     if (!this._messageQueue) {
       this._messageQueue = new SessionMessageQueue({
@@ -291,11 +295,7 @@ export class SessionDO extends DurableObject<Env> {
         spawnSandbox: () => this.spawnSandbox(),
         broadcast: (message) => this.broadcast(message),
         scheduleExecutionTimeout: async (startedAtMs: number) => {
-          const timeoutMs = parseInt(
-            this.env.EXECUTION_TIMEOUT_MS || String(DEFAULT_EXECUTION_TIMEOUT_MS),
-            10
-          );
-          const deadline = startedAtMs + timeoutMs;
+          const deadline = startedAtMs + this.executionTimeoutMs;
           const currentAlarm = await this.ctx.storage.getAlarm();
           if (!currentAlarm || deadline < currentAlarm) {
             await this.ctx.storage.setAlarm(deadline);
@@ -732,20 +732,24 @@ export class SessionDO extends DurableObject<Env> {
   async alarm(): Promise<void> {
     this.ensureInitialized();
 
+    // Execution timeout check: if a message has been in 'processing' longer than
+    // the configured timeout, fail it. This is idempotent — if the message was
+    // already failed (by onSandboxTerminating or a prior alarm), getProcessingMessageWithStartedAt()
+    // returns null and we skip straight to handleAlarm().
     const processing = this.repository.getProcessingMessageWithStartedAt();
     if (processing?.started_at) {
       const now = Date.now();
-      const timeoutMs = parseInt(
-        this.env.EXECUTION_TIMEOUT_MS || String(DEFAULT_EXECUTION_TIMEOUT_MS),
-        10
+      const result = evaluateExecutionTimeout(
+        processing.started_at,
+        { timeoutMs: this.executionTimeoutMs },
+        now
       );
-      const result = evaluateExecutionTimeout(processing.started_at, { timeoutMs }, now);
       if (result.isTimedOut) {
         this.log.warn("Execution timeout: message stuck in processing", {
           event: "execution.timeout",
           message_id: processing.id,
           elapsed_ms: result.elapsedMs,
-          timeout_ms: timeoutMs,
+          timeout_ms: this.executionTimeoutMs,
         });
         await this.messageQueue.failStuckProcessingMessage();
       }

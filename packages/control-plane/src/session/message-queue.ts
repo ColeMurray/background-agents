@@ -36,7 +36,7 @@ interface MessageQueueDeps {
   updateLastActivity: (timestamp: number) => void;
   spawnSandbox: () => Promise<void>;
   broadcast: (message: ServerMessage) => void;
-  scheduleExecutionTimeout?: (deadlineMs: number) => Promise<void>;
+  scheduleExecutionTimeout?: (startedAtMs: number) => Promise<void>;
 }
 
 export class SessionMessageQueue {
