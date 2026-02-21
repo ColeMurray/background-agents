@@ -9,6 +9,7 @@ import { formatRelativeTime, isInactiveSession } from "@/lib/time";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { SidebarIcon, InspectIcon, PlusIcon, SettingsIcon } from "@/components/ui/icons";
+import { Button } from "@/components/ui/button";
 
 export interface SessionItem {
   id: string;
@@ -89,28 +90,30 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border-muted">
         <div className="flex items-center gap-2">
-          <button
+          <Button
+            variant="ghost"
+            size="icon"
             onClick={onToggle}
-            className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
             title={`Toggle sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
             aria-label={`Toggle sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
           >
             <SidebarIcon className="w-4 h-4" />
-          </button>
+          </Button>
           <Link href="/" className="flex items-center gap-2">
             <InspectIcon className="w-5 h-5" />
             <span className="font-semibold text-foreground">Inspect</span>
           </Link>
         </div>
         <div className="flex items-center gap-2">
-          <button
+          <Button
+            variant="ghost"
+            size="icon"
             onClick={onNewSession}
-            className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
             title={`New session (${SHORTCUT_LABELS.NEW_SESSION})`}
             aria-label={`New session (${SHORTCUT_LABELS.NEW_SESSION})`}
           >
             <PlusIcon className="w-4 h-4" />
-          </button>
+          </Button>
           <Link
             href="/settings"
             className={`p-1.5 transition ${

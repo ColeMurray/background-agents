@@ -12,6 +12,7 @@ import {
   CopyIcon,
   CheckIcon,
 } from "@/components/ui/icons";
+import { Badge, prBadgeVariant } from "@/components/ui/badge";
 
 interface MetadataSectionProps {
   createdAt: number;
@@ -56,20 +57,6 @@ export function MetadataSection({
     }
   };
 
-  const getPrBadgeStyles = (state?: string) => {
-    switch (state) {
-      case "merged":
-        return "bg-success-muted text-success";
-      case "closed":
-        return "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400";
-      case "draft":
-        return "bg-muted text-muted-foreground";
-      case "open":
-      default:
-        return "bg-accent-muted text-accent";
-    }
-  };
-
   return (
     <div className="space-y-3">
       {/* Timestamp */}
@@ -106,11 +93,9 @@ export function MetadataSection({
             <span className="text-foreground">#{prNumber}</span>
           )}
           {prState && (
-            <span
-              className={`px-1.5 py-0.5 text-xs font-medium capitalize ${getPrBadgeStyles(prState)}`}
-            >
+            <Badge variant={prBadgeVariant(prState)} className="capitalize">
               {prState}
-            </span>
+            </Badge>
           )}
         </div>
       )}

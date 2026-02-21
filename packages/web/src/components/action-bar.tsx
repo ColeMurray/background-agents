@@ -10,6 +10,7 @@ import {
   LinkIcon,
   GitHubIcon,
 } from "@/components/ui/icons";
+import { buttonVariants } from "@/components/ui/button";
 
 interface ActionBarProps {
   sessionId: string;
@@ -53,9 +54,11 @@ export function ActionBar({
     setIsMenuOpen(false);
   };
 
-  // Shared button style for bordered pill buttons
-  const pillButtonClass =
-    "flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-1.5 text-sm text-foreground border border-border hover:bg-muted transition-colors";
+  const pillButtonClass = buttonVariants({
+    variant: "outline",
+    size: "sm",
+    className: "flex shrink-0 items-center gap-1.5 whitespace-nowrap",
+  });
 
   return (
     <div className="flex flex-wrap items-center gap-2">
