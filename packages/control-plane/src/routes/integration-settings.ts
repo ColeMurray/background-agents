@@ -327,7 +327,6 @@ async function handleGetResolvedConfig(
       reasoningEffort: linearReasoningEffort,
       allowUserPreferenceOverride: linearSettings.allowUserPreferenceOverride ?? true,
       allowLabelModelOverride: linearSettings.allowLabelModelOverride ?? true,
-      repoResolutionMode: linearSettings.repoResolutionMode ?? "assisted",
       emitToolProgressActivities: linearSettings.emitToolProgressActivities ?? true,
       enabledRepos,
     },

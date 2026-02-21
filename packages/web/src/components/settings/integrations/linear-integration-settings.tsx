@@ -116,9 +116,6 @@ function GlobalSettingsSection({
   const [allowLabelModelOverride, setAllowLabelModelOverride] = useState(
     settings?.defaults?.allowLabelModelOverride ?? true
   );
-  const [repoResolutionMode, setRepoResolutionMode] = useState<"assisted" | "strict">(
-    settings?.defaults?.repoResolutionMode ?? "assisted"
-  );
   const [emitToolProgressActivities, setEmitToolProgressActivities] = useState(
     settings?.defaults?.emitToolProgressActivities ?? true
   );
@@ -137,7 +134,6 @@ function GlobalSettingsSection({
         setRepoScopeMode(settings.enabledRepos === undefined ? "all" : "selected");
         setAllowUserPreferenceOverride(settings.defaults?.allowUserPreferenceOverride ?? true);
         setAllowLabelModelOverride(settings.defaults?.allowLabelModelOverride ?? true);
-        setRepoResolutionMode(settings.defaults?.repoResolutionMode ?? "assisted");
         setEmitToolProgressActivities(settings.defaults?.emitToolProgressActivities ?? true);
       }
       setInitialized(true);
@@ -148,7 +144,7 @@ function GlobalSettingsSection({
   const reasoningConfig = model ? MODEL_REASONING_CONFIG[model as ValidModel] : undefined;
 
   const resetNotice =
-    "Reset all Linear settings to defaults? This keeps assisted repository resolution and enables both label/user model overrides.";
+    "Reset all Linear settings to defaults? This enables both label/user model overrides.";
 
   const handleReset = async () => {
     if (!window.confirm(resetNotice)) {
@@ -170,7 +166,6 @@ function GlobalSettingsSection({
         setRepoScopeMode("all");
         setAllowUserPreferenceOverride(true);
         setAllowLabelModelOverride(true);
-        setRepoResolutionMode("assisted");
         setEmitToolProgressActivities(true);
         setDirty(false);
         setSuccess("Settings reset to defaults.");
@@ -193,7 +188,6 @@ function GlobalSettingsSection({
     const defaults: LinearBotSettings = {
       allowUserPreferenceOverride,
       allowLabelModelOverride,
-      repoResolutionMode,
       emitToolProgressActivities,
     };
 
@@ -329,25 +323,8 @@ function GlobalSettingsSection({
         </label>
       </div>
 
-      <div className="grid sm:grid-cols-2 gap-3 mb-4">
-        <label className="text-sm">
-          <span className="block text-foreground font-medium mb-1">Repository resolution mode</span>
-          <select
-            value={repoResolutionMode}
-            onChange={(e) => {
-              setRepoResolutionMode(e.target.value as "assisted" | "strict");
-              setDirty(true);
-              setError("");
-              setSuccess("");
-            }}
-            className="w-full px-3 py-2 text-sm border border-border bg-background text-foreground rounded-sm"
-          >
-            <option value="assisted">Assisted (suggestions + AI fallback)</option>
-            <option value="strict">Strict (mapping only)</option>
-          </select>
-        </label>
-
-        <label className="flex items-center justify-between px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm self-end">
+      <div className="mb-4">
+        <label className="flex items-center justify-between px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
           <span>Emit tool progress activities</span>
           <input
             type="checkbox"
@@ -572,9 +549,6 @@ function RepoOverrideRow({
   const [allowLabelModelOverride, setAllowLabelModelOverride] = useState(
     entry.settings.allowLabelModelOverride ?? true
   );
-  const [repoResolutionMode, setRepoResolutionMode] = useState<"assisted" | "strict">(
-    entry.settings.repoResolutionMode ?? "assisted"
-  );
   const [emitToolProgressActivities, setEmitToolProgressActivities] = useState(
     entry.settings.emitToolProgressActivities ?? true
   );
@@ -601,7 +575,6 @@ function RepoOverrideRow({
     const settings: LinearBotSettings = {
       allowUserPreferenceOverride,
       allowLabelModelOverride,
-      repoResolutionMode,
       emitToolProgressActivities,
     };
     if (model) settings.model = model;
@@ -655,7 +628,7 @@ function RepoOverrideRow({
     <div className="grid gap-2 px-4 py-3 border border-border rounded-sm">
       <div className="text-sm font-medium text-foreground">{entry.repo}</div>
 
-      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-2">
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
         <select
           value={model}
           onChange={(e) => handleModelChange(e.target.value)}
@@ -688,18 +661,6 @@ function RepoOverrideRow({
               {value}
             </option>
           ))}
-        </select>
-
-        <select
-          value={repoResolutionMode}
-          onChange={(e) => {
-            setRepoResolutionMode(e.target.value as "assisted" | "strict");
-            setDirty(true);
-          }}
-          className="px-2 py-1 text-sm border border-border bg-background text-foreground rounded-sm"
-        >
-          <option value="assisted">Assisted mode</option>
-          <option value="strict">Strict mode</option>
         </select>
 
         <label className="flex items-center justify-between px-2 py-1 text-sm border border-border rounded-sm">

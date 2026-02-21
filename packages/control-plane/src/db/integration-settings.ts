@@ -206,16 +206,6 @@ export class IntegrationSettingsStore {
     }
 
     if (
-      settings.repoResolutionMode !== undefined &&
-      settings.repoResolutionMode !== "assisted" &&
-      settings.repoResolutionMode !== "strict"
-    ) {
-      throw new IntegrationSettingsValidationError(
-        `Invalid repoResolutionMode: ${settings.repoResolutionMode}`
-      );
-    }
-
-    if (
       settings.allowUserPreferenceOverride !== undefined &&
       typeof settings.allowUserPreferenceOverride !== "boolean"
     ) {

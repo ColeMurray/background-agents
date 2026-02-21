@@ -24,7 +24,6 @@ export interface LinearBotSettings {
   reasoningEffort?: string;
   allowUserPreferenceOverride?: boolean;
   allowLabelModelOverride?: boolean;
-  repoResolutionMode?: "assisted" | "strict";
   emitToolProgressActivities?: boolean;
 }
 

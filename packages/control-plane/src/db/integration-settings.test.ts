@@ -484,7 +484,6 @@ describe("IntegrationSettingsStore", () => {
           reasoningEffort: "high",
           allowUserPreferenceOverride: true,
           allowLabelModelOverride: false,
-          repoResolutionMode: "strict",
           emitToolProgressActivities: false,
         },
       });
@@ -497,7 +496,6 @@ describe("IntegrationSettingsStore", () => {
           reasoningEffort: "high",
           allowUserPreferenceOverride: true,
           allowLabelModelOverride: false,
-          repoResolutionMode: "strict",
           emitToolProgressActivities: false,
         },
       });
@@ -518,10 +516,10 @@ describe("IntegrationSettingsStore", () => {
       });
     });
 
-    it("rejects invalid linear repoResolutionMode", async () => {
+    it("rejects invalid linear boolean setting", async () => {
       await expect(
         store.setGlobal("linear", {
-          defaults: { repoResolutionMode: "invalid" as "assisted" | "strict" },
+          defaults: { allowUserPreferenceOverride: "invalid" as unknown as boolean },
         })
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
@@ -532,7 +530,6 @@ describe("IntegrationSettingsStore", () => {
         defaults: {
           model: "anthropic/claude-sonnet-4-6",
           allowUserPreferenceOverride: true,
-          repoResolutionMode: "assisted",
         },
       });
       await store.setRepoSettings("linear", "acme/platform", {
@@ -545,7 +542,6 @@ describe("IntegrationSettingsStore", () => {
       expect(config.settings).toEqual({
         model: "anthropic/claude-sonnet-4-6",
         allowUserPreferenceOverride: false,
-        repoResolutionMode: "assisted",
         emitToolProgressActivities: false,
       });
     });

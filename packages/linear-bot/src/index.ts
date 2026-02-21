@@ -41,7 +41,7 @@ import {
   isValidReasoningEffort,
   verifyInternalToken,
 } from "@open-inspect/shared";
-import { getLinearConfig, getLinearGlobalResolutionMode } from "./utils/integration-config";
+import { getLinearConfig } from "./utils/integration-config";
 
 const log = createLogger("handler");
 
@@ -629,7 +629,6 @@ async function handleAgentSessionEvent(
   const labels = issueDetails?.labels || issue.labels || [];
   const labelNames = labels.map((l) => l.name);
   const projectInfo = issueDetails?.project || issue.project;
-  const repoResolutionMode = await getLinearGlobalResolutionMode(env);
 
   // ─── Resolve repo ─────────────────────────────────────────────────────
 
@@ -666,7 +665,7 @@ async function handleAgentSessionEvent(
   }
 
   // 3. Try Linear's built-in issueRepositorySuggestions API
-  if (!repoOwner && repoResolutionMode === "assisted") {
+  if (!repoOwner) {
     const repos = await getAvailableRepos(env, traceId);
     if (repos.length > 0) {
       const candidates = repos.map((r) => ({
@@ -687,7 +686,7 @@ async function handleAgentSessionEvent(
   }
 
   // 4. Fall back to our LLM classification
-  if (!repoOwner && repoResolutionMode === "assisted") {
+  if (!repoOwner) {
     await emitAgentActivity(
       client,
       agentSessionId,
@@ -736,12 +735,11 @@ async function handleAgentSessionEvent(
   if (!repoOwner || !repoName || !repoFullName) {
     await emitAgentActivity(client, agentSessionId, {
       type: "elicitation",
-      body: "I couldn't determine which repository to work on in strict mode. Please configure a project→repo or team→repo mapping and try again.",
+      body: "I couldn't determine which repository to work on. Please configure a project→repo or team→repo mapping and try again.",
     });
     log.warn("agent_session.repo_resolution_failed", {
       trace_id: traceId,
       issue_identifier: issue.identifier,
-      mode: repoResolutionMode,
     });
     return;
   }

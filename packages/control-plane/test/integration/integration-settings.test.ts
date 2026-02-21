@@ -270,7 +270,6 @@ describe("Integration settings API", () => {
               reasoningEffort: "high",
               allowUserPreferenceOverride: true,
               allowLabelModelOverride: true,
-              repoResolutionMode: "assisted",
               emitToolProgressActivities: true,
             },
           },
@@ -283,7 +282,6 @@ describe("Integration settings API", () => {
         body: JSON.stringify({
           settings: {
             allowUserPreferenceOverride: false,
-            repoResolutionMode: "strict",
           },
         }),
       });
@@ -299,7 +297,6 @@ describe("Integration settings API", () => {
           reasoningEffort: string;
           allowUserPreferenceOverride: boolean;
           allowLabelModelOverride: boolean;
-          repoResolutionMode: string;
           emitToolProgressActivities: boolean;
           enabledRepos: string[] | null;
         };
@@ -309,7 +306,6 @@ describe("Integration settings API", () => {
       expect(body.config.reasoningEffort).toBe("high");
       expect(body.config.allowUserPreferenceOverride).toBe(false);
       expect(body.config.allowLabelModelOverride).toBe(true);
-      expect(body.config.repoResolutionMode).toBe("strict");
       expect(body.config.emitToolProgressActivities).toBe(true);
       expect(body.config.enabledRepos).toEqual(["acme/widgets"]);
     });
@@ -327,7 +323,6 @@ describe("Integration settings API", () => {
           reasoningEffort: string | null;
           allowUserPreferenceOverride: boolean;
           allowLabelModelOverride: boolean;
-          repoResolutionMode: string;
           emitToolProgressActivities: boolean;
           enabledRepos: string[] | null;
         };
@@ -337,7 +332,6 @@ describe("Integration settings API", () => {
       expect(body.config.reasoningEffort).toBeNull();
       expect(body.config.allowUserPreferenceOverride).toBe(true);
       expect(body.config.allowLabelModelOverride).toBe(true);
-      expect(body.config.repoResolutionMode).toBe("assisted");
       expect(body.config.emitToolProgressActivities).toBe(true);
       expect(body.config.enabledRepos).toBeNull();
     });
