@@ -32,6 +32,9 @@
   "engines": {
     "node": ">=20.0.0"
   },
+  "overrides": {
+    "minimatch": ">=10.0.1"
+  },
   "lint-staged": {
     "*.{ts,tsx}": [
       "eslint --fix",

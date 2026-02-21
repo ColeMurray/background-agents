@@ -19,7 +19,7 @@
   "devDependencies": {
     "esbuild": "^0.25.0",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8",
-    "wrangler": "^3.99.0"
+    "vitest": "^3.2.0",
+    "wrangler": "^4.0.0"
   }
 }
