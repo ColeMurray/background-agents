@@ -48,19 +48,7 @@ function BitbucketProvider(options: {
           return (await primary.json()) as Record<string, unknown>;
         }
 
-        // Some deployments are stricter about bearer header parsing; fallback to query auth.
-        const fallback = await fetch(
-          `https://api.bitbucket.org/2.0/user?access_token=${encodeURIComponent(token)}`,
-          {
-            headers: {
-              Accept: "application/json",
-            },
-          }
-        );
-        if (!fallback.ok) {
-          throw new Error(`Bitbucket userinfo failed (${primary.status}/${fallback.status})`);
-        }
-        return (await fallback.json()) as Record<string, unknown>;
+        throw new Error(`Bitbucket userinfo failed (${primary.status})`);
       },
     },
     clientId: options.clientId,
