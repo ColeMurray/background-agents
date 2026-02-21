@@ -20,7 +20,11 @@ output "deployment_id" {
 
 output "worker_url" {
   description = "The default workers.dev URL for the worker (note: actual subdomain varies by account)"
-  value       = "https://${cloudflare_worker.this.name}.workers.dev"
+  value = (
+    var.workers_dev_subdomain != null && length(trimspace(var.workers_dev_subdomain)) > 0
+    ? "https://${cloudflare_worker.this.name}.${var.workers_dev_subdomain}.workers.dev"
+    : "https://${cloudflare_worker.this.name}.workers.dev"
+  )
 }
 
 output "custom_domain" {
