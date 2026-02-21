@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { env } from "cloudflare:test";
 import { initNamedSession, openClientWs, collectMessages, seedEvents, queryDO } from "./helpers";
 
 describe("Client WebSocket (via SELF.fetch)", () => {
@@ -71,6 +72,49 @@ describe("Client WebSocket (via SELF.fetch)", () => {
 
     const { code } = await closed;
     expect(code).toBe(4001);
+  });
+
+  it("subscribe with expired token closes socket 4001", async () => {
+    const name = `ws-client-expired-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+
+    // Generate a valid WS token
+    const id = env.SESSION.idFromName(name);
+    const doStub = env.SESSION.get(id);
+    const tokenRes = await doStub.fetch("http://internal/internal/ws-token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: "user-1" }),
+    });
+    const { token } = await tokenRes.json<{ token: string }>();
+
+    // Back-date the token past the 24-hour TTL
+    const expiredAt = Date.now() - 24 * 60 * 60 * 1000 - 1;
+    await queryDO(
+      stub,
+      "UPDATE participants SET ws_token_created_at = ? WHERE user_id = ?",
+      expiredAt,
+      "user-1"
+    );
+
+    // Open WS and try to subscribe with the expired token
+    const { ws } = await openClientWs(name);
+
+    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+      ws.addEventListener("close", (evt) => resolve({ code: evt.code, reason: evt.reason }));
+    });
+
+    ws.send(
+      JSON.stringify({
+        type: "subscribe",
+        token,
+        clientId: "test-client",
+      })
+    );
+
+    const { code, reason } = await closed;
+    expect(code).toBe(4001);
+    expect(reason).toBe("Token expired");
   });
 
   it("subscribe includes batched replay with hasMore=false for empty session", async () => {
