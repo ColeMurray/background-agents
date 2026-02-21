@@ -3,7 +3,7 @@
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { mutate } from "swr";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
 import Link from "next/link";
 import { useSidebarContext } from "@/components/sidebar-layout";
 import { SidebarToggleIcon } from "@/components/sidebar-toggle-icon";
@@ -296,10 +296,17 @@ function HomeContent({
   const [repoDropdownOpen, setRepoDropdownOpen] = useState(false);
   const [repoSearchQuery, setRepoSearchQuery] = useState("");
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
+  const [activeRepoIndex, setActiveRepoIndex] = useState(-1);
+  const [activeModelIndex, setActiveModelIndex] = useState(-1);
   const repoDropdownRef = useRef<HTMLDivElement>(null);
+  const repoButtonRef = useRef<HTMLButtonElement>(null);
   const repoSearchInputRef = useRef<HTMLInputElement>(null);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
+  const modelButtonRef = useRef<HTMLButtonElement>(null);
+  const modelListRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const repoListboxId = useId();
+  const modelListboxId = useId();
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -344,6 +351,89 @@ function HomeContent({
       repo.fullName.toLowerCase().includes(normalizedRepoSearchQuery)
     );
   });
+  const flatModelOptions = useMemo(
+    () => modelOptions.flatMap((group) => group.models),
+    [modelOptions]
+  );
+  const modelOptionIndexById = useMemo(
+    () => new Map(flatModelOptions.map((model, index) => [model.id, index])),
+    [flatModelOptions]
+  );
+
+  useEffect(() => {
+    if (!repoDropdownOpen) {
+      setActiveRepoIndex(-1);
+      return;
+    }
+
+    const selectedIndex = filteredRepos.findIndex((repo) => repo.fullName === selectedRepo);
+    if (selectedIndex >= 0) {
+      setActiveRepoIndex(selectedIndex);
+    } else {
+      setActiveRepoIndex(filteredRepos.length > 0 ? 0 : -1);
+    }
+  }, [repoDropdownOpen, filteredRepos, selectedRepo]);
+
+  useEffect(() => {
+    if (!modelDropdownOpen) {
+      setActiveModelIndex(-1);
+      return;
+    }
+
+    const selectedIndex = flatModelOptions.findIndex((model) => model.id === selectedModel);
+    if (selectedIndex >= 0) {
+      setActiveModelIndex(selectedIndex);
+    } else {
+      setActiveModelIndex(flatModelOptions.length > 0 ? 0 : -1);
+    }
+
+    const id = requestAnimationFrame(() => modelListRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [modelDropdownOpen, flatModelOptions, selectedModel]);
+
+  const selectRepo = useCallback(
+    (repoFullName: string) => {
+      setSelectedRepo(repoFullName);
+      setRepoDropdownOpen(false);
+      requestAnimationFrame(() => repoButtonRef.current?.focus());
+    },
+    [setSelectedRepo]
+  );
+
+  const selectModel = useCallback(
+    (modelId: string) => {
+      setSelectedModel(modelId);
+      setModelDropdownOpen(false);
+      requestAnimationFrame(() => modelButtonRef.current?.focus());
+    },
+    [setSelectedModel]
+  );
+
+  const moveActiveRepoIndex = useCallback(
+    (direction: 1 | -1) => {
+      if (filteredRepos.length === 0) return;
+      setActiveRepoIndex((currentIndex) => {
+        if (currentIndex < 0) {
+          return direction === 1 ? 0 : filteredRepos.length - 1;
+        }
+        return (currentIndex + direction + filteredRepos.length) % filteredRepos.length;
+      });
+    },
+    [filteredRepos]
+  );
+
+  const moveActiveModelIndex = useCallback(
+    (direction: 1 | -1) => {
+      if (flatModelOptions.length === 0) return;
+      setActiveModelIndex((currentIndex) => {
+        if (currentIndex < 0) {
+          return direction === 1 ? 0 : flatModelOptions.length - 1;
+        }
+        return (currentIndex + direction + flatModelOptions.length) % flatModelOptions.length;
+      });
+    },
+    [flatModelOptions]
+  );
 
   return (
     <div className="h-full flex flex-col">
@@ -439,9 +529,37 @@ function HomeContent({
                     {/* Repo selector */}
                     <div className="relative min-w-0" ref={repoDropdownRef}>
                       <button
+                        ref={repoButtonRef}
                         type="button"
                         onClick={() => !creating && setRepoDropdownOpen(!repoDropdownOpen)}
+                        onKeyDown={(e) => {
+                          if (creating || loadingRepos) return;
+
+                          if (e.key === "ArrowDown") {
+                            e.preventDefault();
+                            setRepoDropdownOpen(true);
+                            setActiveRepoIndex((currentIndex) =>
+                              currentIndex < 0
+                                ? 0
+                                : Math.min(currentIndex + 1, filteredRepos.length - 1)
+                            );
+                          } else if (e.key === "ArrowUp") {
+                            e.preventDefault();
+                            setRepoDropdownOpen(true);
+                            setActiveRepoIndex((currentIndex) =>
+                              currentIndex < 0
+                                ? Math.max(filteredRepos.length - 1, 0)
+                                : currentIndex - 1
+                            );
+                          } else if (e.key === "Escape") {
+                            e.preventDefault();
+                            setRepoDropdownOpen(false);
+                          }
+                        }}
                         disabled={creating || loadingRepos}
+                        aria-haspopup="listbox"
+                        aria-expanded={repoDropdownOpen}
+                        aria-controls={repoDropdownOpen ? repoListboxId : undefined}
                         className="flex max-w-full items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
                       >
                         <RepoIcon />
@@ -460,30 +578,64 @@ function HomeContent({
                               value={repoSearchQuery}
                               onChange={(e) => setRepoSearchQuery(e.target.value)}
                               onKeyDown={(e) => {
-                                if (e.key === "Enter") {
+                                if (e.key === "ArrowDown") {
                                   e.preventDefault();
+                                  moveActiveRepoIndex(1);
+                                } else if (e.key === "ArrowUp") {
+                                  e.preventDefault();
+                                  moveActiveRepoIndex(-1);
+                                } else if (e.key === "Home") {
+                                  e.preventDefault();
+                                  setActiveRepoIndex(0);
+                                } else if (e.key === "End") {
+                                  e.preventDefault();
+                                  setActiveRepoIndex(filteredRepos.length - 1);
+                                } else if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  const activeRepo = filteredRepos[activeRepoIndex];
+                                  if (activeRepo) {
+                                    selectRepo(activeRepo.fullName);
+                                  }
+                                } else if (e.key === "Escape") {
+                                  e.preventDefault();
+                                  setRepoDropdownOpen(false);
+                                  repoButtonRef.current?.focus();
                                 }
                               }}
+                              aria-controls={repoListboxId}
+                              aria-activedescendant={
+                                activeRepoIndex >= 0
+                                  ? `${repoListboxId}-option-${activeRepoIndex}`
+                                  : undefined
+                              }
                               placeholder="Search repositories..."
                               className="w-full px-2 py-1.5 text-sm bg-input border border-border focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent placeholder:text-secondary-foreground text-foreground"
                             />
                           </div>
 
-                          <div className="max-h-56 overflow-y-auto py-1">
+                          <div
+                            id={repoListboxId}
+                            role="listbox"
+                            aria-label="Repository"
+                            className="max-h-56 overflow-y-auto py-1"
+                          >
                             {filteredRepos.length === 0 ? (
                               <div className="px-3 py-2 text-sm text-muted-foreground">
                                 No repositories match {repoSearchQuery.trim()}
                               </div>
                             ) : (
-                              filteredRepos.map((repo) => (
+                              filteredRepos.map((repo, index) => (
                                 <button
                                   key={repo.id}
+                                  id={`${repoListboxId}-option-${index}`}
                                   type="button"
-                                  onClick={() => {
-                                    setSelectedRepo(repo.fullName);
-                                    setRepoDropdownOpen(false);
-                                  }}
+                                  role="option"
+                                  aria-selected={selectedRepo === repo.fullName}
+                                  onClick={() => selectRepo(repo.fullName)}
+                                  onMouseEnter={() => setActiveRepoIndex(index)}
                                   className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
+                                    activeRepoIndex === index ? "bg-muted text-foreground" : ""
+                                  } ${
                                     selectedRepo === repo.fullName
                                       ? "text-foreground"
                                       : "text-muted-foreground"
@@ -510,9 +662,37 @@ function HomeContent({
                     {/* Model selector */}
                     <div className="relative min-w-0" ref={modelDropdownRef}>
                       <button
+                        ref={modelButtonRef}
                         type="button"
                         onClick={() => !creating && setModelDropdownOpen(!modelDropdownOpen)}
+                        onKeyDown={(e) => {
+                          if (creating) return;
+
+                          if (e.key === "ArrowDown") {
+                            e.preventDefault();
+                            setModelDropdownOpen(true);
+                            setActiveModelIndex((currentIndex) =>
+                              currentIndex < 0
+                                ? 0
+                                : Math.min(currentIndex + 1, flatModelOptions.length - 1)
+                            );
+                          } else if (e.key === "ArrowUp") {
+                            e.preventDefault();
+                            setModelDropdownOpen(true);
+                            setActiveModelIndex((currentIndex) =>
+                              currentIndex < 0
+                                ? Math.max(flatModelOptions.length - 1, 0)
+                                : currentIndex - 1
+                            );
+                          } else if (e.key === "Escape") {
+                            e.preventDefault();
+                            setModelDropdownOpen(false);
+                          }
+                        }}
                         disabled={creating}
+                        aria-haspopup="listbox"
+                        aria-expanded={modelDropdownOpen}
+                        aria-controls={modelDropdownOpen ? modelListboxId : undefined}
                         className="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
                       >
                         <ModelIcon />
@@ -522,39 +702,85 @@ function HomeContent({
                       </button>
 
                       {modelDropdownOpen && (
-                        <div className="absolute bottom-full left-0 mb-2 w-56 bg-background shadow-lg border border-border py-1 z-50">
+                        <div
+                          id={modelListboxId}
+                          ref={modelListRef}
+                          role="listbox"
+                          tabIndex={-1}
+                          aria-label="Model"
+                          aria-activedescendant={
+                            activeModelIndex >= 0
+                              ? `${modelListboxId}-option-${activeModelIndex}`
+                              : undefined
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === "ArrowDown") {
+                              e.preventDefault();
+                              moveActiveModelIndex(1);
+                            } else if (e.key === "ArrowUp") {
+                              e.preventDefault();
+                              moveActiveModelIndex(-1);
+                            } else if (e.key === "Home") {
+                              e.preventDefault();
+                              setActiveModelIndex(0);
+                            } else if (e.key === "End") {
+                              e.preventDefault();
+                              setActiveModelIndex(flatModelOptions.length - 1);
+                            } else if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              const activeModel = flatModelOptions[activeModelIndex];
+                              if (activeModel) {
+                                selectModel(activeModel.id);
+                              }
+                            } else if (e.key === "Escape") {
+                              e.preventDefault();
+                              setModelDropdownOpen(false);
+                              modelButtonRef.current?.focus();
+                            }
+                          }}
+                          className="absolute bottom-full left-0 mb-2 w-56 bg-background shadow-lg border border-border py-1 z-50"
+                        >
                           {modelOptions.map((group, groupIdx) => (
                             <div key={group.category}>
                               <div
+                                role="presentation"
                                 className={`px-3 py-1.5 text-xs font-medium text-secondary-foreground uppercase tracking-wider ${
                                   groupIdx > 0 ? "border-t border-border-muted mt-1" : ""
                                 }`}
                               >
                                 {group.category}
                               </div>
-                              {group.models.map((model) => (
-                                <button
-                                  key={model.id}
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedModel(model.id);
-                                    setModelDropdownOpen(false);
-                                  }}
-                                  className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
-                                    selectedModel === model.id
-                                      ? "text-foreground"
-                                      : "text-muted-foreground"
-                                  }`}
-                                >
-                                  <div className="flex flex-col items-start">
-                                    <span className="font-medium">{model.name}</span>
-                                    <span className="text-xs text-secondary-foreground">
-                                      {model.description}
-                                    </span>
-                                  </div>
-                                  {selectedModel === model.id && <CheckIcon />}
-                                </button>
-                              ))}
+                              {group.models.map((model) => {
+                                const optionIndex = modelOptionIndexById.get(model.id) ?? -1;
+                                return (
+                                  <button
+                                    key={model.id}
+                                    id={`${modelListboxId}-option-${optionIndex}`}
+                                    type="button"
+                                    role="option"
+                                    aria-selected={selectedModel === model.id}
+                                    onClick={() => selectModel(model.id)}
+                                    onMouseEnter={() => setActiveModelIndex(optionIndex)}
+                                    className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
+                                      activeModelIndex === optionIndex
+                                        ? "bg-muted text-foreground"
+                                        : ""
+                                    } ${
+                                      selectedModel === model.id
+                                        ? "text-foreground"
+                                        : "text-muted-foreground"
+                                    }`}
+                                  >
+                                    <div className="flex flex-col items-start">
+                                      <span className="font-medium">{model.name}</span>
+                                      <span className="text-xs text-secondary-foreground">
+                                        {model.description}
+                                      </span>
+                                    </div>
+                                    {selectedModel === model.id && <CheckIcon />}
+                                  </button>
+                                );
+                              })}
                             </div>
                           ))}
                         </div>
