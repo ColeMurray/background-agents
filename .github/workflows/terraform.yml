@@ -9,6 +9,7 @@ on:
       - "packages/control-plane/**"
       - "packages/slack-bot/**"
       - "packages/github-bot/**"
+      - "packages/linear-bot/**"
       - "packages/modal-infra/**"
       - "packages/shared/**"
       - ".github/workflows/terraform.yml"
@@ -20,6 +21,7 @@ on:
       - "packages/control-plane/**"
       - "packages/slack-bot/**"
       - "packages/github-bot/**"
+      - "packages/linear-bot/**"
       - "packages/modal-infra/**"
       - "packages/shared/**"
       - ".github/workflows/terraform.yml"
@@ -137,6 +139,7 @@ jobs:
           npm run build -w @open-inspect/control-plane
           npm run build -w @open-inspect/slack-bot
           npm run build -w @open-inspect/github-bot
+          npm run build -w @open-inspect/linear-bot
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -188,6 +191,10 @@ jobs:
           TF_VAR_enable_github_bot: "${{ secrets.ENABLE_GITHUB_BOT || 'false' }}"
           TF_VAR_github_webhook_secret: ${{ secrets.GH_WEBHOOK_SECRET }}
           TF_VAR_github_bot_username: ${{ secrets.GH_BOT_USERNAME }}
+          TF_VAR_enable_linear_bot: "${{ secrets.ENABLE_LINEAR_BOT || 'false' }}"
+          TF_VAR_linear_client_id: ${{ secrets.LINEAR_CLIENT_ID }}
+          TF_VAR_linear_client_secret: ${{ secrets.LINEAR_CLIENT_SECRET }}
+          TF_VAR_linear_webhook_secret: ${{ secrets.LINEAR_WEBHOOK_SECRET }}
 
       - name: Post Plan Results
         uses: actions/github-script@v7
@@ -250,6 +257,7 @@ jobs:
           npm run build -w @open-inspect/control-plane
           npm run build -w @open-inspect/slack-bot
           npm run build -w @open-inspect/github-bot
+          npm run build -w @open-inspect/linear-bot
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -303,6 +311,10 @@ jobs:
           TF_VAR_enable_github_bot: "${{ secrets.ENABLE_GITHUB_BOT || 'false' }}"
           TF_VAR_github_webhook_secret: ${{ secrets.GH_WEBHOOK_SECRET }}
           TF_VAR_github_bot_username: ${{ secrets.GH_BOT_USERNAME }}
+          TF_VAR_enable_linear_bot: "${{ secrets.ENABLE_LINEAR_BOT || 'false' }}"
+          TF_VAR_linear_client_id: ${{ secrets.LINEAR_CLIENT_ID }}
+          TF_VAR_linear_client_secret: ${{ secrets.LINEAR_CLIENT_SECRET }}
+          TF_VAR_linear_webhook_secret: ${{ secrets.LINEAR_WEBHOOK_SECRET }}
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 
