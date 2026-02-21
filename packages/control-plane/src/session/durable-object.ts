@@ -327,12 +327,19 @@ export class SessionDO extends DurableObject<Env> {
    */
   private createSourceControlProvider(): SourceControlProvider {
     const appConfig = getGitHubAppConfig(this.env);
-    const provider = resolveScmProviderFromEnv(this.env.SCM_PROVIDER);
+    const session = this.repository.getSession();
+    const provider = session?.vcs_provider ?? resolveScmProviderFromEnv(this.env.SCM_PROVIDER);
 
     return createSourceControlProviderImpl({
       provider,
       github: {
         appConfig: appConfig ?? undefined,
+      },
+      bitbucket: {
+        oauthClientId: this.env.BITBUCKET_CLIENT_ID,
+        oauthClientSecret: this.env.BITBUCKET_CLIENT_SECRET,
+        botUsername: this.env.BITBUCKET_BOT_USERNAME,
+        botAppPassword: this.env.BITBUCKET_BOT_APP_PASSWORD,
       },
     });
   }
@@ -1117,6 +1124,7 @@ export class SessionDO extends DurableObject<Env> {
     return {
       id: session?.id ?? this.ctx.id.toString(),
       title: session?.title ?? null,
+      vcsProvider: session?.vcs_provider ?? resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
       repoOwner: session?.repo_owner ?? "",
       repoName: session?.repo_name ?? "",
       branchName: session?.branch_name ?? null,
@@ -1167,8 +1175,9 @@ export class SessionDO extends DurableObject<Env> {
       throw new Error("Repository is not installed for the GitHub App");
     }
 
-    this.repository.updateSessionRepoId(repo.id);
-    return repo.id;
+    const repoId = typeof repo.id === "number" ? repo.id : 0;
+    this.repository.updateSessionRepoId(repoId);
+    return repoId;
   }
 
   private async getUserEnvVars(): Promise<Record<string, string> | undefined> {
@@ -1354,11 +1363,20 @@ export class SessionDO extends DurableObject<Env> {
       sessionName: string; // The name used for WebSocket routing
       repoOwner: string;
       repoName: string;
-      repoId?: number;
+      repoId?: number | null;
+      vcsProvider?: "github" | "bitbucket";
       title?: string;
       model?: string; // LLM model to use
       reasoningEffort?: string; // Reasoning effort level
       userId: string;
+      scmProvider?: "github" | "bitbucket";
+      scmUserId?: string;
+      scmLogin?: string;
+      scmName?: string;
+      scmEmail?: string;
+      scmTokenEncrypted?: string | null;
+      scmRefreshTokenEncrypted?: string | null;
+      scmTokenExpiresAt?: number | null;
       githubLogin?: string;
       githubName?: string;
       githubEmail?: string;
@@ -1400,6 +1418,7 @@ export class SessionDO extends DurableObject<Env> {
     this.repository.upsertSession({
       id: sessionId,
       sessionName, // Store the session name for WebSocket routing
+      vcsProvider: body.vcsProvider ?? resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
       title: body.title ?? null,
       repoOwner: body.repoOwner,
       repoName: body.repoName,
@@ -1427,6 +1446,14 @@ export class SessionDO extends DurableObject<Env> {
     this.repository.createParticipant({
       id: participantId,
       userId: body.userId,
+      scmProvider: body.scmProvider ?? body.vcsProvider ?? "github",
+      scmUserId: body.scmUserId ?? null,
+      scmLogin: body.scmLogin ?? body.githubLogin ?? null,
+      scmName: body.scmName ?? body.githubName ?? null,
+      scmEmail: body.scmEmail ?? body.githubEmail ?? null,
+      scmAccessTokenEncrypted: body.scmTokenEncrypted ?? encryptedToken,
+      scmRefreshTokenEncrypted: body.scmRefreshTokenEncrypted ?? null,
+      scmTokenExpiresAt: body.scmTokenExpiresAt ?? null,
       githubLogin: body.githubLogin ?? null,
       githubName: body.githubName ?? null,
       githubEmail: body.githubEmail ?? null,
@@ -1452,6 +1479,7 @@ export class SessionDO extends DurableObject<Env> {
     return Response.json({
       id: session.id,
       title: session.title,
+      vcsProvider: session.vcs_provider,
       repoOwner: session.repo_owner,
       repoName: session.repo_name,
       repoDefaultBranch: session.repo_default_branch,
@@ -1688,6 +1716,7 @@ export class SessionDO extends DurableObject<Env> {
     if (result.kind === "manual") {
       return Response.json({
         status: "manual",
+        provider: this.sourceControlProvider.name,
         createPrUrl: result.createPrUrl,
         headBranch: result.headBranch,
         baseBranch: result.baseBranch,
@@ -1732,6 +1761,14 @@ export class SessionDO extends DurableObject<Env> {
   private async handleGenerateWsToken(request: Request): Promise<Response> {
     const body = (await request.json()) as {
       userId: string;
+      scmProvider?: "github" | "bitbucket";
+      scmUserId?: string;
+      scmLogin?: string;
+      scmName?: string;
+      scmEmail?: string;
+      scmTokenEncrypted?: string | null;
+      scmRefreshTokenEncrypted?: string | null;
+      scmTokenExpiresAt?: number | null;
       githubUserId?: string;
       githubLogin?: string;
       githubName?: string;
@@ -1755,22 +1792,42 @@ export class SessionDO extends DurableObject<Env> {
       // The server-side refresh may have rotated tokens, and the client could
       // be sending stale values from an old session cookie.
       const clientExpiresAt = body.githubTokenExpiresAt ?? null;
-      const dbExpiresAt = participant.github_token_expires_at;
+      const clientScmExpiresAt = body.scmTokenExpiresAt ?? clientExpiresAt;
+      const dbScmExpiresAt =
+        participant.scm_token_expires_at ?? participant.github_token_expires_at;
       const clientSentAnyToken =
-        body.githubTokenEncrypted != null || body.githubRefreshTokenEncrypted != null;
+        body.scmTokenEncrypted != null ||
+        body.scmRefreshTokenEncrypted != null ||
+        body.githubTokenEncrypted != null ||
+        body.githubRefreshTokenEncrypted != null;
 
       const shouldUpdateTokens =
         clientSentAnyToken &&
-        (dbExpiresAt == null || (clientExpiresAt != null && clientExpiresAt >= dbExpiresAt));
+        (dbScmExpiresAt == null ||
+          (clientScmExpiresAt != null && clientScmExpiresAt >= dbScmExpiresAt));
 
       // If we already have a refresh token (server-side refresh may rotate it),
       // only accept an incoming refresh token when we're also accepting the
       // access token update, or when we don't have one yet.
       const shouldUpdateRefreshToken =
-        body.githubRefreshTokenEncrypted != null &&
-        (participant.github_refresh_token_encrypted == null || shouldUpdateTokens);
+        (body.scmRefreshTokenEncrypted != null || body.githubRefreshTokenEncrypted != null) &&
+        (participant.scm_refresh_token_encrypted == null ||
+          participant.github_refresh_token_encrypted == null ||
+          shouldUpdateTokens);
 
       this.repository.updateParticipantCoalesce(participant.id, {
+        scmProvider: body.scmProvider ?? null,
+        scmUserId: body.scmUserId ?? body.githubUserId ?? null,
+        scmLogin: body.scmLogin ?? body.githubLogin ?? null,
+        scmName: body.scmName ?? body.githubName ?? null,
+        scmEmail: body.scmEmail ?? body.githubEmail ?? null,
+        scmAccessTokenEncrypted: shouldUpdateTokens
+          ? (body.scmTokenEncrypted ?? body.githubTokenEncrypted ?? null)
+          : null,
+        scmRefreshTokenEncrypted: shouldUpdateRefreshToken
+          ? (body.scmRefreshTokenEncrypted ?? body.githubRefreshTokenEncrypted ?? null)
+          : null,
+        scmTokenExpiresAt: shouldUpdateTokens ? clientScmExpiresAt : null,
         githubUserId: body.githubUserId ?? null,
         githubLogin: body.githubLogin ?? null,
         githubName: body.githubName ?? null,
@@ -1787,6 +1844,15 @@ export class SessionDO extends DurableObject<Env> {
       this.repository.createParticipant({
         id,
         userId: body.userId,
+        scmProvider: body.scmProvider ?? "github",
+        scmUserId: body.scmUserId ?? body.githubUserId ?? null,
+        scmLogin: body.scmLogin ?? body.githubLogin ?? null,
+        scmName: body.scmName ?? body.githubName ?? null,
+        scmEmail: body.scmEmail ?? body.githubEmail ?? null,
+        scmAccessTokenEncrypted: body.scmTokenEncrypted ?? body.githubTokenEncrypted ?? null,
+        scmRefreshTokenEncrypted:
+          body.scmRefreshTokenEncrypted ?? body.githubRefreshTokenEncrypted ?? null,
+        scmTokenExpiresAt: body.scmTokenExpiresAt ?? body.githubTokenExpiresAt ?? null,
         githubUserId: body.githubUserId ?? null,
         githubLogin: body.githubLogin ?? null,
         githubName: body.githubName ?? null,

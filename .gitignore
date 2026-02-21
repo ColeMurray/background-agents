@@ -93,3 +93,7 @@ terraform/environments/production/plan.out
 terraform/environments/production/backend_override.tf
 terraform/environments/production/terraform.tfstate*
 terraform/environments/production/.terraform*
+terraform/environments/production/terraform.tfvars.backup-*
+
+research.md
+plan.md

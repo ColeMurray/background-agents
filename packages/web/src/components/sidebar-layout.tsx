@@ -61,13 +61,21 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
         <p className="text-muted-foreground max-w-md text-center">
           Background coding agent for your team. Ship faster with AI-powered code changes.
         </p>
-        <button
-          onClick={() => signIn("github")}
-          className="flex items-center gap-2 bg-primary text-primary-foreground px-6 py-3 font-medium hover:opacity-90 transition"
-        >
-          <GitHubIcon />
-          Sign in with GitHub
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => signIn("github")}
+            className="flex items-center gap-2 bg-primary text-primary-foreground px-6 py-3 font-medium hover:opacity-90 transition"
+          >
+            <GitHubIcon />
+            Sign in with GitHub
+          </button>
+          <button
+            onClick={() => signIn("bitbucket")}
+            className="flex items-center gap-2 bg-secondary text-secondary-foreground px-6 py-3 font-medium hover:opacity-90 transition"
+          >
+            Sign in with Bitbucket
+          </button>
+        </div>
       </div>
     );
   }

@@ -17,6 +17,8 @@ Use this checklist before opening a pull request for a new source-control provid
       hardcoding).
 - [ ] Manual PR fallback URL is built via provider method (`buildManualPullRequestUrl`).
 - [ ] Push transport spec is built via provider method (`buildGitPushSpec`).
+- [ ] OAuth refresh path is implemented for provider tokens (if provider supports refresh tokens).
+- [ ] Sandbox clone credential injection uses provider-neutral `VCS_*` env vars.
 
 ## Tests Checklist
 
@@ -28,6 +30,7 @@ Use this checklist before opening a pull request for a new source-control provid
 - [ ] Existing create-PR branch consistency tests still pass.
 - [ ] Slack manual-PR button tests still pass.
 - [ ] No provider-specific URL/token logic is introduced outside provider/auth modules.
+- [ ] Session create + ws-token paths persist provider-neutral SCM columns.
 
 ## Documentation Checklist
 

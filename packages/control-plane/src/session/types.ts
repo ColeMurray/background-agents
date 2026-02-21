@@ -18,6 +18,7 @@ import type {
 export interface SessionRow {
   id: string;
   session_name: string | null; // External session name for WebSocket routing
+  vcs_provider: "github" | "bitbucket" | null;
   title: string | null;
   repo_owner: string;
   repo_name: string;
@@ -37,6 +38,14 @@ export interface SessionRow {
 export interface ParticipantRow {
   id: string;
   user_id: string;
+  scm_provider: "github" | "bitbucket" | null;
+  scm_user_id: string | null;
+  scm_login: string | null;
+  scm_email: string | null;
+  scm_name: string | null;
+  scm_access_token_encrypted: string | null;
+  scm_refresh_token_encrypted: string | null;
+  scm_token_expires_at: number | null;
   github_user_id: string | null;
   github_login: string | null;
   github_email: string | null;

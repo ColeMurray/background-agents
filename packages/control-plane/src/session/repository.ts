@@ -57,6 +57,7 @@ export interface SandboxCircuitBreakerState {
 export interface UpsertSessionData {
   id: string;
   sessionName: string;
+  vcsProvider?: "github" | "bitbucket";
   title: string | null;
   repoOwner: string;
   repoName: string;
@@ -84,6 +85,14 @@ export interface CreateSandboxData {
 export interface CreateParticipantData {
   id: string;
   userId: string;
+  scmProvider?: "github" | "bitbucket";
+  scmUserId?: string | null;
+  scmLogin?: string | null;
+  scmName?: string | null;
+  scmEmail?: string | null;
+  scmAccessTokenEncrypted?: string | null;
+  scmRefreshTokenEncrypted?: string | null;
+  scmTokenExpiresAt?: number | null;
   githubUserId?: string | null;
   githubLogin?: string | null;
   githubName?: string | null;
@@ -99,6 +108,14 @@ export interface CreateParticipantData {
  * Data for updating a participant with COALESCE (only non-null values update).
  */
 export interface UpdateParticipantData {
+  scmProvider?: "github" | "bitbucket" | null;
+  scmUserId?: string | null;
+  scmLogin?: string | null;
+  scmName?: string | null;
+  scmEmail?: string | null;
+  scmAccessTokenEncrypted?: string | null;
+  scmRefreshTokenEncrypted?: string | null;
+  scmTokenExpiresAt?: number | null;
   githubUserId?: string | null;
   githubLogin?: string | null;
   githubName?: string | null;
@@ -216,10 +233,11 @@ export class SessionRepository {
 
   upsertSession(data: UpsertSessionData): void {
     this.sql.exec(
-      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, model, reasoning_effort, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO session (id, session_name, vcs_provider, title, repo_owner, repo_name, repo_id, model, reasoning_effort, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.sessionName,
+      data.vcsProvider ?? "github",
       data.title,
       data.repoOwner,
       data.repoName,
@@ -389,10 +407,24 @@ export class SessionRepository {
 
   createParticipant(data: CreateParticipantData): void {
     this.sql.exec(
-      `INSERT INTO participants (id, user_id, github_user_id, github_login, github_name, github_email, github_access_token_encrypted, github_refresh_token_encrypted, github_token_expires_at, role, joined_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO participants (
+         id, user_id, scm_provider, scm_user_id, scm_login, scm_name, scm_email,
+         scm_access_token_encrypted, scm_refresh_token_encrypted, scm_token_expires_at,
+         github_user_id, github_login, github_name, github_email,
+         github_access_token_encrypted, github_refresh_token_encrypted, github_token_expires_at,
+         role, joined_at
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.userId,
+      data.scmProvider ?? "github",
+      data.scmUserId ?? null,
+      data.scmLogin ?? null,
+      data.scmName ?? null,
+      data.scmEmail ?? null,
+      data.scmAccessTokenEncrypted ?? null,
+      data.scmRefreshTokenEncrypted ?? null,
+      data.scmTokenExpiresAt ?? null,
       data.githubUserId ?? null,
       data.githubLogin ?? null,
       data.githubName ?? null,
@@ -408,6 +440,14 @@ export class SessionRepository {
   updateParticipantCoalesce(participantId: string, data: UpdateParticipantData): void {
     this.sql.exec(
       `UPDATE participants SET
+         scm_provider = COALESCE(?, scm_provider),
+         scm_user_id = COALESCE(?, scm_user_id),
+         scm_login = COALESCE(?, scm_login),
+         scm_name = COALESCE(?, scm_name),
+         scm_email = COALESCE(?, scm_email),
+         scm_access_token_encrypted = COALESCE(?, scm_access_token_encrypted),
+         scm_refresh_token_encrypted = COALESCE(?, scm_refresh_token_encrypted),
+         scm_token_expires_at = COALESCE(?, scm_token_expires_at),
          github_user_id = COALESCE(?, github_user_id),
          github_login = COALESCE(?, github_login),
          github_name = COALESCE(?, github_name),
@@ -416,6 +456,14 @@ export class SessionRepository {
          github_refresh_token_encrypted = COALESCE(?, github_refresh_token_encrypted),
          github_token_expires_at = COALESCE(?, github_token_expires_at)
        WHERE id = ?`,
+      data.scmProvider ?? null,
+      data.scmUserId ?? null,
+      data.scmLogin ?? null,
+      data.scmName ?? null,
+      data.scmEmail ?? null,
+      data.scmAccessTokenEncrypted ?? null,
+      data.scmRefreshTokenEncrypted ?? null,
+      data.scmTokenExpiresAt ?? null,
       data.githubUserId ?? null,
       data.githubLogin ?? null,
       data.githubName ?? null,
@@ -444,6 +492,48 @@ export class SessionRepository {
       data.githubAccessTokenEncrypted,
       data.githubRefreshTokenEncrypted ?? null,
       data.githubTokenExpiresAt,
+      participantId
+    );
+  }
+
+  updateParticipantScmTokens(
+    participantId: string,
+    data: {
+      scmProvider: "github" | "bitbucket";
+      scmAccessTokenEncrypted: string;
+      scmRefreshTokenEncrypted?: string | null;
+      scmTokenExpiresAt: number;
+    }
+  ): void {
+    this.sql.exec(
+      `UPDATE participants SET
+         scm_provider = ?,
+         scm_access_token_encrypted = ?,
+         scm_refresh_token_encrypted = COALESCE(?, scm_refresh_token_encrypted),
+         scm_token_expires_at = ?,
+         github_access_token_encrypted = CASE
+           WHEN ? = 'github' THEN ?
+           ELSE github_access_token_encrypted
+         END,
+         github_refresh_token_encrypted = CASE
+           WHEN ? = 'github' THEN COALESCE(?, github_refresh_token_encrypted)
+           ELSE github_refresh_token_encrypted
+         END,
+         github_token_expires_at = CASE
+           WHEN ? = 'github' THEN ?
+           ELSE github_token_expires_at
+         END
+       WHERE id = ?`,
+      data.scmProvider,
+      data.scmAccessTokenEncrypted,
+      data.scmRefreshTokenEncrypted ?? null,
+      data.scmTokenExpiresAt,
+      data.scmProvider,
+      data.scmAccessTokenEncrypted,
+      data.scmProvider,
+      data.scmRefreshTokenEncrypted ?? null,
+      data.scmProvider,
+      data.scmTokenExpiresAt,
       participantId
     );
   }

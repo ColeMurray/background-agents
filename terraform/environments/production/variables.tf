@@ -67,6 +67,19 @@ variable "github_client_secret" {
   sensitive   = true
 }
 
+variable "bitbucket_client_id" {
+  description = "Bitbucket OAuth consumer client ID"
+  type        = string
+  default     = ""
+}
+
+variable "bitbucket_client_secret" {
+  description = "Bitbucket OAuth consumer client secret"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 # =============================================================================
 # GitHub App Credentials (for Modal sandbox)
 # =============================================================================
@@ -87,6 +100,19 @@ variable "github_app_installation_id" {
   type        = string
 }
 
+variable "bitbucket_bot_username" {
+  description = "Bitbucket bot username used for clone/push auth"
+  type        = string
+  default     = ""
+}
+
+variable "bitbucket_bot_app_password" {
+  description = "Bitbucket bot app password used for clone/push auth"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 # =============================================================================
 # GitHub Bot Configuration
 # =============================================================================
@@ -95,11 +121,6 @@ variable "enable_github_bot" {
   description = "Enable the GitHub bot worker. Requires github_webhook_secret and github_bot_username."
   type        = bool
   default     = false
-
-  validation {
-    condition     = var.enable_github_bot == false || (length(var.github_webhook_secret) > 0 && length(var.github_bot_username) > 0)
-    error_message = "When enable_github_bot is true, github_webhook_secret and github_bot_username must be non-empty."
-  }
 }
 
 variable "github_webhook_secret" {
@@ -139,15 +160,6 @@ variable "enable_linear_bot" {
   description = "Enable the Linear bot worker. Requires linear_client_id, linear_client_secret, and linear_webhook_secret."
   type        = bool
   default     = false
-
-  validation {
-    condition = var.enable_linear_bot == false || (
-      length(var.linear_client_id) > 0 &&
-      length(var.linear_client_secret) > 0 &&
-      length(var.linear_webhook_secret) > 0
-    )
-    error_message = "When enable_linear_bot is true, linear_client_id, linear_client_secret, and linear_webhook_secret must be non-empty."
-  }
 }
 
 variable "linear_client_id" {
@@ -246,6 +258,17 @@ variable "project_root" {
   description = "Root path to the project repository"
   type        = string
   default     = "../../../"
+}
+
+variable "scm_provider" {
+  description = "Default source-control provider for the deployment (github or bitbucket)"
+  type        = string
+  default     = "github"
+
+  validation {
+    condition     = contains(["github", "bitbucket"], var.scm_provider)
+    error_message = "scm_provider must be either github or bitbucket."
+  }
 }
 
 # =============================================================================

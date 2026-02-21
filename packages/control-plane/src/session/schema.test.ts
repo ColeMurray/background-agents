@@ -46,11 +46,11 @@ describe("applyMigrations", () => {
     vi.setSystemTime(1000);
   });
 
-  it("runs all 18 migrations on a fresh DO", () => {
+  it("runs all migrations on a fresh DO", () => {
     // No applied IDs → SELECT returns empty
     applyMigrations(mock.sql);
 
-    // Should have: CREATE TABLE + SELECT + 18 migration execs + 18 INSERT OR IGNORE
+    // Should have: CREATE TABLE + SELECT + one INSERT OR IGNORE per migration
     const createTable = mock.calls.find((c) =>
       c.query.includes("CREATE TABLE IF NOT EXISTS _schema_migrations")
     );
@@ -63,15 +63,15 @@ describe("applyMigrations", () => {
     const inserts = mock.calls.filter((c) =>
       c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
     );
-    expect(inserts).toHaveLength(18);
+    expect(inserts).toHaveLength(MIGRATIONS.length);
 
-    // Verify all 18 IDs are recorded
+    // Verify all migration IDs are recorded
     const recordedIds = inserts.map((c) => c.params[0]);
     expect(recordedIds).toEqual(MIGRATIONS.map((m) => m.id));
   });
 
   it("skips all migrations when fully migrated", () => {
-    // All 18 IDs already applied
+    // All IDs already applied
     const appliedRows = MIGRATIONS.map((m) => ({ id: m.id }));
     mock.setData("SELECT id FROM _schema_migrations", appliedRows);
 
@@ -97,10 +97,10 @@ describe("applyMigrations", () => {
     const inserts = mock.calls.filter((c) =>
       c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
     );
-    expect(inserts).toHaveLength(8); // migrations 11-18
+    expect(inserts).toHaveLength(MIGRATIONS.length - 10);
 
     const recordedIds = inserts.map((c) => c.params[0]);
-    expect(recordedIds).toEqual([11, 12, 13, 14, 15, 16, 17, 18]);
+    expect(recordedIds).toEqual(MIGRATIONS.slice(10).map((m) => m.id));
   });
 
   it("rethrows non-duplicate-column errors from string migrations", () => {
@@ -128,11 +128,11 @@ describe("applyMigrations", () => {
     // Should not throw — duplicate column errors are expected
     expect(() => applyMigrations(mock.sql)).not.toThrow();
 
-    // All 18 migrations should still be recorded
+    // All migrations should still be recorded
     const inserts = mock.calls.filter((c) =>
       c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
     );
-    expect(inserts).toHaveLength(18);
+    expect(inserts).toHaveLength(MIGRATIONS.length);
   });
 
   it("is idempotent — calling twice produces no duplicate rows", () => {

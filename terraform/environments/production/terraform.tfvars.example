@@ -61,6 +61,11 @@ modal_workspace = ""
 github_client_id = ""      # e.g., "Iv1.abc123..."
 github_client_secret = ""
 
+# Bitbucket OAuth consumer credentials (optional, required for Bitbucket sign-in)
+# Create at: https://bitbucket.org/account/settings/app-passwords/
+bitbucket_client_id = ""
+bitbucket_client_secret = ""
+
 # App credentials
 github_app_id = ""
 
@@ -73,6 +78,10 @@ github_app_private_key = <<-EOF
 EOF
 
 github_app_installation_id = ""
+
+# Bitbucket bot credentials (optional, required for Bitbucket clone/push path)
+bitbucket_bot_username = ""
+bitbucket_bot_app_password = ""
 
 # =============================================================================
 # Slack App Credentials (Optional)
@@ -142,6 +151,9 @@ deployment_name = ""
 
 # Path to project root (relative to this directory)
 project_root = "../../../"
+
+# Default SCM provider for this deployment ("github" or "bitbucket")
+scm_provider = "github"
 
 # =============================================================================
 # Initial Deployment Flags

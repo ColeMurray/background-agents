@@ -9,6 +9,7 @@
 
 import { decryptToken, encryptToken } from "../auth/crypto";
 import { refreshAccessToken } from "../auth/github";
+import { refreshBitbucketAccessToken } from "../auth/bitbucket";
 import type { SourceControlAuthContext } from "../source-control";
 import type { Logger } from "../logger";
 import type { ParticipantRow } from "./types";
@@ -31,6 +32,15 @@ export interface ParticipantRepository {
       githubTokenExpiresAt: number;
     }
   ): void;
+  updateParticipantScmTokens(
+    participantId: string,
+    data: {
+      scmProvider: "github" | "bitbucket";
+      scmAccessTokenEncrypted: string;
+      scmRefreshTokenEncrypted?: string | null;
+      scmTokenExpiresAt: number;
+    }
+  ): void;
 }
 
 /**
@@ -39,6 +49,8 @@ export interface ParticipantRepository {
 export interface ParticipantServiceEnv {
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
+  BITBUCKET_CLIENT_ID?: string;
+  BITBUCKET_CLIENT_SECRET?: string;
   TOKEN_ENCRYPTION_KEY: string;
 }
 
@@ -105,6 +117,14 @@ export class ParticipantService {
     return {
       id,
       user_id: userId,
+      scm_provider: "github",
+      scm_user_id: null,
+      scm_login: null,
+      scm_email: null,
+      scm_name: name,
+      scm_access_token_encrypted: null,
+      scm_refresh_token_encrypted: null,
+      scm_token_expires_at: null,
       github_user_id: null,
       github_login: null,
       github_email: null,
@@ -152,11 +172,19 @@ export class ParticipantService {
   /**
    * Check whether a participant's GitHub token is expired (with buffer).
    */
-  isGitHubTokenExpired(participant: ParticipantRow, bufferMs = 60000): boolean {
-    if (!participant.github_token_expires_at) {
+  isScmTokenExpired(participant: ParticipantRow, bufferMs = 60000): boolean {
+    const expiry = participant.scm_token_expires_at ?? participant.github_token_expires_at;
+    if (!expiry) {
       return false;
     }
-    return Date.now() + bufferMs >= participant.github_token_expires_at;
+    return Date.now() + bufferMs >= expiry;
+  }
+
+  /**
+   * Backward-compatible alias used by existing tests/callers.
+   */
+  isGitHubTokenExpired(participant: ParticipantRow, bufferMs = 60000): boolean {
+    return this.isScmTokenExpired(participant, bufferMs);
   }
 
   /**
@@ -164,48 +192,78 @@ export class ParticipantService {
    * Returns the updated ParticipantRow on success, null on failure.
    */
   async refreshToken(participant: ParticipantRow): Promise<ParticipantRow | null> {
-    if (!participant.github_refresh_token_encrypted) {
+    const scmProvider = participant.scm_provider ?? "github";
+    const encryptedRefreshToken =
+      participant.scm_refresh_token_encrypted ?? participant.github_refresh_token_encrypted;
+
+    if (!encryptedRefreshToken) {
       this.log.warn("Cannot refresh: no refresh token stored", { user_id: participant.user_id });
       return null;
     }
 
-    if (!this.env.GITHUB_CLIENT_ID || !this.env.GITHUB_CLIENT_SECRET) {
+    if (scmProvider === "bitbucket") {
+      if (!this.env.BITBUCKET_CLIENT_ID || !this.env.BITBUCKET_CLIENT_SECRET) {
+        this.log.warn("Cannot refresh: Bitbucket OAuth credentials not configured");
+        return null;
+      }
+    } else if (!this.env.GITHUB_CLIENT_ID || !this.env.GITHUB_CLIENT_SECRET) {
       this.log.warn("Cannot refresh: GitHub OAuth credentials not configured");
       return null;
     }
 
     try {
-      const refreshToken = await decryptToken(
-        participant.github_refresh_token_encrypted,
-        this.env.TOKEN_ENCRYPTION_KEY
-      );
+      const refreshToken = await decryptToken(encryptedRefreshToken, this.env.TOKEN_ENCRYPTION_KEY);
+      let accessToken: string;
+      let newRefreshToken: string | null = null;
+      let expiresInSeconds: number | undefined;
 
-      const newTokens = await refreshAccessToken(refreshToken, {
-        clientId: this.env.GITHUB_CLIENT_ID,
-        clientSecret: this.env.GITHUB_CLIENT_SECRET,
-        encryptionKey: this.env.TOKEN_ENCRYPTION_KEY,
-      });
+      if (scmProvider === "bitbucket") {
+        const bitbucketClientId = this.env.BITBUCKET_CLIENT_ID;
+        const bitbucketClientSecret = this.env.BITBUCKET_CLIENT_SECRET;
+        const refreshed = await refreshBitbucketAccessToken(refreshToken, {
+          clientId: bitbucketClientId as string,
+          clientSecret: bitbucketClientSecret as string,
+        });
+        accessToken = refreshed.access_token;
+        newRefreshToken = refreshed.refresh_token ?? null;
+        expiresInSeconds = refreshed.expires_in;
+      } else {
+        const githubClientId = this.env.GITHUB_CLIENT_ID;
+        const githubClientSecret = this.env.GITHUB_CLIENT_SECRET;
+        const refreshed = await refreshAccessToken(refreshToken, {
+          clientId: githubClientId as string,
+          clientSecret: githubClientSecret as string,
+          encryptionKey: this.env.TOKEN_ENCRYPTION_KEY,
+        });
+        accessToken = refreshed.access_token;
+        newRefreshToken = refreshed.refresh_token ?? null;
+        expiresInSeconds = refreshed.expires_in;
+      }
 
       const newAccessTokenEncrypted = await encryptToken(
-        newTokens.access_token,
+        accessToken,
         this.env.TOKEN_ENCRYPTION_KEY
       );
 
-      const newRefreshTokenEncrypted = newTokens.refresh_token
-        ? await encryptToken(newTokens.refresh_token, this.env.TOKEN_ENCRYPTION_KEY)
+      const newRefreshTokenEncrypted = newRefreshToken
+        ? await encryptToken(newRefreshToken, this.env.TOKEN_ENCRYPTION_KEY)
         : null;
 
-      const newExpiresAt = newTokens.expires_in
-        ? Date.now() + newTokens.expires_in * 1000
+      const newExpiresAt = expiresInSeconds
+        ? Date.now() + expiresInSeconds * 1000
         : Date.now() + 8 * 60 * 60 * 1000; // fallback: 8 hours
 
-      this.repository.updateParticipantTokens(participant.id, {
-        githubAccessTokenEncrypted: newAccessTokenEncrypted,
-        githubRefreshTokenEncrypted: newRefreshTokenEncrypted,
-        githubTokenExpiresAt: newExpiresAt,
+      this.repository.updateParticipantScmTokens(participant.id, {
+        scmProvider,
+        scmAccessTokenEncrypted: newAccessTokenEncrypted,
+        scmRefreshTokenEncrypted: newRefreshTokenEncrypted,
+        scmTokenExpiresAt: newExpiresAt,
       });
 
-      this.log.info("Server-side token refresh succeeded", { user_id: participant.user_id });
+      this.log.info("Server-side token refresh succeeded", {
+        user_id: participant.user_id,
+        scm_provider: scmProvider,
+      });
 
       return this.repository.getParticipantById(participant.id);
     } catch (error) {
@@ -233,42 +291,48 @@ export class ParticipantService {
   > {
     let resolvedParticipant = participant;
 
-    if (!resolvedParticipant.github_access_token_encrypted) {
+    const tokenEncrypted =
+      resolvedParticipant.scm_access_token_encrypted ??
+      resolvedParticipant.github_access_token_encrypted;
+
+    if (!tokenEncrypted) {
       this.log.info("PR creation: prompting user has no OAuth token, using manual fallback", {
         user_id: resolvedParticipant.user_id,
       });
       return { auth: null };
     }
 
-    if (this.isGitHubTokenExpired(resolvedParticipant)) {
-      this.log.warn("GitHub token expired, attempting server-side refresh", {
+    if (this.isScmTokenExpired(resolvedParticipant)) {
+      this.log.warn("SCM token expired, attempting server-side refresh", {
         userId: resolvedParticipant.user_id,
+        scm_provider: resolvedParticipant.scm_provider ?? "github",
       });
 
       const refreshed = await this.refreshToken(resolvedParticipant);
       if (refreshed) {
         resolvedParticipant = refreshed;
       } else {
-        this.log.warn("GitHub token refresh failed, returning auth error", {
+        this.log.warn("SCM token refresh failed, returning auth error", {
           user_id: resolvedParticipant.user_id,
         });
         return {
           error:
-            "Your GitHub token has expired and could not be refreshed. Please re-authenticate.",
+            "Your source-control token has expired and could not be refreshed. Please re-authenticate.",
           status: 401,
         };
       }
     }
 
-    if (!resolvedParticipant.github_access_token_encrypted) {
+    const resolvedTokenEncrypted =
+      resolvedParticipant.scm_access_token_encrypted ??
+      resolvedParticipant.github_access_token_encrypted;
+
+    if (!resolvedTokenEncrypted) {
       return { auth: null };
     }
 
     try {
-      const accessToken = await decryptToken(
-        resolvedParticipant.github_access_token_encrypted,
-        this.env.TOKEN_ENCRYPTION_KEY
-      );
+      const accessToken = await decryptToken(resolvedTokenEncrypted, this.env.TOKEN_ENCRYPTION_KEY);
 
       return {
         auth: {
@@ -277,12 +341,12 @@ export class ParticipantService {
         },
       };
     } catch (error) {
-      this.log.error("Failed to decrypt GitHub token for PR creation", {
+      this.log.error("Failed to decrypt source-control token for PR creation", {
         user_id: resolvedParticipant.user_id,
         error: error instanceof Error ? error : String(error),
       });
       return {
-        error: "Failed to process GitHub token for PR creation.",
+        error: "Failed to process source-control token for PR creation.",
         status: 500,
       };
     }

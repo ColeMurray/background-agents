@@ -80,11 +80,16 @@ Base image definition with:
 # LLM API keys
 modal secret create llm-api-keys ANTHROPIC_API_KEY="sk-ant-..."
 
-# GitHub App credentials (for repo access)
+# GitHub App credentials (for GitHub repo access)
 modal secret create github-app \
   GITHUB_APP_ID="123456" \
   GITHUB_APP_PRIVATE_KEY="$(cat private-key-pkcs8.pem)" \
   GITHUB_APP_INSTALLATION_ID="12345678"
+
+# Bitbucket bot credentials (for Bitbucket clone access)
+modal secret create bitbucket-bot \
+  BITBUCKET_BOT_USERNAME="your-bot-username" \
+  BITBUCKET_BOT_APP_PASSWORD="your-app-password"
 
 # Internal API secret (for control plane authentication)
 modal secret create internal-api \
@@ -162,6 +167,8 @@ Set via Modal secrets:
 | `GITHUB_APP_INSTALLATION_ID` | `github-app` | GitHub App installation ID |
 | `MODAL_API_SECRET` | `internal-api` | Shared secret for control plane auth |
 | `ALLOWED_CONTROL_PLANE_HOSTS` | `internal-api` | Comma-separated allowed hostnames for URL validation |
+| `BITBUCKET_BOT_USERNAME` | `bitbucket-bot` | Bitbucket bot username for clone auth |
+| `BITBUCKET_BOT_APP_PASSWORD` | `bitbucket-bot` | Bitbucket bot app password for clone auth |
 
 ## Verification Criteria
 

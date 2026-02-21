@@ -7,6 +7,14 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
   return {
     id: "part-1",
     user_id: "user-1",
+    scm_provider: "github",
+    scm_user_id: null,
+    scm_login: "octocat",
+    scm_email: null,
+    scm_name: "Octo Cat",
+    scm_access_token_encrypted: null,
+    scm_refresh_token_encrypted: null,
+    scm_token_expires_at: null,
     github_user_id: null,
     github_login: "octocat",
     github_email: null,
@@ -26,6 +34,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
     id: "sess-1",
     session_name: "s1",
+    vcs_provider: "github",
     title: "Session",
     repo_owner: "acme",
     repo_name: "repo",

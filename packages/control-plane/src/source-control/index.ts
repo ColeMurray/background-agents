@@ -28,8 +28,11 @@ export { DEFAULT_SCM_PROVIDER, resolveScmProviderFromEnv } from "./config";
 // Providers
 export {
   GitHubSourceControlProvider,
+  BitbucketSourceControlProvider,
   createGitHubProvider,
+  createBitbucketProvider,
   createSourceControlProvider,
   type GitHubProviderConfig,
+  type BitbucketProviderConfig,
   type SourceControlProviderFactoryConfig,
 } from "./providers";

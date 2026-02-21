@@ -190,24 +190,24 @@ const token = await decryptToken(encrypted, env.TOKEN_ENCRYPTION_KEY);
 > **Single-Tenant Only**: This control plane is designed for single-tenant deployment where all
 > users are trusted members of the same organization.
 
-### GitHub App Token Flow
+### Source Control Token Flow
 
-The system uses two types of GitHub tokens:
+The system uses provider-specific clone/push credentials plus user OAuth tokens:
 
-| Token            | Used For    | Sent to Sandbox? | Access Scope                     |
-| ---------------- | ----------- | ---------------- | -------------------------------- |
-| GitHub App Token | Clone, push | Yes (ephemeral)  | All repos where App is installed |
-| User OAuth Token | Create PRs  | No (server-only) | User's accessible repos          |
+| Token                     | Used For    | Sent to Sandbox? | Access Scope                           |
+| ------------------------- | ----------- | ---------------- | -------------------------------------- |
+| Provider clone credential | Clone, push | Yes (ephemeral)  | Configured bot/app installation scopes |
+| User OAuth Token          | Create PRs  | No (server-only) | User's accessible repositories         |
 
 If a `create-pr` request is triggered by a participant without a user OAuth token (for example,
-Slack-created sessions), the control-plane still pushes the branch with the GitHub App token and
-returns a manual GitHub `pull/new` URL instead of failing the request.
+Slack-created sessions), the control-plane still pushes the branch with provider credentials and
+returns a manual provider PR URL instead of failing the request.
 
 ### Why This Matters
 
 - **No per-user repo access validation**: When a session is created, the system does not verify that
   the user has access to the requested repository
-- **Shared GitHub App installation**: A single `GITHUB_APP_INSTALLATION_ID` is used for all users
+- **Shared provider credentials**: Deployment-level app/bot credentials are used for clone/push
 - **Trust boundary is the organization**: All users with access to the web app can work with any
   repository the GitHub App is installed on
 
@@ -223,8 +223,12 @@ All secrets are configured via Terraform. Required secrets include:
 Optional variables:
 
 - `SCM_PROVIDER` - Source control provider for this deployment (`github` or `bitbucket`, default:
-  `github`). Current implementation supports `github` only; `bitbucket` returns explicit
-  `501 Not Implemented` responses until implemented.
+  `github`). Session-level provider selection (`vcsProvider`) is persisted at creation time and
+  defaults to this value when omitted.
+- `BITBUCKET_CLIENT_ID` - Bitbucket OAuth consumer client ID
+- `BITBUCKET_CLIENT_SECRET` - Bitbucket OAuth consumer client secret
+- `BITBUCKET_BOT_USERNAME` - Bitbucket bot username for push URL construction
+- `BITBUCKET_BOT_APP_PASSWORD` - Bitbucket bot app password for push auth
 
 See
 [terraform/environments/production/terraform.tfvars.example](../../terraform/environments/production/terraform.tfvars.example)

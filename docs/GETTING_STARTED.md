@@ -3,8 +3,9 @@
 This guide walks you through deploying your own instance of Open-Inspect using Terraform.
 
 > **Important**: This system is designed for **single-tenant deployment only**. All users share the
-> same GitHub App credentials and can access any repository the App is installed on. See the
-> [Security Model](../README.md#security-model-single-tenant-only) for details.
+> same deployment-level SCM credentials and can access repositories available through that
+> credential set. See the [Security Model](../README.md#security-model-single-tenant-only) for
+> details.
 
 ---
 
@@ -29,15 +30,16 @@ Open-Inspect uses Terraform to automate deployment across three cloud providers:
 
 Create accounts on these services before continuing:
 
-| Service                                          | Purpose                   |
-| ------------------------------------------------ | ------------------------- |
-| [Cloudflare](https://dash.cloudflare.com)        | Control plane hosting     |
-| [Vercel](https://vercel.com)                     | Web application hosting   |
-| [Modal](https://modal.com)                       | Sandbox infrastructure    |
-| [GitHub](https://github.com/settings/developers) | OAuth + repository access |
-| [Anthropic](https://console.anthropic.com)       | Claude API                |
-| [Slack](https://api.slack.com/apps) _(optional)_ | Slack bot integration     |
-| GitHub App Webhooks _(optional)_                 | GitHub bot (PR reviews)   |
+| Service                                                           | Purpose                                    |
+| ----------------------------------------------------------------- | ------------------------------------------ |
+| [Cloudflare](https://dash.cloudflare.com)                         | Control plane hosting                      |
+| [Vercel](https://vercel.com)                                      | Web application hosting                    |
+| [Modal](https://modal.com)                                        | Sandbox infrastructure                     |
+| [GitHub](https://github.com/settings/developers)                  | OAuth + repository access (GitHub mode)    |
+| [Bitbucket](https://bitbucket.org/account/settings/) _(optional)_ | OAuth + repository access (Bitbucket mode) |
+| [Anthropic](https://console.anthropic.com)                        | Claude API                                 |
+| [Slack](https://api.slack.com/apps) _(optional)_                  | Slack bot integration                      |
+| GitHub App Webhooks _(optional)_                                  | GitHub bot (PR reviews)                    |
 
 ### Required Tools
 
@@ -140,7 +142,7 @@ Create an R2 API Token:
 
 ---
 
-## Step 3: Create GitHub App
+## Step 3: Create GitHub App (GitHub Mode)
 
 You only need **one GitHub App** - it handles both user authentication (OAuth) and repository
 access.
@@ -191,6 +193,19 @@ You should now have:
 - **Client Secret** (e.g., `abc123...`)
 - **Private Key** (PKCS#8 format, starts with `-----BEGIN PRIVATE KEY-----`)
 - **Installation ID** (e.g., `12345678`)
+
+### Step 3b: Configure Bitbucket (Bitbucket Mode)
+
+If you plan to run with `scm_provider = "bitbucket"`, configure:
+
+1. A Bitbucket OAuth consumer with callback URL:
+   `https://open-inspect-{your-deployment-name}.vercel.app/api/auth/callback/bitbucket`
+2. OAuth consumer credentials:
+   - `bitbucket_client_id`
+   - `bitbucket_client_secret`
+3. A Bitbucket bot account app password for clone/push operations:
+   - `bitbucket_bot_username`
+   - `bitbucket_bot_app_password`
 
 ---
 

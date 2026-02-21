@@ -10,6 +10,7 @@ export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS session (
   id TEXT PRIMARY KEY,                              -- Same as DO ID
   session_name TEXT,                                -- External session name for WebSocket routing
+  vcs_provider TEXT NOT NULL DEFAULT 'github',      -- Source control provider for this session
   title TEXT,                                       -- Session/PR title
   repo_owner TEXT NOT NULL,                         -- e.g., "acme-corp"
   repo_name TEXT NOT NULL,                          -- e.g., "web-app"
@@ -30,6 +31,14 @@ CREATE TABLE IF NOT EXISTS session (
 CREATE TABLE IF NOT EXISTS participants (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
+  scm_provider TEXT NOT NULL DEFAULT 'github',      -- Source control provider for this participant token set
+  scm_user_id TEXT,                                 -- Provider-specific user ID
+  scm_login TEXT,                                   -- Provider login/username
+  scm_email TEXT,                                   -- Provider email for commit attribution
+  scm_name TEXT,                                    -- Provider display name
+  scm_access_token_encrypted TEXT,
+  scm_refresh_token_encrypted TEXT,
+  scm_token_expires_at INTEGER,                     -- Unix timestamp
   github_user_id TEXT,                              -- GitHub numeric ID
   github_login TEXT,                                -- GitHub username
   github_email TEXT,                                -- For git commit attribution
@@ -245,6 +254,51 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 18,
     description: "Add reasoning_effort to messages",
     run: `ALTER TABLE messages ADD COLUMN reasoning_effort TEXT`,
+  },
+  {
+    id: 19,
+    description: "Add vcs_provider to session",
+    run: `ALTER TABLE session ADD COLUMN vcs_provider TEXT NOT NULL DEFAULT 'github'`,
+  },
+  {
+    id: 20,
+    description: "Add scm_provider to participants",
+    run: `ALTER TABLE participants ADD COLUMN scm_provider TEXT NOT NULL DEFAULT 'github'`,
+  },
+  {
+    id: 21,
+    description: "Add scm_user_id to participants",
+    run: `ALTER TABLE participants ADD COLUMN scm_user_id TEXT`,
+  },
+  {
+    id: 22,
+    description: "Add scm_login to participants",
+    run: `ALTER TABLE participants ADD COLUMN scm_login TEXT`,
+  },
+  {
+    id: 23,
+    description: "Add scm_email to participants",
+    run: `ALTER TABLE participants ADD COLUMN scm_email TEXT`,
+  },
+  {
+    id: 24,
+    description: "Add scm_name to participants",
+    run: `ALTER TABLE participants ADD COLUMN scm_name TEXT`,
+  },
+  {
+    id: 25,
+    description: "Add scm_access_token_encrypted to participants",
+    run: `ALTER TABLE participants ADD COLUMN scm_access_token_encrypted TEXT`,
+  },
+  {
+    id: 26,
+    description: "Add scm_refresh_token_encrypted to participants",
+    run: `ALTER TABLE participants ADD COLUMN scm_refresh_token_encrypted TEXT`,
+  },
+  {
+    id: 27,
+    description: "Add scm_token_expires_at to participants",
+    run: `ALTER TABLE participants ADD COLUMN scm_token_expires_at INTEGER`,
   },
 ];
 

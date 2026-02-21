@@ -4,7 +4,7 @@ Next.js web application for interacting with Open-Inspect coding sessions.
 
 ## Features
 
-- GitHub OAuth authentication
+- GitHub and Bitbucket OAuth authentication
 - Session dashboard with list view
 - Real-time streaming via WebSocket
 - Message timeline with tool calls
@@ -25,7 +25,7 @@ Next.js web application for interacting with Open-Inspect coding sessions.
 │  └──────────────────────────────────────────────────────────┘   │
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │                      API Routes                           │   │
-│  │  /api/auth/[...nextauth] - GitHub OAuth                  │   │
+│  │  /api/auth/[...nextauth] - GitHub/Bitbucket OAuth        │   │
 │  │  /api/sessions           - Session CRUD                  │   │
 │  │  /api/repos              - Repository list               │   │
 │  │  /api/repos/:owner/:name/secrets - Secrets CRUD          │   │
@@ -45,7 +45,7 @@ Next.js web application for interacting with Open-Inspect coding sessions.
 ### Prerequisites
 
 - Node.js 22+
-- GitHub App configured for OAuth (see below)
+- GitHub App and/or Bitbucket OAuth consumer configured for OAuth (see below)
 
 ### GitHub App Setup
 
@@ -68,6 +68,13 @@ Required permissions for the GitHub App:
 - **Account permissions**: Email addresses (read-only)
 - **Repository permissions**: Contents (read & write) - for repo operations
 
+### Bitbucket OAuth Setup
+
+For Bitbucket sign-in, create an OAuth consumer and configure:
+
+1. **Callback URL**: `https://your-domain.com/api/auth/callback/bitbucket`
+2. **Scopes**: `account`, `repository`, `pullrequest`
+
 ### Environment Variables
 
 Create `.env.local`:
@@ -77,12 +84,16 @@ Create `.env.local`:
 GITHUB_CLIENT_ID=your_github_app_client_id
 GITHUB_CLIENT_SECRET=your_github_app_client_secret
 
+# Bitbucket OAuth consumer (optional)
+BITBUCKET_CLIENT_ID=your_bitbucket_client_id
+BITBUCKET_CLIENT_SECRET=your_bitbucket_client_secret
+
 # NextAuth
 NEXTAUTH_URL=http://localhost:3000
 NEXTAUTH_SECRET=your_random_secret  # Generate: openssl rand -base64 32
 
 # Access Control (optional - leave empty to allow all authenticated users)
-ALLOWED_USERS=username1,username2          # Comma-separated GitHub usernames
+ALLOWED_USERS=username1,username2          # Comma-separated SCM usernames
 ALLOWED_EMAIL_DOMAINS=example.com,corp.io  # Comma-separated email domains
 
 # Control Plane
@@ -91,8 +102,8 @@ NEXT_PUBLIC_WS_URL=ws://localhost:8787
 ```
 
 > **Access Control**: If both `ALLOWED_USERS` and `ALLOWED_EMAIL_DOMAINS` are empty, any
-> authenticated GitHub user can access the application. If either is set, users must match at least
-> one condition (username in allowed list OR email domain in allowed list).
+> authenticated user can access the application. If either is set, users must match at least one
+> condition (username in allowed list OR email domain in allowed list).
 
 ### Development
 
@@ -120,7 +131,7 @@ npm run build
 
 ### New Session (`/session/new`)
 
-- Repository selector (populated from GitHub)
+- Repository selector (populated from configured SCM provider)
 - Optional title field
 - Creates session and redirects to session view
 

@@ -47,7 +47,8 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
 
     const jwt = await getToken({ req: request });
-    const githubToken = jwt?.accessToken as string | undefined;
+    const scmProvider = jwt?.vcsProvider as "github" | "bitbucket" | undefined;
+    const scmToken = jwt?.accessToken as string | undefined;
 
     // Explicitly pick allowed fields from client body and derive identity
     // from the server-side NextAuth session (not client-supplied data)
@@ -60,8 +61,14 @@ export async function POST(request: NextRequest) {
       model: body.model,
       reasoningEffort: body.reasoningEffort,
       title: body.title,
-      githubToken,
+      vcsProvider: scmProvider,
+      scmToken,
+      scmLogin: user.login,
+      scmName: user.name,
+      scmEmail: user.email,
       userId,
+      // legacy compatibility fields
+      githubToken: scmToken,
       githubLogin: user.login,
       githubName: user.name,
       githubEmail: user.email,

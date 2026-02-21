@@ -93,6 +93,7 @@ describe("SessionRepository", () => {
       expect(mock.calls[0].params).toEqual([
         "sess-1",
         "test-session",
+        "github",
         "Test Title",
         "owner",
         "repo",
@@ -325,6 +326,13 @@ describe("SessionRepository", () => {
       repo.createParticipant({
         id: "p-1",
         userId: "user-1",
+        scmProvider: "github",
+        scmUserId: "gh-123",
+        scmLogin: "testuser",
+        scmName: "Test User",
+        scmEmail: "test@example.com",
+        scmAccessTokenEncrypted: "encrypted-token",
+        scmTokenExpiresAt: 9000,
         githubUserId: "gh-123",
         githubLogin: "testuser",
         githubName: "Test User",
@@ -340,6 +348,14 @@ describe("SessionRepository", () => {
       expect(mock.calls[0].params).toEqual([
         "p-1",
         "user-1",
+        "github",
+        "gh-123",
+        "testuser",
+        "Test User",
+        "test@example.com",
+        "encrypted-token",
+        null,
+        9000,
         "gh-123",
         "testuser",
         "Test User",
@@ -363,6 +379,14 @@ describe("SessionRepository", () => {
       expect(mock.calls[0].params).toEqual([
         "p-1",
         "user-1",
+        "github",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
         null,
         null,
         null,
@@ -385,9 +409,10 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("COALESCE");
-      expect(mock.calls[0].params[0]).toBe(null); // githubUserId
-      expect(mock.calls[0].params[1]).toBe("newlogin");
-      expect(mock.calls[0].params[7]).toBe("p-1"); // participantId
+      expect(mock.calls[0].params[0]).toBe(null); // scmProvider
+      expect(mock.calls[0].params[2]).toBe(null); // scmLogin
+      expect(mock.calls[0].params[9]).toBe("newlogin"); // githubLogin
+      expect(mock.calls[0].params[15]).toBe("p-1"); // participantId
     });
   });
 

@@ -4,6 +4,7 @@
 
 import { RepoMetadataStore } from "../db/repo-metadata";
 import { getGitHubAppConfig, listInstallationRepositories } from "../auth/github-app";
+import { listBitbucketRepositories, listBitbucketRepositoriesWithOAuth } from "../auth/bitbucket";
 import type { Env } from "../types";
 import type {
   EnrichedRepository,
@@ -11,6 +12,7 @@ import type {
   RepoMetadata,
 } from "@open-inspect/shared";
 import { createLogger } from "../logger";
+import { resolveScmProviderFromEnv } from "../source-control";
 import { type Route, type RequestContext, parsePattern, json, error } from "./shared";
 
 const logger = createLogger("router:repos");
@@ -34,27 +36,50 @@ interface CachedReposList {
  * Runs either in the foreground (cache miss) or background (stale-while-revalidate).
  */
 async function refreshReposCache(env: Env, traceId?: string): Promise<void> {
-  const appConfig = getGitHubAppConfig(env);
-  if (!appConfig) return;
-
   let repos: InstallationRepository[];
-  try {
-    const result = await listInstallationRepositories(appConfig, env);
-    repos = result.repos;
+  const scmProvider = resolveScmProviderFromEnv(env.SCM_PROVIDER);
 
-    logger.info("GitHub repo fetch completed", {
-      trace_id: traceId,
-      total_repos: result.timing.totalRepos,
-      total_pages: result.timing.totalPages,
-      token_generation_ms: result.timing.tokenGenerationMs,
-      pages: result.timing.pages,
-    });
-  } catch (e) {
-    logger.error("Failed to list installation repositories (background refresh)", {
-      trace_id: traceId,
-      error: e instanceof Error ? e : String(e),
-    });
-    return;
+  if (scmProvider === "bitbucket") {
+    if (!env.BITBUCKET_BOT_USERNAME || !env.BITBUCKET_BOT_APP_PASSWORD) {
+      return;
+    }
+    try {
+      repos = await listBitbucketRepositories(
+        env.BITBUCKET_BOT_USERNAME,
+        env.BITBUCKET_BOT_APP_PASSWORD
+      );
+      logger.info("Bitbucket repo fetch completed", {
+        trace_id: traceId,
+        total_repos: repos.length,
+      });
+    } catch (e) {
+      logger.error("Failed to list bitbucket repositories (background refresh)", {
+        trace_id: traceId,
+        error: e instanceof Error ? e : String(e),
+      });
+      return;
+    }
+  } else {
+    const appConfig = getGitHubAppConfig(env);
+    if (!appConfig) return;
+    try {
+      const result = await listInstallationRepositories(appConfig, env);
+      repos = result.repos;
+
+      logger.info("GitHub repo fetch completed", {
+        trace_id: traceId,
+        total_repos: result.timing.totalRepos,
+        total_pages: result.timing.totalPages,
+        token_generation_ms: result.timing.tokenGenerationMs,
+        pages: result.timing.pages,
+      });
+    } catch (e) {
+      logger.error("Failed to list installation repositories (background refresh)", {
+        trace_id: traceId,
+        error: e instanceof Error ? e : String(e),
+      });
+      return;
+    }
   }
 
   const metadataStore = new RepoMetadataStore(env.DB);
@@ -114,6 +139,53 @@ async function handleListRepos(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
+  const scmProvider = resolveScmProviderFromEnv(env.SCM_PROVIDER);
+  const scmToken = request.headers.get("x-scm-token");
+  const scmProviderHeader = request.headers.get("x-scm-provider");
+
+  // For bitbucket user OAuth listing, bypass shared cache because repo visibility
+  // may vary per user token.
+  const useBitbucketUserOAuth =
+    scmProvider === "bitbucket" &&
+    scmProviderHeader === "bitbucket" &&
+    typeof scmToken === "string" &&
+    scmToken.length > 0;
+
+  if (useBitbucketUserOAuth) {
+    try {
+      const repos = await ctx.metrics.time("bitbucket_api", () =>
+        listBitbucketRepositoriesWithOAuth(scmToken)
+      );
+
+      const metadataStore = new RepoMetadataStore(env.DB);
+      let metadataMap: Map<string, RepoMetadata>;
+      try {
+        metadataMap = await metadataStore.getBatch(
+          repos.map((r) => ({ owner: r.owner, name: r.name }))
+        );
+      } catch {
+        metadataMap = new Map();
+      }
+
+      const enrichedRepos: EnrichedRepository[] = repos.map((repo) => {
+        const key = `${repo.owner.toLowerCase()}/${repo.name.toLowerCase()}`;
+        const metadata = metadataMap.get(key);
+        return metadata ? { ...repo, metadata } : repo;
+      });
+
+      return json({
+        repos: enrichedRepos,
+        cached: false,
+        cachedAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      logger.error("Failed to list bitbucket repositories via OAuth token", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return error("Failed to fetch repositories from Bitbucket", 500);
+    }
+  }
+
   // Read from KV cache
   let cached: CachedReposList | null = null;
   try {
@@ -144,30 +216,53 @@ async function handleListRepos(
   }
 
   // No cache at all — must fetch synchronously
-  const appConfig = getGitHubAppConfig(env);
-  if (!appConfig) {
-    return error("GitHub App not configured", 500);
-  }
-
   let repos: InstallationRepository[];
-  try {
-    const result = await ctx.metrics.time("github_api", () =>
-      listInstallationRepositories(appConfig, env)
-    );
-    repos = result.repos;
 
-    logger.info("GitHub repo fetch completed", {
-      trace_id: ctx.trace_id,
-      total_repos: result.timing.totalRepos,
-      total_pages: result.timing.totalPages,
-      token_generation_ms: result.timing.tokenGenerationMs,
-      pages: result.timing.pages,
-    });
-  } catch (e) {
-    logger.error("Failed to list installation repositories", {
-      error: e instanceof Error ? e : String(e),
-    });
-    return error("Failed to fetch repositories from GitHub", 500);
+  if (scmProvider === "bitbucket") {
+    const bitbucketUsername = env.BITBUCKET_BOT_USERNAME;
+    const bitbucketAppPassword = env.BITBUCKET_BOT_APP_PASSWORD;
+    if (!bitbucketUsername || !bitbucketAppPassword) {
+      return error("Bitbucket bot credentials not configured", 500);
+    }
+    try {
+      repos = await ctx.metrics.time("bitbucket_api", () =>
+        listBitbucketRepositories(bitbucketUsername, bitbucketAppPassword)
+      );
+      logger.info("Bitbucket repo fetch completed", {
+        trace_id: ctx.trace_id,
+        total_repos: repos.length,
+      });
+    } catch (e) {
+      logger.error("Failed to list bitbucket repositories", {
+        error: e instanceof Error ? e : String(e),
+      });
+      return error("Failed to fetch repositories from Bitbucket", 500);
+    }
+  } else {
+    const appConfig = getGitHubAppConfig(env);
+    if (!appConfig) {
+      return error("GitHub App not configured", 500);
+    }
+
+    try {
+      const result = await ctx.metrics.time("github_api", () =>
+        listInstallationRepositories(appConfig, env)
+      );
+      repos = result.repos;
+
+      logger.info("GitHub repo fetch completed", {
+        trace_id: ctx.trace_id,
+        total_repos: result.timing.totalRepos,
+        total_pages: result.timing.totalPages,
+        token_generation_ms: result.timing.tokenGenerationMs,
+        pages: result.timing.pages,
+      });
+    } catch (e) {
+      logger.error("Failed to list installation repositories", {
+        error: e instanceof Error ? e : String(e),
+      });
+      return error("Failed to fetch repositories from GitHub", 500);
+    }
   }
 
   const metadataStore = new RepoMetadataStore(env.DB);

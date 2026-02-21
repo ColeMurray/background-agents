@@ -25,6 +25,14 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
   return {
     id: "part-1",
     user_id: "user-1",
+    scm_provider: "github",
+    scm_user_id: null,
+    scm_login: null,
+    scm_email: null,
+    scm_name: "Test User",
+    scm_access_token_encrypted: null,
+    scm_refresh_token_encrypted: null,
+    scm_token_expires_at: null,
     github_user_id: null,
     github_login: null,
     github_email: null,
@@ -48,6 +56,7 @@ function createMockRepository(): ParticipantRepository {
     getProcessingMessageAuthor: vi.fn(() => null),
     createParticipant: vi.fn(),
     updateParticipantTokens: vi.fn(),
+    updateParticipantScmTokens: vi.fn(),
   };
 }
 

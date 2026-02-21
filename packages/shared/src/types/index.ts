@@ -38,6 +38,7 @@ export interface SessionParticipant {
 export interface Session {
   id: string;
   title: string | null;
+  vcsProvider?: "github" | "bitbucket";
   repoOwner: string;
   repoName: string;
   repoDefaultBranch: string;
@@ -207,7 +208,7 @@ export interface ParticipantPresence {
 
 // Repository types for GitHub App installation
 export interface InstallationRepository {
-  id: number;
+  id: string | number;
   owner: string;
   name: string;
   fullName: string;
@@ -260,6 +261,7 @@ export interface CreateSessionRequest {
   title?: string;
   model?: string;
   reasoningEffort?: string;
+  vcsProvider?: "github" | "bitbucket";
 }
 
 export interface CreateSessionResponse {

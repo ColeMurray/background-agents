@@ -40,6 +40,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       method: "POST",
       body: JSON.stringify({
         userId,
+        scmProvider: jwt?.vcsProvider as "github" | "bitbucket" | undefined,
+        scmUserId: user.id,
+        scmLogin: user.login,
+        scmName: user.name,
+        scmEmail: user.email,
+        scmToken: jwt?.accessToken as string | undefined,
+        scmTokenExpiresAt: jwt?.accessTokenExpiresAt as number | undefined,
+        scmRefreshToken: jwt?.refreshToken as string | undefined,
+        // legacy compatibility fields
         githubUserId: user.id,
         githubLogin: user.login,
         githubName: user.name,

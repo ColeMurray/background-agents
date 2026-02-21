@@ -20,6 +20,10 @@ export interface Env {
   // Secrets
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
+  BITBUCKET_CLIENT_ID?: string;
+  BITBUCKET_CLIENT_SECRET?: string;
+  BITBUCKET_BOT_USERNAME?: string;
+  BITBUCKET_BOT_APP_PASSWORD?: string;
   TOKEN_ENCRYPTION_KEY: string;
   REPO_SECRETS_ENCRYPTION_KEY?: string;
   MODAL_TOKEN_ID?: string;
@@ -256,6 +260,7 @@ export interface Attachment {
 export interface SessionState {
   id: string;
   title: string | null;
+  vcsProvider?: "github" | "bitbucket";
   repoOwner: string;
   repoName: string;
   branchName: string | null;
@@ -298,6 +303,7 @@ export interface CreateSessionRequest {
   title?: string;
   model?: string; // LLM model to use (e.g., "anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-5")
   reasoningEffort?: string; // Reasoning effort level (e.g., "high", "max")
+  vcsProvider?: "github" | "bitbucket";
 }
 
 export interface CreateSessionResponse {
@@ -308,6 +314,7 @@ export interface CreateSessionResponse {
 export interface SessionResponse {
   id: string;
   title: string | null;
+  vcsProvider?: "github" | "bitbucket";
   repoOwner: string;
   repoName: string;
   repoDefaultBranch: string;

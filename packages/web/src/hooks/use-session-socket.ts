@@ -42,6 +42,7 @@ interface SandboxEvent {
 interface SessionState {
   id: string;
   title: string | null;
+  vcsProvider?: "github" | "bitbucket";
   repoOwner: string;
   repoName: string;
   branchName: string | null;

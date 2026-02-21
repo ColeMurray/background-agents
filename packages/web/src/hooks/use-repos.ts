@@ -2,7 +2,7 @@ import useSWR from "swr";
 import { useSession } from "next-auth/react";
 
 export interface Repo {
-  id: number;
+  id: string | number;
   fullName: string;
   owner: string;
   name: string;

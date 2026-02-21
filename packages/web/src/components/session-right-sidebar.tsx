@@ -14,6 +14,7 @@ import type { Artifact, FileChange } from "@/types/session";
 interface SessionState {
   id: string;
   title: string | null;
+  vcsProvider?: "github" | "bitbucket";
   repoOwner: string;
   repoName: string;
   branchName: string | null;
@@ -87,6 +88,7 @@ export function SessionRightSidebarContent({
           branchName={sessionState.branchName || undefined}
           repoOwner={sessionState.repoOwner}
           repoName={sessionState.repoName}
+          vcsProvider={sessionState.vcsProvider}
           artifacts={artifacts}
         />
       </div>

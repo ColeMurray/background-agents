@@ -23,8 +23,12 @@ from typing import Any, ClassVar
 
 import httpx
 import websockets
-from websockets import ClientConnection, State
 from websockets.exceptions import InvalidStatus
+
+try:
+    from websockets import State
+except ImportError:
+    from websockets.protocol import State
 
 from .log_config import configure_logging, get_logger
 from .types import GitUser
@@ -162,7 +166,7 @@ class AgentBridge:
             max_value=self.SSE_INACTIVITY_TIMEOUT_MAX,
         )
 
-        self.ws: ClientConnection | None = None
+        self.ws: Any | None = None
         self.shutdown_event = asyncio.Event()
         self.git_sync_complete = asyncio.Event()
 

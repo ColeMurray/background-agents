@@ -144,22 +144,7 @@ function enforceImplementedScmProvider(
   ctx: RequestContext
 ): Response | null {
   try {
-    const provider = resolveDeploymentScmProvider(env);
-    if (provider !== "github" && !isPublicRoute(path)) {
-      logger.warn("SCM provider not implemented", {
-        event: "scm.provider_not_implemented",
-        scm_provider: provider,
-        http_path: path,
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-      const response = error(
-        `SCM provider '${provider}' is not implemented in this deployment.`,
-        501
-      );
-      return withCorsAndTraceHeaders(response, ctx);
-    }
-
+    resolveDeploymentScmProvider(env);
     return null;
   } catch (errorValue) {
     const errorMessage =
@@ -535,9 +520,14 @@ async function handleCreateSession(
   ctx: RequestContext
 ): Promise<Response> {
   const body = (await request.json()) as CreateSessionRequest & {
-    // Optional GitHub token for PR creation (will be encrypted and stored)
+    vcsProvider?: SourceControlProviderName;
+    // Optional source-control token for PR creation (will be encrypted and stored)
+    scmToken?: string;
+    scmLogin?: string;
+    scmName?: string;
+    scmEmail?: string;
+    // Legacy GitHub payload fields (backward compatibility)
     githubToken?: string;
-    // User info
     userId?: string;
     githubLogin?: string;
     githubName?: string;
@@ -552,10 +542,22 @@ async function handleCreateSession(
   const repoOwner = body.repoOwner.toLowerCase();
   const repoName = body.repoName.toLowerCase();
 
-  let repoId: number;
+  const sessionScmProvider = body.vcsProvider ?? resolveDeploymentScmProvider(env);
+  const scmToken = body.scmToken ?? body.githubToken;
+
+  let repoId: number | null;
   try {
-    const resolved = await resolveInstalledRepo(env, repoOwner, repoName);
+    const resolved = await resolveInstalledRepo(
+      env,
+      repoOwner,
+      repoName,
+      sessionScmProvider,
+      scmToken
+    );
     if (!resolved) {
+      if (sessionScmProvider === "bitbucket") {
+        return error("Repository is not accessible for configured Bitbucket credentials", 404);
+      }
       return error("Repository is not installed for the GitHub App", 404);
     }
     repoId = resolved.repoId;
@@ -567,27 +569,34 @@ async function handleCreateSession(
       repo_name: repoName,
     });
     return error(
-      message === "GitHub App not configured" ? message : "Failed to resolve repository",
+      message === "GitHub App not configured" ||
+        message === "Bitbucket bot credentials not configured and no user token provided"
+        ? message
+        : "Failed to resolve repository",
       500
     );
   }
 
   // User info from direct params
   const userId = body.userId || "anonymous";
-  const githubLogin = body.githubLogin;
-  const githubName = body.githubName;
-  const githubEmail = body.githubEmail;
+  const scmLogin = body.scmLogin ?? body.githubLogin;
+  const scmName = body.scmName ?? body.githubName;
+  const scmEmail = body.scmEmail ?? body.githubEmail;
   let githubTokenEncrypted: string | null = null;
+  let scmTokenEncrypted: string | null = null;
 
-  // If GitHub token provided, encrypt it
-  if (body.githubToken && env.TOKEN_ENCRYPTION_KEY) {
+  // If source-control token provided, encrypt it
+  if (scmToken && env.TOKEN_ENCRYPTION_KEY) {
     try {
-      githubTokenEncrypted = await encryptToken(body.githubToken, env.TOKEN_ENCRYPTION_KEY);
+      scmTokenEncrypted = await encryptToken(scmToken, env.TOKEN_ENCRYPTION_KEY);
+      if (sessionScmProvider === "github") {
+        githubTokenEncrypted = scmTokenEncrypted;
+      }
     } catch (e) {
-      logger.error("Failed to encrypt GitHub token", {
+      logger.error("Failed to encrypt source-control token", {
         error: e instanceof Error ? e : String(e),
       });
-      return error("Failed to process GitHub token", 500);
+      return error("Failed to process source-control token", 500);
     }
   }
 
@@ -617,13 +626,19 @@ async function handleCreateSession(
           repoOwner,
           repoName,
           repoId,
+          vcsProvider: sessionScmProvider,
           title: body.title,
           model,
           reasoningEffort,
           userId,
-          githubLogin,
-          githubName,
-          githubEmail,
+          scmProvider: sessionScmProvider,
+          scmLogin,
+          scmName,
+          scmEmail,
+          scmTokenEncrypted,
+          githubLogin: scmLogin,
+          githubName: scmName,
+          githubEmail: scmEmail,
           githubTokenEncrypted, // Pass encrypted token to store with owner
         }),
       },
@@ -929,6 +944,14 @@ async function handleSessionWsToken(
 
   const body = (await request.json()) as {
     userId: string;
+    scmProvider?: SourceControlProviderName;
+    scmUserId?: string;
+    scmLogin?: string;
+    scmName?: string;
+    scmEmail?: string;
+    scmToken?: string;
+    scmTokenExpiresAt?: number;
+    scmRefreshToken?: string;
     githubUserId?: string;
     githubLogin?: string;
     githubName?: string;
@@ -942,29 +965,34 @@ async function handleSessionWsToken(
     return error("userId is required");
   }
 
-  // Encrypt the GitHub tokens if provided
+  const scmProvider = body.scmProvider ?? resolveDeploymentScmProvider(env);
+  const scmToken = body.scmToken ?? body.githubToken;
+  const scmRefreshToken = body.scmRefreshToken ?? body.githubRefreshToken;
+  const scmTokenExpiresAt = body.scmTokenExpiresAt ?? body.githubTokenExpiresAt;
+
+  // Encrypt source-control tokens if provided
   const { githubTokenEncrypted, githubRefreshTokenEncrypted } = await ctx.metrics.time(
     "encrypt_tokens",
     async () => {
       let accessToken: string | null = null;
       let refreshToken: string | null = null;
 
-      if (body.githubToken && env.TOKEN_ENCRYPTION_KEY) {
+      if (scmToken && env.TOKEN_ENCRYPTION_KEY) {
         try {
-          accessToken = await encryptToken(body.githubToken, env.TOKEN_ENCRYPTION_KEY);
+          accessToken = await encryptToken(scmToken, env.TOKEN_ENCRYPTION_KEY);
         } catch (e) {
-          logger.error("Failed to encrypt GitHub token", {
+          logger.error("Failed to encrypt source-control token", {
             error: e instanceof Error ? e : String(e),
           });
           // Continue without token - PR creation will fail if this user triggers it
         }
       }
 
-      if (body.githubRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
+      if (scmRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
         try {
-          refreshToken = await encryptToken(body.githubRefreshToken, env.TOKEN_ENCRYPTION_KEY);
+          refreshToken = await encryptToken(scmRefreshToken, env.TOKEN_ENCRYPTION_KEY);
         } catch (e) {
-          logger.error("Failed to encrypt GitHub refresh token", {
+          logger.error("Failed to encrypt source-control refresh token", {
             error: e instanceof Error ? e : String(e),
           });
         }
@@ -986,6 +1014,14 @@ async function handleSessionWsToken(
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             userId: body.userId,
+            scmProvider,
+            scmUserId: body.scmUserId ?? body.githubUserId,
+            scmLogin: body.scmLogin ?? body.githubLogin,
+            scmName: body.scmName ?? body.githubName,
+            scmEmail: body.scmEmail ?? body.githubEmail,
+            scmTokenEncrypted: githubTokenEncrypted,
+            scmRefreshTokenEncrypted: githubRefreshTokenEncrypted,
+            scmTokenExpiresAt,
             githubUserId: body.githubUserId,
             githubLogin: body.githubLogin,
             githubName: body.githubName,

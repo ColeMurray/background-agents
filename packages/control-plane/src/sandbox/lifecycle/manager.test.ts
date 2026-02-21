@@ -34,6 +34,7 @@ function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
     id: "session-123",
     session_name: "test-session",
+    vcs_provider: "github",
     title: "Test Session",
     repo_owner: "testowner",
     repo_name: "testrepo",

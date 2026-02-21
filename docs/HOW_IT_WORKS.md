@@ -307,9 +307,9 @@ This ensures your contributions are properly credited in git history.
 
 When you ask the agent to create a PR:
 
-1. Agent pushes the branch using GitHub App credentials
+1. Agent pushes the branch using configured provider clone/push credentials
 2. Control plane receives the branch name
-3. Control plane creates the PR using _your_ GitHub OAuth token
+3. Control plane creates the PR using _your_ SCM OAuth token
 4. PR appears as created by you, not a bot
 
 This maintains proper code review workflows—you can't approve your own PRs.

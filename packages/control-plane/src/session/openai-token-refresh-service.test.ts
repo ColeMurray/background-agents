@@ -72,6 +72,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
     id: "session-1",
     session_name: "session-name-1",
+    vcs_provider: "github",
     title: null,
     repo_owner: "acme",
     repo_name: "web",
