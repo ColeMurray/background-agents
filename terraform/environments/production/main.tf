@@ -109,8 +109,6 @@ module "control_plane_worker" {
   worker_name = "open-inspect-control-plane-${local.name_suffix}"
   script_path = local.control_plane_script_path
 
-  depends_on = [module.linear_bot_worker]
-
   kv_namespaces = [
     {
       binding_name = "REPOS_CACHE"
@@ -174,7 +172,7 @@ module "control_plane_worker" {
   compatibility_flags = ["nodejs_compat"]
   migration_tag       = "v1"
 
-  depends_on = [null_resource.control_plane_build, module.session_index_kv, null_resource.d1_migrations]
+  depends_on = [null_resource.control_plane_build, module.session_index_kv, null_resource.d1_migrations, module.linear_bot_worker]
 }
 
 # Build slack-bot worker bundle (only runs during apply, not plan)
