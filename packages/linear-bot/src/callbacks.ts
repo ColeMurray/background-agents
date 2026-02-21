@@ -11,7 +11,6 @@ import {
   postIssueComment,
   updateAgentSession,
 } from "./utils/linear-client";
-import { getLinearConfig } from "./utils/integration-config";
 import { extractAgentResponse, formatAgentResponse } from "./completion/extractor";
 import { timingSafeEqual } from "@open-inspect/shared";
 import { createLogger } from "./logger";
@@ -170,13 +169,11 @@ callbacksRouter.post("/tool_call", async (c) => {
         const { context } = payload;
         if (!context.agentSessionId || !context.organizationId) return;
 
+        // Default to true for backward compat with sessions created before this field existed
+        if (context.emitToolProgressActivities === false) return;
+
         const client = await getLinearClient(c.env, context.organizationId);
         if (!client) return;
-
-        const integrationConfig = await getLinearConfig(c.env, context.repoFullName);
-        if (!integrationConfig.emitToolProgressActivities) {
-          return;
-        }
 
         const description = formatToolAction(payload.tool, payload.args);
         await emitAgentActivity(

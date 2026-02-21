@@ -869,6 +869,7 @@ async function handleAgentSessionEvent(
     model,
     agentSessionId,
     organizationId: orgId,
+    emitToolProgressActivities: integrationConfig.emitToolProgressActivities,
   };
 
   const promptRes = await env.CONTROL_PLANE.fetch(
