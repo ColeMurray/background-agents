@@ -311,26 +311,30 @@ async function handleGetResolvedConfig(
     });
   }
 
-  const linearSettings = settings as LinearBotSettings;
-  const linearReasoningEffort =
-    linearSettings.model &&
-    linearSettings.reasoningEffort &&
-    !isValidReasoningEffort(linearSettings.model, linearSettings.reasoningEffort)
-      ? null
-      : (linearSettings.reasoningEffort ?? null);
+  if (id === "linear") {
+    const linearSettings = settings as LinearBotSettings;
+    const linearReasoningEffort =
+      linearSettings.model &&
+      linearSettings.reasoningEffort &&
+      !isValidReasoningEffort(linearSettings.model, linearSettings.reasoningEffort)
+        ? null
+        : (linearSettings.reasoningEffort ?? null);
 
-  return json({
-    integrationId: id,
-    repo,
-    config: {
-      model: linearSettings.model ?? null,
-      reasoningEffort: linearReasoningEffort,
-      allowUserPreferenceOverride: linearSettings.allowUserPreferenceOverride ?? true,
-      allowLabelModelOverride: linearSettings.allowLabelModelOverride ?? true,
-      emitToolProgressActivities: linearSettings.emitToolProgressActivities ?? true,
-      enabledRepos,
-    },
-  });
+    return json({
+      integrationId: id,
+      repo,
+      config: {
+        model: linearSettings.model ?? null,
+        reasoningEffort: linearReasoningEffort,
+        allowUserPreferenceOverride: linearSettings.allowUserPreferenceOverride ?? true,
+        allowLabelModelOverride: linearSettings.allowLabelModelOverride ?? true,
+        emitToolProgressActivities: linearSettings.emitToolProgressActivities ?? true,
+        enabledRepos,
+      },
+    });
+  }
+
+  return error(`Unsupported integration: ${id}`, 400);
 }
 
 export const integrationSettingsRoutes: Route[] = [

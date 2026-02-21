@@ -108,7 +108,7 @@ function GlobalSettingsSection({
   const [effort, setEffort] = useState(settings?.defaults?.reasoningEffort ?? "");
   const [enabledRepos, setEnabledRepos] = useState<string[]>(settings?.enabledRepos ?? []);
   const [repoScopeMode, setRepoScopeMode] = useState<"all" | "selected">(
-    settings?.enabledRepos === undefined ? "all" : "selected"
+    settings?.enabledRepos == null ? "all" : "selected"
   );
   const [allowUserPreferenceOverride, setAllowUserPreferenceOverride] = useState(
     settings?.defaults?.allowUserPreferenceOverride ?? true

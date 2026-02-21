@@ -25,6 +25,10 @@ export async function getLinearConfig(env: Env, repo: string): Promise<ResolvedL
   }
 
   const [owner, name] = repo.split("/");
+  if (!owner || !name) {
+    return DEFAULT_CONFIG;
+  }
+
   const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
 
   let response: Response;
@@ -46,12 +50,5 @@ export async function getLinearConfig(env: Env, repo: string): Promise<ResolvedL
     return DEFAULT_CONFIG;
   }
 
-  return {
-    model: data.config.model,
-    reasoningEffort: data.config.reasoningEffort,
-    allowUserPreferenceOverride: data.config.allowUserPreferenceOverride,
-    allowLabelModelOverride: data.config.allowLabelModelOverride,
-    emitToolProgressActivities: data.config.emitToolProgressActivities,
-    enabledRepos: data.config.enabledRepos,
-  };
+  return data.config;
 }

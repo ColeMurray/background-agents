@@ -174,7 +174,7 @@ export class IntegrationSettingsStore {
     }
   }
 
-  private validateGitHubSettings(settings: GitHubBotSettings): void {
+  private validateModelAndEffort(settings: { model?: string; reasoningEffort?: string }): void {
     if (settings.model !== undefined && !isValidModel(settings.model)) {
       throw new IntegrationSettingsValidationError(`Invalid model ID: ${settings.model}`);
     }
@@ -190,20 +190,12 @@ export class IntegrationSettingsStore {
     }
   }
 
-  private validateLinearSettings(settings: LinearBotSettings): void {
-    if (settings.model !== undefined && !isValidModel(settings.model)) {
-      throw new IntegrationSettingsValidationError(`Invalid model ID: ${settings.model}`);
-    }
+  private validateGitHubSettings(settings: GitHubBotSettings): void {
+    this.validateModelAndEffort(settings);
+  }
 
-    if (
-      settings.model !== undefined &&
-      settings.reasoningEffort !== undefined &&
-      !isValidReasoningEffort(settings.model, settings.reasoningEffort)
-    ) {
-      throw new IntegrationSettingsValidationError(
-        `Invalid reasoning effort "${settings.reasoningEffort}" for model "${settings.model}"`
-      );
-    }
+  private validateLinearSettings(settings: LinearBotSettings): void {
+    this.validateModelAndEffort(settings);
 
     if (
       settings.allowUserPreferenceOverride !== undefined &&
