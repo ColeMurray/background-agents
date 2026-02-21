@@ -8,6 +8,8 @@ import useSWR from "swr";
 import { formatRelativeTime, isInactiveSession } from "@/lib/time";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useIsMobile } from "@/hooks/use-media-query";
+import { SidebarIcon, InspectIcon, PlusIcon, SettingsIcon } from "@/components/ui/icons";
+import { Button } from "@/components/ui/button";
 
 export interface SessionItem {
   id: string;
@@ -88,28 +90,30 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border-muted">
         <div className="flex items-center gap-2">
-          <button
+          <Button
+            variant="ghost"
+            size="icon"
             onClick={onToggle}
-            className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
             title={`Toggle sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
             aria-label={`Toggle sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
           >
-            <SidebarIcon />
-          </button>
+            <SidebarIcon className="w-4 h-4" />
+          </Button>
           <Link href="/" className="flex items-center gap-2">
-            <InspectIcon />
+            <InspectIcon className="w-5 h-5" />
             <span className="font-semibold text-foreground">Inspect</span>
           </Link>
         </div>
         <div className="flex items-center gap-2">
-          <button
+          <Button
+            variant="ghost"
+            size="icon"
             onClick={onNewSession}
-            className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
             title={`New session (${SHORTCUT_LABELS.NEW_SESSION})`}
             aria-label={`New session (${SHORTCUT_LABELS.NEW_SESSION})`}
           >
-            <PlusIcon />
-          </button>
+            <PlusIcon className="w-4 h-4" />
+          </Button>
           <Link
             href="/settings"
             className={`p-1.5 transition ${
@@ -119,7 +123,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
             }`}
             title="Settings"
           >
-            <SettingsIcon />
+            <SettingsIcon className="w-4 h-4" />
           </Link>
           {authSession?.user?.image ? (
             <button
@@ -237,67 +241,5 @@ function SessionListItem({
         <span className="truncate">{repoInfo}</span>
       </div>
     </Link>
-  );
-}
-
-function InspectIcon() {
-  return (
-    <svg
-      className="w-5 h-5"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <polyline points="14 2 14 8 20 8" />
-      <line x1="16" y1="13" x2="8" y2="13" />
-      <line x1="16" y1="17" x2="8" y2="17" />
-      <polyline points="10 9 9 9 8 9" />
-    </svg>
-  );
-}
-
-function PlusIcon() {
-  return (
-    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-    </svg>
-  );
-}
-
-function SidebarIcon() {
-  return (
-    <svg
-      className="w-4 h-4"
-      fill="none"
-      stroke="currentColor"
-      viewBox="0 0 24 24"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <line x1="9" y1="3" x2="9" y2="21" />
-    </svg>
-  );
-}
-
-function SettingsIcon() {
-  return (
-    <svg
-      className="w-4 h-4"
-      fill="none"
-      stroke="currentColor"
-      viewBox="0 0 24 24"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-    </svg>
   );
 }

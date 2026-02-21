@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { INTEGRATION_DEFINITIONS } from "@open-inspect/shared";
+import { ChevronRightIcon } from "@/components/ui/icons";
 
 export function IntegrationsSettings() {
   return (
@@ -23,28 +24,12 @@ export function IntegrationsSettings() {
                   <p className="text-sm font-medium">{integration.name}</p>
                   <p className="text-xs mt-1">{integration.description}</p>
                 </div>
-                <ChevronRightIcon />
+                <ChevronRightIcon className="w-4 h-4 mt-0.5 text-muted-foreground" />
               </Link>
             </li>
           ))}
         </ul>
       </div>
     </div>
-  );
-}
-
-function ChevronRightIcon() {
-  return (
-    <svg
-      className="w-4 h-4 mt-0.5 text-muted-foreground"
-      fill="none"
-      stroke="currentColor"
-      viewBox="0 0 24 24"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M9 18l6-6-6-6" />
-    </svg>
   );
 }

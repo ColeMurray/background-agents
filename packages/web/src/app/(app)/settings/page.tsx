@@ -10,7 +10,7 @@ import { DataControlsSettings } from "@/components/settings/data-controls-settin
 import { KeyboardShortcutsSettings } from "@/components/settings/keyboard-shortcuts-settings";
 import { IntegrationsSettings } from "@/components/settings/integrations-settings";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
-import { SidebarToggleIcon } from "@/components/sidebar-toggle-icon";
+import { SidebarIcon, BackIcon } from "@/components/ui/icons";
 import { useIsMobile } from "@/hooks/use-media-query";
 
 const CATEGORY_LABELS: Record<SettingsCategory, string> = {
@@ -67,7 +67,7 @@ export default function SettingsPage() {
                   title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
                   aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
                 >
-                  <SidebarToggleIcon />
+                  <SidebarIcon className="w-4 h-4" />
                 </button>
               </div>
             </header>
@@ -89,14 +89,14 @@ export default function SettingsPage() {
                   title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
                   aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
                 >
-                  <SidebarToggleIcon />
+                  <SidebarIcon className="w-4 h-4" />
                 </button>
                 <button
                   onClick={() => setMobileView("list")}
                   className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
                   aria-label="Back to settings"
                 >
-                  <BackIcon />
+                  <BackIcon className="w-4 h-4" />
                 </button>
                 <h2 className="text-sm font-medium text-foreground">
                   {CATEGORY_LABELS[activeCategory]}
@@ -123,7 +123,7 @@ export default function SettingsPage() {
               title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
               aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
             >
-              <SidebarToggleIcon />
+              <SidebarIcon className="w-4 h-4" />
             </button>
           </div>
         </header>
@@ -136,21 +136,5 @@ export default function SettingsPage() {
         </div>
       </div>
     </div>
-  );
-}
-
-function BackIcon() {
-  return (
-    <svg
-      className="w-4 h-4"
-      fill="none"
-      stroke="currentColor"
-      viewBox="0 0 24 24"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M15 18l-6-6 6-6" />
-    </svg>
   );
 }

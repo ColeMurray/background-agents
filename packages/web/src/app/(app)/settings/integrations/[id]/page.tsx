@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { INTEGRATION_DEFINITIONS, type IntegrationId } from "@open-inspect/shared";
 import { useSidebarContext } from "@/components/sidebar-layout";
-import { SidebarToggleIcon } from "@/components/sidebar-toggle-icon";
+import { SidebarIcon, BackIcon } from "@/components/ui/icons";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { GitHubIntegrationSettings } from "@/components/settings/integrations/github-integration-settings";
@@ -46,7 +46,7 @@ export default function IntegrationDetailPage() {
               title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
               aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
             >
-              <SidebarToggleIcon />
+              <SidebarIcon className="w-4 h-4" />
             </button>
           )}
           <Link
@@ -54,7 +54,7 @@ export default function IntegrationDetailPage() {
             className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
             aria-label="Back to integrations"
           >
-            <BackIcon />
+            <BackIcon className="w-4 h-4" />
           </Link>
           <h2 className="text-sm font-medium text-foreground">{integration.name}</h2>
         </div>
@@ -66,21 +66,5 @@ export default function IntegrationDetailPage() {
         </div>
       </div>
     </div>
-  );
-}
-
-function BackIcon() {
-  return (
-    <svg
-      className="w-4 h-4"
-      fill="none"
-      stroke="currentColor"
-      viewBox="0 0 24 24"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M15 18l-6-6 6-6" />
-    </svg>
   );
 }

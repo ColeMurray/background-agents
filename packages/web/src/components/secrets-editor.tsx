@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import useSWR, { mutate } from "swr";
+import { Badge } from "@/components/ui/badge";
 
 const VALID_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const MAX_KEY_LENGTH = 256;
@@ -366,9 +367,9 @@ export function SecretsEditor({
                         overridden ? "opacity-40" : "opacity-70"
                       }`}
                     >
-                      <span className="text-[10px] font-medium px-1.5 py-0.5 bg-blue-500/10 text-blue-600 border border-blue-500/20">
+                      <Badge variant="info" className="text-[10px]">
                         Global
-                      </span>
+                      </Badge>
                       <span className="text-xs text-foreground font-mono">{g.key}</span>
                       <input
                         type="password"
