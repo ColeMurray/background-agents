@@ -288,7 +288,7 @@ async function handleGetResolvedConfig(
 
   const store = new IntegrationSettingsStore(env.DB);
   const repo = `${owner}/${name}`;
-  const { enabledRepos, allowedTriggerUsers, settings } = await store.getResolvedConfig(id, repo);
+  const { enabledRepos, settings } = await store.getResolvedConfig(id, repo);
 
   if (id === "github") {
     const githubSettings = settings as GitHubBotSettings;
@@ -307,7 +307,7 @@ async function handleGetResolvedConfig(
         reasoningEffort,
         autoReviewOnOpen: githubSettings.autoReviewOnOpen ?? true,
         enabledRepos,
-        allowedTriggerUsers,
+        allowedTriggerUsers: githubSettings.allowedTriggerUsers ?? null,
       },
     });
   }

@@ -53,23 +53,11 @@ export class IntegrationSettingsStore {
       };
     }
 
-    if (settings.allowedTriggerUsers !== undefined) {
-      if (
-        !Array.isArray(settings.allowedTriggerUsers) ||
-        !settings.allowedTriggerUsers.every((u) => typeof u === "string")
-      ) {
-        throw new IntegrationSettingsValidationError(
-          "allowedTriggerUsers must be an array of strings"
-        );
-      }
+    if (settings.defaults) {
       settings = {
         ...settings,
-        allowedTriggerUsers: settings.allowedTriggerUsers.map((u) => u.toLowerCase()),
+        defaults: this.validateAndNormalizeSettings(integrationId, settings.defaults),
       };
-    }
-
-    if (settings.defaults) {
-      this.validateSettings(integrationId, settings.defaults);
     }
 
     const now = Date.now();
@@ -112,7 +100,7 @@ export class IntegrationSettingsStore {
     repo: string,
     settings: IntegrationSettingsMap[K]["repo"]
   ): Promise<void> {
-    this.validateSettings(integrationId, settings);
+    const normalized = this.validateAndNormalizeSettings(integrationId, settings);
 
     const now = Date.now();
     await this.db
@@ -123,7 +111,7 @@ export class IntegrationSettingsStore {
            settings = excluded.settings,
            updated_at = excluded.updated_at`
       )
-      .bind(integrationId, repo.toLowerCase(), JSON.stringify(settings), now, now)
+      .bind(integrationId, repo.toLowerCase(), JSON.stringify(normalized), now, now)
       .run();
   }
 
@@ -161,10 +149,6 @@ export class IntegrationSettingsStore {
     const enabledRepos =
       globalSettings?.enabledRepos !== undefined ? globalSettings.enabledRepos : null;
 
-    // undefined → null (fallback to permission check), [] → [] (deny all), [...] → [...] (allowlist)
-    const allowedTriggerUsers =
-      globalSettings?.allowedTriggerUsers !== undefined ? globalSettings.allowedTriggerUsers : null;
-
     const defaults = globalSettings?.defaults ?? {};
     const overrides = repoSettings ?? {};
 
@@ -176,24 +160,26 @@ export class IntegrationSettingsStore {
       }
     }
 
-    return { enabledRepos, allowedTriggerUsers, settings } as ResolvedIntegrationConfig<
+    return { enabledRepos, settings } as ResolvedIntegrationConfig<
       IntegrationSettingsMap[K]["repo"]
     >;
   }
 
-  private validateSettings<K extends IntegrationId>(
+  private validateAndNormalizeSettings<K extends IntegrationId>(
     integrationId: K,
     settings: IntegrationSettingsMap[K]["repo"]
-  ): void {
+  ): IntegrationSettingsMap[K]["repo"] {
     if (integrationId === "github") {
-      this.validateGitHubSettings(settings as GitHubBotSettings);
-      return;
+      return this.validateAndNormalizeGitHubSettings(
+        settings as GitHubBotSettings
+      ) as IntegrationSettingsMap[K]["repo"];
     }
 
     if (integrationId === "linear") {
       this.validateLinearSettings(settings as LinearBotSettings);
-      return;
     }
+
+    return settings;
   }
 
   private validateModelAndEffort(settings: { model?: string; reasoningEffort?: string }): void {
@@ -212,8 +198,25 @@ export class IntegrationSettingsStore {
     }
   }
 
-  private validateGitHubSettings(settings: GitHubBotSettings): void {
+  private validateAndNormalizeGitHubSettings(settings: GitHubBotSettings): GitHubBotSettings {
     this.validateModelAndEffort(settings);
+
+    if (settings.allowedTriggerUsers !== undefined) {
+      if (
+        !Array.isArray(settings.allowedTriggerUsers) ||
+        !settings.allowedTriggerUsers.every((u) => typeof u === "string")
+      ) {
+        throw new IntegrationSettingsValidationError(
+          "allowedTriggerUsers must be an array of strings"
+        );
+      }
+      return {
+        ...settings,
+        allowedTriggerUsers: settings.allowedTriggerUsers.map((u) => u.toLowerCase()),
+      };
+    }
+
+    return settings;
   }
 
   private validateLinearSettings(settings: LinearBotSettings): void {
@@ -244,6 +247,5 @@ export class IntegrationSettingsStore {
 
 export interface ResolvedIntegrationConfig<TRepo extends object = Record<string, unknown>> {
   enabledRepos: string[] | null;
-  allowedTriggerUsers: string[] | null;
   settings: TRepo;
 }
