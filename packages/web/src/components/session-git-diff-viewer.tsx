@@ -49,10 +49,14 @@ const diffStyles = {
     light: {
       diffViewerBackground: "var(--card)",
       diffViewerColor: "var(--foreground)",
+      diffViewerTitleBackground: "var(--card)",
+      diffViewerTitleColor: "var(--muted-foreground)",
+      diffViewerTitleBorderColor: "var(--border-muted)",
       addedBackground: "var(--success-muted)",
-      addedColor: "var(--foreground)",
+      addedColor: "var(--success)",
       removedBackground: "var(--destructive-muted)",
-      removedColor: "var(--foreground)",
+      removedColor: "var(--destructive)",
+      changedBackground: "var(--accent-muted)",
       wordAddedBackground: "var(--success-muted)",
       wordRemovedBackground: "var(--destructive-muted)",
       addedGutterBackground: "var(--success-muted)",
@@ -72,10 +76,14 @@ const diffStyles = {
     dark: {
       diffViewerBackground: "var(--card)",
       diffViewerColor: "var(--foreground)",
+      diffViewerTitleBackground: "var(--card)",
+      diffViewerTitleColor: "var(--muted-foreground)",
+      diffViewerTitleBorderColor: "var(--border-muted)",
       addedBackground: "var(--success-muted)",
-      addedColor: "var(--foreground)",
+      addedColor: "var(--success)",
       removedBackground: "var(--destructive-muted)",
-      removedColor: "var(--foreground)",
+      removedColor: "var(--destructive)",
+      changedBackground: "var(--accent-muted)",
       wordAddedBackground: "var(--success-muted)",
       wordRemovedBackground: "var(--destructive-muted)",
       addedGutterBackground: "var(--success-muted)",
@@ -91,6 +99,30 @@ const diffStyles = {
       gutterColor: "var(--secondary-foreground)",
       addedGutterColor: "var(--foreground)",
       removedGutterColor: "var(--foreground)",
+    },
+  },
+  marker: {
+    backgroundColor: "var(--card)",
+    borderLeft: "1px solid var(--border-muted)",
+    borderRight: "1px solid var(--border-muted)",
+    "& pre": {
+      color: "var(--secondary-foreground)",
+      fontWeight: 600,
+    },
+  },
+  lineNumber: {
+    color: "var(--secondary-foreground)",
+  },
+  diffAdded: {
+    backgroundColor: "var(--success-muted)",
+    "& pre": {
+      color: "var(--success)",
+    },
+  },
+  diffRemoved: {
+    backgroundColor: "var(--destructive-muted)",
+    "& pre": {
+      color: "var(--destructive)",
     },
   },
 } as const;
