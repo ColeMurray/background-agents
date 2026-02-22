@@ -13,6 +13,7 @@ import {
   parsePattern,
   json,
   error,
+  createRouteSourceControlProvider,
   resolveInstalledRepo,
 } from "./shared";
 
@@ -40,9 +41,10 @@ async function handleSetRepoSecrets(
     return error("Owner and name are required");
   }
 
+  const provider = createRouteSourceControlProvider(env);
   let resolved;
   try {
-    resolved = await resolveInstalledRepo(env, owner, name);
+    resolved = await resolveInstalledRepo(provider, owner, name);
     if (!resolved) {
       return error("Repository is not installed for the GitHub App", 404);
     }
@@ -139,9 +141,10 @@ async function handleListRepoSecrets(
     return error("Owner and name are required");
   }
 
+  const provider = createRouteSourceControlProvider(env);
   let resolved;
   try {
-    resolved = await resolveInstalledRepo(env, owner, name);
+    resolved = await resolveInstalledRepo(provider, owner, name);
     if (!resolved) {
       return error("Repository is not installed for the GitHub App", 404);
     }
@@ -226,9 +229,10 @@ async function handleDeleteRepoSecret(
     return error("Owner, name, and key are required");
   }
 
+  const provider = createRouteSourceControlProvider(env);
   let resolved;
   try {
-    resolved = await resolveInstalledRepo(env, owner, name);
+    resolved = await resolveInstalledRepo(provider, owner, name);
     if (!resolved) {
       return error("Repository is not installed for the GitHub App", 404);
     }

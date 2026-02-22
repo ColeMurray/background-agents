@@ -1,7 +1,38 @@
 import { describe, expect, it } from "vitest";
 import { GitHubSourceControlProvider } from "./github-provider";
+import { SourceControlProviderError } from "../errors";
 
 describe("GitHubSourceControlProvider", () => {
+  describe("checkRepositoryAccess", () => {
+    it("throws permanent error when appConfig is missing", async () => {
+      const provider = new GitHubSourceControlProvider();
+      await expect(provider.checkRepositoryAccess({ owner: "acme", name: "web" })).rejects.toThrow(
+        SourceControlProviderError
+      );
+
+      try {
+        await provider.checkRepositoryAccess({ owner: "acme", name: "web" });
+      } catch (e) {
+        expect(e).toBeInstanceOf(SourceControlProviderError);
+        expect((e as SourceControlProviderError).errorType).toBe("permanent");
+      }
+    });
+  });
+
+  describe("listRepositories", () => {
+    it("throws permanent error when appConfig is missing", async () => {
+      const provider = new GitHubSourceControlProvider();
+      await expect(provider.listRepositories()).rejects.toThrow(SourceControlProviderError);
+
+      try {
+        await provider.listRepositories();
+      } catch (e) {
+        expect(e).toBeInstanceOf(SourceControlProviderError);
+        expect((e as SourceControlProviderError).errorType).toBe("permanent");
+      }
+    });
+  });
+
   it("builds manual pull request URL with encoded components", () => {
     const provider = new GitHubSourceControlProvider();
     const url = provider.buildManualPullRequestUrl({

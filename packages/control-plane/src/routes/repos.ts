@@ -3,15 +3,22 @@
  */
 
 import { RepoMetadataStore } from "../db/repo-metadata";
-import { getGitHubAppConfig, listInstallationRepositories } from "../auth/github-app";
 import type { Env } from "../types";
 import type {
   EnrichedRepository,
   InstallationRepository,
   RepoMetadata,
 } from "@open-inspect/shared";
+import { SourceControlProviderError } from "../source-control";
 import { createLogger } from "../logger";
-import { type Route, type RequestContext, parsePattern, json, error } from "./shared";
+import {
+  type Route,
+  type RequestContext,
+  parsePattern,
+  json,
+  error,
+  createRouteSourceControlProvider,
+} from "./shared";
 
 const logger = createLogger("router:repos");
 
@@ -30,26 +37,27 @@ interface CachedReposList {
 }
 
 /**
- * Fetch repos from GitHub, enrich with D1 metadata, and write to KV cache.
+ * Fetch repos via the source control provider, enrich with D1 metadata, and write to KV cache.
  * Runs either in the foreground (cache miss) or background (stale-while-revalidate).
  */
 async function refreshReposCache(env: Env, traceId?: string): Promise<void> {
-  const appConfig = getGitHubAppConfig(env);
-  if (!appConfig) return;
+  const provider = createRouteSourceControlProvider(env);
 
   let repos: InstallationRepository[];
   try {
-    const result = await listInstallationRepositories(appConfig, env);
-    repos = result.repos;
+    repos = await provider.listRepositories();
 
-    logger.info("GitHub repo fetch completed", {
+    logger.info("Repo fetch completed", {
       trace_id: traceId,
-      total_repos: result.timing.totalRepos,
-      total_pages: result.timing.totalPages,
-      token_generation_ms: result.timing.tokenGenerationMs,
-      pages: result.timing.pages,
+      total_repos: repos.length,
     });
   } catch (e) {
+    if (e instanceof SourceControlProviderError && e.errorType === "permanent") {
+      logger.warn("SCM provider not configured, skipping repo refresh", {
+        trace_id: traceId,
+      });
+      return;
+    }
     logger.error("Failed to list installation repositories (background refresh)", {
       trace_id: traceId,
       error: e instanceof Error ? e : String(e),
@@ -98,14 +106,14 @@ async function refreshReposCache(env: Env, traceId?: string): Promise<void> {
 }
 
 /**
- * List all repositories accessible via the GitHub App installation.
+ * List all repositories accessible via the SCM provider's app-level credentials.
  *
  * Uses stale-while-revalidate caching:
  * - Fresh cache (< 5 min old): return immediately
  * - Stale cache (5 min – 1 hr): return immediately, revalidate in background
  * - No cache: fetch synchronously (first load or after 1 hr KV expiry)
  *
- * This prevents the slow GitHub API pagination from blocking the Worker
+ * This prevents slow API pagination from blocking the Worker
  * isolate and causing head-of-line blocking for other requests.
  */
 async function handleListRepos(
@@ -144,31 +152,25 @@ async function handleListRepos(
   }
 
   // No cache at all — must fetch synchronously
-  const appConfig = getGitHubAppConfig(env);
-  if (!appConfig) {
-    return error("GitHub App not configured", 500);
-  }
+  const provider = createRouteSourceControlProvider(env);
 
   let repos: InstallationRepository[];
   try {
-    const result = await ctx.metrics.time("github_api", () =>
-      listInstallationRepositories(appConfig, env)
-    );
-    repos = result.repos;
-
-    logger.info("GitHub repo fetch completed", {
-      trace_id: ctx.trace_id,
-      total_repos: result.timing.totalRepos,
-      total_pages: result.timing.totalPages,
-      token_generation_ms: result.timing.tokenGenerationMs,
-      pages: result.timing.pages,
-    });
+    repos = await ctx.metrics.time("scm_api", () => provider.listRepositories());
   } catch (e) {
+    if (e instanceof SourceControlProviderError && e.errorType === "permanent") {
+      return error("SCM provider not configured", 500);
+    }
     logger.error("Failed to list installation repositories", {
       error: e instanceof Error ? e : String(e),
     });
-    return error("Failed to fetch repositories from GitHub", 500);
+    return error("Failed to fetch repositories", 500);
   }
+
+  logger.info("Repo fetch completed", {
+    trace_id: ctx.trace_id,
+    total_repos: repos.length,
+  });
 
   const metadataStore = new RepoMetadataStore(env.DB);
   let metadataMap: Map<string, RepoMetadata>;

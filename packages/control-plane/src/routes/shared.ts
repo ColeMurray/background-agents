@@ -5,7 +5,13 @@
 import type { CorrelationContext } from "../logger";
 import type { RequestMetrics } from "../db/instrumented-d1";
 import type { Env } from "../types";
-import { getGitHubAppConfig, getInstallationRepository } from "../auth/github-app";
+import { getGitHubAppConfig } from "../auth/github-app";
+import {
+  createSourceControlProvider,
+  resolveScmProviderFromEnv,
+  type SourceControlProvider,
+  type RepositoryAccessResult,
+} from "../source-control";
 
 /**
  * Request context with correlation IDs and per-request metrics.
@@ -55,24 +61,26 @@ export function error(message: string, status = 400): Response {
   return json({ error: message }, status);
 }
 
+/**
+ * Create a SourceControlProvider for use in Worker-level route handlers.
+ * Cheap to construct (no I/O), so creating per-request is fine.
+ */
+export function createRouteSourceControlProvider(env: Env): SourceControlProvider {
+  const appConfig = getGitHubAppConfig(env);
+  const provider = resolveScmProviderFromEnv(env.SCM_PROVIDER);
+  return createSourceControlProvider({
+    provider,
+    github: {
+      appConfig: appConfig ?? undefined,
+      kvCache: env.REPOS_CACHE,
+    },
+  });
+}
+
 export async function resolveInstalledRepo(
-  env: Env,
+  provider: SourceControlProvider,
   repoOwner: string,
   repoName: string
-): Promise<{ repoId: number; repoOwner: string; repoName: string } | null> {
-  const appConfig = getGitHubAppConfig(env);
-  if (!appConfig) {
-    throw new Error("GitHub App not configured");
-  }
-
-  const repo = await getInstallationRepository(appConfig, repoOwner, repoName, env);
-  if (!repo) {
-    return null;
-  }
-
-  return {
-    repoId: repo.id,
-    repoOwner: repoOwner.toLowerCase(),
-    repoName: repoName.toLowerCase(),
-  };
+): Promise<RepositoryAccessResult | null> {
+  return provider.checkRepositoryAccess({ owner: repoOwner, name: repoName });
 }

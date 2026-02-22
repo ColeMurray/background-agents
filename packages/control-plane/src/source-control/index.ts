@@ -18,6 +18,7 @@ export type {
   GetRepositoryConfig,
   CreatePullRequestConfig,
   CreatePullRequestResult,
+  RepositoryAccessResult,
 } from "./types";
 
 // Errors

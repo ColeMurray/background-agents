@@ -25,6 +25,7 @@ import {
   parsePattern,
   json,
   error,
+  createRouteSourceControlProvider,
   resolveInstalledRepo,
 } from "./routes/shared";
 import { integrationSettingsRoutes } from "./routes/integration-settings";
@@ -552,9 +553,10 @@ async function handleCreateSession(
   const repoOwner = body.repoOwner.toLowerCase();
   const repoName = body.repoName.toLowerCase();
 
+  const provider = createRouteSourceControlProvider(env);
   let repoId: number;
   try {
-    const resolved = await resolveInstalledRepo(env, repoOwner, repoName);
+    const resolved = await resolveInstalledRepo(provider, repoOwner, repoName);
     if (!resolved) {
       return error("Repository is not installed for the GitHub App", 404);
     }
