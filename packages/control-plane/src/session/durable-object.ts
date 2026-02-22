@@ -1784,15 +1784,6 @@ export class SessionDO extends DurableObject<Env> {
       return Response.json({ error: result.error }, { status: result.status });
     }
 
-    if (result.kind === "manual") {
-      return Response.json({
-        status: "manual",
-        createPrUrl: result.createPrUrl,
-        headBranch: result.headBranch,
-        baseBranch: result.baseBranch,
-      });
-    }
-
     return Response.json({
       prNumber: result.prNumber,
       prUrl: result.prUrl,
