@@ -12,6 +12,7 @@ import type { ResolvedGitHubConfig } from "../src/utils/integration-config";
 vi.mock("../src/github-auth", () => ({
   generateInstallationToken: vi.fn().mockResolvedValue("test-installation-token"),
   postReaction: vi.fn().mockResolvedValue(true),
+  checkSenderPermission: vi.fn().mockResolvedValue({ hasPermission: true }),
 }));
 
 vi.mock("../src/utils/internal", () => ({
@@ -24,6 +25,7 @@ vi.mock("../src/utils/integration-config", () => ({
     reasoningEffort: null,
     autoReviewOnOpen: true,
     enabledRepos: null,
+    allowedTriggerUsers: null,
   }),
 }));
 
@@ -32,6 +34,7 @@ const defaultConfig: ResolvedGitHubConfig = {
   reasoningEffort: null,
   autoReviewOnOpen: true,
   enabledRepos: null,
+  allowedTriggerUsers: null,
 };
 
 import {
@@ -40,7 +43,7 @@ import {
   handleIssueComment,
   handleReviewComment,
 } from "../src/handlers";
-import { generateInstallationToken, postReaction } from "../src/github-auth";
+import { generateInstallationToken, postReaction, checkSenderPermission } from "../src/github-auth";
 import { getGitHubConfig } from "../src/utils/integration-config";
 
 function createMockLogger(): Logger {
@@ -156,6 +159,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(generateInstallationToken).mockResolvedValue("test-installation-token");
   vi.mocked(postReaction).mockResolvedValue(true);
+  vi.mocked(checkSenderPermission).mockResolvedValue({ hasPermission: true });
   vi.mocked(getGitHubConfig).mockResolvedValue({ ...defaultConfig });
 });
 
@@ -596,6 +600,7 @@ describe("integration config", () => {
       reasoningEffort: null,
       autoReviewOnOpen: false,
       enabledRepos: [],
+      allowedTriggerUsers: [],
     });
     const env = createMockEnv();
     const log = createMockLogger();
@@ -621,6 +626,110 @@ describe("integration config", () => {
     // Should proceed normally — null means all repos allowed
     const cpFetch = getControlPlaneFetch(env);
     expect(cpFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects sender not in allowedTriggerUsers (handleIssueComment)", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      allowedTriggerUsers: ["alice"],
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleIssueComment(env, log, issueCommentPayload, "trace-allowlist");
+
+    // bob is the sender, not in ["alice"] → rejected before token generation
+    expect(generateInstallationToken).not.toHaveBeenCalled();
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      "handler.sender_not_allowed",
+      expect.objectContaining({ sender: "bob" })
+    );
+  });
+
+  it("allows sender in allowedTriggerUsers (case-insensitive)", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      allowedTriggerUsers: ["BoB"],
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleIssueComment(env, log, issueCommentPayload, "trace-allowed");
+
+    // bob matches → proceeds to session creation
+    expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(2);
+  });
+
+  it("empty allowedTriggerUsers rejects all senders (handleReviewRequested)", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      allowedTriggerUsers: [],
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleReviewRequested(env, log, reviewRequestedPayload, "trace-empty");
+
+    expect(generateInstallationToken).not.toHaveBeenCalled();
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      "handler.sender_not_allowed",
+      expect.objectContaining({ sender: "alice" })
+    );
+  });
+
+  it("rejects sender when permission check fails (no allowlist)", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      allowedTriggerUsers: null,
+    });
+    vi.mocked(checkSenderPermission).mockResolvedValue({ hasPermission: false });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleIssueComment(env, log, issueCommentPayload, "trace-noperm");
+
+    // Token generated (needed for permission check), but no session created
+    expect(generateInstallationToken).toHaveBeenCalled();
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      "handler.sender_insufficient_permission",
+      expect.objectContaining({ sender: "bob", repo: "acme/widgets" })
+    );
+  });
+
+  it("logs permission_check_failed when permission API returns error", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      allowedTriggerUsers: null,
+    });
+    vi.mocked(checkSenderPermission).mockResolvedValue({ hasPermission: false, error: true });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleIssueComment(env, log, issueCommentPayload, "trace-apierr");
+
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      "handler.permission_check_failed",
+      expect.objectContaining({ sender: "bob", repo: "acme/widgets" })
+    );
+  });
+
+  it("handlePullRequestOpened does not gate on allowedTriggerUsers", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      allowedTriggerUsers: ["someone-else"],
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-pr-nogating");
+
+    // alice is NOT in the allowlist, but PR opened handler ignores it
+    expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(2);
+    expect(log.info).not.toHaveBeenCalledWith("handler.sender_not_allowed", expect.anything());
   });
 
   it("config fetch called after cheap early exit (not-for-bot)", async () => {

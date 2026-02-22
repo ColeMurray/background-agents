@@ -41,8 +41,11 @@ export class IntegrationSettingsStore {
     settings: IntegrationSettingsMap[K]["global"]
   ): Promise<void> {
     if (settings.enabledRepos !== undefined) {
-      if (!Array.isArray(settings.enabledRepos)) {
-        throw new IntegrationSettingsValidationError("enabledRepos must be an array");
+      if (
+        !Array.isArray(settings.enabledRepos) ||
+        !settings.enabledRepos.every((r) => typeof r === "string")
+      ) {
+        throw new IntegrationSettingsValidationError("enabledRepos must be an array of strings");
       }
       settings = {
         ...settings,
@@ -51,7 +54,10 @@ export class IntegrationSettingsStore {
     }
 
     if (settings.defaults) {
-      this.validateSettings(integrationId, settings.defaults);
+      settings = {
+        ...settings,
+        defaults: this.validateAndNormalizeSettings(integrationId, settings.defaults),
+      };
     }
 
     const now = Date.now();
@@ -94,7 +100,7 @@ export class IntegrationSettingsStore {
     repo: string,
     settings: IntegrationSettingsMap[K]["repo"]
   ): Promise<void> {
-    this.validateSettings(integrationId, settings);
+    const normalized = this.validateAndNormalizeSettings(integrationId, settings);
 
     const now = Date.now();
     await this.db
@@ -105,7 +111,7 @@ export class IntegrationSettingsStore {
            settings = excluded.settings,
            updated_at = excluded.updated_at`
       )
-      .bind(integrationId, repo.toLowerCase(), JSON.stringify(settings), now, now)
+      .bind(integrationId, repo.toLowerCase(), JSON.stringify(normalized), now, now)
       .run();
   }
 
@@ -159,19 +165,21 @@ export class IntegrationSettingsStore {
     >;
   }
 
-  private validateSettings<K extends IntegrationId>(
+  private validateAndNormalizeSettings<K extends IntegrationId>(
     integrationId: K,
     settings: IntegrationSettingsMap[K]["repo"]
-  ): void {
+  ): IntegrationSettingsMap[K]["repo"] {
     if (integrationId === "github") {
-      this.validateGitHubSettings(settings as GitHubBotSettings);
-      return;
+      return this.validateAndNormalizeGitHubSettings(
+        settings as GitHubBotSettings
+      ) as IntegrationSettingsMap[K]["repo"];
     }
 
     if (integrationId === "linear") {
       this.validateLinearSettings(settings as LinearBotSettings);
-      return;
     }
+
+    return settings;
   }
 
   private validateModelAndEffort(settings: { model?: string; reasoningEffort?: string }): void {
@@ -190,8 +198,25 @@ export class IntegrationSettingsStore {
     }
   }
 
-  private validateGitHubSettings(settings: GitHubBotSettings): void {
+  private validateAndNormalizeGitHubSettings(settings: GitHubBotSettings): GitHubBotSettings {
     this.validateModelAndEffort(settings);
+
+    if (settings.allowedTriggerUsers !== undefined) {
+      if (
+        !Array.isArray(settings.allowedTriggerUsers) ||
+        !settings.allowedTriggerUsers.every((u) => typeof u === "string")
+      ) {
+        throw new IntegrationSettingsValidationError(
+          "allowedTriggerUsers must be an array of strings"
+        );
+      }
+      return {
+        ...settings,
+        allowedTriggerUsers: settings.allowedTriggerUsers.map((u) => u.trim().toLowerCase()),
+      };
+    }
+
+    return settings;
   }
 
   private validateLinearSettings(settings: LinearBotSettings): void {

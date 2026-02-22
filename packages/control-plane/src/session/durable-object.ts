@@ -50,7 +50,7 @@ import type {
   SandboxStatus,
   ParticipantRole,
 } from "../types";
-import type { SessionRow, ParticipantRow, ArtifactRow, SandboxRow } from "./types";
+import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
 import { SessionPullRequestService } from "./pull-request-service";
@@ -64,7 +64,6 @@ import { CallbackNotificationService } from "./callback-notification-service";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
-import type { SessionContext } from "./session-context";
 
 /**
  * Valid event types for filtering.
@@ -331,23 +330,6 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     return this._sandboxEventProcessor;
-  }
-
-  private createSessionContext(): SessionContext {
-    return {
-      env: this.env,
-      ctx: this.ctx,
-      log: this.log,
-      repository: this.repository,
-      wsManager: this.wsManager,
-      lifecycleManager: this.lifecycleManager,
-      sourceControlProvider: this.sourceControlProvider,
-      participantService: this.participantService,
-      callbackService: this.callbackService,
-      presenceService: this.presenceService,
-      now: () => Date.now(),
-      generateId: (bytes?: number) => generateId(bytes),
-    };
   }
 
   /**
@@ -1190,7 +1172,7 @@ export class SessionDO extends DurableObject<Env> {
   private getSessionState(sandbox?: SandboxRow | null): SessionState {
     const session = this.getSession();
     sandbox ??= this.getSandbox();
-    const messageCount = this.getMessageCount();
+    const messageCount = this.repository.getMessageCount();
     const isProcessing = this.getIsProcessing();
 
     return {
@@ -1423,23 +1405,6 @@ export class SessionDO extends DurableObject<Env> {
       status,
       headers: { "Content-Type": "application/json" },
     });
-  }
-
-  private getMessageCount(): number {
-    return this.repository.getMessageCount();
-  }
-
-  /**
-   * Write a user_message event to the events table and broadcast to connected clients.
-   * Used by both WebSocket and HTTP prompt handlers for unified timeline replay.
-   */
-  private writeUserMessageEvent(
-    participant: ParticipantRow,
-    content: string,
-    messageId: string,
-    now: number
-  ): void {
-    this.messageQueue.writeUserMessageEvent(participant, content, messageId, now);
   }
 
   private updateSandboxStatus(status: string): void {
@@ -1791,15 +1756,6 @@ export class SessionDO extends DurableObject<Env> {
 
     if (result.kind === "error") {
       return Response.json({ error: result.error }, { status: result.status });
-    }
-
-    if (result.kind === "manual") {
-      return Response.json({
-        status: "manual",
-        createPrUrl: result.createPrUrl,
-        headBranch: result.headBranch,
-        baseBranch: result.baseBranch,
-      });
     }
 
     return Response.json({

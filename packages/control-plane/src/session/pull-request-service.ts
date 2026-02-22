@@ -1,4 +1,4 @@
-import { generateBranchName, type ManualPullRequestArtifactMetadata } from "@open-inspect/shared";
+import { generateBranchName } from "@open-inspect/shared";
 import type { Logger } from "../logger";
 import { resolveHeadBranchForPr } from "../source-control/branch-resolution";
 import {
@@ -30,7 +30,6 @@ export type CreatePullRequestResult =
       prUrl: string;
       state: "open" | "closed" | "merged" | "draft";
     }
-  | { kind: "manual"; createPrUrl: string; headBranch: string; baseBranch: string }
   | { kind: "error"; status: number; error: string };
 
 export type PushBranchResult = { success: true } | { success: false; error: string };
@@ -231,118 +230,5 @@ export class SessionPullRequestService {
         error: error instanceof Error ? error.message : "Failed to create PR",
       };
     }
-  }
-
-  /**
-   * Reuses an existing manual PR artifact URL for the same branch when present.
-   */
-  private findExistingManualPrUrl(
-    artifacts: ArtifactRow[],
-    headBranch: string,
-    fallbackUrl: string
-  ): { artifactId: string; createPrUrl: string } | null {
-    for (const artifact of artifacts) {
-      if (artifact.type !== "branch" || !artifact.metadata) {
-        continue;
-      }
-
-      try {
-        const metadata = JSON.parse(artifact.metadata) as Record<string, unknown>;
-        if (metadata.mode !== "manual_pr" || metadata.head !== headBranch) {
-          continue;
-        }
-
-        const metadataUrl = metadata.createPrUrl;
-        let createPrUrl = fallbackUrl;
-
-        if (typeof metadataUrl === "string" && metadataUrl.length > 0) {
-          createPrUrl = metadataUrl;
-        } else if (artifact.url && artifact.url.length > 0) {
-          createPrUrl = artifact.url;
-        }
-
-        return {
-          artifactId: artifact.id,
-          createPrUrl,
-        };
-      } catch (error) {
-        this.deps.log.warn("Invalid artifact metadata JSON", {
-          artifact_id: artifact.id,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    return null;
-  }
-
-  /**
-   * Creates or reuses a manual PR fallback artifact and returns manual response payload.
-   */
-  private buildManualPrFallbackResult(
-    session: SessionRow,
-    headBranch: string,
-    baseBranch: string,
-    artifacts: ArtifactRow[]
-  ): CreatePullRequestResult {
-    const manualCreatePrUrl = this.deps.sourceControlProvider.buildManualPullRequestUrl({
-      owner: session.repo_owner,
-      name: session.repo_name,
-      sourceBranch: headBranch,
-      targetBranch: baseBranch,
-    });
-
-    const existing = this.findExistingManualPrUrl(artifacts, headBranch, manualCreatePrUrl);
-    if (existing) {
-      this.deps.log.info("Using manual PR fallback", {
-        head_branch: headBranch,
-        base_branch: baseBranch,
-        session_id: session.session_name || session.id,
-        existing_artifact_id: existing.artifactId,
-      });
-      return {
-        kind: "manual",
-        createPrUrl: existing.createPrUrl,
-        headBranch,
-        baseBranch,
-      };
-    }
-
-    const artifactId = this.deps.generateId();
-    const now = Date.now();
-    const metadata: ManualPullRequestArtifactMetadata = {
-      head: headBranch,
-      base: baseBranch,
-      mode: "manual_pr",
-      createPrUrl: manualCreatePrUrl,
-      provider: this.deps.sourceControlProvider.name,
-    };
-    this.deps.repository.createArtifact({
-      id: artifactId,
-      type: "branch",
-      url: manualCreatePrUrl,
-      metadata: JSON.stringify(metadata),
-      createdAt: now,
-    });
-
-    this.deps.broadcastArtifactCreated({
-      id: artifactId,
-      type: "branch",
-      url: manualCreatePrUrl,
-    });
-
-    this.deps.log.info("Using manual PR fallback", {
-      head_branch: headBranch,
-      base_branch: baseBranch,
-      session_id: session.session_name || session.id,
-      artifact_id: artifactId,
-    });
-
-    return {
-      kind: "manual",
-      createPrUrl: manualCreatePrUrl,
-      headBranch,
-      baseBranch,
-    };
   }
 }

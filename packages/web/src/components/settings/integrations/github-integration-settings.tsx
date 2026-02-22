@@ -104,6 +104,13 @@ function GlobalSettingsSection({
   const [repoScopeMode, setRepoScopeMode] = useState<"all" | "selected">(
     settings?.enabledRepos === undefined ? "all" : "selected"
   );
+  const [allowedTriggerUsers, setAllowedTriggerUsers] = useState<string[]>(
+    settings?.defaults?.allowedTriggerUsers ?? []
+  );
+  const [triggerUserMode, setTriggerUserMode] = useState<"write_access" | "specific">(
+    settings?.defaults?.allowedTriggerUsers === undefined ? "write_access" : "specific"
+  );
+  const [newUsername, setNewUsername] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -116,6 +123,10 @@ function GlobalSettingsSection({
         setAutoReviewOnOpen(settings.defaults?.autoReviewOnOpen ?? true);
         setEnabledRepos(settings.enabledRepos ?? []);
         setRepoScopeMode(settings.enabledRepos === undefined ? "all" : "selected");
+        setAllowedTriggerUsers(settings.defaults?.allowedTriggerUsers ?? []);
+        setTriggerUserMode(
+          settings.defaults?.allowedTriggerUsers === undefined ? "write_access" : "specific"
+        );
       }
       setInitialized(true);
     }
@@ -144,6 +155,9 @@ function GlobalSettingsSection({
         setAutoReviewOnOpen(true);
         setEnabledRepos([]);
         setRepoScopeMode("all");
+        setAllowedTriggerUsers([]);
+        setTriggerUserMode("write_access");
+        setNewUsername("");
         setDirty(false);
         setSuccess("Settings reset to defaults.");
       } else {
@@ -163,7 +177,10 @@ function GlobalSettingsSection({
     setSuccess("");
 
     const body: GitHubGlobalConfig = {
-      defaults: { autoReviewOnOpen },
+      defaults: {
+        autoReviewOnOpen,
+        ...(triggerUserMode === "specific" ? { allowedTriggerUsers } : {}),
+      },
     };
 
     if (repoScopeMode === "selected") {
@@ -189,6 +206,17 @@ function GlobalSettingsSection({
       setError("Failed to save settings");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const addUsername = () => {
+    const trimmed = newUsername.trim().toLowerCase();
+    if (trimmed && !allowedTriggerUsers.includes(trimmed)) {
+      setAllowedTriggerUsers((prev) => [...prev, trimmed]);
+      setNewUsername("");
+      setDirty(true);
+      setError("");
+      setSuccess("");
     }
   };
 
@@ -293,6 +321,92 @@ function GlobalSettingsSection({
             {enabledRepos.length === 0 && availableRepos.length > 0 && (
               <p className="text-xs text-amber-700 mt-1">
                 No repositories selected. The bot will not respond to webhooks.
+              </p>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="mb-4">
+        <p className="text-sm font-medium text-foreground mb-2">Allowed Trigger Users</p>
+        <div className="grid sm:grid-cols-2 gap-2 mb-3">
+          <RadioCard
+            name="trigger-users"
+            checked={triggerUserMode === "write_access"}
+            onChange={() => {
+              setTriggerUserMode("write_access");
+              setDirty(true);
+              setError("");
+              setSuccess("");
+            }}
+            label="All users with write access"
+            description="Anyone with write permission on the repo can trigger the bot."
+          />
+          <RadioCard
+            name="trigger-users"
+            checked={triggerUserMode === "specific"}
+            onChange={() => {
+              setTriggerUserMode("specific");
+              setDirty(true);
+              setError("");
+              setSuccess("");
+            }}
+            label="Only specific users"
+            description="Only listed GitHub usernames can trigger the bot."
+          />
+        </div>
+
+        {triggerUserMode === "specific" && (
+          <>
+            <div className="flex items-center gap-2 mb-2">
+              <input
+                type="text"
+                value={newUsername}
+                onChange={(e) => setNewUsername(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addUsername();
+                  }
+                }}
+                placeholder="GitHub username"
+                className="flex-1 px-3 py-1.5 text-sm border border-border rounded-sm bg-background text-foreground placeholder:text-muted-foreground"
+              />
+              <Button size="sm" onClick={addUsername} disabled={!newUsername.trim()}>
+                Add
+              </Button>
+            </div>
+
+            {allowedTriggerUsers.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {allowedTriggerUsers.map((user) => (
+                  <span
+                    key={user}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 text-sm bg-muted text-foreground rounded-sm border border-border"
+                  >
+                    {user}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAllowedTriggerUsers((prev) => prev.filter((u) => u !== user));
+                        setDirty(true);
+                        setError("");
+                        setSuccess("");
+                      }}
+                      className="text-muted-foreground hover:text-foreground ml-0.5"
+                      aria-label={`Remove ${user}`}
+                    >
+                      &times;
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {allowedTriggerUsers.length === 0 && (
+              <p className="text-xs text-amber-700 mt-1">
+                No users configured. The bot will not respond to any manual triggers (such as
+                @mentions or review requests).
               </p>
             )}
           </>
@@ -415,6 +529,13 @@ function RepoOverrideRow({
 }) {
   const [model, setModel] = useState(entry.settings.model ?? "");
   const [effort, setEffort] = useState(entry.settings.reasoningEffort ?? "");
+  const [triggerUserMode, setTriggerUserMode] = useState<"global" | "override">(
+    entry.settings.allowedTriggerUsers !== undefined ? "override" : "global"
+  );
+  const [allowedTriggerUsers, setAllowedTriggerUsers] = useState<string[]>(
+    entry.settings.allowedTriggerUsers ?? []
+  );
+  const [newUsername, setNewUsername] = useState("");
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
@@ -438,6 +559,7 @@ function RepoOverrideRow({
     const settings: GitHubBotSettings = {};
     if (model) settings.model = model;
     if (effort) settings.reasoningEffort = effort;
+    if (triggerUserMode === "override") settings.allowedTriggerUsers = allowedTriggerUsers;
 
     try {
       const res = await fetch(`/api/integration-settings/github/repos/${owner}/${name}`, {
@@ -483,56 +605,138 @@ function RepoOverrideRow({
     }
   };
 
+  const addRepoUsername = () => {
+    const trimmed = newUsername.trim().toLowerCase();
+    if (trimmed && !allowedTriggerUsers.includes(trimmed)) {
+      setAllowedTriggerUsers((prev) => [...prev, trimmed]);
+      setNewUsername("");
+      setDirty(true);
+    }
+  };
+
   return (
-    <div className="flex flex-wrap items-center gap-2 px-4 py-3 border border-border rounded-sm">
-      <span className="text-sm font-medium text-foreground min-w-[180px] truncate">
-        {entry.repo}
-      </span>
+    <div className="px-4 py-3 border border-border rounded-sm space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium text-foreground min-w-[180px] truncate">
+          {entry.repo}
+        </span>
 
-      <Select
-        value={model}
-        onChange={(e) => handleModelChange(e.target.value)}
-        className="flex-1 min-w-[180px]"
-        density="compact"
-      >
-        <option value="">Default model</option>
-        {enabledModelOptions.map((group) => (
-          <optgroup key={group.category} label={group.category}>
-            {group.models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </Select>
-
-      {reasoningConfig && (
         <Select
-          value={effort}
-          onChange={(e) => {
-            setEffort(e.target.value);
-            setDirty(true);
-          }}
-          className="w-36"
+          value={model}
+          onChange={(e) => handleModelChange(e.target.value)}
+          className="flex-1 min-w-[180px]"
           density="compact"
         >
-          <option value="">Default effort</option>
-          {reasoningConfig.efforts.map((value) => (
-            <option key={value} value={value}>
-              {value}
-            </option>
+          <option value="">Default model</option>
+          {enabledModelOptions.map((group) => (
+            <optgroup key={group.category} label={group.category}>
+              {group.models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </Select>
-      )}
 
-      <Button size="sm" onClick={handleSave} disabled={saving || !dirty}>
-        {saving ? "..." : "Save"}
-      </Button>
+        {reasoningConfig && (
+          <Select
+            value={effort}
+            onChange={(e) => {
+              setEffort(e.target.value);
+              setDirty(true);
+            }}
+            className="w-36"
+            density="compact"
+          >
+            <option value="">Default effort</option>
+            {reasoningConfig.efforts.map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </Select>
+        )}
 
-      <Button variant="destructive" size="sm" onClick={handleDelete}>
-        Remove
-      </Button>
+        <Button size="sm" onClick={handleSave} disabled={saving || !dirty}>
+          {saving ? "..." : "Save"}
+        </Button>
+
+        <Button variant="destructive" size="sm" onClick={handleDelete}>
+          Remove
+        </Button>
+      </div>
+
+      <div>
+        <p className="text-xs font-medium text-muted-foreground mb-1">Allowed Trigger Users</p>
+        <div className="flex items-center gap-2 mb-1">
+          <Select
+            value={triggerUserMode}
+            onChange={(e) => {
+              setTriggerUserMode(e.target.value as "global" | "override");
+              setDirty(true);
+            }}
+            className="w-48"
+            density="compact"
+          >
+            <option value="global">Use global default</option>
+            <option value="override">Override for this repo</option>
+          </Select>
+        </div>
+
+        {triggerUserMode === "override" && (
+          <>
+            <div className="flex items-center gap-2 mb-1">
+              <input
+                type="text"
+                value={newUsername}
+                onChange={(e) => setNewUsername(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addRepoUsername();
+                  }
+                }}
+                placeholder="GitHub username"
+                className="flex-1 px-2 py-1 text-xs border border-border rounded-sm bg-background text-foreground placeholder:text-muted-foreground"
+              />
+              <Button size="sm" onClick={addRepoUsername} disabled={!newUsername.trim()}>
+                Add
+              </Button>
+            </div>
+
+            {allowedTriggerUsers.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {allowedTriggerUsers.map((user) => (
+                  <span
+                    key={user}
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs bg-muted text-foreground rounded-sm border border-border"
+                  >
+                    {user}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAllowedTriggerUsers((prev) => prev.filter((u) => u !== user));
+                        setDirty(true);
+                      }}
+                      className="text-muted-foreground hover:text-foreground ml-0.5"
+                      aria-label={`Remove ${user}`}
+                    >
+                      &times;
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {allowedTriggerUsers.length === 0 && (
+              <p className="text-xs text-amber-700">
+                No users configured. The bot will not respond to any manual triggers for this repo.
+              </p>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }

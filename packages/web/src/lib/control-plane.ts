@@ -37,7 +37,7 @@ function getInternalSecret(): string {
  *
  * @returns Headers object with Content-Type and Authorization
  */
-export async function getControlPlaneHeaders(): Promise<HeadersInit> {
+async function getControlPlaneHeaders(): Promise<HeadersInit> {
   const secret = getInternalSecret();
   const token = await generateInternalToken(secret);
 
