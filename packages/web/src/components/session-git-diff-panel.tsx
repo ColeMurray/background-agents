@@ -64,8 +64,8 @@ export function SessionGitDiffPanel({
       </div>
 
       {expanded && (
-        <div className="h-72 border-t border-border-muted flex">
-          <div className="w-80 border-r border-border-muted">
+        <div className="h-72 border-t border-border-muted flex overflow-hidden">
+          <div className="w-80 h-full min-h-0 border-r border-border-muted overflow-hidden">
             {error ? (
               <p className="text-sm text-destructive p-3">{error}</p>
             ) : (
@@ -76,7 +76,7 @@ export function SessionGitDiffPanel({
               />
             )}
           </div>
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 h-full min-h-0 overflow-hidden">
             <SessionGitDiffViewer
               filename={selectedFile}
               rawDiff={selectedDiff}

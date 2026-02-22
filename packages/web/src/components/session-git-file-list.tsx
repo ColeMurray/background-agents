@@ -23,7 +23,7 @@ export function SessionGitFileList({ files, selectedFile, onSelectFile }: Sessio
   }
 
   return (
-    <div className="overflow-y-auto">
+    <div className="h-full min-h-0 overflow-y-auto overscroll-contain">
       {files.map((file) => {
         const { display, full } = formatFilePath(file.filename);
         const stat = formatDiffStat(file.additions, file.deletions);

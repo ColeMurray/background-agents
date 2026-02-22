@@ -106,11 +106,11 @@ export function SessionGitDiffViewer({ filename, rawDiff, splitView }: SessionGi
   const { oldValue, newValue } = patchToOldNew(rawDiff);
 
   return (
-    <div className="h-full overflow-auto border-l border-border-muted">
-      <div className="px-3 py-2 border-b border-border-muted text-sm text-muted-foreground truncate">
+    <div className="h-full min-h-0 border-l border-border-muted flex flex-col overflow-hidden">
+      <div className="px-3 py-2 border-b border-border-muted text-sm text-muted-foreground truncate flex-shrink-0">
         {filename}
       </div>
-      <div className="session-git-diff-viewer">
+      <div className="session-git-diff-viewer flex-1 min-h-0 overflow-auto">
         <ReactDiffViewer
           oldValue={oldValue}
           newValue={newValue}

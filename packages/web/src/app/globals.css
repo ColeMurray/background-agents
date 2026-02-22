@@ -195,7 +195,13 @@ body {
 }
 
 .session-git-diff-viewer table {
-  width: 100%;
+  min-width: 100%;
+  width: max-content;
+}
+
+.session-git-diff-viewer td,
+.session-git-diff-viewer th {
+  vertical-align: top;
 }
 
 .session-git-diff-viewer pre,
