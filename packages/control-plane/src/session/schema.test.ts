@@ -117,6 +117,17 @@ describe("applyMigrations", () => {
   });
 
   it("swallows duplicate column errors from string migrations", () => {
+    // Seed PRAGMA data so function-based migrations (7, 20) skip their ALTER TABLE calls.
+    // This isolates the test to only exercise string migration error handling via runMigration().
+    mock.setData("PRAGMA table_info(participants)", [
+      { name: "scm_refresh_token_encrypted" },
+      { name: "scm_user_id" },
+      { name: "scm_login" },
+      { name: "scm_email" },
+      { name: "scm_name" },
+      { name: "scm_access_token_encrypted" },
+      { name: "scm_token_expires_at" },
+    ]);
     const originalExec = mock.sql.exec.bind(mock.sql);
     mock.sql.exec = (query: string, ...params: unknown[]): SqlResult => {
       if (query.includes("ALTER TABLE")) {

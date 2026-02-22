@@ -181,8 +181,21 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
   },
   {
     id: 7,
-    description: "Add github_refresh_token_encrypted to participants",
-    run: `ALTER TABLE participants ADD COLUMN github_refresh_token_encrypted TEXT`,
+    description: "Add refresh_token_encrypted to participants",
+    run: (sql) => {
+      const columns = sql.exec("PRAGMA table_info(participants)").toArray() as Array<{
+        name: string;
+      }>;
+      const names = new Set(columns.map((c) => c.name));
+      // Fresh DOs (post-rename) already have scm_refresh_token_encrypted from SCHEMA_SQL.
+      // Only add the old column name on pre-rename DOs that need migration 20 to rename it.
+      if (
+        !names.has("github_refresh_token_encrypted") &&
+        !names.has("scm_refresh_token_encrypted")
+      ) {
+        sql.exec("ALTER TABLE participants ADD COLUMN scm_refresh_token_encrypted TEXT");
+      }
+    },
   },
   {
     id: 8,
