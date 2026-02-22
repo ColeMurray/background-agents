@@ -17,6 +17,7 @@ import {
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { useRepos, type Repo } from "@/hooks/use-repos";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
+import { DanstackLogo } from "@/components/ui/danstack-logo";
 import { SidebarIcon, RepoIcon, ModelIcon, ChevronDownIcon, SendIcon } from "@/components/ui/icons";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 
@@ -328,16 +329,9 @@ function HomeContent({
 
       <div className="flex-1 flex flex-col items-center justify-center p-8">
         <div className="w-full max-w-2xl">
-          {/* Welcome text */}
-          <div className="text-center mb-8">
-            <h1 className="text-3xl font-semibold text-foreground mb-2">Welcome to Open-Inspect</h1>
-            {isAuthenticated ? (
-              <p className="text-muted-foreground">
-                Ask a question or describe what you want to build
-              </p>
-            ) : (
-              <p className="text-muted-foreground">Sign in to start a new session</p>
-            )}
+          {/* Hero logo */}
+          <div className="mb-10 flex justify-center px-2 sm:px-0">
+            <DanstackLogo className="h-auto w-full max-w-[620px]" />
           </div>
 
           {/* Input box - only show when authenticated */}

@@ -8,6 +8,7 @@ import { useSidebar } from "@/hooks/use-sidebar";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
 import { GitHubIcon } from "@/components/ui/icons";
+import { DanstackLogo } from "@/components/ui/danstack-logo";
 
 interface SidebarContextValue {
   isOpen: boolean;
@@ -57,11 +58,8 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   // Show sign-in page if not authenticated
   if (!session) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-8">
-        <h1 className="text-4xl font-bold text-foreground">Open-Inspect</h1>
-        <p className="text-muted-foreground max-w-md text-center">
-          Background coding agent for your team. Ship faster with AI-powered code changes.
-        </p>
+      <div className="min-h-screen flex flex-col items-center justify-center gap-10 px-6">
+        <DanstackLogo className="h-auto w-full max-w-[620px]" />
         <button
           onClick={() => signIn("github")}
           className="flex items-center gap-2 bg-primary text-primary-foreground px-6 py-3 font-medium hover:opacity-90 transition"
