@@ -717,7 +717,7 @@ describe("integration config", () => {
     );
   });
 
-  it("handlePullRequestOpened does not gate on allowedTriggerUsers", async () => {
+  it("handlePullRequestOpened rejects sender not in allowedTriggerUsers", async () => {
     vi.mocked(getGitHubConfig).mockResolvedValue({
       ...defaultConfig,
       allowedTriggerUsers: ["someone-else"],
@@ -725,11 +725,14 @@ describe("integration config", () => {
     const env = createMockEnv();
     const log = createMockLogger();
 
-    await handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-pr-nogating");
+    await handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-pr-gating");
 
-    // alice is NOT in the allowlist, but PR opened handler ignores it
-    expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(2);
-    expect(log.info).not.toHaveBeenCalledWith("handler.sender_not_allowed", expect.anything());
+    expect(generateInstallationToken).not.toHaveBeenCalled();
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      "handler.sender_not_allowed",
+      expect.objectContaining({ sender: "alice" })
+    );
   });
 
   it("config fetch called after cheap early exit (not-for-bot)", async () => {

@@ -228,7 +228,7 @@ export async function handlePullRequestOpened(
   payload: PullRequestOpenedPayload,
   traceId: string
 ): Promise<void> {
-  const { pull_request: pr, repository: repo } = payload;
+  const { pull_request: pr, repository: repo, sender } = payload;
   const owner = repo.owner.login;
   const repoName = repo.name;
   const repoFullName = `${owner}/${repoName}`.toLowerCase();
@@ -255,14 +255,18 @@ export async function handlePullRequestOpened(
     return;
   }
 
-  const [ghToken, headers] = await Promise.all([
-    generateInstallationToken({
-      appId: env.GITHUB_APP_ID,
-      privateKey: env.GITHUB_APP_PRIVATE_KEY,
-      installationId: env.GITHUB_APP_INSTALLATION_ID,
-    }),
-    getAuthHeaders(env, traceId),
-  ]);
+  const gating = await resolveCallerGating(
+    env,
+    config,
+    sender.login,
+    owner,
+    repoName,
+    log,
+    traceId,
+    repoFullName
+  );
+  if (!gating.allowed) return;
+  const { ghToken, headers } = gating;
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
   fireAndForgetReaction(
@@ -295,7 +299,7 @@ export async function handlePullRequestOpened(
 
   const messageId = await sendPrompt(env.CONTROL_PLANE, headers, sessionId, {
     content: prompt,
-    authorId: `github:${payload.sender.login}`,
+    authorId: `github:${sender.login}`,
   });
   log.info("prompt.sent", {
     ...meta,
