@@ -94,7 +94,7 @@ callbacksRouter.post("/complete", async (c) => {
 
 // ─── Tool Call Callback ──────────────────────────────────────────────────────
 
-function formatToolAction(tool: string, args: Record<string, unknown>): string {
+export function formatToolAction(tool: string, args: Record<string, unknown>): string {
   switch (tool) {
     case "edit_file":
     case "write_file":
@@ -111,7 +111,7 @@ function formatToolAction(tool: string, args: Record<string, unknown>): string {
   }
 }
 
-function isValidToolCallPayload(payload: unknown): payload is ToolCallCallback {
+export function isValidToolCallPayload(payload: unknown): payload is ToolCallCallback {
   if (!payload || typeof payload !== "object") return false;
   const p = payload as Record<string, unknown>;
   return (
