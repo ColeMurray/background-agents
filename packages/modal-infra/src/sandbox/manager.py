@@ -11,6 +11,7 @@ Updated: 2026-01-15 to fix Sandbox.create API
 """
 
 import json
+import os
 import time
 from dataclasses import dataclass
 
@@ -38,7 +39,7 @@ class SandboxConfig:
     control_plane_url: str = ""
     sandbox_auth_token: str = ""
     timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS
-    github_app_token: str | None = None  # GitHub App token for git operations
+    clone_token: str | None = None  # VCS clone token for git operations
     user_env_vars: dict[str, str] | None = None  # User-provided env vars (repo secrets)
 
 
@@ -79,6 +80,24 @@ class SandboxManager:
     def _get_repo_key(self, repo_owner: str, repo_name: str) -> str:
         """Get unique key for a repository."""
         return f"{repo_owner}/{repo_name}"
+
+    @staticmethod
+    def _inject_vcs_env_vars(env_vars: dict[str, str], clone_token: str | None) -> None:
+        """Inject VCS-neutral env vars based on SCM_PROVIDER."""
+        scm_provider = os.environ.get("SCM_PROVIDER", "github")
+        if scm_provider == "bitbucket":
+            env_vars["VCS_HOST"] = "bitbucket.org"
+            env_vars["VCS_CLONE_USERNAME"] = "x-token-auth"
+        else:
+            env_vars["VCS_HOST"] = "github.com"
+            env_vars["VCS_CLONE_USERNAME"] = "x-access-token"
+
+        if clone_token:
+            env_vars["VCS_CLONE_TOKEN"] = clone_token
+            if scm_provider == "github":
+                # Required by gh CLI and git push operations in the sandbox
+                env_vars["GITHUB_APP_TOKEN"] = clone_token
+                env_vars["GITHUB_TOKEN"] = clone_token
 
     async def create_sandbox(
         self,
@@ -121,10 +140,7 @@ class SandboxManager:
             }
         )
 
-        # Add GitHub App token if available (for git sync operations and gh CLI)
-        if config.github_app_token:
-            env_vars["GITHUB_APP_TOKEN"] = config.github_app_token
-            env_vars["GITHUB_TOKEN"] = config.github_app_token
+        self._inject_vcs_env_vars(env_vars, config.clone_token)
 
         if config.session_config:
             env_vars["SESSION_CONFIG"] = config.session_config.model_dump_json()
@@ -287,7 +303,7 @@ class SandboxManager:
         sandbox_id: str | None = None,
         control_plane_url: str = "",
         sandbox_auth_token: str = "",
-        github_app_token: str | None = None,
+        clone_token: str | None = None,
         user_env_vars: dict[str, str] | None = None,
         timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS,
     ) -> SandboxHandle:
@@ -303,6 +319,7 @@ class SandboxManager:
             sandbox_id: Optional sandbox ID (generated if not provided)
             control_plane_url: URL for the control plane
             sandbox_auth_token: Auth token for the sandbox
+            clone_token: VCS clone token for git operations
 
         Returns:
             SandboxHandle for the restored sandbox
@@ -357,9 +374,7 @@ class SandboxManager:
             }
         )
 
-        if github_app_token:
-            env_vars["GITHUB_APP_TOKEN"] = github_app_token
-            env_vars["GITHUB_TOKEN"] = github_app_token
+        self._inject_vcs_env_vars(env_vars, clone_token)
 
         # Create the sandbox from the snapshot image
         sandbox = modal.Sandbox.create(

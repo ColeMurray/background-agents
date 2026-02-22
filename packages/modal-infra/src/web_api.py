@@ -165,7 +165,7 @@ async def api_create_sandbox(
             session_config=session_config,
             control_plane_url=control_plane_url,
             sandbox_auth_token=request.get("sandbox_auth_token"),
-            github_app_token=github_app_token,
+            clone_token=github_app_token,
             user_env_vars=request.get("user_env_vars") or None,
         )
 
@@ -530,7 +530,7 @@ async def api_restore_sandbox(
             sandbox_id=sandbox_id,
             control_plane_url=control_plane_url,
             sandbox_auth_token=sandbox_auth_token,
-            github_app_token=github_app_token,
+            clone_token=github_app_token,
             user_env_vars=user_env_vars,
             timeout_seconds=timeout_seconds,
         )

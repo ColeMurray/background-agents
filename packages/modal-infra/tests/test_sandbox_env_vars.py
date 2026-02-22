@@ -216,3 +216,147 @@ async def test_create_and_restore_timeout_consistency(monkeypatch):
 
     assert captured_create["timeout"] == captured_restore["timeout"]
     assert captured_create["timeout"] == 5400
+
+
+# ---------------------------------------------------------------------------
+# VCS env var injection tests
+# ---------------------------------------------------------------------------
+
+
+def _fake_sandbox_create(captured):
+    """Return a fake Sandbox.create that captures env vars."""
+
+    def fake_create(*args, **kwargs):
+        captured["env"] = kwargs.get("env")
+
+        class FakeSandbox:
+            object_id = "obj-vcs"
+            stdout = None
+
+        return FakeSandbox()
+
+    return fake_create
+
+
+@pytest.mark.asyncio
+async def test_vcs_env_vars_default_github(monkeypatch):
+    """SCM_PROVIDER unset → github.com defaults."""
+    captured = {}
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+    monkeypatch.delenv("SCM_PROVIDER", raising=False)
+
+    manager = SandboxManager()
+    config = SandboxConfig(
+        repo_owner="acme",
+        repo_name="repo",
+        clone_token="ghp_test123",
+    )
+    await manager.create_sandbox(config)
+
+    env = captured["env"]
+    assert env["VCS_HOST"] == "github.com"
+    assert env["VCS_CLONE_USERNAME"] == "x-access-token"
+    assert env["VCS_CLONE_TOKEN"] == "ghp_test123"
+    assert env["GITHUB_APP_TOKEN"] == "ghp_test123"
+    assert env["GITHUB_TOKEN"] == "ghp_test123"
+
+
+@pytest.mark.asyncio
+async def test_vcs_env_vars_explicit_github(monkeypatch):
+    """SCM_PROVIDER=github → same as default."""
+    captured = {}
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+    monkeypatch.setenv("SCM_PROVIDER", "github")
+
+    manager = SandboxManager()
+    config = SandboxConfig(
+        repo_owner="acme",
+        repo_name="repo",
+        clone_token="ghp_test123",
+    )
+    await manager.create_sandbox(config)
+
+    env = captured["env"]
+    assert env["VCS_HOST"] == "github.com"
+    assert env["VCS_CLONE_USERNAME"] == "x-access-token"
+    assert env["VCS_CLONE_TOKEN"] == "ghp_test123"
+
+
+@pytest.mark.asyncio
+async def test_vcs_env_vars_bitbucket(monkeypatch):
+    """SCM_PROVIDER=bitbucket → bitbucket.org + x-token-auth."""
+    captured = {}
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+    monkeypatch.setenv("SCM_PROVIDER", "bitbucket")
+
+    manager = SandboxManager()
+    config = SandboxConfig(
+        repo_owner="acme",
+        repo_name="repo",
+        clone_token="bb_token_abc",
+    )
+    await manager.create_sandbox(config)
+
+    env = captured["env"]
+    assert env["VCS_HOST"] == "bitbucket.org"
+    assert env["VCS_CLONE_USERNAME"] == "x-token-auth"
+    assert env["VCS_CLONE_TOKEN"] == "bb_token_abc"
+    # GitHub-specific vars not set for Bitbucket
+    assert "GITHUB_APP_TOKEN" not in env
+    assert "GITHUB_TOKEN" not in env
+
+
+@pytest.mark.asyncio
+async def test_vcs_env_vars_no_token(monkeypatch):
+    """No clone token → token vars absent, host/username still set."""
+    captured = {}
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+    monkeypatch.delenv("SCM_PROVIDER", raising=False)
+
+    manager = SandboxManager()
+    config = SandboxConfig(
+        repo_owner="acme",
+        repo_name="repo",
+    )
+    await manager.create_sandbox(config)
+
+    env = captured["env"]
+    assert env["VCS_HOST"] == "github.com"
+    assert env["VCS_CLONE_USERNAME"] == "x-access-token"
+    assert "VCS_CLONE_TOKEN" not in env
+    assert "GITHUB_APP_TOKEN" not in env
+    assert "GITHUB_TOKEN" not in env
+
+
+@pytest.mark.asyncio
+async def test_restore_vcs_env_vars(monkeypatch):
+    """restore_from_snapshot injects VCS env vars."""
+    captured = {}
+
+    class FakeImage:
+        object_id = "img-123"
+
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+    monkeypatch.setenv("SCM_PROVIDER", "bitbucket")
+
+    manager = SandboxManager()
+    await manager.restore_from_snapshot(
+        snapshot_image_id="img-abc",
+        session_config={
+            "repo_owner": "acme",
+            "repo_name": "repo",
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-6",
+            "session_id": "sess-1",
+        },
+        clone_token="bb_token_xyz",
+    )
+
+    env = captured["env"]
+    assert env["VCS_HOST"] == "bitbucket.org"
+    assert env["VCS_CLONE_USERNAME"] == "x-token-auth"
+    assert env["VCS_CLONE_TOKEN"] == "bb_token_xyz"
+    # GitHub-specific vars not set for Bitbucket
+    assert "GITHUB_APP_TOKEN" not in env
+    assert "GITHUB_TOKEN" not in env
