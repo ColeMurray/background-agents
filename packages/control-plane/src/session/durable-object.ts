@@ -59,6 +59,7 @@ import { GlobalSecretsStore } from "../db/global-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { ParticipantService, getGitHubAvatarUrl } from "./participant-service";
+import { UserScmTokenStore } from "../db/user-scm-tokens";
 import { CallbackNotificationService } from "./callback-notification-service";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
@@ -213,11 +214,16 @@ export class SessionDO extends DurableObject<Env> {
    */
   private get participantService(): ParticipantService {
     if (!this._participantService) {
+      const userScmTokenStore =
+        this.env.DB && this.env.TOKEN_ENCRYPTION_KEY
+          ? new UserScmTokenStore(this.env.DB, this.env.TOKEN_ENCRYPTION_KEY)
+          : null;
       this._participantService = new ParticipantService({
         repository: this.repository,
         env: this.env,
         log: this.log,
         generateId: () => generateId(),
+        userScmTokenStore,
       });
     }
     return this._participantService;
@@ -1824,7 +1830,7 @@ export class SessionDO extends DurableObject<Env> {
 
       const shouldUpdateTokens =
         clientSentAnyToken &&
-        (dbExpiresAt == null || (clientExpiresAt != null && clientExpiresAt >= dbExpiresAt));
+        (dbExpiresAt == null || (clientExpiresAt != null && clientExpiresAt > dbExpiresAt));
 
       // If we already have a refresh token (server-side refresh may rotate it),
       // only accept an incoming refresh token when we're also accepting the
