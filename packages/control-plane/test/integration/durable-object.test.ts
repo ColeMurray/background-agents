@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
+import { MIGRATIONS } from "../../src/session/schema";
 
 describe("SessionDO Durable Object", () => {
   it("returns 404 for uninitialized session state", async () => {
@@ -103,7 +104,7 @@ describe("SessionDO Durable Object", () => {
         .toArray() as Array<{ id: number }>;
 
       const ids = rows.map((r) => r.id);
-      expect(ids).toEqual(Array.from({ length: 18 }, (_, i) => i + 1));
+      expect(ids).toEqual(MIGRATIONS.map((migration) => migration.id));
     });
   });
 });
