@@ -18,7 +18,8 @@ export function KeyboardShortcutsSettings() {
       </div>
 
       <p className="mt-4 text-sm text-muted-foreground">
-        In the composer, Enter sends and Shift+Enter creates a newline.
+        In the composer, Enter sends, Shift+Enter creates a newline, and typing / opens workflow
+        suggestions.
       </p>
     </div>
   );

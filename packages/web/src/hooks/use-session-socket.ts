@@ -63,6 +63,8 @@ interface Participant {
   lastSeen: number;
 }
 
+type SendPromptOutcome = "accepted" | "rejected" | "local_enqueued";
+
 interface UseSessionSocketReturn {
   connected: boolean;
   connecting: boolean;
@@ -78,12 +80,14 @@ interface UseSessionSocketReturn {
   isProcessing: boolean;
   hasMoreHistory: boolean;
   loadingHistory: boolean;
+  lastPromptQueuedRequestId: string | null;
   sendPrompt: (
     content: string,
     model?: string,
     reasoningEffort?: string,
+    requestId?: string,
     includeContext?: boolean
-  ) => void;
+  ) => SendPromptOutcome;
   stopExecution: () => void;
   sendTyping: () => void;
   reconnect: () => void;
@@ -152,6 +156,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [currentParticipantId, setCurrentParticipantId] = useState<string | null>(null);
+  const [lastPromptQueuedRequestId, setLastPromptQueuedRequestId] = useState<string | null>(null);
   const currentParticipantRef = useRef<{
     participantId: string;
     name: string;
@@ -208,6 +213,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
       artifact?: Artifact;
       userId?: string;
       messageId?: string;
+      requestId?: string;
       position?: number;
       status?: string;
       error?: string;
@@ -257,7 +263,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
         }
 
         case "prompt_queued":
-          // Could show queue position indicator
+          setLastPromptQueuedRequestId(data.requestId || null);
           break;
 
         case "sandbox_event":
@@ -533,17 +539,26 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   }, [sessionId, handleMessage, fetchWsToken]);
 
   const sendPrompt = useCallback(
-    (content: string, model?: string, reasoningEffort?: string, includeContext = true) => {
+    (
+      content: string,
+      model?: string,
+      reasoningEffort?: string,
+      requestId?: string,
+      includeContext = true
+    ): SendPromptOutcome => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
         console.error("WebSocket not connected");
-        return;
+        return "rejected";
       }
 
       if (!subscribedRef.current) {
         console.error("Not subscribed yet, waiting...");
         // Retry after a short delay
-        setTimeout(() => sendPrompt(content, model, reasoningEffort, includeContext), 500);
-        return;
+        setTimeout(
+          () => sendPrompt(content, model, reasoningEffort, requestId, includeContext),
+          500
+        );
+        return "local_enqueued";
       }
 
       console.log("Sending prompt:", content, "with model:", model, "reasoning:", reasoningEffort);
@@ -562,9 +577,11 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           content,
           model, // Include model for per-message model switching
           reasoningEffort,
+          requestId,
           includeContext,
         })
       );
+      return "accepted";
     },
     []
   );
@@ -669,6 +686,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
     isProcessing,
     hasMoreHistory,
     loadingHistory,
+    lastPromptQueuedRequestId,
     sendPrompt,
     stopExecution,
     sendTyping,

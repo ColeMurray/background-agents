@@ -97,6 +97,7 @@ export type ClientMessage =
       content: string;
       model?: string;
       reasoningEffort?: string;
+      requestId?: string;
       includeContext?: boolean;
       attachments?: Attachment[];
     }
@@ -125,7 +126,7 @@ export type ServerMessage =
       };
       spawnError?: string | null;
     }
-  | { type: "prompt_queued"; messageId: string; position: number }
+  | { type: "prompt_queued"; messageId: string; position: number; requestId?: string }
   | { type: "sandbox_event"; event: SandboxEvent }
   | { type: "presence_sync"; participants: ParticipantPresence[] }
   | { type: "presence_update"; participants: ParticipantPresence[] }

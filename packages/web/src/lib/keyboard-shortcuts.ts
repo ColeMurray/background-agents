@@ -1,5 +1,5 @@
 export const SHORTCUT_LABELS = {
-  SEND_PROMPT: "Cmd/Ctrl+Enter",
+  SEND_PROMPT: "Enter",
   NEW_SESSION: "Cmd/Ctrl+K",
   TOGGLE_SIDEBAR: "Cmd/Ctrl+/",
 } as const;
