@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, type ClipboardEvent } from "react";
 import useSWR, { mutate } from "swr";
 
-import { parseMaybeEnvContent, type ParsedEnvEntry } from "@/lib/env-paste";
+import { normalizeKey, parseMaybeEnvContent, type ParsedEnvEntry } from "@/lib/env-paste";
 
 const VALID_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const MAX_KEY_LENGTH = 256;
@@ -47,10 +47,6 @@ type GlobalSecretMeta = {
 interface SecretsResponse {
   secrets: { key: string }[];
   globalSecrets?: GlobalSecretMeta[];
-}
-
-function normalizeKey(value: string) {
-  return value.trim().toUpperCase();
 }
 
 function validateKey(value: string): string | null {
@@ -191,10 +187,22 @@ export function SecretsEditor({
         return;
       }
 
+      const valid = parsed.filter((entry) => !RESERVED_KEYS.has(entry.key));
+      const skipped = parsed.length - valid.length;
+
+      if (valid.length === 0 && skipped > 0) {
+        event.preventDefault();
+        setError(`All ${skipped} pasted key${skipped === 1 ? " is" : "s are"} reserved`);
+        return;
+      }
+
       event.preventDefault();
-      applyEnvEntries(parsed);
+      applyEnvEntries(valid);
       setError("");
-      setSuccess(`Imported ${parsed.length} secret${parsed.length === 1 ? "" : "s"} from paste`);
+
+      const imported = `Imported ${valid.length} secret${valid.length === 1 ? "" : "s"} from paste`;
+      const skippedMsg = skipped > 0 ? ` (skipped ${skipped} reserved)` : "";
+      setSuccess(imported + skippedMsg);
     },
     [applyEnvEntries]
   );

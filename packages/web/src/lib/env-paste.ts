@@ -5,7 +5,7 @@ export type ParsedEnvEntry = {
 
 const ENV_LINE_REGEX = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/;
 
-function normalizeKey(value: string): string {
+export function normalizeKey(value: string): string {
   return value.trim().toUpperCase();
 }
 

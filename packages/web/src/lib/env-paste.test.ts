@@ -31,4 +31,30 @@ JWT='token==abc'
   it("parses single-line key/value pastes", () => {
     expect(parseMaybeEnvContent("ONE=1")).toEqual([{ key: "ONE", value: "1" }]);
   });
+
+  it("returns empty array for empty input", () => {
+    expect(parseMaybeEnvContent("")).toEqual([]);
+  });
+
+  it("returns empty array for comments-only input", () => {
+    expect(parseMaybeEnvContent("# just a comment\n# another one\n")).toEqual([]);
+  });
+
+  it("handles empty values after =", () => {
+    expect(parseMaybeEnvContent("FOO=")).toEqual([{ key: "FOO", value: "" }]);
+    expect(parseMaybeEnvContent('BAR=""')).toEqual([{ key: "BAR", value: "" }]);
+  });
+
+  it("handles Windows-style line endings", () => {
+    expect(parseMaybeEnvContent("A=1\r\nB=2\r\n")).toEqual([
+      { key: "A", value: "1" },
+      { key: "B", value: "2" },
+    ]);
+  });
+
+  it("handles values containing = signs", () => {
+    expect(parseMaybeEnvContent("DB_URL=postgres://host/db?ssl=true&opt=1")).toEqual([
+      { key: "DB_URL", value: "postgres://host/db?ssl=true&opt=1" },
+    ]);
+  });
 });
