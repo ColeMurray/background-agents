@@ -29,6 +29,14 @@ import {
 import type { GitHubProviderConfig } from "./types";
 import { USER_AGENT, GITHUB_API_BASE } from "./constants";
 
+/** Extract HTTP status from upstream errors (GitHubHttpError has a .status property). */
+function extractHttpStatus(error: unknown): number | undefined {
+  if (error && typeof error === "object" && "status" in error && typeof error.status === "number") {
+    return error.status;
+  }
+  return undefined;
+}
+
 /**
  * GitHub implementation of SourceControlProvider.
  */
@@ -220,7 +228,8 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     } catch (error) {
       throw SourceControlProviderError.fromFetchError(
         `Failed to check repository access: ${error instanceof Error ? error.message : String(error)}`,
-        error
+        error,
+        extractHttpStatus(error)
       );
     }
   }
@@ -245,7 +254,8 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     } catch (error) {
       throw SourceControlProviderError.fromFetchError(
         `Failed to list repositories: ${error instanceof Error ? error.message : String(error)}`,
-        error
+        error,
+        extractHttpStatus(error)
       );
     }
   }

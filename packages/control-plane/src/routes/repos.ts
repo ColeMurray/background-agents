@@ -52,7 +52,7 @@ async function refreshReposCache(env: Env, traceId?: string): Promise<void> {
       total_repos: repos.length,
     });
   } catch (e) {
-    if (e instanceof SourceControlProviderError && e.errorType === "permanent") {
+    if (e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus) {
       logger.warn("SCM provider not configured, skipping repo refresh", {
         trace_id: traceId,
       });
@@ -158,7 +158,7 @@ async function handleListRepos(
   try {
     repos = await ctx.metrics.time("scm_api", () => provider.listRepositories());
   } catch (e) {
-    if (e instanceof SourceControlProviderError && e.errorType === "permanent") {
+    if (e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus) {
       return error("SCM provider not configured", 500);
     }
     logger.error("Failed to list installation repositories", {

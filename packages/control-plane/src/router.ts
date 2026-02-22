@@ -553,9 +553,9 @@ async function handleCreateSession(
   const repoOwner = body.repoOwner.toLowerCase();
   const repoName = body.repoName.toLowerCase();
 
-  const provider = createRouteSourceControlProvider(env);
   let repoId: number;
   try {
+    const provider = createRouteSourceControlProvider(env);
     const resolved = await resolveInstalledRepo(provider, repoOwner, repoName);
     if (!resolved) {
       return error("Repository is not installed for the GitHub App", 404);
@@ -568,10 +568,9 @@ async function handleCreateSession(
       repo_owner: repoOwner,
       repo_name: repoName,
     });
-    return error(
-      message === "GitHub App not configured" ? message : "Failed to resolve repository",
-      500
-    );
+    const isConfigError =
+      e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus;
+    return error(isConfigError ? message : "Failed to resolve repository", 500);
   }
 
   // User info from direct params
