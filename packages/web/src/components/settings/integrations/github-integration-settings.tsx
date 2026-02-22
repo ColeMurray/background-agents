@@ -405,7 +405,8 @@ function GlobalSettingsSection({
 
             {allowedTriggerUsers.length === 0 && (
               <p className="text-xs text-amber-700 mt-1">
-                No users configured. The bot will not respond to any @mentions.
+                No users configured. The bot will not respond to any manual triggers (such as
+                @mentions or review requests).
               </p>
             )}
           </>
@@ -730,7 +731,7 @@ function RepoOverrideRow({
 
             {allowedTriggerUsers.length === 0 && (
               <p className="text-xs text-amber-700">
-                No users configured. The bot will not respond to any @mentions for this repo.
+                No users configured. The bot will not respond to any manual triggers for this repo.
               </p>
             )}
           </>

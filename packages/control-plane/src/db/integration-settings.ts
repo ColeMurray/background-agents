@@ -212,7 +212,7 @@ export class IntegrationSettingsStore {
       }
       return {
         ...settings,
-        allowedTriggerUsers: settings.allowedTriggerUsers.map((u) => u.toLowerCase()),
+        allowedTriggerUsers: settings.allowedTriggerUsers.map((u) => u.trim().toLowerCase()),
       };
     }
 

@@ -9,7 +9,7 @@ import type { Logger } from "./logger";
 import { generateInstallationToken, postReaction, checkSenderPermission } from "./github-auth";
 import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
 import { generateInternalToken } from "./utils/internal";
-import { getGitHubConfig } from "./utils/integration-config";
+import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
 
 async function getAuthHeaders(env: Env, traceId: string): Promise<Record<string, string>> {
   const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
@@ -92,6 +92,55 @@ function fireAndForgetReaction(
   );
 }
 
+type CallerGatingResult =
+  | { allowed: true; ghToken: string; headers: Record<string, string> }
+  | { allowed: false };
+
+async function resolveCallerGating(
+  env: Env,
+  config: ResolvedGitHubConfig,
+  senderLogin: string,
+  owner: string,
+  repoName: string,
+  log: Logger,
+  traceId: string,
+  repoFullName: string
+): Promise<CallerGatingResult> {
+  if (config.allowedTriggerUsers !== null) {
+    if (!config.allowedTriggerUsers.some((u) => u.toLowerCase() === senderLogin.toLowerCase())) {
+      log.info("handler.sender_not_allowed", { trace_id: traceId, sender: senderLogin });
+      return { allowed: false };
+    }
+  }
+
+  const [ghToken, headers] = await Promise.all([
+    generateInstallationToken({
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_APP_PRIVATE_KEY,
+      installationId: env.GITHUB_APP_INSTALLATION_ID,
+    }),
+    getAuthHeaders(env, traceId),
+  ]);
+
+  if (config.allowedTriggerUsers === null) {
+    const { hasPermission, error } = await checkSenderPermission(
+      ghToken,
+      owner,
+      repoName,
+      senderLogin
+    );
+    if (!hasPermission) {
+      log.info(
+        error ? "handler.permission_check_failed" : "handler.sender_insufficient_permission",
+        { trace_id: traceId, sender: senderLogin, repo: repoFullName }
+      );
+      return { allowed: false };
+    }
+  }
+
+  return { allowed: true, ghToken, headers };
+}
+
 export async function handleReviewRequested(
   env: Env,
   log: Logger,
@@ -118,33 +167,18 @@ export async function handleReviewRequested(
     return;
   }
 
-  if (config.allowedTriggerUsers !== null) {
-    if (!config.allowedTriggerUsers.includes(sender.login.toLowerCase())) {
-      log.info("handler.sender_not_allowed", { trace_id: traceId, sender: sender.login });
-      return;
-    }
-  }
-
-  const [ghToken, headers] = await Promise.all([
-    generateInstallationToken({
-      appId: env.GITHUB_APP_ID,
-      privateKey: env.GITHUB_APP_PRIVATE_KEY,
-      installationId: env.GITHUB_APP_INSTALLATION_ID,
-    }),
-    getAuthHeaders(env, traceId),
-  ]);
-
-  if (config.allowedTriggerUsers === null) {
-    const hasPermission = await checkSenderPermission(ghToken, owner, repoName, sender.login);
-    if (!hasPermission) {
-      log.info("handler.sender_insufficient_permission", {
-        trace_id: traceId,
-        sender: sender.login,
-        repo: repoFullName,
-      });
-      return;
-    }
-  }
+  const gating = await resolveCallerGating(
+    env,
+    config,
+    sender.login,
+    owner,
+    repoName,
+    log,
+    traceId,
+    repoFullName
+  );
+  if (!gating.allowed) return;
+  const { ghToken, headers } = gating;
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
   fireAndForgetReaction(
@@ -307,35 +341,20 @@ export async function handleIssueComment(
     return;
   }
 
-  if (config.allowedTriggerUsers !== null) {
-    if (!config.allowedTriggerUsers.includes(sender.login.toLowerCase())) {
-      log.info("handler.sender_not_allowed", { trace_id: traceId, sender: sender.login });
-      return;
-    }
-  }
+  const gating = await resolveCallerGating(
+    env,
+    config,
+    sender.login,
+    owner,
+    repoName,
+    log,
+    traceId,
+    repoFullName
+  );
+  if (!gating.allowed) return;
+  const { ghToken, headers } = gating;
 
   const commentBody = stripMention(comment.body, env.GITHUB_BOT_USERNAME);
-
-  const [ghToken, headers] = await Promise.all([
-    generateInstallationToken({
-      appId: env.GITHUB_APP_ID,
-      privateKey: env.GITHUB_APP_PRIVATE_KEY,
-      installationId: env.GITHUB_APP_INSTALLATION_ID,
-    }),
-    getAuthHeaders(env, traceId),
-  ]);
-
-  if (config.allowedTriggerUsers === null) {
-    const hasPermission = await checkSenderPermission(ghToken, owner, repoName, sender.login);
-    if (!hasPermission) {
-      log.info("handler.sender_insufficient_permission", {
-        trace_id: traceId,
-        sender: sender.login,
-        repo: repoFullName,
-      });
-      return;
-    }
-  }
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: issue.number };
   fireAndForgetReaction(
@@ -408,35 +427,20 @@ export async function handleReviewComment(
     return;
   }
 
-  if (config.allowedTriggerUsers !== null) {
-    if (!config.allowedTriggerUsers.includes(sender.login.toLowerCase())) {
-      log.info("handler.sender_not_allowed", { trace_id: traceId, sender: sender.login });
-      return;
-    }
-  }
+  const gating = await resolveCallerGating(
+    env,
+    config,
+    sender.login,
+    owner,
+    repoName,
+    log,
+    traceId,
+    repoFullName
+  );
+  if (!gating.allowed) return;
+  const { ghToken, headers } = gating;
 
   const commentBody = stripMention(comment.body, env.GITHUB_BOT_USERNAME);
-
-  const [ghToken, headers] = await Promise.all([
-    generateInstallationToken({
-      appId: env.GITHUB_APP_ID,
-      privateKey: env.GITHUB_APP_PRIVATE_KEY,
-      installationId: env.GITHUB_APP_INSTALLATION_ID,
-    }),
-    getAuthHeaders(env, traceId),
-  ]);
-
-  if (config.allowedTriggerUsers === null) {
-    const hasPermission = await checkSenderPermission(ghToken, owner, repoName, sender.login);
-    if (!hasPermission) {
-      log.info("handler.sender_insufficient_permission", {
-        trace_id: traceId,
-        sender: sender.login,
-        repo: repoFullName,
-      });
-      return;
-    }
-  }
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
   fireAndForgetReaction(

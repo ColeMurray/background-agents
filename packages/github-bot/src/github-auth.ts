@@ -91,15 +91,20 @@ export async function generateInstallationToken(config: GitHubAppConfig): Promis
 
 const WRITE_PERMISSIONS = new Set(["write", "maintain", "admin"]);
 
+export interface PermissionCheckResult {
+  hasPermission: boolean;
+  error?: boolean;
+}
+
 export async function checkSenderPermission(
   token: string,
   owner: string,
   repo: string,
   username: string
-): Promise<boolean> {
+): Promise<PermissionCheckResult> {
   try {
     const response = await fetch(
-      `https://api.github.com/repos/${owner}/${repo}/collaborators/${username}/permission`,
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/collaborators/${encodeURIComponent(username)}/permission`,
       {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -109,11 +114,11 @@ export async function checkSenderPermission(
         },
       }
     );
-    if (!response.ok) return false;
+    if (!response.ok) return { hasPermission: false, error: true };
     const data = (await response.json()) as { permission: string };
-    return WRITE_PERMISSIONS.has(data.permission);
+    return { hasPermission: WRITE_PERMISSIONS.has(data.permission) };
   } catch {
-    return false;
+    return { hasPermission: false, error: true };
   }
 }
 

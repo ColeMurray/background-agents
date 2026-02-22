@@ -118,52 +118,59 @@ describe("checkSenderPermission", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("returns true for write permission", async () => {
+  it("returns hasPermission true for write permission", async () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(
       new Response(JSON.stringify({ permission: "write" }), { status: 200 })
     );
-    expect(await checkSenderPermission("tok", "acme", "widgets", "alice")).toBe(true);
+    const result = await checkSenderPermission("tok", "acme", "widgets", "alice");
+    expect(result).toEqual({ hasPermission: true });
   });
 
-  it("returns true for admin permission", async () => {
+  it("returns hasPermission true for admin permission", async () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(
       new Response(JSON.stringify({ permission: "admin" }), { status: 200 })
     );
-    expect(await checkSenderPermission("tok", "acme", "widgets", "alice")).toBe(true);
+    const result = await checkSenderPermission("tok", "acme", "widgets", "alice");
+    expect(result).toEqual({ hasPermission: true });
   });
 
-  it("returns true for maintain permission", async () => {
+  it("returns hasPermission true for maintain permission", async () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(
       new Response(JSON.stringify({ permission: "maintain" }), { status: 200 })
     );
-    expect(await checkSenderPermission("tok", "acme", "widgets", "alice")).toBe(true);
+    const result = await checkSenderPermission("tok", "acme", "widgets", "alice");
+    expect(result).toEqual({ hasPermission: true });
   });
 
-  it("returns false for read permission", async () => {
+  it("returns hasPermission false for read permission", async () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(
       new Response(JSON.stringify({ permission: "read" }), { status: 200 })
     );
-    expect(await checkSenderPermission("tok", "acme", "widgets", "alice")).toBe(false);
+    const result = await checkSenderPermission("tok", "acme", "widgets", "alice");
+    expect(result).toEqual({ hasPermission: false });
   });
 
-  it("returns false for none permission", async () => {
+  it("returns hasPermission false for none permission", async () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(
       new Response(JSON.stringify({ permission: "none" }), { status: 200 })
     );
-    expect(await checkSenderPermission("tok", "acme", "widgets", "alice")).toBe(false);
+    const result = await checkSenderPermission("tok", "acme", "widgets", "alice");
+    expect(result).toEqual({ hasPermission: false });
   });
 
-  it("returns false on API error (404)", async () => {
+  it("returns error flag on API error (404)", async () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(new Response("Not Found", { status: 404 }));
-    expect(await checkSenderPermission("tok", "acme", "widgets", "alice")).toBe(false);
+    const result = await checkSenderPermission("tok", "acme", "widgets", "alice");
+    expect(result).toEqual({ hasPermission: false, error: true });
   });
 
-  it("returns false on network error", async () => {
+  it("returns error flag on network error", async () => {
     vi.mocked(globalThis.fetch).mockRejectedValue(new Error("network error"));
-    expect(await checkSenderPermission("tok", "acme", "widgets", "alice")).toBe(false);
+    const result = await checkSenderPermission("tok", "acme", "widgets", "alice");
+    expect(result).toEqual({ hasPermission: false, error: true });
   });
 
-  it("calls correct GitHub API URL", async () => {
+  it("calls correct GitHub API URL with encoded segments", async () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(
       new Response(JSON.stringify({ permission: "write" }), { status: 200 })
     );

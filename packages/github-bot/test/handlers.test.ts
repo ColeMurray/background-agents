@@ -12,7 +12,7 @@ import type { ResolvedGitHubConfig } from "../src/utils/integration-config";
 vi.mock("../src/github-auth", () => ({
   generateInstallationToken: vi.fn().mockResolvedValue("test-installation-token"),
   postReaction: vi.fn().mockResolvedValue(true),
-  checkSenderPermission: vi.fn().mockResolvedValue(true),
+  checkSenderPermission: vi.fn().mockResolvedValue({ hasPermission: true }),
 }));
 
 vi.mock("../src/utils/internal", () => ({
@@ -159,7 +159,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(generateInstallationToken).mockResolvedValue("test-installation-token");
   vi.mocked(postReaction).mockResolvedValue(true);
-  vi.mocked(checkSenderPermission).mockResolvedValue(true);
+  vi.mocked(checkSenderPermission).mockResolvedValue({ hasPermission: true });
   vi.mocked(getGitHubConfig).mockResolvedValue({ ...defaultConfig });
 });
 
@@ -650,7 +650,7 @@ describe("integration config", () => {
   it("allows sender in allowedTriggerUsers (case-insensitive)", async () => {
     vi.mocked(getGitHubConfig).mockResolvedValue({
       ...defaultConfig,
-      allowedTriggerUsers: ["bob"],
+      allowedTriggerUsers: ["BoB"],
     });
     const env = createMockEnv();
     const log = createMockLogger();
@@ -684,7 +684,7 @@ describe("integration config", () => {
       ...defaultConfig,
       allowedTriggerUsers: null,
     });
-    vi.mocked(checkSenderPermission).mockResolvedValue(false);
+    vi.mocked(checkSenderPermission).mockResolvedValue({ hasPermission: false });
     const env = createMockEnv();
     const log = createMockLogger();
 
@@ -695,6 +695,24 @@ describe("integration config", () => {
     expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
     expect(log.info).toHaveBeenCalledWith(
       "handler.sender_insufficient_permission",
+      expect.objectContaining({ sender: "bob", repo: "acme/widgets" })
+    );
+  });
+
+  it("logs permission_check_failed when permission API returns error", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      allowedTriggerUsers: null,
+    });
+    vi.mocked(checkSenderPermission).mockResolvedValue({ hasPermission: false, error: true });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleIssueComment(env, log, issueCommentPayload, "trace-apierr");
+
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      "handler.permission_check_failed",
       expect.objectContaining({ sender: "bob", repo: "acme/widgets" })
     );
   });
