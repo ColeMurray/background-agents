@@ -43,6 +43,8 @@ export interface CreateSandboxConfig {
   model: string;
   /** User-provided environment variables (repo secrets) */
   userEnvVars?: Record<string, string>;
+  /** Repository-scoped MCP configuration resolved for sandbox runtime */
+  mcpConfig?: Record<string, unknown>;
   /** OpenCode session ID for resumption */
   opencodeSessionId?: string;
   /** Git user name for commits */
@@ -93,6 +95,8 @@ export interface RestoreConfig {
   model: string;
   /** User-provided environment variables (repo secrets) */
   userEnvVars?: Record<string, string>;
+  /** Repository-scoped MCP configuration resolved for sandbox runtime */
+  mcpConfig?: Record<string, unknown>;
   /** Sandbox lifetime in seconds. Defaults to DEFAULT_SANDBOX_TIMEOUT_SECONDS. */
   timeoutSeconds?: number;
   /** Trace ID for correlation */

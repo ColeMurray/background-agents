@@ -167,6 +167,7 @@ async def api_create_sandbox(
             sandbox_auth_token=request.get("sandbox_auth_token"),
             clone_token=github_app_token,
             user_env_vars=request.get("user_env_vars") or None,
+            mcp_config=request.get("mcp_config") or None,
         )
 
         handle = await manager.create_sandbox(config)
@@ -504,6 +505,7 @@ async def api_restore_sandbox(
         sandbox_id = request.get("sandbox_id")
         sandbox_auth_token = request.get("sandbox_auth_token", "")
         user_env_vars = request.get("user_env_vars") or None
+        mcp_config = request.get("mcp_config") or None
         timeout_seconds = int(request.get("timeout_seconds", DEFAULT_SANDBOX_TIMEOUT_SECONDS))
 
         manager = SandboxManager()
@@ -532,6 +534,7 @@ async def api_restore_sandbox(
             sandbox_auth_token=sandbox_auth_token,
             clone_token=github_app_token,
             user_env_vars=user_env_vars,
+            mcp_config=mcp_config,
             timeout_seconds=timeout_seconds,
         )
 

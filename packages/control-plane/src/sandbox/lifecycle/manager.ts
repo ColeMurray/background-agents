@@ -59,6 +59,8 @@ export interface SandboxStorage {
   getSession(): SessionRow | null;
   /** Get user env vars for sandbox injection */
   getUserEnvVars(): Promise<Record<string, string> | undefined>;
+  /** Get repository-scoped MCP config resolved for sandbox runtime */
+  getMcpConfig(): Promise<Record<string, unknown> | undefined>;
   /** Update sandbox status */
   updateSandboxStatus(status: SandboxStatus): void;
   /** Update sandbox for spawn (status, auth token, sandbox ID, created_at) */
@@ -312,6 +314,7 @@ export class SandboxLifecycleManager {
       });
 
       const userEnvVars = await this.storage.getUserEnvVars();
+      const mcpConfig = await this.storage.getMcpConfig();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
 
       // Create sandbox via provider
@@ -325,6 +328,7 @@ export class SandboxLifecycleManager {
         provider,
         model: modelId,
         userEnvVars,
+        mcpConfig,
       };
 
       const result = await this.provider.createSandbox(createConfig);
@@ -423,6 +427,7 @@ export class SandboxLifecycleManager {
       });
 
       const userEnvVars = await this.storage.getUserEnvVars();
+      const mcpConfig = await this.storage.getMcpConfig();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
 
       const result = await this.provider.restoreFromSnapshot({
@@ -436,6 +441,7 @@ export class SandboxLifecycleManager {
         provider,
         model: modelId,
         userEnvVars,
+        mcpConfig,
         timeoutSeconds: this.config.sandboxTimeoutSeconds,
       });
 

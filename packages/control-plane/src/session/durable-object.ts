@@ -57,6 +57,7 @@ import { SessionPullRequestService } from "./pull-request-service";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
+import { RepoMcpConfigStore, resolveMcpSecretRefs } from "../db/repo-mcp-config";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { ParticipantService, getAvatarUrl } from "./participant-service";
 import { UserScmTokenStore } from "../db/user-scm-tokens";
@@ -368,6 +369,7 @@ export class SessionDO extends DurableObject<Env> {
       getSandboxWithCircuitBreaker: () => this.repository.getSandboxWithCircuitBreaker(),
       getSession: () => this.repository.getSession(),
       getUserEnvVars: () => this.getUserEnvVars(),
+      getMcpConfig: () => this.getMcpConfigForSandbox(),
       updateSandboxStatus: (status) => this.updateSandboxStatus(status),
       updateSandboxForSpawn: (data) => this.repository.updateSandboxForSpawn(data),
       updateSandboxModalObjectId: (id) => this.repository.updateSandboxModalObjectId(id),
@@ -1287,6 +1289,45 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     return mergedCount === 0 ? undefined : merged;
+  }
+
+  private async getMcpConfigForSandbox(): Promise<Record<string, unknown> | undefined> {
+    const session = this.getSession();
+    if (!session || !this.env.DB) {
+      return undefined;
+    }
+
+    let config;
+    try {
+      const store = new RepoMcpConfigStore(this.env.DB);
+      config = await store.get(session.repo_owner, session.repo_name);
+      if (!config) return undefined;
+    } catch (e) {
+      this.log.warn("Failed to load MCP config, continuing without MCP", {
+        repo_owner: session.repo_owner,
+        repo_name: session.repo_name,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return undefined;
+    }
+
+    // Resolve secret:KEY placeholders using the same merged env vars sent to sandbox.
+    const mergedSecrets = (await this.getUserEnvVars()) || {};
+    const { resolvedConfig, missingSecretKeys } = resolveMcpSecretRefs(config, mergedSecrets);
+    if (missingSecretKeys.length > 0) {
+      this.log.warn("MCP config has missing secret references, continuing without MCP", {
+        repo_owner: session.repo_owner,
+        repo_name: session.repo_name,
+        missing_secret_keys: missingSecretKeys,
+      });
+      this.broadcast({
+        type: "sandbox_warning",
+        message: `MCP disabled: missing secret keys (${missingSecretKeys.join(", ")})`,
+      });
+      return undefined;
+    }
+
+    return resolvedConfig as unknown as Record<string, unknown>;
   }
 
   /**

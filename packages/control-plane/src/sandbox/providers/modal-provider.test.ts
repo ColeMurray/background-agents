@@ -572,5 +572,45 @@ describe("ModalSandboxProvider", () => {
 
       globalThis.fetch = originalFetch;
     });
+
+    it("sends mcp_config in restore request body", async () => {
+      const originalFetch = globalThis.fetch;
+      let requestBody: Record<string, unknown> | undefined;
+      globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        requestBody = JSON.parse((init?.body as string) || "{}");
+        return {
+          ok: true,
+          json: async () => ({ success: true, data: { sandbox_id: "sandbox-123" } }),
+        };
+      }) as unknown as typeof fetch;
+
+      const client = createMockModalClient();
+      const provider = new ModalSandboxProvider(client, "test-secret");
+
+      await provider.restoreFromSnapshot({
+        snapshotImageId: "img-123",
+        sessionId: "session-123",
+        sandboxId: "sandbox-123",
+        sandboxAuthToken: "token",
+        controlPlaneUrl: "https://test.com",
+        repoOwner: "owner",
+        repoName: "repo",
+        provider: "anthropic",
+        model: "anthropic/claude-sonnet-4-5",
+        mcpConfig: {
+          mcpServers: {
+            local: { transport: "stdio", command: "node" },
+          },
+        },
+      });
+
+      expect(requestBody?.mcp_config).toEqual({
+        mcpServers: {
+          local: { transport: "stdio", command: "node" },
+        },
+      });
+
+      globalThis.fetch = originalFetch;
+    });
   });
 });

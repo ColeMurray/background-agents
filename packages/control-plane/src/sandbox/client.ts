@@ -45,6 +45,7 @@ export interface CreateSandboxRequest {
   provider?: string;
   model?: string;
   userEnvVars?: Record<string, string>;
+  mcpConfig?: Record<string, unknown>;
 }
 
 export interface CreateSandboxResponse {
@@ -188,6 +189,7 @@ export class ModalClient {
           provider: request.provider || "anthropic",
           model: request.model || "claude-sonnet-4-6",
           user_env_vars: request.userEnvVars || null,
+          mcp_config: request.mcpConfig || null,
         }),
       });
 

@@ -72,6 +72,7 @@ export class ModalSandboxProvider implements SandboxProvider {
         provider: config.provider,
         model: config.model,
         userEnvVars: config.userEnvVars,
+        mcpConfig: config.mcpConfig,
       });
 
       return {
@@ -116,6 +117,7 @@ export class ModalSandboxProvider implements SandboxProvider {
           control_plane_url: config.controlPlaneUrl,
           sandbox_auth_token: config.sandboxAuthToken,
           user_env_vars: config.userEnvVars || null,
+          mcp_config: config.mcpConfig || null,
           timeout_seconds: config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS,
         }),
       });

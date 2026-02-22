@@ -223,6 +223,22 @@ export interface RepoMetadata {
   keywords?: string[];
 }
 
+export type McpServerTransport = "stdio" | "http" | "sse";
+
+export interface McpServerConfig {
+  transport: McpServerTransport;
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+  enabled?: boolean;
+}
+
+export interface RepoMcpConfig {
+  mcpServers: Record<string, McpServerConfig>;
+}
+
 export interface EnrichedRepository extends InstallationRepository {
   metadata?: RepoMetadata;
 }

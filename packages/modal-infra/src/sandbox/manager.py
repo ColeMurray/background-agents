@@ -41,6 +41,7 @@ class SandboxConfig:
     timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS
     clone_token: str | None = None  # VCS clone token for git operations
     user_env_vars: dict[str, str] | None = None  # User-provided env vars (repo secrets)
+    mcp_config: dict | None = None  # Repository-scoped MCP config for OpenCode
 
 
 @dataclass
@@ -144,6 +145,8 @@ class SandboxManager:
 
         if config.session_config:
             env_vars["SESSION_CONFIG"] = config.session_config.model_dump_json()
+        if config.mcp_config:
+            env_vars["MCP_CONFIG_CONTENT"] = json.dumps(config.mcp_config)
 
         # Determine image to use
         if config.snapshot_id:
@@ -305,6 +308,7 @@ class SandboxManager:
         sandbox_auth_token: str = "",
         clone_token: str | None = None,
         user_env_vars: dict[str, str] | None = None,
+        mcp_config: dict | None = None,
         timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS,
     ) -> SandboxHandle:
         """
@@ -373,6 +377,8 @@ class SandboxManager:
                 ),
             }
         )
+        if mcp_config:
+            env_vars["MCP_CONFIG_CONTENT"] = json.dumps(mcp_config)
 
         self._inject_vcs_env_vars(env_vars, clone_token)
 

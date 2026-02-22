@@ -32,6 +32,7 @@ import {
 import { integrationSettingsRoutes } from "./routes/integration-settings";
 import { modelPreferencesRoutes } from "./routes/model-preferences";
 import { reposRoutes } from "./routes/repos";
+import { mcpRoutes } from "./routes/mcp";
 import { secretsRoutes } from "./routes/secrets";
 
 const logger = createLogger("router");
@@ -379,6 +380,9 @@ const routes: Route[] = [
 
   // Secrets
   ...secretsRoutes,
+
+  // MCP configuration
+  ...mcpRoutes,
 
   // Model preferences
   ...modelPreferencesRoutes,

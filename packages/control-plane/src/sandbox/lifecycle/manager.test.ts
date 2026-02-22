@@ -81,7 +81,8 @@ function createMockStorage(
   sandbox:
     | (SandboxRow & { spawn_failure_count: number; last_spawn_failure: number })
     | null = createMockSandbox(),
-  userEnvVars: Record<string, string> | undefined = undefined
+  userEnvVars: Record<string, string> | undefined = undefined,
+  mcpConfig: Record<string, unknown> | undefined = undefined
 ): SandboxStorage & { calls: string[] } {
   const calls: string[] = [];
 
@@ -102,6 +103,10 @@ function createMockStorage(
     getUserEnvVars: vi.fn(async () => {
       calls.push("getUserEnvVars");
       return userEnvVars;
+    }),
+    getMcpConfig: vi.fn(async () => {
+      calls.push("getMcpConfig");
+      return mcpConfig;
     }),
     updateSandboxStatus: vi.fn((status: SandboxStatus) => {
       calls.push(`updateSandboxStatus:${status}`);
@@ -300,6 +305,31 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.createSandbox).toHaveBeenCalledWith(expect.objectContaining({ userEnvVars }));
     });
 
+    it("passes MCP config to provider", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const mcpConfig = {
+        mcpServers: {
+          local: { transport: "stdio", command: "node", args: ["server.js"] },
+        },
+      };
+      const storage = createMockStorage(createMockSession(), sandbox, undefined, mcpConfig);
+      const provider = createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(storage.calls).toContain("getMcpConfig");
+      expect(provider.createSandbox).toHaveBeenCalledWith(expect.objectContaining({ mcpConfig }));
+    });
+
     it("respects circuit breaker blocking", async () => {
       const now = Date.now();
       const sandbox = createMockSandbox({
@@ -383,6 +413,32 @@ describe("SandboxLifecycleManager", () => {
 
       expect(provider.restoreFromSnapshot).toHaveBeenCalled();
       expect(provider.createSandbox).not.toHaveBeenCalled();
+    });
+
+    it("passes MCP config when restoring from snapshot", async () => {
+      const sandbox = createMockSandbox({ status: "stopped", snapshot_image_id: "img-abc123" });
+      const mcpConfig = {
+        mcpServers: {
+          remote: { transport: "http", url: "https://example.com/mcp" },
+        },
+      };
+      const storage = createMockStorage(createMockSession(), sandbox, undefined, mcpConfig);
+      const provider = createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ mcpConfig })
+      );
     });
 
     it("stores providerObjectId after successful restore for future snapshots", async () => {

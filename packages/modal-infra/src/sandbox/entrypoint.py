@@ -280,6 +280,18 @@ class SandboxSupervisor:
                 },
             },
         }
+        mcp_config_raw = os.environ.get("MCP_CONFIG_CONTENT")
+        if mcp_config_raw:
+            try:
+                mcp_config = json.loads(mcp_config_raw)
+                mcp_servers = mcp_config.get("mcpServers")
+                if isinstance(mcp_servers, dict):
+                    opencode_config["mcpServers"] = mcp_servers
+                    self.log.info("mcp.config_loaded", servers_count=len(mcp_servers))
+                else:
+                    self.log.warn("mcp.config_invalid_shape")
+            except Exception as e:
+                self.log.warn("mcp.config_parse_error", exc=e)
 
         # Determine working directory - use repo path if cloned, otherwise /workspace
         workdir = self.workspace_path

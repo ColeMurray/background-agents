@@ -45,6 +45,7 @@ describe("validateKey", () => {
   it("rejects reserved keys", () => {
     expect(() => validateKey("PATH")).toThrow(SecretsValidationError);
     expect(() => validateKey("SANDBOX_ID")).toThrow(SecretsValidationError);
+    expect(() => validateKey("MCP_CONFIG_CONTENT")).toThrow(SecretsValidationError);
   });
 
   it("rejects reserved keys case-insensitively", () => {

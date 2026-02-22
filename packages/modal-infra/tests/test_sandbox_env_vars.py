@@ -218,6 +218,89 @@ async def test_create_and_restore_timeout_consistency(monkeypatch):
     assert captured_create["timeout"] == 5400
 
 
+@pytest.mark.asyncio
+async def test_create_injects_mcp_config_content(monkeypatch):
+    captured = {}
+
+    def fake_create(*args, **kwargs):
+        captured["env"] = kwargs.get("env")
+
+        class FakeSandbox:
+            object_id = "obj-123"
+            stdout = None
+
+        return FakeSandbox()
+
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+
+    manager = SandboxManager()
+    config = SandboxConfig(
+        repo_owner="acme",
+        repo_name="repo",
+        mcp_config={
+            "mcpServers": {
+                "local": {
+                    "transport": "stdio",
+                    "command": "node",
+                    "args": ["server.js"],
+                }
+            }
+        },
+    )
+    await manager.create_sandbox(config)
+
+    env_vars = captured["env"]
+    assert "MCP_CONFIG_CONTENT" in env_vars
+    assert '"mcpServers"' in env_vars["MCP_CONFIG_CONTENT"]
+
+
+@pytest.mark.asyncio
+async def test_restore_injects_mcp_config_content(monkeypatch):
+    captured = {}
+
+    class FakeImage:
+        object_id = "img-123"
+
+    def fake_from_id(*args, **kwargs):
+        return FakeImage()
+
+    def fake_create(*args, **kwargs):
+        captured["env"] = kwargs.get("env")
+
+        class FakeSandbox:
+            object_id = "obj-456"
+            stdout = None
+
+        return FakeSandbox()
+
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", fake_from_id)
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+
+    manager = SandboxManager()
+    await manager.restore_from_snapshot(
+        snapshot_image_id="img-abc",
+        session_config={
+            "repo_owner": "acme",
+            "repo_name": "repo",
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-6",
+            "session_id": "sess-1",
+        },
+        mcp_config={
+            "mcpServers": {
+                "remote": {
+                    "transport": "http",
+                    "url": "https://example.com/mcp",
+                }
+            }
+        },
+    )
+
+    env_vars = captured["env"]
+    assert "MCP_CONFIG_CONTENT" in env_vars
+    assert '"remote"' in env_vars["MCP_CONFIG_CONTENT"]
+
+
 # ---------------------------------------------------------------------------
 # VCS env var injection tests
 # ---------------------------------------------------------------------------
@@ -240,7 +323,7 @@ def _fake_sandbox_create(captured):
 
 @pytest.mark.asyncio
 async def test_vcs_env_vars_default_github(monkeypatch):
-    """SCM_PROVIDER unset → github.com defaults."""
+    """SCM_PROVIDER unset -> github.com defaults."""
     captured = {}
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
     monkeypatch.delenv("SCM_PROVIDER", raising=False)
@@ -263,7 +346,7 @@ async def test_vcs_env_vars_default_github(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_vcs_env_vars_explicit_github(monkeypatch):
-    """SCM_PROVIDER=github → same as default."""
+    """SCM_PROVIDER=github -> same as default."""
     captured = {}
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
     monkeypatch.setenv("SCM_PROVIDER", "github")
@@ -284,7 +367,7 @@ async def test_vcs_env_vars_explicit_github(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_vcs_env_vars_bitbucket(monkeypatch):
-    """SCM_PROVIDER=bitbucket → bitbucket.org + x-token-auth."""
+    """SCM_PROVIDER=bitbucket -> bitbucket.org + x-token-auth."""
     captured = {}
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
     monkeypatch.setenv("SCM_PROVIDER", "bitbucket")
@@ -308,7 +391,7 @@ async def test_vcs_env_vars_bitbucket(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_vcs_env_vars_no_token(monkeypatch):
-    """No clone token → token vars absent, host/username still set."""
+    """No clone token -> token vars absent, host/username still set."""
     captured = {}
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
     monkeypatch.delenv("SCM_PROVIDER", raising=False)
