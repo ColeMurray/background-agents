@@ -9,8 +9,8 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
-import { generateId, hashToken } from "../auth/crypto";
-import { getGitHubAppConfig, getInstallationRepository } from "../auth/github-app";
+import { generateId, hashToken, timingSafeEqual } from "../auth/crypto";
+import { getGitHubAppConfig } from "../auth/github-app";
 import { createModalClient } from "../sandbox/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
 import { createLogger, parseLogLevel } from "../logger";
@@ -24,6 +24,10 @@ import {
   type AlarmScheduler,
   type IdGenerator,
 } from "../sandbox/lifecycle/manager";
+import {
+  evaluateExecutionTimeout,
+  DEFAULT_EXECUTION_TIMEOUT_MS,
+} from "../sandbox/lifecycle/decisions";
 import {
   createSourceControlProvider as createSourceControlProviderImpl,
   resolveScmProviderFromEnv,
@@ -55,6 +59,7 @@ import { GlobalSecretsStore } from "../db/global-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { ParticipantService, getGitHubAvatarUrl } from "./participant-service";
+import { UserScmTokenStore } from "../db/user-scm-tokens";
 import { CallbackNotificationService } from "./callback-notification-service";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
@@ -92,6 +97,13 @@ const VALID_MESSAGE_STATUSES = ["pending", "processing", "completed", "failed"] 
  * unauthenticated connections that never complete the handshake.
  */
 const WS_AUTH_TIMEOUT_MS = 30000; // 30 seconds
+
+/**
+ * Maximum age of a WebSocket authentication token (in milliseconds).
+ * Tokens older than this are rejected with close code 4001, forcing
+ * the client to fetch a fresh token on reconnect.
+ */
+const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /**
  * Route definition for internal API endpoints.
@@ -202,11 +214,16 @@ export class SessionDO extends DurableObject<Env> {
    */
   private get participantService(): ParticipantService {
     if (!this._participantService) {
+      const userScmTokenStore =
+        this.env.DB && this.env.TOKEN_ENCRYPTION_KEY
+          ? new UserScmTokenStore(this.env.DB, this.env.TOKEN_ENCRYPTION_KEY)
+          : null;
       this._participantService = new ParticipantService({
         repository: this.repository,
         env: this.env,
         log: this.log,
         generateId: () => generateId(),
+        userScmTokenStore,
       });
     }
     return this._participantService;
@@ -263,6 +280,10 @@ export class SessionDO extends DurableObject<Env> {
     return this._wsManager;
   }
 
+  private get executionTimeoutMs(): number {
+    return parseInt(this.env.EXECUTION_TIMEOUT_MS || String(DEFAULT_EXECUTION_TIMEOUT_MS), 10);
+  }
+
   private get messageQueue(): SessionMessageQueue {
     if (!this._messageQueue) {
       this._messageQueue = new SessionMessageQueue({
@@ -279,6 +300,13 @@ export class SessionDO extends DurableObject<Env> {
         updateLastActivity: (timestamp) => this.updateLastActivity(timestamp),
         spawnSandbox: () => this.spawnSandbox(),
         broadcast: (message) => this.broadcast(message),
+        scheduleExecutionTimeout: async (startedAtMs: number) => {
+          const deadline = startedAtMs + this.executionTimeoutMs;
+          const currentAlarm = await this.ctx.storage.getAlarm();
+          if (!currentAlarm || deadline < currentAlarm) {
+            await this.ctx.storage.setAlarm(deadline);
+          }
+        },
       });
     }
 
@@ -333,6 +361,7 @@ export class SessionDO extends DurableObject<Env> {
       provider,
       github: {
         appConfig: appConfig ?? undefined,
+        kvCache: this.env.REPOS_CACHE,
       },
     });
   }
@@ -431,7 +460,10 @@ export class SessionDO extends DurableObject<Env> {
       wsManager,
       alarmScheduler,
       idGenerator,
-      config
+      config,
+      {
+        onSandboxTerminating: () => this.messageQueue.failStuckProcessingMessage(),
+      }
     );
   }
 
@@ -533,10 +565,12 @@ export class SessionDO extends DurableObject<Env> {
       const wsStartTime = Date.now();
       const authHeader = request.headers.get("Authorization");
       const sandboxId = request.headers.get("X-Sandbox-ID");
+      const providedToken = authHeader?.startsWith("Bearer ")
+        ? authHeader.slice("Bearer ".length)
+        : null;
 
       // Get expected values from DB
       const sandbox = this.getSandbox();
-      const expectedToken = sandbox?.auth_token;
       const expectedSandboxId = sandbox?.modal_sandbox_id;
 
       // Reject connection if sandbox should be stopped (prevents reconnection after inactivity timeout)
@@ -567,7 +601,8 @@ export class SessionDO extends DurableObject<Env> {
       }
 
       // Validate auth token
-      if (!authHeader || authHeader !== `Bearer ${expectedToken}`) {
+      const tokenMatches = await this.isValidSandboxToken(providedToken, sandbox);
+      if (!tokenMatches) {
         this.log.warn("ws.connect", {
           event: "ws.connect",
           ws_type: "sandbox",
@@ -699,10 +734,37 @@ export class SessionDO extends DurableObject<Env> {
   /**
    * Durable Object alarm handler.
    *
-   * Delegates to the lifecycle manager for inactivity and heartbeat monitoring.
+   * Checks for stuck processing messages (defense-in-depth execution timeout)
+   * BEFORE delegating to the lifecycle manager for inactivity and heartbeat
+   * monitoring. This ensures stuck messages are failed even when the sandbox
+   * is already dead and handleAlarm() returns early.
    */
   async alarm(): Promise<void> {
     this.ensureInitialized();
+
+    // Execution timeout check: if a message has been in 'processing' longer than
+    // the configured timeout, fail it. This is idempotent — if the message was
+    // already failed (by onSandboxTerminating or a prior alarm), getProcessingMessageWithStartedAt()
+    // returns null and we skip straight to handleAlarm().
+    const processing = this.repository.getProcessingMessageWithStartedAt();
+    if (processing?.started_at) {
+      const now = Date.now();
+      const result = evaluateExecutionTimeout(
+        processing.started_at,
+        { timeoutMs: this.executionTimeoutMs },
+        now
+      );
+      if (result.isTimedOut) {
+        this.log.warn("Execution timeout: message stuck in processing", {
+          event: "execution.timeout",
+          message_id: processing.id,
+          elapsed_ms: result.elapsedMs,
+          timeout_ms: this.executionTimeoutMs,
+        });
+        await this.messageQueue.failStuckProcessingMessage();
+      }
+    }
+
     await this.lifecycleManager.handleAlarm();
   }
 
@@ -823,6 +885,23 @@ export class SessionDO extends DurableObject<Env> {
         reject_reason: "invalid_token",
       });
       ws.close(4001, "Invalid authentication token");
+      return;
+    }
+
+    // Reject tokens older than the TTL
+    if (
+      participant.ws_token_created_at === null ||
+      Date.now() - participant.ws_token_created_at > WS_TOKEN_TTL_MS
+    ) {
+      this.log.warn("ws.connect", {
+        event: "ws.connect",
+        ws_type: "client",
+        outcome: "auth_failed",
+        reject_reason: "token_expired",
+        participant_id: participant.id,
+        user_id: participant.user_id,
+      });
+      ws.close(4001, "Token expired");
       return;
     }
 
@@ -1152,23 +1231,16 @@ export class SessionDO extends DurableObject<Env> {
       return session.repo_id;
     }
 
-    const appConfig = getGitHubAppConfig(this.env);
-    if (!appConfig) {
-      throw new Error("GitHub App not configured");
+    const result = await this.sourceControlProvider.checkRepositoryAccess({
+      owner: session.repo_owner,
+      name: session.repo_name,
+    });
+    if (!result) {
+      throw new Error("Repository is not accessible for the configured SCM provider");
     }
 
-    const repo = await getInstallationRepository(
-      appConfig,
-      session.repo_owner,
-      session.repo_name,
-      this.env
-    );
-    if (!repo) {
-      throw new Error("Repository is not installed for the GitHub App");
-    }
-
-    this.repository.updateSessionRepoId(repo.id);
-    return repo.id;
+    this.repository.updateSessionRepoId(result.repoId);
+    return result.repoId;
   }
 
   private async getUserEnvVars(): Promise<Record<string, string> | undefined> {
@@ -1232,6 +1304,32 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
+   * Verify a provided sandbox token against stored credentials.
+   *
+   * Preferred path uses auth_token_hash. Plaintext auth_token is only used
+   * as a compatibility fallback for older rows.
+   */
+  private async isValidSandboxToken(
+    token: string | null,
+    sandbox: SandboxRow | null
+  ): Promise<boolean> {
+    if (!token || !sandbox) {
+      return false;
+    }
+
+    if (sandbox.auth_token_hash) {
+      const tokenHash = await hashToken(token);
+      return timingSafeEqual(tokenHash, sandbox.auth_token_hash);
+    }
+
+    if (sandbox.auth_token) {
+      return timingSafeEqual(token, sandbox.auth_token);
+    }
+
+    return false;
+  }
+
+  /**
    * Verify a sandbox authentication token.
    * Called by the router to validate sandbox-originated requests.
    */
@@ -1266,7 +1364,8 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     // Validate the token
-    if (body.token !== sandbox.auth_token) {
+    const isTokenValid = await this.isValidSandboxToken(body.token, sandbox);
+    if (!isTokenValid) {
       this.log.warn("Sandbox token verification failed: token mismatch");
       return new Response(JSON.stringify({ valid: false, error: "Invalid token" }), {
         status: 401,
@@ -1761,7 +1860,7 @@ export class SessionDO extends DurableObject<Env> {
 
       const shouldUpdateTokens =
         clientSentAnyToken &&
-        (dbExpiresAt == null || (clientExpiresAt != null && clientExpiresAt >= dbExpiresAt));
+        (dbExpiresAt == null || (clientExpiresAt != null && clientExpiresAt > dbExpiresAt));
 
       // If we already have a refresh token (server-side refresh may rotate it),
       // only accept an incoming refresh token when we're also accepting the

@@ -248,6 +248,7 @@ export interface LinearCallbackContext {
   model: string;
   agentSessionId?: string;
   organizationId?: string;
+  emitToolProgressActivities?: boolean;
 }
 
 export type CallbackContext = SlackCallbackContext | LinearCallbackContext;

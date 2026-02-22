@@ -62,6 +62,7 @@ function createMockSandbox(
     snapshot_id: null,
     snapshot_image_id: null,
     auth_token: "auth-token-123",
+    auth_token_hash: "auth-token-hash-123",
     status: "ready",
     git_sync_status: "completed",
     last_heartbeat: Date.now() - 10000,
@@ -111,7 +112,8 @@ function createMockStorage(
       if (sandbox) {
         sandbox.status = data.status;
         sandbox.created_at = data.createdAt;
-        sandbox.auth_token = data.authToken;
+        sandbox.auth_token_hash = data.authTokenHash;
+        sandbox.auth_token = null;
         sandbox.modal_sandbox_id = data.modalSandboxId;
       }
     }),
@@ -847,6 +849,80 @@ describe("SandboxLifecycleManager", () => {
       await manager.handleAlarm();
 
       expect(provider.takeSnapshot).toHaveBeenCalled();
+    });
+
+    it("calls onSandboxTerminating callback on heartbeat stale", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "ready",
+        last_heartbeat: now - 100000, // Past 90s timeout
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const onSandboxTerminating = vi.fn().mockResolvedValue(undefined);
+
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig(),
+        { onSandboxTerminating }
+      );
+
+      await manager.handleAlarm();
+
+      expect(onSandboxTerminating).toHaveBeenCalledOnce();
+    });
+
+    it("calls onSandboxTerminating callback on inactivity timeout", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "ready",
+        last_heartbeat: now - 10000, // Recent heartbeat
+        last_activity: now - 11 * 60 * 1000, // Past 10 min timeout
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const onSandboxTerminating = vi.fn().mockResolvedValue(undefined);
+
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false, 0), // No clients
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig(),
+        { onSandboxTerminating }
+      );
+
+      await manager.handleAlarm();
+
+      expect(onSandboxTerminating).toHaveBeenCalledOnce();
+    });
+
+    it("does not call onSandboxTerminating when no callback provided", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "ready",
+        last_heartbeat: now - 100000, // Past timeout
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+
+      // No callbacks - should not throw
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.handleAlarm();
+      expect(storage.calls).toContain("updateSandboxStatus:stale");
     });
   });
 

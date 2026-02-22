@@ -44,6 +44,8 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
 function createMockProvider() {
   return {
     name: "github",
+    checkRepositoryAccess: vi.fn(),
+    listRepositories: vi.fn(),
     generatePushAuth: vi.fn(async () => ({ authType: "app", token: "app-token" as const })),
     getRepository: vi.fn(async () => ({
       owner: "acme",

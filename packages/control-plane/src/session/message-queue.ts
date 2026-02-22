@@ -36,6 +36,7 @@ interface MessageQueueDeps {
   updateLastActivity: (timestamp: number) => void;
   spawnSandbox: () => Promise<void>;
   broadcast: (message: ServerMessage) => void;
+  scheduleExecutionTimeout?: (startedAtMs: number) => Promise<void>;
 }
 
 export class SessionMessageQueue {
@@ -151,6 +152,10 @@ export class SessionMessageQueue {
     this.deps.broadcast({ type: "processing_status", isProcessing: true });
     this.deps.updateLastActivity(now);
 
+    if (this.deps.scheduleExecutionTimeout) {
+      await this.deps.scheduleExecutionTimeout(now);
+    }
+
     const author = this.deps.repository.getParticipantById(message.author_id);
     const session = this.deps.getSession();
     const resolvedModel = getValidModelOrDefault(message.model || session?.model);
@@ -231,6 +236,33 @@ export class SessionMessageQueue {
     if (sandboxWs) {
       this.deps.wsManager.send(sandboxWs, { type: "stop" });
     }
+  }
+
+  /**
+   * Fail a stuck processing message (defense-in-depth for execution timeout).
+   *
+   * Only marks the message as failed and broadcasts — does NOT send a stop command
+   * to the sandbox or call processMessageQueue(). This avoids races where a new
+   * prompt could be dispatched to a sandbox being shut down.
+   */
+  async failStuckProcessingMessage(): Promise<void> {
+    const now = Date.now();
+    const processingMessage = this.deps.repository.getProcessingMessage();
+    if (!processingMessage) return;
+
+    this.deps.repository.updateMessageCompletion(processingMessage.id, "failed", now);
+
+    const syntheticEvent: Extract<SandboxEvent, { type: "execution_complete" }> = {
+      type: "execution_complete",
+      messageId: processingMessage.id,
+      success: false,
+      sandboxId: "",
+      timestamp: now / 1000,
+    };
+    this.deps.repository.upsertExecutionCompleteEvent(processingMessage.id, syntheticEvent, now);
+    this.deps.broadcast({ type: "sandbox_event", event: syntheticEvent });
+    this.deps.broadcast({ type: "processing_status", isProcessing: false });
+    this.deps.ctx.waitUntil(this.deps.callbackService.notifyComplete(processingMessage.id, false));
   }
 
   writeUserMessageEvent(

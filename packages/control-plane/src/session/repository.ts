@@ -183,7 +183,7 @@ export interface WsClientMappingData {
 export interface SpawnSandboxData {
   status: SandboxStatus;
   createdAt: number;
-  authToken: string;
+  authTokenHash: string;
   modalSandboxId: string;
 }
 
@@ -301,12 +301,13 @@ export class SessionRepository {
       `UPDATE sandbox SET
          status = ?,
          created_at = ?,
-         auth_token = ?,
+         auth_token_hash = ?,
+         auth_token = NULL,
          modal_sandbox_id = ?
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,
-      data.authToken,
+      data.authTokenHash,
       data.modalSandboxId
     );
   }
@@ -479,6 +480,14 @@ export class SessionRepository {
   getProcessingMessage(): { id: string } | null {
     const result = this.sql.exec(`SELECT id FROM messages WHERE status = 'processing' LIMIT 1`);
     const rows = result.toArray() as Array<{ id: string }>;
+    return rows[0] ?? null;
+  }
+
+  getProcessingMessageWithStartedAt(): { id: string; started_at: number } | null {
+    const result = this.sql.exec(
+      `SELECT id, started_at FROM messages WHERE status = 'processing' LIMIT 1`
+    );
+    const rows = result.toArray() as Array<{ id: string; started_at: number }>;
     return rows[0] ?? null;
   }
 

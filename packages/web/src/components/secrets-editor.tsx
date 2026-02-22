@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type ClipboardEvent } from "react";
 import useSWR, { mutate } from "swr";
+import { Badge } from "@/components/ui/badge";
 
 import { normalizeKey, parseMaybeEnvContent, type ParsedEnvEntry } from "@/lib/env-paste";
 
@@ -441,9 +442,9 @@ export function SecretsEditor({
                         overridden ? "opacity-40" : "opacity-70"
                       }`}
                     >
-                      <span className="text-[10px] font-medium px-1.5 py-0.5 bg-blue-500/10 text-blue-600 border border-blue-500/20">
+                      <Badge variant="info" className="text-[10px]">
                         Global
-                      </span>
+                      </Badge>
                       <span className="text-xs text-foreground font-mono">{g.key}</span>
                       <input
                         type="password"

@@ -89,6 +89,7 @@ export interface SandboxRow {
   snapshot_id: string | null;
   snapshot_image_id: string | null; // Modal Image ID for filesystem snapshot restoration
   auth_token: string | null;
+  auth_token_hash: string | null; // SHA-256 hash of sandbox auth token
   status: SandboxStatus;
   git_sync_status: GitSyncStatus;
   last_heartbeat: number | null;

@@ -6,6 +6,7 @@ import { RepoSecretsStore } from "../db/repo-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { SecretsValidationError, normalizeKey, validateKey } from "../db/secrets-validation";
 import type { Env } from "../types";
+import { SourceControlProviderError } from "../source-control";
 import { createLogger } from "../logger";
 import {
   type Route,
@@ -13,6 +14,7 @@ import {
   parsePattern,
   json,
   error,
+  createRouteSourceControlProvider,
   resolveInstalledRepo,
 } from "./shared";
 
@@ -42,7 +44,8 @@ async function handleSetRepoSecrets(
 
   let resolved;
   try {
-    resolved = await resolveInstalledRepo(env, owner, name);
+    const provider = createRouteSourceControlProvider(env);
+    resolved = await resolveInstalledRepo(provider, owner, name);
     if (!resolved) {
       return error("Repository is not installed for the GitHub App", 404);
     }
@@ -55,10 +58,9 @@ async function handleSetRepoSecrets(
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
-    return error(
-      message === "GitHub App not configured" ? message : "Failed to resolve repository",
-      500
-    );
+    const isConfigError =
+      e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus;
+    return error(isConfigError ? message : "Failed to resolve repository", 500);
   }
 
   let body: { secrets?: Record<string, string> };
@@ -141,7 +143,8 @@ async function handleListRepoSecrets(
 
   let resolved;
   try {
-    resolved = await resolveInstalledRepo(env, owner, name);
+    const provider = createRouteSourceControlProvider(env);
+    resolved = await resolveInstalledRepo(provider, owner, name);
     if (!resolved) {
       return error("Repository is not installed for the GitHub App", 404);
     }
@@ -154,10 +157,9 @@ async function handleListRepoSecrets(
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
-    return error(
-      message === "GitHub App not configured" ? message : "Failed to resolve repository",
-      500
-    );
+    const isConfigError =
+      e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus;
+    return error(isConfigError ? message : "Failed to resolve repository", 500);
   }
 
   const store = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
@@ -228,7 +230,8 @@ async function handleDeleteRepoSecret(
 
   let resolved;
   try {
-    resolved = await resolveInstalledRepo(env, owner, name);
+    const provider = createRouteSourceControlProvider(env);
+    resolved = await resolveInstalledRepo(provider, owner, name);
     if (!resolved) {
       return error("Repository is not installed for the GitHub App", 404);
     }
@@ -241,10 +244,9 @@ async function handleDeleteRepoSecret(
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
-    return error(
-      message === "GitHub App not configured" ? message : "Failed to resolve repository",
-      500
-    );
+    const isConfigError =
+      e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus;
+    return error(isConfigError ? message : "Failed to resolve repository", 500);
   }
 
   const store = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);

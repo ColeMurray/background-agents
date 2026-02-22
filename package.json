@@ -11,6 +11,9 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "test": "npm run test --workspaces --if-present",
+    "test:coverage": "npm run test:coverage --workspaces --if-present",
+    "test:integration": "npm run test:integration --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
     "prepare": "node -e \"if (process.env.CI) process.exit(0)\" && husky"
@@ -27,10 +30,14 @@
     "lint-staged": "^16.2.7",
     "prettier": "^3.4.2",
     "typescript": "^5.7.2",
-    "typescript-eslint": "^8.21.0"
+    "typescript-eslint": "^8.21.0",
+    "wrangler": "^4.0.0"
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "overrides": {
+    "minimatch": ">=10.0.1"
   },
   "lint-staged": {
     "*.{ts,tsx}": [

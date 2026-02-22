@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { runInDurableObject } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
-import { initSession } from "./helpers";
+import { initSession, seedSandboxAuthHash } from "./helpers";
 
 describe("GET /internal/state", () => {
   it("state includes sandbox after init", async () => {
@@ -96,6 +96,31 @@ describe("POST /internal/unarchive", () => {
 });
 
 describe("POST /internal/verify-sandbox-token", () => {
+  it("validates token using hashed sandbox auth token", async () => {
+    const { stub } = await initSession();
+
+    const authToken = "test-sandbox-auth-token-hashed";
+    await seedSandboxAuthHash(stub, { authToken, sandboxId: "sb-hashed-token" });
+
+    const validRes = await stub.fetch("http://internal/internal/verify-sandbox-token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: authToken }),
+    });
+    expect(validRes.status).toBe(200);
+    const validBody = await validRes.json<{ valid: boolean }>();
+    expect(validBody.valid).toBe(true);
+
+    const invalidRes = await stub.fetch("http://internal/internal/verify-sandbox-token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: "wrong-token" }),
+    });
+    expect(invalidRes.status).toBe(401);
+    const invalidBody = await invalidRes.json<{ valid: boolean; error: string }>();
+    expect(invalidBody.valid).toBe(false);
+  });
+
   it("validates correct token and rejects wrong token", async () => {
     const { stub } = await initSession();
 
@@ -103,7 +128,7 @@ describe("POST /internal/verify-sandbox-token", () => {
     const authToken = "test-sandbox-auth-token-12345";
     await runInDurableObject(stub, (instance: SessionDO) => {
       instance.ctx.storage.sql.exec(
-        "UPDATE sandbox SET auth_token = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)",
+        "UPDATE sandbox SET auth_token = ?, auth_token_hash = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)",
         authToken
       );
     });

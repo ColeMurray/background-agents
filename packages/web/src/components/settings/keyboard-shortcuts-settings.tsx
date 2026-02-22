@@ -1,6 +1,7 @@
 "use client";
 
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { Badge } from "@/components/ui/badge";
 
 export function KeyboardShortcutsSettings() {
   return (
@@ -27,9 +28,9 @@ function ShortcutRow({ label, shortcut }: { label: string; shortcut: string }) {
   return (
     <div className="flex items-center justify-between px-4 py-3">
       <span className="text-sm text-foreground">{label}</span>
-      <span className="text-xs font-mono text-muted-foreground border border-border px-2 py-1 rounded bg-input">
+      <Badge variant="kbd" className="px-2 py-1">
         {shortcut}
-      </span>
+      </Badge>
     </div>
   );
 }

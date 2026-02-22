@@ -468,3 +468,51 @@ export function evaluateWarmDecision(state: WarmState): WarmAction {
 
   return { action: "spawn" };
 }
+
+// ==================== Execution Timeout ====================
+
+/**
+ * Configuration for execution timeout.
+ */
+export interface ExecutionTimeoutConfig {
+  /** Maximum time a message can stay in 'processing' before being failed (ms). */
+  timeoutMs: number;
+}
+
+/**
+ * Default: 90 minutes — matches the bridge's PROMPT_MAX_DURATION.
+ * The control plane timeout should never preempt the bridge's own timeout for
+ * legitimate long-running prompts. It fires only when the bridge is dead and
+ * can't enforce its own timeout.
+ */
+export const DEFAULT_EXECUTION_TIMEOUT_MS = 90 * 60 * 1000;
+
+/**
+ * Result of execution timeout evaluation.
+ */
+export interface ExecutionTimeoutResult {
+  isTimedOut: boolean;
+  elapsedMs: number;
+}
+
+/**
+ * Evaluate whether a processing message has exceeded the execution timeout.
+ *
+ * Pure function: no side effects.
+ *
+ * @param startedAt - Timestamp (ms) when the message entered 'processing'
+ * @param config - Execution timeout configuration
+ * @param now - Current timestamp (ms)
+ * @returns Whether the message is timed out and how long it's been processing
+ */
+export function evaluateExecutionTimeout(
+  startedAt: number,
+  config: ExecutionTimeoutConfig,
+  now: number
+): ExecutionTimeoutResult {
+  const elapsedMs = now - startedAt;
+  return {
+    isTimedOut: elapsedMs >= config.timeoutMs,
+    elapsedMs,
+  };
+}

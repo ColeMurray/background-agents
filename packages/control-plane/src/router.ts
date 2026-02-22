@@ -11,6 +11,7 @@ import {
   type SourceControlProviderName,
 } from "./source-control";
 import { SessionIndexStore } from "./db/session-index";
+import { UserScmTokenStore, DEFAULT_TOKEN_LIFETIME_MS } from "./db/user-scm-tokens";
 
 import {
   getValidModelOrDefault,
@@ -25,6 +26,7 @@ import {
   parsePattern,
   json,
   error,
+  createRouteSourceControlProvider,
   resolveInstalledRepo,
 } from "./routes/shared";
 import { integrationSettingsRoutes } from "./routes/integration-settings";
@@ -554,7 +556,8 @@ async function handleCreateSession(
 
   let repoId: number;
   try {
-    const resolved = await resolveInstalledRepo(env, repoOwner, repoName);
+    const provider = createRouteSourceControlProvider(env);
+    const resolved = await resolveInstalledRepo(provider, repoOwner, repoName);
     if (!resolved) {
       return error("Repository is not installed for the GitHub App", 404);
     }
@@ -566,10 +569,9 @@ async function handleCreateSession(
       repo_owner: repoOwner,
       repo_name: repoName,
     });
-    return error(
-      message === "GitHub App not configured" ? message : "Failed to resolve repository",
-      500
-    );
+    const isConfigError =
+      e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus;
+    return error(isConfigError ? message : "Failed to resolve repository", 500);
   }
 
   // User info from direct params
@@ -973,6 +975,29 @@ async function handleSessionWsToken(
       return { githubTokenEncrypted: accessToken, githubRefreshTokenEncrypted: refreshToken };
     }
   );
+
+  // Populate D1 with the user's SCM tokens (non-blocking) so centralized refresh works
+  if (
+    body.githubUserId &&
+    body.githubToken &&
+    body.githubRefreshToken &&
+    env.TOKEN_ENCRYPTION_KEY
+  ) {
+    ctx.executionCtx?.waitUntil(
+      new UserScmTokenStore(env.DB, env.TOKEN_ENCRYPTION_KEY)
+        .upsertTokens(
+          body.githubUserId,
+          body.githubToken,
+          body.githubRefreshToken,
+          body.githubTokenExpiresAt ?? Date.now() + DEFAULT_TOKEN_LIFETIME_MS
+        )
+        .catch((e) =>
+          logger.error("Failed to write tokens to D1", {
+            error: e instanceof Error ? e : String(e),
+          })
+        )
+    );
+  }
 
   const doId = env.SESSION.idFromName(sessionId);
   const stub = env.SESSION.get(doId);

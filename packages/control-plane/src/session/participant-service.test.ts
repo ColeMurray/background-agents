@@ -8,6 +8,23 @@ import {
   type ParticipantServiceDeps,
   type ParticipantServiceEnv,
 } from "./participant-service";
+import type { UserScmTokenStore, ScmTokenRecord, CasResult } from "../db/user-scm-tokens";
+
+// ---- Module-level mocks for centralized refresh tests ----
+
+vi.mock("../auth/crypto", () => ({
+  encryptToken: vi.fn(async (token: string) => `enc:${token}`),
+  decryptToken: vi.fn(async (encrypted: string) => {
+    if (encrypted.startsWith("enc:")) return encrypted.slice(4);
+    return `dec:${encrypted}`;
+  }),
+}));
+
+vi.mock("../auth/github", () => ({
+  refreshAccessToken: vi.fn(),
+}));
+
+import { refreshAccessToken } from "../auth/github";
 
 // ---- Mock factories ----
 
@@ -51,7 +68,48 @@ function createMockRepository(): ParticipantRepository {
   };
 }
 
-function createTestHarness(overrides?: { env?: Partial<ParticipantServiceEnv> }) {
+function createMockUserScmTokenStore(): {
+  store: UserScmTokenStore;
+  getTokens: ReturnType<typeof vi.fn>;
+  upsertTokens: ReturnType<typeof vi.fn>;
+  casUpdateTokens: ReturnType<typeof vi.fn>;
+  isTokenFresh: ReturnType<typeof vi.fn>;
+} {
+  const getTokens = vi.fn<(id: string) => Promise<ScmTokenRecord | null>>().mockResolvedValue(null);
+  const upsertTokens = vi.fn().mockResolvedValue(undefined);
+  const casUpdateTokens = vi
+    .fn<
+      (
+        id: string,
+        expected: string,
+        newAccess: string,
+        newRefresh: string,
+        newExpires: number
+      ) => Promise<CasResult>
+    >()
+    .mockResolvedValue({ ok: true });
+  const isTokenFresh = vi
+    .fn<(expiresAt: number, bufferMs?: number) => boolean>()
+    .mockReturnValue(false);
+
+  return {
+    store: {
+      getTokens,
+      upsertTokens,
+      casUpdateTokens,
+      isTokenFresh,
+    } as unknown as UserScmTokenStore,
+    getTokens,
+    upsertTokens,
+    casUpdateTokens,
+    isTokenFresh,
+  };
+}
+
+function createTestHarness(overrides?: {
+  env?: Partial<ParticipantServiceEnv>;
+  userScmTokenStore?: UserScmTokenStore | null;
+}) {
   const log = createMockLogger();
   const repository = createMockRepository();
   let idCounter = 0;
@@ -68,6 +126,7 @@ function createTestHarness(overrides?: { env?: Partial<ParticipantServiceEnv> })
     env,
     log,
     generateId: () => `gen-id-${++idCounter}`,
+    userScmTokenStore: overrides?.userScmTokenStore,
   };
 
   return {
@@ -98,6 +157,7 @@ describe("ParticipantService", () => {
   let harness: ReturnType<typeof createTestHarness>;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     harness = createTestHarness();
   });
 
@@ -221,7 +281,7 @@ describe("ParticipantService", () => {
     });
   });
 
-  describe("refreshToken", () => {
+  describe("refreshToken (local-only, no D1 store)", () => {
     it("returns null when no refresh token stored", async () => {
       const participant = createParticipant({ github_refresh_token_encrypted: null });
 
@@ -239,7 +299,7 @@ describe("ParticipantService", () => {
         env: { GITHUB_CLIENT_ID: undefined, GITHUB_CLIENT_SECRET: undefined },
       });
       const participant = createParticipant({
-        github_refresh_token_encrypted: "encrypted-refresh",
+        github_refresh_token_encrypted: "enc:refresh-token",
       });
 
       const result = await h.service.refreshToken(participant);
@@ -248,6 +308,262 @@ describe("ParticipantService", () => {
       expect(h.log.warn).toHaveBeenCalledWith(
         "Cannot refresh: GitHub OAuth credentials not configured"
       );
+    });
+
+    it("falls back to local when no github_user_id even if store provided", async () => {
+      const mockStore = createMockUserScmTokenStore();
+      const h = createTestHarness({ userScmTokenStore: mockStore.store });
+
+      const participant = createParticipant({
+        github_user_id: null,
+        github_refresh_token_encrypted: null,
+      });
+
+      await h.service.refreshToken(participant);
+
+      // Should not call D1 store at all
+      expect(mockStore.getTokens).not.toHaveBeenCalled();
+    });
+
+    it("falls back to local when userScmTokenStore is null", async () => {
+      const h = createTestHarness({ userScmTokenStore: null });
+
+      const participant = createParticipant({
+        github_user_id: "gh-123",
+        github_refresh_token_encrypted: null,
+      });
+
+      const result = await h.service.refreshToken(participant);
+
+      expect(result).toBeNull();
+    });
+  });
+
+  describe("refreshToken (centralized D1)", () => {
+    let mockStore: ReturnType<typeof createMockUserScmTokenStore>;
+
+    beforeEach(() => {
+      mockStore = createMockUserScmTokenStore();
+    });
+
+    function createCentralizedHarness(overrides?: { env?: Partial<ParticipantServiceEnv> }) {
+      return createTestHarness({
+        userScmTokenStore: mockStore.store,
+        ...overrides,
+      });
+    }
+
+    it("uses fresh D1 access token without calling GitHub API", async () => {
+      const h = createCentralizedHarness();
+      const freshExpiresAt = Date.now() + 3600_000;
+
+      mockStore.getTokens.mockResolvedValue({
+        accessToken: "fresh-access",
+        refreshToken: "fresh-refresh",
+        expiresAt: freshExpiresAt,
+        refreshTokenEncrypted: "enc-refresh",
+      });
+      mockStore.isTokenFresh.mockReturnValue(true);
+
+      const updatedParticipant = createParticipant({
+        github_user_id: "gh-123",
+        github_access_token_encrypted: "enc:fresh-access",
+        github_refresh_token_encrypted: "enc:fresh-refresh",
+        github_token_expires_at: freshExpiresAt,
+      });
+      vi.mocked(h.repository.getParticipantById).mockReturnValue(updatedParticipant);
+
+      const participant = createParticipant({ github_user_id: "gh-123" });
+      const result = await h.service.refreshToken(participant);
+
+      expect(result).toBe(updatedParticipant);
+      expect(mockStore.getTokens).toHaveBeenCalledWith("gh-123");
+      expect(refreshAccessToken).not.toHaveBeenCalled();
+      expect(h.repository.updateParticipantTokens).toHaveBeenCalledWith("part-1", {
+        githubAccessTokenEncrypted: "enc:fresh-access",
+        githubRefreshTokenEncrypted: "enc:fresh-refresh",
+        githubTokenExpiresAt: freshExpiresAt,
+      });
+    });
+
+    it("refreshes expired D1 token via GitHub API and CAS-writes", async () => {
+      const h = createCentralizedHarness();
+
+      mockStore.getTokens.mockResolvedValue({
+        accessToken: "old-access",
+        refreshToken: "old-refresh",
+        expiresAt: Date.now() - 1000,
+        refreshTokenEncrypted: "enc-old-refresh",
+      });
+      mockStore.isTokenFresh.mockReturnValue(false);
+      mockStore.casUpdateTokens.mockResolvedValue({ ok: true });
+
+      vi.mocked(refreshAccessToken).mockResolvedValue({
+        access_token: "new-access",
+        refresh_token: "new-refresh",
+        token_type: "bearer",
+        scope: "repo",
+        expires_in: 28800,
+      });
+
+      const updatedParticipant = createParticipant({
+        github_user_id: "gh-123",
+        github_access_token_encrypted: "enc:new-access",
+      });
+      vi.mocked(h.repository.getParticipantById).mockReturnValue(updatedParticipant);
+
+      const participant = createParticipant({ github_user_id: "gh-123" });
+      const result = await h.service.refreshToken(participant);
+
+      expect(result).toBe(updatedParticipant);
+      expect(refreshAccessToken).toHaveBeenCalledWith("old-refresh", expect.any(Object));
+      expect(mockStore.casUpdateTokens).toHaveBeenCalledWith(
+        "gh-123",
+        "enc-old-refresh",
+        "new-access",
+        "new-refresh",
+        expect.any(Number)
+      );
+    });
+
+    it("on CAS conflict, re-reads D1 and uses winner's tokens", async () => {
+      const h = createCentralizedHarness();
+
+      mockStore.getTokens
+        .mockResolvedValueOnce({
+          accessToken: "old-access",
+          refreshToken: "old-refresh",
+          expiresAt: Date.now() - 1000,
+          refreshTokenEncrypted: "enc-old-refresh",
+        })
+        .mockResolvedValueOnce({
+          accessToken: "winner-access",
+          refreshToken: "winner-refresh",
+          expiresAt: Date.now() + 3600_000,
+          refreshTokenEncrypted: "enc-winner-refresh",
+        });
+      mockStore.isTokenFresh.mockReturnValue(false);
+      mockStore.casUpdateTokens.mockResolvedValue({ ok: false, reason: "cas_conflict" });
+
+      vi.mocked(refreshAccessToken).mockResolvedValue({
+        access_token: "my-new-access",
+        refresh_token: "my-new-refresh",
+        token_type: "bearer",
+        scope: "repo",
+        expires_in: 28800,
+      });
+
+      const updatedParticipant = createParticipant({
+        github_user_id: "gh-123",
+        github_access_token_encrypted: "enc:winner-access",
+      });
+      vi.mocked(h.repository.getParticipantById).mockReturnValue(updatedParticipant);
+
+      const participant = createParticipant({ github_user_id: "gh-123" });
+      const result = await h.service.refreshToken(participant);
+
+      expect(result).toBe(updatedParticipant);
+      // Should have re-read D1
+      expect(mockStore.getTokens).toHaveBeenCalledTimes(2);
+      // Should update local with winner's tokens
+      expect(h.repository.updateParticipantTokens).toHaveBeenCalledWith("part-1", {
+        githubAccessTokenEncrypted: "enc:winner-access",
+        githubRefreshTokenEncrypted: "enc:winner-refresh",
+        githubTokenExpiresAt: expect.any(Number),
+      });
+    });
+
+    it("falls back to local refresh when no D1 record, then seeds D1", async () => {
+      const h = createCentralizedHarness();
+
+      mockStore.getTokens.mockResolvedValue(null);
+
+      vi.mocked(refreshAccessToken).mockResolvedValue({
+        access_token: "local-new-access",
+        refresh_token: "local-new-refresh",
+        token_type: "bearer",
+        scope: "repo",
+        expires_in: 28800,
+      });
+
+      const refreshedParticipant = createParticipant({
+        id: "part-1",
+        github_user_id: "gh-123",
+        github_access_token_encrypted: "enc:local-new-access",
+        github_refresh_token_encrypted: "enc:local-new-refresh",
+        github_token_expires_at: Date.now() + 28800_000,
+      });
+      vi.mocked(h.repository.getParticipantById).mockReturnValue(refreshedParticipant);
+
+      const participant = createParticipant({
+        github_user_id: "gh-123",
+        github_refresh_token_encrypted: "enc:old-refresh",
+      });
+      const result = await h.service.refreshToken(participant);
+
+      expect(result).toBe(refreshedParticipant);
+      expect(h.log.info).toHaveBeenCalledWith(
+        "No D1 token record, falling back to local refresh",
+        expect.any(Object)
+      );
+      // Should seed D1 after successful local refresh
+      expect(mockStore.upsertTokens).toHaveBeenCalledWith(
+        "gh-123",
+        "local-new-access",
+        "local-new-refresh",
+        expect.any(Number)
+      );
+    });
+
+    it("D1 error falls back to local refresh", async () => {
+      const h = createCentralizedHarness();
+
+      mockStore.getTokens.mockRejectedValue(new Error("D1 unavailable"));
+
+      vi.mocked(refreshAccessToken).mockResolvedValue({
+        access_token: "fallback-access",
+        refresh_token: "fallback-refresh",
+        token_type: "bearer",
+        scope: "repo",
+        expires_in: 28800,
+      });
+
+      const refreshedParticipant = createParticipant({
+        github_user_id: "gh-123",
+        github_access_token_encrypted: "enc:fallback-access",
+      });
+      vi.mocked(h.repository.getParticipantById).mockReturnValue(refreshedParticipant);
+
+      const participant = createParticipant({
+        github_user_id: "gh-123",
+        github_refresh_token_encrypted: "enc:old-refresh",
+      });
+      const result = await h.service.refreshToken(participant);
+
+      expect(result).toBe(refreshedParticipant);
+      expect(h.log.error).toHaveBeenCalledWith(
+        "Centralized token refresh failed, falling back to local",
+        expect.any(Object)
+      );
+    });
+
+    it("returns null when D1 token expired and no GitHub OAuth credentials", async () => {
+      const h = createCentralizedHarness({
+        env: { GITHUB_CLIENT_ID: undefined, GITHUB_CLIENT_SECRET: undefined },
+      });
+
+      mockStore.getTokens.mockResolvedValue({
+        accessToken: "old-access",
+        refreshToken: "old-refresh",
+        expiresAt: Date.now() - 1000,
+        refreshTokenEncrypted: "enc-old-refresh",
+      });
+      mockStore.isTokenFresh.mockReturnValue(false);
+
+      const participant = createParticipant({ github_user_id: "gh-123" });
+      const result = await h.service.refreshToken(participant);
+
+      expect(result).toBeNull();
     });
   });
 
@@ -266,7 +582,7 @@ describe("ParticipantService", () => {
 
     it("returns error when token expired and no refresh token", async () => {
       const participant = createParticipant({
-        github_access_token_encrypted: "encrypted-access",
+        github_access_token_encrypted: "enc:encrypted-access",
         github_refresh_token_encrypted: null,
         github_token_expires_at: Date.now() - 1000,
       });

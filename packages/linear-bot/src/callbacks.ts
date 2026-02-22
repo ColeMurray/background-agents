@@ -135,13 +135,31 @@ function isValidToolCallPayload(payload: unknown): payload is ToolCallCallback {
 }
 
 callbacksRouter.post("/tool_call", async (c) => {
+  const startTime = Date.now();
+  const traceId = c.req.header("x-trace-id") || crypto.randomUUID();
   const payload = await c.req.json();
 
   if (!isValidToolCallPayload(payload)) {
+    log.warn("http.request", {
+      trace_id: traceId,
+      http_path: "/callbacks/tool_call",
+      http_status: 400,
+      outcome: "rejected",
+      reject_reason: "invalid_payload",
+      duration_ms: Date.now() - startTime,
+    });
     return c.json({ error: "invalid payload" }, 400);
   }
 
   if (!c.env.INTERNAL_CALLBACK_SECRET) {
+    log.error("http.request", {
+      trace_id: traceId,
+      http_path: "/callbacks/tool_call",
+      http_status: 500,
+      outcome: "error",
+      reject_reason: "secret_not_configured",
+      duration_ms: Date.now() - startTime,
+    });
     return c.json({ error: "not configured" }, 500);
   }
 
@@ -160,18 +178,65 @@ callbacksRouter.post("/tool_call", async (c) => {
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
   if (!timingSafeEqual(signature, expectedHex)) {
+    log.warn("http.request", {
+      trace_id: traceId,
+      http_path: "/callbacks/tool_call",
+      http_status: 401,
+      outcome: "rejected",
+      reject_reason: "invalid_signature",
+      session_id: payload.sessionId,
+      duration_ms: Date.now() - startTime,
+    });
     return c.json({ error: "unauthorized" }, 401);
   }
 
   c.executionCtx.waitUntil(
     (async () => {
+      const processStart = Date.now();
+      const { context } = payload;
+
+      if (!context.agentSessionId || !context.organizationId) {
+        log.debug("callback.tool_call", {
+          trace_id: traceId,
+          session_id: payload.sessionId,
+          tool: payload.tool,
+          outcome: "skipped",
+          skip_reason: "missing_agent_context",
+          duration_ms: Date.now() - processStart,
+        });
+        return;
+      }
+
+      // Default to true for backward compat with sessions created before this field existed
+      if (context.emitToolProgressActivities === false) {
+        log.debug("callback.tool_call", {
+          trace_id: traceId,
+          session_id: payload.sessionId,
+          agent_session_id: context.agentSessionId,
+          tool: payload.tool,
+          outcome: "skipped",
+          skip_reason: "activities_disabled",
+          duration_ms: Date.now() - processStart,
+        });
+        return;
+      }
+
+      const client = await getLinearClient(c.env, context.organizationId);
+      if (!client) {
+        log.warn("callback.tool_call", {
+          trace_id: traceId,
+          session_id: payload.sessionId,
+          agent_session_id: context.agentSessionId,
+          org_id: context.organizationId,
+          tool: payload.tool,
+          outcome: "skipped",
+          skip_reason: "no_oauth_token",
+          duration_ms: Date.now() - processStart,
+        });
+        return;
+      }
+
       try {
-        const { context } = payload;
-        if (!context.agentSessionId || !context.organizationId) return;
-
-        const client = await getLinearClient(c.env, context.organizationId);
-        if (!client) return;
-
         const description = formatToolAction(payload.tool, payload.args);
         await emitAgentActivity(
           client,
@@ -179,9 +244,23 @@ callbacksRouter.post("/tool_call", async (c) => {
           { type: "action", body: description },
           true
         );
+        log.info("callback.tool_call", {
+          trace_id: traceId,
+          session_id: payload.sessionId,
+          agent_session_id: context.agentSessionId,
+          tool: payload.tool,
+          outcome: "success",
+          duration_ms: Date.now() - processStart,
+        });
       } catch (e) {
-        log.debug("tool_call callback processing failed", {
-          error: e instanceof Error ? e.message : String(e),
+        log.warn("callback.tool_call", {
+          trace_id: traceId,
+          session_id: payload.sessionId,
+          agent_session_id: context.agentSessionId,
+          tool: payload.tool,
+          outcome: "error",
+          error: e instanceof Error ? e : new Error(String(e)),
+          duration_ms: Date.now() - processStart,
         });
       }
     })()

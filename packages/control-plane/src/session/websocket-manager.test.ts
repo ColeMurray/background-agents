@@ -157,6 +157,7 @@ function createSandboxRow(modalSandboxId: string): SandboxRow {
     snapshot_id: null,
     snapshot_image_id: null,
     auth_token: null,
+    auth_token_hash: null,
     status: "ready",
     git_sync_status: "completed",
     last_heartbeat: null,

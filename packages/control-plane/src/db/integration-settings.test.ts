@@ -167,6 +167,7 @@ class FakePreparedStatement {
 describe("isValidIntegrationId", () => {
   it("accepts known integration IDs", () => {
     expect(isValidIntegrationId("github")).toBe(true);
+    expect(isValidIntegrationId("linear")).toBe(true);
   });
 
   it("rejects unknown IDs", () => {
@@ -471,6 +472,78 @@ describe("IntegrationSettingsStore", () => {
           reasoningEffort: "high",
         })
       ).resolves.not.toThrow();
+    });
+  });
+
+  describe("linear settings", () => {
+    it("round-trips global linear settings", async () => {
+      await store.setGlobal("linear", {
+        enabledRepos: ["acme/platform"],
+        defaults: {
+          model: "anthropic/claude-sonnet-4-6",
+          reasoningEffort: "high",
+          allowUserPreferenceOverride: true,
+          allowLabelModelOverride: false,
+          emitToolProgressActivities: false,
+        },
+      });
+
+      const result = await store.getGlobal("linear");
+      expect(result).toEqual({
+        enabledRepos: ["acme/platform"],
+        defaults: {
+          model: "anthropic/claude-sonnet-4-6",
+          reasoningEffort: "high",
+          allowUserPreferenceOverride: true,
+          allowLabelModelOverride: false,
+          emitToolProgressActivities: false,
+        },
+      });
+    });
+
+    it("round-trips linear repo settings", async () => {
+      await store.setRepoSettings("linear", "acme/platform", {
+        model: "openai/gpt-5.3-codex",
+        reasoningEffort: "high",
+        allowLabelModelOverride: false,
+      });
+
+      const result = await store.getRepoSettings("linear", "acme/platform");
+      expect(result).toEqual({
+        model: "openai/gpt-5.3-codex",
+        reasoningEffort: "high",
+        allowLabelModelOverride: false,
+      });
+    });
+
+    it("rejects invalid linear boolean setting", async () => {
+      await expect(
+        store.setGlobal("linear", {
+          defaults: { allowUserPreferenceOverride: "invalid" as unknown as boolean },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("merges linear global and repo settings", async () => {
+      await store.setGlobal("linear", {
+        enabledRepos: ["acme/platform"],
+        defaults: {
+          model: "anthropic/claude-sonnet-4-6",
+          allowUserPreferenceOverride: true,
+        },
+      });
+      await store.setRepoSettings("linear", "acme/platform", {
+        allowUserPreferenceOverride: false,
+        emitToolProgressActivities: false,
+      });
+
+      const config = await store.getResolvedConfig("linear", "acme/platform");
+      expect(config.enabledRepos).toEqual(["acme/platform"]);
+      expect(config.settings).toEqual({
+        model: "anthropic/claude-sonnet-4-6",
+        allowUserPreferenceOverride: false,
+        emitToolProgressActivities: false,
+      });
     });
   });
 });

@@ -4,6 +4,7 @@ import { useState } from "react";
 import useSWR, { mutate } from "swr";
 import { MODEL_OPTIONS, DEFAULT_ENABLED_MODELS } from "@open-inspect/shared";
 import { MODEL_PREFERENCES_KEY } from "@/hooks/use-enabled-models";
+import { Button } from "@/components/ui/button";
 
 export function ModelsSettings() {
   const { data, isLoading: loading } = useSWR<{ enabledModels: string[] }>(MODEL_PREFERENCES_KEY);
@@ -161,14 +162,9 @@ export function ModelsSettings() {
       </div>
 
       <div className="mt-6">
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={saving || !dirty}
-          className="px-4 py-2 text-sm font-medium text-white bg-accent hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition"
-        >
+        <Button onClick={handleSave} disabled={saving || !dirty}>
           {saving ? "Saving..." : "Save"}
-        </button>
+        </Button>
       </div>
     </div>
   );

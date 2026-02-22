@@ -11,6 +11,9 @@ import {
   type ValidModel,
 } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
+import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
+import { Button } from "@/components/ui/button";
+import { RadioCard, Select } from "@/components/ui/form-controls";
 
 const GLOBAL_SETTINGS_KEY = "/api/integration-settings/github";
 const REPO_SETTINGS_KEY = "/api/integration-settings/github/repos";
@@ -41,12 +44,7 @@ export function GitHubIntegrationSettings() {
   const { enabledModelOptions } = useEnabledModels();
 
   if (globalLoading || repoSettingsLoading) {
-    return (
-      <div className="flex items-center gap-2 text-muted-foreground">
-        <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-        Loading GitHub settings...
-      </div>
-    );
+    return <IntegrationSettingsSkeleton />;
   }
 
   const settings = globalData?.settings;
@@ -236,34 +234,30 @@ function GlobalSettingsSection({
       <div className="mb-4">
         <p className="text-sm font-medium text-foreground mb-2">Repository Scope</p>
         <div className="grid sm:grid-cols-2 gap-2 mb-3">
-          <label className="flex items-center gap-2 px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
-            <input
-              type="radio"
-              name="repo-scope"
-              checked={repoScopeMode === "all"}
-              onChange={() => {
-                setRepoScopeMode("all");
-                setDirty(true);
-                setError("");
-                setSuccess("");
-              }}
-            />
-            All repositories
-          </label>
-          <label className="flex items-center gap-2 px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
-            <input
-              type="radio"
-              name="repo-scope"
-              checked={repoScopeMode === "selected"}
-              onChange={() => {
-                setRepoScopeMode("selected");
-                setDirty(true);
-                setError("");
-                setSuccess("");
-              }}
-            />
-            Selected repositories
-          </label>
+          <RadioCard
+            name="repo-scope"
+            checked={repoScopeMode === "all"}
+            onChange={() => {
+              setRepoScopeMode("all");
+              setDirty(true);
+              setError("");
+              setSuccess("");
+            }}
+            label="All repositories"
+            description="Bot responds in every accessible repository."
+          />
+          <RadioCard
+            name="repo-scope"
+            checked={repoScopeMode === "selected"}
+            onChange={() => {
+              setRepoScopeMode("selected");
+              setDirty(true);
+              setError("");
+              setSuccess("");
+            }}
+            label="Selected repositories"
+            description="Bot only responds in the allowlisted repositories."
+          />
         </div>
 
         {repoScopeMode === "selected" && (
@@ -306,24 +300,14 @@ function GlobalSettingsSection({
       </div>
 
       <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={saving || !dirty}
-          className="px-4 py-2 text-sm font-medium text-white bg-accent hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition"
-        >
+        <Button onClick={handleSave} disabled={saving || !dirty}>
           {saving ? "Saving..." : "Save"}
-        </button>
+        </Button>
 
         {isConfigured && (
-          <button
-            type="button"
-            onClick={handleReset}
-            disabled={saving}
-            className="px-4 py-2 text-sm text-red-600 hover:text-red-700 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed transition"
-          >
+          <Button variant="destructive" onClick={handleReset} disabled={saving}>
             Reset to defaults
-          </button>
+          </Button>
         )}
       </div>
     </Section>
@@ -398,10 +382,10 @@ function RepoOverridesSection({
       )}
 
       <div className="flex items-center gap-2">
-        <select
+        <Select
           value={addingRepo}
           onChange={(e) => setAddingRepo(e.target.value)}
-          className="flex-1 px-3 py-2 text-sm border border-border bg-background text-foreground rounded-sm"
+          className="flex-1"
         >
           <option value="">Select a repository...</option>
           {availableForOverride.map((repo) => (
@@ -409,15 +393,10 @@ function RepoOverridesSection({
               {repo.fullName}
             </option>
           ))}
-        </select>
-        <button
-          type="button"
-          onClick={handleAdd}
-          disabled={!addingRepo}
-          className="px-4 py-2 text-sm font-medium text-white bg-accent hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition"
-        >
+        </Select>
+        <Button onClick={handleAdd} disabled={!addingRepo}>
           Add Override
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -510,10 +489,11 @@ function RepoOverrideRow({
         {entry.repo}
       </span>
 
-      <select
+      <Select
         value={model}
         onChange={(e) => handleModelChange(e.target.value)}
-        className="flex-1 min-w-[180px] px-2 py-1 text-sm border border-border bg-background text-foreground rounded-sm"
+        className="flex-1 min-w-[180px]"
+        density="compact"
       >
         <option value="">Default model</option>
         {enabledModelOptions.map((group) => (
@@ -525,16 +505,17 @@ function RepoOverrideRow({
             ))}
           </optgroup>
         ))}
-      </select>
+      </Select>
 
       {reasoningConfig && (
-        <select
+        <Select
           value={effort}
           onChange={(e) => {
             setEffort(e.target.value);
             setDirty(true);
           }}
-          className="w-36 px-2 py-1 text-sm border border-border bg-background text-foreground rounded-sm"
+          className="w-36"
+          density="compact"
         >
           <option value="">Default effort</option>
           {reasoningConfig.efforts.map((value) => (
@@ -542,26 +523,16 @@ function RepoOverrideRow({
               {value}
             </option>
           ))}
-        </select>
+        </Select>
       )}
 
-      <button
-        type="button"
-        onClick={handleSave}
-        disabled={saving || !dirty}
-        className="px-3 py-1 text-sm font-medium text-white bg-accent hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition"
-      >
+      <Button size="sm" onClick={handleSave} disabled={saving || !dirty}>
         {saving ? "..." : "Save"}
-      </button>
+      </Button>
 
-      <button
-        type="button"
-        onClick={handleDelete}
-        className="px-3 py-1 text-sm text-red-600 hover:bg-red-50 transition"
-        title="Remove override"
-      >
+      <Button variant="destructive" size="sm" onClick={handleDelete}>
         Remove
-      </button>
+      </Button>
     </div>
   );
 }

@@ -30,6 +30,7 @@ import {
 } from "./decisions";
 import { extractProviderAndModel } from "../../utils/models";
 import { createLogger, type Logger } from "../../logger";
+import { hashToken } from "../../auth/crypto";
 
 const log = createLogger("lifecycle-manager");
 
@@ -64,7 +65,7 @@ export interface SandboxStorage {
   updateSandboxForSpawn(data: {
     status: SandboxStatus;
     createdAt: number;
-    authToken: string;
+    authTokenHash: string;
     modalSandboxId: string;
   }): void;
   /** Update sandbox Modal object ID (for snapshot API) */
@@ -148,6 +149,17 @@ export const DEFAULT_LIFECYCLE_CONFIG: Omit<SandboxLifecycleConfig, "controlPlan
   heartbeat: DEFAULT_HEARTBEAT_CONFIG,
 };
 
+// ==================== Callbacks ====================
+
+/**
+ * Optional callbacks from the lifecycle manager to the session DO.
+ * Lightweight callback interface — the manager doesn't know what the callbacks do.
+ */
+export interface LifecycleCallbacks {
+  /** Called when the sandbox is being terminated (heartbeat stale, inactivity timeout). */
+  onSandboxTerminating?: () => Promise<void>;
+}
+
 // ==================== Manager ====================
 
 /**
@@ -174,7 +186,8 @@ export class SandboxLifecycleManager {
     private readonly wsManager: WebSocketManager,
     private readonly alarmScheduler: AlarmScheduler,
     private readonly idGenerator: IdGenerator,
-    private readonly config: SandboxLifecycleConfig
+    private readonly config: SandboxLifecycleConfig,
+    private readonly callbacks: LifecycleCallbacks = {}
   ) {
     this.log = config.sessionId ? log.child({ session_id: config.sessionId }) : log;
   }
@@ -279,13 +292,14 @@ export class SandboxLifecycleManager {
       const now = Date.now();
       const sessionId = session.session_name || session.id;
       const sandboxAuthToken = this.idGenerator.generateId();
+      const sandboxAuthTokenHash = await hashToken(sandboxAuthToken);
       const expectedSandboxId = `sandbox-${session.repo_owner}-${session.repo_name}-${now}`;
 
       // Store expected sandbox ID and auth token BEFORE calling provider
       this.storage.updateSandboxForSpawn({
         status: "spawning",
         createdAt: now,
-        authToken: sandboxAuthToken,
+        authTokenHash: sandboxAuthTokenHash,
         modalSandboxId: expectedSandboxId,
       });
       this.broadcaster.broadcast({ type: "sandbox_status", status: "spawning" });
@@ -392,13 +406,14 @@ export class SandboxLifecycleManager {
 
       const now = Date.now();
       const sandboxAuthToken = this.idGenerator.generateId();
+      const sandboxAuthTokenHash = await hashToken(sandboxAuthToken);
       const expectedSandboxId = `sandbox-${session.repo_owner}-${session.repo_name}-${now}`;
 
       // Store expected sandbox ID and auth token
       this.storage.updateSandboxForSpawn({
         status: "spawning",
         createdAt: now,
-        authToken: sandboxAuthToken,
+        authTokenHash: sandboxAuthTokenHash,
         modalSandboxId: expectedSandboxId,
       });
 
@@ -588,6 +603,8 @@ export class SandboxLifecycleManager {
         last_heartbeat_ms: heartbeatHealth.ageMs || 0,
         threshold_ms: this.config.heartbeat.timeoutMs,
       });
+      // Fail any stuck processing message before terminating
+      await this.callbacks.onSandboxTerminating?.();
       // Fire-and-forget snapshot so status broadcast isn't delayed
       this.triggerSnapshot("heartbeat_timeout").catch((e) =>
         this.log.error("Heartbeat snapshot failed", { error: e instanceof Error ? e : String(e) })
@@ -624,6 +641,8 @@ export class SandboxLifecycleManager {
           last_activity: sandbox.last_activity,
           timeout_ms: this.config.inactivity.timeoutMs,
         });
+        // Fail any stuck processing message before terminating
+        await this.callbacks.onSandboxTerminating?.();
         // Set status to stopped FIRST to block reconnection attempts
         this.storage.updateSandboxStatus("stopped");
         this.broadcaster.broadcast({ type: "sandbox_status", status: "stopped" });

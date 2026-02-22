@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ChevronDownIcon } from "@/components/ui/icons";
 
 interface CollapsibleSectionProps {
   title: string;
@@ -22,14 +23,9 @@ export function CollapsibleSection({
         className="flex items-center justify-between w-full px-4 py-3 text-sm font-medium text-foreground hover:bg-muted transition-colors"
       >
         <span>{title}</span>
-        <svg
+        <ChevronDownIcon
           className={`w-4 h-4 text-secondary-foreground transition-transform ${isOpen ? "rotate-180" : ""}`}
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
+        />
       </button>
       {isOpen && <div className="px-4 pb-4">{children}</div>}
     </div>

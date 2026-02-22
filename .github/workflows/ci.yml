@@ -14,6 +14,7 @@ jobs:
   lint-typescript:
     name: Lint & Format (TypeScript)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,6 +37,7 @@ jobs:
   typecheck-typescript:
     name: TypeCheck (TypeScript)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -58,6 +60,7 @@ jobs:
   build-web:
     name: Build (Web)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -80,6 +83,7 @@ jobs:
   lint-python:
     name: Lint & Format (Python)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     defaults:
       run:
         working-directory: packages/modal-infra
@@ -107,6 +111,7 @@ jobs:
   typecheck-python:
     name: TypeCheck (Python)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     defaults:
       run:
         working-directory: packages/modal-infra
@@ -132,6 +137,7 @@ jobs:
   test-typescript:
     name: Test (TypeScript)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [lint-typescript, typecheck-typescript, build-web]
     steps:
       - name: Checkout
@@ -167,6 +173,7 @@ jobs:
   test-python:
     name: Test (Python)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: [lint-python]
     defaults:
       run:
