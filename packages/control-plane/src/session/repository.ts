@@ -37,7 +37,6 @@ export interface WsClientMappingResult {
   user_id: string;
   scm_name: string | null;
   scm_login: string | null;
-  scm_provider: "github" | "bitbucket" | null;
 }
 
 /**
@@ -64,7 +63,6 @@ export interface UpsertSessionData {
   repoId?: number | null;
   model: string;
   reasoningEffort?: string | null;
-  scmProvider?: "github" | "bitbucket";
   status: SessionStatus;
   createdAt: number;
   updatedAt: number;
@@ -93,7 +91,6 @@ export interface CreateParticipantData {
   scmAccessTokenEncrypted?: string | null;
   scmRefreshTokenEncrypted?: string | null;
   scmTokenExpiresAt?: number | null;
-  scmProvider?: "github" | "bitbucket";
   role: ParticipantRole;
   joinedAt: number;
 }
@@ -219,8 +216,8 @@ export class SessionRepository {
 
   upsertSession(data: UpsertSessionData): void {
     this.sql.exec(
-      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, model, reasoning_effort, scm_provider, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, model, reasoning_effort, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.sessionName,
       data.title,
@@ -229,7 +226,6 @@ export class SessionRepository {
       data.repoId ?? null,
       data.model,
       data.reasoningEffort ?? null,
-      data.scmProvider ?? "github",
       data.status,
       data.createdAt,
       data.updatedAt
@@ -394,8 +390,8 @@ export class SessionRepository {
 
   createParticipant(data: CreateParticipantData): void {
     this.sql.exec(
-      `INSERT INTO participants (id, user_id, scm_user_id, scm_login, scm_name, scm_email, scm_access_token_encrypted, scm_refresh_token_encrypted, scm_token_expires_at, scm_provider, role, joined_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO participants (id, user_id, scm_user_id, scm_login, scm_name, scm_email, scm_access_token_encrypted, scm_refresh_token_encrypted, scm_token_expires_at, role, joined_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.userId,
       data.scmUserId ?? null,
@@ -405,7 +401,6 @@ export class SessionRepository {
       data.scmAccessTokenEncrypted ?? null,
       data.scmRefreshTokenEncrypted ?? null,
       data.scmTokenExpiresAt ?? null,
-      data.scmProvider ?? "github",
       data.role,
       data.joinedAt
     );
@@ -734,7 +729,7 @@ export class SessionRepository {
 
   getWsClientMapping(wsId: string): WsClientMappingResult | null {
     const result = this.sql.exec(
-      `SELECT m.participant_id, m.client_id, p.user_id, p.scm_name, p.scm_login, p.scm_provider
+      `SELECT m.participant_id, m.client_id, p.user_id, p.scm_name, p.scm_login
        FROM ws_client_mapping m
        JOIN participants p ON m.participant_id = p.id
        WHERE m.ws_id = ?`,

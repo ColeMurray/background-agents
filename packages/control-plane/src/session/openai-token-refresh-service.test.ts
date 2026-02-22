@@ -86,7 +86,6 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     status: "active",
     created_at: 1,
     updated_at: 1,
-    scm_provider: "github",
     ...overrides,
   };
 }

@@ -99,7 +99,6 @@ describe("SessionRepository", () => {
         null,
         "claude-sonnet-4",
         null,
-        "github",
         "created",
         1000,
         2000,
@@ -349,7 +348,6 @@ describe("SessionRepository", () => {
         "encrypted-token",
         null,
         9000,
-        "github",
         "owner",
         1000,
       ]);
@@ -373,7 +371,6 @@ describe("SessionRepository", () => {
         null,
         null,
         null,
-        "github",
         "member",
         1000,
       ]);

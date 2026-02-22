@@ -46,7 +46,6 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
     scm_login: null,
     scm_email: null,
     scm_name: "Test User",
-    scm_provider: "github",
     role: "member",
     scm_access_token_encrypted: null,
     scm_refresh_token_encrypted: null,

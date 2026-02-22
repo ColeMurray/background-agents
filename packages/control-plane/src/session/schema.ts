@@ -23,8 +23,7 @@ CREATE TABLE IF NOT EXISTS session (
   reasoning_effort TEXT,                            -- Session-level reasoning effort default
   status TEXT DEFAULT 'created',                    -- 'created', 'active', 'completed', 'archived'
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  scm_provider TEXT NOT NULL DEFAULT 'github'       -- 'github', 'bitbucket'
+  updated_at INTEGER NOT NULL
 );
 
 -- Participants in the session
@@ -40,7 +39,6 @@ CREATE TABLE IF NOT EXISTS participants (
   scm_access_token_encrypted TEXT,
   scm_refresh_token_encrypted TEXT,
   scm_token_expires_at INTEGER,                     -- Unix timestamp
-  scm_provider TEXT NOT NULL DEFAULT 'github',      -- 'github', 'bitbucket'
   -- WebSocket authentication
   ws_auth_token TEXT,                               -- SHA-256 hash of WebSocket auth token
   ws_token_created_at INTEGER,                      -- When the token was generated
@@ -301,6 +299,20 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 22,
     description: "Add scm_provider to session",
     run: `ALTER TABLE session ADD COLUMN scm_provider TEXT NOT NULL DEFAULT 'github'`,
+  },
+  {
+    id: 23,
+    description: "Drop scm_provider from session and participants (now deployment-level)",
+    run: (sql) => {
+      for (const table of ["session", "participants"] as const) {
+        const columns = sql.exec(`PRAGMA table_info(${table})`).toArray() as Array<{
+          name: string;
+        }>;
+        if (columns.some((c) => c.name === "scm_provider")) {
+          sql.exec(`ALTER TABLE ${table} DROP COLUMN scm_provider`);
+        }
+      }
+    },
   },
 ];
 

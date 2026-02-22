@@ -11,7 +11,6 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
     scm_login: "octocat",
     scm_email: null,
     scm_name: "Octo Cat",
-    scm_provider: "github",
     role: "member",
     scm_access_token_encrypted: null,
     scm_refresh_token_encrypted: null,
@@ -41,7 +40,6 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     status: "active",
     created_at: 1000,
     updated_at: 1000,
-    scm_provider: "github",
     ...overrides,
   };
 }
@@ -124,6 +122,7 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
     wsManager: wsManager as never,
     participantService: participantService as never,
     callbackService: callbackService as never,
+    scmProvider: "github",
     getClientInfo: options?.getClientInfo ?? (() => createClientInfo()),
     validateReasoningEffort: vi.fn(() => null),
     getSession: vi.fn(() => createSession()),

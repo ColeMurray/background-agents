@@ -293,6 +293,7 @@ export class SessionDO extends DurableObject<Env> {
         wsManager: this.wsManager,
         participantService: this.participantService,
         callbackService: this.callbackService,
+        scmProvider: resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
         getClientInfo: (ws) => this.getClientInfo(ws),
         validateReasoningEffort: (model, effort) => this.validateReasoningEffort(model, effort),
         getSession: () => this.getSession(),
@@ -901,7 +902,7 @@ export class SessionDO extends DurableObject<Env> {
       participantId: participant.id,
       userId: participant.user_id,
       name: participant.scm_name || participant.scm_login || participant.user_id,
-      avatar: getAvatarUrl(participant.scm_login, participant.scm_provider),
+      avatar: getAvatarUrl(participant.scm_login, resolveScmProviderFromEnv(this.env.SCM_PROVIDER)),
       status: "active",
       lastSeen: Date.now(),
       clientId: data.clientId,
@@ -933,7 +934,10 @@ export class SessionDO extends DurableObject<Env> {
       participant: {
         participantId: participant.id,
         name: participant.scm_name || participant.scm_login || participant.user_id,
-        avatar: getAvatarUrl(participant.scm_login, participant.scm_provider),
+        avatar: getAvatarUrl(
+          participant.scm_login,
+          resolveScmProviderFromEnv(this.env.SCM_PROVIDER)
+        ),
       },
       replay,
       spawnError: sandbox?.last_spawn_error ?? null,
@@ -995,7 +999,7 @@ export class SessionDO extends DurableObject<Env> {
       participantId: mapping.participant_id,
       userId: mapping.user_id,
       name: mapping.scm_name || mapping.scm_login || mapping.user_id,
-      avatar: getAvatarUrl(mapping.scm_login, mapping.scm_provider),
+      avatar: getAvatarUrl(mapping.scm_login, resolveScmProviderFromEnv(this.env.SCM_PROVIDER)),
       status: "active",
       lastSeen: Date.now(),
       clientId: mapping.client_id || `client-${Date.now()}`,
@@ -1428,10 +1432,7 @@ export class SessionDO extends DurableObject<Env> {
       scmEmail?: string;
       scmToken?: string | null; // Plain SCM token (will be encrypted)
       scmTokenEncrypted?: string | null; // Pre-encrypted SCM token
-      scmProvider?: "github" | "bitbucket";
     };
-
-    const scmProvider = body.scmProvider ?? "github";
 
     const sessionId = this.ctx.id.toString();
     const sessionName = body.sessionName; // Store the WebSocket routing name
@@ -1473,7 +1474,6 @@ export class SessionDO extends DurableObject<Env> {
       repoId: body.repoId ?? null,
       model,
       reasoningEffort,
-      scmProvider,
       status: "created",
       createdAt: now,
       updatedAt: now,
@@ -1499,7 +1499,6 @@ export class SessionDO extends DurableObject<Env> {
       scmName: body.scmName ?? null,
       scmEmail: body.scmEmail ?? null,
       scmAccessTokenEncrypted: encryptedToken,
-      scmProvider,
       role: "owner",
       joinedAt: now,
     });

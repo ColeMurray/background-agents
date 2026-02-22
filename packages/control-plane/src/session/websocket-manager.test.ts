@@ -117,7 +117,6 @@ function createMockRepository() {
         user_id: `user-${data.participantId}`,
         scm_name: null,
         scm_login: null,
-        scm_provider: "github",
       });
     },
   } as unknown as SessionRepository;
@@ -442,7 +441,6 @@ describe("SessionWebSocketManagerImpl", () => {
         user_id: "user-1",
         scm_name: "Test",
         scm_login: "testuser",
-        scm_provider: "github",
       };
       mockRepo.addMapping("ws-42", mapping);
 
@@ -501,7 +499,6 @@ describe("SessionWebSocketManagerImpl", () => {
         user_id: "u-1",
         scm_name: null,
         scm_login: null,
-        scm_provider: "github",
       });
 
       expect(manager.hasPersistedMapping("ws-1")).toBe(true);
@@ -622,7 +619,6 @@ describe("SessionWebSocketManagerImpl", () => {
         user_id: "u-1",
         scm_name: null,
         scm_login: null,
-        scm_provider: "github",
       });
 
       const called: WebSocket[] = [];
@@ -660,7 +656,6 @@ describe("SessionWebSocketManagerImpl", () => {
         user_id: "u-2",
         scm_name: null,
         scm_login: null,
-        scm_provider: "github",
       });
 
       // Unauthenticated client (connected but never subscribed)
@@ -723,7 +718,6 @@ describe("SessionWebSocketManagerImpl", () => {
         user_id: "u-1",
         scm_name: null,
         scm_login: null,
-        scm_provider: "github",
       });
 
       await manager.enforceAuthTimeout(ws, "ws-1");

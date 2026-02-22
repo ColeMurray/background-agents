@@ -32,7 +32,6 @@ export interface SessionRow {
   status: SessionStatus;
   created_at: number;
   updated_at: number;
-  scm_provider: "github" | "bitbucket";
 }
 
 export interface ParticipantRow {
@@ -46,7 +45,6 @@ export interface ParticipantRow {
   scm_access_token_encrypted: string | null;
   scm_refresh_token_encrypted: string | null;
   scm_token_expires_at: number | null;
-  scm_provider: "github" | "bitbucket";
   ws_auth_token: string | null; // SHA-256 hash of WebSocket auth token
   ws_token_created_at: number | null; // When the token was generated
   joined_at: number;

@@ -48,7 +48,6 @@ function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
     status: "active",
     created_at: Date.now() - 60000,
     updated_at: Date.now(),
-    scm_provider: "github",
     ...overrides,
   };
 }

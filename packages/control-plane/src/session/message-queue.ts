@@ -8,6 +8,7 @@ import {
   isValidModel,
 } from "../utils/models";
 import type { ClientInfo, Env, MessageSource, SandboxEvent, ServerMessage } from "../types";
+import type { SourceControlProviderName } from "../source-control";
 import type { SessionRow, ParticipantRow, SandboxCommand } from "./types";
 import type { SessionRepository } from "./repository";
 import type { SessionWebSocketManager } from "./websocket-manager";
@@ -30,6 +31,7 @@ interface MessageQueueDeps {
   wsManager: SessionWebSocketManager;
   participantService: ParticipantService;
   callbackService: CallbackNotificationService;
+  scmProvider: SourceControlProviderName;
   getClientInfo: (ws: WebSocket) => ClientInfo | null;
   validateReasoningEffort: (model: string, effort: string | undefined) => string | null;
   getSession: () => SessionRow | null;
@@ -279,7 +281,7 @@ export class SessionMessageQueue {
       author: {
         participantId: participant.id,
         name: participant.scm_name || participant.scm_login || participant.user_id,
-        avatar: getAvatarUrl(participant.scm_login, participant.scm_provider),
+        avatar: getAvatarUrl(participant.scm_login, this.deps.scmProvider),
       },
     };
     this.deps.repository.createEvent({

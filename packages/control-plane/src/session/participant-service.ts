@@ -9,7 +9,7 @@
 
 import { decryptToken, encryptToken } from "../auth/crypto";
 import { refreshAccessToken } from "../auth/github";
-import type { SourceControlAuthContext } from "../source-control";
+import type { SourceControlAuthContext, SourceControlProviderName } from "../source-control";
 import type { Logger } from "../logger";
 import type { ParticipantRow } from "./types";
 import type { CreateParticipantData } from "./repository";
@@ -59,7 +59,7 @@ export interface ParticipantServiceDeps {
  */
 export function getAvatarUrl(
   login: string | null | undefined,
-  provider: "github" | "bitbucket" | null | undefined = "github"
+  provider: SourceControlProviderName = "github"
 ): string | undefined {
   if (!login) return undefined;
   if (provider === "github") return `https://github.com/${login}.png`;
@@ -118,7 +118,6 @@ export class ParticipantService {
       scm_login: null,
       scm_email: null,
       scm_name: name,
-      scm_provider: "github",
       role: "member",
       scm_access_token_encrypted: null,
       scm_refresh_token_encrypted: null,
