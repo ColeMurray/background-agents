@@ -307,6 +307,7 @@ async function handleGetResolvedConfig(
         reasoningEffort,
         autoReviewOnOpen: githubSettings.autoReviewOnOpen ?? true,
         enabledRepos,
+        allowedTriggerUsers: githubSettings.allowedTriggerUsers ?? null,
       },
     });
   }

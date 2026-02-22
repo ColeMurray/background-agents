@@ -249,11 +249,73 @@ describe("Integration settings API", () => {
           model: string | null;
           autoReviewOnOpen: boolean;
           enabledRepos: string[] | null;
+          allowedTriggerUsers: string[] | null;
         };
       }>();
       expect(body.config.model).toBeNull();
       expect(body.config.autoReviewOnOpen).toBe(true);
       expect(body.config.enabledRepos).toBeNull();
+      expect(body.config.allowedTriggerUsers).toBeNull();
+    });
+
+    it("returns allowedTriggerUsers in resolved config from defaults", async () => {
+      const headers = await authHeaders();
+
+      await SELF.fetch("https://test.local/integration-settings/github", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          settings: {
+            defaults: { allowedTriggerUsers: ["Alice", "bob"] },
+          },
+        }),
+      });
+
+      const res = await SELF.fetch(
+        "https://test.local/integration-settings/github/resolved/acme/widgets",
+        { headers }
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json<{
+        config: {
+          allowedTriggerUsers: string[] | null;
+        };
+      }>();
+      expect(body.config.allowedTriggerUsers).toEqual(["alice", "bob"]);
+    });
+
+    it("per-repo allowedTriggerUsers overrides global default", async () => {
+      const headers = await authHeaders();
+
+      await SELF.fetch("https://test.local/integration-settings/github", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          settings: {
+            defaults: { allowedTriggerUsers: ["alice", "bob"] },
+          },
+        }),
+      });
+
+      await SELF.fetch("https://test.local/integration-settings/github/repos/acme/widgets", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          settings: { allowedTriggerUsers: ["carol"] },
+        }),
+      });
+
+      const res = await SELF.fetch(
+        "https://test.local/integration-settings/github/resolved/acme/widgets",
+        { headers }
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json<{
+        config: {
+          allowedTriggerUsers: string[] | null;
+        };
+      }>();
+      expect(body.config.allowedTriggerUsers).toEqual(["carol"]);
     });
 
     it("returns linear resolved config with merged defaults", async () => {

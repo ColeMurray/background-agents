@@ -236,6 +236,39 @@ describe("IntegrationSettingsStore", () => {
       expect(result?.enabledRepos).toEqual(["acme/widgets", "foo/bar"]);
     });
 
+    it("normalizes defaults.allowedTriggerUsers to lowercase", async () => {
+      await store.setGlobal("github", {
+        defaults: { allowedTriggerUsers: ["Alice", "BOB"] },
+      });
+
+      const result = await store.getGlobal("github");
+      expect(result?.defaults?.allowedTriggerUsers).toEqual(["alice", "bob"]);
+    });
+
+    it("rejects non-array defaults.allowedTriggerUsers", async () => {
+      await expect(
+        store.setGlobal("github", {
+          defaults: { allowedTriggerUsers: "alice" as unknown as string[] },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects defaults.allowedTriggerUsers with non-string elements", async () => {
+      await expect(
+        store.setGlobal("github", {
+          defaults: { allowedTriggerUsers: [123, null] as unknown as string[] },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects enabledRepos with non-string elements", async () => {
+      await expect(
+        store.setGlobal("github", {
+          enabledRepos: [42] as unknown as string[],
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
     it("validates defaults.model on setGlobal", async () => {
       await expect(
         store.setGlobal("github", {
@@ -322,6 +355,23 @@ describe("IntegrationSettingsStore", () => {
 
       const result = await store.getRepoSettings("github", "acme/widgets");
       expect(result?.autoReviewOnOpen).toBe(false);
+    });
+
+    it("normalizes per-repo allowedTriggerUsers to lowercase", async () => {
+      await store.setRepoSettings("github", "acme/widgets", {
+        allowedTriggerUsers: ["Alice", "BOB"],
+      });
+
+      const result = await store.getRepoSettings("github", "acme/widgets");
+      expect(result?.allowedTriggerUsers).toEqual(["alice", "bob"]);
+    });
+
+    it("rejects non-array per-repo allowedTriggerUsers", async () => {
+      await expect(
+        store.setRepoSettings("github", "acme/widgets", {
+          allowedTriggerUsers: "alice" as unknown as string[],
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
     });
   });
 
@@ -418,6 +468,54 @@ describe("IntegrationSettingsStore", () => {
 
       const config = await store.getResolvedConfig("github", "acme/widgets");
       expect(config.enabledRepos).toEqual([]);
+    });
+
+    it("returns undefined allowedTriggerUsers in settings when not configured", async () => {
+      await store.setGlobal("github", { defaults: { autoReviewOnOpen: true } });
+
+      const config = await store.getResolvedConfig("github", "acme/widgets");
+      expect(config.settings.allowedTriggerUsers).toBeUndefined();
+    });
+
+    it("preserves empty allowedTriggerUsers array in settings (deny all)", async () => {
+      await store.setGlobal("github", { defaults: { allowedTriggerUsers: [] } });
+
+      const config = await store.getResolvedConfig("github", "acme/widgets");
+      expect(config.settings.allowedTriggerUsers).toEqual([]);
+    });
+
+    it("returns allowedTriggerUsers list in settings when configured as default", async () => {
+      await store.setGlobal("github", {
+        defaults: { allowedTriggerUsers: ["alice", "bob"] },
+      });
+
+      const config = await store.getResolvedConfig("github", "acme/widgets");
+      expect(config.settings.allowedTriggerUsers).toEqual(["alice", "bob"]);
+    });
+
+    it("per-repo allowedTriggerUsers overrides global default", async () => {
+      await store.setGlobal("github", {
+        defaults: { allowedTriggerUsers: ["alice", "bob"] },
+      });
+      await store.setRepoSettings("github", "acme/widgets", {
+        allowedTriggerUsers: ["carol"],
+      });
+
+      const config = await store.getResolvedConfig("github", "acme/widgets");
+      expect(config.settings.allowedTriggerUsers).toEqual(["carol"]);
+    });
+
+    it("global allowedTriggerUsers preserved when repo doesn't override", async () => {
+      await store.setGlobal("github", {
+        defaults: { allowedTriggerUsers: ["alice", "bob"] },
+      });
+      await store.setRepoSettings("github", "acme/widgets", {
+        model: "anthropic/claude-opus-4-6",
+      });
+
+      const config = await store.getResolvedConfig("github", "acme/widgets");
+      expect(config.settings.allowedTriggerUsers).toEqual(["alice", "bob"]);
+      expect(config.settings.model).toBe("anthropic/claude-opus-4-6");
     });
   });
 

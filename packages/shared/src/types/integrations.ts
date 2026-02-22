@@ -16,6 +16,7 @@ export interface GitHubBotSettings {
   autoReviewOnOpen?: boolean;
   model?: string;
   reasoningEffort?: string;
+  allowedTriggerUsers?: string[];
 }
 
 /** Overridable behavior settings for the Linear bot. Used at both global (defaults) and per-repo (overrides) levels. */

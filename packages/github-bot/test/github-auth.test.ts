@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { generateAppJwt, postReaction } from "../src/github-auth";
+import { generateAppJwt, postReaction, checkSenderPermission } from "../src/github-auth";
 
 /** Generate a PKCS#8 PEM RSA key pair for testing. */
 async function generateTestKeyPair(): Promise<{ privateKeyPem: string }> {
@@ -104,5 +104,88 @@ describe("postReaction", () => {
     vi.mocked(globalThis.fetch).mockRejectedValue(new Error("network error"));
     const result = await postReaction("tok", "https://api.github.com/test", "eyes");
     expect(result).toBe(false);
+  });
+});
+
+describe("checkSenderPermission", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("returns hasPermission true for write permission", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ permission: "write" }), { status: 200 })
+    );
+    const result = await checkSenderPermission("tok", "acme", "widgets", "alice");
+    expect(result).toEqual({ hasPermission: true });
+  });
+
+  it("returns hasPermission true for admin permission", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ permission: "admin" }), { status: 200 })
+    );
+    const result = await checkSenderPermission("tok", "acme", "widgets", "alice");
+    expect(result).toEqual({ hasPermission: true });
+  });
+
+  it("returns hasPermission true for maintain permission", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ permission: "maintain" }), { status: 200 })
+    );
+    const result = await checkSenderPermission("tok", "acme", "widgets", "alice");
+    expect(result).toEqual({ hasPermission: true });
+  });
+
+  it("returns hasPermission false for read permission", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ permission: "read" }), { status: 200 })
+    );
+    const result = await checkSenderPermission("tok", "acme", "widgets", "alice");
+    expect(result).toEqual({ hasPermission: false });
+  });
+
+  it("returns hasPermission false for none permission", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ permission: "none" }), { status: 200 })
+    );
+    const result = await checkSenderPermission("tok", "acme", "widgets", "alice");
+    expect(result).toEqual({ hasPermission: false });
+  });
+
+  it("returns error flag on API error (404)", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response("Not Found", { status: 404 }));
+    const result = await checkSenderPermission("tok", "acme", "widgets", "alice");
+    expect(result).toEqual({ hasPermission: false, error: true });
+  });
+
+  it("returns error flag on network error", async () => {
+    vi.mocked(globalThis.fetch).mockRejectedValue(new Error("network error"));
+    const result = await checkSenderPermission("tok", "acme", "widgets", "alice");
+    expect(result).toEqual({ hasPermission: false, error: true });
+  });
+
+  it("calls correct GitHub API URL with encoded segments", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ permission: "write" }), { status: 200 })
+    );
+    await checkSenderPermission("test-token", "acme", "widgets", "alice");
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "https://api.github.com/repos/acme/widgets/collaborators/alice/permission",
+      {
+        headers: {
+          Authorization: "Bearer test-token",
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": "Open-Inspect",
+        },
+      }
+    );
   });
 });
