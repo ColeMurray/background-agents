@@ -11,6 +11,7 @@ import {
   type SourceControlProviderName,
 } from "./source-control";
 import { SessionIndexStore } from "./db/session-index";
+import { UserScmTokenStore } from "./db/user-scm-tokens";
 
 import {
   getValidModelOrDefault,
@@ -973,6 +974,30 @@ async function handleSessionWsToken(
       return { githubTokenEncrypted: accessToken, githubRefreshTokenEncrypted: refreshToken };
     }
   );
+
+  // Populate D1 with the user's SCM tokens (non-blocking) so centralized refresh works
+  if (
+    body.githubUserId &&
+    body.githubToken &&
+    body.githubRefreshToken &&
+    env.TOKEN_ENCRYPTION_KEY
+  ) {
+    ctx.executionCtx?.waitUntil(
+      new UserScmTokenStore(env.DB, env.TOKEN_ENCRYPTION_KEY)
+        .upsertTokens(
+          "github",
+          body.githubUserId,
+          body.githubToken,
+          body.githubRefreshToken,
+          body.githubTokenExpiresAt ?? Date.now() + 8 * 3600 * 1000
+        )
+        .catch((e) =>
+          logger.error("Failed to write tokens to D1", {
+            error: e instanceof Error ? e : String(e),
+          })
+        )
+    );
+  }
 
   const doId = env.SESSION.idFromName(sessionId);
   const stub = env.SESSION.get(doId);

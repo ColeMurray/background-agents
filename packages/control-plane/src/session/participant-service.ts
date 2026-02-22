@@ -13,6 +13,7 @@ import type { SourceControlAuthContext } from "../source-control";
 import type { Logger } from "../logger";
 import type { ParticipantRow } from "./types";
 import type { CreateParticipantData } from "./repository";
+import type { UserScmTokenStore } from "../db/user-scm-tokens";
 
 /**
  * Narrow repository interface — only the methods ParticipantService needs.
@@ -50,6 +51,7 @@ export interface ParticipantServiceDeps {
   env: ParticipantServiceEnv;
   log: Logger;
   generateId: () => string;
+  userScmTokenStore?: UserScmTokenStore | null;
 }
 
 /**
@@ -64,12 +66,14 @@ export class ParticipantService {
   private readonly env: ParticipantServiceEnv;
   private readonly log: Logger;
   private readonly generateId: () => string;
+  private readonly userScmTokenStore: UserScmTokenStore | null;
 
   constructor(deps: ParticipantServiceDeps) {
     this.repository = deps.repository;
     this.env = deps.env;
     this.log = deps.log;
     this.generateId = deps.generateId;
+    this.userScmTokenStore = deps.userScmTokenStore ?? null;
   }
 
   /**
@@ -160,10 +164,176 @@ export class ParticipantService {
   }
 
   /**
-   * Refresh a participant's GitHub OAuth token using their stored refresh token.
-   * Returns the updated ParticipantRow on success, null on failure.
+   * Refresh a participant's GitHub OAuth token.
+   * Dispatches to centralized (D1) or local (per-DO SQLite) refresh path.
    */
   async refreshToken(participant: ParticipantRow): Promise<ParticipantRow | null> {
+    if (this.userScmTokenStore && participant.github_user_id) {
+      return this.refreshTokenCentralized(participant);
+    }
+    return this.refreshTokenLocal(participant);
+  }
+
+  /**
+   * Centralized refresh via D1.
+   *
+   * 1. Read D1 for the user's tokens
+   * 2. If D1 has a fresh access token, use it (skip GitHub API call)
+   * 3. If D1 token is expired, refresh via GitHub API and CAS-write to D1
+   * 4. On CAS conflict, re-read D1 and use the winner's tokens
+   * 5. Always update local SQLite cache with final tokens
+   */
+  private async refreshTokenCentralized(
+    participant: ParticipantRow
+  ): Promise<ParticipantRow | null> {
+    const store = this.userScmTokenStore!;
+    const githubUserId = participant.github_user_id!;
+
+    try {
+      const d1Tokens = await store.getTokens(githubUserId);
+
+      if (!d1Tokens) {
+        this.log.info("No D1 token record, falling back to local refresh", {
+          user_id: participant.user_id,
+        });
+        const result = await this.refreshTokenLocal(participant);
+        if (result) {
+          await this.seedD1AfterLocalRefresh(result);
+        }
+        return result;
+      }
+
+      if (store.isTokenFresh(d1Tokens.expiresAt)) {
+        this.log.info("Using fresh D1 access token", { user_id: participant.user_id });
+        await this.updateLocalTokensFromD1(participant.id, d1Tokens);
+        return this.repository.getParticipantById(participant.id);
+      }
+
+      // D1 token expired — refresh via GitHub API
+      if (!this.env.GITHUB_CLIENT_ID || !this.env.GITHUB_CLIENT_SECRET) {
+        this.log.warn("Cannot refresh: GitHub OAuth credentials not configured");
+        return null;
+      }
+
+      const newTokens = await refreshAccessToken(d1Tokens.refreshToken, {
+        clientId: this.env.GITHUB_CLIENT_ID,
+        clientSecret: this.env.GITHUB_CLIENT_SECRET,
+        encryptionKey: this.env.TOKEN_ENCRYPTION_KEY,
+      });
+
+      const newAccessToken = newTokens.access_token;
+      const newRefreshToken = newTokens.refresh_token ?? d1Tokens.refreshToken;
+      const newExpiresAt = newTokens.expires_in
+        ? Date.now() + newTokens.expires_in * 1000
+        : Date.now() + 8 * 60 * 60 * 1000;
+
+      const casResult = await store.casUpdateTokens(
+        githubUserId,
+        d1Tokens.refreshTokenEncrypted,
+        newAccessToken,
+        newRefreshToken,
+        newExpiresAt
+      );
+
+      if (casResult.ok) {
+        this.log.info("CAS update succeeded", { user_id: participant.user_id });
+        const newAccessTokenEncrypted = await encryptToken(
+          newAccessToken,
+          this.env.TOKEN_ENCRYPTION_KEY
+        );
+        const newRefreshTokenEncrypted = await encryptToken(
+          newRefreshToken,
+          this.env.TOKEN_ENCRYPTION_KEY
+        );
+        this.repository.updateParticipantTokens(participant.id, {
+          githubAccessTokenEncrypted: newAccessTokenEncrypted,
+          githubRefreshTokenEncrypted: newRefreshTokenEncrypted,
+          githubTokenExpiresAt: newExpiresAt,
+        });
+        return this.repository.getParticipantById(participant.id);
+      }
+
+      // CAS conflict — another DO won the race. Re-read D1 for the winner's tokens.
+      this.log.info("CAS conflict, re-reading D1 for winner's tokens", {
+        user_id: participant.user_id,
+      });
+      const winnerTokens = await store.getTokens(githubUserId);
+      if (winnerTokens) {
+        await this.updateLocalTokensFromD1(participant.id, winnerTokens);
+        return this.repository.getParticipantById(participant.id);
+      }
+
+      // Unexpected: CAS lost but no row found. Fall back to local.
+      return this.refreshTokenLocal(participant);
+    } catch (error) {
+      this.log.error("Centralized token refresh failed, falling back to local", {
+        user_id: participant.user_id,
+        error: error instanceof Error ? error : String(error),
+      });
+      return this.refreshTokenLocal(participant);
+    }
+  }
+
+  /**
+   * Update local SQLite participant tokens from a D1 record.
+   */
+  private async updateLocalTokensFromD1(
+    participantId: string,
+    d1Tokens: { accessToken: string; refreshToken: string; expiresAt: number }
+  ): Promise<void> {
+    const [accessEnc, refreshEnc] = await Promise.all([
+      encryptToken(d1Tokens.accessToken, this.env.TOKEN_ENCRYPTION_KEY),
+      encryptToken(d1Tokens.refreshToken, this.env.TOKEN_ENCRYPTION_KEY),
+    ]);
+    this.repository.updateParticipantTokens(participantId, {
+      githubAccessTokenEncrypted: accessEnc,
+      githubRefreshTokenEncrypted: refreshEnc,
+      githubTokenExpiresAt: d1Tokens.expiresAt,
+    });
+  }
+
+  /**
+   * After a successful local refresh, seed D1 so future refreshes are centralized.
+   */
+  private async seedD1AfterLocalRefresh(participant: ParticipantRow): Promise<void> {
+    if (
+      !this.userScmTokenStore ||
+      !participant.github_user_id ||
+      !participant.github_access_token_encrypted ||
+      !participant.github_refresh_token_encrypted ||
+      !participant.github_token_expires_at
+    ) {
+      return;
+    }
+
+    try {
+      const [accessToken, refreshToken] = await Promise.all([
+        decryptToken(participant.github_access_token_encrypted, this.env.TOKEN_ENCRYPTION_KEY),
+        decryptToken(participant.github_refresh_token_encrypted, this.env.TOKEN_ENCRYPTION_KEY),
+      ]);
+
+      await this.userScmTokenStore.upsertTokens(
+        "github",
+        participant.github_user_id,
+        accessToken,
+        refreshToken,
+        participant.github_token_expires_at
+      );
+
+      this.log.info("Seeded D1 after local refresh", { user_id: participant.user_id });
+    } catch (error) {
+      this.log.warn("Failed to seed D1 after local refresh", {
+        user_id: participant.user_id,
+        error: error instanceof Error ? error : String(error),
+      });
+    }
+  }
+
+  /**
+   * Local-only refresh using the per-DO SQLite refresh token.
+   * Original refreshToken logic — used as fallback when D1 is unavailable.
+   */
+  private async refreshTokenLocal(participant: ParticipantRow): Promise<ParticipantRow | null> {
     if (!participant.github_refresh_token_encrypted) {
       this.log.warn("Cannot refresh: no refresh token stored", { user_id: participant.user_id });
       return null;
