@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { encryptToken, decryptToken, generateEncryptionKey, generateId, hashToken } from "./crypto";
+import {
+  encryptToken,
+  decryptToken,
+  generateEncryptionKey,
+  generateId,
+  hashToken,
+  timingSafeEqual,
+} from "./crypto";
 
 describe("crypto", () => {
   describe("generateEncryptionKey", () => {
@@ -149,6 +156,30 @@ describe("crypto", () => {
 
       // SHA-256 of empty string is a known value
       expect(hash).toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    });
+  });
+
+  describe("timingSafeEqual", () => {
+    it("returns true for equal strings", () => {
+      expect(timingSafeEqual("abc", "abc")).toBe(true);
+    });
+
+    it("returns false for different strings", () => {
+      expect(timingSafeEqual("abc", "abd")).toBe(false);
+    });
+
+    it("returns false for different lengths", () => {
+      expect(timingSafeEqual("abc", "abcd")).toBe(false);
+    });
+
+    it("works with fixed-length token hashes", async () => {
+      const token = "sandbox-token";
+      const sameHashA = await hashToken(token);
+      const sameHashB = await hashToken(token);
+      const differentHash = await hashToken("other-token");
+
+      expect(timingSafeEqual(sameHashA, sameHashB)).toBe(true);
+      expect(timingSafeEqual(sameHashA, differentHash)).toBe(false);
     });
   });
 });

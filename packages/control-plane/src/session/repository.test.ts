@@ -191,16 +191,17 @@ describe("SessionRepository", () => {
       repo.updateSandboxForSpawn({
         status: "spawning",
         createdAt: 1000,
-        authToken: "token-123",
+        authTokenHash: "token-hash-123",
         modalSandboxId: "modal-sb-1",
       });
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("UPDATE sandbox SET");
       expect(mock.calls[0].query).toContain("status");
-      expect(mock.calls[0].query).toContain("auth_token");
+      expect(mock.calls[0].query).toContain("auth_token_hash");
       expect(mock.calls[0].query).toContain("modal_sandbox_id");
-      expect(mock.calls[0].params).toEqual(["spawning", 1000, "token-123", "modal-sb-1"]);
+      expect(mock.calls[0].query).toContain("auth_token = NULL");
+      expect(mock.calls[0].params).toEqual(["spawning", 1000, "token-hash-123", "modal-sb-1"]);
     });
   });
 

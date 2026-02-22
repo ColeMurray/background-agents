@@ -62,6 +62,7 @@ function createMockSandbox(
     snapshot_id: null,
     snapshot_image_id: null,
     auth_token: "auth-token-123",
+    auth_token_hash: "auth-token-hash-123",
     status: "ready",
     git_sync_status: "completed",
     last_heartbeat: Date.now() - 10000,
@@ -111,7 +112,8 @@ function createMockStorage(
       if (sandbox) {
         sandbox.status = data.status;
         sandbox.created_at = data.createdAt;
-        sandbox.auth_token = data.authToken;
+        sandbox.auth_token_hash = data.authTokenHash;
+        sandbox.auth_token = null;
         sandbox.modal_sandbox_id = data.modalSandboxId;
       }
     }),

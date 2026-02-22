@@ -9,7 +9,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
-import { generateId, hashToken } from "../auth/crypto";
+import { generateId, hashToken, timingSafeEqual } from "../auth/crypto";
 import { getGitHubAppConfig } from "../auth/github-app";
 import { createModalClient } from "../sandbox/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
@@ -565,10 +565,12 @@ export class SessionDO extends DurableObject<Env> {
       const wsStartTime = Date.now();
       const authHeader = request.headers.get("Authorization");
       const sandboxId = request.headers.get("X-Sandbox-ID");
+      const providedToken = authHeader?.startsWith("Bearer ")
+        ? authHeader.slice("Bearer ".length)
+        : null;
 
       // Get expected values from DB
       const sandbox = this.getSandbox();
-      const expectedToken = sandbox?.auth_token;
       const expectedSandboxId = sandbox?.modal_sandbox_id;
 
       // Reject connection if sandbox should be stopped (prevents reconnection after inactivity timeout)
@@ -599,7 +601,8 @@ export class SessionDO extends DurableObject<Env> {
       }
 
       // Validate auth token
-      if (!authHeader || authHeader !== `Bearer ${expectedToken}`) {
+      const tokenMatches = await this.isValidSandboxToken(providedToken, sandbox);
+      if (!tokenMatches) {
         this.log.warn("ws.connect", {
           event: "ws.connect",
           ws_type: "sandbox",
@@ -1301,6 +1304,32 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
+   * Verify a provided sandbox token against stored credentials.
+   *
+   * Preferred path uses auth_token_hash. Plaintext auth_token is only used
+   * as a compatibility fallback for older rows.
+   */
+  private async isValidSandboxToken(
+    token: string | null,
+    sandbox: SandboxRow | null
+  ): Promise<boolean> {
+    if (!token || !sandbox) {
+      return false;
+    }
+
+    if (sandbox.auth_token_hash) {
+      const tokenHash = await hashToken(token);
+      return timingSafeEqual(tokenHash, sandbox.auth_token_hash);
+    }
+
+    if (sandbox.auth_token) {
+      return timingSafeEqual(token, sandbox.auth_token);
+    }
+
+    return false;
+  }
+
+  /**
    * Verify a sandbox authentication token.
    * Called by the router to validate sandbox-originated requests.
    */
@@ -1335,7 +1364,8 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     // Validate the token
-    if (body.token !== sandbox.auth_token) {
+    const isTokenValid = await this.isValidSandboxToken(body.token, sandbox);
+    if (!isTokenValid) {
       this.log.warn("Sandbox token verification failed: token mismatch");
       return new Response(JSON.stringify({ valid: false, error: "Invalid token" }), {
         status: 401,

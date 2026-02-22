@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS sandbox (
   snapshot_id TEXT,
   snapshot_image_id TEXT,                           -- Modal Image ID for filesystem snapshot restoration
   auth_token TEXT,                                  -- Token for sandbox to authenticate back to control plane
+  auth_token_hash TEXT,                             -- SHA-256 hash of sandbox auth token (preferred)
   status TEXT DEFAULT 'pending',                    -- 'pending', 'spawning', 'connecting', 'warming', 'syncing', 'ready', 'running', 'stale', 'snapshotting', 'stopped', 'failed'
   git_sync_status TEXT DEFAULT 'pending',           -- 'pending', 'in_progress', 'completed', 'failed'
   last_heartbeat INTEGER,
@@ -245,6 +246,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 18,
     description: "Add reasoning_effort to messages",
     run: `ALTER TABLE messages ADD COLUMN reasoning_effort TEXT`,
+  },
+  {
+    id: 19,
+    description: "Add auth_token_hash to sandbox",
+    run: `ALTER TABLE sandbox ADD COLUMN auth_token_hash TEXT`,
   },
 ];
 

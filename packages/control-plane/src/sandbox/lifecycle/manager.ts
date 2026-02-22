@@ -30,6 +30,7 @@ import {
 } from "./decisions";
 import { extractProviderAndModel } from "../../utils/models";
 import { createLogger, type Logger } from "../../logger";
+import { hashToken } from "../../auth/crypto";
 
 const log = createLogger("lifecycle-manager");
 
@@ -64,7 +65,7 @@ export interface SandboxStorage {
   updateSandboxForSpawn(data: {
     status: SandboxStatus;
     createdAt: number;
-    authToken: string;
+    authTokenHash: string;
     modalSandboxId: string;
   }): void;
   /** Update sandbox Modal object ID (for snapshot API) */
@@ -291,13 +292,14 @@ export class SandboxLifecycleManager {
       const now = Date.now();
       const sessionId = session.session_name || session.id;
       const sandboxAuthToken = this.idGenerator.generateId();
+      const sandboxAuthTokenHash = await hashToken(sandboxAuthToken);
       const expectedSandboxId = `sandbox-${session.repo_owner}-${session.repo_name}-${now}`;
 
       // Store expected sandbox ID and auth token BEFORE calling provider
       this.storage.updateSandboxForSpawn({
         status: "spawning",
         createdAt: now,
-        authToken: sandboxAuthToken,
+        authTokenHash: sandboxAuthTokenHash,
         modalSandboxId: expectedSandboxId,
       });
       this.broadcaster.broadcast({ type: "sandbox_status", status: "spawning" });
@@ -404,13 +406,14 @@ export class SandboxLifecycleManager {
 
       const now = Date.now();
       const sandboxAuthToken = this.idGenerator.generateId();
+      const sandboxAuthTokenHash = await hashToken(sandboxAuthToken);
       const expectedSandboxId = `sandbox-${session.repo_owner}-${session.repo_name}-${now}`;
 
       // Store expected sandbox ID and auth token
       this.storage.updateSandboxForSpawn({
         status: "spawning",
         createdAt: now,
-        authToken: sandboxAuthToken,
+        authTokenHash: sandboxAuthTokenHash,
         modalSandboxId: expectedSandboxId,
       });
 

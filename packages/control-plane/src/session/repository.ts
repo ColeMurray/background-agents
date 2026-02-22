@@ -183,7 +183,7 @@ export interface WsClientMappingData {
 export interface SpawnSandboxData {
   status: SandboxStatus;
   createdAt: number;
-  authToken: string;
+  authTokenHash: string;
   modalSandboxId: string;
 }
 
@@ -301,12 +301,13 @@ export class SessionRepository {
       `UPDATE sandbox SET
          status = ?,
          created_at = ?,
-         auth_token = ?,
+         auth_token_hash = ?,
+         auth_token = NULL,
          modal_sandbox_id = ?
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,
-      data.authToken,
+      data.authTokenHash,
       data.modalSandboxId
     );
   }
