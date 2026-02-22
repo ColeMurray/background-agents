@@ -147,6 +147,7 @@ module "control_plane_worker" {
     { name = "GITHUB_CLIENT_ID", value = var.github_client_id },
     { name = "WEB_APP_URL", value = local.web_app_url },
     { name = "WORKER_URL", value = local.control_plane_url },
+    { name = "CF_ACCOUNT_ID", value = var.cloudflare_account_id },
     { name = "MODAL_WORKSPACE", value = var.modal_workspace },
     { name = "DEPLOYMENT_NAME", value = var.deployment_name },
     { name = "CLOUDFLARE_AI_SEARCH_AUTORAG_NAME", value = var.cloudflare_ai_search_autorag_name },
