@@ -75,7 +75,7 @@ resource "null_resource" "d1_migrations" {
   }
 
   provisioner "local-exec" {
-    command     = "bash ${var.project_root}/scripts/d1-migrate.sh ${cloudflare_d1_database.main.name} ${var.project_root}/terraform/d1/migrations"
+    command     = "bash scripts/d1-migrate.sh ${cloudflare_d1_database.main.name} terraform/d1/migrations"
     working_dir = var.project_root
 
     environment = {
