@@ -16,6 +16,7 @@ Three tiers connected by WebSockets:
    creation, warm pools, snapshots.
 
 **Bot integrations** — all Cloudflare Workers using Hono:
+
 - `slack-bot` — Slack messages → coding sessions
 - `github-bot` — PR review assignments and @mention commands
 - `linear-bot` — Linear agent webhooks → coding sessions
@@ -34,15 +35,15 @@ it at build time.
 
 ## Package Overview
 
-| Package | Lang / Framework | Purpose |
-|---|---|---|
-| `shared` | TypeScript | Shared types, auth utilities, model definitions |
-| `control-plane` | TypeScript / CF Workers + DO | Session management, WebSocket streaming, GitHub integration |
-| `web` | TypeScript / Next.js 16 + React 19 | User-facing dashboard, OAuth, real-time UI |
-| `slack-bot` | TypeScript / CF Workers + Hono | Slack event handler, session creation |
-| `github-bot` | TypeScript / CF Workers + Hono | PR review and @mention webhook handler |
-| `linear-bot` | TypeScript / CF Workers + Hono | Linear agent webhook handler |
-| `modal-infra` | Python 3.12 / Modal + FastAPI | Sandbox lifecycle, WebSocket bridge to control plane |
+| Package         | Lang / Framework                   | Purpose                                                     |
+| --------------- | ---------------------------------- | ----------------------------------------------------------- |
+| `shared`        | TypeScript                         | Shared types, auth utilities, model definitions             |
+| `control-plane` | TypeScript / CF Workers + DO       | Session management, WebSocket streaming, GitHub integration |
+| `web`           | TypeScript / Next.js 16 + React 19 | User-facing dashboard, OAuth, real-time UI                  |
+| `slack-bot`     | TypeScript / CF Workers + Hono     | Slack event handler, session creation                       |
+| `github-bot`    | TypeScript / CF Workers + Hono     | PR review and @mention webhook handler                      |
+| `linear-bot`    | TypeScript / CF Workers + Hono     | Linear agent webhook handler                                |
+| `modal-infra`   | Python 3.12 / Modal + FastAPI      | Sandbox lifecycle, WebSocket bridge to control plane        |
 
 ## Common Commands
 
@@ -104,19 +105,19 @@ These run inside a real `workerd` runtime with Miniflare, using `defineWorkersCo
 - **Encode the unit in the name.** Python: `timeout_seconds`. TypeScript: `timeoutMs`,
   `INACTIVITY_TIMEOUT_MS`. Never use a bare `timeout`.
 - **Define each default value exactly once.** Extract to a named constant and import everywhere.
-- **Don't restate literal values in comments.** Write `Defaults to
-  DEFAULT_SANDBOX_TIMEOUT_SECONDS`, not `Default: 7200`.
+- **Don't restate literal values in comments.** Write `Defaults to DEFAULT_SANDBOX_TIMEOUT_SECONDS`,
+  not `Default: 7200`.
 
 ### Extending existing patterns
 
 - When threading an existing field through new code paths, evaluate whether the existing design
-  (naming, types, units) is correct — don't blindly propagate it. Fix bad names or units in the
-  same change rather than spreading the problem.
+  (naming, types, units) is correct — don't blindly propagate it. Fix bad names or units in the same
+  change rather than spreading the problem.
 
 ### Commit messages
 
-Use conventional commits: `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`, `test:`. Keep the
-subject under 72 characters. Use the PR body for details, not the commit message.
+Use conventional commits: `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`, `test:`. Keep the subject
+under 72 characters. Use the PR body for details, not the commit message.
 
 ## Key Gotchas
 
