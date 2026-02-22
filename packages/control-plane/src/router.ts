@@ -338,6 +338,11 @@ const routes: Route[] = [
   },
   {
     method: "GET",
+    pattern: parsePattern("/sessions/:id/git/changes"),
+    handler: handleSessionGitChanges,
+  },
+  {
+    method: "GET",
     pattern: parsePattern("/sessions/:id/participants"),
     handler: handleSessionParticipants,
   },
@@ -804,6 +809,18 @@ async function handleSessionArtifacts(
   if (!stub) return error("Session ID required");
 
   return stub.fetch(internalRequest("http://internal/internal/artifacts", undefined, ctx));
+}
+
+async function handleSessionGitChanges(
+  _request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const stub = getSessionStub(env, match);
+  if (!stub) return error("Session ID required");
+
+  return stub.fetch(internalRequest("http://internal/internal/git/changes", undefined, ctx));
 }
 
 async function handleSessionParticipants(

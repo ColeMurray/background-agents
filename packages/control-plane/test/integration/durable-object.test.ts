@@ -12,6 +12,16 @@ describe("SessionDO Durable Object", () => {
     expect(response.status).toBe(404);
   });
 
+  it("returns 503 for git changes when sandbox is not ready", async () => {
+    const id = env.SESSION.newUniqueId();
+    const stub = env.SESSION.get(id);
+
+    const response = await stub.fetch("http://internal/internal/git/changes");
+    expect(response.status).toBe(503);
+    const body = await response.json<{ error: string }>();
+    expect(body.error).toContain("Sandbox not ready");
+  });
+
   it("initializes a session and returns state", async () => {
     const id = env.SESSION.newUniqueId();
     const stub = env.SESSION.get(id);

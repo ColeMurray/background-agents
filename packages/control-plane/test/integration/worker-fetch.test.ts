@@ -40,4 +40,13 @@ describe("Worker fetch handler", () => {
     expect(response.headers.get("x-request-id")).toBeTruthy();
     expect(response.headers.get("x-trace-id")).toBeTruthy();
   });
+
+  it("proxies git changes route for sessions", async () => {
+    const response = await SELF.fetch("https://test.local/sessions/test-session/git/changes", {
+      headers: await authHeaders(),
+    });
+    expect(response.status).toBe(503);
+    const body = await response.json<{ error: string }>();
+    expect(body.error).toContain("Sandbox not ready");
+  });
 });

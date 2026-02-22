@@ -19,6 +19,7 @@
     "next": "^16.1.5",
     "next-auth": "^4.24.11",
     "react": "^19.0.0",
+    "react-diff-viewer-continued": "^4.1.2",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
     "rehype-sanitize": "^6.0.0",

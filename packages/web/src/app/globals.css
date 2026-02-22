@@ -193,3 +193,14 @@ body {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
+
+.session-git-diff-viewer table {
+  width: 100%;
+}
+
+.session-git-diff-viewer pre,
+.session-git-diff-viewer code {
+  font-family:
+    var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}

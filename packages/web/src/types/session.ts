@@ -30,6 +30,23 @@ export interface FileChange {
   deletions: number;
 }
 
+export type GitChangeStatus = "modified" | "added" | "deleted" | "renamed" | "untracked";
+
+export interface GitChangedFile extends FileChange {
+  status: GitChangeStatus;
+  oldFilename?: string | null;
+}
+
+export interface SessionGitChangesResponse {
+  files: GitChangedFile[];
+  diffsByFile: Record<string, string>;
+  summary: {
+    totalFiles: number;
+    totalAdditions: number;
+    totalDeletions: number;
+  };
+}
+
 export interface ChildSession {
   id: string;
   description: string;

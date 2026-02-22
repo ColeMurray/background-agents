@@ -76,6 +76,24 @@ export interface SnapshotInfo {
   expiresAt?: string;
 }
 
+export interface GitChangedFile {
+  filename: string;
+  status: "modified" | "added" | "deleted" | "renamed" | "untracked";
+  old_filename?: string | null;
+  additions: number;
+  deletions: number;
+}
+
+export interface GitChangesResponse {
+  files: GitChangedFile[];
+  diffs_by_file: Record<string, string>;
+  summary: {
+    total_files: number;
+    total_additions: number;
+    total_deletions: number;
+  };
+}
+
 interface ModalApiResponse<T> {
   success: boolean;
   data?: T;
@@ -94,6 +112,7 @@ export class ModalClient {
   private snapshotUrl: string;
   private snapshotSandboxUrl: string;
   private restoreSandboxUrl: string;
+  private gitChangesUrl: string;
   private secret: string;
 
   constructor(secret: string, workspace: string) {
@@ -111,6 +130,7 @@ export class ModalClient {
     this.snapshotUrl = `${baseUrl}-api-snapshot.modal.run`;
     this.snapshotSandboxUrl = `${baseUrl}-api-snapshot-sandbox.modal.run`;
     this.restoreSandboxUrl = `${baseUrl}-api-restore-sandbox.modal.run`;
+    this.gitChangesUrl = `${baseUrl}-api-git-changes.modal.run`;
   }
 
   /**
@@ -340,6 +360,27 @@ export class ModalClient {
     }
 
     return result.data || null;
+  }
+
+  async getGitChanges(
+    sandboxId: string,
+    correlation?: CorrelationHeaders
+  ): Promise<GitChangesResponse> {
+    const headers = await this.getGetHeaders(correlation);
+    const url = `${this.gitChangesUrl}?sandbox_id=${encodeURIComponent(sandboxId)}`;
+    const response = await fetch(url, { headers });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Modal API error: ${response.status} ${text}`);
+    }
+
+    const result = (await response.json()) as ModalApiResponse<GitChangesResponse>;
+    if (!result.success || !result.data) {
+      throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
+    }
+
+    return result.data;
   }
 }
 

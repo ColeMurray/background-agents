@@ -28,7 +28,9 @@ import { useMediaQuery } from "@/hooks/use-media-query";
 import { DEFAULT_MODEL, getDefaultReasoningEffort, type ModelCategory } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
+import { SessionGitDiffPanel } from "@/components/session-git-diff-panel";
 import type { SandboxEvent } from "@/lib/tool-formatters";
+import type { SessionGitChangesResponse } from "@/types/session";
 import {
   SidebarIcon,
   ModelIcon,
@@ -233,6 +235,7 @@ function SessionPageContent() {
 
   return (
     <SessionContent
+      sessionId={sessionId}
       sessionState={sessionState}
       connected={connected}
       connecting={connecting}
@@ -269,6 +272,7 @@ function SessionPageContent() {
 }
 
 function SessionContent({
+  sessionId,
   sessionState,
   connected,
   connecting,
@@ -301,6 +305,7 @@ function SessionContent({
   modelOptions,
   fallbackSessionInfo,
 }: {
+  sessionId: string;
   sessionState: ReturnType<typeof useSessionSocket>["sessionState"];
   connected: boolean;
   connecting: boolean;
@@ -341,6 +346,12 @@ function SessionContent({
   const isBelowLg = useMediaQuery("(max-width: 1023px)");
   const isPhone = useMediaQuery("(max-width: 767px)");
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+  const [isGitPanelOpen, setIsGitPanelOpen] = useState(false);
+  const [gitSplitView, setGitSplitView] = useState(false);
+  const [gitSelectedFile, setGitSelectedFile] = useState<string | null>(null);
+  const [gitChanges, setGitChanges] = useState<SessionGitChangesResponse | null>(null);
+  const [gitLoading, setGitLoading] = useState(false);
+  const [gitError, setGitError] = useState<string | null>(null);
   const [sheetDragY, setSheetDragY] = useState(0);
   const sheetDragYRef = useRef(0);
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
@@ -535,6 +546,66 @@ function SessionContent({
   const resolvedTitle = sessionState?.title || fallbackSessionInfo.title || fallbackRepoLabel;
   const showTimelineSkeleton = events.length === 0 && (connecting || replaying);
 
+  const fetchGitChanges = useCallback(async () => {
+    setGitLoading(true);
+    setGitError(null);
+    try {
+      const response = await fetch(`/api/sessions/${sessionId}/git/changes`, {
+        method: "GET",
+        cache: "no-store",
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        setGitError(payload?.error || "Failed to fetch git changes");
+        return;
+      }
+
+      const normalized: SessionGitChangesResponse = {
+        files: (payload.files || []).map(
+          (file: {
+            filename: string;
+            status: "modified" | "added" | "deleted" | "renamed" | "untracked";
+            old_filename?: string | null;
+            additions: number;
+            deletions: number;
+          }) => ({
+            filename: file.filename,
+            status: file.status,
+            oldFilename: file.old_filename ?? null,
+            additions: file.additions,
+            deletions: file.deletions,
+          })
+        ),
+        diffsByFile: payload.diffs_by_file || {},
+        summary: {
+          totalFiles: payload.summary?.total_files || 0,
+          totalAdditions: payload.summary?.total_additions || 0,
+          totalDeletions: payload.summary?.total_deletions || 0,
+        },
+      };
+
+      setGitChanges(normalized);
+      setGitSelectedFile((current) => {
+        if (current && normalized.files.some((f) => f.filename === current)) return current;
+        return normalized.files[0]?.filename ?? null;
+      });
+    } catch (error) {
+      console.error("Failed to fetch git changes:", error);
+      setGitError("Failed to fetch git changes");
+    } finally {
+      setGitLoading(false);
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!isGitPanelOpen || isBelowLg) return;
+    fetchGitChanges();
+    const interval = setInterval(() => {
+      fetchGitChanges();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [fetchGitChanges, isGitPanelOpen, isBelowLg]);
+
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
@@ -724,6 +795,21 @@ function SessionContent({
             </div>
           )}
         </div>
+      )}
+
+      {!isBelowLg && (
+        <SessionGitDiffPanel
+          expanded={isGitPanelOpen}
+          splitView={gitSplitView}
+          selectedFile={gitSelectedFile}
+          loading={gitLoading}
+          error={gitError}
+          data={gitChanges}
+          onToggleExpanded={() => setIsGitPanelOpen((prev) => !prev)}
+          onToggleSplitView={() => setGitSplitView((prev) => !prev)}
+          onSelectFile={setGitSelectedFile}
+          onRefresh={fetchGitChanges}
+        />
       )}
 
       {/* Input */}

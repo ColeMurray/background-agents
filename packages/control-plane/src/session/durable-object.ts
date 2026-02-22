@@ -12,6 +12,7 @@ import { initSchema } from "./schema";
 import { generateId, hashToken, timingSafeEqual } from "../auth/crypto";
 import { getGitHubAppConfig } from "../auth/github-app";
 import { createModalClient } from "../sandbox/client";
+import type { GitChangesResponse } from "../sandbox/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
@@ -155,6 +156,7 @@ export class SessionDO extends DurableObject<Env> {
     },
     { method: "GET", path: "/internal/events", handler: (_, url) => this.handleListEvents(url) },
     { method: "GET", path: "/internal/artifacts", handler: () => this.handleListArtifacts() },
+    { method: "GET", path: "/internal/git/changes", handler: () => this.handleGitChanges() },
     {
       method: "GET",
       path: "/internal/messages",
@@ -1700,6 +1702,30 @@ export class SessionDO extends DurableObject<Env> {
         createdAt: a.created_at,
       })),
     });
+  }
+
+  private async handleGitChanges(): Promise<Response> {
+    const sandbox = this.getSandbox();
+    if (!sandbox?.modal_object_id) {
+      return Response.json({ error: "Sandbox not ready for git diff" }, { status: 503 });
+    }
+    if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {
+      return Response.json({ error: "Modal configuration is missing" }, { status: 500 });
+    }
+
+    try {
+      const modalClient = createModalClient(this.env.MODAL_API_SECRET, this.env.MODAL_WORKSPACE);
+      const data: GitChangesResponse = await modalClient.getGitChanges(sandbox.modal_object_id, {
+        session_id: this.getSession()?.id,
+        sandbox_id: sandbox.modal_sandbox_id || undefined,
+      });
+      return Response.json(data);
+    } catch (error) {
+      this.log.error("Failed to fetch git changes", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return Response.json({ error: "Failed to fetch git changes" }, { status: 502 });
+    }
   }
 
   private handleListMessages(url: URL): Response {
