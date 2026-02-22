@@ -1,3 +1,14 @@
+function buildCommentGuidelines(isPublicRepo: boolean): string {
+  const visibility = isPublicRepo
+    ? "\n- This is a PUBLIC repository. Be especially careful not to expose secrets, internal URLs, or infrastructure details."
+    : "\n- This is a private repository, but still avoid leaking infrastructure details in comments.";
+  return `
+## Comment Guidelines
+- Summarize command output (e.g. "All 559 tests pass"), never paste raw terminal logs.
+- Do not include internal infrastructure details (sandbox IDs, object IDs, log output) in comments.${visibility}
+- Compose your full response before posting any comments.`;
+}
+
 export function buildCodeReviewPrompt(params: {
   owner: string;
   repo: string;
@@ -7,8 +18,9 @@ export function buildCodeReviewPrompt(params: {
   author: string;
   base: string;
   head: string;
+  isPublic: boolean;
 }): string {
-  const { owner, repo, number, title, body, author, base, head } = params;
+  const { owner, repo, number, title, body, author, base, head, isPublic } = params;
 
   return `You are reviewing Pull Request #${number} in ${owner}/${repo}.
 The repository has been cloned and you are on the ${head} branch.
@@ -46,7 +58,9 @@ ${body ?? "_No description provided._"}
      -f path="<file path>" \\
      -f commit_id="$(gh api repos/${owner}/${repo}/pulls/${number} --jq '.head.sha')" \\
      -f line=<line number> \\
-     -f side="RIGHT"`;
+     -f side="RIGHT"
+
+${buildCommentGuidelines(isPublic)}`;
 }
 
 export function buildCommentActionPrompt(params: {
@@ -55,6 +69,7 @@ export function buildCommentActionPrompt(params: {
   number: number;
   commentBody: string;
   commenter: string;
+  isPublic: boolean;
   title?: string;
   base?: string;
   head?: string;
@@ -68,6 +83,7 @@ export function buildCommentActionPrompt(params: {
     number,
     commentBody,
     commenter,
+    isPublic,
     title,
     base,
     head,
@@ -112,5 +128,7 @@ export function buildCommentActionPrompt(params: {
 
    gh api repos/${owner}/${repo}/issues/${number}/comments \\
      --method POST \\
-     -f body="<summary of what you did or your response>"${replyInstruction}`;
+     -f body="<summary of what you did or your response>"${replyInstruction}
+
+${buildCommentGuidelines(isPublic)}`;
 }
