@@ -3,7 +3,7 @@ import { initSession, queryDO } from "./helpers";
 
 describe("POST /internal/ws-token", () => {
   it("generates WS token for existing owner", async () => {
-    const { stub } = await initSession({ userId: "user-1", githubLogin: "testuser" });
+    const { stub } = await initSession({ userId: "user-1", scmLogin: "testuser" });
 
     const res = await stub.fetch("http://internal/internal/ws-token", {
       method: "POST",
@@ -24,7 +24,7 @@ describe("POST /internal/ws-token", () => {
     const res = await stub.fetch("http://internal/internal/ws-token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: "user-new", githubLogin: "newuser" }),
+      body: JSON.stringify({ userId: "user-new", scmLogin: "newuser" }),
     });
 
     expect(res.status).toBe(200);
@@ -77,7 +77,7 @@ describe("POST /internal/ws-token", () => {
     expect(body.error).toBe("userId is required");
   });
 
-  it("ws-token updates GitHub info on existing participant", async () => {
+  it("ws-token updates SCM info on existing participant", async () => {
     const { stub } = await initSession({ userId: "user-1" });
 
     await stub.fetch("http://internal/internal/ws-token", {
@@ -85,30 +85,30 @@ describe("POST /internal/ws-token", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         userId: "user-1",
-        githubLogin: "updated-login",
-        githubName: "Updated Name",
+        scmLogin: "updated-login",
+        scmName: "Updated Name",
       }),
     });
 
     const participants = await queryDO<{
-      github_login: string | null;
-      github_name: string | null;
-    }>(stub, "SELECT github_login, github_name FROM participants WHERE user_id = 'user-1'");
+      scm_login: string | null;
+      scm_name: string | null;
+    }>(stub, "SELECT scm_login, scm_name FROM participants WHERE user_id = 'user-1'");
 
-    expect(participants[0].github_login).toBe("updated-login");
-    expect(participants[0].github_name).toBe("Updated Name");
+    expect(participants[0].scm_login).toBe("updated-login");
+    expect(participants[0].scm_name).toBe("Updated Name");
   });
 });
 
 describe("GET /internal/participants", () => {
   it("lists participants", async () => {
-    const { stub } = await initSession({ userId: "user-1", githubLogin: "testuser" });
+    const { stub } = await initSession({ userId: "user-1", scmLogin: "testuser" });
 
     // Add a second participant
     await stub.fetch("http://internal/internal/participants", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: "user-2", githubLogin: "user2" }),
+      body: JSON.stringify({ userId: "user-2", scmLogin: "user2" }),
     });
 
     const res = await stub.fetch("http://internal/internal/participants");
@@ -118,7 +118,7 @@ describe("GET /internal/participants", () => {
       participants: Array<{
         id: string;
         userId: string;
-        githubLogin: string | null;
+        scmLogin: string | null;
         role: string;
       }>;
     }>();
@@ -137,7 +137,7 @@ describe("POST /internal/participants", () => {
     const res = await stub.fetch("http://internal/internal/participants", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: "user-added", githubLogin: "addeduser" }),
+      body: JSON.stringify({ userId: "user-added", scmLogin: "addeduser" }),
     });
 
     expect(res.status).toBe(200);

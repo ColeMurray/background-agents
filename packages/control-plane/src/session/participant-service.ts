@@ -1,9 +1,9 @@
 /**
- * ParticipantService - Participant CRUD and GitHub OAuth token management.
+ * ParticipantService - Participant CRUD and SCM OAuth token management.
  *
  * Extracted from SessionDO to reduce its size. Handles:
  * - Creating and looking up participants
- * - GitHub OAuth token refresh
+ * - SCM OAuth token refresh (GitHub, Bitbucket, etc.)
  * - Resolving auth context for PR creation
  */
 
@@ -27,9 +27,9 @@ export interface ParticipantRepository {
   updateParticipantTokens(
     participantId: string,
     data: {
-      githubAccessTokenEncrypted: string;
-      githubRefreshTokenEncrypted?: string | null;
-      githubTokenExpiresAt: number;
+      scmAccessTokenEncrypted: string;
+      scmRefreshTokenEncrypted?: string | null;
+      scmTokenExpiresAt: number;
     }
   ): void;
 }
@@ -55,10 +55,15 @@ export interface ParticipantServiceDeps {
 }
 
 /**
- * Build GitHub avatar URL from login.
+ * Build avatar URL from SCM login.
  */
-export function getGitHubAvatarUrl(githubLogin: string | null | undefined): string | undefined {
-  return githubLogin ? `https://github.com/${githubLogin}.png` : undefined;
+export function getAvatarUrl(
+  login: string | null | undefined,
+  provider: "github" | "bitbucket" | null | undefined = "github"
+): string | undefined {
+  if (!login) return undefined;
+  if (provider === "github") return `https://github.com/${login}.png`;
+  return undefined;
 }
 
 export class ParticipantService {
@@ -101,7 +106,7 @@ export class ParticipantService {
     this.repository.createParticipant({
       id,
       userId,
-      githubName: name,
+      scmName: name,
       role: "member",
       joinedAt: now,
     });
@@ -109,14 +114,15 @@ export class ParticipantService {
     return {
       id,
       user_id: userId,
-      github_user_id: null,
-      github_login: null,
-      github_email: null,
-      github_name: name,
+      scm_user_id: null,
+      scm_login: null,
+      scm_email: null,
+      scm_name: name,
+      scm_provider: "github",
       role: "member",
-      github_access_token_encrypted: null,
-      github_refresh_token_encrypted: null,
-      github_token_expires_at: null,
+      scm_access_token_encrypted: null,
+      scm_refresh_token_encrypted: null,
+      scm_token_expires_at: null,
       ws_auth_token: null,
       ws_token_created_at: null,
       joined_at: now,
@@ -154,21 +160,21 @@ export class ParticipantService {
   }
 
   /**
-   * Check whether a participant's GitHub token is expired (with buffer).
+   * Check whether a participant's SCM token is expired (with buffer).
    */
-  isGitHubTokenExpired(participant: ParticipantRow, bufferMs = 60000): boolean {
-    if (!participant.github_token_expires_at) {
+  isScmTokenExpired(participant: ParticipantRow, bufferMs = 60000): boolean {
+    if (!participant.scm_token_expires_at) {
       return false;
     }
-    return Date.now() + bufferMs >= participant.github_token_expires_at;
+    return Date.now() + bufferMs >= participant.scm_token_expires_at;
   }
 
   /**
-   * Refresh a participant's GitHub OAuth token.
+   * Refresh a participant's SCM OAuth token.
    * Dispatches to centralized (D1) or local (per-DO SQLite) refresh path.
    */
   async refreshToken(participant: ParticipantRow): Promise<ParticipantRow | null> {
-    if (this.userScmTokenStore && participant.github_user_id) {
+    if (this.userScmTokenStore && participant.scm_user_id) {
       return this.refreshTokenCentralized(participant);
     }
     return this.refreshTokenLocal(participant);
@@ -178,8 +184,8 @@ export class ParticipantService {
    * Centralized refresh via D1.
    *
    * 1. Read D1 for the user's tokens
-   * 2. If D1 has a fresh access token, use it (skip GitHub API call)
-   * 3. If D1 token is expired, refresh via GitHub API and CAS-write to D1
+   * 2. If D1 has a fresh access token, use it (skip OAuth API call)
+   * 3. If D1 token is expired, refresh via OAuth API and CAS-write to D1
    * 4. On CAS conflict, re-read D1 and use the winner's tokens
    * 5. Always update local SQLite cache with final tokens
    */
@@ -187,10 +193,10 @@ export class ParticipantService {
     participant: ParticipantRow
   ): Promise<ParticipantRow | null> {
     const store = this.userScmTokenStore!;
-    const githubUserId = participant.github_user_id!;
+    const scmUserId = participant.scm_user_id!;
 
     try {
-      const d1Tokens = await store.getTokens(githubUserId);
+      const d1Tokens = await store.getTokens(scmUserId);
 
       if (!d1Tokens) {
         this.log.info("No D1 token record, falling back to local refresh", {
@@ -209,9 +215,9 @@ export class ParticipantService {
         return this.repository.getParticipantById(participant.id);
       }
 
-      // D1 token expired — refresh via GitHub API
+      // D1 token expired — refresh via OAuth API
       if (!this.env.GITHUB_CLIENT_ID || !this.env.GITHUB_CLIENT_SECRET) {
-        this.log.warn("Cannot refresh: GitHub OAuth credentials not configured");
+        this.log.warn("Cannot refresh: OAuth credentials not configured");
         return null;
       }
 
@@ -228,7 +234,7 @@ export class ParticipantService {
         : Date.now() + DEFAULT_TOKEN_LIFETIME_MS;
 
       const casResult = await store.casUpdateTokens(
-        githubUserId,
+        scmUserId,
         d1Tokens.refreshTokenEncrypted,
         newAccessToken,
         newRefreshToken,
@@ -246,9 +252,9 @@ export class ParticipantService {
           this.env.TOKEN_ENCRYPTION_KEY
         );
         this.repository.updateParticipantTokens(participant.id, {
-          githubAccessTokenEncrypted: newAccessTokenEncrypted,
-          githubRefreshTokenEncrypted: newRefreshTokenEncrypted,
-          githubTokenExpiresAt: newExpiresAt,
+          scmAccessTokenEncrypted: newAccessTokenEncrypted,
+          scmRefreshTokenEncrypted: newRefreshTokenEncrypted,
+          scmTokenExpiresAt: newExpiresAt,
         });
         return this.repository.getParticipantById(participant.id);
       }
@@ -257,7 +263,7 @@ export class ParticipantService {
       this.log.info("CAS conflict, re-reading D1 for winner's tokens", {
         user_id: participant.user_id,
       });
-      const winnerTokens = await store.getTokens(githubUserId);
+      const winnerTokens = await store.getTokens(scmUserId);
       if (winnerTokens) {
         await this.updateLocalTokensFromD1(participant.id, winnerTokens);
         return this.repository.getParticipantById(participant.id);
@@ -286,9 +292,9 @@ export class ParticipantService {
       encryptToken(d1Tokens.refreshToken, this.env.TOKEN_ENCRYPTION_KEY),
     ]);
     this.repository.updateParticipantTokens(participantId, {
-      githubAccessTokenEncrypted: accessEnc,
-      githubRefreshTokenEncrypted: refreshEnc,
-      githubTokenExpiresAt: d1Tokens.expiresAt,
+      scmAccessTokenEncrypted: accessEnc,
+      scmRefreshTokenEncrypted: refreshEnc,
+      scmTokenExpiresAt: d1Tokens.expiresAt,
     });
   }
 
@@ -298,25 +304,25 @@ export class ParticipantService {
   private async seedD1AfterLocalRefresh(participant: ParticipantRow): Promise<void> {
     if (
       !this.userScmTokenStore ||
-      !participant.github_user_id ||
-      !participant.github_access_token_encrypted ||
-      !participant.github_refresh_token_encrypted ||
-      !participant.github_token_expires_at
+      !participant.scm_user_id ||
+      !participant.scm_access_token_encrypted ||
+      !participant.scm_refresh_token_encrypted ||
+      !participant.scm_token_expires_at
     ) {
       return;
     }
 
     try {
       const [accessToken, refreshToken] = await Promise.all([
-        decryptToken(participant.github_access_token_encrypted, this.env.TOKEN_ENCRYPTION_KEY),
-        decryptToken(participant.github_refresh_token_encrypted, this.env.TOKEN_ENCRYPTION_KEY),
+        decryptToken(participant.scm_access_token_encrypted, this.env.TOKEN_ENCRYPTION_KEY),
+        decryptToken(participant.scm_refresh_token_encrypted, this.env.TOKEN_ENCRYPTION_KEY),
       ]);
 
       await this.userScmTokenStore.upsertTokens(
-        participant.github_user_id,
+        participant.scm_user_id,
         accessToken,
         refreshToken,
-        participant.github_token_expires_at
+        participant.scm_token_expires_at
       );
 
       this.log.info("Seeded D1 after local refresh", { user_id: participant.user_id });
@@ -333,19 +339,19 @@ export class ParticipantService {
    * Original refreshToken logic — used as fallback when D1 is unavailable.
    */
   private async refreshTokenLocal(participant: ParticipantRow): Promise<ParticipantRow | null> {
-    if (!participant.github_refresh_token_encrypted) {
+    if (!participant.scm_refresh_token_encrypted) {
       this.log.warn("Cannot refresh: no refresh token stored", { user_id: participant.user_id });
       return null;
     }
 
     if (!this.env.GITHUB_CLIENT_ID || !this.env.GITHUB_CLIENT_SECRET) {
-      this.log.warn("Cannot refresh: GitHub OAuth credentials not configured");
+      this.log.warn("Cannot refresh: OAuth credentials not configured");
       return null;
     }
 
     try {
       const refreshToken = await decryptToken(
-        participant.github_refresh_token_encrypted,
+        participant.scm_refresh_token_encrypted,
         this.env.TOKEN_ENCRYPTION_KEY
       );
 
@@ -369,9 +375,9 @@ export class ParticipantService {
         : Date.now() + DEFAULT_TOKEN_LIFETIME_MS; // fallback: 8 hours
 
       this.repository.updateParticipantTokens(participant.id, {
-        githubAccessTokenEncrypted: newAccessTokenEncrypted,
-        githubRefreshTokenEncrypted: newRefreshTokenEncrypted,
-        githubTokenExpiresAt: newExpiresAt,
+        scmAccessTokenEncrypted: newAccessTokenEncrypted,
+        scmRefreshTokenEncrypted: newRefreshTokenEncrypted,
+        scmTokenExpiresAt: newExpiresAt,
       });
 
       this.log.info("Server-side token refresh succeeded", { user_id: participant.user_id });
@@ -402,15 +408,15 @@ export class ParticipantService {
   > {
     let resolvedParticipant = participant;
 
-    if (!resolvedParticipant.github_access_token_encrypted) {
+    if (!resolvedParticipant.scm_access_token_encrypted) {
       this.log.info("PR creation: prompting user has no OAuth token, using manual fallback", {
         user_id: resolvedParticipant.user_id,
       });
       return { auth: null };
     }
 
-    if (this.isGitHubTokenExpired(resolvedParticipant)) {
-      this.log.warn("GitHub token expired, attempting server-side refresh", {
+    if (this.isScmTokenExpired(resolvedParticipant)) {
+      this.log.warn("SCM token expired, attempting server-side refresh", {
         userId: resolvedParticipant.user_id,
       });
 
@@ -418,24 +424,24 @@ export class ParticipantService {
       if (refreshed) {
         resolvedParticipant = refreshed;
       } else {
-        this.log.warn("GitHub token refresh failed, returning auth error", {
+        this.log.warn("SCM token refresh failed, returning auth error", {
           user_id: resolvedParticipant.user_id,
         });
         return {
           error:
-            "Your GitHub token has expired and could not be refreshed. Please re-authenticate.",
+            "Your source control token has expired and could not be refreshed. Please re-authenticate.",
           status: 401,
         };
       }
     }
 
-    if (!resolvedParticipant.github_access_token_encrypted) {
+    if (!resolvedParticipant.scm_access_token_encrypted) {
       return { auth: null };
     }
 
     try {
       const accessToken = await decryptToken(
-        resolvedParticipant.github_access_token_encrypted,
+        resolvedParticipant.scm_access_token_encrypted,
         this.env.TOKEN_ENCRYPTION_KEY
       );
 
@@ -446,12 +452,12 @@ export class ParticipantService {
         },
       };
     } catch (error) {
-      this.log.error("Failed to decrypt GitHub token for PR creation", {
+      this.log.error("Failed to decrypt SCM token for PR creation", {
         user_id: resolvedParticipant.user_id,
         error: error instanceof Error ? error : String(error),
       });
       return {
-        error: "Failed to process GitHub token for PR creation.",
+        error: "Failed to process source control token for PR creation.",
         status: 500,
       };
     }

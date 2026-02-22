@@ -99,6 +99,7 @@ describe("SessionRepository", () => {
         null,
         "claude-sonnet-4",
         null,
+        "github",
         "created",
         1000,
         2000,
@@ -326,12 +327,12 @@ describe("SessionRepository", () => {
       repo.createParticipant({
         id: "p-1",
         userId: "user-1",
-        githubUserId: "gh-123",
-        githubLogin: "testuser",
-        githubName: "Test User",
-        githubEmail: "test@example.com",
-        githubAccessTokenEncrypted: "encrypted-token",
-        githubTokenExpiresAt: 9000,
+        scmUserId: "gh-123",
+        scmLogin: "testuser",
+        scmName: "Test User",
+        scmEmail: "test@example.com",
+        scmAccessTokenEncrypted: "encrypted-token",
+        scmTokenExpiresAt: 9000,
         role: "owner",
         joinedAt: 1000,
       });
@@ -348,6 +349,7 @@ describe("SessionRepository", () => {
         "encrypted-token",
         null,
         9000,
+        "github",
         "owner",
         1000,
       ]);
@@ -371,6 +373,7 @@ describe("SessionRepository", () => {
         null,
         null,
         null,
+        "github",
         "member",
         1000,
       ]);
@@ -380,13 +383,13 @@ describe("SessionRepository", () => {
   describe("updateParticipantCoalesce", () => {
     it("only updates non-null fields", () => {
       repo.updateParticipantCoalesce("p-1", {
-        githubLogin: "newlogin",
-        githubName: null,
+        scmLogin: "newlogin",
+        scmName: null,
       });
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("COALESCE");
-      expect(mock.calls[0].params[0]).toBe(null); // githubUserId
+      expect(mock.calls[0].params[0]).toBe(null); // scmUserId
       expect(mock.calls[0].params[1]).toBe("newlogin");
       expect(mock.calls[0].params[7]).toBe("p-1"); // participantId
     });

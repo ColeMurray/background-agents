@@ -35,8 +35,9 @@ export interface WsClientMappingResult {
   participant_id: string;
   client_id: string;
   user_id: string;
-  github_name: string | null;
-  github_login: string | null;
+  scm_name: string | null;
+  scm_login: string | null;
+  scm_provider: "github" | "bitbucket" | null;
 }
 
 /**
@@ -63,6 +64,7 @@ export interface UpsertSessionData {
   repoId?: number | null;
   model: string;
   reasoningEffort?: string | null;
+  scmProvider?: "github" | "bitbucket";
   status: SessionStatus;
   createdAt: number;
   updatedAt: number;
@@ -84,13 +86,14 @@ export interface CreateSandboxData {
 export interface CreateParticipantData {
   id: string;
   userId: string;
-  githubUserId?: string | null;
-  githubLogin?: string | null;
-  githubName?: string | null;
-  githubEmail?: string | null;
-  githubAccessTokenEncrypted?: string | null;
-  githubRefreshTokenEncrypted?: string | null;
-  githubTokenExpiresAt?: number | null;
+  scmUserId?: string | null;
+  scmLogin?: string | null;
+  scmName?: string | null;
+  scmEmail?: string | null;
+  scmAccessTokenEncrypted?: string | null;
+  scmRefreshTokenEncrypted?: string | null;
+  scmTokenExpiresAt?: number | null;
+  scmProvider?: "github" | "bitbucket";
   role: ParticipantRole;
   joinedAt: number;
 }
@@ -99,13 +102,13 @@ export interface CreateParticipantData {
  * Data for updating a participant with COALESCE (only non-null values update).
  */
 export interface UpdateParticipantData {
-  githubUserId?: string | null;
-  githubLogin?: string | null;
-  githubName?: string | null;
-  githubEmail?: string | null;
-  githubAccessTokenEncrypted?: string | null;
-  githubRefreshTokenEncrypted?: string | null;
-  githubTokenExpiresAt?: number | null;
+  scmUserId?: string | null;
+  scmLogin?: string | null;
+  scmName?: string | null;
+  scmEmail?: string | null;
+  scmAccessTokenEncrypted?: string | null;
+  scmRefreshTokenEncrypted?: string | null;
+  scmTokenExpiresAt?: number | null;
 }
 
 /**
@@ -216,8 +219,8 @@ export class SessionRepository {
 
   upsertSession(data: UpsertSessionData): void {
     this.sql.exec(
-      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, model, reasoning_effort, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, model, reasoning_effort, scm_provider, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.sessionName,
       data.title,
@@ -226,6 +229,7 @@ export class SessionRepository {
       data.repoId ?? null,
       data.model,
       data.reasoningEffort ?? null,
+      data.scmProvider ?? "github",
       data.status,
       data.createdAt,
       data.updatedAt
@@ -390,17 +394,18 @@ export class SessionRepository {
 
   createParticipant(data: CreateParticipantData): void {
     this.sql.exec(
-      `INSERT INTO participants (id, user_id, github_user_id, github_login, github_name, github_email, github_access_token_encrypted, github_refresh_token_encrypted, github_token_expires_at, role, joined_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO participants (id, user_id, scm_user_id, scm_login, scm_name, scm_email, scm_access_token_encrypted, scm_refresh_token_encrypted, scm_token_expires_at, scm_provider, role, joined_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.userId,
-      data.githubUserId ?? null,
-      data.githubLogin ?? null,
-      data.githubName ?? null,
-      data.githubEmail ?? null,
-      data.githubAccessTokenEncrypted ?? null,
-      data.githubRefreshTokenEncrypted ?? null,
-      data.githubTokenExpiresAt ?? null,
+      data.scmUserId ?? null,
+      data.scmLogin ?? null,
+      data.scmName ?? null,
+      data.scmEmail ?? null,
+      data.scmAccessTokenEncrypted ?? null,
+      data.scmRefreshTokenEncrypted ?? null,
+      data.scmTokenExpiresAt ?? null,
+      data.scmProvider ?? "github",
       data.role,
       data.joinedAt
     );
@@ -409,21 +414,21 @@ export class SessionRepository {
   updateParticipantCoalesce(participantId: string, data: UpdateParticipantData): void {
     this.sql.exec(
       `UPDATE participants SET
-         github_user_id = COALESCE(?, github_user_id),
-         github_login = COALESCE(?, github_login),
-         github_name = COALESCE(?, github_name),
-         github_email = COALESCE(?, github_email),
-         github_access_token_encrypted = COALESCE(?, github_access_token_encrypted),
-         github_refresh_token_encrypted = COALESCE(?, github_refresh_token_encrypted),
-         github_token_expires_at = COALESCE(?, github_token_expires_at)
+         scm_user_id = COALESCE(?, scm_user_id),
+         scm_login = COALESCE(?, scm_login),
+         scm_name = COALESCE(?, scm_name),
+         scm_email = COALESCE(?, scm_email),
+         scm_access_token_encrypted = COALESCE(?, scm_access_token_encrypted),
+         scm_refresh_token_encrypted = COALESCE(?, scm_refresh_token_encrypted),
+         scm_token_expires_at = COALESCE(?, scm_token_expires_at)
        WHERE id = ?`,
-      data.githubUserId ?? null,
-      data.githubLogin ?? null,
-      data.githubName ?? null,
-      data.githubEmail ?? null,
-      data.githubAccessTokenEncrypted ?? null,
-      data.githubRefreshTokenEncrypted ?? null,
-      data.githubTokenExpiresAt ?? null,
+      data.scmUserId ?? null,
+      data.scmLogin ?? null,
+      data.scmName ?? null,
+      data.scmEmail ?? null,
+      data.scmAccessTokenEncrypted ?? null,
+      data.scmRefreshTokenEncrypted ?? null,
+      data.scmTokenExpiresAt ?? null,
       participantId
     );
   }
@@ -431,20 +436,20 @@ export class SessionRepository {
   updateParticipantTokens(
     participantId: string,
     data: {
-      githubAccessTokenEncrypted: string;
-      githubRefreshTokenEncrypted?: string | null;
-      githubTokenExpiresAt: number;
+      scmAccessTokenEncrypted: string;
+      scmRefreshTokenEncrypted?: string | null;
+      scmTokenExpiresAt: number;
     }
   ): void {
     this.sql.exec(
       `UPDATE participants SET
-         github_access_token_encrypted = ?,
-         github_refresh_token_encrypted = COALESCE(?, github_refresh_token_encrypted),
-         github_token_expires_at = ?
+         scm_access_token_encrypted = ?,
+         scm_refresh_token_encrypted = COALESCE(?, scm_refresh_token_encrypted),
+         scm_token_expires_at = ?
        WHERE id = ?`,
-      data.githubAccessTokenEncrypted,
-      data.githubRefreshTokenEncrypted ?? null,
-      data.githubTokenExpiresAt,
+      data.scmAccessTokenEncrypted,
+      data.scmRefreshTokenEncrypted ?? null,
+      data.scmTokenExpiresAt,
       participantId
     );
   }
@@ -729,7 +734,7 @@ export class SessionRepository {
 
   getWsClientMapping(wsId: string): WsClientMappingResult | null {
     const result = this.sql.exec(
-      `SELECT m.participant_id, m.client_id, p.user_id, p.github_name, p.github_login
+      `SELECT m.participant_id, m.client_id, p.user_id, p.scm_name, p.scm_login, p.scm_provider
        FROM ws_client_mapping m
        JOIN participants p ON m.participant_id = p.id
        WHERE m.ws_id = ?`,

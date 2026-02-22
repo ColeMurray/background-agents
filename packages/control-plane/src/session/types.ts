@@ -32,19 +32,21 @@ export interface SessionRow {
   status: SessionStatus;
   created_at: number;
   updated_at: number;
+  scm_provider: "github" | "bitbucket";
 }
 
 export interface ParticipantRow {
   id: string;
   user_id: string;
-  github_user_id: string | null;
-  github_login: string | null;
-  github_email: string | null;
-  github_name: string | null;
+  scm_user_id: string | null;
+  scm_login: string | null;
+  scm_email: string | null;
+  scm_name: string | null;
   role: ParticipantRole;
-  github_access_token_encrypted: string | null;
-  github_refresh_token_encrypted: string | null;
-  github_token_expires_at: number | null;
+  scm_access_token_encrypted: string | null;
+  scm_refresh_token_encrypted: string | null;
+  scm_token_expires_at: number | null;
+  scm_provider: "github" | "bitbucket";
   ws_auth_token: string | null; // SHA-256 hash of WebSocket auth token
   ws_token_created_at: number | null; // When the token was generated
   joined_at: number;
@@ -109,8 +111,8 @@ export interface PromptCommand {
   reasoningEffort?: string; // Reasoning effort level
   author: {
     userId: string;
-    githubName: string | null;
-    githubEmail: string | null;
+    scmName: string | null;
+    scmEmail: string | null;
   };
   attachments?: Array<{
     type: string;

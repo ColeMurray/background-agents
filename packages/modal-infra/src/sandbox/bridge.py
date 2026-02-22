@@ -518,13 +518,14 @@ class AgentBridge:
             reasoning_effort=reasoning_effort,
         )
 
-        github_name = author_data.get("githubName")
-        github_email = author_data.get("githubEmail")
-        if github_name and github_email:
+        # Read scm* fields (preferred), fall back to legacy github* for rolling deploy compat
+        scm_name = author_data.get("scmName") or author_data.get("githubName")
+        scm_email = author_data.get("scmEmail") or author_data.get("githubEmail")
+        if scm_name and scm_email:
             await self._configure_git_identity(
                 GitUser(
-                    name=github_name,
-                    email=github_email,
+                    name=scm_name,
+                    email=scm_email,
                 )
             )
 

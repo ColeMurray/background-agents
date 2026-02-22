@@ -40,13 +40,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       method: "POST",
       body: JSON.stringify({
         userId,
-        githubUserId: user.id,
-        githubLogin: user.login,
-        githubName: user.name,
-        githubEmail: user.email,
-        githubToken: jwt?.accessToken as string | undefined,
-        githubTokenExpiresAt: jwt?.accessTokenExpiresAt as number | undefined,
-        githubRefreshToken: jwt?.refreshToken as string | undefined,
+        scmUserId: user.id,
+        scmLogin: user.login,
+        scmName: user.name,
+        scmEmail: user.email,
+        scmToken: jwt?.accessToken as string | undefined,
+        scmTokenExpiresAt: jwt?.accessTokenExpiresAt as number | undefined,
+        scmRefreshToken: jwt?.refreshToken as string | undefined,
       }),
     });
     const fetchMs = Date.now() - fetchStart;

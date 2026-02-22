@@ -60,11 +60,11 @@ export async function POST(request: NextRequest) {
       model: body.model,
       reasoningEffort: body.reasoningEffort,
       title: body.title,
-      githubToken,
+      scmToken: githubToken,
       userId,
-      githubLogin: user.login,
-      githubName: user.name,
-      githubEmail: user.email,
+      scmLogin: user.login,
+      scmName: user.name,
+      scmEmail: user.email,
     };
 
     const response = await controlPlaneFetch("/sessions", {

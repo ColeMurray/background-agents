@@ -13,7 +13,7 @@ import type { SessionRepository } from "./repository";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
-import { getGitHubAvatarUrl } from "./participant-service";
+import { getAvatarUrl } from "./participant-service";
 
 interface PromptMessageData {
   content: string;
@@ -172,8 +172,8 @@ export class SessionMessageQueue {
       reasoningEffort: resolvedEffort,
       author: {
         userId: author?.user_id ?? "unknown",
-        githubName: author?.github_name ?? null,
-        githubEmail: author?.github_email ?? null,
+        scmName: author?.scm_name ?? null,
+        scmEmail: author?.scm_email ?? null,
       },
       attachments: message.attachments ? JSON.parse(message.attachments) : undefined,
     };
@@ -278,8 +278,8 @@ export class SessionMessageQueue {
       timestamp: now / 1000,
       author: {
         participantId: participant.id,
-        name: participant.github_name || participant.github_login || participant.user_id,
-        avatar: getGitHubAvatarUrl(participant.github_login),
+        name: participant.scm_name || participant.scm_login || participant.user_id,
+        avatar: getAvatarUrl(participant.scm_login, participant.scm_provider),
       },
     };
     this.deps.repository.createEvent({

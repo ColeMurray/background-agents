@@ -537,10 +537,14 @@ async function handleCreateSession(
   ctx: RequestContext
 ): Promise<Response> {
   const body = (await request.json()) as CreateSessionRequest & {
-    // Optional GitHub token for PR creation (will be encrypted and stored)
-    githubToken?: string;
-    // User info
+    // New field names (preferred)
+    scmToken?: string;
     userId?: string;
+    scmLogin?: string;
+    scmName?: string;
+    scmEmail?: string;
+    // Legacy field names (backward compat during rolling deploy, remove after one deploy cycle)
+    githubToken?: string;
     githubLogin?: string;
     githubName?: string;
     githubEmail?: string;
@@ -574,22 +578,23 @@ async function handleCreateSession(
     return error(isConfigError ? message : "Failed to resolve repository", 500);
   }
 
-  // User info from direct params
+  // Resolve field names (new scm* preferred, github* as backward compat)
   const userId = body.userId || "anonymous";
-  const githubLogin = body.githubLogin;
-  const githubName = body.githubName;
-  const githubEmail = body.githubEmail;
-  let githubTokenEncrypted: string | null = null;
+  const scmLogin = body.scmLogin ?? body.githubLogin;
+  const scmName = body.scmName ?? body.githubName;
+  const scmEmail = body.scmEmail ?? body.githubEmail;
+  const scmToken = body.scmToken ?? body.githubToken;
+  let scmTokenEncrypted: string | null = null;
 
-  // If GitHub token provided, encrypt it
-  if (body.githubToken && env.TOKEN_ENCRYPTION_KEY) {
+  // If SCM token provided, encrypt it
+  if (scmToken && env.TOKEN_ENCRYPTION_KEY) {
     try {
-      githubTokenEncrypted = await encryptToken(body.githubToken, env.TOKEN_ENCRYPTION_KEY);
+      scmTokenEncrypted = await encryptToken(scmToken, env.TOKEN_ENCRYPTION_KEY);
     } catch (e) {
-      logger.error("Failed to encrypt GitHub token", {
+      logger.error("Failed to encrypt SCM token", {
         error: e instanceof Error ? e : String(e),
       });
-      return error("Failed to process GitHub token", 500);
+      return error("Failed to process SCM token", 500);
     }
   }
 
@@ -623,10 +628,10 @@ async function handleCreateSession(
           model,
           reasoningEffort,
           userId,
-          githubLogin,
-          githubName,
-          githubEmail,
-          githubTokenEncrypted, // Pass encrypted token to store with owner
+          scmLogin,
+          scmName,
+          scmEmail,
+          scmTokenEncrypted,
         }),
       },
       ctx
@@ -931,65 +936,77 @@ async function handleSessionWsToken(
 
   const body = (await request.json()) as {
     userId: string;
+    // New field names (preferred)
+    scmUserId?: string;
+    scmLogin?: string;
+    scmName?: string;
+    scmEmail?: string;
+    scmToken?: string;
+    scmTokenExpiresAt?: number;
+    scmRefreshToken?: string;
+    // Legacy field names (backward compat during rolling deploy, remove after one deploy cycle)
     githubUserId?: string;
     githubLogin?: string;
     githubName?: string;
     githubEmail?: string;
-    githubToken?: string; // User's GitHub OAuth token for PR creation
-    githubTokenExpiresAt?: number; // Token expiry timestamp in milliseconds
-    githubRefreshToken?: string; // GitHub OAuth refresh token for server-side renewal
+    githubToken?: string;
+    githubTokenExpiresAt?: number;
+    githubRefreshToken?: string;
   };
 
   if (!body.userId) {
     return error("userId is required");
   }
 
-  // Encrypt the GitHub tokens if provided
-  const { githubTokenEncrypted, githubRefreshTokenEncrypted } = await ctx.metrics.time(
+  // Resolve field names (new scm* preferred, github* as backward compat)
+  const scmUserId = body.scmUserId ?? body.githubUserId;
+  const scmLogin = body.scmLogin ?? body.githubLogin;
+  const scmName = body.scmName ?? body.githubName;
+  const scmEmail = body.scmEmail ?? body.githubEmail;
+  const scmToken = body.scmToken ?? body.githubToken;
+  const scmTokenExpiresAt = body.scmTokenExpiresAt ?? body.githubTokenExpiresAt;
+  const scmRefreshToken = body.scmRefreshToken ?? body.githubRefreshToken;
+
+  // Encrypt the SCM tokens if provided
+  const { scmTokenEncrypted, scmRefreshTokenEncrypted } = await ctx.metrics.time(
     "encrypt_tokens",
     async () => {
       let accessToken: string | null = null;
       let refreshToken: string | null = null;
 
-      if (body.githubToken && env.TOKEN_ENCRYPTION_KEY) {
+      if (scmToken && env.TOKEN_ENCRYPTION_KEY) {
         try {
-          accessToken = await encryptToken(body.githubToken, env.TOKEN_ENCRYPTION_KEY);
+          accessToken = await encryptToken(scmToken, env.TOKEN_ENCRYPTION_KEY);
         } catch (e) {
-          logger.error("Failed to encrypt GitHub token", {
-            error: e instanceof Error ? e : String(e),
-          });
-          // Continue without token - PR creation will fail if this user triggers it
-        }
-      }
-
-      if (body.githubRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
-        try {
-          refreshToken = await encryptToken(body.githubRefreshToken, env.TOKEN_ENCRYPTION_KEY);
-        } catch (e) {
-          logger.error("Failed to encrypt GitHub refresh token", {
+          logger.error("Failed to encrypt SCM token", {
             error: e instanceof Error ? e : String(e),
           });
         }
       }
 
-      return { githubTokenEncrypted: accessToken, githubRefreshTokenEncrypted: refreshToken };
+      if (scmRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
+        try {
+          refreshToken = await encryptToken(scmRefreshToken, env.TOKEN_ENCRYPTION_KEY);
+        } catch (e) {
+          logger.error("Failed to encrypt SCM refresh token", {
+            error: e instanceof Error ? e : String(e),
+          });
+        }
+      }
+
+      return { scmTokenEncrypted: accessToken, scmRefreshTokenEncrypted: refreshToken };
     }
   );
 
   // Populate D1 with the user's SCM tokens (non-blocking) so centralized refresh works
-  if (
-    body.githubUserId &&
-    body.githubToken &&
-    body.githubRefreshToken &&
-    env.TOKEN_ENCRYPTION_KEY
-  ) {
+  if (scmUserId && scmToken && scmRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
     ctx.executionCtx?.waitUntil(
       new UserScmTokenStore(env.DB, env.TOKEN_ENCRYPTION_KEY)
         .upsertTokens(
-          body.githubUserId,
-          body.githubToken,
-          body.githubRefreshToken,
-          body.githubTokenExpiresAt ?? Date.now() + DEFAULT_TOKEN_LIFETIME_MS
+          scmUserId,
+          scmToken,
+          scmRefreshToken,
+          scmTokenExpiresAt ?? Date.now() + DEFAULT_TOKEN_LIFETIME_MS
         )
         .catch((e) =>
           logger.error("Failed to write tokens to D1", {
@@ -1011,13 +1028,13 @@ async function handleSessionWsToken(
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             userId: body.userId,
-            githubUserId: body.githubUserId,
-            githubLogin: body.githubLogin,
-            githubName: body.githubName,
-            githubEmail: body.githubEmail,
-            githubTokenEncrypted,
-            githubRefreshTokenEncrypted,
-            githubTokenExpiresAt: body.githubTokenExpiresAt,
+            scmUserId,
+            scmLogin,
+            scmName,
+            scmEmail,
+            scmTokenEncrypted,
+            scmRefreshTokenEncrypted,
+            scmTokenExpiresAt,
           }),
         },
         ctx

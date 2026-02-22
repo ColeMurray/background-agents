@@ -58,7 +58,7 @@ import { RepoSecretsStore } from "../db/repo-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
-import { ParticipantService, getGitHubAvatarUrl } from "./participant-service";
+import { ParticipantService, getAvatarUrl } from "./participant-service";
 import { UserScmTokenStore } from "../db/user-scm-tokens";
 import { CallbackNotificationService } from "./callback-notification-service";
 import { PresenceService } from "./presence-service";
@@ -918,8 +918,8 @@ export class SessionDO extends DurableObject<Env> {
     const clientInfo: ClientInfo = {
       participantId: participant.id,
       userId: participant.user_id,
-      name: participant.github_name || participant.github_login || participant.user_id,
-      avatar: getGitHubAvatarUrl(participant.github_login),
+      name: participant.scm_name || participant.scm_login || participant.user_id,
+      avatar: getAvatarUrl(participant.scm_login, participant.scm_provider),
       status: "active",
       lastSeen: Date.now(),
       clientId: data.clientId,
@@ -950,8 +950,8 @@ export class SessionDO extends DurableObject<Env> {
       participantId: participant.id,
       participant: {
         participantId: participant.id,
-        name: participant.github_name || participant.github_login || participant.user_id,
-        avatar: getGitHubAvatarUrl(participant.github_login),
+        name: participant.scm_name || participant.scm_login || participant.user_id,
+        avatar: getAvatarUrl(participant.scm_login, participant.scm_provider),
       },
       replay,
       spawnError: sandbox?.last_spawn_error ?? null,
@@ -1012,8 +1012,8 @@ export class SessionDO extends DurableObject<Env> {
     const clientInfo: ClientInfo = {
       participantId: mapping.participant_id,
       userId: mapping.user_id,
-      name: mapping.github_name || mapping.github_login || mapping.user_id,
-      avatar: getGitHubAvatarUrl(mapping.github_login),
+      name: mapping.scm_name || mapping.scm_login || mapping.user_id,
+      avatar: getAvatarUrl(mapping.scm_login, mapping.scm_provider),
       status: "active",
       lastSeen: Date.now(),
       clientId: mapping.client_id || `client-${Date.now()}`,
@@ -1458,26 +1458,29 @@ export class SessionDO extends DurableObject<Env> {
       model?: string; // LLM model to use
       reasoningEffort?: string; // Reasoning effort level
       userId: string;
-      githubLogin?: string;
-      githubName?: string;
-      githubEmail?: string;
-      githubToken?: string | null; // Plain GitHub token (will be encrypted)
-      githubTokenEncrypted?: string | null; // Pre-encrypted GitHub token
+      scmLogin?: string;
+      scmName?: string;
+      scmEmail?: string;
+      scmToken?: string | null; // Plain SCM token (will be encrypted)
+      scmTokenEncrypted?: string | null; // Pre-encrypted SCM token
+      scmProvider?: "github" | "bitbucket";
     };
+
+    const scmProvider = body.scmProvider ?? "github";
 
     const sessionId = this.ctx.id.toString();
     const sessionName = body.sessionName; // Store the WebSocket routing name
     const now = Date.now();
 
-    // Encrypt the GitHub token if provided in plain text
-    let encryptedToken = body.githubTokenEncrypted ?? null;
-    if (body.githubToken && this.env.TOKEN_ENCRYPTION_KEY) {
+    // Encrypt the SCM token if provided in plain text
+    let encryptedToken = body.scmTokenEncrypted ?? null;
+    if (body.scmToken && this.env.TOKEN_ENCRYPTION_KEY) {
       try {
         const { encryptToken } = await import("../auth/crypto");
-        encryptedToken = await encryptToken(body.githubToken, this.env.TOKEN_ENCRYPTION_KEY);
-        this.log.debug("Encrypted GitHub token for storage");
+        encryptedToken = await encryptToken(body.scmToken, this.env.TOKEN_ENCRYPTION_KEY);
+        this.log.debug("Encrypted SCM token for storage");
       } catch (err) {
-        this.log.error("Failed to encrypt GitHub token", {
+        this.log.error("Failed to encrypt SCM token", {
           error: err instanceof Error ? err : String(err),
         });
       }
@@ -1505,6 +1508,7 @@ export class SessionDO extends DurableObject<Env> {
       repoId: body.repoId ?? null,
       model,
       reasoningEffort,
+      scmProvider,
       status: "created",
       createdAt: now,
       updatedAt: now,
@@ -1521,15 +1525,16 @@ export class SessionDO extends DurableObject<Env> {
       createdAt: 0,
     });
 
-    // Create owner participant with encrypted GitHub token
+    // Create owner participant with encrypted SCM token
     const participantId = generateId();
     this.repository.createParticipant({
       id: participantId,
       userId: body.userId,
-      githubLogin: body.githubLogin ?? null,
-      githubName: body.githubName ?? null,
-      githubEmail: body.githubEmail ?? null,
-      githubAccessTokenEncrypted: encryptedToken,
+      scmLogin: body.scmLogin ?? null,
+      scmName: body.scmName ?? null,
+      scmEmail: body.scmEmail ?? null,
+      scmAccessTokenEncrypted: encryptedToken,
+      scmProvider,
       role: "owner",
       joinedAt: now,
     });
@@ -1614,8 +1619,8 @@ export class SessionDO extends DurableObject<Env> {
       participants: participants.map((p) => ({
         id: p.id,
         userId: p.user_id,
-        githubLogin: p.github_login,
-        githubName: p.github_name,
+        scmLogin: p.scm_login,
+        scmName: p.scm_name,
         role: p.role,
         joinedAt: p.joined_at,
       })),
@@ -1625,10 +1630,14 @@ export class SessionDO extends DurableObject<Env> {
   private async handleAddParticipant(request: Request): Promise<Response> {
     const body = (await request.json()) as {
       userId: string;
+      scmLogin?: string;
+      scmName?: string;
+      scmEmail?: string;
+      role?: string;
+      // Legacy (backward compat)
       githubLogin?: string;
       githubName?: string;
       githubEmail?: string;
-      role?: string;
     };
 
     const id = generateId();
@@ -1637,9 +1646,9 @@ export class SessionDO extends DurableObject<Env> {
     this.repository.createParticipant({
       id,
       userId: body.userId,
-      githubLogin: body.githubLogin ?? null,
-      githubName: body.githubName ?? null,
-      githubEmail: body.githubEmail ?? null,
+      scmLogin: body.scmLogin ?? body.githubLogin ?? null,
+      scmName: body.scmName ?? body.githubName ?? null,
+      scmEmail: body.scmEmail ?? body.githubEmail ?? null,
       role: (body.role ?? "member") as ParticipantRole,
       joinedAt: now,
     });
@@ -1825,19 +1834,19 @@ export class SessionDO extends DurableObject<Env> {
    * 1. Creates or updates a participant record
    * 2. Generates a 256-bit random token
    * 3. Stores the SHA-256 hash in the participant record
-   * 4. Optionally stores encrypted GitHub token for PR creation
+   * 4. Optionally stores encrypted SCM token for PR creation
    * 5. Returns the plain token to the caller
    */
   private async handleGenerateWsToken(request: Request): Promise<Response> {
     const body = (await request.json()) as {
       userId: string;
-      githubUserId?: string;
-      githubLogin?: string;
-      githubName?: string;
-      githubEmail?: string;
-      githubTokenEncrypted?: string | null; // Encrypted GitHub OAuth token for PR creation
-      githubRefreshTokenEncrypted?: string | null; // Encrypted GitHub OAuth refresh token
-      githubTokenExpiresAt?: number | null; // Token expiry timestamp in milliseconds
+      scmUserId?: string;
+      scmLogin?: string;
+      scmName?: string;
+      scmEmail?: string;
+      scmTokenEncrypted?: string | null; // Encrypted SCM OAuth token for PR creation
+      scmRefreshTokenEncrypted?: string | null; // Encrypted SCM OAuth refresh token
+      scmTokenExpiresAt?: number | null; // Token expiry timestamp in milliseconds
     };
 
     if (!body.userId) {
@@ -1853,10 +1862,10 @@ export class SessionDO extends DurableObject<Env> {
       // Only accept client tokens if they're newer than what we have in the DB.
       // The server-side refresh may have rotated tokens, and the client could
       // be sending stale values from an old session cookie.
-      const clientExpiresAt = body.githubTokenExpiresAt ?? null;
-      const dbExpiresAt = participant.github_token_expires_at;
+      const clientExpiresAt = body.scmTokenExpiresAt ?? null;
+      const dbExpiresAt = participant.scm_token_expires_at;
       const clientSentAnyToken =
-        body.githubTokenEncrypted != null || body.githubRefreshTokenEncrypted != null;
+        body.scmTokenEncrypted != null || body.scmRefreshTokenEncrypted != null;
 
       const shouldUpdateTokens =
         clientSentAnyToken &&
@@ -1866,33 +1875,33 @@ export class SessionDO extends DurableObject<Env> {
       // only accept an incoming refresh token when we're also accepting the
       // access token update, or when we don't have one yet.
       const shouldUpdateRefreshToken =
-        body.githubRefreshTokenEncrypted != null &&
-        (participant.github_refresh_token_encrypted == null || shouldUpdateTokens);
+        body.scmRefreshTokenEncrypted != null &&
+        (participant.scm_refresh_token_encrypted == null || shouldUpdateTokens);
 
       this.repository.updateParticipantCoalesce(participant.id, {
-        githubUserId: body.githubUserId ?? null,
-        githubLogin: body.githubLogin ?? null,
-        githubName: body.githubName ?? null,
-        githubEmail: body.githubEmail ?? null,
-        githubAccessTokenEncrypted: shouldUpdateTokens ? (body.githubTokenEncrypted ?? null) : null,
-        githubRefreshTokenEncrypted: shouldUpdateRefreshToken
-          ? (body.githubRefreshTokenEncrypted ?? null)
+        scmUserId: body.scmUserId ?? null,
+        scmLogin: body.scmLogin ?? null,
+        scmName: body.scmName ?? null,
+        scmEmail: body.scmEmail ?? null,
+        scmAccessTokenEncrypted: shouldUpdateTokens ? (body.scmTokenEncrypted ?? null) : null,
+        scmRefreshTokenEncrypted: shouldUpdateRefreshToken
+          ? (body.scmRefreshTokenEncrypted ?? null)
           : null,
-        githubTokenExpiresAt: shouldUpdateTokens ? clientExpiresAt : null,
+        scmTokenExpiresAt: shouldUpdateTokens ? clientExpiresAt : null,
       });
     } else {
-      // Create new participant with optional GitHub token
+      // Create new participant with optional SCM token
       const id = generateId();
       this.repository.createParticipant({
         id,
         userId: body.userId,
-        githubUserId: body.githubUserId ?? null,
-        githubLogin: body.githubLogin ?? null,
-        githubName: body.githubName ?? null,
-        githubEmail: body.githubEmail ?? null,
-        githubAccessTokenEncrypted: body.githubTokenEncrypted ?? null,
-        githubRefreshTokenEncrypted: body.githubRefreshTokenEncrypted ?? null,
-        githubTokenExpiresAt: body.githubTokenExpiresAt ?? null,
+        scmUserId: body.scmUserId ?? null,
+        scmLogin: body.scmLogin ?? null,
+        scmName: body.scmName ?? null,
+        scmEmail: body.scmEmail ?? null,
+        scmAccessTokenEncrypted: body.scmTokenEncrypted ?? null,
+        scmRefreshTokenEncrypted: body.scmRefreshTokenEncrypted ?? null,
+        scmTokenExpiresAt: body.scmTokenExpiresAt ?? null,
         role: "member",
         joinedAt: now,
       });

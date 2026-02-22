@@ -363,8 +363,8 @@ export interface ArtifactResponse {
 export interface ParticipantResponse {
   id: string;
   userId: string;
-  githubLogin: string | null;
-  githubName: string | null;
+  scmLogin: string | null;
+  scmName: string | null;
   role: ParticipantRole;
   joinedAt: number;
 }

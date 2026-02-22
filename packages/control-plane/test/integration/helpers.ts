@@ -14,7 +14,7 @@ export async function initSession(overrides?: {
   model?: string;
   reasoningEffort?: string;
   userId?: string;
-  githubLogin?: string;
+  scmLogin?: string;
 }) {
   const id = env.SESSION.newUniqueId();
   const stub = env.SESSION.get(id);
@@ -121,7 +121,7 @@ export async function initNamedSession(
     title?: string;
     model?: string;
     userId?: string;
-    githubLogin?: string;
+    scmLogin?: string;
   }
 ) {
   const id = env.SESSION.idFromName(sessionName);

@@ -113,7 +113,7 @@ describe("POST /internal/create-pr", () => {
 
     await runInDurableObject(stub, (instance: SessionDO) => {
       instance.ctx.storage.sql.exec(
-        "UPDATE participants SET github_access_token_encrypted = ?, github_refresh_token_encrypted = ?, github_token_expires_at = ? WHERE id = ?",
+        "UPDATE participants SET scm_access_token_encrypted = ?, scm_refresh_token_encrypted = ?, scm_token_expires_at = ? WHERE id = ?",
         "invalid-access-token",
         "invalid-refresh-token",
         Date.now() - 60_000,
@@ -133,7 +133,7 @@ describe("POST /internal/create-pr", () => {
     expect(res.status).toBe(401);
     const body = await res.json<{ error: string }>();
     expect(body.error).toBe(
-      "Your GitHub token has expired and could not be refreshed. Please re-authenticate."
+      "Your source control token has expired and could not be refreshed. Please re-authenticate."
     );
   });
 

@@ -28,9 +28,9 @@ export interface GitUser {
 export interface SessionParticipant {
   id: string;
   userId: string;
-  githubLogin: string | null;
-  githubName: string | null;
-  githubEmail: string | null;
+  scmLogin: string | null;
+  scmName: string | null;
+  scmEmail: string | null;
   role: "owner" | "member";
 }
 

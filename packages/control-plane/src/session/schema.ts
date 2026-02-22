@@ -23,22 +23,24 @@ CREATE TABLE IF NOT EXISTS session (
   reasoning_effort TEXT,                            -- Session-level reasoning effort default
   status TEXT DEFAULT 'created',                    -- 'created', 'active', 'completed', 'archived'
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  scm_provider TEXT NOT NULL DEFAULT 'github'       -- 'github', 'bitbucket'
 );
 
 -- Participants in the session
 CREATE TABLE IF NOT EXISTS participants (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
-  github_user_id TEXT,                              -- GitHub numeric ID
-  github_login TEXT,                                -- GitHub username
-  github_email TEXT,                                -- For git commit attribution
-  github_name TEXT,                                 -- Display name for git commits
+  scm_user_id TEXT,                                 -- SCM numeric ID
+  scm_login TEXT,                                   -- SCM username
+  scm_email TEXT,                                   -- For git commit attribution
+  scm_name TEXT,                                    -- Display name for git commits
   role TEXT NOT NULL DEFAULT 'member',              -- 'owner', 'member'
   -- Token storage (AES-GCM encrypted)
-  github_access_token_encrypted TEXT,
-  github_refresh_token_encrypted TEXT,
-  github_token_expires_at INTEGER,                  -- Unix timestamp
+  scm_access_token_encrypted TEXT,
+  scm_refresh_token_encrypted TEXT,
+  scm_token_expires_at INTEGER,                     -- Unix timestamp
+  scm_provider TEXT NOT NULL DEFAULT 'github',      -- 'github', 'bitbucket'
   -- WebSocket authentication
   ws_auth_token TEXT,                               -- SHA-256 hash of WebSocket auth token
   ws_token_created_at INTEGER,                      -- When the token was generated
@@ -251,6 +253,41 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 19,
     description: "Add auth_token_hash to sandbox",
     run: `ALTER TABLE sandbox ADD COLUMN auth_token_hash TEXT`,
+  },
+  {
+    id: 20,
+    description: "Rename github_* columns to scm_* in participants",
+    run: (sql) => {
+      const columns = sql.exec("PRAGMA table_info(participants)").toArray() as Array<{
+        name: string;
+      }>;
+      const columnNames = new Set(columns.map((c) => c.name));
+
+      const renames: [string, string][] = [
+        ["github_user_id", "scm_user_id"],
+        ["github_login", "scm_login"],
+        ["github_email", "scm_email"],
+        ["github_name", "scm_name"],
+        ["github_access_token_encrypted", "scm_access_token_encrypted"],
+        ["github_refresh_token_encrypted", "scm_refresh_token_encrypted"],
+        ["github_token_expires_at", "scm_token_expires_at"],
+      ];
+      for (const [oldCol, newCol] of renames) {
+        if (columnNames.has(oldCol) && !columnNames.has(newCol)) {
+          sql.exec(`ALTER TABLE participants RENAME COLUMN ${oldCol} TO ${newCol}`);
+        }
+      }
+    },
+  },
+  {
+    id: 21,
+    description: "Add scm_provider to participants",
+    run: `ALTER TABLE participants ADD COLUMN scm_provider TEXT NOT NULL DEFAULT 'github'`,
+  },
+  {
+    id: 22,
+    description: "Add scm_provider to session",
+    run: `ALTER TABLE session ADD COLUMN scm_provider TEXT NOT NULL DEFAULT 'github'`,
   },
 ];
 

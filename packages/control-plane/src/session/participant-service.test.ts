@@ -3,7 +3,7 @@ import type { Logger } from "../logger";
 import type { ParticipantRow } from "./types";
 import {
   ParticipantService,
-  getGitHubAvatarUrl,
+  getAvatarUrl,
   type ParticipantRepository,
   type ParticipantServiceDeps,
   type ParticipantServiceEnv,
@@ -42,14 +42,15 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
   return {
     id: "part-1",
     user_id: "user-1",
-    github_user_id: null,
-    github_login: null,
-    github_email: null,
-    github_name: "Test User",
+    scm_user_id: null,
+    scm_login: null,
+    scm_email: null,
+    scm_name: "Test User",
+    scm_provider: "github",
     role: "member",
-    github_access_token_encrypted: null,
-    github_refresh_token_encrypted: null,
-    github_token_expires_at: null,
+    scm_access_token_encrypted: null,
+    scm_refresh_token_encrypted: null,
+    scm_token_expires_at: null,
     ws_auth_token: null,
     ws_token_created_at: null,
     joined_at: 1000,
@@ -139,17 +140,25 @@ function createTestHarness(overrides?: {
 
 // ---- Tests ----
 
-describe("getGitHubAvatarUrl", () => {
-  it("returns avatar URL for a login", () => {
-    expect(getGitHubAvatarUrl("octocat")).toBe("https://github.com/octocat.png");
+describe("getAvatarUrl", () => {
+  it("returns avatar URL for a GitHub login", () => {
+    expect(getAvatarUrl("octocat")).toBe("https://github.com/octocat.png");
+  });
+
+  it("returns avatar URL with explicit github provider", () => {
+    expect(getAvatarUrl("octocat", "github")).toBe("https://github.com/octocat.png");
   });
 
   it("returns undefined for null", () => {
-    expect(getGitHubAvatarUrl(null)).toBeUndefined();
+    expect(getAvatarUrl(null)).toBeUndefined();
   });
 
   it("returns undefined for undefined", () => {
-    expect(getGitHubAvatarUrl(undefined)).toBeUndefined();
+    expect(getAvatarUrl(undefined)).toBeUndefined();
+  });
+
+  it("returns undefined for unsupported provider", () => {
+    expect(getAvatarUrl("user", "bitbucket")).toBeUndefined();
   });
 });
 
@@ -198,15 +207,15 @@ describe("ParticipantService", () => {
         expect.objectContaining({
           id: "gen-id-1",
           userId: "user-42",
-          githubName: "Alice",
+          scmName: "Alice",
           role: "member",
         })
       );
       expect(result.id).toBe("gen-id-1");
       expect(result.user_id).toBe("user-42");
-      expect(result.github_name).toBe("Alice");
+      expect(result.scm_name).toBe("Alice");
       expect(result.role).toBe("member");
-      expect(result.github_access_token_encrypted).toBeNull();
+      expect(result.scm_access_token_encrypted).toBeNull();
     });
   });
 
@@ -243,47 +252,47 @@ describe("ParticipantService", () => {
     });
   });
 
-  describe("isGitHubTokenExpired", () => {
+  describe("isScmTokenExpired", () => {
     it("returns false when no expiry is set", () => {
-      const participant = createParticipant({ github_token_expires_at: null });
-      expect(harness.service.isGitHubTokenExpired(participant)).toBe(false);
+      const participant = createParticipant({ scm_token_expires_at: null });
+      expect(harness.service.isScmTokenExpired(participant)).toBe(false);
     });
 
     it("returns false when token is still valid", () => {
       const participant = createParticipant({
-        github_token_expires_at: Date.now() + 120000, // 2 minutes from now
+        scm_token_expires_at: Date.now() + 120000, // 2 minutes from now
       });
-      expect(harness.service.isGitHubTokenExpired(participant)).toBe(false);
+      expect(harness.service.isScmTokenExpired(participant)).toBe(false);
     });
 
     it("returns true when token is within default buffer", () => {
       const participant = createParticipant({
-        github_token_expires_at: Date.now() + 30000, // 30 seconds from now, within 60s buffer
+        scm_token_expires_at: Date.now() + 30000, // 30 seconds from now, within 60s buffer
       });
-      expect(harness.service.isGitHubTokenExpired(participant)).toBe(true);
+      expect(harness.service.isScmTokenExpired(participant)).toBe(true);
     });
 
     it("returns true when token is already expired", () => {
       const participant = createParticipant({
-        github_token_expires_at: Date.now() - 1000,
+        scm_token_expires_at: Date.now() - 1000,
       });
-      expect(harness.service.isGitHubTokenExpired(participant)).toBe(true);
+      expect(harness.service.isScmTokenExpired(participant)).toBe(true);
     });
 
     it("respects custom buffer", () => {
       const participant = createParticipant({
-        github_token_expires_at: Date.now() + 30000,
+        scm_token_expires_at: Date.now() + 30000,
       });
       // With 10s buffer, 30s remaining should NOT be expired
-      expect(harness.service.isGitHubTokenExpired(participant, 10000)).toBe(false);
+      expect(harness.service.isScmTokenExpired(participant, 10000)).toBe(false);
       // With 60s buffer, 30s remaining SHOULD be expired
-      expect(harness.service.isGitHubTokenExpired(participant, 60000)).toBe(true);
+      expect(harness.service.isScmTokenExpired(participant, 60000)).toBe(true);
     });
   });
 
   describe("refreshToken (local-only, no D1 store)", () => {
     it("returns null when no refresh token stored", async () => {
-      const participant = createParticipant({ github_refresh_token_encrypted: null });
+      const participant = createParticipant({ scm_refresh_token_encrypted: null });
 
       const result = await harness.service.refreshToken(participant);
 
@@ -299,24 +308,22 @@ describe("ParticipantService", () => {
         env: { GITHUB_CLIENT_ID: undefined, GITHUB_CLIENT_SECRET: undefined },
       });
       const participant = createParticipant({
-        github_refresh_token_encrypted: "enc:refresh-token",
+        scm_refresh_token_encrypted: "enc:refresh-token",
       });
 
       const result = await h.service.refreshToken(participant);
 
       expect(result).toBeNull();
-      expect(h.log.warn).toHaveBeenCalledWith(
-        "Cannot refresh: GitHub OAuth credentials not configured"
-      );
+      expect(h.log.warn).toHaveBeenCalledWith("Cannot refresh: OAuth credentials not configured");
     });
 
-    it("falls back to local when no github_user_id even if store provided", async () => {
+    it("falls back to local when no scm_user_id even if store provided", async () => {
       const mockStore = createMockUserScmTokenStore();
       const h = createTestHarness({ userScmTokenStore: mockStore.store });
 
       const participant = createParticipant({
-        github_user_id: null,
-        github_refresh_token_encrypted: null,
+        scm_user_id: null,
+        scm_refresh_token_encrypted: null,
       });
 
       await h.service.refreshToken(participant);
@@ -329,8 +336,8 @@ describe("ParticipantService", () => {
       const h = createTestHarness({ userScmTokenStore: null });
 
       const participant = createParticipant({
-        github_user_id: "gh-123",
-        github_refresh_token_encrypted: null,
+        scm_user_id: "gh-123",
+        scm_refresh_token_encrypted: null,
       });
 
       const result = await h.service.refreshToken(participant);
@@ -366,23 +373,23 @@ describe("ParticipantService", () => {
       mockStore.isTokenFresh.mockReturnValue(true);
 
       const updatedParticipant = createParticipant({
-        github_user_id: "gh-123",
-        github_access_token_encrypted: "enc:fresh-access",
-        github_refresh_token_encrypted: "enc:fresh-refresh",
-        github_token_expires_at: freshExpiresAt,
+        scm_user_id: "gh-123",
+        scm_access_token_encrypted: "enc:fresh-access",
+        scm_refresh_token_encrypted: "enc:fresh-refresh",
+        scm_token_expires_at: freshExpiresAt,
       });
       vi.mocked(h.repository.getParticipantById).mockReturnValue(updatedParticipant);
 
-      const participant = createParticipant({ github_user_id: "gh-123" });
+      const participant = createParticipant({ scm_user_id: "gh-123" });
       const result = await h.service.refreshToken(participant);
 
       expect(result).toBe(updatedParticipant);
       expect(mockStore.getTokens).toHaveBeenCalledWith("gh-123");
       expect(refreshAccessToken).not.toHaveBeenCalled();
       expect(h.repository.updateParticipantTokens).toHaveBeenCalledWith("part-1", {
-        githubAccessTokenEncrypted: "enc:fresh-access",
-        githubRefreshTokenEncrypted: "enc:fresh-refresh",
-        githubTokenExpiresAt: freshExpiresAt,
+        scmAccessTokenEncrypted: "enc:fresh-access",
+        scmRefreshTokenEncrypted: "enc:fresh-refresh",
+        scmTokenExpiresAt: freshExpiresAt,
       });
     });
 
@@ -407,12 +414,12 @@ describe("ParticipantService", () => {
       });
 
       const updatedParticipant = createParticipant({
-        github_user_id: "gh-123",
-        github_access_token_encrypted: "enc:new-access",
+        scm_user_id: "gh-123",
+        scm_access_token_encrypted: "enc:new-access",
       });
       vi.mocked(h.repository.getParticipantById).mockReturnValue(updatedParticipant);
 
-      const participant = createParticipant({ github_user_id: "gh-123" });
+      const participant = createParticipant({ scm_user_id: "gh-123" });
       const result = await h.service.refreshToken(participant);
 
       expect(result).toBe(updatedParticipant);
@@ -454,12 +461,12 @@ describe("ParticipantService", () => {
       });
 
       const updatedParticipant = createParticipant({
-        github_user_id: "gh-123",
-        github_access_token_encrypted: "enc:winner-access",
+        scm_user_id: "gh-123",
+        scm_access_token_encrypted: "enc:winner-access",
       });
       vi.mocked(h.repository.getParticipantById).mockReturnValue(updatedParticipant);
 
-      const participant = createParticipant({ github_user_id: "gh-123" });
+      const participant = createParticipant({ scm_user_id: "gh-123" });
       const result = await h.service.refreshToken(participant);
 
       expect(result).toBe(updatedParticipant);
@@ -467,9 +474,9 @@ describe("ParticipantService", () => {
       expect(mockStore.getTokens).toHaveBeenCalledTimes(2);
       // Should update local with winner's tokens
       expect(h.repository.updateParticipantTokens).toHaveBeenCalledWith("part-1", {
-        githubAccessTokenEncrypted: "enc:winner-access",
-        githubRefreshTokenEncrypted: "enc:winner-refresh",
-        githubTokenExpiresAt: expect.any(Number),
+        scmAccessTokenEncrypted: "enc:winner-access",
+        scmRefreshTokenEncrypted: "enc:winner-refresh",
+        scmTokenExpiresAt: expect.any(Number),
       });
     });
 
@@ -488,16 +495,16 @@ describe("ParticipantService", () => {
 
       const refreshedParticipant = createParticipant({
         id: "part-1",
-        github_user_id: "gh-123",
-        github_access_token_encrypted: "enc:local-new-access",
-        github_refresh_token_encrypted: "enc:local-new-refresh",
-        github_token_expires_at: Date.now() + 28800_000,
+        scm_user_id: "gh-123",
+        scm_access_token_encrypted: "enc:local-new-access",
+        scm_refresh_token_encrypted: "enc:local-new-refresh",
+        scm_token_expires_at: Date.now() + 28800_000,
       });
       vi.mocked(h.repository.getParticipantById).mockReturnValue(refreshedParticipant);
 
       const participant = createParticipant({
-        github_user_id: "gh-123",
-        github_refresh_token_encrypted: "enc:old-refresh",
+        scm_user_id: "gh-123",
+        scm_refresh_token_encrypted: "enc:old-refresh",
       });
       const result = await h.service.refreshToken(participant);
 
@@ -529,14 +536,14 @@ describe("ParticipantService", () => {
       });
 
       const refreshedParticipant = createParticipant({
-        github_user_id: "gh-123",
-        github_access_token_encrypted: "enc:fallback-access",
+        scm_user_id: "gh-123",
+        scm_access_token_encrypted: "enc:fallback-access",
       });
       vi.mocked(h.repository.getParticipantById).mockReturnValue(refreshedParticipant);
 
       const participant = createParticipant({
-        github_user_id: "gh-123",
-        github_refresh_token_encrypted: "enc:old-refresh",
+        scm_user_id: "gh-123",
+        scm_refresh_token_encrypted: "enc:old-refresh",
       });
       const result = await h.service.refreshToken(participant);
 
@@ -560,7 +567,7 @@ describe("ParticipantService", () => {
       });
       mockStore.isTokenFresh.mockReturnValue(false);
 
-      const participant = createParticipant({ github_user_id: "gh-123" });
+      const participant = createParticipant({ scm_user_id: "gh-123" });
       const result = await h.service.refreshToken(participant);
 
       expect(result).toBeNull();
@@ -569,7 +576,7 @@ describe("ParticipantService", () => {
 
   describe("resolveAuthForPR", () => {
     it("returns auth: null when participant has no OAuth token", async () => {
-      const participant = createParticipant({ github_access_token_encrypted: null });
+      const participant = createParticipant({ scm_access_token_encrypted: null });
 
       const result = await harness.service.resolveAuthForPR(participant);
 
@@ -582,9 +589,9 @@ describe("ParticipantService", () => {
 
     it("returns error when token expired and no refresh token", async () => {
       const participant = createParticipant({
-        github_access_token_encrypted: "enc:encrypted-access",
-        github_refresh_token_encrypted: null,
-        github_token_expires_at: Date.now() - 1000,
+        scm_access_token_encrypted: "enc:encrypted-access",
+        scm_refresh_token_encrypted: null,
+        scm_token_expires_at: Date.now() - 1000,
       });
 
       const result = await harness.service.resolveAuthForPR(participant);

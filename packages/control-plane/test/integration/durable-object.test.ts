@@ -27,7 +27,7 @@ describe("SessionDO Durable Object", () => {
         title: "Integration test session",
         model: "anthropic/claude-haiku-4-5",
         userId: "user-1",
-        githubLogin: "testuser",
+        scmLogin: "testuser",
       }),
     });
     expect(initResponse.status).toBe(200);

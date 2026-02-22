@@ -115,8 +115,9 @@ function createMockRepository() {
         participant_id: data.participantId,
         client_id: data.clientId,
         user_id: `user-${data.participantId}`,
-        github_name: null,
-        github_login: null,
+        scm_name: null,
+        scm_login: null,
+        scm_provider: "github",
       });
     },
   } as unknown as SessionRepository;
@@ -439,8 +440,9 @@ describe("SessionWebSocketManagerImpl", () => {
         participant_id: "part-1",
         client_id: "client-1",
         user_id: "user-1",
-        github_name: "Test",
-        github_login: "testuser",
+        scm_name: "Test",
+        scm_login: "testuser",
+        scm_provider: "github",
       };
       mockRepo.addMapping("ws-42", mapping);
 
@@ -497,8 +499,9 @@ describe("SessionWebSocketManagerImpl", () => {
         participant_id: "p-1",
         client_id: "c-1",
         user_id: "u-1",
-        github_name: null,
-        github_login: null,
+        scm_name: null,
+        scm_login: null,
+        scm_provider: "github",
       });
 
       expect(manager.hasPersistedMapping("ws-1")).toBe(true);
@@ -617,8 +620,9 @@ describe("SessionWebSocketManagerImpl", () => {
         participant_id: "p-1",
         client_id: "c-1",
         user_id: "u-1",
-        github_name: null,
-        github_login: null,
+        scm_name: null,
+        scm_login: null,
+        scm_provider: "github",
       });
 
       const called: WebSocket[] = [];
@@ -654,8 +658,9 @@ describe("SessionWebSocketManagerImpl", () => {
         participant_id: "p-2",
         client_id: "c-2",
         user_id: "u-2",
-        github_name: null,
-        github_login: null,
+        scm_name: null,
+        scm_login: null,
+        scm_provider: "github",
       });
 
       // Unauthenticated client (connected but never subscribed)
@@ -716,8 +721,9 @@ describe("SessionWebSocketManagerImpl", () => {
         participant_id: "p-1",
         client_id: "c-1",
         user_id: "u-1",
-        github_name: null,
-        github_login: null,
+        scm_name: null,
+        scm_login: null,
+        scm_provider: "github",
       });
 
       await manager.enforceAuthTimeout(ws, "ws-1");
