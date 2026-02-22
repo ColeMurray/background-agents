@@ -26,7 +26,7 @@ events back through the same WebSocket chain.
 ### Package Dependency Graph
 
 ```
-@open-inspect/shared  ←  control-plane, web, slack-bot, linear-bot
+@open-inspect/shared  ←  control-plane, web, slack-bot, github-bot, linear-bot
 ```
 
 **Build `@open-inspect/shared` first** whenever you change shared types. Other packages import from
