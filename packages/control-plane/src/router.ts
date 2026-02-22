@@ -537,17 +537,11 @@ async function handleCreateSession(
   ctx: RequestContext
 ): Promise<Response> {
   const body = (await request.json()) as CreateSessionRequest & {
-    // New field names (preferred)
     scmToken?: string;
     userId?: string;
     scmLogin?: string;
     scmName?: string;
     scmEmail?: string;
-    // Legacy field names (backward compat during rolling deploy, remove after one deploy cycle)
-    githubToken?: string;
-    githubLogin?: string;
-    githubName?: string;
-    githubEmail?: string;
   };
 
   if (!body.repoOwner || !body.repoName) {
@@ -578,12 +572,11 @@ async function handleCreateSession(
     return error(isConfigError ? message : "Failed to resolve repository", 500);
   }
 
-  // Resolve field names (new scm* preferred, github* as backward compat)
   const userId = body.userId || "anonymous";
-  const scmLogin = body.scmLogin ?? body.githubLogin;
-  const scmName = body.scmName ?? body.githubName;
-  const scmEmail = body.scmEmail ?? body.githubEmail;
-  const scmToken = body.scmToken ?? body.githubToken;
+  const scmLogin = body.scmLogin;
+  const scmName = body.scmName;
+  const scmEmail = body.scmEmail;
+  const scmToken = body.scmToken;
   let scmTokenEncrypted: string | null = null;
 
   // If SCM token provided, encrypt it
@@ -936,7 +929,6 @@ async function handleSessionWsToken(
 
   const body = (await request.json()) as {
     userId: string;
-    // New field names (preferred)
     scmUserId?: string;
     scmLogin?: string;
     scmName?: string;
@@ -944,28 +936,19 @@ async function handleSessionWsToken(
     scmToken?: string;
     scmTokenExpiresAt?: number;
     scmRefreshToken?: string;
-    // Legacy field names (backward compat during rolling deploy, remove after one deploy cycle)
-    githubUserId?: string;
-    githubLogin?: string;
-    githubName?: string;
-    githubEmail?: string;
-    githubToken?: string;
-    githubTokenExpiresAt?: number;
-    githubRefreshToken?: string;
   };
 
   if (!body.userId) {
     return error("userId is required");
   }
 
-  // Resolve field names (new scm* preferred, github* as backward compat)
-  const scmUserId = body.scmUserId ?? body.githubUserId;
-  const scmLogin = body.scmLogin ?? body.githubLogin;
-  const scmName = body.scmName ?? body.githubName;
-  const scmEmail = body.scmEmail ?? body.githubEmail;
-  const scmToken = body.scmToken ?? body.githubToken;
-  const scmTokenExpiresAt = body.scmTokenExpiresAt ?? body.githubTokenExpiresAt;
-  const scmRefreshToken = body.scmRefreshToken ?? body.githubRefreshToken;
+  const scmUserId = body.scmUserId;
+  const scmLogin = body.scmLogin;
+  const scmName = body.scmName;
+  const scmEmail = body.scmEmail;
+  const scmToken = body.scmToken;
+  const scmTokenExpiresAt = body.scmTokenExpiresAt;
+  const scmRefreshToken = body.scmRefreshToken;
 
   // Encrypt the SCM tokens if provided
   const { scmTokenEncrypted, scmRefreshTokenEncrypted } = await ctx.metrics.time(

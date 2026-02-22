@@ -143,8 +143,8 @@ Commits are attributed to the user who sent the prompt:
 ```typescript
 // Configure git identity per prompt
 await configureGitIdentity({
-  name: author.githubName,
-  email: author.githubEmail || generateNoreplyEmail(author.githubId, author.githubLogin),
+  name: author.scmName,
+  email: author.scmEmail,
 });
 ```
 

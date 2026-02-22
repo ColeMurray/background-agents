@@ -1599,10 +1599,6 @@ export class SessionDO extends DurableObject<Env> {
       scmName?: string;
       scmEmail?: string;
       role?: string;
-      // Legacy (backward compat)
-      githubLogin?: string;
-      githubName?: string;
-      githubEmail?: string;
     };
 
     const id = generateId();
@@ -1611,9 +1607,9 @@ export class SessionDO extends DurableObject<Env> {
     this.repository.createParticipant({
       id,
       userId: body.userId,
-      scmLogin: body.scmLogin ?? body.githubLogin ?? null,
-      scmName: body.scmName ?? body.githubName ?? null,
-      scmEmail: body.scmEmail ?? body.githubEmail ?? null,
+      scmLogin: body.scmLogin ?? null,
+      scmName: body.scmName ?? null,
+      scmEmail: body.scmEmail ?? null,
       role: (body.role ?? "member") as ParticipantRole,
       joinedAt: now,
     });

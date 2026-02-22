@@ -59,56 +59,6 @@ export function generateCommitMessage(
 }
 
 /**
- * Generate a noreply email for users who hide their email.
- *
- * @param githubId - GitHub user ID
- * @param githubLogin - GitHub username
- * @returns GitHub noreply email
- */
-export function generateNoreplyEmail(githubId: number | string, githubLogin: string): string {
-  return `${githubId}+${githubLogin}@users.noreply.github.com`;
-}
-
-/**
- * Get the best email for git commit attribution.
- *
- * Priority:
- * 1. User's public email from GitHub profile
- * 2. User's primary verified email (if accessible)
- * 3. GitHub noreply email
- *
- * @param publicEmail - User's public email (may be null)
- * @param githubId - GitHub user ID
- * @param githubLogin - GitHub username
- * @returns Email to use for commits
- */
-export function getCommitEmail(
-  publicEmail: string | null,
-  githubId: number | string,
-  githubLogin: string
-): string {
-  if (publicEmail) {
-    return publicEmail;
-  }
-  return generateNoreplyEmail(githubId, githubLogin);
-}
-
-/**
- * Create GitUser from GitHub profile data.
- */
-export function createGitUser(
-  githubLogin: string,
-  githubName: string | null,
-  publicEmail: string | null,
-  githubId: number | string
-): GitUser {
-  return {
-    name: githubName || githubLogin,
-    email: getCommitEmail(publicEmail, githubId, githubLogin),
-  };
-}
-
-/**
  * Git environment variables for subprocess.
  */
 export function getGitEnv(user: GitUser): Record<string, string> {
