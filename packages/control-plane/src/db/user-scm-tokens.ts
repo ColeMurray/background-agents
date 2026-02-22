@@ -1,5 +1,8 @@
 import { encryptToken, decryptToken } from "../auth/crypto";
 
+/** Fallback token lifetime when GitHub doesn't provide expires_in (8 hours). */
+export const DEFAULT_TOKEN_LIFETIME_MS = 8 * 60 * 60 * 1000;
+
 export interface ScmTokenRecord {
   accessToken: string;
   refreshToken: string;
@@ -44,7 +47,6 @@ export class UserScmTokenStore {
   }
 
   async upsertTokens(
-    provider: string,
     providerUserId: string,
     accessToken: string,
     refreshToken: string,
@@ -59,24 +61,16 @@ export class UserScmTokenStore {
     await this.db
       .prepare(
         `INSERT INTO user_scm_tokens
-         (provider, provider_user_id, access_token_encrypted, refresh_token_encrypted, token_expires_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+         (provider_user_id, access_token_encrypted, refresh_token_encrypted, token_expires_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(provider_user_id) DO UPDATE SET
-           provider = excluded.provider,
            access_token_encrypted = excluded.access_token_encrypted,
            refresh_token_encrypted = excluded.refresh_token_encrypted,
            token_expires_at = excluded.token_expires_at,
-           updated_at = excluded.updated_at`
+           updated_at = excluded.updated_at
+         WHERE excluded.token_expires_at > user_scm_tokens.token_expires_at`
       )
-      .bind(
-        provider,
-        providerUserId,
-        accessTokenEncrypted,
-        refreshTokenEncrypted,
-        expiresAt,
-        now,
-        now
-      )
+      .bind(providerUserId, accessTokenEncrypted, refreshTokenEncrypted, expiresAt, now, now)
       .run();
   }
 

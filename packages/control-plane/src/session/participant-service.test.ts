@@ -508,7 +508,6 @@ describe("ParticipantService", () => {
       );
       // Should seed D1 after successful local refresh
       expect(mockStore.upsertTokens).toHaveBeenCalledWith(
-        "github",
         "gh-123",
         "local-new-access",
         "local-new-refresh",

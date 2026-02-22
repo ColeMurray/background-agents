@@ -1,5 +1,4 @@
 CREATE TABLE IF NOT EXISTS user_scm_tokens (
-  provider                TEXT    NOT NULL,
   provider_user_id        TEXT    NOT NULL,
   access_token_encrypted  TEXT    NOT NULL,
   refresh_token_encrypted TEXT    NOT NULL,

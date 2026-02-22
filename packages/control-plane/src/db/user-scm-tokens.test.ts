@@ -19,7 +19,6 @@ afterAll(() => {
 });
 
 type ScmTokenRow = {
-  provider: string;
   provider_user_id: string;
   access_token_encrypted: string;
   refresh_token_encrypted: string;
@@ -67,11 +66,22 @@ class FakeD1Database {
     const normalized = normalizeQuery(query);
 
     if (QUERY_PATTERNS.UPSERT_TOKENS.test(normalized)) {
-      const [provider, providerUserId, accessEnc, refreshEnc, expiresAt, createdAt, updatedAt] =
-        args as [string, string, string, string, number, number, number];
+      const [providerUserId, accessEnc, refreshEnc, expiresAt, createdAt, updatedAt] = args as [
+        string,
+        string,
+        string,
+        number,
+        number,
+        number,
+      ];
       const existing = this.rows.get(providerUserId);
+
+      // Freshness guard: ON CONFLICT ... WHERE excluded.token_expires_at > user_scm_tokens.token_expires_at
+      if (existing && expiresAt <= existing.token_expires_at) {
+        return { meta: { changes: 0 } };
+      }
+
       this.rows.set(providerUserId, {
-        provider,
         provider_user_id: providerUserId,
         access_token_encrypted: accessEnc,
         refresh_token_encrypted: refreshEnc,
@@ -147,7 +157,7 @@ describe("UserScmTokenStore", () => {
 
   it("upsertTokens + getTokens round-trip", async () => {
     const expiresAt = Date.now() + 3600_000;
-    await store.upsertTokens("github", "user-123", "access-abc", "refresh-xyz", expiresAt);
+    await store.upsertTokens("user-123", "access-abc", "refresh-xyz", expiresAt);
 
     const result = await store.getTokens("user-123");
     expect(result).not.toBeNull();
@@ -157,12 +167,12 @@ describe("UserScmTokenStore", () => {
     expect(result!.refreshTokenEncrypted).toBeTypeOf("string");
   });
 
-  it("upsertTokens overwrites existing row", async () => {
+  it("upsertTokens overwrites existing row when newer", async () => {
     const expiresAt1 = Date.now() + 3600_000;
     const expiresAt2 = Date.now() + 7200_000;
 
-    await store.upsertTokens("github", "user-123", "access-1", "refresh-1", expiresAt1);
-    await store.upsertTokens("github", "user-123", "access-2", "refresh-2", expiresAt2);
+    await store.upsertTokens("user-123", "access-1", "refresh-1", expiresAt1);
+    await store.upsertTokens("user-123", "access-2", "refresh-2", expiresAt2);
 
     const result = await store.getTokens("user-123");
     expect(result!.accessToken).toBe("access-2");
@@ -170,9 +180,33 @@ describe("UserScmTokenStore", () => {
     expect(result!.expiresAt).toBe(expiresAt2);
   });
 
+  it("upsertTokens does not overwrite when stale (older expiry)", async () => {
+    const newerExpiresAt = Date.now() + 7200_000;
+    const olderExpiresAt = Date.now() + 3600_000;
+
+    await store.upsertTokens("user-123", "fresh-access", "fresh-refresh", newerExpiresAt);
+    await store.upsertTokens("user-123", "stale-access", "stale-refresh", olderExpiresAt);
+
+    const result = await store.getTokens("user-123");
+    expect(result!.accessToken).toBe("fresh-access");
+    expect(result!.refreshToken).toBe("fresh-refresh");
+    expect(result!.expiresAt).toBe(newerExpiresAt);
+  });
+
+  it("upsertTokens does not overwrite when equal expiry", async () => {
+    const expiresAt = Date.now() + 3600_000;
+
+    await store.upsertTokens("user-123", "first-access", "first-refresh", expiresAt);
+    await store.upsertTokens("user-123", "second-access", "second-refresh", expiresAt);
+
+    const result = await store.getTokens("user-123");
+    expect(result!.accessToken).toBe("first-access");
+    expect(result!.refreshToken).toBe("first-refresh");
+  });
+
   it("casUpdateTokens succeeds when refresh token matches", async () => {
     const expiresAt = Date.now() + 3600_000;
-    await store.upsertTokens("github", "user-123", "access-old", "refresh-old", expiresAt);
+    await store.upsertTokens("user-123", "access-old", "refresh-old", expiresAt);
 
     const tokens = await store.getTokens("user-123");
     const casResult = await store.casUpdateTokens(
@@ -192,7 +226,7 @@ describe("UserScmTokenStore", () => {
 
   it("casUpdateTokens returns cas_conflict when refresh token doesn't match", async () => {
     const expiresAt = Date.now() + 3600_000;
-    await store.upsertTokens("github", "user-123", "access-old", "refresh-old", expiresAt);
+    await store.upsertTokens("user-123", "access-old", "refresh-old", expiresAt);
 
     const casResult = await store.casUpdateTokens(
       "user-123",
@@ -212,20 +246,6 @@ describe("UserScmTokenStore", () => {
   it("getTokens returns null for unknown user", async () => {
     const result = await store.getTokens("nonexistent");
     expect(result).toBeNull();
-  });
-
-  it("provider column is stored correctly", async () => {
-    await store.upsertTokens(
-      "gitlab",
-      "user-456",
-      "access-gl",
-      "refresh-gl",
-      Date.now() + 3600_000
-    );
-
-    const row = db.getRow("user-456");
-    expect(row).toBeDefined();
-    expect(row!.provider).toBe("gitlab");
   });
 
   describe("isTokenFresh", () => {

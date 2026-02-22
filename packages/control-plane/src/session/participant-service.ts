@@ -13,7 +13,7 @@ import type { SourceControlAuthContext } from "../source-control";
 import type { Logger } from "../logger";
 import type { ParticipantRow } from "./types";
 import type { CreateParticipantData } from "./repository";
-import type { UserScmTokenStore } from "../db/user-scm-tokens";
+import { DEFAULT_TOKEN_LIFETIME_MS, type UserScmTokenStore } from "../db/user-scm-tokens";
 
 /**
  * Narrow repository interface — only the methods ParticipantService needs.
@@ -225,7 +225,7 @@ export class ParticipantService {
       const newRefreshToken = newTokens.refresh_token ?? d1Tokens.refreshToken;
       const newExpiresAt = newTokens.expires_in
         ? Date.now() + newTokens.expires_in * 1000
-        : Date.now() + 8 * 60 * 60 * 1000;
+        : Date.now() + DEFAULT_TOKEN_LIFETIME_MS;
 
       const casResult = await store.casUpdateTokens(
         githubUserId,
@@ -313,7 +313,6 @@ export class ParticipantService {
       ]);
 
       await this.userScmTokenStore.upsertTokens(
-        "github",
         participant.github_user_id,
         accessToken,
         refreshToken,
@@ -367,7 +366,7 @@ export class ParticipantService {
 
       const newExpiresAt = newTokens.expires_in
         ? Date.now() + newTokens.expires_in * 1000
-        : Date.now() + 8 * 60 * 60 * 1000; // fallback: 8 hours
+        : Date.now() + DEFAULT_TOKEN_LIFETIME_MS; // fallback: 8 hours
 
       this.repository.updateParticipantTokens(participant.id, {
         githubAccessTokenEncrypted: newAccessTokenEncrypted,

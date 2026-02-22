@@ -11,7 +11,7 @@ import {
   type SourceControlProviderName,
 } from "./source-control";
 import { SessionIndexStore } from "./db/session-index";
-import { UserScmTokenStore } from "./db/user-scm-tokens";
+import { UserScmTokenStore, DEFAULT_TOKEN_LIFETIME_MS } from "./db/user-scm-tokens";
 
 import {
   getValidModelOrDefault,
@@ -985,11 +985,10 @@ async function handleSessionWsToken(
     ctx.executionCtx?.waitUntil(
       new UserScmTokenStore(env.DB, env.TOKEN_ENCRYPTION_KEY)
         .upsertTokens(
-          "github",
           body.githubUserId,
           body.githubToken,
           body.githubRefreshToken,
-          body.githubTokenExpiresAt ?? Date.now() + 8 * 3600 * 1000
+          body.githubTokenExpiresAt ?? Date.now() + DEFAULT_TOKEN_LIFETIME_MS
         )
         .catch((e) =>
           logger.error("Failed to write tokens to D1", {
