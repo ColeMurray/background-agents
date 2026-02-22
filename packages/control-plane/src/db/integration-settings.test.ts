@@ -236,6 +236,39 @@ describe("IntegrationSettingsStore", () => {
       expect(result?.enabledRepos).toEqual(["acme/widgets", "foo/bar"]);
     });
 
+    it("normalizes allowedTriggerUsers to lowercase", async () => {
+      await store.setGlobal("github", {
+        allowedTriggerUsers: ["Alice", "BOB"],
+      });
+
+      const result = await store.getGlobal("github");
+      expect(result?.allowedTriggerUsers).toEqual(["alice", "bob"]);
+    });
+
+    it("rejects non-array allowedTriggerUsers", async () => {
+      await expect(
+        store.setGlobal("github", {
+          allowedTriggerUsers: "alice" as unknown as string[],
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects allowedTriggerUsers with non-string elements", async () => {
+      await expect(
+        store.setGlobal("github", {
+          allowedTriggerUsers: [123, null] as unknown as string[],
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects enabledRepos with non-string elements", async () => {
+      await expect(
+        store.setGlobal("github", {
+          enabledRepos: [42] as unknown as string[],
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
     it("validates defaults.model on setGlobal", async () => {
       await expect(
         store.setGlobal("github", {
@@ -330,6 +363,7 @@ describe("IntegrationSettingsStore", () => {
       const config = await store.getResolvedConfig("github", "acme/widgets");
       expect(config).toEqual({
         enabledRepos: null,
+        allowedTriggerUsers: null,
         settings: {},
       });
     });
@@ -418,6 +452,27 @@ describe("IntegrationSettingsStore", () => {
 
       const config = await store.getResolvedConfig("github", "acme/widgets");
       expect(config.enabledRepos).toEqual([]);
+    });
+
+    it("normalizes undefined allowedTriggerUsers to null", async () => {
+      await store.setGlobal("github", { defaults: { autoReviewOnOpen: true } });
+
+      const config = await store.getResolvedConfig("github", "acme/widgets");
+      expect(config.allowedTriggerUsers).toBeNull();
+    });
+
+    it("preserves empty allowedTriggerUsers array (deny all)", async () => {
+      await store.setGlobal("github", { allowedTriggerUsers: [] });
+
+      const config = await store.getResolvedConfig("github", "acme/widgets");
+      expect(config.allowedTriggerUsers).toEqual([]);
+    });
+
+    it("returns allowedTriggerUsers list when configured", async () => {
+      await store.setGlobal("github", { allowedTriggerUsers: ["alice", "bob"] });
+
+      const config = await store.getResolvedConfig("github", "acme/widgets");
+      expect(config.allowedTriggerUsers).toEqual(["alice", "bob"]);
     });
   });
 

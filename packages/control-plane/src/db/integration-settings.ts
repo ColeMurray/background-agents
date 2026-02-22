@@ -41,12 +41,30 @@ export class IntegrationSettingsStore {
     settings: IntegrationSettingsMap[K]["global"]
   ): Promise<void> {
     if (settings.enabledRepos !== undefined) {
-      if (!Array.isArray(settings.enabledRepos)) {
-        throw new IntegrationSettingsValidationError("enabledRepos must be an array");
+      if (
+        !Array.isArray(settings.enabledRepos) ||
+        !settings.enabledRepos.every((r) => typeof r === "string")
+      ) {
+        throw new IntegrationSettingsValidationError("enabledRepos must be an array of strings");
       }
       settings = {
         ...settings,
         enabledRepos: settings.enabledRepos.map((r) => r.toLowerCase()),
+      };
+    }
+
+    if (settings.allowedTriggerUsers !== undefined) {
+      if (
+        !Array.isArray(settings.allowedTriggerUsers) ||
+        !settings.allowedTriggerUsers.every((u) => typeof u === "string")
+      ) {
+        throw new IntegrationSettingsValidationError(
+          "allowedTriggerUsers must be an array of strings"
+        );
+      }
+      settings = {
+        ...settings,
+        allowedTriggerUsers: settings.allowedTriggerUsers.map((u) => u.toLowerCase()),
       };
     }
 
@@ -143,6 +161,10 @@ export class IntegrationSettingsStore {
     const enabledRepos =
       globalSettings?.enabledRepos !== undefined ? globalSettings.enabledRepos : null;
 
+    // undefined → null (fallback to permission check), [] → [] (deny all), [...] → [...] (allowlist)
+    const allowedTriggerUsers =
+      globalSettings?.allowedTriggerUsers !== undefined ? globalSettings.allowedTriggerUsers : null;
+
     const defaults = globalSettings?.defaults ?? {};
     const overrides = repoSettings ?? {};
 
@@ -154,7 +176,7 @@ export class IntegrationSettingsStore {
       }
     }
 
-    return { enabledRepos, settings } as ResolvedIntegrationConfig<
+    return { enabledRepos, allowedTriggerUsers, settings } as ResolvedIntegrationConfig<
       IntegrationSettingsMap[K]["repo"]
     >;
   }
@@ -222,5 +244,6 @@ export class IntegrationSettingsStore {
 
 export interface ResolvedIntegrationConfig<TRepo extends object = Record<string, unknown>> {
   enabledRepos: string[] | null;
+  allowedTriggerUsers: string[] | null;
   settings: TRepo;
 }

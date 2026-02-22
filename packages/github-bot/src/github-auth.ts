@@ -89,6 +89,34 @@ export async function generateInstallationToken(config: GitHubAppConfig): Promis
   return getInstallationToken(jwt, config.installationId);
 }
 
+const WRITE_PERMISSIONS = new Set(["write", "maintain", "admin"]);
+
+export async function checkSenderPermission(
+  token: string,
+  owner: string,
+  repo: string,
+  username: string
+): Promise<boolean> {
+  try {
+    const response = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/collaborators/${username}/permission`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": "Open-Inspect",
+        },
+      }
+    );
+    if (!response.ok) return false;
+    const data = (await response.json()) as { permission: string };
+    return WRITE_PERMISSIONS.has(data.permission);
+  } catch {
+    return false;
+  }
+}
+
 export async function postReaction(token: string, url: string, content: string): Promise<boolean> {
   try {
     const response = await fetch(url, {

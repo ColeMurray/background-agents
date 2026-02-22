@@ -6,12 +6,14 @@ export interface ResolvedGitHubConfig {
   reasoningEffort: string | null;
   autoReviewOnOpen: boolean;
   enabledRepos: string[] | null;
+  allowedTriggerUsers: string[] | null;
 }
 
 const FAIL_CLOSED: Omit<ResolvedGitHubConfig, "model"> = {
   reasoningEffort: null,
   autoReviewOnOpen: false,
   enabledRepos: [],
+  allowedTriggerUsers: [],
 };
 
 export async function getGitHubConfig(env: Env, repo: string): Promise<ResolvedGitHubConfig> {
@@ -38,6 +40,7 @@ export async function getGitHubConfig(env: Env, repo: string): Promise<ResolvedG
       reasoningEffort: string | null;
       autoReviewOnOpen: boolean;
       enabledRepos: string[] | null;
+      allowedTriggerUsers: string[] | null;
     } | null;
   };
 
@@ -47,6 +50,7 @@ export async function getGitHubConfig(env: Env, repo: string): Promise<ResolvedG
       reasoningEffort: null,
       autoReviewOnOpen: true,
       enabledRepos: null,
+      allowedTriggerUsers: null,
     };
   }
 
@@ -55,5 +59,6 @@ export async function getGitHubConfig(env: Env, repo: string): Promise<ResolvedG
     reasoningEffort: data.config.reasoningEffort,
     autoReviewOnOpen: data.config.autoReviewOnOpen,
     enabledRepos: data.config.enabledRepos,
+    allowedTriggerUsers: data.config.allowedTriggerUsers,
   };
 }

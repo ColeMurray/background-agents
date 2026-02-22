@@ -6,7 +6,7 @@ import type {
   ReviewCommentPayload,
 } from "./types";
 import type { Logger } from "./logger";
-import { generateInstallationToken, postReaction } from "./github-auth";
+import { generateInstallationToken, postReaction, checkSenderPermission } from "./github-auth";
 import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
 import { generateInternalToken } from "./utils/internal";
 import { getGitHubConfig } from "./utils/integration-config";
@@ -98,7 +98,7 @@ export async function handleReviewRequested(
   payload: ReviewRequestedPayload,
   traceId: string
 ): Promise<void> {
-  const { pull_request: pr, repository: repo, requested_reviewer } = payload;
+  const { pull_request: pr, repository: repo, requested_reviewer, sender } = payload;
   const owner = repo.owner.login;
   const repoName = repo.name;
   const repoFullName = `${owner}/${repoName}`.toLowerCase();
@@ -118,6 +118,13 @@ export async function handleReviewRequested(
     return;
   }
 
+  if (config.allowedTriggerUsers !== null) {
+    if (!config.allowedTriggerUsers.includes(sender.login.toLowerCase())) {
+      log.info("handler.sender_not_allowed", { trace_id: traceId, sender: sender.login });
+      return;
+    }
+  }
+
   const [ghToken, headers] = await Promise.all([
     generateInstallationToken({
       appId: env.GITHUB_APP_ID,
@@ -126,6 +133,18 @@ export async function handleReviewRequested(
     }),
     getAuthHeaders(env, traceId),
   ]);
+
+  if (config.allowedTriggerUsers === null) {
+    const hasPermission = await checkSenderPermission(ghToken, owner, repoName, sender.login);
+    if (!hasPermission) {
+      log.info("handler.sender_insufficient_permission", {
+        trace_id: traceId,
+        sender: sender.login,
+        repo: repoFullName,
+      });
+      return;
+    }
+  }
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
   fireAndForgetReaction(
@@ -288,6 +307,13 @@ export async function handleIssueComment(
     return;
   }
 
+  if (config.allowedTriggerUsers !== null) {
+    if (!config.allowedTriggerUsers.includes(sender.login.toLowerCase())) {
+      log.info("handler.sender_not_allowed", { trace_id: traceId, sender: sender.login });
+      return;
+    }
+  }
+
   const commentBody = stripMention(comment.body, env.GITHUB_BOT_USERNAME);
 
   const [ghToken, headers] = await Promise.all([
@@ -298,6 +324,18 @@ export async function handleIssueComment(
     }),
     getAuthHeaders(env, traceId),
   ]);
+
+  if (config.allowedTriggerUsers === null) {
+    const hasPermission = await checkSenderPermission(ghToken, owner, repoName, sender.login);
+    if (!hasPermission) {
+      log.info("handler.sender_insufficient_permission", {
+        trace_id: traceId,
+        sender: sender.login,
+        repo: repoFullName,
+      });
+      return;
+    }
+  }
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: issue.number };
   fireAndForgetReaction(
@@ -370,6 +408,13 @@ export async function handleReviewComment(
     return;
   }
 
+  if (config.allowedTriggerUsers !== null) {
+    if (!config.allowedTriggerUsers.includes(sender.login.toLowerCase())) {
+      log.info("handler.sender_not_allowed", { trace_id: traceId, sender: sender.login });
+      return;
+    }
+  }
+
   const commentBody = stripMention(comment.body, env.GITHUB_BOT_USERNAME);
 
   const [ghToken, headers] = await Promise.all([
@@ -380,6 +425,18 @@ export async function handleReviewComment(
     }),
     getAuthHeaders(env, traceId),
   ]);
+
+  if (config.allowedTriggerUsers === null) {
+    const hasPermission = await checkSenderPermission(ghToken, owner, repoName, sender.login);
+    if (!hasPermission) {
+      log.info("handler.sender_insufficient_permission", {
+        trace_id: traceId,
+        sender: sender.login,
+        repo: repoFullName,
+      });
+      return;
+    }
+  }
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
   fireAndForgetReaction(

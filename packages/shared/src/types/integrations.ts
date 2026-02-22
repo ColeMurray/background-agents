@@ -6,6 +6,7 @@ export type IntegrationId = "github" | "linear";
 export interface IntegrationEntry<TRepo extends object = Record<string, unknown>> {
   global: {
     enabledRepos?: string[];
+    allowedTriggerUsers?: string[];
     defaults?: TRepo;
   };
   repo: TRepo;

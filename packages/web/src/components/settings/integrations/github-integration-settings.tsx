@@ -104,6 +104,13 @@ function GlobalSettingsSection({
   const [repoScopeMode, setRepoScopeMode] = useState<"all" | "selected">(
     settings?.enabledRepos === undefined ? "all" : "selected"
   );
+  const [allowedTriggerUsers, setAllowedTriggerUsers] = useState<string[]>(
+    settings?.allowedTriggerUsers ?? []
+  );
+  const [triggerUserMode, setTriggerUserMode] = useState<"write_access" | "specific">(
+    settings?.allowedTriggerUsers === undefined ? "write_access" : "specific"
+  );
+  const [newUsername, setNewUsername] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -116,6 +123,10 @@ function GlobalSettingsSection({
         setAutoReviewOnOpen(settings.defaults?.autoReviewOnOpen ?? true);
         setEnabledRepos(settings.enabledRepos ?? []);
         setRepoScopeMode(settings.enabledRepos === undefined ? "all" : "selected");
+        setAllowedTriggerUsers(settings.allowedTriggerUsers ?? []);
+        setTriggerUserMode(
+          settings.allowedTriggerUsers === undefined ? "write_access" : "specific"
+        );
       }
       setInitialized(true);
     }
@@ -144,6 +155,9 @@ function GlobalSettingsSection({
         setAutoReviewOnOpen(true);
         setEnabledRepos([]);
         setRepoScopeMode("all");
+        setAllowedTriggerUsers([]);
+        setTriggerUserMode("write_access");
+        setNewUsername("");
         setDirty(false);
         setSuccess("Settings reset to defaults.");
       } else {
@@ -170,6 +184,10 @@ function GlobalSettingsSection({
       body.enabledRepos = enabledRepos;
     }
 
+    if (triggerUserMode === "specific") {
+      body.allowedTriggerUsers = allowedTriggerUsers;
+    }
+
     try {
       const res = await fetch(GLOBAL_SETTINGS_KEY, {
         method: "PUT",
@@ -189,6 +207,17 @@ function GlobalSettingsSection({
       setError("Failed to save settings");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const addUsername = () => {
+    const trimmed = newUsername.trim().toLowerCase();
+    if (trimmed && !allowedTriggerUsers.includes(trimmed)) {
+      setAllowedTriggerUsers((prev) => [...prev, trimmed]);
+      setNewUsername("");
+      setDirty(true);
+      setError("");
+      setSuccess("");
     }
   };
 
@@ -293,6 +322,91 @@ function GlobalSettingsSection({
             {enabledRepos.length === 0 && availableRepos.length > 0 && (
               <p className="text-xs text-amber-700 mt-1">
                 No repositories selected. The bot will not respond to webhooks.
+              </p>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="mb-4">
+        <p className="text-sm font-medium text-foreground mb-2">Allowed Trigger Users</p>
+        <div className="grid sm:grid-cols-2 gap-2 mb-3">
+          <RadioCard
+            name="trigger-users"
+            checked={triggerUserMode === "write_access"}
+            onChange={() => {
+              setTriggerUserMode("write_access");
+              setDirty(true);
+              setError("");
+              setSuccess("");
+            }}
+            label="All users with write access"
+            description="Anyone with write permission on the repo can trigger the bot."
+          />
+          <RadioCard
+            name="trigger-users"
+            checked={triggerUserMode === "specific"}
+            onChange={() => {
+              setTriggerUserMode("specific");
+              setDirty(true);
+              setError("");
+              setSuccess("");
+            }}
+            label="Only specific users"
+            description="Only listed GitHub usernames can trigger the bot."
+          />
+        </div>
+
+        {triggerUserMode === "specific" && (
+          <>
+            <div className="flex items-center gap-2 mb-2">
+              <input
+                type="text"
+                value={newUsername}
+                onChange={(e) => setNewUsername(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addUsername();
+                  }
+                }}
+                placeholder="GitHub username"
+                className="flex-1 px-3 py-1.5 text-sm border border-border rounded-sm bg-background text-foreground placeholder:text-muted-foreground"
+              />
+              <Button size="sm" onClick={addUsername} disabled={!newUsername.trim()}>
+                Add
+              </Button>
+            </div>
+
+            {allowedTriggerUsers.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {allowedTriggerUsers.map((user) => (
+                  <span
+                    key={user}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 text-sm bg-muted text-foreground rounded-sm border border-border"
+                  >
+                    {user}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAllowedTriggerUsers((prev) => prev.filter((u) => u !== user));
+                        setDirty(true);
+                        setError("");
+                        setSuccess("");
+                      }}
+                      className="text-muted-foreground hover:text-foreground ml-0.5"
+                      aria-label={`Remove ${user}`}
+                    >
+                      &times;
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {allowedTriggerUsers.length === 0 && (
+              <p className="text-xs text-amber-700 mt-1">
+                No users configured. The bot will not respond to any @mentions.
               </p>
             )}
           </>
