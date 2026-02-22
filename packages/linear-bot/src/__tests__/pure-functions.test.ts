@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { extractModelFromLabels, resolveSessionModelSettings, resolveStaticRepo } from "../index";
+import {
+  extractModelFromLabels,
+  resolveSessionModelSettings,
+  resolveStaticRepo,
+} from "../model-resolution";
 import { isValidPayload, verifyCallbackSignature } from "../callbacks";
 import type { CompletionCallback } from "../types";
 

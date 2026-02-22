@@ -4,6 +4,7 @@
 
 import type { Env, OAuthTokenResponse, StoredTokenData, LinearIssueDetails } from "../types";
 import { timingSafeEqual } from "@open-inspect/shared";
+import { computeHmacHex } from "./crypto";
 import { createLogger } from "../logger";
 
 const log = createLogger("linear-client");
@@ -245,34 +246,6 @@ export async function fetchIssueDetails(
   }
 }
 
-/**
- * Fetch issue labels (kept for backward compat).
- */
-export async function fetchIssueLabels(
-  client: LinearApiClient,
-  issueId: string
-): Promise<string[]> {
-  try {
-    const data = await linearGraphQL(
-      client,
-      `
-      query IssueLabels($id: String!) {
-        issue(id: $id) {
-          labels { nodes { name } }
-        }
-      }
-    `,
-      { id: issueId }
-    );
-
-    const issue = (data as { data?: { issue?: { labels?: { nodes: Array<{ name: string }> } } } })
-      .data?.issue;
-    return issue?.labels?.nodes.map((l) => l.name) || [];
-  } catch {
-    return [];
-  }
-}
-
 // ─── Agent Session Management ────────────────────────────────────────────────
 
 /**
@@ -357,18 +330,7 @@ export async function verifyLinearWebhook(
   secret: string
 ): Promise<boolean> {
   if (!signature) return false;
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const expectedSig = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
-  const expectedHex = Array.from(new Uint8Array(expectedSig))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const expectedHex = await computeHmacHex(body, secret);
   return timingSafeEqual(signature, expectedHex);
 }
 

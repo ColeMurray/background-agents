@@ -13,28 +13,18 @@ import {
 } from "./utils/linear-client";
 import { extractAgentResponse, formatAgentResponse } from "./completion/extractor";
 import { timingSafeEqual } from "@open-inspect/shared";
+import { computeHmacHex } from "./utils/crypto";
+import { makePlan } from "./plan";
 import { createLogger } from "./logger";
 
 const log = createLogger("callback");
 
-export async function verifyCallbackSignature(
-  payload: CompletionCallback,
+export async function verifyCallbackSignature<T extends { signature: string }>(
+  payload: T,
   secret: string
 ): Promise<boolean> {
   const { signature, ...data } = payload;
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const signatureData = encoder.encode(JSON.stringify(data));
-  const expectedSig = await crypto.subtle.sign("HMAC", key, signatureData);
-  const expectedHex = Array.from(new Uint8Array(expectedSig))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const expectedHex = await computeHmacHex(JSON.stringify(data), secret);
   return timingSafeEqual(signature, expectedHex);
 }
 
@@ -163,21 +153,8 @@ callbacksRouter.post("/tool_call", async (c) => {
     return c.json({ error: "not configured" }, 500);
   }
 
-  // Verify signature (same pattern as /complete)
-  const { signature, ...data } = payload;
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(c.env.INTERNAL_CALLBACK_SECRET),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const expectedSig = await crypto.subtle.sign("HMAC", key, encoder.encode(JSON.stringify(data)));
-  const expectedHex = Array.from(new Uint8Array(expectedSig))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-  if (!timingSafeEqual(signature, expectedHex)) {
+  const isValid = await verifyCallbackSignature(payload, c.env.INTERNAL_CALLBACK_SECRET);
+  if (!isValid) {
     log.warn("http.request", {
       trace_id: traceId,
       http_path: "/callbacks/tool_call",
@@ -308,15 +285,9 @@ async function handleCompletionCallback(
         });
 
         // Update plan to completed/failed
-        const prStatus = payload.success ? "completed" : "canceled";
-        const planSteps = [
-          { content: "Analyze issue", status: "completed" },
-          { content: "Resolve repository", status: "completed" },
-          { content: "Create coding session", status: "completed" },
-          { content: "Code changes", status: "completed" },
-          { content: "Open PR", status: prStatus },
-        ];
-        await updateAgentSession(client, context.agentSessionId, { plan: planSteps });
+        await updateAgentSession(client, context.agentSessionId, {
+          plan: makePlan(payload.success ? "completed" : "failed"),
+        });
 
         // Update externalUrls with PR link if available
         const prArtifact = agentResponse.artifacts.find((a) => a.type === "pr" && a.url);

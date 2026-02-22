@@ -150,9 +150,6 @@ export interface IssueSession {
 export type { LinearCallbackContext, CallbackContext } from "@open-inspect/shared";
 import type { LinearCallbackContext } from "@open-inspect/shared";
 
-/** Alias for linear-bot specific callback context */
-export type LinearBotCallbackContext = LinearCallbackContext;
-
 /**
  * Completion callback payload from control-plane.
  */
@@ -260,4 +257,35 @@ export interface LinearIssueDetails {
   assignee?: { id: string; name: string } | null;
   team: { id: string; key: string; name: string };
   comments: Array<{ body: string; user?: { name: string } }>;
+}
+
+// ─── Webhook Payload Types ──────────────────────────────────────────────────
+
+export interface AgentSessionWebhookIssue {
+  id: string;
+  identifier: string;
+  title: string;
+  description?: string;
+  url: string;
+  priority: number;
+  priorityLabel: string;
+  team: { id: string; key: string; name: string };
+  teamId?: string;
+  labels?: Array<{ id: string; name: string }>;
+  assignee?: { id: string; name: string };
+  project?: { id: string; name: string };
+}
+
+export interface AgentSessionWebhook {
+  type: string;
+  action: string;
+  organizationId: string;
+  appUserId?: string;
+  agentSession: {
+    id: string;
+    issue?: AgentSessionWebhookIssue;
+    comment?: { body: string };
+    promptContext?: string;
+  };
+  agentActivity?: { body?: string };
 }
