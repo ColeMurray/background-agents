@@ -199,9 +199,6 @@ export function formatToolGroup(events: SandboxEvent[]): {
   // Build summary based on tool type
   switch (toolName) {
     case "Read": {
-      const _files = events
-        .map((e) => basename(e.args?.file_path as string | undefined))
-        .filter(Boolean);
       return {
         toolName: "Read",
         count,

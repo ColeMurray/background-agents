@@ -46,27 +46,3 @@ export function extractLatestTasks(events: SandboxEvent[]): Task[] {
     activeForm: todo.activeForm,
   }));
 }
-
-/**
- * Get task counts by status
- */
-export function getTaskCounts(tasks: Task[]): {
-  total: number;
-  pending: number;
-  inProgress: number;
-  completed: number;
-} {
-  return {
-    total: tasks.length,
-    pending: tasks.filter((t) => t.status === "pending").length,
-    inProgress: tasks.filter((t) => t.status === "in_progress").length,
-    completed: tasks.filter((t) => t.status === "completed").length,
-  };
-}
-
-/**
- * Get the currently active task (in_progress status)
- */
-export function getCurrentTask(tasks: Task[]): Task | null {
-  return tasks.find((t) => t.status === "in_progress") || null;
-}

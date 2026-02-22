@@ -34,8 +34,6 @@ export const ToolCallGroup = memo(
 
     const formatted = formatToolGroup(events);
     const firstEvent = events[0];
-    const _lastEvent = events[events.length - 1];
-
     const time = new Date(firstEvent.timestamp * 1000).toLocaleTimeString([], {
       hour: "2-digit",
       minute: "2-digit",
