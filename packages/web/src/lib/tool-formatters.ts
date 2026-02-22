@@ -54,13 +54,15 @@ export interface FormattedToolCall {
 /**
  * Format a tool call event for compact display
  * Note: OpenCode uses camelCase field names (filePath, not file_path)
+ * Tool names are normalized to lowercase for matching since OpenCode may
+ * report them in different cases (e.g., "todowrite" vs "TodoWrite")
  */
 export function formatToolCall(event: SandboxEvent): FormattedToolCall {
   const { tool, args, output } = event;
-  const toolName = tool || "Unknown";
+  const normalizedTool = tool?.toLowerCase() || "unknown";
 
-  switch (toolName) {
-    case "Read": {
+  switch (normalizedTool) {
+    case "read": {
       // OpenCode uses filePath (camelCase)
       const filePath = (args?.filePath ?? args?.file_path) as string | undefined;
       const lineCount = countLines(output);
@@ -74,7 +76,7 @@ export function formatToolCall(event: SandboxEvent): FormattedToolCall {
       };
     }
 
-    case "Edit": {
+    case "edit": {
       const filePath = (args?.filePath ?? args?.file_path) as string | undefined;
       return {
         toolName: "Edit",
@@ -84,7 +86,7 @@ export function formatToolCall(event: SandboxEvent): FormattedToolCall {
       };
     }
 
-    case "Write": {
+    case "write": {
       const filePath = (args?.filePath ?? args?.file_path) as string | undefined;
       return {
         toolName: "Write",
@@ -94,7 +96,7 @@ export function formatToolCall(event: SandboxEvent): FormattedToolCall {
       };
     }
 
-    case "Bash": {
+    case "bash": {
       const command = args?.command as string | undefined;
       return {
         toolName: "Bash",
@@ -104,7 +106,7 @@ export function formatToolCall(event: SandboxEvent): FormattedToolCall {
       };
     }
 
-    case "Grep": {
+    case "grep": {
       const pattern = args?.pattern as string | undefined;
       const matchCount = output ? countLines(output) : 0;
       return {
@@ -117,7 +119,7 @@ export function formatToolCall(event: SandboxEvent): FormattedToolCall {
       };
     }
 
-    case "Glob": {
+    case "glob": {
       const pattern = args?.pattern as string | undefined;
       const fileCount = output ? countLines(output) : 0;
       return {
@@ -130,7 +132,7 @@ export function formatToolCall(event: SandboxEvent): FormattedToolCall {
       };
     }
 
-    case "Task": {
+    case "task": {
       const description = args?.description as string | undefined;
       const prompt = args?.prompt as string | undefined;
       return {
@@ -141,7 +143,7 @@ export function formatToolCall(event: SandboxEvent): FormattedToolCall {
       };
     }
 
-    case "WebFetch": {
+    case "webfetch": {
       const url = args?.url as string | undefined;
       return {
         toolName: "WebFetch",
@@ -151,7 +153,7 @@ export function formatToolCall(event: SandboxEvent): FormattedToolCall {
       };
     }
 
-    case "WebSearch": {
+    case "websearch": {
       const query = args?.query as string | undefined;
       return {
         toolName: "WebSearch",
@@ -161,7 +163,7 @@ export function formatToolCall(event: SandboxEvent): FormattedToolCall {
       };
     }
 
-    case "TodoWrite": {
+    case "todowrite": {
       const todos = args?.todos as unknown[] | undefined;
       return {
         toolName: "TodoWrite",
@@ -173,7 +175,7 @@ export function formatToolCall(event: SandboxEvent): FormattedToolCall {
 
     default:
       return {
-        toolName,
+        toolName: tool || "Unknown",
         summary: args && Object.keys(args).length > 0 ? truncate(JSON.stringify(args), 50) : "",
         icon: null,
         getDetails: () => ({ args, output }),
@@ -193,12 +195,14 @@ export function formatToolGroup(events: SandboxEvent[]): {
     return { toolName: "Unknown", count: 0, summary: "" };
   }
 
-  const toolName = events[0].tool || "Unknown";
+  const rawToolName = events[0].tool || "Unknown";
+  const normalizedTool = rawToolName.toLowerCase();
   const count = events.length;
 
   // Build summary based on tool type
-  switch (toolName) {
-    case "Read": {
+  // Use lowercase for matching since OpenCode may report tool names in different cases
+  switch (normalizedTool) {
+    case "read": {
       return {
         toolName: "Read",
         count,
@@ -206,7 +210,7 @@ export function formatToolGroup(events: SandboxEvent[]): {
       };
     }
 
-    case "Edit": {
+    case "edit": {
       return {
         toolName: "Edit",
         count,
@@ -214,7 +218,7 @@ export function formatToolGroup(events: SandboxEvent[]): {
       };
     }
 
-    case "Bash": {
+    case "bash": {
       return {
         toolName: "Bash",
         count,
@@ -224,7 +228,7 @@ export function formatToolGroup(events: SandboxEvent[]): {
 
     default:
       return {
-        toolName,
+        toolName: rawToolName,
         count,
         summary: `${count} call${count === 1 ? "" : "s"}`,
       };
