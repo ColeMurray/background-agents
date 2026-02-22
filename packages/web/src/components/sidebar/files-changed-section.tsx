@@ -25,7 +25,7 @@ export function FilesChangedSection({ files }: FilesChangedSectionProps) {
             <span className="text-foreground truncate flex-1">{display}</span>
             <div className="flex items-center gap-1.5 flex-shrink-0">
               <span className="text-success font-mono text-xs">{additions}</span>
-              <span className="text-red-600 dark:text-red-400 font-mono text-xs">{deletions}</span>
+              <span className="text-destructive font-mono text-xs">{deletions}</span>
             </div>
           </div>
         );

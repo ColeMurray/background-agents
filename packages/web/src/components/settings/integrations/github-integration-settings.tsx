@@ -67,7 +67,7 @@ export function GitHubIntegrationSettings() {
             Repository access is available. You can limit the bot to selected repositories below.
           </p>
         ) : (
-          <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 px-4 py-3 rounded-sm">
+          <p className="text-sm text-warning bg-warning-muted border border-warning/40 px-4 py-3 rounded-sm">
             GitHub App is not configured or has no accessible repositories. Repository filtering is
             currently unavailable.
           </p>
@@ -319,7 +319,7 @@ function GlobalSettingsSection({
             )}
 
             {enabledRepos.length === 0 && availableRepos.length > 0 && (
-              <p className="text-xs text-amber-700 mt-1">
+              <p className="text-xs text-warning mt-1">
                 No repositories selected. The bot will not respond to webhooks.
               </p>
             )}
@@ -764,8 +764,8 @@ function Section({
 function Message({ tone, text }: { tone: "error" | "success"; text: string }) {
   const classes =
     tone === "error"
-      ? "mb-4 bg-red-50 text-red-700 px-4 py-3 border border-red-200 text-sm rounded-sm"
-      : "mb-4 bg-green-50 text-green-700 px-4 py-3 border border-green-200 text-sm rounded-sm";
+      ? "mb-4 bg-destructive-muted text-destructive px-4 py-3 border border-destructive/40 text-sm rounded-sm"
+      : "mb-4 bg-success-muted text-success px-4 py-3 border border-success/40 text-sm rounded-sm";
 
   return (
     <div className={classes} aria-live="polite">

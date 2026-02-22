@@ -9,7 +9,7 @@ const variantClasses: Record<ButtonVariant, string> = {
   outline: "border border-border text-foreground hover:bg-muted",
   ghost: "text-muted-foreground hover:text-foreground hover:bg-muted",
   destructive:
-    "text-red-600 hover:text-red-700 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed",
+    "text-destructive hover:text-destructive/90 hover:bg-destructive-muted disabled:opacity-50 disabled:cursor-not-allowed",
   subtle:
     "text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed",
 };

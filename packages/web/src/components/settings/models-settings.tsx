@@ -99,13 +99,13 @@ export function ModelsSettings() {
       </p>
 
       {error && (
-        <div className="mb-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 px-4 py-3 border border-red-200 dark:border-red-800 text-sm">
+        <div className="mb-4 bg-destructive-muted text-destructive px-4 py-3 border border-destructive/40 text-sm">
           {error}
         </div>
       )}
 
       {success && (
-        <div className="mb-4 bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 px-4 py-3 border border-green-200 dark:border-green-800 text-sm">
+        <div className="mb-4 bg-success-muted text-success px-4 py-3 border border-success/40 text-sm">
           {success}
         </div>
       )}

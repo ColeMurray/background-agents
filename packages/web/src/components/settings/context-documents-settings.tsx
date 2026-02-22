@@ -303,7 +303,7 @@ export function ContextDocumentsSettings() {
                           {document.sourceType} · {document.ingestStatus}
                         </p>
                         {document.ingestStatus === "failed" && (
-                          <p className="text-[11px] text-red-500 mt-1">
+                          <p className="text-[11px] text-destructive mt-1">
                             {getDocumentIndexError(document) || "Indexing failed"}
                           </p>
                         )}
@@ -319,7 +319,7 @@ export function ContextDocumentsSettings() {
                         <button
                           type="button"
                           onClick={() => handleDeleteDocument(document.id)}
-                          className="text-xs px-2 py-1 border border-border-muted text-muted-foreground hover:text-red-500 hover:border-red-300 transition"
+                          className="text-xs px-2 py-1 border border-border-muted text-muted-foreground hover:text-destructive hover:border-destructive/40 transition"
                         >
                           Delete
                         </button>
@@ -333,8 +333,8 @@ export function ContextDocumentsSettings() {
         </>
       )}
 
-      {error && <p className="mt-3 text-xs text-red-500">{error}</p>}
-      {success && <p className="mt-3 text-xs text-green-600">{success}</p>}
+      {error && <p className="mt-3 text-xs text-destructive">{error}</p>}
+      {success && <p className="mt-3 text-xs text-success">{success}</p>}
     </div>
   );
 }

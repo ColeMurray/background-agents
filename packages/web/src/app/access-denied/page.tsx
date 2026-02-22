@@ -16,7 +16,7 @@ function AccessDeniedContent() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-6">
       <h1 className="text-4xl font-bold text-foreground">Access Denied</h1>
-      <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 px-6 py-4 text-red-700 dark:text-red-400 max-w-md text-center">
+      <div className="bg-destructive-muted border border-destructive/40 px-6 py-4 text-destructive max-w-md text-center">
         {message}
       </div>
       <a href="/" className="text-accent hover:underline">

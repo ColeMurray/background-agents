@@ -62,7 +62,9 @@ interface SafeMarkdownProps {
 
 export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
   return (
-    <div className={`prose prose-sm dark:prose-invert max-w-none break-words ${className}`}>
+    <div
+      className={`prose prose-sm max-w-none break-words prose-headings:text-foreground prose-p:text-foreground prose-strong:text-foreground prose-code:text-foreground prose-li:text-foreground prose-hr:border-border ${className}`}
+    >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}
@@ -81,7 +83,10 @@ export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
           ),
           // Code blocks with styling
           pre: ({ children, ...props }: ComponentPropsWithoutRef<"pre">) => (
-            <pre className="bg-card text-foreground p-3 overflow-x-auto text-sm" {...props}>
+            <pre
+              className="bg-input text-foreground border border-border p-3 overflow-x-auto text-sm"
+              {...props}
+            >
               {children}
             </pre>
           ),
@@ -97,7 +102,7 @@ export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
               );
             }
             return (
-              <code className="bg-card text-foreground px-1.5 py-0.5 text-sm" {...props}>
+              <code className="bg-muted text-foreground px-1.5 py-0.5 text-sm" {...props}>
                 {children}
               </code>
             );

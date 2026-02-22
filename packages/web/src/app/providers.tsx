@@ -2,6 +2,8 @@
 
 import { SessionProvider } from "next-auth/react";
 import { SWRConfig } from "swr";
+import { ThemeProvider } from "@/components/theme-provider";
+import type { ThemeId } from "@/lib/theme";
 
 async function swrFetcher<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -9,10 +11,18 @@ async function swrFetcher<T>(url: string): Promise<T> {
   return res.json();
 }
 
-export function Providers({ children }: { children: React.ReactNode }) {
+export function Providers({
+  children,
+  initialTheme,
+}: {
+  children: React.ReactNode;
+  initialTheme: ThemeId;
+}) {
   return (
     <SWRConfig value={{ fetcher: swrFetcher, revalidateOnFocus: true, dedupingInterval: 2000 }}>
-      <SessionProvider>{children}</SessionProvider>
+      <SessionProvider>
+        <ThemeProvider initialTheme={initialTheme}>{children}</ThemeProvider>
+      </SessionProvider>
     </SWRConfig>
   );
 }

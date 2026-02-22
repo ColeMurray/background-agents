@@ -9,6 +9,7 @@ import { ModelsSettings } from "@/components/settings/models-settings";
 import { DataControlsSettings } from "@/components/settings/data-controls-settings";
 import { KeyboardShortcutsSettings } from "@/components/settings/keyboard-shortcuts-settings";
 import { IntegrationsSettings } from "@/components/settings/integrations-settings";
+import { ThemeSettings } from "@/components/settings/theme-settings";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { SidebarIcon, BackIcon } from "@/components/ui/icons";
 import { useIsMobile } from "@/hooks/use-media-query";
@@ -16,6 +17,7 @@ import { useIsMobile } from "@/hooks/use-media-query";
 const CATEGORY_LABELS: Record<SettingsCategory, string> = {
   secrets: "Secrets",
   models: "Models",
+  appearance: "Appearance",
   "keyboard-shortcuts": "Keyboard",
   "data-controls": "Data Controls",
   integrations: "Integrations",
@@ -24,6 +26,7 @@ const CATEGORY_LABELS: Record<SettingsCategory, string> = {
 const VALID_CATEGORIES = new Set<string>([
   "secrets",
   "models",
+  "appearance",
   "keyboard-shortcuts",
   "data-controls",
   "integrations",
@@ -56,6 +59,7 @@ export default function SettingsPage() {
     <>
       {activeCategory === "secrets" && <SecretsSettings />}
       {activeCategory === "models" && <ModelsSettings />}
+      {activeCategory === "appearance" && <ThemeSettings />}
       {activeCategory === "keyboard-shortcuts" && <KeyboardShortcutsSettings />}
       {activeCategory === "data-controls" && <DataControlsSettings />}
       {activeCategory === "integrations" && <IntegrationsSettings />}

@@ -3,113 +3,166 @@
 @tailwind utilities;
 
 /*
- * Design System Color Tokens
+ * Theme tokens.
  *
- * All colors are defined as CSS variables that automatically switch with dark mode.
- * Components should use semantic Tailwind classes (bg-background, text-foreground, etc.)
- * instead of hardcoded hex values.
- *
- * To change the color palette, update only these variables.
+ * Theme classes are applied to <html> as `theme-<id>`.
+ * Components should only consume semantic Tailwind tokens.
  */
 
-:root {
-  /* Core backgrounds */
-  --background: #f8f8f6;
-  --foreground: #1a1a1a;
-
-  /* Card/surface backgrounds */
-  --card: #f8f8f6;
-  --card-foreground: #1a1a1a;
-
-  /* Primary (inverted button style) */
-  --primary: #1a1a1a;
-  --primary-foreground: #ffffff;
-
-  /* Accent color (warm brown) */
-  --accent: #8b7355;
-  --accent-foreground: #ffffff;
-  --accent-muted: rgba(139, 115, 85, 0.1);
-
-  /* Muted/secondary text */
-  --muted: rgba(0, 0, 0, 0.05);
-  --muted-foreground: #666666;
-  --secondary-foreground: #999999;
-
-  /* Borders */
-  --border: rgba(0, 0, 0, 0.1);
-  --border-muted: rgba(0, 0, 0, 0.05);
-
-  /* Input backgrounds */
-  --input: #ffffff;
-
-  /* Focus ring */
-  --ring: #8b7355;
-
-  /* Success (green) */
-  --success: #28c840;
-  --success-muted: rgba(40, 200, 64, 0.1);
+:root,
+.theme-tokyonight {
+  --background: #1a1b26;
+  --foreground: #c0caf5;
+  --card: #1f2335;
+  --card-foreground: #c0caf5;
+  --primary: #c0caf5;
+  --primary-foreground: #1a1b26;
+  --accent: #7aa2f7;
+  --accent-foreground: #1a1b26;
+  --accent-muted: rgba(122, 162, 247, 0.18);
+  --muted: rgba(65, 72, 104, 0.42);
+  --muted-foreground: #9aa5ce;
+  --secondary-foreground: #6f7dab;
+  --border: rgba(122, 162, 247, 0.22);
+  --border-muted: rgba(122, 162, 247, 0.12);
+  --input: #16161e;
+  --ring: #7aa2f7;
+  --success: #9ece6a;
+  --success-foreground: #1a1b26;
+  --success-muted: rgba(158, 206, 106, 0.18);
+  --warning: #e0af68;
+  --warning-foreground: #1a1b26;
+  --warning-muted: rgba(224, 175, 104, 0.2);
+  --destructive: #f7768e;
+  --destructive-foreground: #1a1b26;
+  --destructive-muted: rgba(247, 118, 142, 0.2);
+  --info: #7dcfff;
+  --info-foreground: #1a1b26;
+  --info-muted: rgba(125, 207, 255, 0.2);
 }
 
-/* Dark mode via system preference */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #1a1a1a;
-    --foreground: #f8f8f6;
-
-    --card: rgba(255, 255, 255, 0.05);
-    --card-foreground: #f8f8f6;
-
-    --primary: #f8f8f6;
-    --primary-foreground: #1a1a1a;
-
-    --accent: #a68b6a;
-    --accent-foreground: #ffffff;
-    --accent-muted: rgba(139, 115, 85, 0.2);
-
-    --muted: rgba(255, 255, 255, 0.05);
-    --muted-foreground: #999999;
-    --secondary-foreground: #666666;
-
-    --border: rgba(255, 255, 255, 0.1);
-    --border-muted: rgba(255, 255, 255, 0.05);
-
-    --input: #1a1a1a;
-
-    --ring: #a68b6a;
-
-    --success: #28c840;
-    --success-muted: rgba(40, 200, 64, 0.1);
-  }
+.theme-catppuccin {
+  --background: #1e1e2e;
+  --foreground: #cdd6f4;
+  --card: #313244;
+  --card-foreground: #cdd6f4;
+  --primary: #cdd6f4;
+  --primary-foreground: #1e1e2e;
+  --accent: #89b4fa;
+  --accent-foreground: #1e1e2e;
+  --accent-muted: rgba(137, 180, 250, 0.18);
+  --muted: rgba(69, 71, 90, 0.44);
+  --muted-foreground: #a6adc8;
+  --secondary-foreground: #9399b2;
+  --border: rgba(137, 180, 250, 0.22);
+  --border-muted: rgba(137, 180, 250, 0.12);
+  --input: #181825;
+  --ring: #89b4fa;
+  --success: #a6e3a1;
+  --success-foreground: #1e1e2e;
+  --success-muted: rgba(166, 227, 161, 0.18);
+  --warning: #f9e2af;
+  --warning-foreground: #1e1e2e;
+  --warning-muted: rgba(249, 226, 175, 0.22);
+  --destructive: #f38ba8;
+  --destructive-foreground: #1e1e2e;
+  --destructive-muted: rgba(243, 139, 168, 0.22);
+  --info: #89dceb;
+  --info-foreground: #1e1e2e;
+  --info-muted: rgba(137, 220, 235, 0.2);
 }
 
-/* Dark mode via class (for manual toggle support) */
-.dark {
-  --background: #1a1a1a;
-  --foreground: #f8f8f6;
+.theme-gruvbox {
+  --background: #282828;
+  --foreground: #ebdbb2;
+  --card: #32302f;
+  --card-foreground: #ebdbb2;
+  --primary: #ebdbb2;
+  --primary-foreground: #282828;
+  --accent: #83a598;
+  --accent-foreground: #1d2021;
+  --accent-muted: rgba(131, 165, 152, 0.2);
+  --muted: rgba(80, 73, 69, 0.5);
+  --muted-foreground: #bdae93;
+  --secondary-foreground: #a89984;
+  --border: rgba(168, 153, 132, 0.28);
+  --border-muted: rgba(168, 153, 132, 0.16);
+  --input: #1d2021;
+  --ring: #83a598;
+  --success: #b8bb26;
+  --success-foreground: #1d2021;
+  --success-muted: rgba(184, 187, 38, 0.2);
+  --warning: #fabd2f;
+  --warning-foreground: #1d2021;
+  --warning-muted: rgba(250, 189, 47, 0.22);
+  --destructive: #fb4934;
+  --destructive-foreground: #1d2021;
+  --destructive-muted: rgba(251, 73, 52, 0.22);
+  --info: #83a598;
+  --info-foreground: #1d2021;
+  --info-muted: rgba(131, 165, 152, 0.2);
+}
 
-  --card: rgba(255, 255, 255, 0.05);
-  --card-foreground: #f8f8f6;
+.theme-kanagawa {
+  --background: #1f1f28;
+  --foreground: #dcd7ba;
+  --card: #2a2a37;
+  --card-foreground: #dcd7ba;
+  --primary: #dcd7ba;
+  --primary-foreground: #1f1f28;
+  --accent: #7e9cd8;
+  --accent-foreground: #1f1f28;
+  --accent-muted: rgba(126, 156, 216, 0.2);
+  --muted: rgba(84, 84, 109, 0.44);
+  --muted-foreground: #a6a69c;
+  --secondary-foreground: #8a8a87;
+  --border: rgba(126, 156, 216, 0.24);
+  --border-muted: rgba(126, 156, 216, 0.14);
+  --input: #16161d;
+  --ring: #7e9cd8;
+  --success: #98bb6c;
+  --success-foreground: #1f1f28;
+  --success-muted: rgba(152, 187, 108, 0.2);
+  --warning: #ffa066;
+  --warning-foreground: #1f1f28;
+  --warning-muted: rgba(255, 160, 102, 0.22);
+  --destructive: #e46876;
+  --destructive-foreground: #1f1f28;
+  --destructive-muted: rgba(228, 104, 118, 0.22);
+  --info: #7fb4ca;
+  --info-foreground: #1f1f28;
+  --info-muted: rgba(127, 180, 202, 0.2);
+}
 
-  --primary: #f8f8f6;
-  --primary-foreground: #1a1a1a;
-
-  --accent: #a68b6a;
-  --accent-foreground: #ffffff;
-  --accent-muted: rgba(139, 115, 85, 0.2);
-
-  --muted: rgba(255, 255, 255, 0.05);
-  --muted-foreground: #999999;
-  --secondary-foreground: #666666;
-
-  --border: rgba(255, 255, 255, 0.1);
-  --border-muted: rgba(255, 255, 255, 0.05);
-
-  --input: #1a1a1a;
-
-  --ring: #a68b6a;
-
-  --success: #28c840;
-  --success-muted: rgba(40, 200, 64, 0.1);
+.theme-onedark {
+  --background: #282c34;
+  --foreground: #abb2bf;
+  --card: #2f333d;
+  --card-foreground: #abb2bf;
+  --primary: #abb2bf;
+  --primary-foreground: #282c34;
+  --accent: #61afef;
+  --accent-foreground: #0f1115;
+  --accent-muted: rgba(97, 175, 239, 0.18);
+  --muted: rgba(72, 78, 91, 0.48);
+  --muted-foreground: #9aa2b1;
+  --secondary-foreground: #7f8793;
+  --border: rgba(97, 175, 239, 0.24);
+  --border-muted: rgba(97, 175, 239, 0.14);
+  --input: #21252b;
+  --ring: #61afef;
+  --success: #98c379;
+  --success-foreground: #0f1115;
+  --success-muted: rgba(152, 195, 121, 0.2);
+  --warning: #e5c07b;
+  --warning-foreground: #0f1115;
+  --warning-muted: rgba(229, 192, 123, 0.22);
+  --destructive: #e06c75;
+  --destructive-foreground: #0f1115;
+  --destructive-muted: rgba(224, 108, 117, 0.22);
+  --info: #56b6c2;
+  --info-foreground: #0f1115;
+  --info-muted: rgba(86, 182, 194, 0.2);
 }
 
 html {

@@ -80,7 +80,7 @@ export function ActionBar({
           <GlobeIcon className="w-4 h-4" />
           <span>View preview</span>
           {previewArtifact.metadata?.previewStatus === "outdated" && (
-            <span className="text-xs text-yellow-600 dark:text-yellow-400">(outdated)</span>
+            <span className="text-xs text-warning">(outdated)</span>
           )}
         </a>
       )}

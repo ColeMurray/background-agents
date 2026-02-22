@@ -344,7 +344,7 @@ function HomeContent({
           {isAuthenticated && (
             <form onSubmit={handleSubmit}>
               {error && (
-                <div className="mb-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 px-4 py-3 border border-red-200 dark:border-red-800 text-sm">
+                <div className="mb-4 bg-destructive-muted text-destructive px-4 py-3 border border-destructive/40 text-sm">
                   {error}
                 </div>
               )}

@@ -414,7 +414,7 @@ export function SecretsEditor({
                     type="button"
                     onClick={() => handleDeleteRow(row)}
                     disabled={disabled || deletingKey === normalizeKey(row.key)}
-                    className="text-xs px-2 py-1 border border-border-muted text-muted-foreground hover:text-red-500 hover:border-red-300 transition disabled:opacity-50"
+                    className="text-xs px-2 py-1 border border-border-muted text-muted-foreground hover:text-destructive hover:border-destructive/40 transition disabled:opacity-50"
                   >
                     {deletingKey === normalizeKey(row.key) ? "Deleting..." : "Delete"}
                   </button>
@@ -465,8 +465,8 @@ export function SecretsEditor({
             </div>
           )}
 
-          {error && <p className="mt-3 text-xs text-red-500">{error}</p>}
-          {success && <p className="mt-3 text-xs text-green-600">{success}</p>}
+          {error && <p className="mt-3 text-xs text-destructive">{error}</p>}
+          {success && <p className="mt-3 text-xs text-success">{success}</p>}
 
           <div className="mt-3 flex items-center gap-2">
             <button

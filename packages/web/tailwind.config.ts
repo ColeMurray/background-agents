@@ -2,7 +2,7 @@ import type { Config } from "tailwindcss";
 import typography from "@tailwindcss/typography";
 
 const config: Config = {
-  darkMode: "media",
+  darkMode: "class",
   content: [
     "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
@@ -29,7 +29,17 @@ const config: Config = {
         input: "var(--input)",
         ring: "var(--ring)",
         success: "var(--success)",
+        "success-foreground": "var(--success-foreground)",
         "success-muted": "var(--success-muted)",
+        warning: "var(--warning)",
+        "warning-foreground": "var(--warning-foreground)",
+        "warning-muted": "var(--warning-muted)",
+        destructive: "var(--destructive)",
+        "destructive-foreground": "var(--destructive-foreground)",
+        "destructive-muted": "var(--destructive-muted)",
+        info: "var(--info)",
+        "info-foreground": "var(--info-foreground)",
+        "info-muted": "var(--info-muted)",
       },
     },
   },
