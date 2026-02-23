@@ -132,6 +132,7 @@ class AgentBridge:
     OPENCODE_REQUEST_TIMEOUT = 10.0
     PROMPT_MAX_DURATION = 5400.0
     CURSOR_REQUEST_TIMEOUT = 5400.0
+    CURSOR_STDOUT_IDLE_LOG_SECONDS = 30.0
     MAX_PENDING_PART_EVENTS = 2000
     MAX_EVENT_BUFFER_SIZE = 1000
     CRITICAL_EVENT_TYPES: ClassVar[set[str]] = {
@@ -669,21 +670,41 @@ class AgentBridge:
             cmd.extend(["--resume", self.cursor_session_id])
 
         env = os.environ.copy()
+        cursor_api_key = env.get("CURSOR_API_KEY")
+        if cursor_api_key:
+            cmd.extend(["--api-key", cursor_api_key])
         workdir = self._resolve_repo_workdir()
+        has_cursor_api_key = bool(cursor_api_key)
         self.log.info(
             "cursor.prompt.start",
             message_id=message_id,
             model=normalized_model,
             has_resume=bool(self.cursor_session_id),
+            has_cursor_api_key=has_cursor_api_key,
             cwd=str(workdir),
         )
+        if not has_cursor_api_key:
+            self.log.warn(
+                "cursor.prompt.missing_api_key",
+                message_id=message_id,
+                detail="CURSOR_API_KEY is not set; CLI may block waiting for auth",
+            )
 
         process = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=str(workdir),
             env=env,
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+        )
+        process_pid = getattr(process, "pid", None)
+        self.log.info(
+            "cursor.prompt.process_spawned",
+            message_id=message_id,
+            pid=process_pid,
+            has_resume=bool(self.cursor_session_id),
+            model=normalized_model,
         )
 
         stderr_chunks: list[str] = []
@@ -697,14 +718,42 @@ class AgentBridge:
                 chunk = await process.stderr.readline()
                 if not chunk:
                     break
-                stderr_chunks.append(chunk.decode("utf-8", errors="replace").rstrip())
+                line = chunk.decode("utf-8", errors="replace").rstrip()
+                stderr_chunks.append(line)
+                self.log.debug(
+                    "cursor.stream.stderr",
+                    message_id=message_id,
+                    pid=process_pid,
+                    line_preview=line[:300],
+                )
 
         stderr_task = asyncio.create_task(consume_stderr())
 
         try:
             if process.stdout:
                 while True:
-                    line = await process.stdout.readline()
+                    try:
+                        line = await asyncio.wait_for(
+                            process.stdout.readline(),
+                            timeout=self.CURSOR_STDOUT_IDLE_LOG_SECONDS,
+                        )
+                    except TimeoutError:
+                        if process.returncode is not None:
+                            self.log.info(
+                                "cursor.stream.stdout_closed",
+                                message_id=message_id,
+                                pid=process_pid,
+                                return_code=process.returncode,
+                            )
+                            break
+                        self.log.info(
+                            "cursor.stream.waiting_for_output",
+                            message_id=message_id,
+                            pid=process_pid,
+                            waited_seconds=self.CURSOR_STDOUT_IDLE_LOG_SECONDS,
+                            stderr_lines=len(stderr_chunks),
+                        )
+                        continue
                     if not line:
                         break
 
@@ -719,6 +768,12 @@ class AgentBridge:
                         continue
 
                     event_type = event.get("type")
+                    self.log.debug(
+                        "cursor.stream.event",
+                        message_id=message_id,
+                        pid=process_pid,
+                        event_type=event_type,
+                    )
                     if event_type in ("system", "result"):
                         session_id = event.get("session_id")
                         if isinstance(session_id, str) and session_id.strip():
@@ -781,6 +836,14 @@ class AgentBridge:
             with contextlib.suppress(asyncio.CancelledError):
                 await stderr_task
             return_code = await process.wait()
+            self.log.info(
+                "cursor.prompt.process_exit",
+                message_id=message_id,
+                pid=process_pid,
+                return_code=return_code,
+                stderr_lines=len(stderr_chunks),
+                had_error=had_error,
+            )
 
             if return_code != 0 and not had_error:
                 stderr_text = "\n".join(stderr_chunks).strip()
