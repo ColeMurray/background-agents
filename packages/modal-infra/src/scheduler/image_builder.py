@@ -139,28 +139,37 @@ def _generate_clone_token() -> str:
     return ""
 
 
-def _parse_head_sha_from_logs(sandbox) -> str:
+async def _stream_build_logs(sandbox) -> tuple[str, bool]:
     """
-    Parse the HEAD SHA from sandbox stdout after the sandbox has exited.
+    Stream sandbox stdout and extract build results.
 
-    The entrypoint logs a structured JSON line with event="git.sync_complete"
-    and a "head_sha" field. We read all stdout and parse that line.
+    The entrypoint logs structured JSON lines. We look for:
+    - event="git.sync_complete" with "head_sha" field
+    - event="image_build.complete" to know the build finished
 
-    Returns the SHA string, or empty string if not found.
+    The sandbox stays alive after logging image_build.complete (it awaits
+    shutdown_event), so we can snapshot_filesystem() while it's still running.
+
+    Returns:
+        (head_sha, build_complete) tuple. head_sha is empty string if not found.
     """
+    head_sha = ""
     try:
-        for line in sandbox.stdout:
-            if "git.sync_complete" not in line:
+        async for line in sandbox.stdout:
+            if "git.sync_complete" not in line and "image_build.complete" not in line:
                 continue
             try:
                 entry = json.loads(line)
-                if entry.get("event") == "git.sync_complete" and entry.get("head_sha"):
-                    return entry["head_sha"]
+                event = entry.get("event", "")
+                if event == "git.sync_complete" and entry.get("head_sha"):
+                    head_sha = entry["head_sha"]
+                elif event == "image_build.complete":
+                    return head_sha, True
             except json.JSONDecodeError:
                 continue
     except Exception as e:
-        log.warn("build.parse_sha_error", error=str(e))
-    return ""
+        log.warn("build.stream_error", error=str(e))
+    return head_sha, False
 
 
 @app.function(
@@ -217,18 +226,18 @@ async def build_repo_image(
             clone_token=clone_token,
         )
 
-        # 3. Await sandbox exit
-        await handle.modal_sandbox.wait.aio()
-        exit_code = handle.modal_sandbox.returncode
-        if exit_code != 0:
-            raise BuildError(f"Build sandbox exited with code {exit_code}")
+        # 3. Stream stdout until build completes (sandbox stays alive for snapshotting)
+        base_sha, build_complete = await _stream_build_logs(handle.modal_sandbox)
+        if not build_complete:
+            exit_code = handle.modal_sandbox.returncode
+            raise BuildError(f"Build sandbox exited without completing (exit_code={exit_code})")
 
-        # 4. Parse base SHA from sandbox stdout (exact commit that was cloned)
-        base_sha = _parse_head_sha_from_logs(handle.modal_sandbox)
-
-        # 5. Snapshot filesystem
+        # 4. Snapshot the running sandbox's filesystem
         image = await handle.modal_sandbox.snapshot_filesystem.aio()
         provider_image_id = image.object_id
+
+        # 5. Terminate the sandbox (no longer needed after snapshot)
+        await handle.modal_sandbox.terminate.aio()
 
         build_duration = time.time() - start_time
 

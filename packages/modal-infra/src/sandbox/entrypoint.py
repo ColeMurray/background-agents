@@ -869,11 +869,13 @@ class SandboxSupervisor:
             if not restored_from_snapshot and not from_repo_image:
                 setup_success = await self.run_setup_script()
 
-            # Image build mode: exit after setup, before starting OpenCode/bridge.
-            # The builder will snapshot_filesystem() after this exits.
+            # Image build mode: signal completion, then keep sandbox alive for
+            # snapshot_filesystem(). The builder streams stdout, detects this
+            # event, snapshots the running sandbox, then terminates us.
             if image_build_mode:
                 duration_ms = int((time.time() - startup_start) * 1000)
                 self.log.info("image_build.complete", duration_ms=duration_ms)
+                await self.shutdown_event.wait()
                 return
 
             # Phase 3: Start OpenCode server (in repo directory)

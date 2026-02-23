@@ -16,6 +16,7 @@ Usage:
 
 import json
 import logging
+import sys
 from typing import Any
 
 # Standard LogRecord attributes to exclude from extra fields.
@@ -79,7 +80,7 @@ def configure_logging() -> None:
     Call once at process startup (entrypoint, bridge, web_api module load).
     Replaces any existing handlers on the root logger.
     """
-    handler = logging.StreamHandler()
+    handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JSONFormatter())
     logging.root.handlers = [handler]
     logging.root.setLevel(logging.DEBUG)

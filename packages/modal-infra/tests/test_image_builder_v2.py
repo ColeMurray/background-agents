@@ -13,7 +13,7 @@ from src.scheduler.image_builder import (
     CALLBACK_MAX_RETRIES,
     BuildError,
     _callback_with_retry,
-    _parse_head_sha_from_logs,
+    _stream_build_logs,
 )
 
 
@@ -169,54 +169,93 @@ class TestCallbackWithRetry:
         assert verify_internal_token(token, "test-secret") is True
 
 
-class TestParseHeadShaFromLogs:
-    """Test the _parse_head_sha_from_logs function."""
+class TestStreamBuildLogs:
+    """Test the _stream_build_logs function."""
 
-    def test_parses_sha_from_structured_log(self):
-        """Should parse head_sha from git.sync_complete log line."""
+    @staticmethod
+    def _async_stdout(lines):
+        """Create an async iterator from a list of strings."""
+
+        async def _aiter():
+            for line in lines:
+                yield line
+
+        return _aiter()
+
+    @pytest.mark.asyncio
+    async def test_returns_sha_and_complete(self):
+        """Should return head_sha and build_complete=True on success."""
         log_lines = [
             json.dumps({"level": "info", "event": "supervisor.start"}),
             json.dumps({"level": "info", "event": "git.clone_start"}),
             json.dumps({"level": "info", "event": "git.sync_complete", "head_sha": "abc123def456"}),
-            json.dumps({"level": "info", "event": "image_build.complete"}),
+            json.dumps({"level": "info", "event": "image_build.complete", "duration_ms": 5000}),
         ]
         mock_sandbox = MagicMock()
-        mock_sandbox.stdout = iter(log_lines)
+        mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha = _parse_head_sha_from_logs(mock_sandbox)
+        sha, complete = await _stream_build_logs(mock_sandbox)
         assert sha == "abc123def456"
+        assert complete is True
 
-    def test_returns_empty_when_no_sync_complete(self):
-        """Should return empty string if git.sync_complete not found."""
+    @pytest.mark.asyncio
+    async def test_complete_without_sha(self):
+        """Should return empty SHA but build_complete=True if sync_complete missing."""
         log_lines = [
             json.dumps({"level": "info", "event": "supervisor.start"}),
             json.dumps({"level": "info", "event": "image_build.complete"}),
         ]
         mock_sandbox = MagicMock()
-        mock_sandbox.stdout = iter(log_lines)
+        mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha = _parse_head_sha_from_logs(mock_sandbox)
+        sha, complete = await _stream_build_logs(mock_sandbox)
         assert sha == ""
+        assert complete is True
 
-    def test_returns_empty_on_error(self):
-        """Should return empty string on error."""
-        mock_sandbox = MagicMock()
-        mock_sandbox.stdout = MagicMock(side_effect=Exception("stream error"))
-
-        sha = _parse_head_sha_from_logs(mock_sandbox)
-        assert sha == ""
-
-    def test_handles_malformed_json(self):
-        """Should skip malformed JSON lines."""
+    @pytest.mark.asyncio
+    async def test_incomplete_when_sandbox_exits(self):
+        """Should return build_complete=False if sandbox exits without image_build.complete."""
         log_lines = [
-            "not json at all",
+            json.dumps({"level": "info", "event": "supervisor.start"}),
             json.dumps({"level": "info", "event": "git.sync_complete", "head_sha": "abc123"}),
+            json.dumps({"level": "error", "event": "git.clone_error"}),
         ]
         mock_sandbox = MagicMock()
-        mock_sandbox.stdout = iter(log_lines)
+        mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha = _parse_head_sha_from_logs(mock_sandbox)
+        sha, complete = await _stream_build_logs(mock_sandbox)
         assert sha == "abc123"
+        assert complete is False
+
+    @pytest.mark.asyncio
+    async def test_returns_incomplete_on_error(self):
+        """Should return build_complete=False on stream error."""
+
+        async def _raise():
+            raise Exception("stream error")
+            yield  # noqa: unreachable — makes this an async generator
+
+        mock_sandbox = MagicMock()
+        mock_sandbox.stdout = _raise()
+
+        sha, complete = await _stream_build_logs(mock_sandbox)
+        assert sha == ""
+        assert complete is False
+
+    @pytest.mark.asyncio
+    async def test_handles_malformed_json(self):
+        """Should skip malformed JSON lines containing keywords."""
+        log_lines = [
+            "not json but has git.sync_complete in it",
+            json.dumps({"level": "info", "event": "git.sync_complete", "head_sha": "abc123"}),
+            json.dumps({"level": "info", "event": "image_build.complete"}),
+        ]
+        mock_sandbox = MagicMock()
+        mock_sandbox.stdout = self._async_stdout(log_lines)
+
+        sha, complete = await _stream_build_logs(mock_sandbox)
+        assert sha == "abc123"
+        assert complete is True
 
 
 class TestBuildError:
