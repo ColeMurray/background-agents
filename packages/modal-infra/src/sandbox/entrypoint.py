@@ -802,7 +802,7 @@ class SandboxSupervisor:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await result.communicate()
+            _stdout, stderr = await result.communicate()
 
             if result.returncode != 0:
                 self.log.error(

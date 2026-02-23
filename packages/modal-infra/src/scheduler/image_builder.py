@@ -28,7 +28,13 @@ import time
 import httpx
 import modal
 
-from ..app import app, function_image, github_app_secrets, internal_api_secret
+from ..app import (
+    app,
+    function_image,
+    github_app_secrets,
+    internal_api_secret,
+    validate_control_plane_url,
+)
 from ..auth.internal import generate_internal_token
 from ..log_config import get_logger
 
@@ -169,6 +175,11 @@ async def build_repo_image(
         build_id: Build identifier from the control plane
     """
     from ..sandbox.manager import SandboxManager
+
+    # Validate callback URL against allowed hosts to prevent SSRF
+    if callback_url and not validate_control_plane_url(callback_url):
+        log.error("build.invalid_callback_url", url=callback_url, build_id=build_id)
+        return
 
     start_time = time.time()
     manager = SandboxManager()
