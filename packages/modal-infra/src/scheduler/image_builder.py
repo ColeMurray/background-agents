@@ -36,7 +36,7 @@ log = get_logger("image_builder")
 
 # Retry config for callbacks
 CALLBACK_MAX_RETRIES = 3
-CALLBACK_BACKOFF_BASE = 2  # seconds: 2, 8, 32
+CALLBACK_BACKOFF_BASE = 2  # seconds: 2, 4, 8
 
 
 class BuildError(Exception):
@@ -122,18 +122,20 @@ def _generate_clone_token() -> str:
     return ""
 
 
-def _read_sandbox_head_sha(sandbox) -> str:
+def _read_sandbox_head_sha(sandbox, repo_name: str) -> str:
     """
     Read the git HEAD SHA from a sandbox by executing git rev-parse.
 
     Args:
         sandbox: A modal.Sandbox instance
+        repo_name: Repository name (used to construct /workspace/{repo_name} path)
 
     Returns:
         The HEAD SHA string, or empty string on failure
     """
     try:
-        process = sandbox.exec("git", "-C", "/workspace/repo", "rev-parse", "HEAD")
+        repo_path = f"/workspace/{repo_name}"
+        process = sandbox.exec("git", "-C", repo_path, "rev-parse", "HEAD")
         stdout = process.stdout.read().strip()
         return stdout
     except Exception as e:
@@ -197,7 +199,7 @@ async def build_repo_image(
             raise BuildError(f"Build sandbox exited with code {exit_code}")
 
         # 4. Read base SHA before snapshot
-        base_sha = _read_sandbox_head_sha(handle.modal_sandbox)
+        base_sha = _read_sandbox_head_sha(handle.modal_sandbox, repo_name)
 
         # 5. Snapshot filesystem
         image = handle.modal_sandbox.snapshot_filesystem()

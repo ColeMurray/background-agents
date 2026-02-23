@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS repo_images (
   status TEXT NOT NULL DEFAULT 'building',
   build_duration_seconds REAL,
   error_message TEXT,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
 CREATE INDEX IF NOT EXISTS idx_repo_images_repo_status

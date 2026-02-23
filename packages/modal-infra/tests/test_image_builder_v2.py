@@ -179,11 +179,11 @@ class TestReadSandboxHeadSha:
         mock_sandbox = MagicMock()
         mock_sandbox.exec.return_value = mock_process
 
-        sha = _read_sandbox_head_sha(mock_sandbox)
+        sha = _read_sandbox_head_sha(mock_sandbox, "my-repo")
         assert sha == "abc123def456"
 
         mock_sandbox.exec.assert_called_once_with(
-            "git", "-C", "/workspace/repo", "rev-parse", "HEAD"
+            "git", "-C", "/workspace/my-repo", "rev-parse", "HEAD"
         )
 
     def test_returns_empty_on_error(self):
@@ -191,7 +191,7 @@ class TestReadSandboxHeadSha:
         mock_sandbox = MagicMock()
         mock_sandbox.exec.side_effect = Exception("sandbox not running")
 
-        sha = _read_sandbox_head_sha(mock_sandbox)
+        sha = _read_sandbox_head_sha(mock_sandbox, "my-repo")
         assert sha == ""
 
 
