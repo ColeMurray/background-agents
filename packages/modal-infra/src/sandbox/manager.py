@@ -41,6 +41,8 @@ class SandboxConfig:
     timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS
     clone_token: str | None = None  # VCS clone token for git operations
     user_env_vars: dict[str, str] | None = None  # User-provided env vars (repo secrets)
+    repo_image_id: str | None = None  # Pre-built repo image ID from provider
+    repo_image_sha: str | None = None  # Git SHA the repo image was built from
 
 
 @dataclass
@@ -145,12 +147,14 @@ class SandboxManager:
         if config.session_config:
             env_vars["SESSION_CONFIG"] = config.session_config.model_dump_json()
 
-        # Determine image to use
+        # Determine image to use (priority: session snapshot > repo image > base image)
         if config.snapshot_id:
-            # Restore from snapshot
             image = modal.Image.from_registry(f"open-inspect-snapshot:{config.snapshot_id}")
+        elif config.repo_image_id:
+            image = modal.Image.from_id(config.repo_image_id)
+            env_vars["FROM_REPO_IMAGE"] = "true"
+            env_vars["REPO_IMAGE_SHA"] = config.repo_image_sha or ""
         else:
-            # Use base image (would be repo-specific in production)
             image = base_image
 
         # Create the sandbox
@@ -187,6 +191,70 @@ class SandboxManager:
             status=SandboxStatus.WARMING,
             created_at=time.time(),
             snapshot_id=config.snapshot_id,
+            modal_object_id=modal_object_id,
+        )
+
+    async def create_build_sandbox(
+        self,
+        repo_owner: str,
+        repo_name: str,
+        default_branch: str = "main",
+        clone_token: str = "",
+    ) -> SandboxHandle:
+        """
+        Create a sandbox specifically for image building.
+
+        Like create_sandbox() but:
+        - Sets IMAGE_BUILD_MODE=true (exits after setup, no OpenCode/bridge)
+        - No CONTROL_PLANE_URL, SANDBOX_AUTH_TOKEN, or LLM secrets
+        - Shorter timeout (30 min vs 2 hours)
+        - Always uses base_image (builds start from the universal base)
+        """
+        BUILD_TIMEOUT_SECONDS = 1800
+
+        start_time = time.time()
+        sandbox_id = f"build-{repo_owner}-{repo_name}-{int(time.time() * 1000)}"
+
+        env_vars: dict[str, str] = {
+            "PYTHONUNBUFFERED": "1",
+            "SANDBOX_ID": sandbox_id,
+            "REPO_OWNER": repo_owner,
+            "REPO_NAME": repo_name,
+            "IMAGE_BUILD_MODE": "true",
+            "SESSION_CONFIG": json.dumps({"branch": default_branch}),
+        }
+
+        self._inject_vcs_env_vars(env_vars, clone_token or None)
+
+        sandbox = modal.Sandbox.create(
+            "python",
+            "-m",
+            "sandbox.entrypoint",
+            image=base_image,
+            app=app,
+            secrets=[],
+            timeout=BUILD_TIMEOUT_SECONDS,
+            workdir="/workspace",
+            env=env_vars,
+        )
+
+        modal_object_id = sandbox.object_id
+        duration_ms = int((time.time() - start_time) * 1000)
+        log.info(
+            "sandbox.create_build",
+            sandbox_id=sandbox_id,
+            modal_object_id=modal_object_id,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            duration_ms=duration_ms,
+            outcome="success",
+        )
+
+        return SandboxHandle(
+            sandbox_id=sandbox_id,
+            modal_sandbox=sandbox,
+            status=SandboxStatus.WARMING,
+            created_at=time.time(),
             modal_object_id=modal_object_id,
         )
 

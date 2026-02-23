@@ -167,6 +167,8 @@ async def api_create_sandbox(
             sandbox_auth_token=request.get("sandbox_auth_token"),
             clone_token=github_app_token,
             user_env_vars=request.get("user_env_vars") or None,
+            repo_image_id=request.get("repo_image_id") or None,
+            repo_image_sha=request.get("repo_image_sha") or None,
         )
 
         handle = await manager.create_sandbox(config)

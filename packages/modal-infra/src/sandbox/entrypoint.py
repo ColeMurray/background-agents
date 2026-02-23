@@ -119,12 +119,14 @@ class SandboxSupervisor:
             )
 
             clone_url = self._build_repo_url()
+            image_build_mode = os.environ.get("IMAGE_BUILD_MODE") == "true"
+            clone_depth = "100" if image_build_mode else "1"
 
             result = await asyncio.create_subprocess_exec(
                 "git",
                 "clone",
                 "--depth",
-                "1",
+                clone_depth,
                 clone_url,
                 str(self.repo_path),
                 stdout=asyncio.subprocess.PIPE,
@@ -741,6 +743,80 @@ class SandboxSupervisor:
         except Exception as e:
             self.log.error("git.quick_fetch_error", exc=e)
 
+    async def _incremental_git_sync(self) -> bool:
+        """
+        Fast git sync for repo-image starts. Repo already exists from the build,
+        just pull the latest commits (up to 30 minutes of drift).
+        """
+        if not self.repo_path.exists():
+            self.log.warn("git.incremental_sync_skip", reason="no_repo_path")
+            self.git_sync_complete.set()
+            return False
+
+        try:
+            # Update remote URL with fresh clone token
+            if self.vcs_clone_token:
+                await asyncio.create_subprocess_exec(
+                    "git",
+                    "remote",
+                    "set-url",
+                    "origin",
+                    self._build_repo_url(),
+                    cwd=self.repo_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+
+            # Fetch latest
+            result = await asyncio.create_subprocess_exec(
+                "git",
+                "fetch",
+                "origin",
+                cwd=self.repo_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await result.communicate()
+
+            if result.returncode != 0:
+                self.log.error(
+                    "git.incremental_fetch_error",
+                    stderr=stderr.decode(),
+                    exit_code=result.returncode,
+                )
+                self.git_sync_complete.set()
+                return False
+
+            # Hard reset to latest — safe because this runs at session startup
+            # before the user has made any changes
+            base_branch = self.session_config.get("branch", "main")
+            result = await asyncio.create_subprocess_exec(
+                "git",
+                "reset",
+                "--hard",
+                f"origin/{base_branch}",
+                cwd=self.repo_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await result.communicate()
+
+            if result.returncode != 0:
+                self.log.error(
+                    "git.incremental_reset_error",
+                    stderr=stderr.decode(),
+                    exit_code=result.returncode,
+                )
+
+            self.log.info("git.incremental_sync_complete")
+            self.git_sync_complete.set()
+            return True
+
+        except Exception as e:
+            self.log.error("git.incremental_sync_error", exc=e)
+            self.git_sync_complete.set()
+            return False
+
     async def run(self) -> None:
         """Main supervisor loop."""
         startup_start = time.time()
@@ -751,10 +827,18 @@ class SandboxSupervisor:
             repo_name=self.repo_name,
         )
 
-        # Check if restored from snapshot
+        # Detect operating mode
+        image_build_mode = os.environ.get("IMAGE_BUILD_MODE") == "true"
         restored_from_snapshot = os.environ.get("RESTORED_FROM_SNAPSHOT") == "true"
-        if restored_from_snapshot:
+        from_repo_image = os.environ.get("FROM_REPO_IMAGE") == "true"
+
+        if image_build_mode:
+            self.log.info("supervisor.image_build_mode")
+        elif restored_from_snapshot:
             self.log.info("supervisor.restored_from_snapshot")
+        elif from_repo_image:
+            repo_image_sha = os.environ.get("REPO_IMAGE_SHA", "unknown")
+            self.log.info("supervisor.from_repo_image", build_sha=repo_image_sha)
 
         # Set up signal handlers
         loop = asyncio.get_event_loop()
@@ -766,21 +850,28 @@ class SandboxSupervisor:
         try:
             # Phase 1: Git sync
             if restored_from_snapshot:
-                # Restored from snapshot - just do a quick fetch to check for updates
                 await self._quick_git_fetch()
                 self.git_sync_complete.set()
                 git_sync_success = True
+            elif from_repo_image:
+                git_sync_success = await self._incremental_git_sync()
             else:
-                # Fresh sandbox - full git clone and sync
                 git_sync_success = await self.perform_git_sync()
 
             # Phase 2: Configure git identity (if repo was cloned)
             await self.configure_git_identity()
 
-            # Phase 2.5: Run repo setup script (fresh clone only)
+            # Phase 2.5: Run repo setup script (skip if restored or from repo image)
             setup_success: bool | None = None
-            if not restored_from_snapshot:
+            if not restored_from_snapshot and not from_repo_image:
                 setup_success = await self.run_setup_script()
+
+            # Image build mode: exit after setup, before starting OpenCode/bridge.
+            # The builder will snapshot_filesystem() after this exits.
+            if image_build_mode:
+                duration_ms = int((time.time() - startup_start) * 1000)
+                self.log.info("image_build.complete", duration_ms=duration_ms)
+                return
 
             # Phase 3: Start OpenCode server (in repo directory)
             await self.start_opencode()
@@ -796,6 +887,7 @@ class SandboxSupervisor:
                 repo_owner=self.repo_owner,
                 repo_name=self.repo_name,
                 restored_from_snapshot=restored_from_snapshot,
+                from_repo_image=from_repo_image,
                 git_sync_success=git_sync_success,
                 setup_success=setup_success,
                 opencode_ready=opencode_ready,

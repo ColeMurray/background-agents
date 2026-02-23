@@ -45,6 +45,8 @@ export interface CreateSandboxRequest {
   provider?: string;
   model?: string;
   userEnvVars?: Record<string, string>;
+  repoImageId?: string | null;
+  repoImageSha?: string | null;
 }
 
 export interface CreateSandboxResponse {
@@ -188,6 +190,8 @@ export class ModalClient {
           provider: request.provider || "anthropic",
           model: request.model || "claude-sonnet-4-6",
           user_env_vars: request.userEnvVars || null,
+          repo_image_id: request.repoImageId || null,
+          repo_image_sha: request.repoImageSha || null,
         }),
       });
 

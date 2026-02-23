@@ -53,6 +53,10 @@ export interface CreateSandboxConfig {
   traceId?: string;
   /** Request ID for correlation */
   requestId?: string;
+  /** Opaque provider image ID of a pre-built repo image */
+  repoImageId?: string | null;
+  /** Git SHA the repo image was built from */
+  repoImageSha?: string | null;
 }
 
 /**
