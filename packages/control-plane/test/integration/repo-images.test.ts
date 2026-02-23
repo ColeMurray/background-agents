@@ -380,6 +380,85 @@ describe("Repo image HTTP routes", () => {
     expect(names).toEqual(["repo-a", "repo-c"]);
   });
 
+  it("PUT /repo-images/toggle/:owner/:name enables image build", async () => {
+    const response = await SELF.fetch("https://test.local/repo-images/toggle/acme/repo", {
+      method: "PUT",
+      headers: await authHeaders(),
+      body: JSON.stringify({ enabled: true }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json<{ ok: boolean; enabled: boolean }>();
+    expect(body.ok).toBe(true);
+    expect(body.enabled).toBe(true);
+
+    // Verify via enabled-repos endpoint
+    const headers = await authHeaders();
+    delete (headers as Record<string, string | undefined>)["Content-Type"];
+    const enabledResponse = await SELF.fetch("https://test.local/repo-images/enabled-repos", {
+      headers,
+    });
+    const enabledBody = await enabledResponse.json<{
+      repos: Array<{ repoOwner: string; repoName: string }>;
+    }>();
+    const found = enabledBody.repos.find((r) => r.repoOwner === "acme" && r.repoName === "repo");
+    expect(found).toBeDefined();
+  });
+
+  it("PUT /repo-images/toggle/:owner/:name disables image build", async () => {
+    // Enable first
+    await SELF.fetch("https://test.local/repo-images/toggle/acme/repo", {
+      method: "PUT",
+      headers: await authHeaders(),
+      body: JSON.stringify({ enabled: true }),
+    });
+
+    // Disable
+    const response = await SELF.fetch("https://test.local/repo-images/toggle/acme/repo", {
+      method: "PUT",
+      headers: await authHeaders(),
+      body: JSON.stringify({ enabled: false }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json<{ ok: boolean; enabled: boolean }>();
+    expect(body.ok).toBe(true);
+    expect(body.enabled).toBe(false);
+
+    // Verify repo no longer in enabled list
+    const headers = await authHeaders();
+    delete (headers as Record<string, string | undefined>)["Content-Type"];
+    const enabledResponse = await SELF.fetch("https://test.local/repo-images/enabled-repos", {
+      headers,
+    });
+    const enabledBody = await enabledResponse.json<{
+      repos: Array<{ repoOwner: string; repoName: string }>;
+    }>();
+    const found = enabledBody.repos.find((r) => r.repoOwner === "acme" && r.repoName === "repo");
+    expect(found).toBeUndefined();
+  });
+
+  it("PUT /repo-images/toggle with non-boolean enabled returns 400", async () => {
+    const response = await SELF.fetch("https://test.local/repo-images/toggle/acme/repo", {
+      method: "PUT",
+      headers: await authHeaders(),
+      body: JSON.stringify({ enabled: "yes" }),
+    });
+
+    expect(response.status).toBe(400);
+    const body = await response.json<{ error: string }>();
+    expect(body.error).toContain("boolean");
+  });
+
+  it("PUT /repo-images/toggle requires auth", async () => {
+    const response = await SELF.fetch("https://test.local/repo-images/toggle/acme/repo", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(response.status).toBe(401);
+  });
+
   it("requires auth on all repo-images routes", async () => {
     const response = await SELF.fetch("https://test.local/repo-images/status");
     expect(response.status).toBe(401);

@@ -360,6 +360,63 @@ async function handleCleanup(
 }
 
 /**
+ * PUT /repo-images/toggle/:owner/:name
+ * Toggle image building for a repo.
+ */
+async function handleToggleImageBuild(
+  request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  if (!env.DB) {
+    return error("Database not configured", 503);
+  }
+
+  const owner = match.groups?.owner;
+  const name = match.groups?.name;
+  if (!owner || !name) {
+    return error("Owner and name are required", 400);
+  }
+
+  let body: { enabled?: unknown };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return error("Invalid JSON body", 400);
+  }
+
+  if (typeof body.enabled !== "boolean") {
+    return error("enabled must be a boolean", 400);
+  }
+
+  const metadataStore = new RepoMetadataStore(env.DB);
+
+  try {
+    await metadataStore.setImageBuildEnabled(owner, name, body.enabled);
+
+    logger.info("repo_image.toggle", {
+      repo_owner: owner,
+      repo_name: name,
+      enabled: body.enabled,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+
+    return json({ ok: true, enabled: body.enabled });
+  } catch (e) {
+    logger.error("repo_image.toggle_error", {
+      error: e instanceof Error ? e.message : String(e),
+      repo_owner: owner,
+      repo_name: name,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Failed to toggle image build", 500);
+  }
+}
+
+/**
  * GET /repo-images/enabled-repos
  * Returns repos with image building enabled. Called by scheduler.
  */
@@ -408,6 +465,11 @@ export const repoImageRoutes: Route[] = [
     method: "GET",
     pattern: parsePattern("/repo-images/status"),
     handler: handleGetStatus,
+  },
+  {
+    method: "PUT",
+    pattern: parsePattern("/repo-images/toggle/:owner/:name"),
+    handler: handleToggleImageBuild,
   },
   {
     method: "GET",
