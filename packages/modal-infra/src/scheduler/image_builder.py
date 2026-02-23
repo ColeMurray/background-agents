@@ -214,16 +214,16 @@ async def build_repo_image(
         )
 
         # 3. Await sandbox exit
-        handle.modal_sandbox.wait()
+        await handle.modal_sandbox.wait.aio()
         exit_code = handle.modal_sandbox.returncode
         if exit_code != 0:
             raise BuildError(f"Build sandbox exited with code {exit_code}")
 
-        # 4. Read base SHA before snapshot
-        base_sha = _read_sandbox_head_sha(handle.modal_sandbox, repo_name)
+        # 4. Get base SHA via ls-remote (can't exec into terminated sandbox)
+        base_sha = _git_ls_remote_sha(repo_owner, repo_name, default_branch, clone_token) or ""
 
         # 5. Snapshot filesystem
-        image = handle.modal_sandbox.snapshot_filesystem()
+        image = await handle.modal_sandbox.snapshot_filesystem.aio()
         provider_image_id = image.object_id
 
         build_duration = time.time() - start_time
