@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { generateInternalToken } from "../../src/auth/internal";
 import { RepoImageStore } from "../../src/db/repo-images";
+import { RepoMetadataStore } from "../../src/db/repo-metadata";
 import { cleanD1Tables } from "./cleanup";
 
 describe("D1 RepoImageStore", () => {
@@ -329,7 +330,7 @@ describe("Repo image HTTP routes", () => {
     const response = await SELF.fetch("https://test.local/repo-images/mark-stale", {
       method: "POST",
       headers: await authHeaders(),
-      body: JSON.stringify({ max_age_seconds: 1800000 }),
+      body: JSON.stringify({ max_age_seconds: 1800 }),
     });
 
     expect(response.status).toBe(200);
@@ -348,13 +349,35 @@ describe("Repo image HTTP routes", () => {
     const response = await SELF.fetch("https://test.local/repo-images/cleanup", {
       method: "POST",
       headers: await authHeaders(),
-      body: JSON.stringify({ max_age_seconds: 86400000 }),
+      body: JSON.stringify({ max_age_seconds: 86400 }),
     });
 
     expect(response.status).toBe(200);
     const body = await response.json<{ ok: boolean; deleted: number }>();
     expect(body.ok).toBe(true);
     expect(body.deleted).toBeGreaterThanOrEqual(1);
+  });
+
+  it("GET /repo-images/enabled-repos returns repos with image building enabled", async () => {
+    const metadataStore = new RepoMetadataStore(env.DB);
+    await metadataStore.setImageBuildEnabled("acme", "repo-a", true);
+    await metadataStore.setImageBuildEnabled("acme", "repo-b", false);
+    await metadataStore.setImageBuildEnabled("acme", "repo-c", true);
+
+    const headers = await authHeaders();
+    delete (headers as Record<string, string | undefined>)["Content-Type"];
+
+    const response = await SELF.fetch("https://test.local/repo-images/enabled-repos", {
+      headers,
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json<{
+      repos: Array<{ repoOwner: string; repoName: string }>;
+    }>();
+    expect(body.repos).toHaveLength(2);
+    const names = body.repos.map((r) => r.repoName).sort();
+    expect(names).toEqual(["repo-a", "repo-c"]);
   });
 
   it("requires auth on all repo-images routes", async () => {

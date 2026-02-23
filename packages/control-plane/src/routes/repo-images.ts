@@ -9,6 +9,7 @@
  */
 
 import { RepoImageStore } from "../db/repo-images";
+import { RepoMetadataStore } from "../db/repo-metadata";
 import { createModalClient } from "../sandbox/client";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
@@ -289,11 +290,12 @@ async function handleMarkStale(
   }
 
   const maxAgeSeconds = body.max_age_seconds ?? 2100; // 35 minutes default
+  const maxAgeMs = maxAgeSeconds * 1000;
 
   const store = new RepoImageStore(env.DB);
 
   try {
-    const count = await store.markStaleBuildsAsFailed(maxAgeSeconds);
+    const count = await store.markStaleBuildsAsFailed(maxAgeMs);
 
     logger.info("repo_image.stale_marked", {
       event: "repo_image.stale_marked",
@@ -336,11 +338,12 @@ async function handleCleanup(
   }
 
   const maxAgeSeconds = body.max_age_seconds ?? 86400; // 24 hours default
+  const maxAgeMs = maxAgeSeconds * 1000;
 
   const store = new RepoImageStore(env.DB);
 
   try {
-    const count = await store.deleteOldFailedBuilds(maxAgeSeconds);
+    const count = await store.deleteOldFailedBuilds(maxAgeMs);
 
     logger.info("repo_image.cleanup", {
       event: "repo_image.cleanup",
@@ -358,6 +361,35 @@ async function handleCleanup(
       trace_id: ctx.trace_id,
     });
     return error("Failed to clean up old builds", 500);
+  }
+}
+
+/**
+ * GET /repo-images/enabled-repos
+ * Returns repos with image building enabled. Called by scheduler.
+ */
+async function handleGetEnabledRepos(
+  _request: Request,
+  env: Env,
+  _match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  if (!env.DB) {
+    return error("Database not configured", 503);
+  }
+
+  const metadataStore = new RepoMetadataStore(env.DB);
+
+  try {
+    const repos = await metadataStore.getImageBuildEnabledRepos();
+    return json({ repos });
+  } catch (e) {
+    logger.error("repo_image.enabled_repos_error", {
+      error: e instanceof Error ? e.message : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Failed to get enabled repos", 500);
   }
 }
 
@@ -381,6 +413,11 @@ export const repoImageRoutes: Route[] = [
     method: "GET",
     pattern: parsePattern("/repo-images/status"),
     handler: handleGetStatus,
+  },
+  {
+    method: "GET",
+    pattern: parsePattern("/repo-images/enabled-repos"),
+    handler: handleGetEnabledRepos,
   },
   {
     method: "POST",

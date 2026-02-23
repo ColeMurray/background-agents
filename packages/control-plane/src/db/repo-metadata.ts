@@ -10,8 +10,14 @@ interface RepoMetadataRow {
   aliases: string | null;
   channel_associations: string | null;
   keywords: string | null;
+  image_build_enabled: number;
   created_at: number;
   updated_at: number;
+}
+
+export interface ImageBuildEnabledRepo {
+  repoOwner: string;
+  repoName: string;
 }
 
 function parseJsonArray(value: string | null): string[] | undefined {
@@ -106,5 +112,33 @@ export class RepoMetadataStore {
     }
 
     return map;
+  }
+
+  async getImageBuildEnabledRepos(): Promise<ImageBuildEnabledRepo[]> {
+    const result = await this.db
+      .prepare("SELECT repo_owner, repo_name FROM repo_metadata WHERE image_build_enabled = 1")
+      .all<{ repo_owner: string; repo_name: string }>();
+
+    return (result.results || []).map((row) => ({
+      repoOwner: row.repo_owner,
+      repoName: row.repo_name,
+    }));
+  }
+
+  async setImageBuildEnabled(owner: string, name: string, enabled: boolean): Promise<void> {
+    const now = Date.now();
+    const normalizedOwner = owner.toLowerCase();
+    const normalizedName = name.toLowerCase();
+
+    await this.db
+      .prepare(
+        `INSERT INTO repo_metadata (repo_owner, repo_name, image_build_enabled, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(repo_owner, repo_name) DO UPDATE SET
+           image_build_enabled = excluded.image_build_enabled,
+           updated_at = excluded.updated_at`
+      )
+      .bind(normalizedOwner, normalizedName, enabled ? 1 : 0, now, now)
+      .run();
   }
 }

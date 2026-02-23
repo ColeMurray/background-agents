@@ -1,23 +1,32 @@
 """
-Async image builder for repository pre-built images.
+Async image builder and scheduler for repository pre-built images.
 
 This module handles:
 - Building repository images asynchronously (triggered by control plane)
 - Creating build sandboxes, awaiting exit, snapshotting filesystem
 - Reporting results back to control plane via authenticated callbacks
+- Scheduled rebuilds every 30 minutes (cron) with git ls-remote comparison
 
 The build flow:
 1. Control plane POSTs to api_build_repo_image with repo info + callback URL
 2. api_build_repo_image spawns build_repo_image.spawn() and returns immediately
 3. build_repo_image creates a build sandbox, waits for it to finish, snapshots
 4. On success/failure, POSTs result to the callback URL with HMAC auth
+
+The scheduler flow:
+1. Every 30 min, fetch enabled repos and current image status from control plane
+2. For each enabled repo, git ls-remote to get HEAD SHA
+3. If SHA differs from latest ready image, trigger a build
+4. Mark stale builds as failed, clean up old failed rows
 """
 
 import asyncio
 import os
+import subprocess
 import time
 
 import httpx
+import modal
 
 from ..app import app, function_image, github_app_secrets, internal_api_secret
 from ..auth.internal import generate_internal_token
@@ -230,3 +239,284 @@ async def build_repo_image(
                     "error": str(e),
                 },
             )
+
+
+# ---------------------------------------------------------------------------
+# Scheduler: cron-based rebuild logic
+# ---------------------------------------------------------------------------
+
+# Stale build threshold: builds older than this are marked failed
+STALE_BUILD_THRESHOLD_SECONDS = 2100  # 35 minutes
+
+# Cleanup threshold: failed builds older than this are deleted
+FAILED_BUILD_CLEANUP_SECONDS = 86400  # 24 hours
+
+
+async def _api_get(
+    url: str,
+    secret: str | None = None,
+) -> dict:
+    """GET a control plane endpoint with HMAC auth."""
+    token = generate_internal_token(secret)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+async def _api_post(
+    url: str,
+    payload: dict | None = None,
+    secret: str | None = None,
+) -> dict:
+    """POST to a control plane endpoint with HMAC auth."""
+    token = generate_internal_token(secret)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            url,
+            json=payload or {},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+def _git_ls_remote_sha(
+    repo_owner: str,
+    repo_name: str,
+    branch: str,
+    clone_token: str,
+) -> str | None:
+    """
+    Run git ls-remote to get the HEAD SHA for a branch.
+
+    Returns the SHA string, or None on failure.
+    """
+    if clone_token:
+        url = f"https://x-access-token:{clone_token}@github.com/{repo_owner}/{repo_name}.git"
+    else:
+        url = f"https://github.com/{repo_owner}/{repo_name}.git"
+
+    try:
+        result = subprocess.run(
+            ["git", "ls-remote", url, f"refs/heads/{branch}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            log.warn(
+                "scheduler.ls_remote_failed",
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                branch=branch,
+                stderr=result.stderr[:200],
+            )
+            return None
+
+        # Output format: "sha\trefs/heads/branch"
+        output = result.stdout.strip()
+        if not output:
+            return None
+        return output.split("\t")[0]
+    except Exception as e:
+        log.warn(
+            "scheduler.ls_remote_error",
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            error=str(e),
+        )
+        return None
+
+
+def _should_rebuild(
+    repo_owner: str,
+    repo_name: str,
+    remote_sha: str,
+    all_images: list[dict],
+) -> bool:
+    """
+    Determine if a repo needs a rebuild based on current image status.
+
+    Returns True if a build should be triggered.
+    """
+    owner_lower = repo_owner.lower()
+    name_lower = repo_name.lower()
+
+    # Find images for this repo
+    repo_images = [
+        img
+        for img in all_images
+        if img.get("repo_owner", "").lower() == owner_lower
+        and img.get("repo_name", "").lower() == name_lower
+    ]
+
+    # Check if there's already a build in progress
+    building = [img for img in repo_images if img.get("status") == "building"]
+    if building:
+        log.info(
+            "scheduler.skip_building",
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            building_count=len(building),
+        )
+        return False
+
+    # Find latest ready image
+    ready = [img for img in repo_images if img.get("status") == "ready"]
+    if not ready:
+        # No ready image — always rebuild
+        log.info(
+            "scheduler.no_ready_image",
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+        )
+        return True
+
+    # Compare SHA
+    latest_ready = ready[0]  # getAllStatus returns ordered by created_at DESC
+    if latest_ready.get("base_sha") != remote_sha:
+        log.info(
+            "scheduler.sha_mismatch",
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            ready_sha=latest_ready.get("base_sha", "")[:12],
+            remote_sha=remote_sha[:12],
+        )
+        return True
+
+    log.info(
+        "scheduler.up_to_date",
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        sha=remote_sha[:12],
+    )
+    return False
+
+
+@app.function(
+    image=function_image,
+    schedule=modal.Cron("*/30 * * * *"),
+    secrets=[internal_api_secret, github_app_secrets],
+    timeout=300,  # 5 min — scheduler itself is fast, builds run async
+)
+async def rebuild_repo_images():
+    """
+    Every 30 minutes:
+    1. Fetch list of repos with image building enabled from control plane
+    2. Fetch current image status for all repos
+    3. For each enabled repo, check remote HEAD SHA via git ls-remote
+    4. If SHA differs from latest ready image, trigger a build
+    5. Mark stale builds as failed
+    6. Clean up old failed D1 rows
+    """
+    from ..auth.github_app import generate_installation_token
+
+    control_plane_url = os.environ.get("CONTROL_PLANE_URL", "")
+    if not control_plane_url:
+        log.error("scheduler.no_control_plane_url")
+        return
+
+    log.info("scheduler.start")
+    start_time = time.time()
+    builds_triggered = 0
+
+    try:
+        # 1. Get enabled repos
+        enabled_data = await _api_get(f"{control_plane_url}/repo-images/enabled-repos")
+        enabled_repos: list[dict] = enabled_data.get("repos", [])
+
+        if not enabled_repos:
+            log.info("scheduler.no_enabled_repos")
+            return
+
+        # 2. Get current image status (all repos)
+        status_data = await _api_get(f"{control_plane_url}/repo-images/status")
+        all_images: list[dict] = status_data.get("images", [])
+
+        # 3. Generate GitHub App token for ls-remote
+        clone_token = ""
+        try:
+            app_id = os.environ.get("GITHUB_APP_ID")
+            private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
+            installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID")
+
+            if app_id and private_key and installation_id:
+                clone_token = generate_installation_token(
+                    app_id=app_id,
+                    private_key=private_key,
+                    installation_id=installation_id,
+                )
+        except Exception as e:
+            log.warn("scheduler.github_token_error", error=str(e))
+
+        # 4. Check each enabled repo
+        for repo in enabled_repos:
+            repo_owner = repo.get("repoOwner", "")
+            repo_name = repo.get("repoName", "")
+
+            if not repo_owner or not repo_name:
+                continue
+
+            remote_sha = _git_ls_remote_sha(repo_owner, repo_name, "main", clone_token)
+            if not remote_sha:
+                continue
+
+            if _should_rebuild(repo_owner, repo_name, remote_sha, all_images):
+                try:
+                    await _api_post(
+                        f"{control_plane_url}/repo-images/trigger/{repo_owner}/{repo_name}",
+                    )
+                    builds_triggered += 1
+                    log.info(
+                        "scheduler.build_triggered",
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                    )
+                except Exception as e:
+                    log.error(
+                        "scheduler.trigger_error",
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        error=str(e),
+                    )
+
+        # 5. Mark stale builds as failed
+        try:
+            result = await _api_post(
+                f"{control_plane_url}/repo-images/mark-stale",
+                {"max_age_seconds": STALE_BUILD_THRESHOLD_SECONDS},
+            )
+            stale_count = result.get("markedFailed", 0)
+            if stale_count:
+                log.info("scheduler.stale_marked", count=stale_count)
+        except Exception as e:
+            log.warn("scheduler.mark_stale_error", error=str(e))
+
+        # 6. Clean up old failed builds
+        try:
+            result = await _api_post(
+                f"{control_plane_url}/repo-images/cleanup",
+                {"max_age_seconds": FAILED_BUILD_CLEANUP_SECONDS},
+            )
+            deleted = result.get("deleted", 0)
+            if deleted:
+                log.info("scheduler.cleanup", deleted=deleted)
+        except Exception as e:
+            log.warn("scheduler.cleanup_error", error=str(e))
+
+    except Exception as e:
+        log.error("scheduler.error", error=str(e))
+
+    duration_s = round(time.time() - start_time, 1)
+    log.info(
+        "scheduler.done",
+        builds_triggered=builds_triggered,
+        duration_s=duration_s,
+    )
