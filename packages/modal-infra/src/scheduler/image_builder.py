@@ -236,7 +236,8 @@ async def build_repo_image(
 
         # Callback: failure
         if callback_url:
-            failure_url = callback_url.replace("/build-complete", "/build-failed")
+            base_url = callback_url.rsplit("/", 1)[0]
+            failure_url = f"{base_url}/build-failed"
             await _callback_with_retry(
                 failure_url,
                 {
@@ -316,12 +317,15 @@ def _git_ls_remote_sha(
             timeout=30,
         )
         if result.returncode != 0:
+            stderr = result.stderr[:200]
+            if clone_token:
+                stderr = stderr.replace(clone_token, "***")
             log.warn(
                 "scheduler.ls_remote_failed",
                 repo_owner=repo_owner,
                 repo_name=repo_name,
                 branch=branch,
-                stderr=result.stderr[:200],
+                stderr=stderr,
             )
             return None
 

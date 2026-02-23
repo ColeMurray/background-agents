@@ -756,7 +756,7 @@ class SandboxSupervisor:
         try:
             # Update remote URL with fresh clone token
             if self.vcs_clone_token:
-                await asyncio.create_subprocess_exec(
+                set_url = await asyncio.create_subprocess_exec(
                     "git",
                     "remote",
                     "set-url",
@@ -766,6 +766,9 @@ class SandboxSupervisor:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
+                await set_url.communicate()
+                if set_url.returncode != 0:
+                    self.log.warn("git.set_url_failed", exit_code=set_url.returncode)
 
             # Fetch latest
             result = await asyncio.create_subprocess_exec(
