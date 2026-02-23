@@ -51,6 +51,14 @@ class BuildError(Exception):
     pass
 
 
+def _outbound_secret() -> str:
+    """Get INTERNAL_CALLBACK_SECRET for authenticating outbound calls to the control plane."""
+    secret = os.environ.get("INTERNAL_CALLBACK_SECRET")
+    if not secret:
+        raise RuntimeError("INTERNAL_CALLBACK_SECRET not configured")
+    return secret
+
+
 async def _callback_with_retry(
     url: str,
     payload: dict,
@@ -62,11 +70,13 @@ async def _callback_with_retry(
     Args:
         url: The callback URL to POST to
         payload: JSON body to send
-        secret: MODAL_API_SECRET for auth. If None, reads from env.
+        secret: INTERNAL_CALLBACK_SECRET for auth. If None, reads from env.
 
     Returns:
         True if the callback succeeded, False if all retries failed
     """
+    if secret is None:
+        secret = _outbound_secret()
     for attempt in range(CALLBACK_MAX_RETRIES):
         try:
             token = generate_internal_token(secret)
@@ -276,6 +286,8 @@ async def _api_get(
     secret: str | None = None,
 ) -> dict:
     """GET a control plane endpoint with HMAC auth."""
+    if secret is None:
+        secret = _outbound_secret()
     token = generate_internal_token(secret)
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.get(
@@ -292,6 +304,8 @@ async def _api_post(
     secret: str | None = None,
 ) -> dict:
     """POST to a control plane endpoint with HMAC auth."""
+    if secret is None:
+        secret = _outbound_secret()
     token = generate_internal_token(secret)
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(

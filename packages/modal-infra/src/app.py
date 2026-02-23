@@ -41,12 +41,13 @@ github_app_secrets = modal.Secret.from_name(
     required_keys=["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_APP_INSTALLATION_ID"],
 )
 
-# Secret for internal API authentication (control plane -> Modal)
-# Used to verify requests from the control plane to Modal endpoints
+# Secret for internal API authentication (bidirectional)
+# MODAL_API_SECRET: verify requests from control plane to Modal endpoints
+# INTERNAL_CALLBACK_SECRET: sign requests from Modal to control plane
 # Also contains ALLOWED_CONTROL_PLANE_HOSTS for URL validation
 internal_api_secret = modal.Secret.from_name(
     "internal-api",
-    required_keys=["MODAL_API_SECRET"],
+    required_keys=["MODAL_API_SECRET", "INTERNAL_CALLBACK_SECRET"],
 )
 
 
