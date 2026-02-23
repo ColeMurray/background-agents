@@ -15,7 +15,9 @@ function buildUntrustedUserContentBlock(params: {
   content: string;
 }): string {
   const { source, author, content } = params;
-  const escapedContent = content.replaceAll("</user_content>", "<\\/user_content>");
+  const escapedContent = content
+    .replaceAll("<user_content", "<\\user_content")
+    .replaceAll("</user_content>", "<\\/user_content>");
 
   return `<user_content source="${source}" author="${author}">
 ${escapedContent}
