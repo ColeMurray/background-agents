@@ -6,6 +6,6 @@ import { env } from "cloudflare:test";
  */
 export async function cleanD1Tables(): Promise<void> {
   await env.DB.exec(
-    "DELETE FROM sessions; DELETE FROM repo_metadata; DELETE FROM repo_secrets; DELETE FROM global_secrets; DELETE FROM integration_settings; DELETE FROM integration_repo_settings;"
+    "DELETE FROM sessions; DELETE FROM repo_metadata; DELETE FROM repo_secrets; DELETE FROM global_secrets; DELETE FROM integration_settings; DELETE FROM integration_repo_settings; DELETE FROM repo_images;"
   );
 }
