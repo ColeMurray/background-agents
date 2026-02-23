@@ -21,6 +21,7 @@ The scheduler flow:
 """
 
 import asyncio
+import json
 import os
 import subprocess
 import time
@@ -138,25 +139,28 @@ def _generate_clone_token() -> str:
     return ""
 
 
-def _read_sandbox_head_sha(sandbox, repo_name: str) -> str:
+def _parse_head_sha_from_logs(sandbox) -> str:
     """
-    Read the git HEAD SHA from a sandbox by executing git rev-parse.
+    Parse the HEAD SHA from sandbox stdout after the sandbox has exited.
 
-    Args:
-        sandbox: A modal.Sandbox instance
-        repo_name: Repository name (used to construct /workspace/{repo_name} path)
+    The entrypoint logs a structured JSON line with event="git.sync_complete"
+    and a "head_sha" field. We read all stdout and parse that line.
 
-    Returns:
-        The HEAD SHA string, or empty string on failure
+    Returns the SHA string, or empty string if not found.
     """
     try:
-        repo_path = f"/workspace/{repo_name}"
-        process = sandbox.exec("git", "-C", repo_path, "rev-parse", "HEAD")
-        stdout = process.stdout.read().strip()
-        return stdout
+        for line in sandbox.stdout:
+            if "git.sync_complete" not in line:
+                continue
+            try:
+                entry = json.loads(line)
+                if entry.get("event") == "git.sync_complete" and entry.get("head_sha"):
+                    return entry["head_sha"]
+            except json.JSONDecodeError:
+                continue
     except Exception as e:
-        log.warn("sandbox.read_sha_error", error=str(e))
-        return ""
+        log.warn("build.parse_sha_error", error=str(e))
+    return ""
 
 
 @app.function(
@@ -219,8 +223,8 @@ async def build_repo_image(
         if exit_code != 0:
             raise BuildError(f"Build sandbox exited with code {exit_code}")
 
-        # 4. Get base SHA via ls-remote (can't exec into terminated sandbox)
-        base_sha = _git_ls_remote_sha(repo_owner, repo_name, default_branch, clone_token) or ""
+        # 4. Parse base SHA from sandbox stdout (exact commit that was cloned)
+        base_sha = _parse_head_sha_from_logs(handle.modal_sandbox)
 
         # 5. Snapshot filesystem
         image = await handle.modal_sandbox.snapshot_filesystem.aio()

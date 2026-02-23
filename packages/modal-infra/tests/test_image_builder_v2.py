@@ -1,5 +1,6 @@
 """Tests for the async image builder (v2)."""
 
+import json
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,7 +13,7 @@ from src.scheduler.image_builder import (
     CALLBACK_MAX_RETRIES,
     BuildError,
     _callback_with_retry,
-    _read_sandbox_head_sha,
+    _parse_head_sha_from_logs,
 )
 
 
@@ -168,31 +169,54 @@ class TestCallbackWithRetry:
         assert verify_internal_token(token, "test-secret") is True
 
 
-class TestReadSandboxHeadSha:
-    """Test the _read_sandbox_head_sha function."""
+class TestParseHeadShaFromLogs:
+    """Test the _parse_head_sha_from_logs function."""
 
-    def test_reads_sha_from_sandbox(self):
-        """Should read HEAD SHA via sandbox exec."""
-        mock_process = MagicMock()
-        mock_process.stdout.read.return_value = "abc123def456\n"
-
+    def test_parses_sha_from_structured_log(self):
+        """Should parse head_sha from git.sync_complete log line."""
+        log_lines = [
+            json.dumps({"level": "info", "event": "supervisor.start"}),
+            json.dumps({"level": "info", "event": "git.clone_start"}),
+            json.dumps({"level": "info", "event": "git.sync_complete", "head_sha": "abc123def456"}),
+            json.dumps({"level": "info", "event": "image_build.complete"}),
+        ]
         mock_sandbox = MagicMock()
-        mock_sandbox.exec.return_value = mock_process
+        mock_sandbox.stdout = iter(log_lines)
 
-        sha = _read_sandbox_head_sha(mock_sandbox, "my-repo")
+        sha = _parse_head_sha_from_logs(mock_sandbox)
         assert sha == "abc123def456"
 
-        mock_sandbox.exec.assert_called_once_with(
-            "git", "-C", "/workspace/my-repo", "rev-parse", "HEAD"
-        )
+    def test_returns_empty_when_no_sync_complete(self):
+        """Should return empty string if git.sync_complete not found."""
+        log_lines = [
+            json.dumps({"level": "info", "event": "supervisor.start"}),
+            json.dumps({"level": "info", "event": "image_build.complete"}),
+        ]
+        mock_sandbox = MagicMock()
+        mock_sandbox.stdout = iter(log_lines)
+
+        sha = _parse_head_sha_from_logs(mock_sandbox)
+        assert sha == ""
 
     def test_returns_empty_on_error(self):
         """Should return empty string on error."""
         mock_sandbox = MagicMock()
-        mock_sandbox.exec.side_effect = Exception("sandbox not running")
+        mock_sandbox.stdout = MagicMock(side_effect=Exception("stream error"))
 
-        sha = _read_sandbox_head_sha(mock_sandbox, "my-repo")
+        sha = _parse_head_sha_from_logs(mock_sandbox)
         assert sha == ""
+
+    def test_handles_malformed_json(self):
+        """Should skip malformed JSON lines."""
+        log_lines = [
+            "not json at all",
+            json.dumps({"level": "info", "event": "git.sync_complete", "head_sha": "abc123"}),
+        ]
+        mock_sandbox = MagicMock()
+        mock_sandbox.stdout = iter(log_lines)
+
+        sha = _parse_head_sha_from_logs(mock_sandbox)
+        assert sha == "abc123"
 
 
 class TestBuildError:
