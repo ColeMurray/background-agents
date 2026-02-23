@@ -19,12 +19,16 @@ app = modal.App("open-inspect")
 
 # Image for Modal functions (not sandbox)
 # Includes all dependencies needed by the function modules at import time
-function_image = modal.Image.debian_slim(python_version="3.12").pip_install(
-    "pydantic>=2.0",
-    "httpx",
-    "fastapi",
-    "modal",  # Required for sandbox.manager imports
-    "PyJWT[crypto]",  # For GitHub App token generation
+function_image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .apt_install("git")  # For scheduler git ls-remote checks
+    .pip_install(
+        "pydantic>=2.0",
+        "httpx",
+        "fastapi",
+        "modal",  # Required for sandbox.manager imports
+        "PyJWT[crypto]",  # For GitHub App token generation
+    )
 )
 
 # Secrets for LLM API keys - defined in Modal dashboard or CLI
