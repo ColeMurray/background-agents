@@ -225,6 +225,13 @@ variable "cursor_cli_enabled" {
   default     = true
 }
 
+variable "doppler_token" {
+  description = "Doppler service token for sandbox runtime CLI access"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 # =============================================================================
 # Security Secrets
 # =============================================================================

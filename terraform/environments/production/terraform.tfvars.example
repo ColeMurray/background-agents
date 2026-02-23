@@ -115,6 +115,9 @@ cursor_api_key = ""
 # Enable Cursor CLI route for cursor-routed prompts
 cursor_cli_enabled = true
 
+# Doppler API token
+doppler_token = ""
+
 # =============================================================================
 # Security Secrets
 # =============================================================================

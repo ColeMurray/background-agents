@@ -484,6 +484,7 @@ export class SessionDO extends DurableObject<Env> {
       sessionId,
       cursorCliEnabled: this.env.CURSOR_CLI_ENABLED !== "false",
       cursorApiKey: this.env.CURSOR_API_KEY,
+      dopplerToken: this.env.DOPPLER_TOKEN,
       inactivity: {
         ...DEFAULT_LIFECYCLE_CONFIG.inactivity,
         timeoutMs: parseInt(this.env.SANDBOX_INACTIVITY_TIMEOUT_MS || "600000", 10),

@@ -53,6 +53,7 @@ export interface Env {
   CURSOR_FALLBACK_COOLDOWN_MS?: string; // Provider fallback cooldown in ms (default: 900000)
   CURSOR_CLI_ENABLED?: string; // Feature flag: "true" | "false" (default: true)
   CURSOR_API_KEY?: string; // Cursor CLI API key for in-sandbox agent auth
+  DOPPLER_TOKEN?: string; // Doppler service token for in-sandbox Doppler CLI auth
 
   // Logging
   LOG_LEVEL?: string; // "debug" | "info" | "warn" | "error" (default: "info")

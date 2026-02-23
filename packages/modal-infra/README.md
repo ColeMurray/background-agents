@@ -37,6 +37,7 @@ Base image definition with:
 - Node.js 22, pnpm, Bun
 - Python 3.12 with uv
 - OpenCode CLI
+- Doppler CLI
 - Playwright + headless Chrome
 
 ### Sandbox (`src/sandbox/`)
@@ -162,6 +163,11 @@ Set via Modal secrets:
 | `GITHUB_APP_INSTALLATION_ID` | `github-app` | GitHub App installation ID |
 | `MODAL_API_SECRET` | `internal-api` | Shared secret for control plane auth |
 | `ALLOWED_CONTROL_PLANE_HOSTS` | `internal-api` | Comma-separated allowed hostnames for URL validation |
+
+`DOPPLER_TOKEN` is expected at sandbox runtime via the existing control-plane global/repo secret
+injection flow. On shell startup, the sandbox configures Doppler with:
+`printf '%s' \"$DOPPLER_TOKEN\" | doppler configure set token --scope /`.
+Wrapper commands (for example `with-dev-env`) can then call Doppler directly in sessions.
 
 ## Verification Criteria
 

@@ -143,6 +143,8 @@ export interface SandboxLifecycleConfig {
   cursorCliEnabled?: boolean;
   /** Cursor API key injected into sandbox for Cursor CLI auth. */
   cursorApiKey?: string;
+  /** Doppler token injected into sandbox for Doppler CLI auth. */
+  dopplerToken?: string;
 }
 
 /**
@@ -210,6 +212,10 @@ export class SandboxLifecycleManager {
       }
     } else {
       merged["CURSOR_CLI_ENABLED"] = "false";
+    }
+
+    if (this.config.dopplerToken) {
+      merged["DOPPLER_TOKEN"] = this.config.dopplerToken;
     }
 
     return Object.keys(merged).length > 0 ? merged : undefined;

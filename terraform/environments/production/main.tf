@@ -173,6 +173,7 @@ module "control_plane_worker" {
     { name = "INTERNAL_CALLBACK_SECRET", value = var.internal_callback_secret },
     { name = "CLOUDFLARE_AI_SEARCH_API_TOKEN", value = var.cloudflare_ai_search_api_token },
     { name = "CURSOR_API_KEY", value = var.cursor_api_key },
+    { name = "DOPPLER_TOKEN", value = var.doppler_token },
     # GitHub App credentials for /repos endpoint (listInstallationRepositories)
     { name = "GITHUB_APP_ID", value = var.github_app_id },
     { name = "GITHUB_APP_PRIVATE_KEY", value = var.github_app_private_key },

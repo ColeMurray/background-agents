@@ -23,8 +23,8 @@ SANDBOX_DIR = Path(__file__).parent.parent / "sandbox"
 OPENCODE_VERSION = "latest"
 
 # Cache buster - change this to force Modal image rebuild
-# v40: Install Cursor Agent CLI for cursor-routed prompts
-CACHE_BUSTER = "v40-cursor-cli"
+# v41: Install Doppler CLI for wrapper-based env loading
+CACHE_BUSTER = "v41-doppler-cli"
 
 # Base image with all development tools
 base_image = (
@@ -109,15 +109,21 @@ base_image = (
         "curl https://cursor.com/install -fsS | bash",
         "agent --version || echo 'Cursor CLI installed'",
     )
+    # Install Doppler CLI for wrapper-based env loading (with-dev-env style flows)
+    .run_commands(
+        "curl -Ls --tlsv1.2 --proto '=https' --retry 3 https://cli.doppler.com/install.sh | sh",
+        "doppler --version || echo 'Doppler CLI installed'",
+        # Configure Doppler from DOPPLER_TOKEN at shell startup (runtime only, never baked into image)
+        "echo '#!/usr/bin/env bash' > /etc/profile.d/doppler.sh",
+        "echo 'if command -v doppler >/dev/null 2>&1 && [ -n \"${DOPPLER_TOKEN:-}\" ]; then' >> /etc/profile.d/doppler.sh",
+        'echo \'  printf "%%s" "$DOPPLER_TOKEN" | doppler configure set token --scope / >/dev/null 2>&1 || true\' >> /etc/profile.d/doppler.sh',
+        "echo 'fi' >> /etc/profile.d/doppler.sh",
+        "chmod +x /etc/profile.d/doppler.sh",
+    )
     # Install Playwright browsers (Chromium only to save space)
     .run_commands(
         "playwright install chromium",
         "playwright install-deps chromium",
-    )
-    # Install Doppler CLI
-    .run_commands(
-        "curl -fsSL https://cli.doppler.com/install.sh | bash",
-        "doppler --version || echo 'Doppler CLI installed'",
     )
     # Create working directories
     .run_commands(
