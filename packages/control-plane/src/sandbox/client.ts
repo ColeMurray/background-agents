@@ -67,6 +67,28 @@ export interface WarmSandboxResponse {
   status: string;
 }
 
+export interface BuildRepoImageRequest {
+  repoOwner: string;
+  repoName: string;
+  defaultBranch?: string;
+  buildId: string;
+  callbackUrl: string;
+}
+
+export interface BuildRepoImageResponse {
+  buildId: string;
+  status: string;
+}
+
+export interface DeleteProviderImageRequest {
+  providerImageId: string;
+}
+
+export interface DeleteProviderImageResponse {
+  providerImageId: string;
+  deleted: boolean;
+}
+
 export interface SnapshotInfo {
   id: string;
   repoOwner: string;
@@ -95,6 +117,8 @@ export class ModalClient {
   private snapshotUrl: string;
   private snapshotSandboxUrl: string;
   private restoreSandboxUrl: string;
+  private buildRepoImageUrl: string;
+  private deleteProviderImageUrl: string;
   private secret: string;
 
   constructor(secret: string, workspace: string) {
@@ -112,6 +136,8 @@ export class ModalClient {
     this.snapshotUrl = `${baseUrl}-api-snapshot.modal.run`;
     this.snapshotSandboxUrl = `${baseUrl}-api-snapshot-sandbox.modal.run`;
     this.restoreSandboxUrl = `${baseUrl}-api-restore-sandbox.modal.run`;
+    this.buildRepoImageUrl = `${baseUrl}-api-build-repo-image.modal.run`;
+    this.deleteProviderImageUrl = `${baseUrl}-api-delete-provider-image.modal.run`;
   }
 
   /**
@@ -126,6 +152,20 @@ export class ModalClient {
    */
   getRestoreSandboxUrl(): string {
     return this.restoreSandboxUrl;
+  }
+
+  /**
+   * Get the URL for the build repo image endpoint.
+   */
+  getBuildRepoImageUrl(): string {
+    return this.buildRepoImageUrl;
+  }
+
+  /**
+   * Get the URL for the delete provider image endpoint.
+   */
+  getDeleteProviderImageUrl(): string {
+    return this.deleteProviderImageUrl;
   }
 
   /**
@@ -342,6 +382,126 @@ export class ModalClient {
     }
 
     return result.data || null;
+  }
+
+  /**
+   * Trigger an async image build on Modal.
+   */
+  async buildRepoImage(
+    request: BuildRepoImageRequest,
+    correlation?: CorrelationHeaders
+  ): Promise<BuildRepoImageResponse> {
+    const startTime = Date.now();
+    const endpoint = "buildRepoImage";
+    let httpStatus: number | undefined;
+    let outcome: "success" | "error" = "error";
+
+    try {
+      const headers = await this.getPostHeaders(correlation);
+      const response = await fetch(this.buildRepoImageUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          repo_owner: request.repoOwner,
+          repo_name: request.repoName,
+          default_branch: request.defaultBranch || "main",
+          build_id: request.buildId,
+          callback_url: request.callbackUrl,
+        }),
+      });
+
+      httpStatus = response.status;
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Modal API error: ${response.status} ${text}`);
+      }
+
+      const result = (await response.json()) as ModalApiResponse<{
+        build_id: string;
+        status: string;
+      }>;
+
+      if (!result.success || !result.data) {
+        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
+      }
+
+      outcome = "success";
+      return {
+        buildId: result.data.build_id,
+        status: result.data.status,
+      };
+    } finally {
+      log.info("modal.request", {
+        event: "modal.request",
+        endpoint,
+        build_id: request.buildId,
+        repo_owner: request.repoOwner,
+        repo_name: request.repoName,
+        trace_id: correlation?.trace_id,
+        request_id: correlation?.request_id,
+        http_status: httpStatus,
+        duration_ms: Date.now() - startTime,
+        outcome,
+      });
+    }
+  }
+
+  /**
+   * Delete a provider image (best-effort).
+   */
+  async deleteProviderImage(
+    request: DeleteProviderImageRequest,
+    correlation?: CorrelationHeaders
+  ): Promise<DeleteProviderImageResponse> {
+    const startTime = Date.now();
+    const endpoint = "deleteProviderImage";
+    let httpStatus: number | undefined;
+    let outcome: "success" | "error" = "error";
+
+    try {
+      const headers = await this.getPostHeaders(correlation);
+      const response = await fetch(this.deleteProviderImageUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          provider_image_id: request.providerImageId,
+        }),
+      });
+
+      httpStatus = response.status;
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Modal API error: ${response.status} ${text}`);
+      }
+
+      const result = (await response.json()) as ModalApiResponse<{
+        provider_image_id: string;
+        deleted: boolean;
+      }>;
+
+      if (!result.success || !result.data) {
+        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
+      }
+
+      outcome = "success";
+      return {
+        providerImageId: result.data.provider_image_id,
+        deleted: result.data.deleted,
+      };
+    } finally {
+      log.info("modal.request", {
+        event: "modal.request",
+        endpoint,
+        provider_image_id: request.providerImageId,
+        trace_id: correlation?.trace_id,
+        request_id: correlation?.request_id,
+        http_status: httpStatus,
+        duration_ms: Date.now() - startTime,
+        outcome,
+      });
+    }
   }
 }
 

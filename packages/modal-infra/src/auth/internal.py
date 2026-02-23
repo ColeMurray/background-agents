@@ -47,6 +47,40 @@ def require_secret() -> str:
     return secret
 
 
+def generate_internal_token(secret: str | None = None) -> str:
+    """
+    Generate an internal API token for service-to-service calls.
+
+    Token format: `timestamp.signature` where:
+    - timestamp: Unix milliseconds when the token was generated
+    - signature: HMAC-SHA256 of the timestamp using the shared secret (hex encoded)
+
+    This mirrors the TypeScript implementation in packages/shared/src/auth.ts.
+
+    Args:
+        secret: The shared secret for HMAC signing. If not provided, reads from
+                MODAL_API_SECRET environment variable.
+
+    Returns:
+        A token string in the format "timestamp.signature"
+
+    Raises:
+        AuthConfigurationError: If secret is not provided and MODAL_API_SECRET is not set
+    """
+    if secret is None:
+        secret = require_secret()
+
+    timestamp_str = str(int(time.time() * 1000))
+
+    signature = hmac.new(
+        secret.encode("utf-8"),
+        timestamp_str.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+    return f"{timestamp_str}.{signature}"
+
+
 def verify_internal_token(auth_header: str | None, secret: str | None = None) -> bool:
     """
     Verify an internal API token from the Authorization header.
