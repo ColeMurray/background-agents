@@ -622,7 +622,7 @@ async def api_build_repo_image(
             raise HTTPException(status_code=400, detail="build_id is required")
 
         # Spawn the async builder — returns immediately
-        build_repo_image.spawn(
+        await build_repo_image.spawn.aio(
             repo_owner=repo_owner,
             repo_name=repo_name,
             default_branch=default_branch,
