@@ -102,6 +102,26 @@ async def _callback_with_retry(
     return False
 
 
+def _generate_clone_token() -> str:
+    """Generate a GitHub App install token for git operations. Returns empty string on failure."""
+    from ..auth.github_app import generate_installation_token
+
+    try:
+        app_id = os.environ.get("GITHUB_APP_ID")
+        private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
+        installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID")
+
+        if app_id and private_key and installation_id:
+            return generate_installation_token(
+                app_id=app_id,
+                private_key=private_key,
+                installation_id=installation_id,
+            )
+    except Exception as e:
+        log.warn("github.token_error", error=str(e))
+    return ""
+
+
 def _read_sandbox_head_sha(sandbox) -> str:
     """
     Read the git HEAD SHA from a sandbox by executing git rev-parse.
@@ -146,30 +166,15 @@ async def build_repo_image(
         callback_url: URL to POST success result to
         build_id: Build identifier from the control plane
     """
-    from ..auth.github_app import generate_installation_token
     from ..sandbox.manager import SandboxManager
 
     start_time = time.time()
     manager = SandboxManager()
 
     try:
-        # 1. Generate GitHub App install token for clone
-        clone_token = ""
-        try:
-            app_id = os.environ.get("GITHUB_APP_ID")
-            private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
-            installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID")
+        clone_token = _generate_clone_token()
 
-            if app_id and private_key and installation_id:
-                clone_token = generate_installation_token(
-                    app_id=app_id,
-                    private_key=private_key,
-                    installation_id=installation_id,
-                )
-        except Exception as e:
-            log.warn("github.token_error", error=str(e))
-
-        # 2. Create build sandbox
+        # Create build sandbox
         log.info(
             "build.start",
             build_id=build_id,
@@ -391,12 +396,6 @@ def _should_rebuild(
         )
         return True
 
-    log.info(
-        "scheduler.up_to_date",
-        repo_owner=repo_owner,
-        repo_name=repo_name,
-        sha=remote_sha[:12],
-    )
     return False
 
 
@@ -416,8 +415,6 @@ async def rebuild_repo_images():
     5. Mark stale builds as failed
     6. Clean up old failed D1 rows
     """
-    from ..auth.github_app import generate_installation_token
-
     control_plane_url = os.environ.get("CONTROL_PLANE_URL", "")
     if not control_plane_url:
         log.error("scheduler.no_control_plane_url")
@@ -441,20 +438,7 @@ async def rebuild_repo_images():
         all_images: list[dict] = status_data.get("images", [])
 
         # 3. Generate GitHub App token for ls-remote
-        clone_token = ""
-        try:
-            app_id = os.environ.get("GITHUB_APP_ID")
-            private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
-            installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID")
-
-            if app_id and private_key and installation_id:
-                clone_token = generate_installation_token(
-                    app_id=app_id,
-                    private_key=private_key,
-                    installation_id=installation_id,
-                )
-        except Exception as e:
-            log.warn("scheduler.github_token_error", error=str(e))
+        clone_token = _generate_clone_token()
 
         # 4. Check each enabled repo
         for repo in enabled_repos:

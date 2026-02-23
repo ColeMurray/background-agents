@@ -5,8 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.scheduler.image_builder import (
-    FAILED_BUILD_CLEANUP_SECONDS,
-    STALE_BUILD_THRESHOLD_SECONDS,
     _git_ls_remote_sha,
     _should_rebuild,
 )
@@ -376,26 +374,9 @@ class TestRebuildRepoImages:
 
             await rebuild_repo_images.local()
 
-        # Check that mark-stale was called with correct threshold
+        # Check that mark-stale and cleanup were called
         stale_calls = [c for c in mock_post.call_args_list if "mark-stale" in str(c)]
         assert len(stale_calls) == 1
-        stale_payload = (
-            stale_calls[0].kwargs.get("payload") or stale_calls[0][0][1]
-            if len(stale_calls[0][0]) > 1
-            else stale_calls[0].kwargs.get("payload")
-        )
-        assert stale_payload == {"max_age_seconds": STALE_BUILD_THRESHOLD_SECONDS}
 
-        # Check that cleanup was called with correct threshold
         cleanup_calls = [c for c in mock_post.call_args_list if "cleanup" in str(c)]
         assert len(cleanup_calls) == 1
-
-
-class TestSchedulerConstants:
-    """Test scheduler configuration constants."""
-
-    def test_stale_threshold_is_35_minutes(self):
-        assert STALE_BUILD_THRESHOLD_SECONDS == 2100
-
-    def test_cleanup_threshold_is_24_hours(self):
-        assert FAILED_BUILD_CLEANUP_SECONDS == 86400

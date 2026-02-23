@@ -155,20 +155,6 @@ export class ModalClient {
   }
 
   /**
-   * Get the URL for the build repo image endpoint.
-   */
-  getBuildRepoImageUrl(): string {
-    return this.buildRepoImageUrl;
-  }
-
-  /**
-   * Get the URL for the delete provider image endpoint.
-   */
-  getDeleteProviderImageUrl(): string {
-    return this.deleteProviderImageUrl;
-  }
-
-  /**
    * Generate authentication headers for POST/PUT requests (includes Content-Type).
    */
   private async getPostHeaders(correlation?: CorrelationHeaders): Promise<Record<string, string>> {

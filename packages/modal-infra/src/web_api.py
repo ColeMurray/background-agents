@@ -693,32 +693,19 @@ async def api_delete_provider_image(
         raise HTTPException(status_code=400, detail="provider_image_id is required")
 
     try:
-        import modal
-
-        # Best-effort deletion — log but don't fail if the image doesn't exist
-        try:
-            modal.Image.from_id(provider_image_id)
-            # Modal doesn't have an explicit delete API for images;
-            # images are garbage-collected when no longer referenced.
-            # We log the request for auditability.
-            log.info(
-                "image.delete_requested",
-                provider_image_id=provider_image_id,
-            )
-            deleted = True
-        except Exception as e:
-            log.warn(
-                "image.delete_error",
-                provider_image_id=provider_image_id,
-                error=str(e),
-            )
-            deleted = False
+        # Modal doesn't have an explicit delete API for images;
+        # images are garbage-collected when no longer referenced.
+        # We log the request for auditability.
+        log.info(
+            "image.delete_requested",
+            provider_image_id=provider_image_id,
+        )
 
         return {
             "success": True,
             "data": {
                 "provider_image_id": provider_image_id,
-                "deleted": deleted,
+                "deleted": True,
             },
         }
     except HTTPException as e:

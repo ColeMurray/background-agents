@@ -63,7 +63,6 @@ async function handleBuildComplete(
     );
 
     logger.info("repo_image.build_complete", {
-      event: "repo_image.build_complete",
       build_id: buildId,
       provider_image_id: providerImageId,
       base_sha: baseSha,
@@ -133,7 +132,6 @@ async function handleBuildFailed(
     await store.markFailed(buildId, body.error || "Unknown error");
 
     logger.info("repo_image.build_failed", {
-      event: "repo_image.build_failed",
       build_id: buildId,
       error_message: body.error,
       request_id: ctx.request_id,
@@ -208,7 +206,6 @@ async function handleTriggerBuild(
     );
 
     logger.info("repo_image.build_triggered", {
-      event: "repo_image.build_triggered",
       build_id: buildId,
       repo_owner: owner,
       repo_name: name,
@@ -298,7 +295,6 @@ async function handleMarkStale(
     const count = await store.markStaleBuildsAsFailed(maxAgeMs);
 
     logger.info("repo_image.stale_marked", {
-      event: "repo_image.stale_marked",
       count,
       max_age_seconds: maxAgeSeconds,
       request_id: ctx.request_id,
@@ -346,7 +342,6 @@ async function handleCleanup(
     const count = await store.deleteOldFailedBuilds(maxAgeMs);
 
     logger.info("repo_image.cleanup", {
-      event: "repo_image.cleanup",
       deleted: count,
       max_age_seconds: maxAgeSeconds,
       request_id: ctx.request_id,
