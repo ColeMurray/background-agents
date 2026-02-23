@@ -32,6 +32,7 @@ import {
 import { integrationSettingsRoutes } from "./routes/integration-settings";
 import { modelPreferencesRoutes } from "./routes/model-preferences";
 import { reposRoutes } from "./routes/repos";
+import { repoImageRoutes } from "./routes/repo-images";
 import { secretsRoutes } from "./routes/secrets";
 
 const logger = createLogger("router");
@@ -385,6 +386,9 @@ const routes: Route[] = [
 
   // Integration settings
   ...integrationSettingsRoutes,
+
+  // Repo image builds
+  ...repoImageRoutes,
 ];
 
 /**

@@ -149,6 +149,19 @@ export const DEFAULT_LIFECYCLE_CONFIG: Omit<SandboxLifecycleConfig, "controlPlan
   heartbeat: DEFAULT_HEARTBEAT_CONFIG,
 };
 
+// ==================== Repo Image Lookup ====================
+
+/**
+ * Lookup interface for pre-built repo images.
+ * Returns the latest ready image for a repo, if any.
+ */
+export interface RepoImageLookup {
+  getLatestReady(
+    repoOwner: string,
+    repoName: string
+  ): Promise<{ provider_image_id: string; base_sha: string } | null>;
+}
+
 // ==================== Callbacks ====================
 
 /**
@@ -187,7 +200,8 @@ export class SandboxLifecycleManager {
     private readonly alarmScheduler: AlarmScheduler,
     private readonly idGenerator: IdGenerator,
     private readonly config: SandboxLifecycleConfig,
-    private readonly callbacks: LifecycleCallbacks = {}
+    private readonly callbacks: LifecycleCallbacks = {},
+    private readonly repoImageLookup?: RepoImageLookup
   ) {
     this.log = config.sessionId ? log.child({ session_id: config.sessionId }) : log;
   }
@@ -314,6 +328,30 @@ export class SandboxLifecycleManager {
       const userEnvVars = await this.storage.getUserEnvVars();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
 
+      // Look up pre-built repo image (graceful fallback on failure)
+      let repoImageId: string | null = null;
+      let repoImageSha: string | null = null;
+      if (this.repoImageLookup) {
+        try {
+          const repoImage = await this.repoImageLookup.getLatestReady(
+            session.repo_owner,
+            session.repo_name
+          );
+          if (repoImage) {
+            repoImageId = repoImage.provider_image_id;
+            repoImageSha = repoImage.base_sha;
+            this.log.info("Using pre-built repo image", {
+              provider_image_id: repoImageId,
+              base_sha: repoImageSha,
+            });
+          }
+        } catch (e) {
+          this.log.warn("Failed to look up repo image, using base image", {
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+
       // Create sandbox via provider
       const createConfig: CreateSandboxConfig = {
         sessionId,
@@ -325,6 +363,8 @@ export class SandboxLifecycleManager {
         provider,
         model: modelId,
         userEnvVars,
+        repoImageId,
+        repoImageSha,
       };
 
       const result = await this.provider.createSandbox(createConfig);

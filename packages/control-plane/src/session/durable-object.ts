@@ -23,7 +23,9 @@ import {
   type WebSocketManager,
   type AlarmScheduler,
   type IdGenerator,
+  type RepoImageLookup,
 } from "../sandbox/lifecycle/manager";
+import { RepoImageStore } from "../db/repo-images";
 import {
   evaluateExecutionTimeout,
   DEFAULT_EXECUTION_TIMEOUT_MS,
@@ -436,6 +438,15 @@ export class SessionDO extends DurableObject<Env> {
       },
     };
 
+    // Create repo image lookup if D1 is available
+    let repoImageLookup: RepoImageLookup | undefined;
+    if (this.env.DB) {
+      const repoImageStore = new RepoImageStore(this.env.DB);
+      repoImageLookup = {
+        getLatestReady: (repoOwner, repoName) => repoImageStore.getLatestReady(repoOwner, repoName),
+      };
+    }
+
     return new SandboxLifecycleManager(
       provider,
       storage,
@@ -446,7 +457,8 @@ export class SessionDO extends DurableObject<Env> {
       config,
       {
         onSandboxTerminating: () => this.messageQueue.failStuckProcessingMessage(),
-      }
+      },
+      repoImageLookup
     );
   }
 

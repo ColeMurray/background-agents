@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { env } from "cloudflare:test";
+import { SELF, env } from "cloudflare:test";
+import { generateInternalToken } from "../../src/auth/internal";
 import { RepoImageStore } from "../../src/db/repo-images";
 import { cleanD1Tables } from "./cleanup";
 
@@ -222,5 +223,181 @@ describe("D1 RepoImageStore", () => {
 
     expect(readyA!.provider_image_id).toBe("modal-a");
     expect(readyB!.provider_image_id).toBe("modal-b");
+  });
+});
+
+// ==================== HTTP Route Tests ====================
+
+async function authHeaders(): Promise<Record<string, string>> {
+  const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
+  return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+}
+
+describe("Repo image HTTP routes", () => {
+  let store: RepoImageStore;
+
+  beforeEach(async () => {
+    await cleanD1Tables();
+    store = new RepoImageStore(env.DB);
+  });
+
+  it("POST /repo-images/build-complete marks build as ready", async () => {
+    await store.registerBuild({
+      id: "img-test-1",
+      repoOwner: "acme",
+      repoName: "repo",
+      baseBranch: "main",
+    });
+
+    const response = await SELF.fetch("https://test.local/repo-images/build-complete", {
+      method: "POST",
+      headers: await authHeaders(),
+      body: JSON.stringify({
+        build_id: "img-test-1",
+        provider_image_id: "modal-img-xyz",
+        base_sha: "abc123",
+        build_duration_seconds: 45.5,
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json<{ ok: boolean; replacedImageId: string | null }>();
+    expect(body.ok).toBe(true);
+    expect(body.replacedImageId).toBeNull();
+
+    const ready = await store.getLatestReady("acme", "repo");
+    expect(ready).not.toBeNull();
+    expect(ready!.provider_image_id).toBe("modal-img-xyz");
+  });
+
+  it("POST /repo-images/build-failed marks build as failed", async () => {
+    await store.registerBuild({
+      id: "img-test-2",
+      repoOwner: "acme",
+      repoName: "repo",
+      baseBranch: "main",
+    });
+
+    const response = await SELF.fetch("https://test.local/repo-images/build-failed", {
+      method: "POST",
+      headers: await authHeaders(),
+      body: JSON.stringify({
+        build_id: "img-test-2",
+        error: "npm install failed",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json<{ ok: boolean }>();
+    expect(body.ok).toBe(true);
+
+    const status = await store.getStatus("acme", "repo");
+    const failed = status.find((r) => r.id === "img-test-2");
+    expect(failed!.status).toBe("failed");
+    expect(failed!.error_message).toBe("npm install failed");
+  });
+
+  it("GET /repo-images/status returns images for a repo", async () => {
+    await store.registerBuild({
+      id: "img-s1",
+      repoOwner: "acme",
+      repoName: "repo",
+      baseBranch: "main",
+    });
+    await store.markReady("img-s1", "modal-img-1", "sha1", 30);
+
+    const headers = await authHeaders();
+    delete (headers as Record<string, string | undefined>)["Content-Type"];
+
+    const response = await SELF.fetch(
+      "https://test.local/repo-images/status?repo_owner=acme&repo_name=repo",
+      { headers }
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json<{ images: unknown[] }>();
+    expect(body.images.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("POST /repo-images/mark-stale marks old building rows", async () => {
+    await env.DB.prepare(
+      "INSERT INTO repo_images (id, repo_owner, repo_name, base_branch, provider_image_id, status, base_sha, created_at) VALUES (?, ?, ?, ?, '', 'building', '', ?)"
+    )
+      .bind("img-stale-route", "acme", "repo", "main", Date.now() - 3600000)
+      .run();
+
+    const response = await SELF.fetch("https://test.local/repo-images/mark-stale", {
+      method: "POST",
+      headers: await authHeaders(),
+      body: JSON.stringify({ max_age_seconds: 1800000 }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json<{ ok: boolean; markedFailed: number }>();
+    expect(body.ok).toBe(true);
+    expect(body.markedFailed).toBeGreaterThanOrEqual(1);
+  });
+
+  it("POST /repo-images/cleanup deletes old failed builds", async () => {
+    await env.DB.prepare(
+      "INSERT INTO repo_images (id, repo_owner, repo_name, base_branch, provider_image_id, status, base_sha, error_message, created_at) VALUES (?, ?, ?, ?, '', 'failed', '', 'old error', ?)"
+    )
+      .bind("img-cleanup-route", "acme", "repo", "main", Date.now() - 86400000 - 1000)
+      .run();
+
+    const response = await SELF.fetch("https://test.local/repo-images/cleanup", {
+      method: "POST",
+      headers: await authHeaders(),
+      body: JSON.stringify({ max_age_seconds: 86400000 }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json<{ ok: boolean; deleted: number }>();
+    expect(body.ok).toBe(true);
+    expect(body.deleted).toBeGreaterThanOrEqual(1);
+  });
+
+  it("requires auth on all repo-images routes", async () => {
+    const response = await SELF.fetch("https://test.local/repo-images/status");
+    expect(response.status).toBe(401);
+  });
+
+  it("full callback flow: register -> complete -> status shows ready", async () => {
+    // 1. Register a build (as if triggered)
+    await store.registerBuild({
+      id: "img-flow-1",
+      repoOwner: "acme",
+      repoName: "repo",
+      baseBranch: "main",
+    });
+
+    // 2. Complete the build via callback
+    const completeResponse = await SELF.fetch("https://test.local/repo-images/build-complete", {
+      method: "POST",
+      headers: await authHeaders(),
+      body: JSON.stringify({
+        build_id: "img-flow-1",
+        provider_image_id: "modal-img-flow",
+        base_sha: "flow-sha-123",
+        build_duration_seconds: 55.5,
+      }),
+    });
+    expect(completeResponse.status).toBe(200);
+
+    // 3. Verify status shows ready
+    const headers = await authHeaders();
+    delete (headers as Record<string, string | undefined>)["Content-Type"];
+    const statusResponse = await SELF.fetch(
+      "https://test.local/repo-images/status?repo_owner=acme&repo_name=repo",
+      { headers }
+    );
+    expect(statusResponse.status).toBe(200);
+    const statusBody = await statusResponse.json<{
+      images: Array<{ id: string; status: string; provider_image_id: string }>;
+    }>();
+    const readyImage = statusBody.images.find((img) => img.id === "img-flow-1");
+    expect(readyImage).toBeDefined();
+    expect(readyImage!.status).toBe("ready");
+    expect(readyImage!.provider_image_id).toBe("modal-img-flow");
   });
 });

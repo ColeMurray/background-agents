@@ -14,6 +14,7 @@ import {
   type AlarmScheduler,
   type IdGenerator,
   type SandboxLifecycleConfig,
+  type RepoImageLookup,
 } from "./manager";
 import {
   SandboxProviderError,
@@ -1072,6 +1073,137 @@ describe("SandboxLifecycleManager", () => {
       const scheduledTime = alarmScheduler.alarms[0];
       expect(scheduledTime).toBeGreaterThanOrEqual(beforeTime + config.inactivity.timeoutMs);
       expect(scheduledTime).toBeLessThanOrEqual(afterTime + config.inactivity.timeoutMs);
+    });
+  });
+
+  describe("repo image lookup in doSpawn", () => {
+    it("passes repoImageId when lookup returns a ready image", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const provider = createMockProvider();
+
+      const repoImageLookup: RepoImageLookup = {
+        getLatestReady: vi.fn(async () => ({
+          provider_image_id: "img-abc123",
+          base_sha: "sha-def456",
+        })),
+      };
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        broadcaster,
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig(),
+        {},
+        repoImageLookup
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repoImageId: "img-abc123",
+          repoImageSha: "sha-def456",
+        })
+      );
+    });
+
+    it("passes null repoImageId when no ready image exists", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const provider = createMockProvider();
+
+      const repoImageLookup: RepoImageLookup = {
+        getLatestReady: vi.fn(async () => null),
+      };
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        broadcaster,
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig(),
+        {},
+        repoImageLookup
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repoImageId: null,
+          repoImageSha: null,
+        })
+      );
+    });
+
+    it("falls back gracefully when repo image lookup fails", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const provider = createMockProvider();
+
+      const repoImageLookup: RepoImageLookup = {
+        getLatestReady: vi.fn(async () => {
+          throw new Error("D1 unavailable");
+        }),
+      };
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        broadcaster,
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig(),
+        {},
+        repoImageLookup
+      );
+
+      await manager.spawnSandbox();
+
+      // Should still spawn, just without repo image
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repoImageId: null,
+          repoImageSha: null,
+        })
+      );
+    });
+
+    it("passes null repoImageId when no lookup is configured", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const provider = createMockProvider();
+
+      // No repoImageLookup provided
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        broadcaster,
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repoImageId: null,
+          repoImageSha: null,
+        })
+      );
     });
   });
 });
