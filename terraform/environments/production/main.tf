@@ -483,6 +483,7 @@ module "modal_app" {
       values = {
         MODAL_API_SECRET            = var.modal_api_secret
         ALLOWED_CONTROL_PLANE_HOSTS = local.control_plane_host
+        CONTROL_PLANE_URL           = local.control_plane_url
       }
     }
   ]
