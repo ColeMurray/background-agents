@@ -25,7 +25,12 @@ jobs:
       - name: Check if secrets are configured
         id: check-secrets
         run: |
-          if [ -z "${{ secrets.VERCEL_API_TOKEN }}" ] || [ -z "${{ secrets.VERCEL_PROJECT_ID }}" ]; then
+          # Skip if web_platform is set to something other than vercel
+          WEB_PLATFORM="${{ secrets.WEB_PLATFORM }}"
+          if [ -n "$WEB_PLATFORM" ] && [ "$WEB_PLATFORM" != "vercel" ]; then
+            echo "Skipping Vercel deployment - web_platform is '${WEB_PLATFORM}'"
+            echo "configured=false" >> $GITHUB_OUTPUT
+          elif [ -z "${{ secrets.VERCEL_API_TOKEN }}" ] || [ -z "${{ secrets.VERCEL_PROJECT_ID }}" ]; then
             echo "Skipping deployment - Vercel secrets not configured"
             echo "configured=false" >> $GITHUB_OUTPUT
           else

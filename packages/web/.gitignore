@@ -1,2 +1,5 @@
 .env*.local
 .vercel
+.open-next
+.dev.vars
+wrangler.production.toml

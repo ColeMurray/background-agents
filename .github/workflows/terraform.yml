@@ -12,6 +12,7 @@ on:
       - "packages/linear-bot/**"
       - "packages/modal-infra/**"
       - "packages/shared/**"
+      - "packages/web/**" # Web app deployed via Terraform when web_platform = "cloudflare"
       - ".github/workflows/terraform.yml"
   pull_request:
     branches: [main]
@@ -24,6 +25,7 @@ on:
       - "packages/linear-bot/**"
       - "packages/modal-infra/**"
       - "packages/shared/**"
+      - "packages/web/**"
       - ".github/workflows/terraform.yml"
   workflow_dispatch: # Allow manual trigger
 
@@ -198,6 +200,7 @@ jobs:
           TF_VAR_linear_client_id: ${{ secrets.LINEAR_CLIENT_ID }}
           TF_VAR_linear_client_secret: ${{ secrets.LINEAR_CLIENT_SECRET }}
           TF_VAR_linear_webhook_secret: ${{ secrets.LINEAR_WEBHOOK_SECRET }}
+          TF_VAR_web_platform: "${{ secrets.WEB_PLATFORM || 'vercel' }}"
 
       - name: Post Plan Results
         uses: actions/github-script@v7
@@ -319,6 +322,7 @@ jobs:
           TF_VAR_linear_client_id: ${{ secrets.LINEAR_CLIENT_ID }}
           TF_VAR_linear_client_secret: ${{ secrets.LINEAR_CLIENT_SECRET }}
           TF_VAR_linear_webhook_secret: ${{ secrets.LINEAR_WEBHOOK_SECRET }}
+          TF_VAR_web_platform: "${{ secrets.WEB_PLATFORM || 'vercel' }}"
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 
