@@ -473,7 +473,8 @@ resource "null_resource" "web_app_cloudflare_build" {
   }
 }
 
-# Upload secrets to the Cloudflare Worker (only re-runs when secrets change)
+# Upload secrets to the Cloudflare Worker (only re-runs when secrets change).
+# Must run after deploy — wrangler secret put requires the worker to exist.
 resource "null_resource" "web_app_cloudflare_secrets" {
   count = var.web_platform == "cloudflare" ? 1 : 0
 
@@ -498,6 +499,8 @@ resource "null_resource" "web_app_cloudflare_secrets" {
       INTERNAL_CALLBACK_SECRET = var.internal_callback_secret
     }
   }
+
+  depends_on = [null_resource.web_app_cloudflare_deploy]
 }
 
 # Generate a production wrangler config with the correct service binding name.
@@ -549,7 +552,6 @@ resource "null_resource" "web_app_cloudflare_deploy" {
 
   depends_on = [
     null_resource.web_app_cloudflare_build,
-    null_resource.web_app_cloudflare_secrets,
     module.control_plane_worker,
     local_file.web_app_wrangler_production,
   ]
