@@ -112,7 +112,14 @@ export class SessionMessageQueue {
       const store = new SessionIndexStore(this.deps.env.DB);
       const sessionId = this.deps.getSession()?.id;
       if (sessionId) {
-        this.deps.ctx.waitUntil(store.touchUpdatedAt(sessionId).catch(() => {}));
+        this.deps.ctx.waitUntil(
+          store.touchUpdatedAt(sessionId).catch((error) => {
+            this.deps.log.error("session_index.touch_updated_at.background_error", {
+              session_id: sessionId,
+              error,
+            });
+          })
+        );
       }
     }
 

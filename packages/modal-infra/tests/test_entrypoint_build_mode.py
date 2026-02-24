@@ -56,6 +56,9 @@ class TestImageBuildMode:
         supervisor.start_bridge = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
+        # In build mode, entrypoint waits for shutdown_event (builder terminates sandbox).
+        # Pre-set so the test doesn't hang.
+        supervisor.shutdown_event.set()
 
         with patch.dict(os.environ, build_env, clear=False):
             await supervisor.run()
@@ -74,6 +77,8 @@ class TestImageBuildMode:
         supervisor = _make_supervisor(build_env)
         # Point repo_path to a non-existent dir so clone branch is taken
         supervisor.repo_path = tmp_path / "nonexistent"
+        # Pre-set so entrypoint doesn't hang waiting for builder to terminate
+        supervisor.shutdown_event.set()
 
         all_calls = []
 
@@ -114,6 +119,8 @@ class TestImageBuildMode:
         supervisor.configure_git_identity = AsyncMock()
         supervisor.run_setup_script = AsyncMock(return_value=True)
         supervisor.shutdown = AsyncMock()
+        # Pre-set so entrypoint doesn't hang waiting for builder to terminate
+        supervisor.shutdown_event.set()
 
         with patch.dict(os.environ, build_env, clear=False):
             await supervisor.run()

@@ -752,7 +752,16 @@ async function handleSessionPrompt(
 
   // Background: update D1 timestamp so session bubbles to top of sidebar
   const store = new SessionIndexStore(env.DB);
-  ctx.executionCtx?.waitUntil(store.touchUpdatedAt(sessionId).catch(() => {}));
+  ctx.executionCtx?.waitUntil(
+    store.touchUpdatedAt(sessionId).catch((error) => {
+      logger.error("session_index.touch_updated_at.background_error", {
+        session_id: sessionId,
+        trace_id: ctx.trace_id,
+        request_id: ctx.request_id,
+        error,
+      });
+    })
+  );
 
   return response;
 }

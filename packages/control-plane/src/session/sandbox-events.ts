@@ -72,7 +72,12 @@ export class SessionSandboxEventProcessor {
 
       if (messageId && event.status === "running") {
         this.deps.ctx.waitUntil(
-          this.deps.callbackService.notifyToolCall(messageId, event).catch(() => {})
+          this.deps.callbackService.notifyToolCall(messageId, event).catch((error) => {
+            this.deps.log.error("callback.tool_call.background_error", {
+              message_id: messageId,
+              error,
+            });
+          })
         );
       }
       return;

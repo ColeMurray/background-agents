@@ -36,8 +36,11 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   const sidebar = useSidebar();
   const isMobile = useIsMobile();
   const handleNewSession = useCallback(() => {
+    if (isMobile) {
+      sidebar.close();
+    }
     router.push("/");
-  }, [router]);
+  }, [isMobile, router, sidebar]);
 
   useGlobalShortcuts({
     enabled: status === "authenticated" && Boolean(session),
