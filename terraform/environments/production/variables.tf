@@ -119,16 +119,24 @@ variable "github_bot_username" {
 # Slack App Credentials
 # =============================================================================
 
+variable "enable_slack_bot" {
+  description = "Enable the Slack bot worker. Set to false to skip deployment."
+  type        = bool
+  default     = true
+}
+
 variable "slack_bot_token" {
   description = "Slack Bot OAuth token (xoxb-...)"
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "slack_signing_secret" {
   description = "Slack app signing secret"
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 # =============================================================================

@@ -78,7 +78,9 @@ github_app_installation_id = ""
 # Slack App Credentials (Optional)
 # =============================================================================
 # From Slack App dashboard: https://api.slack.com/apps
-# Leave empty to disable Slack integration.
+# Set enable_slack_bot = false to skip deployment.
+
+enable_slack_bot = false
 
 slack_bot_token = ""       # e.g., "xoxb-..."
 slack_signing_secret = ""
