@@ -533,7 +533,11 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
       return;
     }
 
-    console.log("Sending prompt:", content, "with model:", model, "reasoning:", reasoningEffort);
+    console.log("Sending prompt", {
+      contentLength: content.length,
+      model,
+      reasoningEffort,
+    });
 
     // Optimistically set isProcessing for immediate feedback
     // Server will confirm with processing_status message
