@@ -41,7 +41,7 @@ terraform/
 ### 1. Required Tools
 
 ```bash
-# Terraform >= 1.5.0
+# Terraform >= 1.9.0
 brew install terraform
 
 # Modal CLI (for Modal deployments)
