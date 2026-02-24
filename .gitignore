@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 .pnpm-store/
+packages/*/package-lock.json
 
 # Python
 __pycache__/
