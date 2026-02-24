@@ -20,6 +20,8 @@ function ToolIcon({ toolName }: { toolName: string }) {
       return <FileIcon className={iconClass} />;
     case "Edit":
       return <PencilIcon className={iconClass} />;
+    case "Apply Patch":
+      return <PencilIcon className={iconClass} />;
     case "Bash":
       return <TerminalIcon className={iconClass} />;
     default:

@@ -10,7 +10,7 @@ output "session_index_kv_id" {
 
 output "slack_kv_id" {
   description = "Slack KV namespace ID"
-  value       = module.slack_kv.namespace_id
+  value       = var.enable_slack_bot ? module.slack_kv[0].namespace_id : null
 }
 
 # Cloudflare D1 Database
@@ -32,7 +32,7 @@ output "control_plane_worker_name" {
 
 output "slack_bot_worker_name" {
   description = "Slack bot worker name"
-  value       = module.slack_bot_worker.worker_name
+  value       = var.enable_slack_bot ? module.slack_bot_worker[0].worker_name : null
 }
 
 output "linear_kv_id" {

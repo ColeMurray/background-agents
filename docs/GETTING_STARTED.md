@@ -311,7 +311,8 @@ github_app_private_key     = <<-EOF
 -----END PRIVATE KEY-----
 EOF
 
-# Slack (leave as empty strings to disable Slack integration)
+# Slack (set enable_slack_bot = false to disable Slack integration)
+enable_slack_bot     = false
 slack_bot_token      = ""
 slack_signing_secret = ""
 
@@ -580,8 +581,9 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `GH_APP_ID`                   | GitHub App ID                                                                 |
 | `GH_APP_PRIVATE_KEY`          | GitHub App private key (PKCS#8 format)                                        |
 | `GH_APP_INSTALLATION_ID`      | GitHub App installation ID                                                    |
-| `SLACK_BOT_TOKEN`             | Slack bot token (or empty)                                                    |
-| `SLACK_SIGNING_SECRET`        | Slack signing secret (or empty)                                               |
+| `ENABLE_SLACK_BOT`            | `true` to deploy Slack bot, `false` to skip (default: `true`)                 |
+| `SLACK_BOT_TOKEN`             | Slack bot token (required if enabled)                                         |
+| `SLACK_SIGNING_SECRET`        | Slack signing secret (required if enabled)                                    |
 | `ANTHROPIC_API_KEY`           | Anthropic API key                                                             |
 | `TOKEN_ENCRYPTION_KEY`        | Generated encryption key (OAuth tokens)                                       |
 | `REPO_SECRETS_ENCRYPTION_KEY` | Generated encryption key (repo secrets)                                       |

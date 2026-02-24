@@ -40,6 +40,81 @@ function countLines(str: string | undefined): number {
   return str.split("\n").length;
 }
 
+type PatchOperation = "add" | "update" | "delete";
+
+interface PatchSummary {
+  addCount: number;
+  updateCount: number;
+  deleteCount: number;
+  totalFiles: number;
+  firstFile: string | null;
+  firstOperation: PatchOperation | null;
+}
+
+function summarizeApplyPatch(patchText: string | undefined): PatchSummary {
+  if (!patchText) {
+    return {
+      addCount: 0,
+      updateCount: 0,
+      deleteCount: 0,
+      totalFiles: 0,
+      firstFile: null,
+      firstOperation: null,
+    };
+  }
+
+  const summary: PatchSummary = {
+    addCount: 0,
+    updateCount: 0,
+    deleteCount: 0,
+    totalFiles: 0,
+    firstFile: null,
+    firstOperation: null,
+  };
+
+  for (const line of patchText.split("\n")) {
+    let operation: PatchOperation | null = null;
+    let filePath: string | undefined;
+
+    if (line.startsWith("*** Add File: ")) {
+      operation = "add";
+      filePath = line.slice("*** Add File: ".length);
+      summary.addCount += 1;
+    } else if (line.startsWith("*** Update File: ")) {
+      operation = "update";
+      filePath = line.slice("*** Update File: ".length);
+      summary.updateCount += 1;
+    } else if (line.startsWith("*** Delete File: ")) {
+      operation = "delete";
+      filePath = line.slice("*** Delete File: ".length);
+      summary.deleteCount += 1;
+    }
+
+    if (!operation) continue;
+
+    summary.totalFiles += 1;
+    if (!summary.firstFile) {
+      summary.firstFile = basename(filePath);
+      summary.firstOperation = operation;
+    }
+  }
+
+  return summary;
+}
+
+function operationLabel(operation: PatchOperation | null): string {
+  switch (operation) {
+    case "add":
+      return "Add";
+    case "update":
+      return "Update";
+    case "delete":
+      return "Delete";
+    default:
+      return "Patch";
+  }
+}
+
 export interface FormattedToolCall {
   /** Tool name for display */
   toolName: string;
@@ -173,6 +248,29 @@ export function formatToolCall(event: SandboxEvent): FormattedToolCall {
       };
     }
 
+    case "apply_patch": {
+      const patchText = args?.patchText as string | undefined;
+      const patchSummary = summarizeApplyPatch(patchText);
+
+      let summary = "patch";
+      if (patchSummary.totalFiles === 1 && patchSummary.firstFile) {
+        summary = `${operationLabel(patchSummary.firstOperation)} ${patchSummary.firstFile}`;
+      } else if (patchSummary.totalFiles > 1) {
+        const parts: string[] = [];
+        if (patchSummary.updateCount > 0) parts.push(`${patchSummary.updateCount} updated`);
+        if (patchSummary.addCount > 0) parts.push(`${patchSummary.addCount} added`);
+        if (patchSummary.deleteCount > 0) parts.push(`${patchSummary.deleteCount} deleted`);
+        summary = `${patchSummary.totalFiles} files${parts.length > 0 ? ` (${parts.join(", ")})` : ""}`;
+      }
+
+      return {
+        toolName: "Apply Patch",
+        summary,
+        icon: "pencil",
+        getDetails: () => ({ args, output }),
+      };
+    }
+
     default:
       return {
         toolName: tool || "Unknown",
@@ -223,6 +321,14 @@ export function formatToolGroup(events: SandboxEvent[]): {
         toolName: "Bash",
         count,
         summary: `${count} command${count === 1 ? "" : "s"}`,
+      };
+    }
+
+    case "apply_patch": {
+      return {
+        toolName: "Apply Patch",
+        count,
+        summary: `${count} patch${count === 1 ? "" : "es"}`,
       };
     }
 

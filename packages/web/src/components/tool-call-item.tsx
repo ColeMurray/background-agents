@@ -50,12 +50,19 @@ function ToolIcon({ name }: { name: string | null }) {
 
 export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: ToolCallItemProps) {
   const formatted = formatToolCall(event);
+  const isApplyPatch = event.tool?.toLowerCase() === "apply_patch";
   const time = new Date(event.timestamp * 1000).toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
   });
 
   const { args, output } = formatted.getDetails();
+  const patchText = isApplyPatch && typeof args?.patchText === "string" ? args.patchText : null;
+  const nonPatchArgs =
+    isApplyPatch && args
+      ? Object.fromEntries(Object.entries(args).filter(([key]) => key !== "patchText"))
+      : args;
+  const hasNonPatchArgs = !!nonPatchArgs && Object.keys(nonPatchArgs).length > 0;
 
   return (
     <div className="py-0.5">
@@ -79,11 +86,19 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
 
       {isExpanded && (
         <div className="mt-2 ml-5 p-3 bg-card border border-border-muted text-xs overflow-hidden">
-          {args && Object.keys(args).length > 0 && (
+          {hasNonPatchArgs && (
             <div className="mb-2">
               <div className="text-muted-foreground mb-1 font-medium">Arguments:</div>
               <pre className="overflow-x-auto text-foreground whitespace-pre-wrap">
-                {JSON.stringify(args, null, 2)}
+                {JSON.stringify(nonPatchArgs, null, 2)}
+              </pre>
+            </div>
+          )}
+          {patchText && (
+            <div className="mb-2">
+              <div className="text-muted-foreground mb-1 font-medium">Patch:</div>
+              <pre className="overflow-x-auto max-h-64 text-foreground whitespace-pre-wrap">
+                {patchText}
               </pre>
             </div>
           )}
@@ -95,7 +110,7 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
               </pre>
             </div>
           )}
-          {!args && !output && (
+          {!hasNonPatchArgs && !patchText && !output && (
             <span className="text-secondary-foreground">No details available</span>
           )}
         </div>

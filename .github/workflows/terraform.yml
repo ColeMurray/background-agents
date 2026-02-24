@@ -180,6 +180,7 @@ jobs:
           TF_VAR_github_app_id: ${{ secrets.GH_APP_ID }}
           TF_VAR_github_app_private_key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           TF_VAR_github_app_installation_id: ${{ secrets.GH_APP_INSTALLATION_ID }}
+          TF_VAR_enable_slack_bot: "${{ secrets.ENABLE_SLACK_BOT || 'true' }}"
           TF_VAR_slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
           TF_VAR_slack_signing_secret: ${{ secrets.SLACK_SIGNING_SECRET }}
           TF_VAR_anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -301,6 +302,7 @@ jobs:
           TF_VAR_github_app_id: ${{ secrets.GH_APP_ID }}
           TF_VAR_github_app_private_key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           TF_VAR_github_app_installation_id: ${{ secrets.GH_APP_INSTALLATION_ID }}
+          TF_VAR_enable_slack_bot: "${{ secrets.ENABLE_SLACK_BOT || 'true' }}"
           TF_VAR_slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
           TF_VAR_slack_signing_secret: ${{ secrets.SLACK_SIGNING_SECRET }}
           TF_VAR_anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
