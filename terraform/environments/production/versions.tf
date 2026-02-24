@@ -30,6 +30,6 @@ provider "cloudflare" {
 }
 
 provider "vercel" {
-  api_token = var.vercel_api_token
+  api_token = var.web_platform == "vercel" ? var.vercel_api_token : "unused"
   team      = var.web_platform == "vercel" ? var.vercel_team_id : null
 }
