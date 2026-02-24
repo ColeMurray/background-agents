@@ -123,6 +123,11 @@ variable "enable_slack_bot" {
   description = "Enable the Slack bot worker. Set to false to skip deployment."
   type        = bool
   default     = true
+
+  validation {
+    condition     = var.enable_slack_bot == false || (length(var.slack_bot_token) > 0 && length(var.slack_signing_secret) > 0)
+    error_message = "When enable_slack_bot is true, slack_bot_token and slack_signing_secret must be non-empty."
+  }
 }
 
 variable "slack_bot_token" {
