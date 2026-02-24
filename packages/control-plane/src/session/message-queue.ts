@@ -116,7 +116,7 @@ export class SessionMessageQueue {
           store.touchUpdatedAt(sessionId).catch((error) => {
             this.deps.log.error("session_index.touch_updated_at.background_error", {
               session_id: sessionId,
-              error: error instanceof Error ? error.message : String(error),
+              error,
             });
           })
         );

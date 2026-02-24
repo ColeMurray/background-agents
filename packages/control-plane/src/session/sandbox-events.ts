@@ -75,7 +75,7 @@ export class SessionSandboxEventProcessor {
           this.deps.callbackService.notifyToolCall(messageId, event).catch((error) => {
             this.deps.log.error("callback.tool_call.background_error", {
               message_id: messageId,
-              error: error instanceof Error ? error.message : String(error),
+              error,
             });
           })
         );
