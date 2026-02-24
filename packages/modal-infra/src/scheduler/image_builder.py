@@ -21,6 +21,7 @@ The scheduler flow:
 """
 
 import asyncio
+import json
 import os
 import subprocess
 import time
@@ -51,6 +52,14 @@ class BuildError(Exception):
     pass
 
 
+def _outbound_secret() -> str:
+    """Get INTERNAL_CALLBACK_SECRET for authenticating outbound calls to the control plane."""
+    secret = os.environ.get("INTERNAL_CALLBACK_SECRET")
+    if not secret:
+        raise RuntimeError("INTERNAL_CALLBACK_SECRET not configured")
+    return secret
+
+
 async def _callback_with_retry(
     url: str,
     payload: dict,
@@ -62,11 +71,13 @@ async def _callback_with_retry(
     Args:
         url: The callback URL to POST to
         payload: JSON body to send
-        secret: MODAL_API_SECRET for auth. If None, reads from env.
+        secret: INTERNAL_CALLBACK_SECRET for auth. If None, reads from env.
 
     Returns:
         True if the callback succeeded, False if all retries failed
     """
+    if secret is None:
+        secret = _outbound_secret()
     for attempt in range(CALLBACK_MAX_RETRIES):
         try:
             token = generate_internal_token(secret)
@@ -128,25 +139,37 @@ def _generate_clone_token() -> str:
     return ""
 
 
-def _read_sandbox_head_sha(sandbox, repo_name: str) -> str:
+async def _stream_build_logs(sandbox) -> tuple[str, bool]:
     """
-    Read the git HEAD SHA from a sandbox by executing git rev-parse.
+    Stream sandbox stdout and extract build results.
 
-    Args:
-        sandbox: A modal.Sandbox instance
-        repo_name: Repository name (used to construct /workspace/{repo_name} path)
+    The entrypoint logs structured JSON lines. We look for:
+    - event="git.sync_complete" with "head_sha" field
+    - event="image_build.complete" to know the build finished
+
+    The sandbox stays alive after logging image_build.complete (it awaits
+    shutdown_event), so we can snapshot_filesystem() while it's still running.
 
     Returns:
-        The HEAD SHA string, or empty string on failure
+        (head_sha, build_complete) tuple. head_sha is empty string if not found.
     """
+    head_sha = ""
     try:
-        repo_path = f"/workspace/{repo_name}"
-        process = sandbox.exec("git", "-C", repo_path, "rev-parse", "HEAD")
-        stdout = process.stdout.read().strip()
-        return stdout
+        async for line in sandbox.stdout:
+            if "git.sync_complete" not in line and "image_build.complete" not in line:
+                continue
+            try:
+                entry = json.loads(line)
+                event = entry.get("event", "")
+                if event == "git.sync_complete" and entry.get("head_sha"):
+                    head_sha = entry["head_sha"]
+                elif event == "image_build.complete":
+                    return head_sha, True
+            except json.JSONDecodeError:
+                continue
     except Exception as e:
-        log.warn("sandbox.read_sha_error", error=str(e))
-        return ""
+        log.warn("build.stream_error", error=str(e))
+    return head_sha, False
 
 
 @app.function(
@@ -203,18 +226,18 @@ async def build_repo_image(
             clone_token=clone_token,
         )
 
-        # 3. Await sandbox exit
-        handle.modal_sandbox.wait()
-        exit_code = handle.modal_sandbox.returncode
-        if exit_code != 0:
-            raise BuildError(f"Build sandbox exited with code {exit_code}")
+        # 3. Stream stdout until build completes (sandbox stays alive for snapshotting)
+        base_sha, build_complete = await _stream_build_logs(handle.modal_sandbox)
+        if not build_complete:
+            exit_code = handle.modal_sandbox.returncode
+            raise BuildError(f"Build sandbox exited without completing (exit_code={exit_code})")
 
-        # 4. Read base SHA before snapshot
-        base_sha = _read_sandbox_head_sha(handle.modal_sandbox, repo_name)
-
-        # 5. Snapshot filesystem
-        image = handle.modal_sandbox.snapshot_filesystem()
+        # 4. Snapshot the running sandbox's filesystem
+        image = await handle.modal_sandbox.snapshot_filesystem.aio()
         provider_image_id = image.object_id
+
+        # 5. Terminate the sandbox (no longer needed after snapshot)
+        await handle.modal_sandbox.terminate.aio()
 
         build_duration = time.time() - start_time
 
@@ -276,6 +299,8 @@ async def _api_get(
     secret: str | None = None,
 ) -> dict:
     """GET a control plane endpoint with HMAC auth."""
+    if secret is None:
+        secret = _outbound_secret()
     token = generate_internal_token(secret)
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.get(
@@ -292,6 +317,8 @@ async def _api_post(
     secret: str | None = None,
 ) -> dict:
     """POST to a control plane endpoint with HMAC auth."""
+    if secret is None:
+        secret = _outbound_secret()
     token = generate_internal_token(secret)
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
