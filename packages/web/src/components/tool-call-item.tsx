@@ -62,6 +62,7 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
     isApplyPatch && args
       ? Object.fromEntries(Object.entries(args).filter(([key]) => key !== "patchText"))
       : args;
+  const hasNonPatchArgs = !!nonPatchArgs && Object.keys(nonPatchArgs).length > 0;
 
   return (
     <div className="py-0.5">
@@ -85,7 +86,7 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
 
       {isExpanded && (
         <div className="mt-2 ml-5 p-3 bg-card border border-border-muted text-xs overflow-hidden">
-          {nonPatchArgs && Object.keys(nonPatchArgs).length > 0 && (
+          {hasNonPatchArgs && (
             <div className="mb-2">
               <div className="text-muted-foreground mb-1 font-medium">Arguments:</div>
               <pre className="overflow-x-auto text-foreground whitespace-pre-wrap">
@@ -109,7 +110,7 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
               </pre>
             </div>
           )}
-          {!nonPatchArgs && !patchText && !output && (
+          {!hasNonPatchArgs && !patchText && !output && (
             <span className="text-secondary-foreground">No details available</span>
           )}
         </div>
