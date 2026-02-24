@@ -42,6 +42,7 @@ module "session_index_kv" {
 }
 
 module "slack_kv" {
+  count  = var.enable_slack_bot ? 1 : 0
   source = "../../modules/cloudflare-kv"
 
   account_id     = var.cloudflare_account_id
@@ -131,12 +132,12 @@ module "control_plane_worker" {
   ]
 
   service_bindings = concat(
-    [
+    var.enable_slack_bot ? [
       {
         binding_name = "SLACK_BOT"
-        service_name = "open-inspect-slack-bot-${local.name_suffix}"
+        service_name = module.slack_bot_worker[0].worker_name
       }
-    ],
+    ] : [],
     var.enable_linear_bot ? [
       {
         binding_name = "LINEAR_BOT"
@@ -179,11 +180,13 @@ module "control_plane_worker" {
   compatibility_flags = ["nodejs_compat"]
   migration_tag       = "v1"
 
-  depends_on = [null_resource.control_plane_build, module.session_index_kv, null_resource.d1_migrations, module.linear_bot_worker]
+  depends_on = [null_resource.control_plane_build, module.session_index_kv, null_resource.d1_migrations, module.slack_bot_worker, module.linear_bot_worker]
 }
 
 # Build slack-bot worker bundle (only runs during apply, not plan)
 resource "null_resource" "slack_bot_build" {
+  count = var.enable_slack_bot ? 1 : 0
+
   triggers = {
     # Rebuild when source files change - use timestamp to always check
     # In CI, this ensures fresh builds; locally, npm handles caching
@@ -197,6 +200,7 @@ resource "null_resource" "slack_bot_build" {
 }
 
 module "slack_bot_worker" {
+  count  = var.enable_slack_bot ? 1 : 0
   source = "../../modules/cloudflare-worker"
 
   account_id  = var.cloudflare_account_id
@@ -206,7 +210,7 @@ module "slack_bot_worker" {
   kv_namespaces = [
     {
       binding_name = "SLACK_KV"
-      namespace_id = module.slack_kv.namespace_id
+      namespace_id = module.slack_kv[0].namespace_id
     }
   ]
 
@@ -237,7 +241,7 @@ module "slack_bot_worker" {
   compatibility_date  = "2024-09-23"
   compatibility_flags = ["nodejs_compat"]
 
-  depends_on = [null_resource.slack_bot_build, module.slack_kv, module.control_plane_worker]
+  depends_on = [null_resource.slack_bot_build[0], module.slack_kv[0], module.control_plane_worker]
 }
 
 # Build github-bot worker bundle (only runs during apply, not plan)
