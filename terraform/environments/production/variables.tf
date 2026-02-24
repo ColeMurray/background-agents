@@ -25,14 +25,16 @@ variable "cloudflare_worker_subdomain" {
 }
 
 variable "vercel_api_token" {
-  description = "Vercel API token"
+  description = "Vercel API token (required only when web_platform = 'vercel')"
   type        = string
   sensitive   = true
+  default     = "unused"
 }
 
 variable "vercel_team_id" {
-  description = "Vercel team ID"
+  description = "Vercel team ID (required only when web_platform = 'vercel')"
   type        = string
+  default     = "unused"
 }
 
 variable "modal_token_id" {
@@ -224,6 +226,17 @@ variable "nextauth_secret" {
 # =============================================================================
 # Configuration
 # =============================================================================
+
+variable "web_platform" {
+  description = "Platform for the web app deployment: 'vercel' or 'cloudflare' (OpenNext)"
+  type        = string
+  default     = "vercel"
+
+  validation {
+    condition     = contains(["vercel", "cloudflare"], var.web_platform)
+    error_message = "web_platform must be 'vercel' or 'cloudflare'."
+  }
+}
 
 variable "deployment_name" {
   description = "Unique deployment name used in URLs and resource names. Use something unique like your GitHub username or company name (e.g., 'acme', 'johndoe'). This will create URLs like: open-inspect-{deployment_name}.vercel.app"

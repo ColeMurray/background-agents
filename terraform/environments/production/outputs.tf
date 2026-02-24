@@ -60,15 +60,20 @@ output "github_bot_worker_name" {
   value       = var.enable_github_bot ? module.github_bot_worker[0].worker_name : null
 }
 
-# Vercel Web App
+# Web App
 output "web_app_url" {
-  description = "Vercel web app URL"
-  value       = module.web_app.production_url
+  description = "Web app URL"
+  value       = var.web_platform == "vercel" ? module.web_app[0].production_url : local.web_app_url
+}
+
+output "web_app_platform" {
+  description = "Web app deployment platform"
+  value       = var.web_platform
 }
 
 output "web_app_project_id" {
-  description = "Vercel project ID"
-  value       = module.web_app.project_id
+  description = "Vercel project ID (null when using Cloudflare)"
+  value       = var.web_platform == "vercel" ? module.web_app[0].project_id : null
 }
 
 # Modal
@@ -96,8 +101,8 @@ output "verification_commands" {
     # 2. Health check Modal
     curl ${module.modal_app.api_health_url}
 
-    # 3. Verify Vercel deployment
-    curl ${module.web_app.production_url}
+    # 3. Verify web app deployment
+    curl ${local.web_app_url}
 
     # 4. Test authenticated endpoint (should return 401)
     curl ${module.control_plane_worker.worker_url}/sessions

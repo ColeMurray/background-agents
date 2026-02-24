@@ -1,0 +1,20 @@
+# OpenNext Cloudflare Workers configuration for the web app.
+# See: https://opennext.js.org/cloudflare
+#
+# The name follows the convention: open-inspect-web-<deployment_name>
+# In production, Terraform generates a separate `wrangler.production.toml`.
+# For local dev, change the suffix below to match your deployment_name.
+
+name = "open-inspect-web-local"
+main = ".open-next/worker.js"
+compatibility_date = "2025-08-15"
+compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
+
+[assets]
+directory = ".open-next/assets"
+binding = "ASSETS"
+
+# Service binding to the control plane worker (required for same-account worker-to-worker calls)
+[[services]]
+binding = "CONTROL_PLANE_WORKER"
+service = "open-inspect-control-plane-local"

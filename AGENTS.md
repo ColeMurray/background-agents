@@ -8,7 +8,8 @@ Next.js (React), Terraform.
 
 Three tiers connected by WebSockets:
 
-1. **Web Client** (Next.js on Vercel) — UI with GitHub OAuth, session dashboard, real-time streaming
+1. **Web Client** (Next.js on Vercel or Cloudflare Workers via OpenNext) — UI with GitHub OAuth,
+   session dashboard, real-time streaming
 2. **Control Plane** (Cloudflare Workers + Durable Objects) — session lifecycle, WebSocket hub,
    GitHub/auth integration. Each session is a Durable Object with SQLite storage. Uses D1 for
    session index, repo metadata, and encrypted repo secrets.
@@ -130,13 +131,19 @@ under 72 characters. Use the PR body for details, not the commit message.
 - **Modal deployment**: never deploy `src/app.py` directly — use `modal deploy deploy.py` or
   `modal deploy -m src`. The `app.py` file doesn't import function modules.
 - **Modal image rebuild**: update `CACHE_BUSTER` in `src/images/base.py` to force a rebuild.
+- **Web platform choice**: set `web_platform = "cloudflare"` in Terraform variables to deploy the
+  web app to Cloudflare Workers via OpenNext instead of Vercel. When using Cloudflare, Vercel
+  credentials are not required (dummy defaults are used). `NEXT_PUBLIC_WS_URL` must be available at
+  build time since Next.js inlines `NEXT_PUBLIC_*` vars into the client bundle.
 
 ## CI/CD
 
 Pushing to `main` auto-deploys changed services:
 
-- **Terraform** → control plane + D1 migrations (triggers: `terraform/`, `packages/*/`)
-- **Vercel** → web app (triggers: `packages/web/`, `packages/shared/`)
+- **Terraform** → control plane + D1 migrations + web app if `web_platform = "cloudflare"`
+  (triggers: `terraform/`, `packages/*/`)
+- **Vercel** → web app when `web_platform = "vercel"` (triggers: `packages/web/`,
+  `packages/shared/`)
 - **Modal** → data plane (triggers: `packages/modal-infra/`, deployed via Terraform apply)
 
 CI runs lint, typecheck, and tests for all TypeScript and Python packages on every push and PR.
