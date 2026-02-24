@@ -2,6 +2,9 @@
 
 This guide walks you through deploying your own instance of Open-Inspect using Terraform.
 
+> Looking for local development setup (without full infra deployment)? Start with
+> [SETUP_GUIDE.md](./SETUP_GUIDE.md).
+
 > **Important**: This system is designed for **single-tenant deployment only**. All users share the
 > same GitHub App credentials and can access any repository the App is installed on. See the
 > [Security Model](../README.md#security-model-single-tenant-only) for details.

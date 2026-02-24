@@ -21,7 +21,8 @@ bash .openinspect/setup.sh
 This handles npm dependencies, builds the shared package, configures git hooks (husky +
 lint-staged), and optionally sets up a Python virtualenv for `packages/modal-infra`.
 
-See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for full deployment instructions.
+See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for full deployment instructions. See
+[docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md) for local setup and day-to-day development paths.
 
 For manual setup or individual steps:
 
