@@ -74,6 +74,7 @@ export class ModalSandboxProvider implements SandboxProvider {
         userEnvVars: config.userEnvVars,
         repoImageId: config.repoImageId,
         repoImageSha: config.repoImageSha,
+        timeoutSeconds: config.timeoutSeconds,
       });
 
       return {

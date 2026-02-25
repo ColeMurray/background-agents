@@ -17,6 +17,8 @@ import {
   getValidModelOrDefault,
   isValidReasoningEffort,
   type CallbackContext,
+  type SpawnChildSessionRequest,
+  type SpawnContext,
 } from "@open-inspect/shared";
 import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
 import { createLogger } from "./logger";
@@ -36,6 +38,11 @@ import { repoImageRoutes } from "./routes/repo-images";
 import { secretsRoutes } from "./routes/secrets";
 
 const logger = createLogger("router");
+
+// Guardrail constants for agent-spawned child sessions
+const MAX_SPAWN_DEPTH = 2;
+const MAX_CONCURRENT_CHILDREN = 5;
+const MAX_TOTAL_CHILDREN = 15;
 
 /**
  * Create a Request to a Durable Object stub with correlation headers.
@@ -85,6 +92,9 @@ const PUBLIC_ROUTES: RegExp[] = [/^\/health$/];
 const SANDBOX_AUTH_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/pr$/, // PR creation from sandbox
   /^\/sessions\/[^/]+\/openai-token-refresh$/, // OpenAI token refresh from sandbox
+  /^\/sessions\/[^/]+\/children$/, // POST spawn, GET list
+  /^\/sessions\/[^/]+\/children\/[^/]+$/, // GET child detail
+  /^\/sessions\/[^/]+\/children\/[^/]+\/cancel$/, // POST cancel child
 ];
 
 type CachedScmProvider =
@@ -373,6 +383,28 @@ const routes: Route[] = [
     method: "POST",
     pattern: parsePattern("/sessions/:id/unarchive"),
     handler: handleUnarchiveSession,
+  },
+
+  // Child session management (sandbox-authenticated)
+  {
+    method: "POST",
+    pattern: parsePattern("/sessions/:id/children"),
+    handler: handleSpawnChild,
+  },
+  {
+    method: "GET",
+    pattern: parsePattern("/sessions/:id/children"),
+    handler: handleListChildren,
+  },
+  {
+    method: "GET",
+    pattern: parsePattern("/sessions/:id/children/:childId"),
+    handler: handleGetChild,
+  },
+  {
+    method: "POST",
+    pattern: parsePattern("/sessions/:id/children/:childId/cancel"),
+    handler: handleCancelChild,
   },
 
   // Repository management
@@ -1126,6 +1158,230 @@ async function handleUnarchiveSession(
     if (!updated) {
       logger.warn("Session not found in D1 index during unarchive", { session_id: sessionId });
     }
+  }
+
+  return response;
+}
+
+// Child session handlers
+
+async function handleSpawnChild(
+  request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const parentId = match.groups?.id;
+  if (!parentId) return error("Parent session ID required");
+
+  const body = (await request.json()) as SpawnChildSessionRequest;
+
+  if (!body.title || !body.prompt) {
+    return error("title and prompt are required");
+  }
+
+  const sessionStore = new SessionIndexStore(env.DB);
+
+  // Guardrail: depth
+  const parentDepth = await sessionStore.getSpawnDepth(parentId);
+  if (parentDepth >= MAX_SPAWN_DEPTH) {
+    return error(`Maximum spawn depth (${MAX_SPAWN_DEPTH}) exceeded`, 403);
+  }
+
+  // Guardrail: concurrent children
+  const activeCount = await sessionStore.countActiveChildren(parentId);
+  if (activeCount >= MAX_CONCURRENT_CHILDREN) {
+    return error(`Maximum concurrent children (${MAX_CONCURRENT_CHILDREN}) reached`, 429);
+  }
+
+  // Guardrail: total children
+  const totalCount = await sessionStore.countTotalChildren(parentId);
+  if (totalCount >= MAX_TOTAL_CHILDREN) {
+    return error(`Maximum total children (${MAX_TOTAL_CHILDREN}) reached`, 429);
+  }
+
+  // Get parent context from parent DO
+  const parentDoId = env.SESSION.idFromName(parentId);
+  const parentStub = env.SESSION.get(parentDoId);
+
+  const spawnContextRes = await parentStub.fetch(
+    internalRequest("http://internal/internal/spawn-context", undefined, ctx)
+  );
+
+  if (!spawnContextRes.ok) {
+    return error("Failed to get parent session context", 500);
+  }
+
+  const spawnContext = (await spawnContextRes.json()) as SpawnContext;
+
+  // Guardrail: same-repo — reject if either field doesn't match parent
+  if (
+    (body.repoOwner && body.repoOwner.toLowerCase() !== spawnContext.repoOwner.toLowerCase()) ||
+    (body.repoName && body.repoName.toLowerCase() !== spawnContext.repoName.toLowerCase())
+  ) {
+    return error("Child sessions must use the same repository as the parent", 403);
+  }
+
+  // Create child session (same pattern as handleCreateSession)
+  const childId = generateId();
+  const childDoId = env.SESSION.idFromName(childId);
+  const childStub = env.SESSION.get(childDoId);
+
+  const model = getValidModelOrDefault(body.model || spawnContext.model);
+  const reasoningEffort =
+    body.reasoningEffort && isValidReasoningEffort(model, body.reasoningEffort)
+      ? body.reasoningEffort
+      : spawnContext.reasoningEffort;
+
+  const childDepth = parentDepth + 1;
+
+  logger.info("Spawning child session", {
+    event: "session.spawn_child",
+    parent_id: parentId,
+    child_id: childId,
+    child_depth: childDepth,
+    model,
+  });
+
+  // Initialize child DO
+  const initResponse = await childStub.fetch(
+    internalRequest(
+      "http://internal/internal/init",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionName: childId,
+          repoOwner: spawnContext.repoOwner,
+          repoName: spawnContext.repoName,
+          repoId: spawnContext.repoId,
+          title: body.title,
+          model,
+          reasoningEffort,
+          userId: spawnContext.owner.userId,
+          scmLogin: spawnContext.owner.scmLogin,
+          scmName: spawnContext.owner.scmName,
+          scmEmail: spawnContext.owner.scmEmail,
+          scmTokenEncrypted: spawnContext.owner.scmAccessTokenEncrypted,
+          parentSessionId: parentId,
+          spawnSource: "agent",
+          spawnDepth: childDepth,
+        }),
+      },
+      ctx
+    )
+  );
+
+  if (!initResponse.ok) {
+    return error("Failed to create child session", 500);
+  }
+
+  // Store in D1 index
+  const now = Date.now();
+  await sessionStore.create({
+    id: childId,
+    title: body.title,
+    repoOwner: spawnContext.repoOwner,
+    repoName: spawnContext.repoName,
+    model,
+    reasoningEffort,
+    status: "created",
+    parentSessionId: parentId,
+    spawnSource: "agent",
+    spawnDepth: childDepth,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  // Enqueue the prompt on the child DO
+  await childStub.fetch(
+    internalRequest(
+      "http://internal/internal/prompt",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: body.prompt,
+          authorId: spawnContext.owner.userId,
+          source: "agent",
+        }),
+      },
+      ctx
+    )
+  );
+
+  return json({ sessionId: childId, status: "created" }, 201);
+}
+
+async function handleListChildren(
+  _request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  _ctx: RequestContext
+): Promise<Response> {
+  const parentId = match.groups?.id;
+  if (!parentId) return error("Parent session ID required");
+
+  const sessionStore = new SessionIndexStore(env.DB);
+  const children = await sessionStore.listByParent(parentId);
+
+  return json({ children });
+}
+
+async function handleGetChild(
+  _request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const parentId = match.groups?.id;
+  const childId = match.groups?.childId;
+  if (!parentId || !childId) return error("Parent and child session IDs required");
+
+  const sessionStore = new SessionIndexStore(env.DB);
+  const isChild = await sessionStore.isChildOf(childId, parentId);
+  if (!isChild) {
+    return error("Child session not found", 404);
+  }
+
+  // Fetch child summary from child DO
+  const childDoId = env.SESSION.idFromName(childId);
+  const childStub = env.SESSION.get(childDoId);
+
+  const response = await childStub.fetch(
+    internalRequest("http://internal/internal/child-summary", undefined, ctx)
+  );
+
+  return response;
+}
+
+async function handleCancelChild(
+  _request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const parentId = match.groups?.id;
+  const childId = match.groups?.childId;
+  if (!parentId || !childId) return error("Parent and child session IDs required");
+
+  const sessionStore = new SessionIndexStore(env.DB);
+  const isChild = await sessionStore.isChildOf(childId, parentId);
+  if (!isChild) {
+    return error("Child session not found", 404);
+  }
+
+  // Cancel via child DO
+  const childDoId = env.SESSION.idFromName(childId);
+  const childStub = env.SESSION.get(childDoId);
+
+  const response = await childStub.fetch(
+    internalRequest("http://internal/internal/cancel", { method: "POST" }, ctx)
+  );
+
+  // Update D1 status if cancel succeeded
+  if (response.ok) {
+    await sessionStore.updateStatus(childId, "cancelled");
   }
 
   return response;

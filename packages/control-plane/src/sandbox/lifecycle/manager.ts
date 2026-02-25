@@ -149,6 +149,9 @@ export const DEFAULT_LIFECYCLE_CONFIG: Omit<SandboxLifecycleConfig, "controlPlan
   heartbeat: DEFAULT_HEARTBEAT_CONFIG,
 };
 
+/** Child (agent-spawned) sessions get a shorter sandbox timeout. */
+const CHILD_SANDBOX_TIMEOUT_SECONDS = 3600; // 1 hour (vs default 2 hours)
+
 // ==================== Repo Image Lookup ====================
 
 /**
@@ -352,6 +355,10 @@ export class SandboxLifecycleManager {
         }
       }
 
+      // Child sessions get a shorter timeout
+      const timeoutSeconds =
+        session.spawn_source === "agent" ? CHILD_SANDBOX_TIMEOUT_SECONDS : undefined;
+
       // Create sandbox via provider
       const createConfig: CreateSandboxConfig = {
         sessionId,
@@ -365,6 +372,7 @@ export class SandboxLifecycleManager {
         userEnvVars,
         repoImageId,
         repoImageSha,
+        timeoutSeconds,
       };
 
       const result = await this.provider.createSandbox(createConfig);

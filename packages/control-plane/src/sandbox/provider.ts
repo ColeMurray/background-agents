@@ -57,6 +57,8 @@ export interface CreateSandboxConfig {
   repoImageId?: string | null;
   /** Git SHA the repo image was built from */
   repoImageSha?: string | null;
+  /** Sandbox lifetime in seconds. Defaults to DEFAULT_SANDBOX_TIMEOUT_SECONDS on Modal. */
+  timeoutSeconds?: number;
 }
 
 /**

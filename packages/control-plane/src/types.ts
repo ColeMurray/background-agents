@@ -267,6 +267,7 @@ export interface SessionState {
   model?: string;
   reasoningEffort?: string;
   isProcessing: boolean;
+  parentSessionId?: string | null;
 }
 
 // Participant presence
