@@ -1480,8 +1480,7 @@ export class SessionDO extends DurableObject<Env> {
     const reasoningEffort = this.validateReasoningEffort(model, body.reasoningEffort);
 
     // Resolve branch: user-selected branch takes priority, then repo default, then "main"
-    const fallbackBranch = body.defaultBranch || "main";
-    const branch = body.branch || fallbackBranch;
+    const baseBranch = body.branch || body.defaultBranch || "main";
 
     // Create session (store both internal ID and external name)
     this.repository.upsertSession({
@@ -1491,7 +1490,7 @@ export class SessionDO extends DurableObject<Env> {
       repoOwner: body.repoOwner,
       repoName: body.repoName,
       repoId: body.repoId ?? null,
-      baseBranch: branch,
+      baseBranch,
       model,
       reasoningEffort,
       status: "created",
@@ -1764,6 +1763,7 @@ export class SessionDO extends DurableObject<Env> {
 
     const result = await pullRequestService.createPullRequest({
       ...body,
+      baseBranch: body.baseBranch || session.repo_default_branch,
       promptingUserId: promptingParticipant.user_id,
       promptingAuth: authResolution.auth,
       sessionUrl,

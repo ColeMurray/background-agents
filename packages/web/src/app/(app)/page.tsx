@@ -41,7 +41,7 @@ export default function Home() {
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
     getDefaultReasoningEffort(DEFAULT_MODEL)
   );
-  const [selectedBranch, setSelectedBranch] = useState<string>("");
+  const [selectedBaseBranch, setSelectedBranch] = useState<string>("");
   const [prompt, setPrompt] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
@@ -116,7 +116,7 @@ export default function Home() {
     setIsCreatingSession(false);
     sessionCreationPromise.current = null;
     pendingConfigRef.current = null;
-  }, [selectedRepo, selectedModel, selectedBranch]);
+  }, [selectedRepo, selectedModel, selectedBaseBranch]);
 
   const createSessionForWarming = useCallback(async () => {
     if (pendingSessionId) return pendingSessionId;
@@ -141,7 +141,7 @@ export default function Home() {
             repoName: name,
             model: selectedModel,
             reasoningEffort,
-            branch: selectedBranch || undefined,
+            branch: selectedBaseBranch || undefined,
           }),
           signal: abortController.signal,
         });
@@ -175,7 +175,7 @@ export default function Home() {
 
     sessionCreationPromise.current = promise;
     return promise;
-  }, [selectedRepo, selectedModel, reasoningEffort, selectedBranch, pendingSessionId]);
+  }, [selectedRepo, selectedModel, reasoningEffort, selectedBaseBranch, pendingSessionId]);
 
   // Reset selections when model preferences change
   useEffect(() => {
@@ -267,7 +267,7 @@ export default function Home() {
       loadingRepos={loadingRepos}
       selectedRepo={selectedRepo}
       setSelectedRepo={handleRepoChange}
-      selectedBranch={selectedBranch}
+      selectedBaseBranch={selectedBaseBranch}
       setSelectedBranch={setSelectedBranch}
       branches={branches}
       loadingBranches={loadingBranches}
@@ -292,7 +292,7 @@ function HomeContent({
   loadingRepos,
   selectedRepo,
   setSelectedRepo,
-  selectedBranch,
+  selectedBaseBranch,
   setSelectedBranch,
   branches,
   loadingBranches,
@@ -313,7 +313,7 @@ function HomeContent({
   loadingRepos: boolean;
   selectedRepo: string;
   setSelectedRepo: (value: string) => void;
-  selectedBranch: string;
+  selectedBaseBranch: string;
   setSelectedBranch: (value: string) => void;
   branches: { name: string }[];
   loadingBranches: boolean;
@@ -453,7 +453,7 @@ function HomeContent({
 
                     {/* Branch selector */}
                     <Combobox
-                      value={selectedBranch}
+                      value={selectedBaseBranch}
                       onChange={(value) => setSelectedBranch(value)}
                       items={branches.map((b) => ({
                         value: b.name,
@@ -469,7 +469,7 @@ function HomeContent({
                     >
                       <BranchIcon className="w-3.5 h-3.5" />
                       <span className="truncate max-w-[9rem] sm:max-w-none">
-                        {loadingBranches ? "Loading..." : selectedBranch || "branch"}
+                        {loadingBranches ? "Loading..." : selectedBaseBranch || "branch"}
                       </span>
                       <ChevronDownIcon className="w-3 h-3" />
                     </Combobox>
