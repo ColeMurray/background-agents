@@ -68,7 +68,7 @@ export function ActionBar({
   });
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-wrap items-stretch gap-2">
       {/* View Preview */}
       {previewArtifact?.url && (
         <a
@@ -115,7 +115,7 @@ export function ActionBar({
           className={buttonVariants({
             variant: "outline",
             size: "sm",
-            className: "flex shrink-0 items-center justify-center !px-2",
+            className: "flex shrink-0 items-center justify-center !px-2 h-full",
           })}
         >
           <MoreIcon className="w-4 h-4" />
