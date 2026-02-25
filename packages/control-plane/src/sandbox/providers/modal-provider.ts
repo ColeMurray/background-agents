@@ -74,6 +74,7 @@ export class ModalSandboxProvider implements SandboxProvider {
         userEnvVars: config.userEnvVars,
         repoImageId: config.repoImageId,
         repoImageSha: config.repoImageSha,
+        branch: config.branch,
       });
 
       return {
@@ -113,6 +114,7 @@ export class ModalSandboxProvider implements SandboxProvider {
             repo_name: config.repoName,
             provider: config.provider,
             model: config.model,
+            branch: config.branch || null,
           },
           sandbox_id: config.sandboxId,
           control_plane_url: config.controlPlaneUrl,

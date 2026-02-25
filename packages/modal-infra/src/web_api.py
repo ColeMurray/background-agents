@@ -151,6 +151,7 @@ async def api_create_sandbox(
             session_id=request.get("session_id"),
             repo_owner=request.get("repo_owner"),
             repo_name=request.get("repo_name"),
+            branch=request.get("branch"),
             opencode_session_id=request.get("opencode_session_id"),
             provider=request.get("provider", "anthropic"),
             model=request.get("model", "claude-sonnet-4-6"),

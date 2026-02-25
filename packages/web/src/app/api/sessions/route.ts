@@ -59,6 +59,7 @@ export async function POST(request: NextRequest) {
       repoName: body.repoName,
       model: body.model,
       reasoningEffort: body.reasoningEffort,
+      branch: body.branch,
       title: body.title,
       scmToken: accessToken,
       userId,

@@ -61,6 +61,7 @@ export interface UpsertSessionData {
   repoOwner: string;
   repoName: string;
   repoId?: number | null;
+  repoDefaultBranch?: string;
   model: string;
   reasoningEffort?: string | null;
   status: SessionStatus;
@@ -216,14 +217,15 @@ export class SessionRepository {
 
   upsertSession(data: UpsertSessionData): void {
     this.sql.exec(
-      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, model, reasoning_effort, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, repo_default_branch, model, reasoning_effort, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.sessionName,
       data.title,
       data.repoOwner,
       data.repoName,
       data.repoId ?? null,
+      data.repoDefaultBranch ?? "main",
       data.model,
       data.reasoningEffort ?? null,
       data.status,

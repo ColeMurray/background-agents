@@ -557,6 +557,7 @@ async function handleCreateSession(
   const repoName = body.repoName.toLowerCase();
 
   let repoId: number;
+  let defaultBranch: string;
   try {
     const provider = createRouteSourceControlProvider(env);
     const resolved = await resolveInstalledRepo(provider, repoOwner, repoName);
@@ -564,6 +565,7 @@ async function handleCreateSession(
       return error("Repository is not installed for the GitHub App", 404);
     }
     repoId = resolved.repoId;
+    defaultBranch = resolved.defaultBranch;
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     logger.error("Failed to resolve repository", {
@@ -621,6 +623,8 @@ async function handleCreateSession(
           repoOwner,
           repoName,
           repoId,
+          defaultBranch,
+          branch: body.branch,
           title: body.title,
           model,
           reasoningEffort,

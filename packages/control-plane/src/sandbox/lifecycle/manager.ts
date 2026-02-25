@@ -365,6 +365,7 @@ export class SandboxLifecycleManager {
         userEnvVars,
         repoImageId,
         repoImageSha,
+        branch: session.repo_default_branch,
       };
 
       const result = await this.provider.createSandbox(createConfig);
@@ -476,6 +477,7 @@ export class SandboxLifecycleManager {
         provider,
         model: modelId,
         userEnvVars,
+        branch: session.repo_default_branch,
         timeoutSeconds: this.config.sandboxTimeoutSeconds,
       });
 

@@ -1435,6 +1435,8 @@ export class SessionDO extends DurableObject<Env> {
       repoOwner: string;
       repoName: string;
       repoId?: number;
+      defaultBranch?: string; // Repo's default branch from GitHub
+      branch?: string; // User-selected branch to work on
       title?: string;
       model?: string; // LLM model to use
       reasoningEffort?: string; // Reasoning effort level
@@ -1476,6 +1478,10 @@ export class SessionDO extends DurableObject<Env> {
     // Validate reasoning effort if provided
     const reasoningEffort = this.validateReasoningEffort(model, body.reasoningEffort);
 
+    // Resolve branch: user-selected branch takes priority, then repo default, then "main"
+    const repoDefaultBranch = body.defaultBranch || "main";
+    const branch = body.branch || repoDefaultBranch;
+
     // Create session (store both internal ID and external name)
     this.repository.upsertSession({
       id: sessionId,
@@ -1484,6 +1490,7 @@ export class SessionDO extends DurableObject<Env> {
       repoOwner: body.repoOwner,
       repoName: body.repoName,
       repoId: body.repoId ?? null,
+      repoDefaultBranch: branch,
       model,
       reasoningEffort,
       status: "created",

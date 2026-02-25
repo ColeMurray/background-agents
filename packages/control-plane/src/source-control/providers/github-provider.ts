@@ -24,6 +24,7 @@ import {
   getCachedInstallationToken,
   getInstallationRepository,
   listInstallationRepositories,
+  listRepositoryBranches,
   fetchWithTimeout,
 } from "../../auth/github-app";
 import type { GitHubProviderConfig } from "./types";
@@ -224,6 +225,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         repoId: repo.id,
         repoOwner: config.owner.toLowerCase(),
         repoName: config.name.toLowerCase(),
+        defaultBranch: repo.defaultBranch,
       };
     } catch (error) {
       throw SourceControlProviderError.fromFetchError(
@@ -254,6 +256,33 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     } catch (error) {
       throw SourceControlProviderError.fromFetchError(
         `Failed to list repositories: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+        extractHttpStatus(error)
+      );
+    }
+  }
+
+  /**
+   * List branches for a repository.
+   */
+  async listBranches(config: GetRepositoryConfig): Promise<{ name: string }[]> {
+    if (!this.appConfig) {
+      throw new SourceControlProviderError(
+        "GitHub App not configured - cannot list branches",
+        "permanent"
+      );
+    }
+
+    try {
+      return await listRepositoryBranches(
+        this.appConfig,
+        config.owner,
+        config.name,
+        this.kvCache ? { REPOS_CACHE: this.kvCache } : undefined
+      );
+    } catch (error) {
+      throw SourceControlProviderError.fromFetchError(
+        `Failed to list branches: ${error instanceof Error ? error.message : String(error)}`,
         error,
         extractHttpStatus(error)
       );

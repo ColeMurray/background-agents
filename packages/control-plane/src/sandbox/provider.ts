@@ -57,6 +57,8 @@ export interface CreateSandboxConfig {
   repoImageId?: string | null;
   /** Git SHA the repo image was built from */
   repoImageSha?: string | null;
+  /** Git branch to work on (defaults to repo's default branch) */
+  branch?: string;
 }
 
 /**
@@ -99,6 +101,8 @@ export interface RestoreConfig {
   userEnvVars?: Record<string, string>;
   /** Sandbox lifetime in seconds. Defaults to DEFAULT_SANDBOX_TIMEOUT_SECONDS. */
   timeoutSeconds?: number;
+  /** Git branch to work on (defaults to repo's default branch) */
+  branch?: string;
   /** Trace ID for correlation */
   traceId?: string;
   /** Request ID for correlation */

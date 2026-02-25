@@ -298,6 +298,39 @@ async function handleGetRepoMetadata(
   }
 }
 
+/**
+ * List branches for a specific repository.
+ */
+async function handleListBranches(
+  _request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  _ctx: RequestContext
+): Promise<Response> {
+  const owner = match.groups?.owner;
+  const name = match.groups?.name;
+
+  if (!owner || !name) {
+    return error("Owner and name are required");
+  }
+
+  try {
+    const provider = createRouteSourceControlProvider(env);
+    const branches = await provider.listBranches({ owner, name });
+    return json({ branches });
+  } catch (e) {
+    if (e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus) {
+      return error("SCM provider not configured", 500);
+    }
+    logger.error("Failed to list branches", {
+      error: e instanceof Error ? e : String(e),
+      repo_owner: owner,
+      repo_name: name,
+    });
+    return error("Failed to list branches", 500);
+  }
+}
+
 export const reposRoutes: Route[] = [
   {
     method: "GET",
@@ -313,5 +346,10 @@ export const reposRoutes: Route[] = [
     method: "GET",
     pattern: parsePattern("/repos/:owner/:name/metadata"),
     handler: handleGetRepoMetadata,
+  },
+  {
+    method: "GET",
+    pattern: parsePattern("/repos/:owner/:name/branches"),
+    handler: handleListBranches,
   },
 ];

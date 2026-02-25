@@ -260,6 +260,7 @@ export interface CreateSessionRequest {
   title?: string;
   model?: string;
   reasoningEffort?: string;
+  branch?: string;
 }
 
 export interface CreateSessionResponse {
