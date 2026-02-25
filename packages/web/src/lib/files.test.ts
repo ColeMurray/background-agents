@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractChangedFiles } from "./files";
+import { extractChangedFiles, parseApplyPatch } from "./files";
 
 function makeEvent(overrides: Record<string, unknown> = {}) {
   return {
@@ -174,5 +174,219 @@ describe("extractChangedFiles", () => {
     expect(extractChangedFiles(events)).toEqual([
       { filename: "src/new.ts", additions: 0, deletions: 0 },
     ]);
+  });
+
+  // --- apply_patch tests ---
+
+  it("extracts a single-file add patch with correct addition count", () => {
+    const events = [
+      makeEvent({
+        tool: "apply_patch",
+        args: {
+          patchText: [
+            "*** Begin Patch",
+            "*** Add File: src/new-file.ts",
+            "+import { foo } from 'bar';",
+            "+",
+            "+export function hello() {",
+            "+  return 'world';",
+            "+}",
+            "*** End Patch",
+          ].join("\n"),
+        },
+      }),
+    ];
+    expect(extractChangedFiles(events)).toEqual([
+      { filename: "src/new-file.ts", additions: 5, deletions: 0 },
+    ]);
+  });
+
+  it("extracts a single-file update patch with correct additions and deletions", () => {
+    const events = [
+      makeEvent({
+        tool: "apply_patch",
+        args: {
+          patchText: [
+            "*** Begin Patch",
+            "*** Update File: src/index.ts",
+            "@@ -1,4 +1,5 @@",
+            " import { foo } from 'bar';",
+            "-const x = 1;",
+            "-const y = 2;",
+            "+const x = 10;",
+            "+const y = 20;",
+            "+const z = 30;",
+            " export default x;",
+            "*** End Patch",
+          ].join("\n"),
+        },
+      }),
+    ];
+    // 3 additions (+), 2 deletions (-)
+    expect(extractChangedFiles(events)).toEqual([
+      { filename: "src/index.ts", additions: 3, deletions: 2 },
+    ]);
+  });
+
+  it("extracts a single-file delete patch", () => {
+    const events = [
+      makeEvent({
+        tool: "apply_patch",
+        args: {
+          patchText: ["*** Begin Patch", "*** Delete File: src/obsolete.ts", "*** End Patch"].join(
+            "\n"
+          ),
+        },
+      }),
+    ];
+    // File shows up with 0/0 stats (no body lines to count)
+    expect(extractChangedFiles(events)).toEqual([
+      { filename: "src/obsolete.ts", additions: 0, deletions: 0 },
+    ]);
+  });
+
+  it("extracts multi-file patch with correct per-file stats", () => {
+    const events = [
+      makeEvent({
+        tool: "apply_patch",
+        args: {
+          patchText: [
+            "*** Begin Patch",
+            "*** Add File: src/a.ts",
+            "+line1",
+            "+line2",
+            "*** Update File: src/b.ts",
+            "@@ -1,2 +1,2 @@",
+            "-old",
+            "+new",
+            " unchanged",
+            "*** Delete File: src/c.ts",
+            "*** End Patch",
+          ].join("\n"),
+        },
+      }),
+    ];
+    expect(extractChangedFiles(events)).toEqual([
+      { filename: "src/a.ts", additions: 2, deletions: 0 },
+      { filename: "src/b.ts", additions: 1, deletions: 1 },
+      { filename: "src/c.ts", additions: 0, deletions: 0 },
+    ]);
+  });
+
+  it("accumulates apply_patch + Edit stats on same file", () => {
+    const events = [
+      makeEvent({
+        tool: "apply_patch",
+        args: {
+          patchText: [
+            "*** Begin Patch",
+            "*** Update File: src/index.ts",
+            "@@ -1,2 +1,2 @@",
+            "-old line",
+            "+new line",
+            "*** End Patch",
+          ].join("\n"),
+        },
+      }),
+      // Subsequent Edit on the same file
+      makeEvent({
+        tool: "Edit",
+        args: { filePath: "src/index.ts", oldString: "a", newString: "b\nc" },
+      }),
+    ];
+    // apply_patch: +1/-1, Edit: +2/-1 (diffLines: "a" → "b\nc")
+    expect(extractChangedFiles(events)).toEqual([
+      { filename: "src/index.ts", additions: 3, deletions: 2 },
+    ]);
+  });
+
+  it("skips apply_patch with empty patchText", () => {
+    const events = [makeEvent({ tool: "apply_patch", args: { patchText: "" } })];
+    expect(extractChangedFiles(events)).toEqual([]);
+  });
+
+  it("skips apply_patch with undefined patchText", () => {
+    const events = [makeEvent({ tool: "apply_patch", args: { patchText: undefined } })];
+    expect(extractChangedFiles(events)).toEqual([]);
+  });
+
+  it("skips apply_patch with missing args", () => {
+    const events = [makeEvent({ tool: "apply_patch", args: undefined })];
+    expect(extractChangedFiles(events)).toEqual([]);
+  });
+
+  it("handles update patch with multiple hunks", () => {
+    const events = [
+      makeEvent({
+        tool: "apply_patch",
+        args: {
+          patchText: [
+            "*** Begin Patch",
+            "*** Update File: src/app.ts",
+            "@@ -1,3 +1,3 @@",
+            " import a;",
+            "-const x = 1;",
+            "+const x = 2;",
+            " const y = 3;",
+            "@@ -10,3 +10,4 @@",
+            " function foo() {",
+            "+  console.log('added');",
+            "   return true;",
+            " }",
+            "*** End Patch",
+          ].join("\n"),
+        },
+      }),
+    ];
+    // Hunk 1: +1/-1; Hunk 2: +1/-0 → total: +2/-1
+    expect(extractChangedFiles(events)).toEqual([
+      { filename: "src/app.ts", additions: 2, deletions: 1 },
+    ]);
+  });
+
+  it("skips *** End of File markers in patch body", () => {
+    const events = [
+      makeEvent({
+        tool: "apply_patch",
+        args: {
+          patchText: [
+            "*** Begin Patch",
+            "*** Add File: src/new.ts",
+            "+content",
+            "*** End of File",
+            "*** End Patch",
+          ].join("\n"),
+        },
+      }),
+    ];
+    expect(extractChangedFiles(events)).toEqual([
+      { filename: "src/new.ts", additions: 1, deletions: 0 },
+    ]);
+  });
+});
+
+describe("parseApplyPatch", () => {
+  it("returns empty array for patch with no file sections", () => {
+    expect(parseApplyPatch("*** Begin Patch\n*** End Patch")).toEqual([]);
+  });
+
+  it("correctly counts context lines as neither additions nor deletions", () => {
+    const result = parseApplyPatch(
+      [
+        "*** Update File: src/foo.ts",
+        "@@ -1,5 +1,5 @@",
+        " line1",
+        " line2",
+        "-old",
+        "+new",
+        " line4",
+      ].join("\n")
+    );
+    expect(result).toEqual([{ filePath: "src/foo.ts", additions: 1, deletions: 1 }]);
+  });
+
+  it("handles file path with spaces", () => {
+    const result = parseApplyPatch(["*** Add File: src/my file.ts", "+content"].join("\n"));
+    expect(result).toEqual([{ filePath: "src/my file.ts", additions: 1, deletions: 0 }]);
   });
 });
