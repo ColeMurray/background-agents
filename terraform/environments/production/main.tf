@@ -180,7 +180,7 @@ module "control_plane_worker" {
   compatibility_flags = ["nodejs_compat"]
   migration_tag       = "v1"
 
-  depends_on = [null_resource.control_plane_build, module.session_index_kv, null_resource.d1_migrations]
+  depends_on = [null_resource.control_plane_build, module.session_index_kv, null_resource.d1_migrations, module.linear_bot_worker, module.slack_bot_worker]
 }
 
 # Build slack-bot worker bundle (only runs during apply, not plan)
