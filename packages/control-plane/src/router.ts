@@ -653,6 +653,7 @@ async function handleCreateSession(
     repoName,
     model,
     reasoningEffort,
+    branch: body.branch || defaultBranch || null,
     status: "created",
     createdAt: now,
     updatedAt: now,

@@ -8,7 +8,13 @@ import useSWR from "swr";
 import { formatRelativeTime, isInactiveSession } from "@/lib/time";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useIsMobile } from "@/hooks/use-media-query";
-import { SidebarIcon, InspectIcon, PlusIcon, SettingsIcon } from "@/components/ui/icons";
+import {
+  SidebarIcon,
+  InspectIcon,
+  PlusIcon,
+  SettingsIcon,
+  BranchIcon,
+} from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
 
 export interface SessionItem {
@@ -16,6 +22,7 @@ export interface SessionItem {
   title: string | null;
   repoOwner: string;
   repoName: string;
+  branch: string | null;
   status: string;
   createdAt: number;
   updatedAt: number;
@@ -239,6 +246,13 @@ function SessionListItem({
         <span>{relativeTime}</span>
         <span>·</span>
         <span className="truncate">{repoInfo}</span>
+        {session.branch && session.branch !== "main" && (
+          <>
+            <span>·</span>
+            <BranchIcon className="w-3 h-3 flex-shrink-0" />
+            <span className="truncate">{session.branch}</span>
+          </>
+        )}
       </div>
     </Link>
   );
