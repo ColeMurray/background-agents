@@ -2,6 +2,7 @@
  * File change extraction utilities for parsing Edit/Write tool call events
  */
 
+import { diffLines } from "diff";
 import type { FileChange } from "@/types/session";
 
 interface SandboxEvent {
@@ -22,10 +23,34 @@ function countLines(str: unknown): number {
 }
 
 /**
+ * Compute accurate line-level additions/deletions between two strings
+ * using the Myers diff algorithm via the `diff` package.
+ */
+function computeEditStats(oldStr: unknown, newStr: unknown): { additions: number; deletions: number } {
+  const old = typeof oldStr === "string" ? oldStr : "";
+  const neu = typeof newStr === "string" ? newStr : "";
+  if (old === "" && neu === "") return { additions: 0, deletions: 0 };
+
+  // ignoreNewlineAtEof prevents false diffs when tool call substrings
+  // differ only in whether the last line has a trailing newline
+  const changes = diffLines(old, neu, { ignoreNewlineAtEof: true });
+  let additions = 0;
+  let deletions = 0;
+  for (const change of changes) {
+    if (change.added) additions += change.count ?? 0;
+    if (change.removed) deletions += change.count ?? 0;
+  }
+  return { additions, deletions };
+}
+
+/**
  * Extract changed files from sandbox events.
  *
  * Filters for completed Edit/Write tool_call events, deduplicates by file path,
- * accumulates approximate diff stats, and returns a sorted list of FileChange.
+ * accumulates diff stats, and returns a sorted list of FileChange.
+ *
+ * Edit events use line-level diffing (via `diffLines`) for accurate stats.
+ * Write events count total lines as additions (no prior content to diff against).
  */
 export function extractChangedFiles(events: SandboxEvent[]): FileChange[] {
   const fileMap = new Map<string, FileChange>();
@@ -48,12 +73,12 @@ export function extractChangedFiles(events: SandboxEvent[]): FileChange[] {
     let deletions = 0;
 
     if (normalizedTool === "edit") {
-      additions = countLines(args.newString);
-      deletions = countLines(args.oldString);
+      const stats = computeEditStats(args.oldString, args.newString);
+      additions = stats.additions;
+      deletions = stats.deletions;
     } else {
-      // write
+      // write — no prior content, count total lines as additions
       additions = countLines(args.content);
-      deletions = 0;
     }
 
     const existing = fileMap.get(filePath);

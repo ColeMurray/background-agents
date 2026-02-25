@@ -39,10 +39,12 @@ describe("extractChangedFiles", () => {
     expect(extractChangedFiles(events)).toEqual([]);
   });
 
-  it("extracts a single Edit event", () => {
+  it("extracts a single Edit event with accurate diff stats", () => {
+    // oldString: "a\nb" (2 lines), newString: "a\nb\nc" (3 lines)
+    // Only line "c" was actually added — diffLines correctly reports +1/-0
     const events = [makeEvent()];
     expect(extractChangedFiles(events)).toEqual([
-      { filename: "src/index.ts", additions: 3, deletions: 2 },
+      { filename: "src/index.ts", additions: 1, deletions: 0 },
     ]);
   });
 
@@ -82,9 +84,11 @@ describe("extractChangedFiles", () => {
   it("deduplicates by file path and accumulates stats", () => {
     const events = [
       makeEvent({
+        // "a" → "b\nc": full replacement, 2 added + 1 deleted
         args: { filePath: "src/index.ts", oldString: "a", newString: "b\nc" },
       }),
       makeEvent({
+        // "x\ny" → "z": full replacement, 1 added + 2 deleted
         args: { filePath: "src/index.ts", oldString: "x\ny", newString: "z" },
       }),
     ];
@@ -92,8 +96,8 @@ describe("extractChangedFiles", () => {
     expect(result).toHaveLength(1);
     expect(result[0]).toEqual({
       filename: "src/index.ts",
-      additions: 2 + 1, // 2 lines + 1 line
-      deletions: 1 + 2, // 1 line + 2 lines
+      additions: 3,
+      deletions: 3,
     });
   });
 
@@ -123,6 +127,23 @@ describe("extractChangedFiles", () => {
     ];
     const result = extractChangedFiles(events);
     expect(result).toHaveLength(2);
+  });
+
+  it("computes accurate diff for edits with shared context lines", () => {
+    // A large edit where only 1 line changed out of many — diffLines correctly
+    // reports +1/-1 instead of the old heuristic which would report +5/-5
+    const events = [
+      makeEvent({
+        args: {
+          filePath: "src/app.ts",
+          oldString: "import a from 'a';\nimport b from 'b';\nconst x = 1;\nconst y = 2;\nconst z = 3;",
+          newString: "import a from 'a';\nimport b from 'b';\nconst x = 42;\nconst y = 2;\nconst z = 3;",
+        },
+      }),
+    ];
+    expect(extractChangedFiles(events)).toEqual([
+      { filename: "src/app.ts", additions: 1, deletions: 1 },
+    ]);
   });
 
   it("handles missing args gracefully", () => {
