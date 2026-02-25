@@ -370,6 +370,14 @@ export class SessionDO extends DurableObject<Env> {
       getSandboxWithCircuitBreaker: () => this.repository.getSandboxWithCircuitBreaker(),
       getSession: () => this.repository.getSession(),
       getUserEnvVars: () => this.getUserEnvVars(),
+      getSessionOwnerGitIdentity: () => {
+        const participants = this.repository.listParticipants();
+        const owner = participants.find((p) => p.role === "owner");
+        if (owner?.scm_name && owner?.scm_email) {
+          return { name: owner.scm_name, email: owner.scm_email };
+        }
+        return null;
+      },
       updateSandboxStatus: (status) => this.updateSandboxStatus(status),
       updateSandboxForSpawn: (data) => this.repository.updateSandboxForSpawn(data),
       updateSandboxModalObjectId: (id) => this.repository.updateSandboxModalObjectId(id),

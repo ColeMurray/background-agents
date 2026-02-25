@@ -59,6 +59,8 @@ export interface SandboxStorage {
   getSession(): SessionRow | null;
   /** Get user env vars for sandbox injection */
   getUserEnvVars(): Promise<Record<string, string> | undefined>;
+  /** Get session owner's git identity for commit attribution */
+  getSessionOwnerGitIdentity(): { name: string; email: string } | null;
   /** Update sandbox status */
   updateSandboxStatus(status: SandboxStatus): void;
   /** Update sandbox for spawn (status, auth token, sandbox ID, created_at) */
@@ -352,6 +354,9 @@ export class SandboxLifecycleManager {
         }
       }
 
+      // Look up session owner's git identity for commit attribution
+      const gitIdentity = this.storage.getSessionOwnerGitIdentity();
+
       // Create sandbox via provider
       const createConfig: CreateSandboxConfig = {
         sessionId,
@@ -363,6 +368,8 @@ export class SandboxLifecycleManager {
         provider,
         model: modelId,
         userEnvVars,
+        gitUserName: gitIdentity?.name,
+        gitUserEmail: gitIdentity?.email,
         repoImageId,
         repoImageSha,
       };

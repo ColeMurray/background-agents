@@ -82,7 +82,8 @@ function createMockStorage(
   sandbox:
     | (SandboxRow & { spawn_failure_count: number; last_spawn_failure: number })
     | null = createMockSandbox(),
-  userEnvVars: Record<string, string> | undefined = undefined
+  userEnvVars: Record<string, string> | undefined = undefined,
+  ownerGitIdentity: { name: string; email: string } | null = null
 ): SandboxStorage & { calls: string[] } {
   const calls: string[] = [];
 
@@ -103,6 +104,10 @@ function createMockStorage(
     getUserEnvVars: vi.fn(async () => {
       calls.push("getUserEnvVars");
       return userEnvVars;
+    }),
+    getSessionOwnerGitIdentity: vi.fn(() => {
+      calls.push("getSessionOwnerGitIdentity");
+      return ownerGitIdentity;
     }),
     updateSandboxStatus: vi.fn((status: SandboxStatus) => {
       calls.push(`updateSandboxStatus:${status}`);
@@ -299,6 +304,63 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(provider.createSandbox).toHaveBeenCalledWith(expect.objectContaining({ userEnvVars }));
+    });
+
+    it("passes session owner git identity to provider", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const gitIdentity = { name: "Jane Doe", email: "jane@example.com" };
+      const storage = createMockStorage(createMockSession(), sandbox, undefined, gitIdentity);
+      const broadcaster = createMockBroadcaster();
+      const wsManager = createMockWebSocketManager(false);
+      const alarmScheduler = createMockAlarmScheduler();
+      const idGenerator = createMockIdGenerator();
+      const provider = createMockProvider();
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        broadcaster,
+        wsManager,
+        alarmScheduler,
+        idGenerator,
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          gitUserName: "Jane Doe",
+          gitUserEmail: "jane@example.com",
+        })
+      );
+    });
+
+    it("passes undefined git identity when no owner found", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession(), sandbox, undefined, null);
+      const broadcaster = createMockBroadcaster();
+      const wsManager = createMockWebSocketManager(false);
+      const provider = createMockProvider();
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        broadcaster,
+        wsManager,
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          gitUserName: undefined,
+          gitUserEmail: undefined,
+        })
+      );
     });
 
     it("respects circuit breaker blocking", async () => {
