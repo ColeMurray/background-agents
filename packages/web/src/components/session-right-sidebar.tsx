@@ -10,7 +10,7 @@ import {
 } from "./sidebar";
 import { extractLatestTasks } from "@/lib/tasks";
 import { extractChangedFiles } from "@/lib/files";
-import type { Artifact } from "@/types/session";
+import type { Artifact, SandboxEvent } from "@/types/session";
 
 interface SessionState {
   id: string;
@@ -33,13 +33,6 @@ interface Participant {
   avatar?: string;
   status: "active" | "idle" | "away";
   lastSeen: number;
-}
-
-interface SandboxEvent {
-  type: string;
-  tool?: string;
-  args?: Record<string, unknown>;
-  timestamp: number;
 }
 
 interface SessionRightSidebarProps {

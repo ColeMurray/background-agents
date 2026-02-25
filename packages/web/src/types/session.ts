@@ -18,6 +18,27 @@ export interface Artifact {
   createdAt: number;
 }
 
+export interface SandboxEvent {
+  type: string;
+  content?: string;
+  messageId?: string;
+  tool?: string;
+  args?: Record<string, unknown>;
+  callId?: string;
+  result?: string;
+  error?: string;
+  success?: boolean;
+  status?: string;
+  output?: string;
+  sha?: string;
+  timestamp: number;
+  author?: {
+    participantId: string;
+    name: string;
+    avatar?: string;
+  };
+}
+
 export interface Task {
   content: string;
   status: "pending" | "in_progress" | "completed";

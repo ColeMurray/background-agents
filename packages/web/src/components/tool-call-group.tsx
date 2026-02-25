@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useState } from "react";
-import type { SandboxEvent } from "@/lib/tool-formatters";
+import type { SandboxEvent } from "@/types/session";
 import { formatToolGroup } from "@/lib/tool-formatters";
 import { ToolCallItem } from "./tool-call-item";
 import {
