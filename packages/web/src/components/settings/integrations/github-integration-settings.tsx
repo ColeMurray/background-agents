@@ -74,7 +74,11 @@ export function GitHubIntegrationSettings() {
         )}
       </Section>
 
-      <GlobalSettingsSection settings={settings} availableRepos={availableRepos} />
+      <GlobalSettingsSection
+        settings={settings}
+        availableRepos={availableRepos}
+        enabledModelOptions={enabledModelOptions}
+      />
 
       <Section
         title="Repository Overrides"
@@ -93,10 +97,14 @@ export function GitHubIntegrationSettings() {
 function GlobalSettingsSection({
   settings,
   availableRepos,
+  enabledModelOptions,
 }: {
   settings: GitHubGlobalConfig | null | undefined;
   availableRepos: EnrichedRepository[];
+  enabledModelOptions: { category: string; models: { id: string; name: string }[] }[];
 }) {
+  const [model, setModel] = useState(settings?.defaults?.model ?? "");
+  const [effort, setEffort] = useState(settings?.defaults?.reasoningEffort ?? "");
   const [autoReviewOnOpen, setAutoReviewOnOpen] = useState(
     settings?.defaults?.autoReviewOnOpen ?? true
   );
@@ -117,9 +125,13 @@ function GlobalSettingsSection({
   const [dirty, setDirty] = useState(false);
   const [initialized, setInitialized] = useState(false);
 
+  const reasoningConfig = model ? MODEL_REASONING_CONFIG[model as ValidModel] : undefined;
+
   useEffect(() => {
     if (settings !== undefined && !initialized) {
       if (settings) {
+        setModel(settings.defaults?.model ?? "");
+        setEffort(settings.defaults?.reasoningEffort ?? "");
         setAutoReviewOnOpen(settings.defaults?.autoReviewOnOpen ?? true);
         setEnabledRepos(settings.enabledRepos ?? []);
         setRepoScopeMode(settings.enabledRepos === undefined ? "all" : "selected");
@@ -152,6 +164,8 @@ function GlobalSettingsSection({
 
       if (res.ok) {
         mutate(GLOBAL_SETTINGS_KEY);
+        setModel("");
+        setEffort("");
         setAutoReviewOnOpen(true);
         setEnabledRepos([]);
         setRepoScopeMode("all");
@@ -176,12 +190,14 @@ function GlobalSettingsSection({
     setError("");
     setSuccess("");
 
-    const body: GitHubGlobalConfig = {
-      defaults: {
-        autoReviewOnOpen,
-        ...(triggerUserMode === "specific" ? { allowedTriggerUsers } : {}),
-      },
+    const defaults: GitHubBotSettings = {
+      autoReviewOnOpen,
+      ...(triggerUserMode === "specific" ? { allowedTriggerUsers } : {}),
     };
+    if (model) defaults.model = model;
+    if (effort) defaults.reasoningEffort = effort;
+
+    const body: GitHubGlobalConfig = { defaults };
 
     if (repoScopeMode === "selected") {
       body.enabledRepos = enabledRepos;
@@ -258,6 +274,58 @@ function GlobalSettingsSection({
           <div className="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform peer-checked:translate-x-4" />
         </div>
       </label>
+
+      <div className="mb-4">
+        <label className="block mb-3">
+          <span className="block text-foreground font-medium mb-1">Default model</span>
+          <Select
+            value={model}
+            onChange={(e) => {
+              const nextModel = e.target.value;
+              setModel(nextModel);
+              if (effort && nextModel && !isValidReasoningEffort(nextModel, effort)) {
+                setEffort("");
+              }
+              setDirty(true);
+              setError("");
+              setSuccess("");
+            }}
+          >
+            <option value="">Worker default</option>
+            {enabledModelOptions.map((group) => (
+              <optgroup key={group.category} label={group.category}>
+                {group.models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </Select>
+        </label>
+
+        {reasoningConfig && (
+          <label className="block mb-3">
+            <span className="block text-foreground font-medium mb-1">Reasoning effort</span>
+            <Select
+              value={effort}
+              onChange={(e) => {
+                setEffort(e.target.value);
+                setDirty(true);
+                setError("");
+                setSuccess("");
+              }}
+            >
+              <option value="">Use model default</option>
+              {reasoningConfig.efforts.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </Select>
+          </label>
+        )}
+      </div>
 
       <div className="mb-4">
         <p className="text-sm font-medium text-foreground mb-2">Repository Scope</p>
