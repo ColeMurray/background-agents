@@ -9,7 +9,8 @@ import {
   FilesChangedSection,
 } from "./sidebar";
 import { extractLatestTasks } from "@/lib/tasks";
-import type { Artifact, FileChange } from "@/types/session";
+import { extractChangedFiles } from "@/lib/files";
+import type { Artifact } from "@/types/session";
 
 interface SessionState {
   id: string;
@@ -46,7 +47,6 @@ interface SessionRightSidebarProps {
   participants: Participant[];
   events: SandboxEvent[];
   artifacts: Artifact[];
-  filesChanged?: FileChange[];
 }
 
 export type SessionRightSidebarContentProps = SessionRightSidebarProps;
@@ -56,9 +56,9 @@ export function SessionRightSidebarContent({
   participants,
   events,
   artifacts,
-  filesChanged = [],
 }: SessionRightSidebarContentProps) {
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
+  const filesChanged = useMemo(() => extractChangedFiles(events), [events]);
 
   if (!sessionState) {
     return (
@@ -124,7 +124,6 @@ export function SessionRightSidebar({
   participants,
   events,
   artifacts,
-  filesChanged = [],
 }: SessionRightSidebarProps) {
   return (
     <aside className="w-80 border-l border-border-muted overflow-y-auto hidden lg:block">
@@ -133,7 +132,6 @@ export function SessionRightSidebar({
         participants={participants}
         events={events}
         artifacts={artifacts}
-        filesChanged={filesChanged}
       />
     </aside>
   );
