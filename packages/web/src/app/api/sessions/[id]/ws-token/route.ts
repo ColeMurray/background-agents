@@ -35,6 +35,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const jwt = await getToken({ req: request });
     const jwtMs = Date.now() - jwtStart;
 
+    // GitHub noreply email ensures commit attribution even when the user's
+    // email is private (user.email will be null in that case).
+    const scmEmail =
+      user.email ||
+      (user.id && user.login ? `${user.id}+${user.login}@users.noreply.github.com` : null);
+
     const fetchStart = Date.now();
     const response = await controlPlaneFetch(`/sessions/${sessionId}/ws-token`, {
       method: "POST",
@@ -42,8 +48,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         userId,
         scmUserId: user.id,
         scmLogin: user.login,
-        scmName: user.name,
-        scmEmail: user.email,
+        scmName: user.name || user.login,
+        scmEmail,
         scmToken: jwt?.accessToken as string | undefined,
         scmTokenExpiresAt: jwt?.accessTokenExpiresAt as number | undefined,
         scmRefreshToken: jwt?.refreshToken as string | undefined,

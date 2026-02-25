@@ -54,6 +54,12 @@ export async function POST(request: NextRequest) {
     const user = session.user;
     const userId = user.id || user.email || "anonymous";
 
+    // GitHub noreply email ensures commit attribution even when the user's
+    // email is private (user.email will be null in that case).
+    const scmEmail =
+      user.email ||
+      (user.id && user.login ? `${user.id}+${user.login}@users.noreply.github.com` : null);
+
     const sessionBody = {
       repoOwner: body.repoOwner,
       repoName: body.repoName,
@@ -63,8 +69,8 @@ export async function POST(request: NextRequest) {
       scmToken: accessToken,
       userId,
       scmLogin: user.login,
-      scmName: user.name,
-      scmEmail: user.email,
+      scmName: user.name || user.login,
+      scmEmail,
     };
 
     const response = await controlPlaneFetch("/sessions", {
