@@ -82,6 +82,7 @@ describe("D1 SessionIndexStore", () => {
       repoName: "api",
       model: "anthropic/claude-sonnet-4-5",
       reasoningEffort: "high",
+      branch: null,
       status: "created",
       createdAt: now,
       updatedAt: now,

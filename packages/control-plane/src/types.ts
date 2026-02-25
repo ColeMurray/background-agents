@@ -260,6 +260,7 @@ export interface SessionState {
   repoOwner: string;
   repoName: string;
   branchName: string | null;
+  baseBranch: string | null;
   status: SessionStatus;
   sandboxStatus: SandboxStatus;
   messageCount: number;
@@ -312,7 +313,7 @@ export interface SessionResponse {
   title: string | null;
   repoOwner: string;
   repoName: string;
-  repoDefaultBranch: string;
+  baseBranch: string;
   branchName: string | null;
   baseSha: string | null;
   currentSha: string | null;

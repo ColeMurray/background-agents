@@ -1197,6 +1197,7 @@ export class SessionDO extends DurableObject<Env> {
       repoOwner: session?.repo_owner ?? "",
       repoName: session?.repo_name ?? "",
       branchName: session?.branch_name ?? null,
+      baseBranch: session?.repo_default_branch ?? null,
       status: session?.status ?? "created",
       sandboxStatus: sandbox?.status ?? "pending",
       messageCount,
@@ -1479,8 +1480,8 @@ export class SessionDO extends DurableObject<Env> {
     const reasoningEffort = this.validateReasoningEffort(model, body.reasoningEffort);
 
     // Resolve branch: user-selected branch takes priority, then repo default, then "main"
-    const repoDefaultBranch = body.defaultBranch || "main";
-    const branch = body.branch || repoDefaultBranch;
+    const fallbackBranch = body.defaultBranch || "main";
+    const branch = body.branch || fallbackBranch;
 
     // Create session (store both internal ID and external name)
     this.repository.upsertSession({
@@ -1490,7 +1491,7 @@ export class SessionDO extends DurableObject<Env> {
       repoOwner: body.repoOwner,
       repoName: body.repoName,
       repoId: body.repoId ?? null,
-      repoDefaultBranch: branch,
+      baseBranch: branch,
       model,
       reasoningEffort,
       status: "created",
@@ -1541,7 +1542,7 @@ export class SessionDO extends DurableObject<Env> {
       title: session.title,
       repoOwner: session.repo_owner,
       repoName: session.repo_name,
-      repoDefaultBranch: session.repo_default_branch,
+      baseBranch: session.repo_default_branch,
       branchName: session.branch_name,
       baseSha: session.base_sha,
       currentSha: session.current_sha,

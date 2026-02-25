@@ -45,6 +45,7 @@ interface SessionState {
   repoOwner: string;
   repoName: string;
   branchName: string | null;
+  baseBranch: string | null;
   status: string;
   sandboxStatus: string;
   messageCount: number;
