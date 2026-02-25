@@ -820,6 +820,10 @@ class AgentBridge:
         # Child session tracking (sub-tasks)
         tracked_child_session_ids: set[str] = set()
 
+        # Compaction tracking: after compaction, parentID changes so we must
+        # accept all non-summary assistant messages from the parent session
+        compaction_occurred = False
+
         start_time = time.time()
         loop = asyncio.get_running_loop()
 
@@ -974,25 +978,32 @@ class AgentBridge:
                                         role = info.get("role", "")
                                         finish = info.get("finish", "")
 
+                                        parent_matches = parent_id == opencode_message_id
+                                        is_compaction_summary = info.get("summary") is True
+
                                         self.log.debug(
                                             "bridge.message_updated",
                                             role=role,
                                             oc_msg_id=oc_msg_id,
-                                            parent_match=(parent_id == opencode_message_id),
+                                            parent_match=parent_matches,
+                                            compaction_occurred=compaction_occurred,
+                                            is_compaction_summary=is_compaction_summary,
                                         )
 
-                                        if (
-                                            role == "assistant"
-                                            and parent_id == opencode_message_id
-                                            and oc_msg_id
-                                        ):
-                                            allowed_assistant_msg_ids.add(oc_msg_id)
-                                            pending = pending_parts.pop(oc_msg_id, [])
-                                            if pending:
-                                                pending_parts_total -= len(pending)
-                                                for part, delta in pending:
-                                                    for part_event in handle_part(part, delta):
-                                                        yield part_event
+                                        if role == "assistant" and oc_msg_id:
+                                            # Accept if: parentID matches our message,
+                                            # OR compaction happened and this isn't the
+                                            # compaction summary itself
+                                            if parent_matches or (
+                                                compaction_occurred and not is_compaction_summary
+                                            ):
+                                                allowed_assistant_msg_ids.add(oc_msg_id)
+                                                pending = pending_parts.pop(oc_msg_id, [])
+                                                if pending:
+                                                    pending_parts_total -= len(pending)
+                                                    for part, delta in pending:
+                                                        for part_event in handle_part(part, delta):
+                                                            yield part_event
 
                                         if finish and finish not in ("tool-calls", ""):
                                             self.log.debug(
@@ -1065,6 +1076,7 @@ class AgentBridge:
                                             opencode_message_id,
                                             cumulative_text,
                                             allowed_assistant_msg_ids,
+                                            compaction_occurred=compaction_occurred,
                                         ):
                                             yield final_event
                                         return
@@ -1088,6 +1100,7 @@ class AgentBridge:
                                             opencode_message_id,
                                             cumulative_text,
                                             allowed_assistant_msg_ids,
+                                            compaction_occurred=compaction_occurred,
                                         ):
                                             yield final_event
                                         return
@@ -1122,6 +1135,15 @@ class AgentBridge:
                                         }
                                         # No return — parent stream continues
 
+                                elif event_type == "session.compacted":
+                                    compacted_session_id = props.get("sessionID")
+                                    if compacted_session_id == self.opencode_session_id:
+                                        compaction_occurred = True
+                                        self.log.info(
+                                            "bridge.session_compacted",
+                                            message_id=message_id,
+                                        )
+
                         if loop.time() > prompt_start + self.PROMPT_MAX_DURATION:
                             elapsed = time.time() - start_time
                             self.log.error(
@@ -1136,6 +1158,7 @@ class AgentBridge:
                                 opencode_message_id,
                                 cumulative_text,
                                 allowed_assistant_msg_ids,
+                                compaction_occurred=compaction_occurred,
                             ):
                                 yield final_event
                             raise RuntimeError(
@@ -1158,6 +1181,7 @@ class AgentBridge:
                 opencode_message_id,
                 cumulative_text,
                 allowed_assistant_msg_ids,
+                compaction_occurred=compaction_occurred,
             ):
                 yield final_event
             raise RuntimeError(
@@ -1175,6 +1199,7 @@ class AgentBridge:
         opencode_message_id: str,
         cumulative_text: dict[str, str],
         tracked_msg_ids: set[str] | None = None,
+        compaction_occurred: bool = False,
     ) -> AsyncIterator[dict[str, Any]]:
         """Fetch final message state from API to ensure complete text.
 
@@ -1187,6 +1212,9 @@ class AgentBridge:
             opencode_message_id: OpenCode ascending ID (used for parentID correlation)
             cumulative_text: Text already sent, keyed by part ID
             tracked_msg_ids: Assistant message IDs tracked during SSE streaming
+            compaction_occurred: Whether session compaction happened during this prompt.
+                When True, accepts non-summary assistant messages even if parentID
+                doesn't match, since compaction changes the message chain.
 
         Uses parentID-based correlation if available, falling back to
         tracked_msg_ids from SSE streaming if parentID doesn't match.
@@ -1221,8 +1249,16 @@ class AgentBridge:
 
                 parent_matches = parent_id == opencode_message_id
                 in_tracked_set = tracked_msg_ids and msg_id in tracked_msg_ids
+                is_compaction_summary = info.get("summary") is True
 
-                if not parent_matches and not in_tracked_set:
+                # Accept if: parentID matches, was tracked during SSE, or
+                # compaction occurred and this isn't the summary message
+                should_accept = (
+                    parent_matches
+                    or in_tracked_set
+                    or (compaction_occurred and not is_compaction_summary)
+                )
+                if not should_accept:
                     continue
 
                 parts = msg.get("parts", [])

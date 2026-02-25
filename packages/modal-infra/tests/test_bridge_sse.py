@@ -1863,5 +1863,438 @@ class TestSubtaskStreaming:
         assert len(tool_events) == 0  # Grandchild events should be filtered out
 
 
+class TestCompactionHandling:
+    """Tests for session compaction handling in the bridge.
+
+    When OpenCode compacts a session, the message chain changes:
+    1. A compaction summary message is created (summary=True, mode=compaction)
+    2. A synthetic "Continue..." user message is injected
+    3. The next assistant response has parentID pointing to the synthetic message,
+       NOT to our original opencode_message_id
+
+    The bridge must detect session.compacted and accept post-compaction messages.
+    """
+
+    @pytest.mark.asyncio
+    async def test_post_compaction_text_forwarded(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """After compaction, text from the new assistant message should be forwarded."""
+        http_client = bridge.http_client
+
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            # Pre-compaction: normal assistant with matching parentID
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "part-1",
+                        "sessionID": "oc-session-123",
+                        "messageID": "oc-msg-1",
+                        "text": "Let me check...",
+                    },
+                    "delta": "Let me check...",
+                },
+            ),
+            # Compaction happens
+            create_sse_event(
+                "session.compacted",
+                {"sessionID": "oc-session-123"},
+            ),
+            # Compaction summary message (should be skipped)
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-summary",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": "msg_compaction_user",
+                        "summary": True,
+                    }
+                },
+            ),
+            # Post-compaction assistant with different parentID
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-2",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": "msg_synthetic_continue",
+                    }
+                },
+            ),
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "part-2",
+                        "sessionID": "oc-session-123",
+                        "messageID": "oc-msg-2",
+                        "text": "Here is the answer.",
+                    },
+                    "delta": "Here is the answer.",
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        token_events = [e for e in events if e["type"] == "token"]
+        assert len(token_events) == 2
+        assert token_events[0]["content"] == "Let me check..."
+        assert token_events[1]["content"] == "Here is the answer."
+
+    @pytest.mark.asyncio
+    async def test_compaction_summary_text_not_forwarded(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """The compaction summary message text should NOT be forwarded to the user."""
+        http_client = bridge.http_client
+
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            # Compaction
+            create_sse_event(
+                "session.compacted",
+                {"sessionID": "oc-session-123"},
+            ),
+            # Compaction summary with summary=True
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-summary",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": "msg_compaction_user",
+                        "summary": True,
+                    }
+                },
+            ),
+            # Summary text — should be skipped
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "summary-part",
+                        "sessionID": "oc-session-123",
+                        "messageID": "oc-msg-summary",
+                        "text": "## Goal\nThe user was working on...",
+                    },
+                    "delta": "## Goal\nThe user was working on...",
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        # Summary text should not appear
+        token_events = [e for e in events if e["type"] == "token"]
+        assert len(token_events) == 0
+
+    @pytest.mark.asyncio
+    async def test_without_compaction_strict_parent_matching(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """Without compaction, messages with wrong parentID should still be rejected."""
+        http_client = bridge.http_client
+
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            # Message with non-matching parentID (no compaction event)
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-wrong",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": "msg_some_other_id",
+                    }
+                },
+            ),
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "part-wrong",
+                        "sessionID": "oc-session-123",
+                        "messageID": "oc-msg-wrong",
+                        "text": "Should not appear",
+                    },
+                    "delta": "Should not appear",
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        token_events = [e for e in events if e["type"] == "token"]
+        assert len(token_events) == 0
+
+    @pytest.mark.asyncio
+    async def test_compaction_parts_buffered_before_message_updated(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """Parts arriving before message.updated after compaction should be buffered and flushed."""
+        http_client = bridge.http_client
+
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            # Compaction
+            create_sse_event(
+                "session.compacted",
+                {"sessionID": "oc-session-123"},
+            ),
+            # Part arrives BEFORE message.updated for post-compaction msg
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "part-post",
+                        "sessionID": "oc-session-123",
+                        "messageID": "oc-msg-post",
+                        "text": "Buffered text",
+                    },
+                    "delta": "Buffered text",
+                },
+            ),
+            # Now message.updated arrives (non-summary, non-matching parentID)
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-post",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": "msg_synthetic_continue",
+                    }
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        token_events = [e for e in events if e["type"] == "token"]
+        assert len(token_events) == 1
+        assert token_events[0]["content"] == "Buffered text"
+
+    @pytest.mark.asyncio
+    async def test_fetch_final_state_after_compaction(self):
+        """_fetch_final_message_state with compaction_occurred should find post-compaction text."""
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+        bridge.opencode_session_id = "oc-session-123"
+        bridge.http_client = AsyncMock()
+
+        # API returns: compaction summary + post-compaction response
+        messages = [
+            {
+                "info": {
+                    "id": "oc-msg-summary",
+                    "role": "assistant",
+                    "parentID": "msg_compaction_user",
+                    "summary": True,
+                },
+                "parts": [
+                    {"id": "summary-part", "type": "text", "text": "## Goal\nSummary..."},
+                ],
+            },
+            {
+                "info": {
+                    "id": "oc-msg-post",
+                    "role": "assistant",
+                    "parentID": "msg_synthetic_continue",
+                },
+                "parts": [
+                    {"id": "post-part", "type": "text", "text": "Here is the answer."},
+                ],
+            },
+        ]
+
+        bridge.http_client.get = AsyncMock(return_value=MockResponse(200, messages))
+
+        events = []
+        async for event in bridge._fetch_final_message_state(
+            "cp-msg-1",
+            "msg_original_id",
+            {},
+            set(),
+            compaction_occurred=True,
+        ):
+            events.append(event)
+
+        # Should find the post-compaction response but NOT the summary
+        assert len(events) == 1
+        assert events[0]["content"] == "Here is the answer."
+        assert events[0]["messageId"] == "cp-msg-1"
+
+    @pytest.mark.asyncio
+    async def test_fetch_final_state_without_compaction_rejects_unknown(self):
+        """_fetch_final_message_state without compaction should reject non-matching messages."""
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+        bridge.opencode_session_id = "oc-session-123"
+        bridge.http_client = AsyncMock()
+
+        messages = [
+            {
+                "info": {
+                    "id": "oc-msg-post",
+                    "role": "assistant",
+                    "parentID": "msg_some_other_id",
+                },
+                "parts": [
+                    {"id": "part-1", "type": "text", "text": "Should not appear"},
+                ],
+            },
+        ]
+
+        bridge.http_client.get = AsyncMock(return_value=MockResponse(200, messages))
+
+        events = []
+        async for event in bridge._fetch_final_message_state(
+            "cp-msg-1",
+            "msg_original_id",
+            {},
+            set(),
+            compaction_occurred=False,
+        ):
+            events.append(event)
+
+        assert len(events) == 0
+
+    @pytest.mark.asyncio
+    async def test_child_compaction_does_not_affect_parent(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """Compaction in a child session should NOT trigger compaction handling for parent."""
+        http_client = bridge.http_client
+
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            create_sse_event(
+                "session.created",
+                {
+                    "info": {
+                        "id": "child-1",
+                        "parentID": "oc-session-123",
+                    }
+                },
+            ),
+            # Compaction in CHILD session — should not affect parent tracking
+            create_sse_event(
+                "session.compacted",
+                {"sessionID": "child-1"},
+            ),
+            # Message with wrong parentID in parent — should still be rejected
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-wrong",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": "msg_some_other_id",
+                    }
+                },
+            ),
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "part-wrong",
+                        "sessionID": "oc-session-123",
+                        "messageID": "oc-msg-wrong",
+                        "text": "Should not appear",
+                    },
+                    "delta": "Should not appear",
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        token_events = [e for e in events if e["type"] == "token"]
+        assert len(token_events) == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
