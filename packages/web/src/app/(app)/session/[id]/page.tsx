@@ -28,7 +28,7 @@ import { useMediaQuery } from "@/hooks/use-media-query";
 import { DEFAULT_MODEL, getDefaultReasoningEffort, type ModelCategory } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
-import type { SandboxEvent } from "@/lib/tool-formatters";
+import type { SandboxEvent } from "@/types/session";
 import {
   SidebarIcon,
   ModelIcon,
@@ -972,22 +972,7 @@ const EventItem = memo(function EventItem({
   event,
   currentParticipantId,
 }: {
-  event: {
-    type: string;
-    content?: string;
-    tool?: string;
-    args?: Record<string, unknown>;
-    result?: string;
-    error?: string;
-    success?: boolean;
-    status?: string;
-    timestamp: number;
-    author?: {
-      participantId: string;
-      name: string;
-      avatar?: string;
-    };
-  };
+  event: SandboxEvent;
   currentParticipantId: string | null;
 }) {
   const [copied, setCopied] = useState(false);
