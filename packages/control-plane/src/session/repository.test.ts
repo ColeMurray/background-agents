@@ -100,6 +100,9 @@ describe("SessionRepository", () => {
         "claude-sonnet-4",
         null,
         "created",
+        null,
+        "user",
+        0,
         1000,
         2000,
       ]);

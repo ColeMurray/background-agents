@@ -21,7 +21,10 @@ CREATE TABLE IF NOT EXISTS session (
   opencode_session_id TEXT,                         -- OpenCode session ID (for 1:1 mapping)
   model TEXT DEFAULT 'anthropic/claude-haiku-4-5',   -- LLM model to use
   reasoning_effort TEXT,                            -- Session-level reasoning effort default
-  status TEXT DEFAULT 'created',                    -- 'created', 'active', 'completed', 'archived'
+  status TEXT DEFAULT 'created',                    -- 'created', 'active', 'completed', 'archived', 'cancelled'
+  parent_session_id TEXT,                           -- Parent session ID (NULL for top-level)
+  spawn_source TEXT NOT NULL DEFAULT 'user',        -- 'user' or 'agent'
+  spawn_depth INTEGER NOT NULL DEFAULT 0,           -- 0 for top-level, parent.depth + 1 for children
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -313,6 +316,15 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
         }
       }
     },
+  },
+  {
+    id: 24,
+    description: "Add parent session tracking",
+    run: `
+      ALTER TABLE session ADD COLUMN parent_session_id TEXT;
+      ALTER TABLE session ADD COLUMN spawn_source TEXT NOT NULL DEFAULT 'user';
+      ALTER TABLE session ADD COLUMN spawn_depth INTEGER NOT NULL DEFAULT 0;
+    `,
   },
 ];
 

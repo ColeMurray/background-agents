@@ -30,6 +30,9 @@ export interface SessionRow {
   model: string; // LLM model to use (e.g., "anthropic/claude-haiku-4-5")
   reasoning_effort: string | null; // Reasoning effort level (e.g., "high", "max")
   status: SessionStatus;
+  parent_session_id: string | null;
+  spawn_source: "user" | "agent";
+  spawn_depth: number;
   created_at: number;
   updated_at: number;
 }

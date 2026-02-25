@@ -6,6 +6,9 @@ export interface SessionEntry {
   model: string;
   reasoningEffort: string | null;
   status: string;
+  parentSessionId?: string | null;
+  spawnSource?: "user" | "agent";
+  spawnDepth?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -18,6 +21,9 @@ interface SessionRow {
   model: string;
   reasoning_effort: string | null;
   status: string;
+  parent_session_id: string | null;
+  spawn_source: "user" | "agent";
+  spawn_depth: number;
   created_at: number;
   updated_at: number;
 }
@@ -46,6 +52,9 @@ function toEntry(row: SessionRow): SessionEntry {
     model: row.model,
     reasoningEffort: row.reasoning_effort,
     status: row.status,
+    parentSessionId: row.parent_session_id,
+    spawnSource: row.spawn_source,
+    spawnDepth: row.spawn_depth,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -57,8 +66,8 @@ export class SessionIndexStore {
   async create(session: SessionEntry): Promise<void> {
     await this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         session.id,
@@ -68,6 +77,9 @@ export class SessionIndexStore {
         session.model,
         session.reasoningEffort,
         session.status,
+        session.parentSessionId ?? null,
+        session.spawnSource ?? "user",
+        session.spawnDepth ?? 0,
         session.createdAt,
         session.updatedAt
       )
@@ -155,5 +167,53 @@ export class SessionIndexStore {
     const result = await this.db.prepare("DELETE FROM sessions WHERE id = ?").bind(id).run();
 
     return (result.meta?.changes ?? 0) > 0;
+  }
+
+  /** List children of a parent session, newest first. */
+  async listByParent(parentSessionId: string): Promise<SessionEntry[]> {
+    const result = await this.db
+      .prepare(`SELECT * FROM sessions WHERE parent_session_id = ? ORDER BY created_at DESC`)
+      .bind(parentSessionId)
+      .all<SessionRow>();
+    return (result.results || []).map(toEntry);
+  }
+
+  /** Count active (non-terminal) children for concurrent cap enforcement. */
+  async countActiveChildren(parentSessionId: string): Promise<number> {
+    const result = await this.db
+      .prepare(
+        `SELECT COUNT(*) as count FROM sessions
+         WHERE parent_session_id = ? AND status NOT IN ('completed', 'archived', 'cancelled')`
+      )
+      .bind(parentSessionId)
+      .first<{ count: number }>();
+    return result?.count ?? 0;
+  }
+
+  /** Count total children ever spawned for rate-limit enforcement. */
+  async countTotalChildren(parentSessionId: string): Promise<number> {
+    const result = await this.db
+      .prepare(`SELECT COUNT(*) as count FROM sessions WHERE parent_session_id = ?`)
+      .bind(parentSessionId)
+      .first<{ count: number }>();
+    return result?.count ?? 0;
+  }
+
+  /** Validate that childId is a direct child of parentId. */
+  async isChildOf(childId: string, parentId: string): Promise<boolean> {
+    const result = await this.db
+      .prepare(`SELECT 1 FROM sessions WHERE id = ? AND parent_session_id = ?`)
+      .bind(childId, parentId)
+      .first();
+    return result !== null;
+  }
+
+  /** Get a session's stored spawn_depth (single read, no chain walking). */
+  async getSpawnDepth(sessionId: string): Promise<number> {
+    const result = await this.db
+      .prepare(`SELECT spawn_depth FROM sessions WHERE id = ?`)
+      .bind(sessionId)
+      .first<{ spawn_depth: number }>();
+    return result?.spawn_depth ?? 0;
   }
 }
