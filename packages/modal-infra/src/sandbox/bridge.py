@@ -1253,9 +1253,13 @@ class AgentBridge:
 
                 # Accept if: parentID matches, was tracked during SSE, or
                 # compaction occurred and this isn't the summary message
-                if not parent_matches and not in_tracked_set:
-                    if not (compaction_occurred and not is_compaction_summary):
-                        continue
+                should_accept = (
+                    parent_matches
+                    or in_tracked_set
+                    or (compaction_occurred and not is_compaction_summary)
+                )
+                if not should_accept:
+                    continue
 
                 parts = msg.get("parts", [])
                 for part in parts:
