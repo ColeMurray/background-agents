@@ -136,8 +136,10 @@ describe("extractChangedFiles", () => {
       makeEvent({
         args: {
           filePath: "src/app.ts",
-          oldString: "import a from 'a';\nimport b from 'b';\nconst x = 1;\nconst y = 2;\nconst z = 3;",
-          newString: "import a from 'a';\nimport b from 'b';\nconst x = 42;\nconst y = 2;\nconst z = 3;",
+          oldString:
+            "import a from 'a';\nimport b from 'b';\nconst x = 1;\nconst y = 2;\nconst z = 3;",
+          newString:
+            "import a from 'a';\nimport b from 'b';\nconst x = 42;\nconst y = 2;\nconst z = 3;",
         },
       }),
     ];

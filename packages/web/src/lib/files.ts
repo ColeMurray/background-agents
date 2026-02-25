@@ -26,7 +26,10 @@ function countLines(str: unknown): number {
  * Compute accurate line-level additions/deletions between two strings
  * using the Myers diff algorithm via the `diff` package.
  */
-function computeEditStats(oldStr: unknown, newStr: unknown): { additions: number; deletions: number } {
+function computeEditStats(
+  oldStr: unknown,
+  newStr: unknown
+): { additions: number; deletions: number } {
   const old = typeof oldStr === "string" ? oldStr : "";
   const neu = typeof newStr === "string" ? newStr : "";
   if (old === "" && neu === "") return { additions: 0, deletions: 0 };
