@@ -27,7 +27,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     repo_owner: "acme",
     repo_name: "web",
     repo_id: 123,
-    repo_default_branch: "main",
+    base_branch: "main",
     branch_name: null,
     base_sha: null,
     current_sha: null,

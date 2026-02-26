@@ -1196,6 +1196,7 @@ export class SessionDO extends DurableObject<Env> {
       title: session?.title ?? null,
       repoOwner: session?.repo_owner ?? "",
       repoName: session?.repo_name ?? "",
+      baseBranch: session?.base_branch ?? "main",
       branchName: session?.branch_name ?? null,
       status: session?.status ?? "created",
       sandboxStatus: sandbox?.status ?? "pending",
@@ -1435,6 +1436,7 @@ export class SessionDO extends DurableObject<Env> {
       repoOwner: string;
       repoName: string;
       repoId?: number;
+      defaultBranch?: string; // GitHub-reported default branch (e.g., "main", "master")
       title?: string;
       model?: string; // LLM model to use
       reasoningEffort?: string; // Reasoning effort level
@@ -1484,6 +1486,7 @@ export class SessionDO extends DurableObject<Env> {
       repoOwner: body.repoOwner,
       repoName: body.repoName,
       repoId: body.repoId ?? null,
+      baseBranch: body.defaultBranch,
       model,
       reasoningEffort,
       status: "created",
@@ -1534,7 +1537,7 @@ export class SessionDO extends DurableObject<Env> {
       title: session.title,
       repoOwner: session.repo_owner,
       repoName: session.repo_name,
-      repoDefaultBranch: session.repo_default_branch,
+      baseBranch: session.base_branch,
       branchName: session.branch_name,
       baseSha: session.base_sha,
       currentSha: session.current_sha,
