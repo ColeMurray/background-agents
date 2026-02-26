@@ -52,6 +52,7 @@ interface SessionState {
   model?: string;
   reasoningEffort?: string;
   isProcessing: boolean;
+  parentSessionId?: string | null;
 }
 
 interface Participant {
