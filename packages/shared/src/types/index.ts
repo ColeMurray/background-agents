@@ -6,15 +6,19 @@
 export type SessionStatus = "created" | "active" | "completed" | "archived" | "cancelled";
 export type SandboxStatus =
   | "pending"
+  | "spawning"
+  | "connecting"
   | "warming"
   | "syncing"
   | "ready"
   | "running"
+  | "stale"
+  | "snapshotting"
   | "stopped"
   | "failed";
 export type GitSyncStatus = "pending" | "in_progress" | "completed" | "failed";
 export type MessageStatus = "pending" | "processing" | "completed" | "failed";
-export type MessageSource = "web" | "slack" | "extension" | "github";
+export type MessageSource = "web" | "slack" | "linear" | "extension" | "github";
 export type ArtifactType = "pr" | "screenshot" | "preview" | "branch";
 export type EventType = "tool_call" | "tool_result" | "token" | "error" | "git_sync";
 
@@ -111,31 +115,107 @@ export interface PullRequest {
   updatedAt: string;
 }
 
-// Sandbox event from Modal
-export interface SandboxEvent {
-  type: string;
-  sandboxId: string;
-  timestamp: number;
-  messageId?: string;
-  content?: string;
-  tool?: string;
-  args?: Record<string, unknown>;
-  callId?: string;
-  output?: string;
-  result?: string;
-  error?: string;
-  status?: string;
-  sha?: string;
-  success?: boolean;
-  artifactType?: string;
-  url?: string;
-  metadata?: Record<string, unknown>;
-  author?: {
-    participantId: string;
-    name: string;
-    avatar?: string;
-  };
-}
+// Sandbox events (from Modal / control-plane synthesized)
+export type SandboxEvent =
+  | { type: "heartbeat"; sandboxId: string; status: string; timestamp: number }
+  | {
+      type: "token";
+      content: string;
+      messageId: string;
+      sandboxId: string;
+      timestamp: number;
+    }
+  | {
+      type: "tool_call";
+      tool: string;
+      args: Record<string, unknown>;
+      callId: string;
+      status?: string;
+      output?: string;
+      messageId: string;
+      sandboxId: string;
+      timestamp: number;
+    }
+  | {
+      type: "step_start";
+      messageId: string;
+      sandboxId: string;
+      timestamp: number;
+      isSubtask?: boolean;
+    }
+  | {
+      type: "step_finish";
+      cost?: number;
+      tokens?: number;
+      reason?: string;
+      messageId: string;
+      sandboxId: string;
+      timestamp: number;
+      isSubtask?: boolean;
+    }
+  | {
+      type: "tool_result";
+      callId: string;
+      result: string;
+      error?: string;
+      messageId: string;
+      sandboxId: string;
+      timestamp: number;
+    }
+  | {
+      type: "git_sync";
+      status: GitSyncStatus;
+      sha?: string;
+      sandboxId: string;
+      timestamp: number;
+    }
+  | {
+      type: "error";
+      error: string;
+      messageId: string;
+      sandboxId: string;
+      timestamp: number;
+    }
+  | {
+      type: "execution_complete";
+      messageId: string;
+      success: boolean;
+      error?: string;
+      sandboxId: string;
+      timestamp: number;
+    }
+  | {
+      type: "artifact";
+      artifactType: string;
+      url: string;
+      metadata?: Record<string, unknown>;
+      sandboxId: string;
+      timestamp: number;
+    }
+  | {
+      type: "push_complete";
+      branchName: string;
+      sandboxId?: string;
+      timestamp?: number;
+    }
+  | {
+      type: "push_error";
+      branchName: string;
+      error: string;
+      sandboxId?: string;
+      timestamp?: number;
+    }
+  | {
+      type: "user_message";
+      content: string;
+      messageId: string;
+      timestamp: number;
+      author?: {
+        participantId: string;
+        name: string;
+        avatar?: string;
+      };
+    };
 
 // WebSocket message types
 export type ClientMessage =
@@ -150,7 +230,8 @@ export type ClientMessage =
     }
   | { type: "stop" }
   | { type: "typing" }
-  | { type: "presence"; status: "active" | "idle"; cursor?: { line: number; file: string } };
+  | { type: "presence"; status: "active" | "idle"; cursor?: { line: number; file: string } }
+  | { type: "fetch_history"; cursor: { timestamp: number; id: string }; limit?: number };
 
 export type ServerMessage =
   | { type: "pong"; timestamp: number }
@@ -173,7 +254,24 @@ export type ServerMessage =
   | { type: "presence_update"; participants: ParticipantPresence[] }
   | { type: "presence_leave"; userId: string }
   | { type: "sandbox_warming" }
+  | { type: "sandbox_spawning" }
+  | { type: "sandbox_status"; status: SandboxStatus }
   | { type: "sandbox_ready" }
+  | { type: "sandbox_error"; error: string }
+  | {
+      type: "artifact_created";
+      artifact: { id: string; type: string; url: string; prNumber?: number };
+    }
+  | { type: "snapshot_saved"; imageId: string; reason: string }
+  | { type: "sandbox_restored"; message: string }
+  | { type: "sandbox_warning"; message: string }
+  | { type: "processing_status"; isProcessing: boolean }
+  | {
+      type: "history_page";
+      items: SandboxEvent[];
+      hasMore: boolean;
+      cursor: { timestamp: number; id: string } | null;
+    }
   | { type: "session_status"; status: SessionStatus }
   | { type: "error"; code: string; message: string };
 
@@ -183,6 +281,7 @@ export interface SessionState {
   title: string | null;
   repoOwner: string;
   repoName: string;
+  baseBranch: string;
   branchName: string | null;
   status: SessionStatus;
   sandboxStatus: SandboxStatus;

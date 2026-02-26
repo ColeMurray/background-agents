@@ -22,6 +22,18 @@ export interface SandboxProviderCapabilities {
 }
 
 /**
+ * Optional request correlation context propagated to provider calls.
+ *
+ * Use snake_case to match transport headers (`x-trace-id`, `x-request-id`).
+ */
+export interface CorrelationContext {
+  trace_id?: string;
+  request_id?: string;
+  session_id?: string;
+  sandbox_id?: string;
+}
+
+/**
  * Configuration for creating a new sandbox.
  */
 export interface CreateSandboxConfig {
@@ -45,10 +57,8 @@ export interface CreateSandboxConfig {
   userEnvVars?: Record<string, string>;
   /** OpenCode session ID for resumption */
   opencodeSessionId?: string;
-  /** Trace ID for correlation */
-  traceId?: string;
-  /** Request ID for correlation */
-  requestId?: string;
+  /** Correlation context for downstream tracing */
+  correlation?: CorrelationContext;
   /** Opaque provider image ID of a pre-built repo image */
   repoImageId?: string | null;
   /** Git SHA the repo image was built from */
@@ -101,10 +111,8 @@ export interface RestoreConfig {
   timeoutSeconds?: number;
   /** Git branch to work on (defaults to repo's default branch) */
   branch?: string;
-  /** Trace ID for correlation */
-  traceId?: string;
-  /** Request ID for correlation */
-  requestId?: string;
+  /** Correlation context for downstream tracing */
+  correlation?: CorrelationContext;
 }
 
 /**
@@ -131,10 +139,8 @@ export interface SnapshotConfig {
   sessionId: string;
   /** Reason for the snapshot (e.g., "inactivity_timeout", "execution_complete") */
   reason: string;
-  /** Trace ID for correlation */
-  traceId?: string;
-  /** Request ID for correlation */
-  requestId?: string;
+  /** Correlation context for downstream tracing */
+  correlation?: CorrelationContext;
 }
 
 /**
@@ -247,7 +253,7 @@ export class SandboxProviderError extends Error {
  *
  * @example
  * ```typescript
- * const provider: SandboxProvider = new ModalSandboxProvider(client, secret);
+ * const provider: SandboxProvider = new ModalSandboxProvider(client);
  *
  * try {
  *   const result = await provider.createSandbox(config);

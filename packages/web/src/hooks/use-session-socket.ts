@@ -2,6 +2,12 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { Artifact, SandboxEvent } from "@/types/session";
+import type {
+  ParticipantPresence,
+  SandboxEvent as SharedSandboxEvent,
+  ServerMessage,
+  SessionState as SharedSessionState,
+} from "@open-inspect/shared";
 
 // WebSocket URL (should come from env in production)
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8787";
@@ -19,31 +25,9 @@ interface Message {
   createdAt: number;
 }
 
-interface SessionState {
-  id: string;
-  title: string | null;
-  repoOwner: string;
-  repoName: string;
-  branchName: string | null;
-  baseBranch: string;
-  status: string;
-  sandboxStatus: string;
-  messageCount: number;
-  createdAt: number;
-  model?: string;
-  reasoningEffort?: string;
-  isProcessing: boolean;
-  parentSessionId?: string | null;
-}
-
-interface Participant {
-  participantId: string;
-  userId: string;
-  name: string;
-  avatar?: string;
-  status: "active" | "idle" | "away";
-  lastSeen: number;
-}
+type SessionState = SharedSessionState;
+type Participant = ParticipantPresence;
+type WsMessage = ServerMessage | { type: "artifact_updated"; artifact: Artifact };
 
 interface UseSessionSocketReturn {
   connected: boolean;
@@ -105,6 +89,28 @@ function collapseTokenEvents(
     }
   }
   return result;
+}
+
+function toUiSandboxEvent(event: SharedSandboxEvent): SandboxEvent {
+  return {
+    ...(event as unknown as SandboxEvent),
+    timestamp: typeof event.timestamp === "number" ? event.timestamp : Date.now() / 1000,
+  };
+}
+
+function toUiArtifact(artifact: {
+  id: string;
+  type: string;
+  url: string;
+  prNumber?: number;
+}): Artifact {
+  return {
+    id: artifact.id,
+    type: artifact.type as Artifact["type"],
+    url: artifact.url,
+    createdAt: Date.now(),
+    metadata: artifact.prNumber ? { prNumber: artifact.prNumber } : undefined,
+  };
 }
 
 export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
@@ -176,30 +182,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   }, []);
 
   const handleMessage = useCallback(
-    (data: {
-      type: string;
-      state?: SessionState;
-      event?: SandboxEvent;
-      items?: SandboxEvent[];
-      participants?: Participant[];
-      artifact?: Artifact;
-      userId?: string;
-      messageId?: string;
-      position?: number;
-      status?: string;
-      error?: string;
-      participantId?: string;
-      participant?: { participantId: string; name: string; avatar?: string };
-      isProcessing?: boolean;
-      hasMore?: boolean;
-      cursor?: { timestamp: number; id: string } | null;
-      replay?: {
-        events: SandboxEvent[];
-        hasMore: boolean;
-        cursor: { timestamp: number; id: string } | null;
-      };
-      spawnError?: string | null;
-    }) => {
+    (data: WsMessage) => {
       switch (data.type) {
         case "subscribed": {
           console.log("WebSocket subscribed to session");
@@ -208,7 +191,11 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           setArtifacts([]);
           pendingTextRef.current = null;
           if (data.state) {
-            setSessionState(data.state);
+            setSessionState({
+              ...data.state,
+              // Backward-compatible default for older sessions that may omit this.
+              isProcessing: data.state.isProcessing ?? false,
+            });
           }
           // Store the current user's participant ID and info for author attribution
           if (data.participantId) {
@@ -220,7 +207,11 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           }
 
           // Process batched replay events in a single state update
-          setEvents(data.replay ? collapseTokenEvents(data.replay.events, pendingTextRef) : []);
+          setEvents(
+            data.replay
+              ? collapseTokenEvents(data.replay.events.map(toUiSandboxEvent), pendingTextRef)
+              : []
+          );
           setHasMoreHistory(data.replay?.hasMore ?? false);
           cursorRef.current = data.replay?.cursor ?? null;
           setReplaying(false);
@@ -238,15 +229,13 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
 
         case "sandbox_event":
           if (data.event) {
-            processSandboxEvent(data.event);
+            processSandboxEvent(toUiSandboxEvent(data.event));
           }
           break;
 
         case "history_page": {
-          if (data.items) {
-            // Prepend older events to the beginning
-            setEvents((prev) => [...data.items!, ...prev]);
-          }
+          // Prepend older events to the beginning
+          setEvents((prev) => [...data.items.map(toUiSandboxEvent), ...prev]);
           setHasMoreHistory(data.hasMore ?? false);
           cursorRef.current = data.cursor ?? null;
           setLoadingHistory(false);
@@ -255,31 +244,27 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
 
         case "presence_sync":
         case "presence_update":
-          if (data.participants) {
-            setParticipants(data.participants);
-            // Update current participant info for author attribution
-            setCurrentParticipantId((currentId) => {
-              if (currentId) {
-                const currentParticipant = data.participants!.find(
-                  (p) => p.participantId === currentId
-                );
-                if (currentParticipant) {
-                  currentParticipantRef.current = {
-                    participantId: currentParticipant.participantId,
-                    name: currentParticipant.name,
-                    avatar: currentParticipant.avatar,
-                  };
-                }
+          setParticipants(data.participants);
+          // Update current participant info for author attribution
+          setCurrentParticipantId((currentId) => {
+            if (currentId) {
+              const currentParticipant = data.participants.find(
+                (p) => p.participantId === currentId
+              );
+              if (currentParticipant) {
+                currentParticipantRef.current = {
+                  participantId: currentParticipant.participantId,
+                  name: currentParticipant.name,
+                  avatar: currentParticipant.avatar,
+                };
               }
-              return currentId;
-            });
-          }
+            }
+            return currentId;
+          });
           break;
 
         case "presence_leave":
-          if (data.userId) {
-            setParticipants((prev) => prev.filter((p) => p.userId !== data.userId));
-          }
+          setParticipants((prev) => prev.filter((p) => p.userId !== data.userId));
           break;
 
         case "sandbox_warming":
@@ -291,10 +276,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           break;
 
         case "sandbox_status":
-          if (data.status) {
-            const status = data.status;
-            setSessionState((prev) => (prev ? { ...prev, sandboxStatus: status } : null));
-          }
+          setSessionState((prev) => (prev ? { ...prev, sandboxStatus: data.status } : null));
           break;
 
         case "sandbox_ready":
@@ -302,37 +284,26 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           break;
 
         case "artifact_created":
-          if (data.artifact) {
-            setArtifacts((prev) => {
-              // Avoid duplicates
-              const existing = prev.find((a) => a.id === data.artifact!.id);
-              if (existing) {
-                return prev.map((a) => (a.id === data.artifact!.id ? data.artifact! : a));
-              }
-              return [...prev, data.artifact!];
-            });
-          }
+          setArtifacts((prev) => {
+            // Avoid duplicates
+            const existing = prev.find((a) => a.id === data.artifact.id);
+            if (existing) {
+              return prev.map((a) => (a.id === data.artifact.id ? toUiArtifact(data.artifact) : a));
+            }
+            return [...prev, toUiArtifact(data.artifact)];
+          });
           break;
 
         case "artifact_updated":
-          if (data.artifact) {
-            setArtifacts((prev) =>
-              prev.map((a) => (a.id === data.artifact!.id ? data.artifact! : a))
-            );
-          }
+          setArtifacts((prev) => prev.map((a) => (a.id === data.artifact.id ? data.artifact : a)));
           break;
 
         case "session_status":
-          if (data.status) {
-            setSessionState((prev) => (prev ? { ...prev, status: data.status! } : null));
-          }
+          setSessionState((prev) => (prev ? { ...prev, status: data.status } : null));
           break;
 
         case "processing_status":
-          if (typeof data.isProcessing === "boolean") {
-            const isProcessing = data.isProcessing;
-            setSessionState((prev) => (prev ? { ...prev, isProcessing } : null));
-          }
+          setSessionState((prev) => (prev ? { ...prev, isProcessing: data.isProcessing } : null));
           break;
 
         case "sandbox_error":
@@ -353,6 +324,12 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
     },
     [processSandboxEvent]
   );
+
+  const parseWsMessage = useCallback((raw: unknown): WsMessage | null => {
+    if (!raw || typeof raw !== "object") return null;
+    if (!("type" in raw)) return null;
+    return raw as WsMessage;
+  }, []);
 
   const fetchWsToken = useCallback(async (): Promise<string | null> => {
     try {
@@ -442,7 +419,8 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
 
     ws.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
+        const data = parseWsMessage(JSON.parse(event.data));
+        if (!data) return;
         handleMessage(data);
       } catch (error) {
         console.error("Failed to parse WebSocket message:", error);
@@ -500,7 +478,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
     ws.onerror = (error) => {
       console.error("WebSocket error event:", error);
     };
-  }, [sessionId, handleMessage, fetchWsToken]);
+  }, [sessionId, handleMessage, fetchWsToken, parseWsMessage]);
 
   const sendPrompt = useCallback((content: string, model?: string, reasoningEffort?: string) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
