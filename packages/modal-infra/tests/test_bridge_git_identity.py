@@ -1,10 +1,12 @@
 """Tests for git identity configuration in bridge prompt handling."""
 
-from unittest.mock import AsyncMock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
 from src.sandbox.bridge import FALLBACK_GIT_USER, AgentBridge
+from src.sandbox.types import GitUser
 
 
 @pytest.fixture
@@ -172,3 +174,112 @@ class TestFallbackGitUserConstant:
         """Fallback should use Open-Inspect noreply identity."""
         assert FALLBACK_GIT_USER.name == "OpenInspect"
         assert FALLBACK_GIT_USER.email == "open-inspect@noreply.github.com"
+
+
+class TestConfigureGitIdentity:
+    """Tests for non-blocking git identity configuration."""
+
+    @pytest.mark.asyncio
+    async def test_configures_name_and_email_with_async_subprocess(
+        self,
+        bridge: AgentBridge,
+        tmp_path,
+    ):
+        repo_dir = tmp_path / "repo"
+        (repo_dir / ".git").mkdir(parents=True)
+        bridge.repo_path = tmp_path
+
+        name_proc = MagicMock()
+        name_proc.communicate = AsyncMock(return_value=(b"", b""))
+        name_proc.returncode = 0
+
+        email_proc = MagicMock()
+        email_proc.communicate = AsyncMock(return_value=(b"", b""))
+        email_proc.returncode = 0
+
+        with patch(
+            "src.sandbox.bridge.asyncio.create_subprocess_exec",
+            new_callable=AsyncMock,
+            side_effect=[name_proc, email_proc],
+        ) as mock_exec:
+            await bridge._configure_git_identity(GitUser(name="Jane Dev", email="jane@example.com"))
+
+        mock_exec.assert_has_awaits(
+            [
+                call(
+                    "git",
+                    "config",
+                    "--local",
+                    "user.name",
+                    "Jane Dev",
+                    cwd=repo_dir,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
+                ),
+                call(
+                    "git",
+                    "config",
+                    "--local",
+                    "user.email",
+                    "jane@example.com",
+                    cwd=repo_dir,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
+                ),
+            ]
+        )
+
+    @pytest.mark.asyncio
+    async def test_logs_error_when_git_config_fails(
+        self,
+        bridge: AgentBridge,
+        tmp_path,
+    ):
+        repo_dir = tmp_path / "repo"
+        (repo_dir / ".git").mkdir(parents=True)
+        bridge.repo_path = tmp_path
+        bridge.log = MagicMock()
+
+        failed_proc = MagicMock()
+        failed_proc.communicate = AsyncMock(return_value=(b"", b"invalid config"))
+        failed_proc.returncode = 1
+
+        with patch(
+            "src.sandbox.bridge.asyncio.create_subprocess_exec",
+            new_callable=AsyncMock,
+            return_value=failed_proc,
+        ) as mock_exec:
+            await bridge._configure_git_identity(GitUser(name="Jane Dev", email="jane@example.com"))
+
+        mock_exec.assert_awaited_once()
+        bridge.log.error.assert_called_once()
+        assert bridge.log.error.call_args.args[0] == "git.identity_error"
+
+    @pytest.mark.asyncio
+    async def test_logs_error_when_git_config_times_out(
+        self,
+        bridge: AgentBridge,
+        tmp_path,
+    ):
+        repo_dir = tmp_path / "repo"
+        (repo_dir / ".git").mkdir(parents=True)
+        bridge.repo_path = tmp_path
+        bridge.log = MagicMock()
+
+        hanging_proc = MagicMock()
+        hanging_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
+        hanging_proc.wait = AsyncMock(return_value=0)
+        hanging_proc.kill = MagicMock()
+
+        with patch(
+            "src.sandbox.bridge.asyncio.create_subprocess_exec",
+            new_callable=AsyncMock,
+            return_value=hanging_proc,
+        ) as mock_exec:
+            await bridge._configure_git_identity(GitUser(name="Jane Dev", email="jane@example.com"))
+
+        mock_exec.assert_awaited_once()
+        hanging_proc.kill.assert_called_once()
+        hanging_proc.wait.assert_awaited_once()
+        bridge.log.error.assert_called_once()
+        assert bridge.log.error.call_args.args[0] == "git.identity_error"

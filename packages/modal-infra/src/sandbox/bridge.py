@@ -135,6 +135,7 @@ class AgentBridge:
     HTTP_DEFAULT_TIMEOUT = 30.0
     OPENCODE_REQUEST_TIMEOUT = 10.0
     PROMPT_MAX_DURATION = 5400.0
+    GIT_CONFIG_TIMEOUT_SECONDS = 10.0
     MAX_PENDING_PART_EVENTS = 2000
     MAX_EVENT_BUFFER_SIZE = 1000
     CRITICAL_EVENT_TYPES: ClassVar[set[str]] = {
@@ -1437,18 +1438,40 @@ class AgentBridge:
 
         repo_dir = repo_dirs[0].parent
 
+        async def _run_git_config(*args: str) -> None:
+            cmd = ["git", "config", "--local", *args]
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=repo_dir,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            try:
+                _, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=self.GIT_CONFIG_TIMEOUT_SECONDS,
+                )
+            except TimeoutError as e:
+                process.kill()
+                with contextlib.suppress(ProcessLookupError):
+                    await process.wait()
+                raise subprocess.TimeoutExpired(
+                    cmd=cmd,
+                    timeout=self.GIT_CONFIG_TIMEOUT_SECONDS,
+                ) from e
+
+            if process.returncode != 0:
+                raise subprocess.CalledProcessError(
+                    returncode=process.returncode,
+                    cmd=cmd,
+                    stderr=stderr,
+                )
+
         try:
-            subprocess.run(
-                ["git", "config", "--local", "user.name", user.name],
-                cwd=repo_dir,
-                check=True,
-            )
-            subprocess.run(
-                ["git", "config", "--local", "user.email", user.email],
-                cwd=repo_dir,
-                check=True,
-            )
-        except subprocess.CalledProcessError as e:
+            await _run_git_config("user.name", user.name)
+            await _run_git_config("user.email", user.email)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
             self.log.error("git.identity_error", exc=e)
 
     async def _load_session_id(self) -> None:
