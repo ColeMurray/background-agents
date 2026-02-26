@@ -42,7 +42,7 @@ def _make_supervisor(env_vars: dict):
 
 
 class TestImageBuildMode:
-    """IMAGE_BUILD_MODE=true: exit after setup, don't start OpenCode/bridge."""
+    """IMAGE_BUILD_MODE=true: setup only, don't run start/OpenCode/bridge."""
 
     @pytest.mark.asyncio
     async def test_exits_after_setup(self, build_env):
@@ -52,6 +52,7 @@ class TestImageBuildMode:
         supervisor.perform_git_sync = AsyncMock(return_value=True)
 
         supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.run_start_script = AsyncMock(return_value=True)
         supervisor.start_opencode = AsyncMock()
         supervisor.start_bridge = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
@@ -65,6 +66,7 @@ class TestImageBuildMode:
 
         supervisor.perform_git_sync.assert_called_once()
         supervisor.run_setup_script.assert_called_once()
+        supervisor.run_start_script.assert_not_called()
         # OpenCode and bridge should NOT be started in build mode
         supervisor.start_opencode.assert_not_called()
         supervisor.start_bridge.assert_not_called()
@@ -90,6 +92,7 @@ class TestImageBuildMode:
             return mock_proc
 
         supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.run_start_script = AsyncMock(return_value=True)
         supervisor.shutdown = AsyncMock()
 
         with (
@@ -116,6 +119,7 @@ class TestImageBuildMode:
         supervisor.perform_git_sync = AsyncMock(return_value=True)
 
         supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.run_start_script = AsyncMock(return_value=True)
         supervisor.shutdown = AsyncMock()
         # Pre-set so entrypoint doesn't hang waiting for builder to terminate
         supervisor.shutdown_event.set()
@@ -124,10 +128,32 @@ class TestImageBuildMode:
             await supervisor.run()
 
         supervisor.run_setup_script.assert_called_once()
+        supervisor.run_start_script.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_setup_failure_is_fatal_in_build_mode(self, build_env):
+        """Build mode should fail fast when setup hook fails."""
+        supervisor = _make_supervisor(build_env)
+
+        supervisor.perform_git_sync = AsyncMock(return_value=True)
+        supervisor.run_setup_script = AsyncMock(return_value=False)
+        supervisor.run_start_script = AsyncMock(return_value=True)
+        supervisor.start_opencode = AsyncMock()
+        supervisor.start_bridge = AsyncMock()
+        supervisor.monitor_processes = AsyncMock()
+        supervisor.shutdown = AsyncMock()
+        supervisor._report_fatal_error = AsyncMock()
+
+        with patch.dict(os.environ, build_env, clear=False):
+            await supervisor.run()
+
+        supervisor._report_fatal_error.assert_called_once()
+        supervisor.start_opencode.assert_not_called()
+        supervisor.start_bridge.assert_not_called()
 
 
 class TestFromRepoImage:
-    """FROM_REPO_IMAGE=true: incremental sync, skip setup."""
+    """FROM_REPO_IMAGE=true: incremental sync + start hook, skip setup."""
 
     @pytest.mark.asyncio
     async def test_uses_incremental_sync(self, repo_image_env):
@@ -139,6 +165,7 @@ class TestFromRepoImage:
         supervisor._quick_git_fetch = AsyncMock()
 
         supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.run_start_script = AsyncMock(return_value=True)
         supervisor.start_opencode = AsyncMock()
         supervisor.start_bridge = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
@@ -152,13 +179,14 @@ class TestFromRepoImage:
         supervisor._quick_git_fetch.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_skips_setup_script(self, repo_image_env):
-        """Setup script should be skipped (already ran during image build)."""
+    async def test_skips_setup_and_runs_start_script(self, repo_image_env):
+        """Setup is skipped for repo images, but start hook still runs."""
         supervisor = _make_supervisor(repo_image_env)
 
         supervisor._incremental_git_sync = AsyncMock(return_value=True)
 
         supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.run_start_script = AsyncMock(return_value=True)
         supervisor.start_opencode = AsyncMock()
         supervisor.start_bridge = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
@@ -168,6 +196,7 @@ class TestFromRepoImage:
             await supervisor.run()
 
         supervisor.run_setup_script.assert_not_called()
+        supervisor.run_start_script.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_starts_opencode_and_bridge(self, repo_image_env):
@@ -176,6 +205,7 @@ class TestFromRepoImage:
 
         supervisor._incremental_git_sync = AsyncMock(return_value=True)
 
+        supervisor.run_start_script = AsyncMock(return_value=True)
         supervisor.start_opencode = AsyncMock()
         supervisor.start_bridge = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
@@ -187,9 +217,30 @@ class TestFromRepoImage:
         supervisor.start_opencode.assert_called_once()
         supervisor.start_bridge.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_start_script_failure_is_fatal(self, repo_image_env):
+        """Repo-image boot should fail fast when start hook fails."""
+        supervisor = _make_supervisor(repo_image_env)
+
+        supervisor._incremental_git_sync = AsyncMock(return_value=True)
+        supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.run_start_script = AsyncMock(return_value=False)
+        supervisor.start_opencode = AsyncMock()
+        supervisor.start_bridge = AsyncMock()
+        supervisor.monitor_processes = AsyncMock()
+        supervisor.shutdown = AsyncMock()
+        supervisor._report_fatal_error = AsyncMock()
+
+        with patch.dict(os.environ, repo_image_env, clear=False):
+            await supervisor.run()
+
+        supervisor._report_fatal_error.assert_called_once()
+        supervisor.start_opencode.assert_not_called()
+        supervisor.start_bridge.assert_not_called()
+
 
 class TestNormalMode:
-    """No build mode or repo image flags: full clone + setup + OpenCode."""
+    """No build mode or repo image flags: full clone + setup + start + OpenCode."""
 
     @pytest.mark.asyncio
     async def test_uses_full_git_sync(self, base_env):
@@ -201,6 +252,7 @@ class TestNormalMode:
         supervisor._quick_git_fetch = AsyncMock()
 
         supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.run_start_script = AsyncMock(return_value=True)
         supervisor.start_opencode = AsyncMock()
         supervisor.start_bridge = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
@@ -221,6 +273,7 @@ class TestNormalMode:
         supervisor.perform_git_sync = AsyncMock(return_value=True)
 
         supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.run_start_script = AsyncMock(return_value=True)
         supervisor.start_opencode = AsyncMock()
         supervisor.start_bridge = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
@@ -230,6 +283,7 @@ class TestNormalMode:
             await supervisor.run()
 
         supervisor.run_setup_script.assert_called_once()
+        supervisor.run_start_script.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_clone_depth_1(self, base_env, tmp_path):
@@ -248,6 +302,7 @@ class TestNormalMode:
             return mock_proc
 
         supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.run_start_script = AsyncMock(return_value=True)
         supervisor.start_opencode = AsyncMock()
         supervisor.start_bridge = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
@@ -268,6 +323,47 @@ class TestNormalMode:
         clone_args = clone_calls[0]
         assert "1" in clone_args, f"Expected --depth 1 in clone args, got {clone_args}"
         assert "100" not in clone_args, "Normal mode should not use --depth 100"
+
+
+class TestSnapshotRestoreMode:
+    """RESTORED_FROM_SNAPSHOT=true: quick fetch + start hook, skip setup."""
+
+    @pytest.mark.asyncio
+    async def test_skips_setup_and_runs_start(self, base_env):
+        supervisor = _make_supervisor({**base_env, "RESTORED_FROM_SNAPSHOT": "true"})
+
+        supervisor._quick_git_fetch = AsyncMock()
+        supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.run_start_script = AsyncMock(return_value=True)
+        supervisor.start_opencode = AsyncMock()
+        supervisor.start_bridge = AsyncMock()
+        supervisor.monitor_processes = AsyncMock()
+        supervisor.shutdown = AsyncMock()
+
+        with patch.dict(os.environ, {"RESTORED_FROM_SNAPSHOT": "true"}, clear=False):
+            await supervisor.run()
+
+        supervisor.run_setup_script.assert_not_called()
+        supervisor.run_start_script.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_start_failure_is_fatal(self, base_env):
+        supervisor = _make_supervisor({**base_env, "RESTORED_FROM_SNAPSHOT": "true"})
+
+        supervisor._quick_git_fetch = AsyncMock()
+        supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.run_start_script = AsyncMock(return_value=False)
+        supervisor.start_opencode = AsyncMock()
+        supervisor.start_bridge = AsyncMock()
+        supervisor.monitor_processes = AsyncMock()
+        supervisor.shutdown = AsyncMock()
+        supervisor._report_fatal_error = AsyncMock()
+
+        with patch.dict(os.environ, {"RESTORED_FROM_SNAPSHOT": "true"}, clear=False):
+            await supervisor.run()
+
+        supervisor._report_fatal_error.assert_called_once()
+        supervisor.start_opencode.assert_not_called()
 
 
 class TestIncrementalGitSync:

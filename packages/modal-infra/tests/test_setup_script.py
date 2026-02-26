@@ -280,6 +280,7 @@ class TestSetupInRun:
         # Mock all phases
         sup.perform_git_sync = AsyncMock(return_value=True)
         sup.run_setup_script = AsyncMock(return_value=True)
+        sup.run_start_script = AsyncMock(return_value=True)
         sup.start_opencode = AsyncMock()
         sup.start_bridge = AsyncMock()
         sup.monitor_processes = AsyncMock()
@@ -294,13 +295,13 @@ class TestSetupInRun:
 
         sup.run_setup_script.assert_called_once()
 
-        # Verify ordering: run_setup_script before start_opencode
+        # Verify ordering: run_setup_script before run_start_script before start_opencode
         call_order = []
-        for name in ["run_setup_script", "start_opencode"]:
+        for name in ["run_setup_script", "run_start_script", "start_opencode"]:
             mock = getattr(sup, name)
             if mock.call_count > 0:
                 call_order.append(name)
-        assert call_order == ["run_setup_script", "start_opencode"]
+        assert call_order == ["run_setup_script", "run_start_script", "start_opencode"]
 
     async def test_run_skips_setup_on_snapshot_restore(self, tmp_path):
         sup = _make_supervisor(tmp_path)
@@ -308,6 +309,7 @@ class TestSetupInRun:
         # Mock all phases
         sup._quick_git_fetch = AsyncMock()
         sup.run_setup_script = AsyncMock(return_value=True)
+        sup.run_start_script = AsyncMock(return_value=True)
         sup.start_opencode = AsyncMock()
         sup.start_bridge = AsyncMock()
         sup.monitor_processes = AsyncMock()
@@ -320,3 +322,4 @@ class TestSetupInRun:
             await sup.run()
 
         sup.run_setup_script.assert_not_called()
+        sup.run_start_script.assert_called_once()
