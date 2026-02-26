@@ -24,7 +24,7 @@ export type SandboxStatus =
   | "failed";
 export type GitSyncStatus = "pending" | "in_progress" | "completed" | "failed";
 export type MessageStatus = "pending" | "processing" | "completed" | "failed";
-export type MessageSource = "web" | "slack" | "linear" | "extension" | "github";
+export type MessageSource = "web" | "slack" | "teams" | "linear" | "extension" | "github";
 export type ArtifactType = "pr" | "screenshot" | "preview" | "branch";
 export type EventType = "tool_call" | "tool_result" | "token" | "error" | "git_sync";
 
@@ -355,7 +355,19 @@ export interface LinearCallbackContext {
   emitToolProgressActivities?: boolean;
 }
 
-export type CallbackContext = SlackCallbackContext | LinearCallbackContext;
+export interface TeamsCallbackContext {
+  source: "teams";
+  conversationId: string;
+  activityId: string;
+  serviceUrl: string;
+  repoFullName: string;
+  model: string;
+  reasoningEffort?: string;
+  typingMode?: string;
+  tenantId?: string;
+}
+
+export type CallbackContext = SlackCallbackContext | LinearCallbackContext | TeamsCallbackContext;
 
 // API response types
 export interface CreateSessionRequest {
