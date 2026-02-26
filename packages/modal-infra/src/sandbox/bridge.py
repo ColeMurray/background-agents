@@ -134,6 +134,8 @@ class AgentBridge:
     HTTP_CONNECT_TIMEOUT = 30.0
     HTTP_DEFAULT_TIMEOUT = 30.0
     OPENCODE_REQUEST_TIMEOUT = 10.0
+    GIT_PUSH_TIMEOUT_SECONDS = 120.0
+    GIT_PUSH_TERMINATE_GRACE_SECONDS = 5.0
     PROMPT_MAX_DURATION = 5400.0
     MAX_PENDING_PART_EVENTS = 2000
     MAX_EVENT_BUFFER_SIZE = 1000
@@ -1396,7 +1398,47 @@ class AgentBridge:
                 stderr=asyncio.subprocess.PIPE,
             )
 
-            _stdout, _stderr = await result.communicate()
+            try:
+                _stdout, _stderr = await asyncio.wait_for(
+                    result.communicate(),
+                    timeout=self.GIT_PUSH_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                self.log.warn(
+                    "git.push_timeout",
+                    branch_name=branch_name,
+                    timeout_ms=int(self.GIT_PUSH_TIMEOUT_SECONDS * 1000),
+                )
+
+                with contextlib.suppress(ProcessLookupError):
+                    result.terminate()
+
+                try:
+                    await asyncio.wait_for(
+                        result.wait(),
+                        timeout=self.GIT_PUSH_TERMINATE_GRACE_SECONDS,
+                    )
+                except TimeoutError:
+                    self.log.warn(
+                        "git.push_kill",
+                        branch_name=branch_name,
+                        timeout_ms=int(self.GIT_PUSH_TERMINATE_GRACE_SECONDS * 1000),
+                    )
+                    with contextlib.suppress(ProcessLookupError):
+                        result.kill()
+                    await result.wait()
+
+                await self._send_event(
+                    {
+                        "type": "push_error",
+                        "error": (
+                            "Push failed - git push timed out "
+                            f"after {int(self.GIT_PUSH_TIMEOUT_SECONDS)}s"
+                        ),
+                        "branchName": branch_name,
+                    }
+                )
+                return
 
             if result.returncode != 0:
                 self.log.warn("git.push_failed", branch_name=branch_name)
