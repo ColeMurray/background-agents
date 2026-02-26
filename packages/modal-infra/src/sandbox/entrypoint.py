@@ -83,6 +83,11 @@ class SandboxSupervisor:
             session_id=session_id,
         )
 
+    @property
+    def base_branch(self) -> str:
+        """The branch to clone/fetch — defaults to 'main'."""
+        return self.session_config.get("branch", "main")
+
     def _build_repo_url(self, authenticated: bool = True) -> str:
         """Build the HTTPS URL for the repository, optionally with clone credentials."""
         if authenticated and self.vcs_clone_token:
@@ -121,7 +126,7 @@ class SandboxSupervisor:
             clone_url = self._build_repo_url()
             image_build_mode = os.environ.get("IMAGE_BUILD_MODE") == "true"
             clone_depth = "100" if image_build_mode else "1"
-            base_branch = self.session_config.get("branch", "main")
+            base_branch = self.base_branch
 
             result = await asyncio.create_subprocess_exec(
                 "git",
@@ -163,7 +168,7 @@ class SandboxSupervisor:
                 )
 
             # Fetch latest changes for the target branch
-            base_branch = self.session_config.get("branch", "main")
+            base_branch = self.base_branch
             result = await asyncio.create_subprocess_exec(
                 "git",
                 "fetch",
@@ -759,7 +764,7 @@ class SandboxSupervisor:
                     self.log.warn("git.set_url_failed", exit_code=set_url.returncode)
 
             # Fetch latest for the target branch
-            base_branch = self.session_config.get("branch", "main")
+            base_branch = self.base_branch
             result = await asyncio.create_subprocess_exec(
                 "git",
                 "fetch",
