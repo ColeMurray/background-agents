@@ -91,6 +91,12 @@ function collapseTokenEvents(
   return result;
 }
 
+function parseWsMessage(raw: unknown): WsMessage | null {
+  if (!raw || typeof raw !== "object") return null;
+  if (!("type" in raw)) return null;
+  return raw as WsMessage;
+}
+
 function toUiSandboxEvent(event: SharedSandboxEvent): SandboxEvent {
   return {
     ...(event as unknown as SandboxEvent),
@@ -325,12 +331,6 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
     [processSandboxEvent]
   );
 
-  const parseWsMessage = useCallback((raw: unknown): WsMessage | null => {
-    if (!raw || typeof raw !== "object") return null;
-    if (!("type" in raw)) return null;
-    return raw as WsMessage;
-  }, []);
-
   const fetchWsToken = useCallback(async (): Promise<string | null> => {
     try {
       const response = await fetch(`/api/sessions/${sessionId}/ws-token`, {
@@ -478,7 +478,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
     ws.onerror = (error) => {
       console.error("WebSocket error event:", error);
     };
-  }, [sessionId, handleMessage, fetchWsToken, parseWsMessage]);
+  }, [sessionId, handleMessage, fetchWsToken]);
 
   const sendPrompt = useCallback((content: string, model?: string, reasoningEffort?: string) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {

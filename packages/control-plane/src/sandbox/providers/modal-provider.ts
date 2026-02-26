@@ -5,6 +5,7 @@
  * enabling unit testing and future provider abstraction.
  */
 
+import { ModalApiError } from "../client";
 import type { ModalClient } from "../client";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
@@ -122,9 +123,11 @@ export class ModalSandboxProvider implements SandboxProvider {
         error: result.error || "Unknown restore error",
       };
     } catch (error) {
-      const status = this.extractHttpStatus(error);
-      if (status !== null) {
-        throw this.classifyErrorWithStatus(`Restore failed with HTTP ${status}`, status);
+      if (error instanceof ModalApiError) {
+        throw this.classifyErrorWithStatus(
+          `Restore failed with HTTP ${error.status}`,
+          error.status
+        );
       }
       if (error instanceof SandboxProviderError) {
         throw error;
@@ -159,9 +162,11 @@ export class ModalSandboxProvider implements SandboxProvider {
         error: result.error || "Unknown snapshot error",
       };
     } catch (error) {
-      const status = this.extractHttpStatus(error);
-      if (status !== null) {
-        throw this.classifyErrorWithStatus(`Snapshot failed with HTTP ${status}`, status);
+      if (error instanceof ModalApiError) {
+        throw this.classifyErrorWithStatus(
+          `Snapshot failed with HTTP ${error.status}`,
+          error.status
+        );
       }
       if (error instanceof SandboxProviderError) {
         throw error;
@@ -217,18 +222,6 @@ export class ModalSandboxProvider implements SandboxProvider {
       "permanent",
       error instanceof Error ? error : undefined
     );
-  }
-
-  /**
-   * Extract HTTP status from Modal client error text.
-   * Expected format: "Modal API error: <status> ..."
-   */
-  private extractHttpStatus(error: unknown): number | null {
-    if (!(error instanceof Error)) return null;
-    const match = error.message.match(/modal api error:\s*(\d{3})\b/i);
-    if (!match) return null;
-    const status = Number.parseInt(match[1], 10);
-    return Number.isFinite(status) ? status : null;
   }
 }
 

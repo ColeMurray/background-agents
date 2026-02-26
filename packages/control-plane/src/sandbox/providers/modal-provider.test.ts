@@ -7,6 +7,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { ModalSandboxProvider } from "./modal-provider";
 import { SandboxProviderError } from "../provider";
+import { ModalApiError } from "../client";
 import type {
   ModalClient,
   CreateSandboxRequest,
@@ -469,7 +470,7 @@ describe("ModalSandboxProvider", () => {
     it("classifies HTTP 502 from restoreFromSnapshot as transient", async () => {
       const client = createMockModalClient({
         restoreSandbox: vi.fn(async () => {
-          throw new Error("Modal API error: 502 Bad Gateway");
+          throw new ModalApiError("Modal API error: 502 Bad Gateway", 502);
         }),
       });
       const provider = new ModalSandboxProvider(client);
@@ -496,7 +497,7 @@ describe("ModalSandboxProvider", () => {
     it("classifies HTTP 401 from restoreFromSnapshot as permanent", async () => {
       const client = createMockModalClient({
         restoreSandbox: vi.fn(async () => {
-          throw new Error("Modal API error: 401 Unauthorized");
+          throw new ModalApiError("Modal API error: 401 Unauthorized", 401);
         }),
       });
       const provider = new ModalSandboxProvider(client);
@@ -523,7 +524,7 @@ describe("ModalSandboxProvider", () => {
     it("classifies HTTP 503 from takeSnapshot as transient", async () => {
       const client = createMockModalClient({
         snapshotSandbox: vi.fn(async () => {
-          throw new Error("Modal API error: 503 Service Unavailable");
+          throw new ModalApiError("Modal API error: 503 Service Unavailable", 503);
         }),
       });
       const provider = new ModalSandboxProvider(client);
