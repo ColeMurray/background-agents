@@ -463,14 +463,6 @@ export class SessionRepository {
     return result.toArray() as unknown as ParticipantRow[];
   }
 
-  getOwnerParticipant(): ParticipantRow | null {
-    const result = this.sql.exec(
-      `SELECT * FROM participants WHERE role = 'owner' ORDER BY joined_at LIMIT 1`
-    );
-    const rows = result.toArray() as unknown as ParticipantRow[];
-    return rows[0] ?? null;
-  }
-
   // === MESSAGES ===
 
   getMessageCount(): number {

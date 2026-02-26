@@ -45,10 +45,6 @@ export interface CreateSandboxConfig {
   userEnvVars?: Record<string, string>;
   /** OpenCode session ID for resumption */
   opencodeSessionId?: string;
-  /** SCM display name for commit attribution */
-  scmUserName?: string;
-  /** SCM email for commit attribution */
-  scmUserEmail?: string;
   /** Trace ID for correlation */
   traceId?: string;
   /** Request ID for correlation */

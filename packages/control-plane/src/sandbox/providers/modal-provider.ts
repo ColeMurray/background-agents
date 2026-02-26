@@ -67,8 +67,6 @@ export class ModalSandboxProvider implements SandboxProvider {
         controlPlaneUrl: config.controlPlaneUrl,
         sandboxAuthToken: config.sandboxAuthToken,
         opencodeSessionId: config.opencodeSessionId,
-        scmUserName: config.scmUserName,
-        scmUserEmail: config.scmUserEmail,
         provider: config.provider,
         model: config.model,
         userEnvVars: config.userEnvVars,
