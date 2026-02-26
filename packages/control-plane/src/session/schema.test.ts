@@ -46,11 +46,10 @@ describe("applyMigrations", () => {
     vi.setSystemTime(1000);
   });
 
-  it("runs all 19 migrations on a fresh DO", () => {
+  it("runs all migrations on a fresh DO", () => {
     // No applied IDs → SELECT returns empty
     applyMigrations(mock.sql);
 
-    // Should have: CREATE TABLE + SELECT + 19 migration execs + 19 INSERT OR IGNORE
     const createTable = mock.calls.find((c) =>
       c.query.includes("CREATE TABLE IF NOT EXISTS _schema_migrations")
     );
@@ -63,9 +62,9 @@ describe("applyMigrations", () => {
     const inserts = mock.calls.filter((c) =>
       c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
     );
-    expect(inserts).toHaveLength(23);
+    expect(inserts).toHaveLength(MIGRATIONS.length);
 
-    // Verify all 22 IDs are recorded
+    // Verify all IDs are recorded
     const recordedIds = inserts.map((c) => c.params[0]);
     expect(recordedIds).toEqual(MIGRATIONS.map((m) => m.id));
   });
@@ -97,10 +96,10 @@ describe("applyMigrations", () => {
     const inserts = mock.calls.filter((c) =>
       c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
     );
-    expect(inserts).toHaveLength(13); // migrations 11-23
+    expect(inserts).toHaveLength(14); // migrations 11-24
 
     const recordedIds = inserts.map((c) => c.params[0]);
-    expect(recordedIds).toEqual([11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]);
+    expect(recordedIds).toEqual([11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
   });
 
   it("rethrows non-duplicate-column errors from string migrations", () => {
@@ -117,7 +116,7 @@ describe("applyMigrations", () => {
   });
 
   it("swallows duplicate column errors from string migrations", () => {
-    // Seed PRAGMA data so function-based migrations (7, 20) skip their ALTER TABLE calls.
+    // Seed PRAGMA data so function-based migrations (7, 20, 24) skip their ALTER TABLE calls.
     // This isolates the test to only exercise string migration error handling via runMigration().
     mock.setData("PRAGMA table_info(participants)", [
       { name: "scm_refresh_token_encrypted" },
@@ -128,6 +127,8 @@ describe("applyMigrations", () => {
       { name: "scm_access_token_encrypted" },
       { name: "scm_token_expires_at" },
     ]);
+    // Migration 24 checks session columns — include base_branch so it skips the rename
+    mock.setData("PRAGMA table_info(session)", [{ name: "base_branch" }]);
     const originalExec = mock.sql.exec.bind(mock.sql);
     mock.sql.exec = (query: string, ...params: unknown[]): SqlResult => {
       if (query.includes("ALTER TABLE")) {
@@ -139,11 +140,11 @@ describe("applyMigrations", () => {
     // Should not throw — duplicate column errors are expected
     expect(() => applyMigrations(mock.sql)).not.toThrow();
 
-    // All 23 migrations should still be recorded
+    // All migrations should still be recorded
     const inserts = mock.calls.filter((c) =>
       c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
     );
-    expect(inserts).toHaveLength(23);
+    expect(inserts).toHaveLength(MIGRATIONS.length);
   });
 
   it("is idempotent — calling twice produces no duplicate rows", () => {

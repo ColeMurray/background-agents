@@ -1196,8 +1196,8 @@ export class SessionDO extends DurableObject<Env> {
       title: session?.title ?? null,
       repoOwner: session?.repo_owner ?? "",
       repoName: session?.repo_name ?? "",
+      baseBranch: session?.base_branch ?? "main",
       branchName: session?.branch_name ?? null,
-      baseBranch: session?.repo_default_branch ?? null,
       status: session?.status ?? "created",
       sandboxStatus: sandbox?.status ?? "pending",
       messageCount,
@@ -1541,7 +1541,7 @@ export class SessionDO extends DurableObject<Env> {
       title: session.title,
       repoOwner: session.repo_owner,
       repoName: session.repo_name,
-      baseBranch: session.repo_default_branch,
+      baseBranch: session.base_branch,
       branchName: session.branch_name,
       baseSha: session.base_sha,
       currentSha: session.current_sha,
@@ -1763,7 +1763,7 @@ export class SessionDO extends DurableObject<Env> {
 
     const result = await pullRequestService.createPullRequest({
       ...body,
-      baseBranch: body.baseBranch || session.repo_default_branch,
+      baseBranch: body.baseBranch || session.base_branch,
       promptingUserId: promptingParticipant.user_id,
       promptingAuth: authResolution.auth,
       sessionUrl,
