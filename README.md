@@ -1,191 +1,118 @@
-# Background Agents: Open-Inspect
+# Background Agents
 
-An open-source background agents coding system inspired by
-[Ramp's Inspect](https://builders.ramp.com/post/why-we-built-our-background-agent).
+A local-first background coding agent system. Spawn sandboxed Docker environments that work on your
+repositories while you focus on other things.
 
-## Overview
+Forked from [open-inspect/background-agents](https://github.com/open-inspect/background-agents),
+simplified to run entirely on a single machine with no cloud dependencies.
 
-Open-Inspect provides a hosted background coding agent that can:
+## Features
 
-- Work on tasks in the background while you focus on other things
-- Access full development environments with all tools engineers have
-- Support multiple clients (web, Slack, Chrome extension)
-- Enable multiplayer sessions where multiple people can collaborate
-- Create PRs with proper commit attribution
-- Use your choice of AI model — Anthropic Claude or OpenAI Codex via your ChatGPT subscription
+- **Fully local** — no cloud services, no external accounts (except LLM API keys)
+- **Docker sandboxes** — each session runs in an isolated container with a git worktree
+- **Web UI** — Next.js dashboard for managing sessions, sending prompts, viewing agent output
+- **Git push / PR support** — via mounted SSH keys and `gh` CLI
+- **Model flexibility** — Anthropic Claude or OpenAI Codex, configurable per-session
+- **Secrets management** — environment variables injected into sandboxes
 
-## Security Model (Single-Tenant Only)
+## Prerequisites
 
-> **Important**: This system is designed for **single-tenant deployment only**, where all users are
-> trusted members of the same organization with access to the same repositories.
+- **Node.js** >= 20
+- **Docker Desktop** (must be running)
+- At least one LLM API key (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`)
 
-### How It Works
+## Quick Start
 
-The system uses a shared GitHub App installation for all git operations (clone, push). This means:
+```bash
+# 1. Clone and install
+git clone https://github.com/anomalyco/background-agents.git
+cd background-agents
+cp .env.example .env
+# Edit .env to add your API keys
 
-- **All users share the same GitHub App credentials** - The GitHub App must be installed on your
-  organization's repositories, and any user of the system can access any repo the App has access to
-- **No per-user repository access validation** - The system does not verify that a user has
-  permission to access a specific repository before creating a session
-- **User OAuth tokens are used for PR creation** - PRs are created using the user's GitHub OAuth
-  token, ensuring proper attribution and that users can only create PRs on repos they have write
-  access to
+# 2. Start everything
+./scripts/dev.sh
+```
 
-### Token Architecture
+This will:
 
-| Token Type       | Purpose                | Scope                            |
-| ---------------- | ---------------------- | -------------------------------- |
-| GitHub App Token | Clone repos, push code | All repos where App is installed |
-| User OAuth Token | Create PRs, user info  | Repos user has access to         |
-| WebSocket Token  | Real-time session auth | Single session                   |
-
-### Why Single-Tenant Only
-
-This architecture follows
-[Ramp's Inspect design](https://builders.ramp.com/post/why-we-built-our-background-agent), which was
-built for internal use where all employees are trusted and have access to company repositories.
-
-**For multi-tenant deployment**, you would need:
-
-- Per-tenant GitHub App installations
-- Access validation at session creation
-- Tenant isolation in the data model
-
-### Deployment Recommendations
-
-1. **Deploy behind your organization's SSO/VPN** - Ensure only authorized employees can access the
-   web interface
-2. **Install GitHub App only on intended repositories** - The App's installation scope defines what
-   the system can access
-3. **Use GitHub's repository selection** - When installing the App, select specific repositories
-   rather than "All repositories"
+1. Install npm dependencies
+2. Build the shared types package
+3. Build the sandbox Docker image (first run takes a few minutes)
+4. Start the API server on **http://localhost:8787**
+5. Start the Next.js web UI on **http://localhost:3000**
 
 ## Architecture
 
 ```
-                                    ┌──────────────────┐
-                                    │     Clients      │
-                                    │ ┌──────────────┐ │
-                                    │ │     Web      │ │
-                                    │ │    Slack     │ │
-                                    │ │   Extension  │ │
-                                    │ └──────────────┘ │
-                                    └────────┬─────────┘
-                                             │
-                                             ▼
-┌────────────────────────────────────────────────────────────────────┐
-│                     Control Plane (Cloudflare)                      │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │                   Durable Objects (per session)               │  │
-│  │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌───────────────┐   │  │
-│  │  │ SQLite  │  │WebSocket│  │  Event  │  │   GitHub      │   │  │
-│  │  │   DB    │  │   Hub   │  │ Stream  │  │ Integration   │   │  │
-│  │  └─────────┘  └─────────┘  └─────────┘  └───────────────┘   │  │
-│  └──────────────────────────────────────────────────────────────┘  │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │              D1 Database (repo-scoped secrets)                │  │
-│  └──────────────────────────────────────────────────────────────┘  │
-└────────────────────────────────┬───────────────────────────────────┘
-                                 │
-                                 ▼
-┌────────────────────────────────────────────────────────────────────┐
-│                      Data Plane (Modal)                             │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │                     Session Sandbox                           │  │
-│  │  ┌───────────┐  ┌───────────┐  ┌───────────┐                 │  │
-│  │  │ Supervisor│──│  OpenCode │──│   Bridge  │─────────────────┼──┼──▶ Control Plane
-│  │  └───────────┘  └───────────┘  └───────────┘                 │  │
-│  │                      │                                        │  │
-│  │              Full Dev Environment                             │  │
-│  │        (Node.js, Python, git, Playwright)                     │  │
-│  └──────────────────────────────────────────────────────────────┘  │
-└────────────────────────────────────────────────────────────────────┘
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────────┐
+│   Web UI        │────▶│   API Server     │────▶│  Docker Sandbox     │
+│   (Next.js)     │ WS  │   (Fastify)      │ WS  │  (OpenCode + Bridge)│
+│   :3000         │◀────│   :8787          │◀────│                     │
+└─────────────────┘     └──────────────────┘     └─────────────────────┘
+                              │
+                        ┌─────┴─────┐
+                        │  SQLite   │
+                        │  data.db  │
+                        └───────────┘
 ```
 
-## Packages
+### Packages
 
-| Package                                 | Description                          |
-| --------------------------------------- | ------------------------------------ |
-| [modal-infra](packages/modal-infra)     | Modal sandbox infrastructure         |
-| [control-plane](packages/control-plane) | Cloudflare Workers + Durable Objects |
-| [web](packages/web)                     | Next.js web client                   |
-| [shared](packages/shared)               | Shared types and utilities           |
+| Package   | Description                                                      |
+| --------- | ---------------------------------------------------------------- |
+| `shared`  | Shared types, model definitions, git utilities                   |
+| `server`  | Fastify API server + WebSocket hub + SQLite storage              |
+| `web`     | Next.js web UI — session dashboard, prompt input, settings       |
+| `sandbox` | Docker image + Python supervisor (entrypoint + WebSocket bridge) |
 
-## Getting Started
-
-See **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** for deployment instructions.
-
-To understand the architecture and core concepts, read
-**[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)**.
-
-## Key Features
-
-### Fast Startup
-
-Sessions start near-instantly using Modal filesystem snapshots:
-
-- Images rebuilt every 30 minutes with latest code
-- Dependencies pre-installed and cached
-- Sandboxes warmed proactively when user starts typing
-
-### Multiplayer Sessions
-
-Multiple users can collaborate in the same session:
-
-- Presence indicators show who's active
-- Prompts are attributed to their authors in git commits
-- Real-time streaming to all connected clients
-
-### Commit Attribution
-
-Commits are attributed to the user who sent the prompt:
-
-```typescript
-// Configure git identity per prompt
-await configureGitIdentity({
-  name: author.scmName,
-  email: author.scmEmail,
-});
-```
-
-### Multi-Provider Model Support
-
-Choose the AI model that fits your task — Anthropic Claude or OpenAI Codex:
-
-| Provider  | Models                                |
-| --------- | ------------------------------------- |
-| Anthropic | Claude Haiku, Sonnet, Opus            |
-| OpenAI    | GPT 5.2, GPT 5.2 Codex, GPT 5.3 Codex |
-
-OpenAI models work with your existing ChatGPT subscription — no separate API key needed. See
-**[docs/OPENAI_MODELS.md](docs/OPENAI_MODELS.md)** for setup instructions.
-
-### Repository Setup Scripts
-
-Repositories can include a `.openinspect/setup.sh` script for custom environment setup:
+## Development
 
 ```bash
-# .openinspect/setup.sh
-#!/bin/bash
-npm install
-pip install -r requirements.txt
+# Start dev servers (server + web in parallel)
+./scripts/dev.sh
+
+# Or start individually:
+npm run build -w @background-agents/shared   # Build shared first
+npm run dev -w @background-agents/server     # API server with hot reload
+npm run dev -w @background-agents/web        # Next.js dev server
+
+# Rebuild the sandbox Docker image
+docker build -t background-agents-sandbox packages/sandbox/
+
+# Lint and format
+npm run lint:fix
+npm run format
+
+# Type check
+npm run typecheck
 ```
 
-- Runs automatically after git clone, before the agent starts
-- Skipped when restoring from a snapshot (dependencies already installed)
-- Non-blocking: failures are logged but don't prevent the session from starting
-- Default timeout: 5 minutes (configurable via `SETUP_TIMEOUT_SECONDS` environment variable)
+## Configuration
+
+All configuration is via `.env` in the project root. See `.env.example` for options.
+
+| Variable            | Required | Description                     |
+| ------------------- | -------- | ------------------------------- |
+| `ANTHROPIC_API_KEY` | Yes\*    | Anthropic API key for Claude    |
+| `OPENAI_API_KEY`    | Yes\*    | OpenAI API key for GPT/Codex    |
+| `REPOS_DIR`         | No       | Path to repos directory (~code) |
+| `PORT`              | No       | Server port (default: 8787)     |
+| `DATA_DIR`          | No       | SQLite data directory           |
+| `SANDBOX_IMAGE`     | No       | Docker image name for sandboxes |
+
+\* At least one LLM API key is required.
+
+### Git Push / PR Support
+
+The sandbox containers mount your host credentials read-only:
+
+- `~/.ssh` — for `git push` via SSH
+- `~/.gitconfig` — for commit identity
+- `~/.config/gh` — for `gh pr create` via GitHub CLI
+
+Make sure you're authenticated with `gh auth login` and have SSH keys set up for your repositories.
 
 ## License
 
-MIT
-
-## Credits
-
-Inspired by [Ramp's Inspect](https://builders.ramp.com/post/why-we-built-our-background-agent) and
-built with:
-
-- [Modal](https://modal.com) - Cloud sandbox infrastructure
-- [Cloudflare Workers](https://workers.cloudflare.com) - Edge computing
-- [OpenCode](https://opencode.ai) - Coding agent runtime
-- [Next.js](https://nextjs.org) - Web framework
+Apache 2.0 — see [LICENSE](LICENSE).

@@ -39,19 +39,10 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
 # Test
 coverage/
 .nyc_output/
-
-# Cloudflare
-.wrangler/
-.dev.vars
-
-# Modal
-.modal/
 
 # Cache
 .cache/
@@ -63,34 +54,7 @@ coverage/
 # TypeScript build cache
 *.tsbuildinfo
 
-# Reference/vendored code
-opencode-reference/
-
-# Token files
-*-token.txt
-
-# Terraform
-**/.terraform/
-*.tfstate
-*.tfstate.*
-*.tfvars
-!*.tfvars.example
-crash.log
-crash.*.log
-override.tf
-override.tf.json
-*_override.tf
-*_override.tf.json
-.terraformrc
-terraform.rc
-*.tfplan
-.vercel
-
-# Internal docs (kept locally)
-docs/internal/
-
-SECURITY-AUDIT.md
-terraform/environments/production/plan.out
-terraform/environments/production/backend_override.tf
-terraform/environments/production/terraform.tfstate*
-terraform/environments/production/.terraform*
+# SQLite
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
