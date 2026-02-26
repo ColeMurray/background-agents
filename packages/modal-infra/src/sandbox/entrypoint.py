@@ -658,7 +658,9 @@ class SandboxSupervisor:
                 )
                 return False
 
-            output_tail = "\n".join((stdout.decode(errors="replace") if stdout else "").splitlines()[-50:])
+            output_tail = "\n".join(
+                (stdout.decode(errors="replace") if stdout else "").splitlines()[-50:]
+            )
             duration_ms = int((time.time() - start_time) * 1000)
 
             if process.returncode == 0:
