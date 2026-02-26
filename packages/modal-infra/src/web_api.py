@@ -101,8 +101,6 @@ async def api_create_sandbox(
         "control_plane_url": "...",
         "sandbox_auth_token": "...",
         "snapshot_id": null,
-        "git_user_name": null,
-        "git_user_email": null,
         "provider": "anthropic",
         "model": "claude-sonnet-4-6"
     }
@@ -120,7 +118,7 @@ async def api_create_sandbox(
         # Import types and manager directly
         from .auth.github_app import generate_installation_token
         from .sandbox.manager import SandboxConfig, SandboxManager
-        from .sandbox.types import GitUser, SessionConfig
+        from .sandbox.types import SessionConfig
 
         manager = SandboxManager()
 
@@ -140,13 +138,6 @@ async def api_create_sandbox(
         except Exception as e:
             log.warn("github.token_error", exc=e)
 
-        # Build session config
-        git_user = None
-        git_user_name = request.get("git_user_name")
-        git_user_email = request.get("git_user_email")
-        if git_user_name and git_user_email:
-            git_user = GitUser(name=git_user_name, email=git_user_email)
-
         session_config = SessionConfig(
             session_id=request.get("session_id"),
             repo_owner=request.get("repo_owner"),
@@ -154,7 +145,6 @@ async def api_create_sandbox(
             opencode_session_id=request.get("opencode_session_id"),
             provider=request.get("provider", "anthropic"),
             model=request.get("model", "claude-sonnet-4-6"),
-            git_user=git_user,
         )
 
         config = SandboxConfig(

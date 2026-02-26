@@ -228,6 +228,45 @@ class SandboxSupervisor:
             self.git_sync_complete.set()  # Allow agent to proceed anyway
             return False
 
+    def _install_tools(self, workdir: Path) -> None:
+        """Copy custom tools into the .opencode/tool directory for OpenCode to discover."""
+        opencode_dir = workdir / ".opencode"
+        tool_dest = opencode_dir / "tool"
+
+        # Legacy tool (inspect-plugin.js → create-pull-request.js)
+        legacy_tool = Path("/app/sandbox/inspect-plugin.js")
+        # New tools directory
+        tools_dir = Path("/app/sandbox/tools")
+
+        has_tools = legacy_tool.exists() or tools_dir.exists()
+        if not has_tools:
+            return
+
+        tool_dest.mkdir(parents=True, exist_ok=True)
+
+        if legacy_tool.exists():
+            shutil.copy(legacy_tool, tool_dest / "create-pull-request.js")
+
+        # Copy all .js files from tools/ (including _-prefixed internal modules)
+        if tools_dir.exists():
+            for tool_file in tools_dir.iterdir():
+                if tool_file.suffix == ".js":
+                    shutil.copy(tool_file, tool_dest / tool_file.name)
+
+        # Node modules symlink
+        node_modules = opencode_dir / "node_modules"
+        global_modules = Path("/usr/lib/node_modules")
+        if not node_modules.exists() and global_modules.exists():
+            try:
+                node_modules.symlink_to(global_modules)
+            except Exception as e:
+                self.log.warn("opencode.symlink_error", exc=e)
+
+        # Minimal package.json
+        package_json = opencode_dir / "package.json"
+        if not package_json.exists():
+            package_json.write_text('{"name": "opencode-tools", "type": "module"}')
+
     def _setup_openai_oauth(self) -> None:
         """Write OpenCode auth.json for ChatGPT OAuth if refresh token is configured."""
         refresh_token = os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN")
@@ -288,32 +327,10 @@ class SandboxSupervisor:
         if self.repo_path.exists() and (self.repo_path / ".git").exists():
             workdir = self.repo_path
 
-        # Set up .opencode directory for custom tools
-        opencode_dir = workdir / ".opencode"
-        tool_dest = opencode_dir / "tool"
-        tool_source = Path("/app/sandbox/inspect-plugin.js")
-
-        if tool_source.exists():
-            # Create .opencode/tool directory
-            tool_dest.mkdir(parents=True, exist_ok=True)
-            shutil.copy(tool_source, tool_dest / "create-pull-request.js")
-
-            # Create node_modules symlink to global modules so OpenCode doesn't try to install
-            # and so imports resolve correctly via NODE_PATH
-            node_modules = opencode_dir / "node_modules"
-            global_modules = Path("/usr/lib/node_modules")
-            if not node_modules.exists() and global_modules.exists():
-                try:
-                    node_modules.symlink_to(global_modules)
-                except Exception as e:
-                    self.log.warn("opencode.symlink_error", exc=e)
-
-            # Create a minimal package.json so OpenCode sees this as a configured directory
-            package_json = opencode_dir / "package.json"
-            if not package_json.exists():
-                package_json.write_text('{"name": "opencode-tools", "type": "module"}')
+        self._install_tools(workdir)
 
         # Deploy codex auth proxy plugin if OpenAI OAuth is configured
+        opencode_dir = workdir / ".opencode"
         plugin_source = Path("/app/sandbox/codex-auth-plugin.ts")
         if plugin_source.exists() and os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN"):
             plugin_dir = opencode_dir / "plugins"
@@ -558,37 +575,6 @@ class SandboxSupervisor:
                 )
         except Exception as e:
             self.log.error("supervisor.report_error_failed", exc=e)
-
-    async def configure_git_identity(self) -> None:
-        """Configure git identity from session owner."""
-        git_user = self.session_config.get("git_user")
-        if not git_user or not self.repo_path.exists():
-            return
-
-        try:
-            await asyncio.create_subprocess_exec(
-                "git",
-                "config",
-                "--local",
-                "user.name",
-                git_user["name"],
-                cwd=self.repo_path,
-            )
-            await asyncio.create_subprocess_exec(
-                "git",
-                "config",
-                "--local",
-                "user.email",
-                git_user["email"],
-                cwd=self.repo_path,
-            )
-            self.log.info(
-                "git.identity_configured",
-                git_name=git_user["name"],
-                git_email=git_user["email"],
-            )
-        except Exception as e:
-            self.log.error("git.identity_error", exc=e)
 
     async def run_setup_script(self) -> bool:
         """
@@ -861,10 +847,7 @@ class SandboxSupervisor:
             else:
                 git_sync_success = await self.perform_git_sync()
 
-            # Phase 2: Configure git identity (if repo was cloned)
-            await self.configure_git_identity()
-
-            # Phase 2.5: Run repo setup script (skip if restored or from repo image)
+            # Phase 2: Run repo setup script (skip if restored or from repo image)
             setup_success: bool | None = None
             if not restored_from_snapshot and not from_repo_image:
                 setup_success = await self.run_setup_script()
