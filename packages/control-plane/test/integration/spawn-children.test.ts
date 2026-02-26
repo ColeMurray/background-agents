@@ -89,7 +89,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(stateRes.status).toBe(200);
     const state = await stateRes.json<{ repoOwner: string; status: string }>();
     expect(state.repoOwner).toBe("acme");
-    expect(state.status).toBe("created");
+    // Child spawn immediately enqueues the initial prompt, which transitions session to active.
+    expect(state.status).toBe("active");
   });
 
   it("rejects when depth >= 2 (403)", async () => {
