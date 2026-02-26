@@ -26,6 +26,7 @@ import {
   type RepoImageLookup,
 } from "../sandbox/lifecycle/manager";
 import { RepoImageStore } from "../db/repo-images";
+import { SessionIndexStore } from "../db/session-index";
 import {
   evaluateExecutionTimeout,
   DEFAULT_EXECUTION_TIMEOUT_MS,
@@ -50,6 +51,7 @@ import type {
   SandboxEvent,
   SessionState,
   SandboxStatus,
+  SessionStatus,
   ParticipantRole,
 } from "../types";
 import type { SpawnContext } from "@open-inspect/shared";
@@ -1117,6 +1119,85 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async processSandboxEvent(event: SandboxEvent): Promise<void> {
     await this.sandboxEventProcessor.processSandboxEvent(event);
+    if (event.type === "execution_complete") {
+      await this.reconcileChildSessionStatus();
+    }
+  }
+
+  /**
+   * Child sessions are single-shot tasks. Reconcile status from message queue state
+   * so child task tooling can treat completed/failed executions as terminal.
+   */
+  private deriveChildSessionStatus(session: SessionRow): SessionStatus {
+    if (!session.parent_session_id) {
+      return session.status;
+    }
+
+    if (TERMINAL_STATUSES.has(session.status)) {
+      return session.status;
+    }
+
+    if (this.repository.getProcessingMessage()) {
+      return "active";
+    }
+
+    if (this.repository.getNextPendingMessage()) {
+      return "created";
+    }
+
+    const latestMessage = this.repository.listMessages({ limit: 1 })[0];
+    if (
+      latestMessage &&
+      (latestMessage.status === "completed" || latestMessage.status === "failed")
+    ) {
+      return "completed";
+    }
+
+    return session.status;
+  }
+
+  private async persistChildSessionStatus(
+    session: SessionRow,
+    status: SessionStatus
+  ): Promise<void> {
+    if (session.status === status) {
+      return;
+    }
+
+    const now = Date.now();
+    this.repository.updateSessionStatus(session.id, status, now);
+    this.broadcast({ type: "session_status", status });
+
+    if (!this.env.DB) {
+      return;
+    }
+
+    const externalSessionId = session.session_name || session.id;
+    try {
+      const sessionStore = new SessionIndexStore(this.env.DB);
+      await sessionStore.updateStatus(externalSessionId, status);
+    } catch (error) {
+      this.log.error("session_index.child_status_update_failed", {
+        session_id: externalSessionId,
+        status,
+        error,
+      });
+    }
+  }
+
+  private async reconcileChildSessionStatus(): Promise<SessionRow | null> {
+    const session = this.getSession();
+    if (!session || !session.parent_session_id) {
+      return session;
+    }
+
+    const derivedStatus = this.deriveChildSessionStatus(session);
+    if (derivedStatus !== session.status) {
+      await this.persistChildSessionStatus(session, derivedStatus);
+      return this.getSession();
+    }
+
+    return session;
   }
 
   /**
@@ -2022,8 +2103,8 @@ export class SessionDO extends DurableObject<Env> {
     return Response.json(context);
   }
 
-  private handleGetChildSummary(): Response {
-    const session = this.getSession();
+  private async handleGetChildSummary(): Promise<Response> {
+    const session = await this.reconcileChildSessionStatus();
     if (!session) {
       return Response.json({ error: "Session not found" }, { status: 404 });
     }
@@ -2038,7 +2119,7 @@ export class SessionDO extends DurableObject<Env> {
 
     const detail = {
       session: {
-        id: session.id,
+        id: session.session_name || session.id,
         title: session.title ?? "",
         status: session.status,
         repoOwner: session.repo_owner,

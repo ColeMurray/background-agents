@@ -24,6 +24,23 @@ function formatTimestamp(ts) {
   return new Date(ts).toISOString()
 }
 
+function getExecutionCompleteEvent(recentEvents) {
+  if (!Array.isArray(recentEvents)) return null
+  return recentEvents.find((event) => event?.type === "execution_complete") || null
+}
+
+function resolveStatus(sessionStatus, recentEvents) {
+  const completionEvent = getExecutionCompleteEvent(recentEvents)
+  if (!completionEvent) return sessionStatus
+
+  // Backward compatibility: older control-plane versions can leave child
+  // session.status as "created"/"active" even after execution completes.
+  if (sessionStatus === "created" || sessionStatus === "active") {
+    return "completed"
+  }
+  return sessionStatus
+}
+
 async function listChildren() {
   const response = await bridgeFetch("/children")
 
@@ -72,10 +89,11 @@ async function getChildDetail(taskId) {
 
   const detail = await response.json()
   const s = detail.session || {}
+  const resolvedStatus = resolveStatus(s.status || "unknown", detail.recentEvents)
   const lines = [
-    `Task: ${s.id || taskId}`,
+    `Task: ${taskId}`,
     `  Title:   ${s.title || "(untitled)"}`,
-    `  Status:  ${formatStatus(s.status || "unknown")}`,
+    `  Status:  ${formatStatus(resolvedStatus)}`,
     `  Model:   ${s.model || "default"}`,
     `  Repo:    ${s.repoOwner || ""}/${s.repoName || ""}`,
     `  Branch:  ${s.branchName || "(none)"}`,

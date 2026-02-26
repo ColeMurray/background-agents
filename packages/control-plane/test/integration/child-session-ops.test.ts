@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
-import { initNamedSession, seedSandboxAuth, queryDO, seedEvents } from "./helpers";
+import { initNamedSession, seedSandboxAuth, queryDO, seedEvents, seedMessage } from "./helpers";
 
 describe("Child session operations (list, get, cancel)", () => {
   beforeEach(cleanD1Tables);
@@ -165,6 +165,61 @@ describe("Child session operations (list, get, cancel)", () => {
       );
 
       expect(res.status).toBe(404);
+    });
+
+    it("marks a child task as completed after execution_complete", async () => {
+      const { pName, childName, childStub, sandboxToken, store } = await setupParentAndChild({
+        childStatus: "created",
+      });
+
+      const [owner] = await queryDO<{ id: string }>(
+        childStub,
+        "SELECT id FROM participants WHERE role = 'owner' LIMIT 1"
+      );
+      expect(owner).toBeDefined();
+
+      // Mirror real spawn behavior: child DO knows its parent.
+      await queryDO(
+        childStub,
+        "UPDATE session SET parent_session_id = ?, spawn_source = 'agent', spawn_depth = 1",
+        pName
+      );
+
+      const now = Date.now();
+      await seedMessage(childStub, {
+        id: "msg-child-complete-1",
+        authorId: owner.id,
+        content: "Do the task",
+        source: "agent",
+        status: "processing",
+        createdAt: now - 1000,
+        startedAt: now - 500,
+      });
+
+      const eventRes = await childStub.fetch("http://internal/internal/sandbox-event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "execution_complete",
+          messageId: "msg-child-complete-1",
+          success: true,
+          sandboxId: "sb-child-ops",
+          timestamp: now / 1000,
+        }),
+      });
+      expect(eventRes.status).toBe(200);
+
+      const child = await store.get(childName);
+      expect(child).not.toBeNull();
+      expect(child!.status).toBe("completed");
+
+      const res = await SELF.fetch(`https://test.local/sessions/${pName}/children/${childName}`, {
+        headers: { Authorization: `Bearer ${sandboxToken}` },
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json<{ session: { id: string; status: string } }>();
+      expect(body.session.id).toBe(childName);
+      expect(body.session.status).toBe("completed");
     });
   });
 
