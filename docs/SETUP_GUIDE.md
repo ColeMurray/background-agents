@@ -6,9 +6,9 @@ It is organized by goal so you can pick the fastest path:
 
 | Path   | Best For                                                 | Time       |
 | ------ | -------------------------------------------------------- | ---------- |
-| Path A | Run the web app locally against an existing backend      | ~10-20 min |
-| Path B | Contribute code locally (lint/typecheck/tests)           | ~15-30 min |
-| Path C | Deploy your own full stack (Cloudflare + Modal + Vercel) | ~1-3 hours |
+| Path A | Run the web app locally against an existing backend      | ~5-10 min  |
+| Path B | Contribute code locally (lint/typecheck/tests)           | ~10-20 min |
+| Path C | Deploy your own full stack (Cloudflare + Modal + Vercel) | ~45-90 min |
 
 ## Important Context
 
