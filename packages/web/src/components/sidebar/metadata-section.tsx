@@ -19,7 +19,7 @@ interface MetadataSectionProps {
   createdAt: number;
   model?: string;
   reasoningEffort?: string;
-  baseBranch?: string;
+  baseBranch: string;
   branchName?: string;
   repoOwner?: string;
   repoName?: string;

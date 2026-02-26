@@ -552,6 +552,11 @@ async function handleCreateSession(
     return error("repoOwner and repoName are required");
   }
 
+  // Validate branch name if provided (defense in depth)
+  if (body.branch && !/^[\w.\-/]+$/.test(body.branch)) {
+    return error("Invalid branch name");
+  }
+
   // Normalize repo identifiers to lowercase for consistent storage
   const repoOwner = body.repoOwner.toLowerCase();
   const repoName = body.repoName.toLowerCase();
@@ -653,7 +658,7 @@ async function handleCreateSession(
     repoName,
     model,
     reasoningEffort,
-    branch: body.branch || defaultBranch || null,
+    baseBranch: body.branch || defaultBranch || "main",
     status: "created",
     createdAt: now,
     updatedAt: now,

@@ -1,1 +1,1 @@
-ALTER TABLE sessions ADD COLUMN branch TEXT;
+ALTER TABLE sessions ADD COLUMN base_branch TEXT;

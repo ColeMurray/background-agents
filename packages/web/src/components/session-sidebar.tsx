@@ -22,7 +22,7 @@ export interface SessionItem {
   title: string | null;
   repoOwner: string;
   repoName: string;
-  branch: string | null;
+  baseBranch: string | null;
   status: string;
   createdAt: number;
   updatedAt: number;
@@ -246,11 +246,11 @@ function SessionListItem({
         <span>{relativeTime}</span>
         <span>·</span>
         <span className="truncate">{repoInfo}</span>
-        {session.branch && session.branch !== "main" && (
+        {session.baseBranch && session.baseBranch !== "main" && (
           <>
             <span>·</span>
             <BranchIcon className="w-3 h-3 flex-shrink-0" />
-            <span className="truncate">{session.branch}</span>
+            <span className="truncate">{session.baseBranch}</span>
           </>
         )}
       </div>

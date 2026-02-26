@@ -9,7 +9,7 @@ type SessionRow = {
   repo_name: string;
   model: string;
   reasoning_effort: string | null;
-  branch: string | null;
+  base_branch: string | null;
   status: string;
   created_at: number;
   updated_at: number;
@@ -86,7 +86,7 @@ class FakeD1Database {
         repoName,
         model,
         reasoningEffort,
-        branch,
+        baseBranch,
         status,
         createdAt,
         updatedAt,
@@ -111,7 +111,7 @@ class FakeD1Database {
           repo_name: repoName,
           model,
           reasoning_effort: reasoningEffort,
-          branch,
+          base_branch: baseBranch,
           status,
           created_at: createdAt,
           updated_at: updatedAt,
@@ -208,7 +208,7 @@ function makeSession(overrides: Partial<SessionEntry> = {}): SessionEntry {
     repoName: "repo",
     model: "anthropic/claude-haiku-4-5",
     reasoningEffort: null,
-    branch: null,
+    baseBranch: null,
     status: "created",
     createdAt: 1000,
     updatedAt: 1000,
