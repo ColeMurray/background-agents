@@ -135,7 +135,17 @@ export interface ShutdownCommand {
   type: "shutdown";
 }
 
-export type SandboxCommand = PromptCommand | StopCommand | SnapshotCommand | ShutdownCommand;
+export interface AckCommand {
+  type: "ack";
+  ackId: string;
+}
+
+export type SandboxCommand =
+  | PromptCommand
+  | StopCommand
+  | SnapshotCommand
+  | ShutdownCommand
+  | AckCommand;
 
 // Internal session update types
 

@@ -24,6 +24,15 @@ interface SessionSandboxEventProcessorDeps {
   processMessageQueue: () => Promise<void>;
 }
 
+/** Event types that require delivery acknowledgement. */
+const CRITICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "execution_complete",
+  "error",
+  "snapshot_ready",
+  "push_complete",
+  "push_error",
+]);
+
 export class SessionSandboxEventProcessor {
   private pendingPushResolvers = new Map<string, PushResolver>();
 
@@ -36,6 +45,9 @@ export class SessionSandboxEventProcessor {
       this.deps.log.info("Sandbox event", { event_type: event.type });
     }
     const now = Date.now();
+
+    // Extract ackId from the raw event (attached by bridge for critical events)
+    const ackId = (event as Record<string, unknown>).ackId as string | undefined;
 
     if (event.type === "heartbeat") {
       this.deps.repository.updateSandboxHeartbeat(now);
@@ -150,6 +162,7 @@ export class SessionSandboxEventProcessor {
       this.deps.updateLastActivity(now);
       await this.deps.scheduleInactivityCheck();
       await this.deps.processMessageQueue();
+      this.sendAck(ackId);
       return;
     }
 
@@ -174,6 +187,10 @@ export class SessionSandboxEventProcessor {
     }
 
     this.deps.broadcast({ type: "sandbox_event", event });
+
+    if (CRITICAL_EVENT_TYPES.has(event.type)) {
+      this.sendAck(ackId);
+    }
   }
 
   async pushBranchToRemote(
@@ -251,6 +268,16 @@ export class SessionSandboxEventProcessor {
     }
 
     this.pendingPushResolvers.delete(normalizedBranch);
+  }
+
+  private sendAck(ackId: string | undefined): void {
+    if (!ackId) return;
+    const sandboxWs = this.deps.wsManager.getSandboxSocket();
+    if (sandboxWs) {
+      this.deps.wsManager.send(sandboxWs, { type: "ack", ackId });
+    } else {
+      this.deps.log.debug("Cannot send ACK: no sandbox socket", { ack_id: ackId });
+    }
   }
 
   private normalizeBranchName(name: string): string {
