@@ -160,21 +160,32 @@ Choose the AI model that fits your task — Anthropic Claude or OpenAI Codex:
 OpenAI models work with your existing ChatGPT subscription — no separate API key needed. See
 **[docs/OPENAI_MODELS.md](docs/OPENAI_MODELS.md)** for setup instructions.
 
-### Repository Setup Scripts
+### Repository Lifecycle Scripts
 
-Repositories can include a `.openinspect/setup.sh` script for custom environment setup:
+Repositories can define two optional startup scripts under `.openinspect/`:
 
 ```bash
-# .openinspect/setup.sh
+# .openinspect/setup.sh (provisioning)
 #!/bin/bash
 npm install
 pip install -r requirements.txt
 ```
 
-- Runs automatically after git clone, before the agent starts
-- Skipped when restoring from a snapshot (dependencies already installed)
-- Non-blocking: failures are logged but don't prevent the session from starting
-- Default timeout: 5 minutes (configurable via `SETUP_TIMEOUT_SECONDS` environment variable)
+```bash
+# .openinspect/start.sh (runtime startup)
+#!/bin/bash
+docker compose up -d postgres redis
+```
+
+- `setup.sh` runs for image builds and fresh sessions
+- `setup.sh` is skipped for repo-image and snapshot-restore starts
+- `setup.sh` failures are non-fatal for fresh sessions, but fatal in image build mode
+- `start.sh` runs for every non-build session startup (fresh, repo-image, snapshot-restore)
+- `start.sh` failures are strict: if present and it fails, session startup fails
+- Default timeouts:
+  - `SETUP_TIMEOUT_SECONDS` (default `300`)
+  - `START_TIMEOUT_SECONDS` (default `120`)
+- Both hooks receive `OPENINSPECT_BOOT_MODE` (`build`, `fresh`, `repo_image`, `snapshot_restore`)
 
 ## License
 
