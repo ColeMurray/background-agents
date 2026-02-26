@@ -246,7 +246,7 @@ function SessionListItem({
         <span>{relativeTime}</span>
         <span>·</span>
         <span className="truncate">{repoInfo}</span>
-        {session.branch && (
+        {session.branch && session.branch !== "main" && (
           <>
             <span>·</span>
             <BranchIcon className="w-3 h-3 flex-shrink-0" />
