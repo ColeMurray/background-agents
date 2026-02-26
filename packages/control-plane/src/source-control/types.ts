@@ -123,6 +123,8 @@ export interface RepositoryAccessResult {
   repoOwner: string;
   /** Normalized (lowercase) repository name */
   repoName: string;
+  /** Repository's default branch (e.g., "main") */
+  defaultBranch: string;
 }
 
 /**
@@ -259,6 +261,15 @@ export interface SourceControlProvider {
    * @throws SourceControlProviderError on configuration or API errors
    */
   listRepositories(): Promise<InstallationRepository[]>;
+
+  /**
+   * List branches for a repository.
+   *
+   * @param config - Repository identifier (owner/name)
+   * @returns Array of branch names
+   * @throws SourceControlProviderError on configuration or API errors
+   */
+  listBranches(config: GetRepositoryConfig): Promise<{ name: string }[]>;
 
   /**
    * Generate authentication for git push operations.

@@ -83,6 +83,11 @@ class SandboxSupervisor:
             session_id=session_id,
         )
 
+    @property
+    def base_branch(self) -> str:
+        """The branch to clone/fetch — defaults to 'main'."""
+        return self.session_config.get("branch", "main")
+
     def _build_repo_url(self, authenticated: bool = True) -> str:
         """Build the HTTPS URL for the repository, optionally with clone credentials."""
         if authenticated and self.vcs_clone_token:
@@ -121,12 +126,15 @@ class SandboxSupervisor:
             clone_url = self._build_repo_url()
             image_build_mode = os.environ.get("IMAGE_BUILD_MODE") == "true"
             clone_depth = "100" if image_build_mode else "1"
+            base_branch = self.base_branch
 
             result = await asyncio.create_subprocess_exec(
                 "git",
                 "clone",
                 "--depth",
                 clone_depth,
+                "--branch",
+                base_branch,
                 clone_url,
                 str(self.repo_path),
                 stdout=asyncio.subprocess.PIPE,
@@ -159,11 +167,13 @@ class SandboxSupervisor:
                     stderr=asyncio.subprocess.PIPE,
                 )
 
-            # Fetch latest changes
+            # Fetch latest changes for the target branch
+            base_branch = self.base_branch
             result = await asyncio.create_subprocess_exec(
                 "git",
                 "fetch",
                 "origin",
+                base_branch,
                 cwd=self.repo_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -178,9 +188,6 @@ class SandboxSupervisor:
                     exit_code=result.returncode,
                 )
                 return False
-
-            # Get the base branch (default to main)
-            base_branch = self.session_config.get("branch", "main")
 
             # Rebase onto latest
             result = await asyncio.create_subprocess_exec(
@@ -576,37 +583,6 @@ class SandboxSupervisor:
         except Exception as e:
             self.log.error("supervisor.report_error_failed", exc=e)
 
-    async def configure_git_identity(self) -> None:
-        """Configure git identity from session owner."""
-        git_user = self.session_config.get("git_user")
-        if not git_user or not self.repo_path.exists():
-            return
-
-        try:
-            await asyncio.create_subprocess_exec(
-                "git",
-                "config",
-                "--local",
-                "user.name",
-                git_user["name"],
-                cwd=self.repo_path,
-            )
-            await asyncio.create_subprocess_exec(
-                "git",
-                "config",
-                "--local",
-                "user.email",
-                git_user["email"],
-                cwd=self.repo_path,
-            )
-            self.log.info(
-                "git.identity_configured",
-                git_name=git_user["name"],
-                git_email=git_user["email"],
-            )
-        except Exception as e:
-            self.log.error("git.identity_error", exc=e)
-
     async def run_setup_script(self) -> bool:
         """
         Run .openinspect/setup.sh if it exists in the cloned repo.
@@ -787,11 +763,13 @@ class SandboxSupervisor:
                 if set_url.returncode != 0:
                     self.log.warn("git.set_url_failed", exit_code=set_url.returncode)
 
-            # Fetch latest
+            # Fetch latest for the target branch
+            base_branch = self.base_branch
             result = await asyncio.create_subprocess_exec(
                 "git",
                 "fetch",
                 "origin",
+                base_branch,
                 cwd=self.repo_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -806,10 +784,6 @@ class SandboxSupervisor:
                 )
                 self.git_sync_complete.set()
                 return False
-
-            # Hard reset to latest — safe because this runs at session startup
-            # before the user has made any changes
-            base_branch = self.session_config.get("branch", "main")
             result = await asyncio.create_subprocess_exec(
                 "git",
                 "reset",
@@ -878,10 +852,7 @@ class SandboxSupervisor:
             else:
                 git_sync_success = await self.perform_git_sync()
 
-            # Phase 2: Configure git identity (if repo was cloned)
-            await self.configure_git_identity()
-
-            # Phase 2.5: Run repo setup script (skip if restored or from repo image)
+            # Phase 2: Run repo setup script (skip if restored or from repo image)
             setup_success: bool | None = None
             if not restored_from_snapshot and not from_repo_image:
                 setup_success = await self.run_setup_script()

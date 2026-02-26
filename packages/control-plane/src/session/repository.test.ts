@@ -97,6 +97,7 @@ describe("SessionRepository", () => {
         "owner",
         "repo",
         null,
+        "main",
         "claude-sonnet-4",
         null,
         "created",

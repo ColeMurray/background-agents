@@ -5,6 +5,7 @@ export interface SessionEntry {
   repoName: string;
   model: string;
   reasoningEffort: string | null;
+  baseBranch: string | null;
   status: string;
   parentSessionId?: string | null;
   spawnSource?: "user" | "agent";
@@ -20,6 +21,7 @@ interface SessionRow {
   repo_name: string;
   model: string;
   reasoning_effort: string | null;
+  base_branch: string | null;
   status: string;
   parent_session_id: string | null;
   spawn_source: "user" | "agent";
@@ -51,6 +53,7 @@ function toEntry(row: SessionRow): SessionEntry {
     repoName: row.repo_name,
     model: row.model,
     reasoningEffort: row.reasoning_effort,
+    baseBranch: row.base_branch,
     status: row.status,
     parentSessionId: row.parent_session_id,
     spawnSource: row.spawn_source,
@@ -66,8 +69,8 @@ export class SessionIndexStore {
   async create(session: SessionEntry): Promise<void> {
     await this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, spawn_source, spawn_depth, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         session.id,
@@ -76,6 +79,7 @@ export class SessionIndexStore {
         session.repoName.toLowerCase(),
         session.model,
         session.reasoningEffort,
+        session.baseBranch,
         session.status,
         session.parentSessionId ?? null,
         session.spawnSource ?? "user",

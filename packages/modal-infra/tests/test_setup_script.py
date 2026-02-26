@@ -279,7 +279,6 @@ class TestSetupInRun:
 
         # Mock all phases
         sup.perform_git_sync = AsyncMock(return_value=True)
-        sup.configure_git_identity = AsyncMock()
         sup.run_setup_script = AsyncMock(return_value=True)
         sup.start_opencode = AsyncMock()
         sup.start_bridge = AsyncMock()
@@ -295,20 +294,19 @@ class TestSetupInRun:
 
         sup.run_setup_script.assert_called_once()
 
-        # Verify ordering: configure_git_identity before run_setup_script before start_opencode
+        # Verify ordering: run_setup_script before start_opencode
         call_order = []
-        for name in ["configure_git_identity", "run_setup_script", "start_opencode"]:
+        for name in ["run_setup_script", "start_opencode"]:
             mock = getattr(sup, name)
             if mock.call_count > 0:
                 call_order.append(name)
-        assert call_order == ["configure_git_identity", "run_setup_script", "start_opencode"]
+        assert call_order == ["run_setup_script", "start_opencode"]
 
     async def test_run_skips_setup_on_snapshot_restore(self, tmp_path):
         sup = _make_supervisor(tmp_path)
 
         # Mock all phases
         sup._quick_git_fetch = AsyncMock()
-        sup.configure_git_identity = AsyncMock()
         sup.run_setup_script = AsyncMock(return_value=True)
         sup.start_opencode = AsyncMock()
         sup.start_bridge = AsyncMock()

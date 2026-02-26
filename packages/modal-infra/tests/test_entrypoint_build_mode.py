@@ -50,7 +50,7 @@ class TestImageBuildMode:
         supervisor = _make_supervisor(build_env)
 
         supervisor.perform_git_sync = AsyncMock(return_value=True)
-        supervisor.configure_git_identity = AsyncMock()
+
         supervisor.run_setup_script = AsyncMock(return_value=True)
         supervisor.start_opencode = AsyncMock()
         supervisor.start_bridge = AsyncMock()
@@ -64,7 +64,6 @@ class TestImageBuildMode:
             await supervisor.run()
 
         supervisor.perform_git_sync.assert_called_once()
-        supervisor.configure_git_identity.assert_called_once()
         supervisor.run_setup_script.assert_called_once()
         # OpenCode and bridge should NOT be started in build mode
         supervisor.start_opencode.assert_not_called()
@@ -90,7 +89,6 @@ class TestImageBuildMode:
             mock_proc.returncode = 0
             return mock_proc
 
-        supervisor.configure_git_identity = AsyncMock()
         supervisor.run_setup_script = AsyncMock(return_value=True)
         supervisor.shutdown = AsyncMock()
 
@@ -116,7 +114,7 @@ class TestImageBuildMode:
         supervisor = _make_supervisor(build_env)
 
         supervisor.perform_git_sync = AsyncMock(return_value=True)
-        supervisor.configure_git_identity = AsyncMock()
+
         supervisor.run_setup_script = AsyncMock(return_value=True)
         supervisor.shutdown = AsyncMock()
         # Pre-set so entrypoint doesn't hang waiting for builder to terminate
@@ -139,7 +137,7 @@ class TestFromRepoImage:
         supervisor.perform_git_sync = AsyncMock(return_value=True)
         supervisor._incremental_git_sync = AsyncMock(return_value=True)
         supervisor._quick_git_fetch = AsyncMock()
-        supervisor.configure_git_identity = AsyncMock()
+
         supervisor.run_setup_script = AsyncMock(return_value=True)
         supervisor.start_opencode = AsyncMock()
         supervisor.start_bridge = AsyncMock()
@@ -159,7 +157,7 @@ class TestFromRepoImage:
         supervisor = _make_supervisor(repo_image_env)
 
         supervisor._incremental_git_sync = AsyncMock(return_value=True)
-        supervisor.configure_git_identity = AsyncMock()
+
         supervisor.run_setup_script = AsyncMock(return_value=True)
         supervisor.start_opencode = AsyncMock()
         supervisor.start_bridge = AsyncMock()
@@ -177,7 +175,7 @@ class TestFromRepoImage:
         supervisor = _make_supervisor(repo_image_env)
 
         supervisor._incremental_git_sync = AsyncMock(return_value=True)
-        supervisor.configure_git_identity = AsyncMock()
+
         supervisor.start_opencode = AsyncMock()
         supervisor.start_bridge = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
@@ -201,7 +199,7 @@ class TestNormalMode:
         supervisor.perform_git_sync = AsyncMock(return_value=True)
         supervisor._incremental_git_sync = AsyncMock(return_value=True)
         supervisor._quick_git_fetch = AsyncMock()
-        supervisor.configure_git_identity = AsyncMock()
+
         supervisor.run_setup_script = AsyncMock(return_value=True)
         supervisor.start_opencode = AsyncMock()
         supervisor.start_bridge = AsyncMock()
@@ -221,7 +219,7 @@ class TestNormalMode:
         supervisor = _make_supervisor(base_env)
 
         supervisor.perform_git_sync = AsyncMock(return_value=True)
-        supervisor.configure_git_identity = AsyncMock()
+
         supervisor.run_setup_script = AsyncMock(return_value=True)
         supervisor.start_opencode = AsyncMock()
         supervisor.start_bridge = AsyncMock()
@@ -249,7 +247,6 @@ class TestNormalMode:
             mock_proc.returncode = 0
             return mock_proc
 
-        supervisor.configure_git_identity = AsyncMock()
         supervisor.run_setup_script = AsyncMock(return_value=True)
         supervisor.start_opencode = AsyncMock()
         supervisor.start_bridge = AsyncMock()

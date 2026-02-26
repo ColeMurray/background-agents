@@ -40,14 +40,13 @@ export interface CreateSandboxRequest {
   sandboxAuthToken: string;
   snapshotId?: string;
   opencodeSessionId?: string;
-  gitUserName?: string;
-  gitUserEmail?: string;
   provider?: string;
   model?: string;
   userEnvVars?: Record<string, string>;
   repoImageId?: string | null;
   repoImageSha?: string | null;
   timeoutSeconds?: number;
+  branch?: string;
 }
 
 export interface CreateSandboxResponse {
@@ -212,14 +211,13 @@ export class ModalClient {
           sandbox_auth_token: request.sandboxAuthToken,
           snapshot_id: request.snapshotId || null,
           opencode_session_id: request.opencodeSessionId || null,
-          git_user_name: request.gitUserName || null,
-          git_user_email: request.gitUserEmail || null,
           provider: request.provider || "anthropic",
           model: request.model || "claude-sonnet-4-6",
           user_env_vars: request.userEnvVars || null,
           repo_image_id: request.repoImageId || null,
           repo_image_sha: request.repoImageSha || null,
           timeout_seconds: request.timeoutSeconds || null,
+          branch: request.branch || null,
         }),
       });
 

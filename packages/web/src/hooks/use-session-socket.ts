@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import type { Artifact } from "@/types/session";
+import type { Artifact, SandboxEvent } from "@/types/session";
 
 // WebSocket URL (should come from env in production)
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8787";
@@ -19,32 +19,13 @@ interface Message {
   createdAt: number;
 }
 
-interface SandboxEvent {
-  type: string;
-  content?: string;
-  messageId?: string;
-  tool?: string;
-  args?: Record<string, unknown>;
-  callId?: string;
-  result?: string;
-  error?: string;
-  success?: boolean;
-  status?: string;
-  sha?: string;
-  timestamp: number;
-  author?: {
-    participantId: string;
-    name: string;
-    avatar?: string;
-  };
-}
-
 interface SessionState {
   id: string;
   title: string | null;
   repoOwner: string;
   repoName: string;
   branchName: string | null;
+  baseBranch: string;
   status: string;
   sandboxStatus: string;
   messageCount: number;

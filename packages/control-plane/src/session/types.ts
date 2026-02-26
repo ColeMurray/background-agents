@@ -22,7 +22,7 @@ export interface SessionRow {
   repo_owner: string;
   repo_name: string;
   repo_id: number | null;
-  repo_default_branch: string;
+  base_branch: string;
   branch_name: string | null;
   base_sha: string | null;
   current_sha: string | null;

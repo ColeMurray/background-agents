@@ -5,7 +5,6 @@ from datetime import datetime
 from src.registry.models import Repository, Snapshot, SnapshotStatus
 from src.sandbox.types import (
     GitSyncStatus,
-    GitUser,
     SandboxStatus,
     SessionConfig,
 )
@@ -45,21 +44,6 @@ class TestSandboxTypes:
         assert config.provider == "anthropic"
         assert config.model == "claude-sonnet-4-6"
         assert config.branch is None
-        assert config.git_user is None
-
-    def test_session_config_with_git_user(self):
-        """Test SessionConfig with git user."""
-        git_user = GitUser(name="Jane Dev", email="jane@example.com")
-        config = SessionConfig(
-            session_id="test-123",
-            repo_owner="acme",
-            repo_name="webapp",
-            git_user=git_user,
-        )
-
-        assert config.git_user is not None
-        assert config.git_user.name == "Jane Dev"
-        assert config.git_user.email == "jane@example.com"
 
 
 class TestRegistryModels:

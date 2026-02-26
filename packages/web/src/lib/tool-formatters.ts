@@ -1,18 +1,4 @@
-export interface SandboxEvent {
-  type: string;
-  content?: string;
-  messageId?: string;
-  tool?: string;
-  args?: Record<string, unknown>;
-  callId?: string;
-  result?: string;
-  error?: string;
-  success?: boolean;
-  status?: string;
-  output?: string;
-  sha?: string;
-  timestamp: number;
-}
+import type { SandboxEvent } from "@/types/session";
 
 /**
  * Extract just the filename from a file path

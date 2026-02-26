@@ -561,6 +561,48 @@ export async function getInstallationRepository(
 }
 
 /**
+ * List branches for a repository using the GitHub App installation token.
+ */
+export async function listRepositoryBranches(
+  config: GitHubAppConfig,
+  owner: string,
+  repo: string,
+  env?: InstallationTokenCacheBindings
+): Promise<{ name: string }[]> {
+  const token = await getCachedInstallationToken(config, env);
+  const branches: { name: string }[] = [];
+  let page = 1;
+
+  // Paginate through branches (100 per page, cap at 500)
+  while (branches.length < 500) {
+    const response = await fetchWithTimeout(
+      `https://api.github.com/repos/${owner}/${repo}/branches?per_page=100&page=${page}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": "Open-Inspect",
+        },
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Failed to list branches: ${response.status} ${error}`);
+    }
+
+    const data = (await response.json()) as { name: string }[];
+    branches.push(...data.map((b) => ({ name: b.name })));
+
+    if (data.length < 100) break;
+    page++;
+  }
+
+  return branches;
+}
+
+/**
  * Check if GitHub App credentials are configured.
  */
 export function isGitHubAppConfigured(env: {

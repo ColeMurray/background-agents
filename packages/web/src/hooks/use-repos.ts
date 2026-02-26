@@ -8,6 +8,7 @@ export interface Repo {
   name: string;
   description: string | null;
   private: boolean;
+  defaultBranch: string;
 }
 
 interface ReposResponse {

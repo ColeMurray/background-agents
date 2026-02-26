@@ -45,10 +45,6 @@ export interface CreateSandboxConfig {
   userEnvVars?: Record<string, string>;
   /** OpenCode session ID for resumption */
   opencodeSessionId?: string;
-  /** Git user name for commits */
-  gitUserName?: string;
-  /** Git user email for commits */
-  gitUserEmail?: string;
   /** Trace ID for correlation */
   traceId?: string;
   /** Request ID for correlation */
@@ -59,6 +55,8 @@ export interface CreateSandboxConfig {
   repoImageSha?: string | null;
   /** Sandbox lifetime in seconds. Defaults to DEFAULT_SANDBOX_TIMEOUT_SECONDS on Modal. */
   timeoutSeconds?: number;
+  /** Git branch to work on (defaults to repo's default branch) */
+  branch?: string;
 }
 
 /**
@@ -101,6 +99,8 @@ export interface RestoreConfig {
   userEnvVars?: Record<string, string>;
   /** Sandbox lifetime in seconds. Defaults to DEFAULT_SANDBOX_TIMEOUT_SECONDS. */
   timeoutSeconds?: number;
+  /** Git branch to work on (defaults to repo's default branch) */
+  branch?: string;
   /** Trace ID for correlation */
   traceId?: string;
   /** Request ID for correlation */

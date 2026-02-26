@@ -112,12 +112,20 @@ jobs:
 
             *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
 
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: output
-            });
+            try {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: output
+              });
+            } catch (error) {
+              if (error.status === 403) {
+                core.notice('Could not post PR comment — GITHUB_TOKEN has read-only access (expected for fork PRs).');
+              } else {
+                throw error;
+              }
+            }
 
   plan:
     name: Plan

@@ -9,6 +9,7 @@ type SessionRow = {
   repo_name: string;
   model: string;
   reasoning_effort: string | null;
+  base_branch: string | null;
   status: string;
   parent_session_id: string | null;
   spawn_source: "user" | "agent";
@@ -116,6 +117,7 @@ class FakeD1Database {
         repoName,
         model,
         reasoningEffort,
+        baseBranch,
         status,
         parentSessionId,
         spawnSource,
@@ -128,6 +130,7 @@ class FakeD1Database {
         string,
         string,
         string,
+        string | null,
         string | null,
         string,
         string | null,
@@ -145,6 +148,7 @@ class FakeD1Database {
           repo_name: repoName,
           model,
           reasoning_effort: reasoningEffort,
+          base_branch: baseBranch,
           status,
           parent_session_id: parentSessionId,
           spawn_source: spawnSource,
@@ -263,6 +267,7 @@ function makeSession(overrides: Partial<SessionEntry> = {}): SessionEntry {
     repoName: "repo",
     model: "anthropic/claude-haiku-4-5",
     reasoningEffort: null,
+    baseBranch: null,
     status: "created",
     createdAt: 1000,
     updatedAt: 1000,

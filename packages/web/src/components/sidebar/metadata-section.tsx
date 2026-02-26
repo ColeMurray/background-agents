@@ -10,6 +10,7 @@ import {
   SparkleIcon,
   GitHubIcon,
   GitPrIcon,
+  BranchIcon,
   CopyIcon,
   CheckIcon,
   LinkIcon,
@@ -20,6 +21,7 @@ interface MetadataSectionProps {
   createdAt: number;
   model?: string;
   reasoningEffort?: string;
+  baseBranch: string;
   branchName?: string;
   repoOwner?: string;
   repoName?: string;
@@ -31,6 +33,7 @@ export function MetadataSection({
   createdAt,
   model,
   reasoningEffort,
+  baseBranch,
   branchName,
   repoOwner,
   repoName,
@@ -114,7 +117,29 @@ export function MetadataSection({
         </div>
       )}
 
-      {/* Branch */}
+      {/* Base Branch */}
+      {baseBranch && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <BranchIcon className="w-4 h-4" />
+          {repoOwner && repoName ? (
+            <a
+              href={`https://github.com/${repoOwner}/${repoName}/tree/${encodeURIComponent(baseBranch)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-accent truncate max-w-[180px] hover:underline"
+              title={baseBranch}
+            >
+              {truncateBranch(baseBranch)}
+            </a>
+          ) : (
+            <span className="truncate max-w-[180px]" title={baseBranch}>
+              {truncateBranch(baseBranch)}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Working Branch */}
       {branchName && (
         <div className="flex items-center gap-2 text-sm">
           <GitPrIcon className="w-4 h-4 text-muted-foreground" />

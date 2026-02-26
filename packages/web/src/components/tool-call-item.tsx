@@ -1,6 +1,6 @@
 "use client";
 
-import type { SandboxEvent } from "@/lib/tool-formatters";
+import type { SandboxEvent } from "@/types/session";
 import { formatToolCall } from "@/lib/tool-formatters";
 import {
   ChevronRightIcon,

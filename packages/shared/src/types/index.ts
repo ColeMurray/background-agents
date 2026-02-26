@@ -18,12 +18,6 @@ export type MessageSource = "web" | "slack" | "extension" | "github";
 export type ArtifactType = "pr" | "screenshot" | "preview" | "branch";
 export type EventType = "tool_call" | "tool_result" | "token" | "error" | "git_sync";
 
-// User info for commit attribution
-export interface GitUser {
-  name: string;
-  email: string;
-}
-
 // Participant in a session
 export interface SessionParticipant {
   id: string;
@@ -40,7 +34,7 @@ export interface Session {
   title: string | null;
   repoOwner: string;
   repoName: string;
-  repoDefaultBranch: string;
+  baseBranch: string;
   branchName: string | null;
   baseSha: string | null;
   currentSha: string | null;
@@ -265,6 +259,7 @@ export interface CreateSessionRequest {
   title?: string;
   model?: string;
   reasoningEffort?: string;
+  branch?: string;
 }
 
 export interface CreateSessionResponse {

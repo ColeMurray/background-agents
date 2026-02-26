@@ -2,14 +2,7 @@
  * Task extraction utilities for parsing TodoWrite events
  */
 
-import type { Task } from "@/types/session";
-
-interface SandboxEvent {
-  type: string;
-  tool?: string;
-  args?: Record<string, unknown>;
-  timestamp: number;
-}
+import type { SandboxEvent, Task } from "@/types/session";
 
 interface TodoWriteArgs {
   todos?: Array<{

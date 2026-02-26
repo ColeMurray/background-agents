@@ -41,6 +41,11 @@ module "session_index_kv" {
   namespace_name = "open-inspect-session-index-${local.name_suffix}"
 }
 
+moved {
+  from = module.slack_kv
+  to   = module.slack_kv[0]
+}
+
 module "slack_kv" {
   count  = var.enable_slack_bot ? 1 : 0
   source = "../../modules/cloudflare-kv"
@@ -135,13 +140,13 @@ module "control_plane_worker" {
     var.enable_slack_bot ? [
       {
         binding_name = "SLACK_BOT"
-        service_name = module.slack_bot_worker[0].worker_name
+        service_name = "open-inspect-slack-bot-${local.name_suffix}"
       }
     ] : [],
     var.enable_linear_bot ? [
       {
         binding_name = "LINEAR_BOT"
-        service_name = module.linear_bot_worker[0].worker_name
+        service_name = "open-inspect-linear-bot-${local.name_suffix}"
       }
     ] : []
   )
@@ -183,6 +188,11 @@ module "control_plane_worker" {
   depends_on = [null_resource.control_plane_build, module.session_index_kv, null_resource.d1_migrations, module.linear_bot_worker]
 }
 
+moved {
+  from = null_resource.slack_bot_build
+  to   = null_resource.slack_bot_build[0]
+}
+
 # Build slack-bot worker bundle (only runs during apply, not plan)
 resource "null_resource" "slack_bot_build" {
   count = var.enable_slack_bot ? 1 : 0
@@ -197,6 +207,11 @@ resource "null_resource" "slack_bot_build" {
     command     = "npm run build"
     working_dir = "${var.project_root}/packages/slack-bot"
   }
+}
+
+moved {
+  from = module.slack_bot_worker
+  to   = module.slack_bot_worker[0]
 }
 
 module "slack_bot_worker" {
@@ -363,6 +378,11 @@ module "linear_bot_worker" {
 # =============================================================================
 # Web App — Vercel (when web_platform = "vercel")
 # =============================================================================
+
+moved {
+  from = module.web_app
+  to   = module.web_app[0]
+}
 
 module "web_app" {
   count  = var.web_platform == "vercel" ? 1 : 0
