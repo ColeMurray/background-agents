@@ -19,7 +19,7 @@ simplified to run entirely on a single machine with no cloud dependencies.
 
 - **Node.js** >= 20
 - **Docker Desktop** (must be running)
-- At least one LLM API key (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`)
+- **OpenCode CLI** logged in (`opencode` → `/connect`), or explicit LLM API keys in `.env`
 
 ## Quick Start
 
@@ -28,11 +28,14 @@ simplified to run entirely on a single machine with no cloud dependencies.
 git clone https://github.com/anomalyco/background-agents.git
 cd background-agents
 cp .env.example .env
-# Edit .env to add your API keys
 
 # 2. Start everything
 ./scripts/dev.sh
 ```
+
+If you're already logged into OpenCode with your Anthropic Pro/Max or ChatGPT Plus/Pro account, auth
+carries over automatically — the sandbox mounts your `~/.local/share/opencode/auth.json` into each
+container. No API keys needed.
 
 This will:
 
@@ -92,24 +95,26 @@ npm run typecheck
 
 All configuration is via `.env` in the project root. See `.env.example` for options.
 
-| Variable            | Required | Description                     |
-| ------------------- | -------- | ------------------------------- |
-| `ANTHROPIC_API_KEY` | Yes\*    | Anthropic API key for Claude    |
-| `OPENAI_API_KEY`    | Yes\*    | OpenAI API key for GPT/Codex    |
-| `REPOS_DIR`         | No       | Path to repos directory (~code) |
-| `PORT`              | No       | Server port (default: 8787)     |
-| `DATA_DIR`          | No       | SQLite data directory           |
-| `SANDBOX_IMAGE`     | No       | Docker image name for sandboxes |
+| Variable            | Required | Description                            |
+| ------------------- | -------- | -------------------------------------- |
+| `ANTHROPIC_API_KEY` | No\*     | Anthropic API key (if not using OAuth) |
+| `OPENAI_API_KEY`    | No\*     | OpenAI API key (if not using OAuth)    |
+| `REPOS_DIR`         | No       | Path to repos directory (~code)        |
+| `PORT`              | No       | Server port (default: 8787)            |
+| `DATA_DIR`          | No       | SQLite data directory                  |
+| `SANDBOX_IMAGE`     | No       | Docker image name for sandboxes        |
 
-\* At least one LLM API key is required.
+\* Not needed if you're logged into OpenCode via OAuth (`opencode` → `/connect`).
 
-### Git Push / PR Support
+### Host Mounts
 
-The sandbox containers mount your host credentials read-only:
+The sandbox containers mount your host credentials:
 
-- `~/.ssh` — for `git push` via SSH
-- `~/.gitconfig` — for commit identity
-- `~/.config/gh` — for `gh pr create` via GitHub CLI
+- `~/.local/share/opencode/` — OpenCode OAuth tokens (read-write, for token refresh)
+- `~/.config/opencode/` — OpenCode config (read-only)
+- `~/.ssh` — for `git push` via SSH (read-only)
+- `~/.gitconfig` — for commit identity (read-only)
+- `~/.config/gh` — for `gh pr create` via GitHub CLI (read-only)
 
 Make sure you're authenticated with `gh auth login` and have SSH keys set up for your repositories.
 

@@ -95,11 +95,14 @@ export class DockerManager {
     // Volume mounts
     const binds: string[] = [`${worktreePath}:/workspace`];
 
-    // Mount host credentials read-only for git push / gh CLI
+    // Mount host credentials for git push / gh CLI / OpenCode auth
     const optionalMounts: Array<[string, string]> = [
       [path.join(HOME, ".ssh"), "/root/.ssh:ro"],
       [path.join(HOME, ".gitconfig"), "/root/.gitconfig:ro"],
       [path.join(HOME, ".config", "gh"), "/root/.config/gh:ro"],
+      // OpenCode auth — read-write so the sandbox can refresh expired OAuth tokens
+      [path.join(HOME, ".local", "share", "opencode"), "/root/.local/share/opencode"],
+      [path.join(HOME, ".config", "opencode"), "/root/.config/opencode:ro"],
     ];
 
     for (const [hostPath, containerPath] of optionalMounts) {
