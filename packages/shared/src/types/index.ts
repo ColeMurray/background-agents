@@ -198,7 +198,6 @@ export interface SessionState {
   reasoningEffort?: string;
   isProcessing?: boolean;
   parentSessionId?: string | null;
-  childSessionCount?: number;
 }
 
 // Participant presence info

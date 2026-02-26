@@ -108,7 +108,7 @@ const WS_AUTH_TIMEOUT_MS = 30000; // 30 seconds
 const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /** Statuses that indicate a session has reached a final state and cannot be cancelled. */
-const TERMINAL_STATUSES = new Set(["completed", "archived", "cancelled"]);
+const TERMINAL_STATUSES = new Set(["completed", "archived", "cancelled", "failed"]);
 
 /**
  * Route definition for internal API endpoints.
