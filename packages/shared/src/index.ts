@@ -1,8 +1,7 @@
 /**
- * Shared types and utilities for Open-Inspect.
+ * Shared types and utilities for Background Agents.
  */
 
 export * from "./types";
 export * from "./git";
-export * from "./auth";
 export * from "./models";

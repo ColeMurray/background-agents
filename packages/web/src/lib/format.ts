@@ -2,7 +2,7 @@
  * Utility functions for formatting display values
  */
 
-import { MODEL_OPTIONS, normalizeModelId } from "@open-inspect/shared";
+import { MODEL_OPTIONS, normalizeModelId } from "@background-agents/shared";
 
 // Build a lookup map once at module level
 const MODEL_DISPLAY_NAMES = new Map<string, string>(

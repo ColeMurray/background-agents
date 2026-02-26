@@ -12,7 +12,7 @@ import {
   getDefaultReasoningEffort,
   isValidReasoningEffort,
   type ModelCategory,
-} from "@open-inspect/shared";
+} from "@background-agents/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { useRepos, type Repo } from "@/hooks/use-repos";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";

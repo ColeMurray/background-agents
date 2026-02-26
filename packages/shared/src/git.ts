@@ -3,19 +3,17 @@
  */
 
 /**
- * Branch naming convention for Open-Inspect sessions.
+ * Branch naming convention for Background Agents sessions.
  */
-export const BRANCH_PREFIX = "open-inspect";
+export const BRANCH_PREFIX = "agent";
 
 /**
  * Generate a branch name for a session.
  *
  * @param sessionId - Session ID
- * @param title - Optional title for the branch
- * @returns Branch name in format: open-inspect/{session-id}
+ * @returns Branch name in format: agent/{session-id}
  */
 export function generateBranchName(sessionId: string, _title?: string): string {
-  // Use just session ID to keep it short and unique
   return `${BRANCH_PREFIX}/${sessionId}`;
 }
 
@@ -23,7 +21,7 @@ export function generateBranchName(sessionId: string, _title?: string): string {
  * Extract session ID from a branch name.
  *
  * @param branchName - Branch name
- * @returns Session ID or null if not an Open-Inspect branch
+ * @returns Session ID or null if not an agent branch
  */
 export function extractSessionIdFromBranch(branchName: string): string | null {
   const prefix = `${BRANCH_PREFIX}/`;
@@ -34,8 +32,8 @@ export function extractSessionIdFromBranch(branchName: string): string | null {
 }
 
 /**
- * Check if a branch name is an Open-Inspect branch.
+ * Check if a branch name is an agent branch.
  */
-export function isInspectBranch(branchName: string): boolean {
+export function isAgentBranch(branchName: string): boolean {
   return branchName.startsWith(`${BRANCH_PREFIX}/`);
 }

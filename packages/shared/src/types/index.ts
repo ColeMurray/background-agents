@@ -1,5 +1,5 @@
 /**
- * Shared type definitions used across Open-Inspect packages.
+ * Shared type definitions used across Background Agents packages.
  */
 
 // Session states
@@ -14,19 +14,9 @@ export type SandboxStatus =
   | "failed";
 export type GitSyncStatus = "pending" | "in_progress" | "completed" | "failed";
 export type MessageStatus = "pending" | "processing" | "completed" | "failed";
-export type MessageSource = "web" | "slack" | "extension" | "github";
+export type MessageSource = "web";
 export type ArtifactType = "pr" | "screenshot" | "preview" | "branch";
 export type EventType = "tool_call" | "tool_result" | "token" | "error" | "git_sync";
-
-// Participant in a session
-export interface SessionParticipant {
-  id: string;
-  userId: string;
-  scmLogin: string | null;
-  scmName: string | null;
-  scmEmail: string | null;
-  role: "owner" | "member";
-}
 
 // Session state
 export interface Session {
@@ -47,7 +37,6 @@ export interface Session {
 // Message in a session
 export interface SessionMessage {
   id: string;
-  authorId: string;
   content: string;
   source: MessageSource;
   attachments: Attachment[] | null;
@@ -108,7 +97,7 @@ export interface PullRequest {
   updatedAt: string;
 }
 
-// Sandbox event from Modal
+// Sandbox event from the coding agent
 export interface SandboxEvent {
   type: string;
   sandboxId: string;
@@ -128,16 +117,14 @@ export interface SandboxEvent {
   url?: string;
   metadata?: Record<string, unknown>;
   author?: {
-    participantId: string;
     name: string;
-    avatar?: string;
   };
 }
 
 // WebSocket message types
 export type ClientMessage =
   | { type: "ping" }
-  | { type: "subscribe"; token: string; clientId: string }
+  | { type: "subscribe" }
   | {
       type: "prompt";
       content: string;
@@ -146,32 +133,7 @@ export type ClientMessage =
       attachments?: Attachment[];
     }
   | { type: "stop" }
-  | { type: "typing" }
-  | { type: "presence"; status: "active" | "idle"; cursor?: { line: number; file: string } };
-
-export type ServerMessage =
-  | { type: "pong"; timestamp: number }
-  | {
-      type: "subscribed";
-      sessionId: string;
-      state: SessionState;
-      participantId: string;
-      participant?: { participantId: string; name: string; avatar?: string };
-      replay?: {
-        events: SandboxEvent[];
-        hasMore: boolean;
-        cursor: { timestamp: number; id: string } | null;
-      };
-      spawnError?: string | null;
-    }
-  | { type: "prompt_queued"; messageId: string; position: number }
-  | { type: "sandbox_event"; event: SandboxEvent }
-  | { type: "presence_sync"; participants: ParticipantPresence[] }
-  | { type: "presence_update"; participants: ParticipantPresence[] }
-  | { type: "presence_leave"; userId: string }
-  | { type: "sandbox_warming" }
-  | { type: "sandbox_ready" }
-  | { type: "error"; code: string; message: string };
+  | { type: "typing" };
 
 // Session state sent to clients
 export interface SessionState {
@@ -189,68 +151,9 @@ export interface SessionState {
   isProcessing?: boolean;
 }
 
-// Participant presence info
-export interface ParticipantPresence {
-  participantId: string;
-  userId: string;
-  name: string;
-  avatar?: string;
-  status: "active" | "idle" | "away";
-  lastSeen: number;
-}
-
-// Repository types for GitHub App installation
-export interface InstallationRepository {
-  id: number;
-  owner: string;
-  name: string;
-  fullName: string;
-  description: string | null;
-  private: boolean;
-  defaultBranch: string;
-}
-
-export interface RepoMetadata {
-  description?: string;
-  aliases?: string[];
-  channelAssociations?: string[];
-  keywords?: string[];
-}
-
-export interface EnrichedRepository extends InstallationRepository {
-  metadata?: RepoMetadata;
-}
-
-// ─── Callback Context (discriminated union) ──────────────────────────────────
-
-export interface SlackCallbackContext {
-  source: "slack";
-  channel: string;
-  threadTs: string;
-  repoFullName: string;
-  model: string;
-  reasoningEffort?: string;
-  reactionMessageTs?: string;
-}
-
-export interface LinearCallbackContext {
-  source: "linear";
-  issueId: string;
-  issueIdentifier: string;
-  issueUrl: string;
-  repoFullName: string;
-  model: string;
-  agentSessionId?: string;
-  organizationId?: string;
-  emitToolProgressActivities?: boolean;
-}
-
-export type CallbackContext = SlackCallbackContext | LinearCallbackContext;
-
 // API response types
 export interface CreateSessionRequest {
-  repoOwner: string;
-  repoName: string;
+  repoPath: string;
   title?: string;
   model?: string;
   reasoningEffort?: string;
@@ -266,5 +169,3 @@ export interface ListSessionsResponse {
   cursor?: string;
   hasMore: boolean;
 }
-
-export * from "./integrations";

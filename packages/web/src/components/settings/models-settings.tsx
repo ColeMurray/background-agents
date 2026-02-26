@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import useSWR, { mutate } from "swr";
-import { MODEL_OPTIONS, DEFAULT_ENABLED_MODELS } from "@open-inspect/shared";
+import { MODEL_OPTIONS, DEFAULT_ENABLED_MODELS } from "@background-agents/shared";
 import { MODEL_PREFERENCES_KEY } from "@/hooks/use-enabled-models";
 import { Button } from "@/components/ui/button";
 
