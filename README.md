@@ -113,6 +113,9 @@ built for internal use where all employees are trusted and have access to compan
 
 ## Getting Started
 
+For a practical setup guide (local + contributor + deployment paths), start with
+**[docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md)**.
+
 See **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** for deployment instructions.
 
 To understand the architecture and core concepts, read
