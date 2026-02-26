@@ -259,7 +259,7 @@ export interface SessionState {
   title: string | null;
   repoOwner: string;
   repoName: string;
-  baseBranch: string | null;
+  baseBranch: string;
   branchName: string | null;
   status: SessionStatus;
   sandboxStatus: SandboxStatus;

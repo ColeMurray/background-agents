@@ -1196,7 +1196,7 @@ export class SessionDO extends DurableObject<Env> {
       title: session?.title ?? null,
       repoOwner: session?.repo_owner ?? "",
       repoName: session?.repo_name ?? "",
-      baseBranch: session?.base_branch ?? null,
+      baseBranch: session?.base_branch ?? "main",
       branchName: session?.branch_name ?? null,
       status: session?.status ?? "created",
       sandboxStatus: sandbox?.status ?? "pending",
