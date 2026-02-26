@@ -275,8 +275,8 @@ function GlobalSettingsSection({
         </div>
       </label>
 
-      <div className="mb-4">
-        <label className="block mb-3">
+      <div className="grid sm:grid-cols-2 gap-4 mb-4">
+        <label className="block">
           <span className="block text-foreground font-medium mb-1">Default model</span>
           <Select
             value={model}
@@ -305,7 +305,7 @@ function GlobalSettingsSection({
         </label>
 
         {reasoningConfig && (
-          <label className="block mb-3">
+          <label className="block">
             <span className="block text-foreground font-medium mb-1">Reasoning effort</span>
             <Select
               value={effort}
