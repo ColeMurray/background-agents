@@ -352,34 +352,10 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
     [processSandboxEvent]
   );
 
+  // No auth token needed for local mode
   const fetchWsToken = useCallback(async (): Promise<string | null> => {
-    try {
-      const response = await fetch(`/api/sessions/${sessionId}/ws-token`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        if (response.status === 401) {
-          setAuthError("Please sign in to connect");
-          return null;
-        }
-        const error = await response.text();
-        console.error("Failed to fetch WS token:", error);
-        setAuthError("Failed to authenticate");
-        return null;
-      }
-
-      const data = await response.json();
-      return data.token;
-    } catch (error) {
-      console.error("Failed to fetch WS token:", error);
-      setAuthError("Failed to authenticate");
-      return null;
-    }
-  }, [sessionId]);
+    return "local";
+  }, []);
 
   const connect = useCallback(async () => {
     // Use ref to avoid race conditions with React StrictMode
@@ -428,12 +404,10 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
       setConnecting(false);
       reconnectAttempts.current = 0;
 
-      // Subscribe to session with the auth token
+      // Subscribe to session (no auth needed for local mode)
       ws.send(
         JSON.stringify({
           type: "subscribe",
-          token: wsTokenRef.current,
-          clientId: crypto.randomUUID(),
         })
       );
     };

@@ -300,6 +300,57 @@ app.put("/settings", async (request) => {
   return { ok: true };
 });
 
+// ─── Secrets REST API ───────────────────────────────────────────────────────
+
+// Global secrets
+app.get("/secrets", async () => {
+  const secrets = repo.listSecrets("global");
+  return { secrets: secrets.map((s) => ({ key: s.key })), globalSecrets: [] };
+});
+
+app.put("/secrets", async (request) => {
+  const body = request.body as { secrets: Record<string, string> };
+  if (!body.secrets || typeof body.secrets !== "object") {
+    return { error: "secrets object is required" };
+  }
+  repo.upsertSecrets("global", body.secrets);
+  return { ok: true };
+});
+
+app.delete("/secrets/:key", async (request) => {
+  const { key } = request.params as { key: string };
+  const deleted = repo.deleteSecret("global", key);
+  return { ok: deleted };
+});
+
+// Repo-scoped secrets
+app.get("/repos/:owner/:name/secrets", async (request) => {
+  const { owner, name } = request.params as { owner: string; name: string };
+  const scope = `${owner}/${name}`;
+  const secrets = repo.listSecrets(scope);
+  const globalSecrets = repo.listSecrets("global");
+  return {
+    secrets: secrets.map((s) => ({ key: s.key })),
+    globalSecrets,
+  };
+});
+
+app.put("/repos/:owner/:name/secrets", async (request) => {
+  const { owner, name } = request.params as { owner: string; name: string };
+  const body = request.body as { secrets: Record<string, string> };
+  if (!body.secrets || typeof body.secrets !== "object") {
+    return { error: "secrets object is required" };
+  }
+  repo.upsertSecrets(`${owner}/${name}`, body.secrets);
+  return { ok: true };
+});
+
+app.delete("/repos/:owner/:name/secrets/:key", async (request) => {
+  const { owner, name, key } = request.params as { owner: string; name: string; key: string };
+  const deleted = repo.deleteSecret(`${owner}/${name}`, key);
+  return { ok: deleted };
+});
+
 // ─── WebSocket endpoint ─────────────────────────────────────────────────────
 
 app.register(async function wsRoutes(fastify) {

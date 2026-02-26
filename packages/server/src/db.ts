@@ -109,6 +109,16 @@ function initSchema(db: Database.Database): void {
       value TEXT NOT NULL
     );
 
+    -- Secrets (environment variables injected into sandboxes)
+    CREATE TABLE IF NOT EXISTS secrets (
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      scope TEXT NOT NULL DEFAULT 'global',              -- 'global' or repo name
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (key, scope)
+    );
+
     -- Indexes
     CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
     CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
@@ -118,6 +128,7 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_events_created ON events(session_id, created_at, id);
     CREATE INDEX IF NOT EXISTS idx_events_type ON events(session_id, type);
     CREATE INDEX IF NOT EXISTS idx_artifacts_session ON artifacts(session_id);
+    CREATE INDEX IF NOT EXISTS idx_secrets_scope ON secrets(scope);
   `);
 }
 

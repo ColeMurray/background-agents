@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, useMemo } from "react";
-import { useSession, signOut } from "next-auth/react";
 import useSWR from "swr";
 import { formatRelativeTime, isInactiveSession } from "@/lib/time";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
@@ -39,14 +38,11 @@ interface SessionSidebarProps {
 }
 
 export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: SessionSidebarProps) {
-  const { data: authSession } = useSession();
   const pathname = usePathname();
   const [searchQuery, setSearchQuery] = useState("");
   const isMobile = useIsMobile();
 
-  const { data, isLoading: loading } = useSWR<{ sessions: SessionItem[] }>(
-    authSession ? "/api/sessions" : null
-  );
+  const { data, isLoading: loading } = useSWR<{ sessions: SessionItem[] }>("/api/sessions");
   const sessions = useMemo(() => data?.sessions ?? [], [data]);
 
   // Sort sessions by updatedAt (most recent first) and filter by search query
@@ -101,7 +97,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           </Button>
           <Link href="/" className="flex items-center gap-2">
             <InspectIcon className="w-5 h-5" />
-            <span className="font-semibold text-foreground">Inspect</span>
+            <span className="font-semibold text-foreground">Agents</span>
           </Link>
         </div>
         <div className="flex items-center gap-2">
@@ -125,27 +121,6 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           >
             <SettingsIcon className="w-4 h-4" />
           </Link>
-          {authSession?.user?.image ? (
-            <button
-              onClick={() => signOut()}
-              className="w-7 h-7 rounded-full overflow-hidden"
-              title={`Signed in as ${authSession.user.name}\nClick to sign out`}
-            >
-              <img
-                src={authSession.user.image}
-                alt={authSession.user.name || "User"}
-                className="w-full h-full object-cover"
-              />
-            </button>
-          ) : (
-            <button
-              onClick={() => signOut()}
-              className="w-7 h-7 rounded-full bg-card flex items-center justify-center text-xs font-medium text-foreground"
-              title="Sign out"
-            >
-              {authSession?.user?.name?.charAt(0).toUpperCase() || "?"}
-            </button>
-          )}
         </div>
       </div>
 

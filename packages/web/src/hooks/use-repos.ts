@@ -1,26 +1,29 @@
 import useSWR from "swr";
-import { useSession } from "next-auth/react";
 
 export interface Repo {
-  id: number;
+  path: string;
+  name: string;
+  defaultBranch: string;
+  // Compat fields for existing components that expect GitHub-style repos
   fullName: string;
   owner: string;
-  name: string;
-  description: string | null;
-  private: boolean;
 }
 
 interface ReposResponse {
-  repos: Repo[];
+  repos: Array<{ path: string; name: string; defaultBranch: string }>;
 }
 
 export function useRepos() {
-  const { data: session } = useSession();
+  const { data, isLoading } = useSWR<ReposResponse>("/api/repos");
 
-  const { data, isLoading } = useSWR<ReposResponse>(session ? "/api/repos" : null);
+  const repos: Repo[] = (data?.repos ?? []).map((r) => ({
+    ...r,
+    fullName: r.name,
+    owner: r.name,
+  }));
 
   return {
-    repos: data?.repos ?? [],
+    repos,
     loading: isLoading,
   };
 }

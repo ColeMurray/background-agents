@@ -1,41 +1,14 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
-import type { EnrichedRepository } from "@open-inspect/shared";
 
-interface ControlPlaneReposResponse {
-  repos: EnrichedRepository[];
-  cached: boolean;
-  cachedAt: string;
-}
+const API_BASE = process.env.API_URL || "http://localhost:8787";
 
 export async function GET() {
-  const session = await getServerSession(authOptions);
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   try {
-    // Fetch repositories from control plane using GitHub App installation token.
-    // This ensures we only show repos the App has access to, not all repos the user can see.
-    const response = await controlPlaneFetch("/repos");
-
-    if (!response.ok) {
-      const error = await response.text();
-      console.error("Control plane API error:", error);
-      return NextResponse.json(
-        { error: "Failed to fetch repositories" },
-        { status: response.status }
-      );
-    }
-
-    const data: ControlPlaneReposResponse = await response.json();
-
-    // The control plane returns repos in the format we need
-    return NextResponse.json({ repos: data.repos });
+    const response = await fetch(`${API_BASE}/repos`);
+    const data = await response.json();
+    return NextResponse.json(data, { status: response.status });
   } catch (error) {
-    console.error("Error fetching repos:", error);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    console.error("Failed to fetch repos:", error);
+    return NextResponse.json({ error: "Failed to fetch repos" }, { status: 500 });
   }
 }

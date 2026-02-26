@@ -12,12 +12,12 @@ export function SecretsSettings() {
   const { repos, loading: loadingRepos } = useRepos();
   const [selectedRepo, setSelectedRepo] = useState(GLOBAL_SCOPE);
 
-  const selectedRepoObj = repos.find((r) => r.fullName === selectedRepo);
+  const selectedRepoObj = repos.find((r) => r.name === selectedRepo);
   const isGlobal = selectedRepo === GLOBAL_SCOPE;
   const displayRepoName = isGlobal
     ? "All Repositories (Global)"
     : selectedRepoObj
-      ? selectedRepoObj.fullName
+      ? selectedRepoObj.name
       : loadingRepos
         ? "Loading..."
         : "Select a repository";
@@ -36,16 +36,15 @@ export function SecretsSettings() {
           value={selectedRepo}
           onChange={setSelectedRepo}
           items={repos.map((repo) => ({
-            value: repo.fullName,
+            value: repo.name,
             label: repo.name,
-            description: `${repo.owner}${repo.private ? " \u2022 private" : ""}`,
+            description: repo.path,
           }))}
           searchable
           searchPlaceholder="Search repositories..."
           filterFn={(option, query) =>
             option.label.toLowerCase().includes(query) ||
-            (option.description?.toLowerCase().includes(query) ?? false) ||
-            String(option.value).toLowerCase().includes(query)
+            (option.description?.toLowerCase().includes(query) ?? false)
           }
           direction="down"
           dropdownWidth="w-full max-w-sm"
@@ -82,7 +81,7 @@ export function SecretsSettings() {
       ) : (
         <SecretsEditor
           scope="repo"
-          owner={selectedRepoObj?.owner}
+          owner={selectedRepoObj?.name}
           name={selectedRepoObj?.name}
           disabled={loadingRepos}
         />

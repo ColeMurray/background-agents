@@ -1,43 +1,31 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+
+const API_BASE = process.env.API_URL || "http://localhost:8787";
 
 export async function GET() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   try {
-    const response = await controlPlaneFetch("/secrets");
+    const response = await fetch(`${API_BASE}/secrets`);
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
-    console.error("Failed to fetch global secrets:", error);
-    return NextResponse.json({ error: "Failed to fetch global secrets" }, { status: 500 });
+    console.error("Failed to fetch secrets:", error);
+    return NextResponse.json({ error: "Failed to fetch secrets" }, { status: 500 });
   }
 }
 
 export async function PUT(request: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   try {
     const body = await request.json();
-
-    const response = await controlPlaneFetch("/secrets", {
+    const response = await fetch(`${API_BASE}/secrets`, {
       method: "PUT",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
-    console.error("Failed to update global secrets:", error);
-    return NextResponse.json({ error: "Failed to update global secrets" }, { status: 500 });
+    console.error("Failed to update secrets:", error);
+    return NextResponse.json({ error: "Failed to update secrets" }, { status: 500 });
   }
 }

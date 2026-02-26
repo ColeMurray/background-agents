@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Open-Inspect",
-  description: "Background coding agent for your team",
+  title: "Background Agents",
+  description: "Local background coding agent",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -1,35 +1,16 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { getToken } from "next-auth/jwt";
-import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+
+const API_BASE = process.env.API_URL || "http://localhost:8787";
 
 export async function GET(request: NextRequest) {
-  const routeStart = Date.now();
-
-  const session = await getServerSession(authOptions);
-  const authMs = Date.now() - routeStart;
-
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   const searchParams = request.nextUrl.searchParams;
   const queryString = searchParams.toString();
   const path = queryString ? `/sessions?${queryString}` : "/sessions";
 
   try {
-    const fetchStart = Date.now();
-    const response = await controlPlaneFetch(path);
-    const fetchMs = Date.now() - fetchStart;
+    const response = await fetch(`${API_BASE}${path}`);
     const data = await response.json();
-    const totalMs = Date.now() - routeStart;
-
-    console.log(
-      `[sessions:GET] total=${totalMs}ms auth=${authMs}ms fetch=${fetchMs}ms status=${response.status}`
-    );
-
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
     console.error("Failed to fetch sessions:", error);
@@ -38,40 +19,13 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   try {
     const body = await request.json();
-
-    const jwt = await getToken({ req: request });
-    const accessToken = jwt?.accessToken as string | undefined;
-
-    // Explicitly pick allowed fields from client body and derive identity
-    // from the server-side NextAuth session (not client-supplied data)
-    const user = session.user;
-    const userId = user.id || user.email || "anonymous";
-
-    const sessionBody = {
-      repoOwner: body.repoOwner,
-      repoName: body.repoName,
-      model: body.model,
-      reasoningEffort: body.reasoningEffort,
-      title: body.title,
-      scmToken: accessToken,
-      userId,
-      scmLogin: user.login,
-      scmName: user.name,
-      scmEmail: user.email,
-    };
-
-    const response = await controlPlaneFetch("/sessions", {
+    const response = await fetch(`${API_BASE}/sessions`, {
       method: "POST",
-      body: JSON.stringify(sessionBody),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
     });
-
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {

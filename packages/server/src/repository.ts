@@ -456,4 +456,54 @@ export class Repository {
   deleteSetting(key: string): void {
     this.db.prepare(`DELETE FROM settings WHERE key = ?`).run(key);
   }
+
+  // ── Secrets ────────────────────────────────────────────────────────────
+
+  listSecrets(scope: string): Array<{ key: string; createdAt: number; updatedAt: number }> {
+    return (
+      this.db
+        .prepare(`SELECT key, created_at, updated_at FROM secrets WHERE scope = ? ORDER BY key`)
+        .all(scope) as Array<{ key: string; created_at: number; updated_at: number }>
+    ).map((r) => ({ key: r.key, createdAt: r.created_at, updatedAt: r.updated_at }));
+  }
+
+  upsertSecrets(scope: string, secrets: Record<string, string>): void {
+    const now = Date.now();
+    const upsert = this.db.prepare(`
+      INSERT INTO secrets (key, value, scope, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(key, scope) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `);
+    const tx = this.db.transaction(() => {
+      for (const [key, value] of Object.entries(secrets)) {
+        upsert.run(key, value, scope, now, now);
+      }
+    });
+    tx();
+  }
+
+  deleteSecret(scope: string, key: string): boolean {
+    const result = this.db
+      .prepare(`DELETE FROM secrets WHERE scope = ? AND key = ?`)
+      .run(scope, key);
+    return result.changes > 0;
+  }
+
+  /**
+   * Get all secrets (resolved) for a given repo scope.
+   * Repo secrets override global secrets with the same key.
+   */
+  getResolvedSecrets(repoScope: string): Record<string, string> {
+    const globalSecrets = this.db
+      .prepare(`SELECT key, value FROM secrets WHERE scope = 'global'`)
+      .all() as Array<{ key: string; value: string }>;
+    const repoSecrets = this.db
+      .prepare(`SELECT key, value FROM secrets WHERE scope = ?`)
+      .all(repoScope) as Array<{ key: string; value: string }>;
+
+    const result: Record<string, string> = {};
+    for (const s of globalSecrets) result[s.key] = s.value;
+    for (const s of repoSecrets) result[s.key] = s.value;
+    return result;
+  }
 }
