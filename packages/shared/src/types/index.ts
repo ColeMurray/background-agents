@@ -18,12 +18,6 @@ export type MessageSource = "web" | "slack" | "extension" | "github";
 export type ArtifactType = "pr" | "screenshot" | "preview" | "branch";
 export type EventType = "tool_call" | "tool_result" | "token" | "error" | "git_sync";
 
-// User info for commit attribution
-export interface GitUser {
-  name: string;
-  email: string;
-}
-
 // Participant in a session
 export interface SessionParticipant {
   id: string;

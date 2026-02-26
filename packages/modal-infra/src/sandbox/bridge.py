@@ -32,6 +32,10 @@ from .types import GitUser
 
 configure_logging()
 
+# Fallback git identity when prompt author has no SCM name/email configured.
+# Matches the co-author trailer used in generateCommitMessage (shared/git.ts).
+FALLBACK_GIT_USER = GitUser(name="OpenInspect", email="open-inspect@noreply.github.com")
+
 
 class OpenCodeIdentifier:
     """
@@ -520,13 +524,12 @@ class AgentBridge:
 
         scm_name = author_data.get("scmName")
         scm_email = author_data.get("scmEmail")
-        if scm_name and scm_email:
-            await self._configure_git_identity(
-                GitUser(
-                    name=scm_name,
-                    email=scm_email,
-                )
+        await self._configure_git_identity(
+            GitUser(
+                name=scm_name or FALLBACK_GIT_USER.name,
+                email=scm_email or FALLBACK_GIT_USER.email,
             )
+        )
 
         if not self.opencode_session_id:
             await self._create_opencode_session()
