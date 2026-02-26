@@ -80,6 +80,7 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
   const repository = {
     createMessage: vi.fn(),
     createEvent: vi.fn(),
+    updateParticipantCoalesce: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 1),
     getProcessingMessage: vi.fn(() => null as { id: string } | null),
     getNextPendingMessage: vi.fn(() => null as MessageRow | null),
@@ -205,5 +206,24 @@ describe("SessionMessageQueue", () => {
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
     expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
     expect(h.waitUntil).toHaveBeenCalledTimes(1);
+  });
+
+  it("fills missing participant SCM fields from API prompt metadata", async () => {
+    const h = buildQueue();
+
+    await h.queue.enqueuePromptFromApi({
+      content: "hello",
+      authorId: "user-1",
+      source: "web",
+      scmLogin: "octocat",
+      scmName: "Octo Cat",
+      scmEmail: "octo@example.com",
+    });
+
+    expect(h.repository.updateParticipantCoalesce).toHaveBeenCalledWith("part-1", {
+      scmLogin: "octocat",
+      scmName: "Octo Cat",
+      scmEmail: "octo@example.com",
+    });
   });
 });

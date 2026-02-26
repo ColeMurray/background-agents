@@ -45,6 +45,10 @@ export interface CreateSandboxConfig {
   userEnvVars?: Record<string, string>;
   /** OpenCode session ID for resumption */
   opencodeSessionId?: string;
+  /** Git user name for commits */
+  gitUserName?: string;
+  /** Git user email for commits */
+  gitUserEmail?: string;
   /** Trace ID for correlation */
   traceId?: string;
   /** Request ID for correlation */

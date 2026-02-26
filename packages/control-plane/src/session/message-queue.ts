@@ -304,6 +304,9 @@ export class SessionMessageQueue {
   async enqueuePromptFromApi(data: {
     content: string;
     authorId: string;
+    scmLogin?: string;
+    scmName?: string;
+    scmEmail?: string;
     source: string;
     model?: string;
     reasoningEffort?: string;
@@ -312,7 +315,25 @@ export class SessionMessageQueue {
   }): Promise<{ messageId: string; status: "queued" }> {
     let participant = this.deps.participantService.getByUserId(data.authorId);
     if (!participant) {
-      participant = this.deps.participantService.create(data.authorId, data.authorId);
+      participant = this.deps.participantService.create(
+        data.authorId,
+        data.scmName ?? data.scmLogin ?? data.authorId
+      );
+    }
+
+    if (data.scmLogin || data.scmName || data.scmEmail) {
+      this.deps.repository.updateParticipantCoalesce(participant.id, {
+        scmLogin: data.scmLogin,
+        scmName: data.scmName,
+        scmEmail: data.scmEmail,
+      });
+
+      participant = {
+        ...participant,
+        scm_login: data.scmLogin ?? participant.scm_login,
+        scm_name: data.scmName ?? participant.scm_name,
+        scm_email: data.scmEmail ?? participant.scm_email,
+      };
     }
 
     const messageId = generateId();

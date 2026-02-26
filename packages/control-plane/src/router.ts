@@ -716,6 +716,9 @@ async function handleSessionPrompt(
   const body = (await request.json()) as {
     content: string;
     authorId?: string;
+    scmLogin?: string;
+    scmName?: string;
+    scmEmail?: string;
     source?: string;
     model?: string;
     reasoningEffort?: string;
@@ -739,6 +742,9 @@ async function handleSessionPrompt(
         body: JSON.stringify({
           content: body.content,
           authorId: body.authorId || "anonymous",
+          scmLogin: body.scmLogin,
+          scmName: body.scmName,
+          scmEmail: body.scmEmail,
           source: body.source || "web",
           model: body.model,
           reasoningEffort: body.reasoningEffort,

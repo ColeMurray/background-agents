@@ -1561,6 +1561,9 @@ export class SessionDO extends DurableObject<Env> {
       const body = (await request.json()) as {
         content: string;
         authorId: string;
+        scmLogin?: string;
+        scmName?: string;
+        scmEmail?: string;
         source: string;
         model?: string;
         reasoningEffort?: string;

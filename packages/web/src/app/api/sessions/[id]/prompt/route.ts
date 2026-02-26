@@ -28,6 +28,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       body: JSON.stringify({
         content,
         authorId: userId,
+        scmLogin: user.login,
+        scmName: user.name,
+        scmEmail: user.email,
         source: "web",
         model,
         reasoningEffort,

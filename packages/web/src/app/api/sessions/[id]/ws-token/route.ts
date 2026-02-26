@@ -4,7 +4,6 @@ import { getServerSession } from "next-auth";
 import { getToken } from "next-auth/jwt";
 import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
-import { resolveScmIdentity } from "@/lib/scm-identity";
 
 /**
  * Generate a WebSocket authentication token for the current user.
@@ -31,7 +30,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     // Extract user info from NextAuth session
     const user = session.user;
     const userId = user.id || user.email || "anonymous";
-    const scmIdentity = resolveScmIdentity(user);
 
     const jwtStart = Date.now();
     const jwt = await getToken({ req: request });
@@ -42,10 +40,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       method: "POST",
       body: JSON.stringify({
         userId,
-        scmUserId: scmIdentity.scmUserId,
-        scmLogin: scmIdentity.scmLogin,
-        scmName: scmIdentity.scmName,
-        scmEmail: scmIdentity.scmEmail,
+        scmUserId: user.id,
+        scmLogin: user.login,
+        scmName: user.name,
+        scmEmail: user.email,
         scmToken: jwt?.accessToken as string | undefined,
         scmTokenExpiresAt: jwt?.accessTokenExpiresAt as number | undefined,
         scmRefreshToken: jwt?.refreshToken as string | undefined,
