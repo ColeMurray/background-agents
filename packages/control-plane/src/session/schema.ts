@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS session (
   repo_owner TEXT NOT NULL,                         -- e.g., "acme-corp"
   repo_name TEXT NOT NULL,                          -- e.g., "web-app"
   repo_id INTEGER,                                  -- GitHub repository ID (stable)
-  repo_default_branch TEXT NOT NULL DEFAULT 'main', -- Base branch for PRs
+  base_branch TEXT NOT NULL DEFAULT 'main',          -- Base branch for PRs
   branch_name TEXT,                                 -- Working branch (set after first commit)
   base_sha TEXT,                                    -- SHA of base branch at session start
   current_sha TEXT,                                 -- Current HEAD SHA
@@ -311,6 +311,19 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
         if (columns.some((c) => c.name === "scm_provider")) {
           sql.exec(`ALTER TABLE ${table} DROP COLUMN scm_provider`);
         }
+      }
+    },
+  },
+  {
+    id: 24,
+    description: "Rename repo_default_branch to base_branch in session",
+    run: (sql) => {
+      const columns = sql.exec("PRAGMA table_info(session)").toArray() as Array<{
+        name: string;
+      }>;
+      const columnNames = new Set(columns.map((c) => c.name));
+      if (columnNames.has("repo_default_branch") && !columnNames.has("base_branch")) {
+        sql.exec(`ALTER TABLE session RENAME COLUMN repo_default_branch TO base_branch`);
       }
     },
   },

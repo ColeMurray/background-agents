@@ -259,6 +259,7 @@ export interface SessionState {
   title: string | null;
   repoOwner: string;
   repoName: string;
+  baseBranch: string | null;
   branchName: string | null;
   status: SessionStatus;
   sandboxStatus: SandboxStatus;
@@ -311,7 +312,7 @@ export interface SessionResponse {
   title: string | null;
   repoOwner: string;
   repoName: string;
-  repoDefaultBranch: string;
+  baseBranch: string;
   branchName: string | null;
   baseSha: string | null;
   currentSha: string | null;
