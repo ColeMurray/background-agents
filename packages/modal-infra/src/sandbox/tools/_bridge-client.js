@@ -8,13 +8,17 @@
 const BRIDGE_URL = process.env.CONTROL_PLANE_URL || "http://localhost:8787"
 const BRIDGE_TOKEN = process.env.SANDBOX_AUTH_TOKEN || ""
 
+let _cachedSessionId = null
+
 function getSessionId() {
+  if (_cachedSessionId !== null) return _cachedSessionId
   try {
     const config = JSON.parse(process.env.SESSION_CONFIG || "{}")
-    return config.sessionId || config.session_id || ""
+    _cachedSessionId = config.sessionId || config.session_id || ""
   } catch {
-    return ""
+    _cachedSessionId = ""
   }
+  return _cachedSessionId
 }
 
 /** Make an authenticated request to the control plane, scoped to the current session. */

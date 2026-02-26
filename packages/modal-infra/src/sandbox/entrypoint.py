@@ -250,7 +250,7 @@ class SandboxSupervisor:
         # Copy all .js files from tools/ (including _-prefixed internal modules)
         if tools_dir.exists():
             for tool_file in tools_dir.iterdir():
-                if tool_file.suffix == ".js":
+                if tool_file.is_file() and tool_file.suffix == ".js":
                     shutil.copy(tool_file, tool_dest / tool_file.name)
 
         # Node modules symlink
