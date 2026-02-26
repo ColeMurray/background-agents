@@ -963,11 +963,11 @@ class SandboxSupervisor:
                 await self.shutdown_event.wait()
                 return
 
-            # Phase 3: Start OpenCode server (in repo directory)
+            # Phase 4: Start OpenCode server (in repo directory)
             await self.start_opencode()
             opencode_ready = True
 
-            # Phase 4: Start bridge (after OpenCode is ready)
+            # Phase 5: Start bridge (after OpenCode is ready)
             await self.start_bridge()
 
             # Emit sandbox.startup wide event
@@ -987,7 +987,7 @@ class SandboxSupervisor:
                 outcome="success",
             )
 
-            # Phase 5: Monitor processes
+            # Phase 6: Monitor processes
             await self.monitor_processes()
 
         except Exception as e:
