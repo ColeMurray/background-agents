@@ -150,10 +150,11 @@ export class SessionIndexStore {
     };
   }
 
-  async updateStatus(id: string, status: string): Promise<boolean> {
+  async updateStatus(id: string, status: string, updatedAt = Date.now()): Promise<boolean> {
+    // Protect against out-of-order async writes by only applying monotonic updated_at values.
     const result = await this.db
-      .prepare("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?")
-      .bind(status, Date.now(), id)
+      .prepare("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? AND updated_at <= ?")
+      .bind(status, updatedAt, id, updatedAt)
       .run();
 
     return (result.meta?.changes ?? 0) > 0;
@@ -187,7 +188,7 @@ export class SessionIndexStore {
     const result = await this.db
       .prepare(
         `SELECT COUNT(*) as count FROM sessions
-         WHERE parent_session_id = ? AND status NOT IN ('completed', 'archived', 'cancelled')`
+         WHERE parent_session_id = ? AND status NOT IN ('completed', 'failed', 'archived', 'cancelled')`
       )
       .bind(parentSessionId)
       .first<{ count: number }>();

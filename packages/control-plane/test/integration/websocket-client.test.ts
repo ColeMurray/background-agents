@@ -21,10 +21,11 @@ describe("Client WebSocket (via SELF.fetch)", () => {
 
     const subscribed = messages!.find((m) => m.type === "subscribed") as Record<string, unknown>;
     expect(subscribed).toBeDefined();
-    expect(subscribed.sessionId).toEqual(expect.any(String));
+    expect(subscribed.sessionId).toBe(name);
     expect(subscribed.participantId).toBe(participantId);
 
     const state = subscribed.state as Record<string, unknown>;
+    expect(state.id).toBe(name);
     expect(state.repoOwner).toBe("acme");
 
     ws.close();

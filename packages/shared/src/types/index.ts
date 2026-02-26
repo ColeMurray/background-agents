@@ -3,7 +3,13 @@
  */
 
 // Session states
-export type SessionStatus = "created" | "active" | "completed" | "archived" | "cancelled";
+export type SessionStatus =
+  | "created"
+  | "active"
+  | "completed"
+  | "failed"
+  | "archived"
+  | "cancelled";
 export type SandboxStatus =
   | "pending"
   | "warming"

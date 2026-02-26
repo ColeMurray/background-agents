@@ -18,6 +18,7 @@ interface SessionSandboxEventProcessorDeps {
   broadcast: (message: ServerMessage) => void;
   getIsProcessing: () => boolean;
   triggerSnapshot: (reason: string) => Promise<void>;
+  reconcileSessionStatusAfterExecution: (success: boolean) => Promise<void>;
   updateLastActivity: (timestamp: number) => void;
   scheduleInactivityCheck: () => Promise<void>;
   processMessageQueue: () => Promise<void>;
@@ -135,6 +136,8 @@ export class SessionSandboxEventProcessor {
         this.deps.ctx.waitUntil(
           this.deps.callbackService.notifyComplete(completionMessageId, event.success)
         );
+
+        await this.deps.reconcileSessionStatusAfterExecution(event.success);
       } else {
         this.deps.log.info("prompt.complete", {
           event: "prompt.complete",

@@ -29,6 +29,7 @@ function createProcessor() {
 
   const broadcast = vi.fn((_message: ServerMessage) => {});
   const triggerSnapshot = vi.fn(async (_reason: string) => {});
+  const reconcileSessionStatusAfterExecution = vi.fn(async (_success: boolean) => {});
   const scheduleInactivityCheck = vi.fn(async () => {});
   const processMessageQueue = vi.fn(async () => {});
   const updateLastActivity = vi.fn();
@@ -50,6 +51,7 @@ function createProcessor() {
     broadcast,
     getIsProcessing,
     triggerSnapshot,
+    reconcileSessionStatusAfterExecution,
     updateLastActivity,
     scheduleInactivityCheck,
     processMessageQueue,
@@ -62,6 +64,7 @@ function createProcessor() {
     callbackService,
     broadcast,
     triggerSnapshot,
+    reconcileSessionStatusAfterExecution,
     scheduleInactivityCheck,
     processMessageQueue,
     waitUntil,
@@ -127,6 +130,7 @@ describe("SessionSandboxEventProcessor", () => {
     );
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
+    expect(h.reconcileSessionStatusAfterExecution).toHaveBeenCalledWith(true);
     expect(h.triggerSnapshot).toHaveBeenCalledWith("execution_complete");
     expect(h.scheduleInactivityCheck).toHaveBeenCalledTimes(1);
     expect(h.processMessageQueue).toHaveBeenCalledTimes(1);

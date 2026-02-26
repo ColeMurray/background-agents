@@ -51,7 +51,9 @@ describe("DO internal sub-session routes", () => {
 
   describe("GET /internal/child-summary", () => {
     it("returns ChildSessionDetail shape with session, sandbox, artifacts, and events", async () => {
+      const externalSessionId = `child-summary-${Date.now()}`;
       const { stub } = await initSession({
+        sessionName: externalSessionId,
         repoOwner: "acme",
         repoName: "web-app",
         title: "Child task",
@@ -101,6 +103,7 @@ describe("DO internal sub-session routes", () => {
 
       // Session info
       expect(detail.session).toBeDefined();
+      expect(detail.session.id).toBe(externalSessionId);
       expect(detail.session.repoOwner).toBe("acme");
       expect(detail.session.title).toBe("Child task");
       expect(detail.session.status).toBe("created");

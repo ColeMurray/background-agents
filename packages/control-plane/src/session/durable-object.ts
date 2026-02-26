@@ -26,6 +26,7 @@ import {
   type RepoImageLookup,
 } from "../sandbox/lifecycle/manager";
 import { RepoImageStore } from "../db/repo-images";
+import { SessionIndexStore } from "../db/session-index";
 import {
   evaluateExecutionTimeout,
   DEFAULT_EXECUTION_TIMEOUT_MS,
@@ -49,6 +50,7 @@ import type {
   ServerMessage,
   SandboxEvent,
   SessionState,
+  SessionStatus,
   SandboxStatus,
   ParticipantRole,
 } from "../types";
@@ -309,6 +311,12 @@ export class SessionDO extends DurableObject<Env> {
         updateLastActivity: (timestamp) => this.updateLastActivity(timestamp),
         spawnSandbox: () => this.spawnSandbox(),
         broadcast: (message) => this.broadcast(message),
+        setSessionStatus: async (status) => {
+          await this.transitionSessionStatus(status);
+        },
+        reconcileSessionStatusAfterExecution: async (success) => {
+          await this.reconcileSessionStatusAfterExecution(success);
+        },
         scheduleExecutionTimeout: async (startedAtMs: number) => {
           const deadline = startedAtMs + this.executionTimeoutMs;
           const currentAlarm = await this.ctx.storage.getAlarm();
@@ -333,6 +341,9 @@ export class SessionDO extends DurableObject<Env> {
         broadcast: (message) => this.broadcast(message),
         getIsProcessing: () => this.getIsProcessing(),
         triggerSnapshot: (reason) => this.triggerSnapshot(reason),
+        reconcileSessionStatusAfterExecution: async (success) => {
+          await this.reconcileSessionStatusAfterExecution(success);
+        },
         updateLastActivity: (timestamp) => this.updateLastActivity(timestamp),
         scheduleInactivityCheck: () => this.scheduleInactivityCheck(),
         processMessageQueue: () => this.messageQueue.processMessageQueue(),
@@ -1161,8 +1172,8 @@ export class SessionDO extends DurableObject<Env> {
    * broadcasts synthetic execution_complete
    * so all clients flush buffered tokens, and forwards stop to the sandbox.
    */
-  private async stopExecution(): Promise<void> {
-    await this.messageQueue.stopExecution();
+  private async stopExecution(options?: { suppressStatusReconcile?: boolean }): Promise<void> {
+    await this.messageQueue.stopExecution(options);
   }
 
   /**
@@ -1188,6 +1199,56 @@ export class SessionDO extends DurableObject<Env> {
     return null;
   }
 
+  private getPublicSessionId(session?: SessionRow | null): string {
+    const resolved = session ?? this.getSession();
+    return resolved?.session_name || resolved?.id || this.ctx.id.toString();
+  }
+
+  private syncSessionIndexStatus(
+    sessionId: string,
+    status: SessionStatus,
+    updatedAt: number
+  ): void {
+    if (!this.env.DB) return;
+    const sessionStore = new SessionIndexStore(this.env.DB);
+    this.ctx.waitUntil(
+      sessionStore.updateStatus(sessionId, status, updatedAt).catch((error) => {
+        this.log.error("session_index.update_status.background_error", {
+          session_id: sessionId,
+          status,
+          updated_at: updatedAt,
+          error,
+        });
+      })
+    );
+  }
+
+  private async transitionSessionStatus(status: SessionStatus): Promise<boolean> {
+    const session = this.getSession();
+    if (!session) return false;
+
+    const publicSessionId = this.getPublicSessionId(session);
+    if (session.status === status) {
+      this.syncSessionIndexStatus(publicSessionId, status, session.updated_at);
+      return false;
+    }
+
+    const updatedAt = Math.max(Date.now(), session.updated_at + 1);
+    this.repository.updateSessionStatus(session.id, status, updatedAt);
+    this.syncSessionIndexStatus(publicSessionId, status, updatedAt);
+
+    this.broadcast({ type: "session_status", status });
+
+    return true;
+  }
+
+  private async reconcileSessionStatusAfterExecution(success: boolean): Promise<void> {
+    const pendingOrProcessing = this.repository.getPendingOrProcessingCount();
+    const nextStatus: SessionStatus =
+      pendingOrProcessing > 0 ? "active" : success ? "completed" : "failed";
+    await this.transitionSessionStatus(nextStatus);
+  }
+
   /**
    * Get current session state.
    * Accepts an optional pre-fetched sandbox row to avoid a redundant SQLite read.
@@ -1199,7 +1260,7 @@ export class SessionDO extends DurableObject<Env> {
     const isProcessing = this.getIsProcessing();
 
     return {
-      id: session?.id ?? this.ctx.id.toString(),
+      id: this.getPublicSessionId(session),
       title: session?.title ?? null,
       repoOwner: session?.repo_owner ?? "",
       repoName: session?.repo_name ?? "",
@@ -1551,7 +1612,7 @@ export class SessionDO extends DurableObject<Env> {
     const sandbox = this.getSandbox();
 
     return Response.json({
-      id: session.id,
+      id: this.getPublicSessionId(session),
       title: session.title,
       repoOwner: session.repo_owner,
       repoName: session.repo_name,
@@ -1910,7 +1971,6 @@ export class SessionDO extends DurableObject<Env> {
 
   /**
    * Handle archive session request.
-   * Sets session status to "archived" and broadcasts to all clients.
    * Only session participants are authorized to archive.
    */
   private async handleArchive(request: Request): Promise<Response> {
@@ -1936,21 +1996,13 @@ export class SessionDO extends DurableObject<Env> {
       return Response.json({ error: "Not authorized to archive this session" }, { status: 403 });
     }
 
-    const now = Date.now();
-    this.repository.updateSessionStatus(session.id, "archived", now);
-
-    // Broadcast status change to all connected clients
-    this.broadcast({
-      type: "session_status",
-      status: "archived",
-    });
+    await this.transitionSessionStatus("archived");
 
     return Response.json({ status: "archived" });
   }
 
   /**
    * Handle unarchive session request.
-   * Restores session status to "active" and broadcasts to all clients.
    * Only session participants are authorized to unarchive.
    */
   private async handleUnarchive(request: Request): Promise<Response> {
@@ -1976,14 +2028,7 @@ export class SessionDO extends DurableObject<Env> {
       return Response.json({ error: "Not authorized to unarchive this session" }, { status: 403 });
     }
 
-    const now = Date.now();
-    this.repository.updateSessionStatus(session.id, "active", now);
-
-    // Broadcast status change to all connected clients
-    this.broadcast({
-      type: "session_status",
-      status: "active",
-    });
+    await this.transitionSessionStatus("active");
 
     return Response.json({ status: "active" });
   }
@@ -2038,7 +2083,7 @@ export class SessionDO extends DurableObject<Env> {
 
     const detail = {
       session: {
-        id: session.id,
+        id: this.getPublicSessionId(session),
         title: session.title ?? "",
         status: session.status,
         repoOwner: session.repo_owner,
@@ -2074,12 +2119,10 @@ export class SessionDO extends DurableObject<Env> {
       return Response.json({ error: `Session already ${session.status}` }, { status: 409 });
     }
 
-    // Stop any in-flight message processing
-    await this.stopExecution();
+    // Stop any in-flight message processing without emitting intermediate "failed".
+    await this.stopExecution({ suppressStatusReconcile: true });
 
-    // Update session status
-    const now = Date.now();
-    this.repository.updateSessionStatus(session.id, "cancelled", now);
+    await this.transitionSessionStatus("cancelled");
 
     // Stop sandbox if running
     const sandbox = this.getSandbox();
@@ -2090,9 +2133,6 @@ export class SessionDO extends DurableObject<Env> {
       }
       this.updateSandboxStatus("stopped");
     }
-
-    // Broadcast status change
-    this.broadcast({ type: "session_status", status: "cancelled" });
 
     return Response.json({ status: "cancelled" });
   }

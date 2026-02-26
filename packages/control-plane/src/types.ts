@@ -49,7 +49,13 @@ export interface Env {
 }
 
 // Session status
-export type SessionStatus = "created" | "active" | "completed" | "archived" | "cancelled";
+export type SessionStatus =
+  | "created"
+  | "active"
+  | "completed"
+  | "failed"
+  | "archived"
+  | "cancelled";
 
 // Sandbox status
 export type SandboxStatus =

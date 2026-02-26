@@ -43,6 +43,7 @@ describe("SessionDO Durable Object", () => {
       status: string;
       model: string;
     }>();
+    expect(state.id).toBe("test-session-init");
     expect(state.title).toBe("Integration test session");
     expect(state.repoOwner).toBe("acme");
     expect(state.repoName).toBe("web-app");

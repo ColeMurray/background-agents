@@ -141,6 +141,33 @@ describe("D1 SessionIndexStore", () => {
     expect(session).toBeNull();
   });
 
+  it("rejects stale status updates when a newer status write exists", async () => {
+    const store = new SessionIndexStore(env.DB);
+
+    await store.create({
+      id: "status-ordering-1",
+      title: "Ordering",
+      repoOwner: "acme",
+      repoName: "worker",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "active",
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    const latestApplied = await store.updateStatus("status-ordering-1", "completed", 3000);
+    expect(latestApplied).toBe(true);
+
+    const staleApplied = await store.updateStatus("status-ordering-1", "failed", 2000);
+    expect(staleApplied).toBe(false);
+
+    const row = await store.get("status-ordering-1");
+    expect(row?.status).toBe("completed");
+    expect(row?.updatedAt).toBe(3000);
+  });
+
   describe("parent/child queries", () => {
     const store = new SessionIndexStore(env.DB);
     const parentId = "parent-session-1";
@@ -216,7 +243,23 @@ describe("D1 SessionIndexStore", () => {
       expect(children).toEqual([]);
     });
 
-    it("countActiveChildren excludes completed/archived/cancelled", async () => {
+    it("countActiveChildren excludes completed/failed/archived/cancelled", async () => {
+      await store.create({
+        id: "child-session-failed",
+        title: "Child failed",
+        repoOwner: "owner",
+        repoName: "repo",
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: null,
+        baseBranch: null,
+        status: "failed",
+        parentSessionId: parentId,
+        spawnSource: "agent",
+        spawnDepth: 1,
+        createdAt: Date.now() + 2,
+        updatedAt: Date.now() + 2,
+      });
+
       const count = await store.countActiveChildren(parentId);
       expect(count).toBe(1); // child1 is "created" (active), child2 is "completed" (excluded)
     });

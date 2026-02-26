@@ -142,6 +142,9 @@ describe("POST /internal/sandbox-event", () => {
     );
     expect(messages[0].status).toBe("completed");
     expect(messages[0].completed_at).toEqual(expect.any(Number));
+
+    const sessions = await queryDO<{ status: string }>(stub, "SELECT status FROM session LIMIT 1");
+    expect(sessions[0].status).toBe("completed");
   });
 
   it("execution_complete with success=false marks message as failed", async () => {
@@ -183,6 +186,57 @@ describe("POST /internal/sandbox-event", () => {
       msgId
     );
     expect(messages[0].status).toBe("failed");
+
+    const sessions = await queryDO<{ status: string }>(stub, "SELECT status FROM session LIMIT 1");
+    expect(sessions[0].status).toBe("failed");
+  });
+
+  it("execution_complete keeps session active when queued messages remain", async () => {
+    const { stub } = await initSession();
+
+    const participants = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants WHERE user_id = 'user-1'"
+    );
+    const participantId = participants[0].id;
+
+    const processingMsgId = "msg-processing";
+    await seedMessage(stub, {
+      id: processingMsgId,
+      authorId: participantId,
+      content: "First prompt",
+      source: "web",
+      status: "processing",
+      createdAt: Date.now() - 2000,
+      startedAt: Date.now() - 1000,
+    });
+
+    const queuedMsgId = "msg-queued";
+    await seedMessage(stub, {
+      id: queuedMsgId,
+      authorId: participantId,
+      content: "Second prompt",
+      source: "web",
+      status: "pending",
+      createdAt: Date.now() - 500,
+    });
+
+    const res = await stub.fetch("http://internal/internal/sandbox-event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "execution_complete",
+        messageId: processingMsgId,
+        success: true,
+        sandboxId: "sb-1",
+        timestamp: Date.now() / 1000,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+
+    const sessions = await queryDO<{ status: string }>(stub, "SELECT status FROM session LIMIT 1");
+    expect(sessions[0].status).toBe("active");
   });
 
   it("git_sync updates sandbox and session", async () => {

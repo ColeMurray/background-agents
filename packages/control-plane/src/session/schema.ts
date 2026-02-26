@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS session (
   opencode_session_id TEXT,                         -- OpenCode session ID (for 1:1 mapping)
   model TEXT DEFAULT 'anthropic/claude-haiku-4-5',   -- LLM model to use
   reasoning_effort TEXT,                            -- Session-level reasoning effort default
-  status TEXT DEFAULT 'created',                    -- 'created', 'active', 'completed', 'archived', 'cancelled'
+  status TEXT DEFAULT 'created',                    -- 'created', 'active', 'completed', 'failed', 'archived', 'cancelled'
   parent_session_id TEXT,                           -- Parent session ID (NULL for top-level)
   spawn_source TEXT NOT NULL DEFAULT 'user',        -- 'user' or 'agent'
   spawn_depth INTEGER NOT NULL DEFAULT 0,           -- 0 for top-level, parent.depth + 1 for children

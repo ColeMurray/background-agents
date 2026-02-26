@@ -161,9 +161,9 @@ class FakeD1Database {
     }
 
     if (QUERY_PATTERNS.UPDATE_STATUS.test(normalized)) {
-      const [status, updatedAt, id] = args as [string, number, string];
+      const [status, updatedAt, id, maxUpdatedAt] = args as [string, number, string, number];
       const row = this.rows.get(id);
-      if (row) {
+      if (row && row.updated_at <= maxUpdatedAt) {
         row.status = status;
         row.updated_at = updatedAt;
         return { meta: { changes: 1 } };
@@ -205,7 +205,9 @@ class FakeD1Database {
       }
 
       if (conditions.includes("status NOT IN")) {
-        rows = rows.filter((r) => !["completed", "archived", "cancelled"].includes(r.status));
+        rows = rows.filter(
+          (r) => !["completed", "failed", "archived", "cancelled"].includes(r.status)
+        );
       }
 
       if (conditions.includes("status = ?")) {
@@ -414,6 +416,20 @@ describe("SessionIndexStore", () => {
       const updated = await store.updateStatus("nonexistent", "archived");
       expect(updated).toBe(false);
     });
+
+    it("ignores stale status updates when a newer update already exists", async () => {
+      await store.create(makeSession({ id: "test-id", status: "active", updatedAt: 1000 }));
+
+      const latest = await store.updateStatus("test-id", "completed", 2000);
+      expect(latest).toBe(true);
+
+      const stale = await store.updateStatus("test-id", "failed", 1500);
+      expect(stale).toBe(false);
+
+      const session = await store.get("test-id");
+      expect(session?.status).toBe("completed");
+      expect(session?.updatedAt).toBe(2000);
+    });
   });
 
   describe("delete", () => {
@@ -487,7 +503,7 @@ describe("SessionIndexStore", () => {
     });
 
     describe("countActiveChildren", () => {
-      it("excludes completed/archived/cancelled", async () => {
+      it("excludes completed/failed/archived/cancelled", async () => {
         const count = await store.countActiveChildren(parentId);
         expect(count).toBe(1); // child-1 is "created", child-2 is "completed"
       });

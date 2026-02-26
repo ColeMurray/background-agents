@@ -11,6 +11,7 @@ const STATUS_LABELS = {
   created: "PENDING",
   active: "RUNNING",
   completed: "DONE",
+  failed: "FAILED",
   cancelled: "CANCELLED",
   archived: "DONE",
 }
@@ -38,13 +39,14 @@ async function listChildren() {
     return "No child tasks found."
   }
 
-  const counts = { pending: 0, running: 0, done: 0 }
+  const counts = { pending: 0, running: 0, done: 0, failed: 0 }
   const lines = []
 
   for (const child of children) {
     const label = formatStatus(child.status)
     if (label === "PENDING") counts.pending++
     else if (label === "RUNNING") counts.running++
+    else if (label === "FAILED") counts.failed++
     else counts.done++
 
     lines.push(
@@ -55,7 +57,7 @@ async function listChildren() {
     )
   }
 
-  const header = `${children.length} child task(s): ${counts.running} running, ${counts.pending} pending, ${counts.done} done`
+  const header = `${children.length} child task(s): ${counts.running} running, ${counts.pending} pending, ${counts.done} done, ${counts.failed} failed`
   return [header, "", ...lines].join("\n")
 }
 
