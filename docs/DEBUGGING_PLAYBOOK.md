@@ -31,6 +31,17 @@ Include whichever are available at the call site:
 | `sandbox_id`          | Sandbox lifetime  | Modal on create/restore  |
 | `opencode_session_id` | OpenCode process  | Supervisor on ensure     |
 
+### Canonical Naming + Boundary Conversion
+
+Canonical correlation keys are snake_case everywhere outside local in-memory variables:
+
+- Logs: `trace_id`, `request_id`, `session_id`, `sandbox_id`
+- HTTP headers: `x-trace-id`, `x-request-id`, `x-session-id`, `x-sandbox-id`
+- Provider/client correlation objects: `correlation.trace_id`, `correlation.request_id`, etc.
+
+If a module uses camelCase internally, convert once at the boundary and keep the rest of the path
+canonical. Do not mix `traceId`/`requestId` and `trace_id`/`request_id` within the same boundary.
+
 ### Joining across services
 
 A prompt run flows: **slack-bot → control-plane → modal-infra → sandbox**.

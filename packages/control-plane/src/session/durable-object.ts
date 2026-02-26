@@ -380,7 +380,7 @@ export class SessionDO extends DurableObject<Env> {
 
     // Create Modal provider
     const modalClient = createModalClient(this.env.MODAL_API_SECRET, this.env.MODAL_WORKSPACE);
-    const provider = createModalProvider(modalClient, this.env.MODAL_API_SECRET);
+    const provider = createModalProvider(modalClient);
 
     // Storage adapter
     const storage: SandboxStorage = {
@@ -513,6 +513,8 @@ export class SessionDO extends DurableObject<Env> {
     this.ensureInitialized();
     const initMs = performance.now() - fetchStart;
 
+    const originalLogger = this.log;
+
     // Extract correlation headers and create a request-scoped logger
     const traceId = request.headers.get("x-trace-id");
     const requestId = request.headers.get("x-request-id");
@@ -520,50 +522,54 @@ export class SessionDO extends DurableObject<Env> {
       const correlationCtx: Record<string, unknown> = {};
       if (traceId) correlationCtx.trace_id = traceId;
       if (requestId) correlationCtx.request_id = requestId;
-      this.log = this.log.child(correlationCtx);
+      this.log = originalLogger.child(correlationCtx);
     }
 
-    const url = new URL(request.url);
-    const path = url.pathname;
+    try {
+      const url = new URL(request.url);
+      const path = url.pathname;
 
-    // WebSocket upgrade (special case - header-based, not path-based)
-    if (request.headers.get("Upgrade") === "websocket") {
-      return this.handleWebSocketUpgrade(request, url);
-    }
-
-    // Match route from table
-    const route = this.routes.find((r) => r.path === path && r.method === request.method);
-
-    if (route) {
-      const handlerStart = performance.now();
-      let status = 500;
-      let outcome: "success" | "error" = "error";
-      try {
-        const response = await route.handler(request, url);
-        status = response.status;
-        outcome = status >= 500 ? "error" : "success";
-        return response;
-      } catch (e) {
-        status = 500;
-        outcome = "error";
-        throw e;
-      } finally {
-        const handlerMs = performance.now() - handlerStart;
-        const totalMs = performance.now() - fetchStart;
-        this.log.info("do.request", {
-          event: "do.request",
-          http_method: request.method,
-          http_path: path,
-          http_status: status,
-          duration_ms: Math.round(totalMs * 100) / 100,
-          init_ms: Math.round(initMs * 100) / 100,
-          handler_ms: Math.round(handlerMs * 100) / 100,
-          outcome,
-        });
+      // WebSocket upgrade (special case - header-based, not path-based)
+      if (request.headers.get("Upgrade") === "websocket") {
+        return this.handleWebSocketUpgrade(request, url);
       }
-    }
 
-    return new Response("Not Found", { status: 404 });
+      // Match route from table
+      const route = this.routes.find((r) => r.path === path && r.method === request.method);
+
+      if (route) {
+        const handlerStart = performance.now();
+        let status = 500;
+        let outcome: "success" | "error" = "error";
+        try {
+          const response = await route.handler(request, url);
+          status = response.status;
+          outcome = status >= 500 ? "error" : "success";
+          return response;
+        } catch (e) {
+          status = 500;
+          outcome = "error";
+          throw e;
+        } finally {
+          const handlerMs = performance.now() - handlerStart;
+          const totalMs = performance.now() - fetchStart;
+          this.log.info("do.request", {
+            event: "do.request",
+            http_method: request.method,
+            http_path: path,
+            http_status: status,
+            duration_ms: Math.round(totalMs * 100) / 100,
+            init_ms: Math.round(initMs * 100) / 100,
+            handler_ms: Math.round(handlerMs * 100) / 100,
+            outcome,
+          });
+        }
+      }
+
+      return new Response("Not Found", { status: 404 });
+    } finally {
+      this.log = originalLogger;
+    }
   }
 
   /**

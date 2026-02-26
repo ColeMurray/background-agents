@@ -7,18 +7,9 @@
 
 import { generateInternalToken } from "@open-inspect/shared";
 import { createLogger } from "../logger";
+import type { CorrelationContext } from "./provider";
 
 const log = createLogger("modal-client");
-
-/**
- * Optional correlation headers to propagate through Modal API calls.
- */
-export interface CorrelationHeaders {
-  trace_id?: string;
-  request_id?: string;
-  session_id?: string;
-  sandbox_id?: string;
-}
 
 // Modal app name
 const MODAL_APP_NAME = "open-inspect";
@@ -54,6 +45,40 @@ export interface CreateSandboxResponse {
   modalObjectId?: string; // Modal's internal object ID for snapshot API
   status: string;
   createdAt: number;
+}
+
+export interface RestoreSandboxRequest {
+  snapshotImageId: string;
+  sessionId: string;
+  sandboxId: string;
+  sandboxAuthToken: string;
+  controlPlaneUrl: string;
+  repoOwner: string;
+  repoName: string;
+  provider: string;
+  model: string;
+  userEnvVars?: Record<string, string>;
+  timeoutSeconds?: number;
+  branch?: string;
+}
+
+export interface RestoreSandboxResponse {
+  success: boolean;
+  sandboxId?: string;
+  modalObjectId?: string;
+  error?: string;
+}
+
+export interface SnapshotSandboxRequest {
+  providerObjectId: string;
+  sessionId: string;
+  reason: string;
+}
+
+export interface SnapshotSandboxResponse {
+  success: boolean;
+  imageId?: string;
+  error?: string;
 }
 
 export interface WarmSandboxRequest {
@@ -106,6 +131,20 @@ interface ModalApiResponse<T> {
 }
 
 /**
+ * Error thrown by ModalClient when the Modal API returns a non-OK HTTP status.
+ * Carries the numeric status code so callers can classify without string parsing.
+ */
+export class ModalApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number
+  ) {
+    super(message);
+    this.name = "ModalApiError";
+  }
+}
+
+/**
  * Modal sandbox API client.
  *
  * Requires MODAL_API_SECRET for authentication and MODAL_WORKSPACE for URL construction.
@@ -141,23 +180,9 @@ export class ModalClient {
   }
 
   /**
-   * Get the URL for the snapshot sandbox endpoint.
-   */
-  getSnapshotSandboxUrl(): string {
-    return this.snapshotSandboxUrl;
-  }
-
-  /**
-   * Get the URL for the restore sandbox endpoint.
-   */
-  getRestoreSandboxUrl(): string {
-    return this.restoreSandboxUrl;
-  }
-
-  /**
    * Generate authentication headers for POST/PUT requests (includes Content-Type).
    */
-  private async getPostHeaders(correlation?: CorrelationHeaders): Promise<Record<string, string>> {
+  private async getPostHeaders(correlation?: CorrelationContext): Promise<Record<string, string>> {
     const token = await generateInternalToken(this.secret);
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -173,7 +198,7 @@ export class ModalClient {
   /**
    * Generate authentication headers for GET requests (no Content-Type).
    */
-  private async getGetHeaders(correlation?: CorrelationHeaders): Promise<Record<string, string>> {
+  private async getGetHeaders(correlation?: CorrelationContext): Promise<Record<string, string>> {
     const token = await generateInternalToken(this.secret);
     const headers: Record<string, string> = {
       Authorization: `Bearer ${token}`,
@@ -190,7 +215,7 @@ export class ModalClient {
    */
   async createSandbox(
     request: CreateSandboxRequest,
-    correlation?: CorrelationHeaders
+    correlation?: CorrelationContext
   ): Promise<CreateSandboxResponse> {
     const startTime = Date.now();
     const endpoint = "createSandbox";
@@ -225,7 +250,7 @@ export class ModalClient {
 
       if (!response.ok) {
         const text = await response.text();
-        throw new Error(`Modal API error: ${response.status} ${text}`);
+        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
 
       const result = (await response.json()) as ModalApiResponse<{
@@ -262,11 +287,140 @@ export class ModalClient {
   }
 
   /**
+   * Restore a sandbox from a snapshot image.
+   */
+  async restoreSandbox(
+    request: RestoreSandboxRequest,
+    correlation?: CorrelationContext
+  ): Promise<RestoreSandboxResponse> {
+    const startTime = Date.now();
+    const endpoint = "restoreSandbox";
+    let httpStatus: number | undefined;
+    let outcome: "success" | "error" = "error";
+
+    try {
+      const headers = await this.getPostHeaders(correlation);
+      const response = await fetch(this.restoreSandboxUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          snapshot_image_id: request.snapshotImageId,
+          session_config: {
+            session_id: request.sessionId,
+            repo_owner: request.repoOwner,
+            repo_name: request.repoName,
+            provider: request.provider,
+            model: request.model,
+            branch: request.branch || null,
+          },
+          sandbox_id: request.sandboxId,
+          control_plane_url: request.controlPlaneUrl,
+          sandbox_auth_token: request.sandboxAuthToken,
+          user_env_vars: request.userEnvVars || null,
+          timeout_seconds: request.timeoutSeconds || null,
+        }),
+      });
+
+      httpStatus = response.status;
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
+      }
+
+      const result = (await response.json()) as ModalApiResponse<{
+        sandbox_id: string;
+        modal_object_id?: string;
+      }>;
+
+      if (!result.success) {
+        return { success: false, error: result.error || "Unknown restore error" };
+      }
+
+      outcome = "success";
+      return {
+        success: true,
+        sandboxId: result.data?.sandbox_id,
+        modalObjectId: result.data?.modal_object_id,
+      };
+    } finally {
+      log.info("modal.request", {
+        event: "modal.request",
+        endpoint,
+        session_id: request.sessionId,
+        sandbox_id: request.sandboxId,
+        trace_id: correlation?.trace_id,
+        request_id: correlation?.request_id,
+        http_status: httpStatus,
+        duration_ms: Date.now() - startTime,
+        outcome,
+      });
+    }
+  }
+
+  /**
+   * Trigger a filesystem snapshot for a sandbox object.
+   */
+  async snapshotSandbox(
+    request: SnapshotSandboxRequest,
+    correlation?: CorrelationContext
+  ): Promise<SnapshotSandboxResponse> {
+    const startTime = Date.now();
+    const endpoint = "snapshotSandbox";
+    let httpStatus: number | undefined;
+    let outcome: "success" | "error" = "error";
+
+    try {
+      const headers = await this.getPostHeaders(correlation);
+      const response = await fetch(this.snapshotSandboxUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          sandbox_id: request.providerObjectId,
+          session_id: request.sessionId,
+          reason: request.reason,
+        }),
+      });
+
+      httpStatus = response.status;
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
+      }
+
+      const result = (await response.json()) as ModalApiResponse<{ image_id: string }>;
+      if (!result.success) {
+        return { success: false, error: result.error || "Unknown snapshot error" };
+      }
+
+      if (!result.data?.image_id) {
+        return { success: false, error: "Snapshot response missing image_id" };
+      }
+
+      outcome = "success";
+      return { success: true, imageId: result.data.image_id };
+    } finally {
+      log.info("modal.request", {
+        event: "modal.request",
+        endpoint,
+        session_id: request.sessionId,
+        sandbox_id: request.providerObjectId,
+        trace_id: correlation?.trace_id,
+        request_id: correlation?.request_id,
+        http_status: httpStatus,
+        duration_ms: Date.now() - startTime,
+        outcome,
+      });
+    }
+  }
+
+  /**
    * Pre-warm a sandbox for faster startup.
    */
   async warmSandbox(
     request: WarmSandboxRequest,
-    correlation?: CorrelationHeaders
+    correlation?: CorrelationContext
   ): Promise<WarmSandboxResponse> {
     const startTime = Date.now();
     const endpoint = "warmSandbox";
@@ -289,7 +443,7 @@ export class ModalClient {
 
       if (!response.ok) {
         const text = await response.text();
-        throw new Error(`Modal API error: ${response.status} ${text}`);
+        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
 
       const result = (await response.json()) as ModalApiResponse<{
@@ -329,7 +483,7 @@ export class ModalClient {
     const response = await fetch(this.healthUrl);
 
     if (!response.ok) {
-      throw new Error(`Modal API error: ${response.status}`);
+      throw new ModalApiError(`Modal API error: ${response.status}`, response.status);
     }
 
     const result = (await response.json()) as ModalApiResponse<{
@@ -350,7 +504,7 @@ export class ModalClient {
   async getLatestSnapshot(
     repoOwner: string,
     repoName: string,
-    correlation?: CorrelationHeaders
+    correlation?: CorrelationContext
   ): Promise<SnapshotInfo | null> {
     const url = `${this.snapshotUrl}?repo_owner=${encodeURIComponent(repoOwner)}&repo_name=${encodeURIComponent(repoName)}`;
 
@@ -375,7 +529,7 @@ export class ModalClient {
    */
   async buildRepoImage(
     request: BuildRepoImageRequest,
-    correlation?: CorrelationHeaders
+    correlation?: CorrelationContext
   ): Promise<BuildRepoImageResponse> {
     const startTime = Date.now();
     const endpoint = "buildRepoImage";
@@ -400,7 +554,7 @@ export class ModalClient {
 
       if (!response.ok) {
         const text = await response.text();
-        throw new Error(`Modal API error: ${response.status} ${text}`);
+        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
 
       const result = (await response.json()) as ModalApiResponse<{
@@ -438,7 +592,7 @@ export class ModalClient {
    */
   async deleteProviderImage(
     request: DeleteProviderImageRequest,
-    correlation?: CorrelationHeaders
+    correlation?: CorrelationContext
   ): Promise<DeleteProviderImageResponse> {
     const startTime = Date.now();
     const endpoint = "deleteProviderImage";
@@ -459,7 +613,7 @@ export class ModalClient {
 
       if (!response.ok) {
         const text = await response.text();
-        throw new Error(`Modal API error: ${response.status} ${text}`);
+        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
 
       const result = (await response.json()) as ModalApiResponse<{
