@@ -26,8 +26,16 @@ terraform/
 │   └── modal-app/               # Modal CLI wrapper
 │       └── scripts/             # Deployment scripts
 ├── environments/
-│   └── production/              # Production environment config
-│       ├── main.tf              # Main configuration
+│   └── production/              # Production root module (split by concern)
+│       ├── main.tf              # Entrypoint + file map
+│       ├── locals.tf            # Shared naming/URL/script path locals
+│       ├── kv.tf                # Cloudflare KV namespaces
+│       ├── d1.tf                # D1 database + migrations
+│       ├── workers-*.tf         # Worker builds/deployments per service
+│       ├── web-*.tf             # Web app resources (Vercel/OpenNext)
+│       ├── modal.tf             # Modal infrastructure
+│       ├── checks.tf            # Terraform check blocks
+│       ├── moved.tf             # State move declarations
 │       ├── variables.tf         # Input variables
 │       ├── outputs.tf           # Output values
 │       ├── backend.tf           # State backend (R2)
