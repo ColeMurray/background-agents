@@ -59,6 +59,8 @@ export interface SandboxStorage {
   getSession(): SessionRow | null;
   /** Get user env vars for sandbox injection */
   getUserEnvVars(): Promise<Record<string, string> | undefined>;
+  /** Get owner SCM identity for commit attribution */
+  getOwnerScmIdentity(): { scmName: string | null; scmEmail: string | null } | null;
   /** Update sandbox status */
   updateSandboxStatus(status: SandboxStatus): void;
   /** Update sandbox for spawn (status, auth token, sandbox ID, created_at) */
@@ -326,6 +328,7 @@ export class SandboxLifecycleManager {
       });
 
       const userEnvVars = await this.storage.getUserEnvVars();
+      const ownerScmIdentity = this.storage.getOwnerScmIdentity();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
 
       // Look up pre-built repo image (graceful fallback on failure)
@@ -362,6 +365,8 @@ export class SandboxLifecycleManager {
         sandboxAuthToken,
         provider,
         model: modelId,
+        scmUserName: ownerScmIdentity?.scmName ?? undefined,
+        scmUserEmail: ownerScmIdentity?.scmEmail ?? undefined,
         userEnvVars,
         repoImageId,
         repoImageSha,

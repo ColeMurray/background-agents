@@ -82,7 +82,8 @@ function createMockStorage(
   sandbox:
     | (SandboxRow & { spawn_failure_count: number; last_spawn_failure: number })
     | null = createMockSandbox(),
-  userEnvVars: Record<string, string> | undefined = undefined
+  userEnvVars: Record<string, string> | undefined = undefined,
+  ownerScmIdentity: { scmName: string | null; scmEmail: string | null } | null = null
 ): SandboxStorage & { calls: string[] } {
   const calls: string[] = [];
 
@@ -103,6 +104,10 @@ function createMockStorage(
     getUserEnvVars: vi.fn(async () => {
       calls.push("getUserEnvVars");
       return userEnvVars;
+    }),
+    getOwnerScmIdentity: vi.fn(() => {
+      calls.push("getOwnerScmIdentity");
+      return ownerScmIdentity;
     }),
     updateSandboxStatus: vi.fn((status: SandboxStatus) => {
       calls.push(`updateSandboxStatus:${status}`);
@@ -299,6 +304,39 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(provider.createSandbox).toHaveBeenCalledWith(expect.objectContaining({ userEnvVars }));
+    });
+
+    it("passes owner SCM identity to provider", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const ownerScmIdentity = {
+        scmName: "Jane Dev",
+        scmEmail: "12345+janedev@users.noreply.github.com",
+      };
+      const storage = createMockStorage(createMockSession(), sandbox, undefined, ownerScmIdentity);
+      const broadcaster = createMockBroadcaster();
+      const wsManager = createMockWebSocketManager(false);
+      const alarmScheduler = createMockAlarmScheduler();
+      const idGenerator = createMockIdGenerator();
+      const provider = createMockProvider();
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        broadcaster,
+        wsManager,
+        alarmScheduler,
+        idGenerator,
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scmUserName: ownerScmIdentity.scmName,
+          scmUserEmail: ownerScmIdentity.scmEmail,
+        })
+      );
     });
 
     it("respects circuit breaker blocking", async () => {

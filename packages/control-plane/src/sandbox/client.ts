@@ -40,8 +40,8 @@ export interface CreateSandboxRequest {
   sandboxAuthToken: string;
   snapshotId?: string;
   opencodeSessionId?: string;
-  gitUserName?: string;
-  gitUserEmail?: string;
+  scmUserName?: string;
+  scmUserEmail?: string;
   provider?: string;
   model?: string;
   userEnvVars?: Record<string, string>;
@@ -211,8 +211,8 @@ export class ModalClient {
           sandbox_auth_token: request.sandboxAuthToken,
           snapshot_id: request.snapshotId || null,
           opencode_session_id: request.opencodeSessionId || null,
-          git_user_name: request.gitUserName || null,
-          git_user_email: request.gitUserEmail || null,
+          scm_user_name: request.scmUserName || null,
+          scm_user_email: request.scmUserEmail || null,
           provider: request.provider || "anthropic",
           model: request.model || "claude-sonnet-4-6",
           user_env_vars: request.userEnvVars || null,

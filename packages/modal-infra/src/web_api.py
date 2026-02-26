@@ -101,8 +101,8 @@ async def api_create_sandbox(
         "control_plane_url": "...",
         "sandbox_auth_token": "...",
         "snapshot_id": null,
-        "git_user_name": null,
-        "git_user_email": null,
+        "scm_user_name": null,
+        "scm_user_email": null,
         "provider": "anthropic",
         "model": "claude-sonnet-4-6"
     }
@@ -142,10 +142,10 @@ async def api_create_sandbox(
 
         # Build session config
         git_user = None
-        git_user_name = request.get("git_user_name")
-        git_user_email = request.get("git_user_email")
-        if git_user_name and git_user_email:
-            git_user = GitUser(name=git_user_name, email=git_user_email)
+        scm_user_name = request.get("scm_user_name") or request.get("git_user_name")
+        scm_user_email = request.get("scm_user_email") or request.get("git_user_email")
+        if scm_user_name and scm_user_email:
+            git_user = GitUser(name=scm_user_name, email=scm_user_email)
 
         session_config = SessionConfig(
             session_id=request.get("session_id"),
