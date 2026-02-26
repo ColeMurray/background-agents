@@ -50,15 +50,17 @@ export function ChildSessionsSection({ sessionId }: ChildSessionsSectionProps) {
             className="block p-2 hover:bg-muted transition-colors rounded"
           >
             <div className="flex items-center justify-between gap-2">
-              <span className="text-sm truncate">
-                {child.title || `${child.repoOwner}/${child.repoName}`}
-              </span>
+              <div className="flex min-w-0 items-center gap-1.5">
+                <span className="text-sm truncate">
+                  {child.title || `${child.repoOwner}/${child.repoName}`}
+                </span>
+                <span className="text-xs text-muted-foreground shrink-0">
+                  {formatRelativeTime(child.updatedAt || child.createdAt)}
+                </span>
+              </div>
               <Badge variant={statusBadgeVariant(child.status)} className="shrink-0">
                 {child.status}
               </Badge>
-            </div>
-            <div className="text-xs text-muted-foreground mt-0.5">
-              {formatRelativeTime(child.updatedAt || child.createdAt)}
             </div>
           </Link>
         ))}
