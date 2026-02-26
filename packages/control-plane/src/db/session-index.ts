@@ -5,7 +5,7 @@ export interface SessionEntry {
   repoName: string;
   model: string;
   reasoningEffort: string | null;
-  branch: string | null;
+  baseBranch: string | null;
   status: string;
   createdAt: number;
   updatedAt: number;
@@ -18,7 +18,7 @@ interface SessionRow {
   repo_name: string;
   model: string;
   reasoning_effort: string | null;
-  branch: string | null;
+  base_branch: string | null;
   status: string;
   created_at: number;
   updated_at: number;
@@ -47,7 +47,7 @@ function toEntry(row: SessionRow): SessionEntry {
     repoName: row.repo_name,
     model: row.model,
     reasoningEffort: row.reasoning_effort,
-    branch: row.branch,
+    baseBranch: row.base_branch,
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -60,7 +60,7 @@ export class SessionIndexStore {
   async create(session: SessionEntry): Promise<void> {
     await this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, branch, status, created_at, updated_at)
+        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
@@ -70,7 +70,7 @@ export class SessionIndexStore {
         session.repoName.toLowerCase(),
         session.model,
         session.reasoningEffort,
-        session.branch,
+        session.baseBranch,
         session.status,
         session.createdAt,
         session.updatedAt

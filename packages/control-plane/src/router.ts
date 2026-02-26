@@ -658,7 +658,7 @@ async function handleCreateSession(
     repoName,
     model,
     reasoningEffort,
-    branch: body.branch || defaultBranch || "main",
+    baseBranch: body.branch || defaultBranch || "main",
     status: "created",
     createdAt: now,
     updatedAt: now,
