@@ -27,6 +27,7 @@ export interface SessionItem {
   createdAt: number;
   updatedAt: number;
   spawnSource?: "user" | "agent";
+  parentSessionId?: string | null;
 }
 
 export function buildSessionHref(session: SessionItem) {
@@ -57,8 +58,9 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   );
   const sessions = useMemo(() => data?.sessions ?? [], [data]);
 
-  // Sort sessions by updatedAt (most recent first) and filter by search query
-  const { activeSessions, inactiveSessions } = useMemo(() => {
+  // Sort sessions by updatedAt (most recent first), filter by search query,
+  // and group children under their parent sessions
+  const { activeSessions, inactiveSessions, childrenMap } = useMemo(() => {
     const filtered = sessions
       .filter((session) => session.status !== "archived")
       .filter((session) => {
@@ -76,10 +78,30 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
       return bTime - aTime;
     });
 
+    // Build set of visible session IDs for orphan detection
+    const visibleIds = new Set(sorted.map((s) => s.id));
+
+    // Group children by parent ID
+    const children = new Map<string, SessionItem[]>();
+    const topLevel: SessionItem[] = [];
+
+    for (const session of sorted) {
+      const parentId = session.parentSessionId;
+      if (parentId && visibleIds.has(parentId)) {
+        // Parent is visible — nest under it
+        const siblings = children.get(parentId) ?? [];
+        siblings.push(session);
+        children.set(parentId, siblings);
+      } else {
+        // Top-level session (or orphan child whose parent is filtered out)
+        topLevel.push(session);
+      }
+    }
+
     const active: SessionItem[] = [];
     const inactive: SessionItem[] = [];
 
-    for (const session of sorted) {
+    for (const session of topLevel) {
       const timestamp = session.updatedAt || session.createdAt;
       if (isInactiveSession(timestamp)) {
         inactive.push(session);
@@ -88,7 +110,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
       }
     }
 
-    return { activeSessions: active, inactiveSessions: inactive };
+    return { activeSessions: active, inactiveSessions: inactive, childrenMap: children };
   }, [sessions, searchQuery]);
 
   const currentSessionId = pathname?.startsWith("/session/") ? pathname.split("/")[2] : null;
@@ -180,10 +202,11 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           <>
             {/* Active Sessions */}
             {activeSessions.map((session) => (
-              <SessionListItem
+              <SessionWithChildren
                 key={session.id}
                 session={session}
-                isActive={session.id === currentSessionId}
+                childSessions={childrenMap.get(session.id)}
+                currentSessionId={currentSessionId}
                 isMobile={isMobile}
                 onSessionSelect={onSessionSelect}
               />
@@ -198,10 +221,11 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
                   </span>
                 </div>
                 {inactiveSessions.map((session) => (
-                  <SessionListItem
+                  <SessionWithChildren
                     key={session.id}
                     session={session}
-                    isActive={session.id === currentSessionId}
+                    childSessions={childrenMap.get(session.id)}
+                    currentSessionId={currentSessionId}
                     isMobile={isMobile}
                     onSessionSelect={onSessionSelect}
                   />
@@ -212,6 +236,41 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
         )}
       </div>
     </aside>
+  );
+}
+
+function SessionWithChildren({
+  session,
+  childSessions,
+  currentSessionId,
+  isMobile,
+  onSessionSelect,
+}: {
+  session: SessionItem;
+  childSessions?: SessionItem[];
+  currentSessionId: string | null;
+  isMobile: boolean;
+  onSessionSelect?: () => void;
+}) {
+  return (
+    <>
+      <SessionListItem
+        session={session}
+        isActive={session.id === currentSessionId}
+        isMobile={isMobile}
+        onSessionSelect={onSessionSelect}
+      />
+      {childSessions &&
+        childSessions.map((child) => (
+          <ChildSessionListItem
+            key={child.id}
+            session={child}
+            isActive={child.id === currentSessionId}
+            isMobile={isMobile}
+            onSessionSelect={onSessionSelect}
+          />
+        ))}
+    </>
   );
 }
 
@@ -230,6 +289,8 @@ function SessionListItem({
   const relativeTime = formatRelativeTime(timestamp);
   const displayTitle = session.title || `${session.repoOwner}/${session.repoName}`;
   const repoInfo = `${session.repoOwner}/${session.repoName}`;
+  // Orphan child (parent filtered out) — show a subtle badge
+  const isOrphanChild = session.parentSessionId && session.spawnSource === "agent";
   return (
     <Link
       href={buildSessionHref(session)}
@@ -247,10 +308,10 @@ function SessionListItem({
         <span>{relativeTime}</span>
         <span>·</span>
         <span className="truncate">{repoInfo}</span>
-        {session.spawnSource === "agent" && (
+        {isOrphanChild && (
           <>
             <span>·</span>
-            <span>Sub-task</span>
+            <span className="text-accent">sub-task</span>
           </>
         )}
         {session.baseBranch && session.baseBranch !== "main" && (
@@ -260,6 +321,40 @@ function SessionListItem({
             <span className="truncate">{session.baseBranch}</span>
           </>
         )}
+      </div>
+    </Link>
+  );
+}
+
+function ChildSessionListItem({
+  session,
+  isActive,
+  isMobile,
+  onSessionSelect,
+}: {
+  session: SessionItem;
+  isActive: boolean;
+  isMobile: boolean;
+  onSessionSelect?: () => void;
+}) {
+  const timestamp = session.updatedAt || session.createdAt;
+  const relativeTime = formatRelativeTime(timestamp);
+  const displayTitle = session.title || "Sub-task";
+  return (
+    <Link
+      href={buildSessionHref(session)}
+      onClick={() => {
+        if (isMobile) {
+          onSessionSelect?.();
+        }
+      }}
+      className={`block pl-7 pr-4 py-1.5 border-l-2 transition ${
+        isActive ? "border-l-accent bg-accent-muted" : "border-l-transparent hover:bg-muted"
+      }`}
+    >
+      <div className="truncate text-xs font-medium text-foreground">{displayTitle}</div>
+      <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
+        <span>{relativeTime}</span>
       </div>
     </Link>
   );
