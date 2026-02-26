@@ -1305,21 +1305,48 @@ async function handleSpawnChild(
   });
 
   // Enqueue the prompt on the child DO
-  await childStub.fetch(
-    internalRequest(
-      "http://internal/internal/prompt",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          content: body.prompt,
-          authorId: spawnContext.owner.userId,
-          source: "agent",
-        }),
-      },
-      ctx
-    )
-  );
+  let promptResponse: Response;
+  try {
+    promptResponse = await childStub.fetch(
+      internalRequest(
+        "http://internal/internal/prompt",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            content: body.prompt,
+            authorId: spawnContext.owner.userId,
+            source: "agent",
+          }),
+        },
+        ctx
+      )
+    );
+  } catch (enqueueError) {
+    logger.error("Failed to enqueue initial prompt for child session", {
+      event: "session.spawn_child_prompt_enqueue_failed",
+      parent_id: parentId,
+      child_id: childId,
+      trace_id: ctx.trace_id,
+      request_id: ctx.request_id,
+      error: enqueueError instanceof Error ? enqueueError.message : String(enqueueError),
+    });
+    await sessionStore.updateStatus(childId, "failed");
+    return error("Failed to enqueue child session prompt", 500);
+  }
+
+  if (!promptResponse.ok) {
+    logger.error("Failed to enqueue initial prompt for child session", {
+      event: "session.spawn_child_prompt_enqueue_failed",
+      parent_id: parentId,
+      child_id: childId,
+      prompt_status: promptResponse.status,
+      trace_id: ctx.trace_id,
+      request_id: ctx.request_id,
+    });
+    await sessionStore.updateStatus(childId, "failed");
+    return error("Failed to enqueue child session prompt", 500);
+  }
 
   return json({ sessionId: childId, status: "created" }, 201);
 }
