@@ -1,22 +1,22 @@
 {
-  "name": "open-inspect",
+  "name": "background-agents",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "workspaces": [
-    "packages/*"
+    "packages/shared",
+    "packages/server",
+    "packages/web"
   ],
   "scripts": {
+    "dev": "npm run dev --workspace=@background-agents/server & npm run dev --workspace=@background-agents/web",
+    "build": "npm run build --workspaces --if-present",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "npm run test --workspaces --if-present",
-    "test:coverage": "npm run test:coverage --workspaces --if-present",
-    "test:integration": "npm run test:integration --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present",
-    "build": "npm run build --workspaces --if-present",
-    "prepare": "node -e \"if (process.env.CI) process.exit(0)\" && husky"
+    "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",
@@ -26,30 +26,14 @@
     "eslint-plugin-react": "^7.37.4",
     "eslint-plugin-react-hooks": "^5.1.0",
     "globals": "^15.14.0",
-    "husky": "^9.1.7",
-    "lint-staged": "^16.2.7",
     "prettier": "^3.4.2",
     "typescript": "^5.7.2",
-    "typescript-eslint": "^8.21.0",
-    "wrangler": "^4.0.0"
+    "typescript-eslint": "^8.21.0"
   },
   "engines": {
     "node": ">=20.0.0"
   },
   "overrides": {
     "minimatch": ">=10.0.1"
-  },
-  "lint-staged": {
-    "*.{ts,tsx}": [
-      "eslint --fix",
-      "prettier --write"
-    ],
-    "*.{js,jsx,json,md,yaml,yml,css}": [
-      "prettier --write"
-    ],
-    "packages/modal-infra/**/*.py": [
-      "ruff check --fix",
-      "ruff format"
-    ]
   }
 }
