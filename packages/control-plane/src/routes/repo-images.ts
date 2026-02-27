@@ -234,14 +234,16 @@ async function handleTriggerBuild(
         });
       }
 
-      const { merged, totalBytes } = mergeSecrets(globalSecrets, repoSecrets);
+      const { merged, totalBytes, exceedsLimit } = mergeSecrets(globalSecrets, repoSecrets);
       if (Object.keys(merged).length > 0) {
         userEnvVars = merged;
-        logger.info("repo_image.secrets_loaded", {
+        const logLevel = exceedsLimit ? "warn" : "info";
+        logger[logLevel]("repo_image.secrets_loaded", {
           global_count: Object.keys(globalSecrets).length,
           repo_count: Object.keys(repoSecrets).length,
           merged_count: Object.keys(merged).length,
           payload_bytes: totalBytes,
+          exceeds_limit: exceedsLimit,
           repo_owner: owner,
           repo_name: name,
         });
