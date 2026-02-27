@@ -40,6 +40,7 @@ export type EventType =
   | "push_complete"
   | "push_error"
   | "user_message";
+export type ParticipantRole = "owner" | "member";
 
 // Participant in a session
 export interface SessionParticipant {
@@ -48,7 +49,7 @@ export interface SessionParticipant {
   scmLogin: string | null;
   scmName: string | null;
   scmEmail: string | null;
-  role: "owner" | "member";
+  role: ParticipantRole;
 }
 
 // Session state
@@ -215,14 +216,14 @@ export type SandboxEvent =
       type: "push_complete";
       branchName: string;
       sandboxId?: string;
-      timestamp?: number;
+      timestamp: number;
     }
   | {
       type: "push_error";
       branchName: string;
       error: string;
       sandboxId?: string;
-      timestamp?: number;
+      timestamp: number;
     }
   | {
       type: "user_message";

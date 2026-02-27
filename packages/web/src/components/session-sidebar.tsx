@@ -16,19 +16,9 @@ import {
   BranchIcon,
 } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
+import type { Session } from "@open-inspect/shared";
 
-export interface SessionItem {
-  id: string;
-  title: string | null;
-  repoOwner: string;
-  repoName: string;
-  baseBranch: string | null;
-  status: string;
-  createdAt: number;
-  updatedAt: number;
-  spawnSource?: "user" | "agent";
-  parentSessionId?: string | null;
-}
+export type SessionItem = Session;
 
 export function buildSessionHref(session: SessionItem) {
   return {

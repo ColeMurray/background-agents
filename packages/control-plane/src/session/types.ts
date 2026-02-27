@@ -3,6 +3,7 @@
  */
 
 import type {
+  Attachment,
   SessionStatus,
   SandboxStatus,
   GitSyncStatus,
@@ -115,12 +116,7 @@ export interface PromptCommand {
     scmName: string | null;
     scmEmail: string | null;
   };
-  attachments?: Array<{
-    type: string;
-    name: string;
-    url?: string;
-    content?: string;
-  }>;
+  attachments?: Attachment[];
 }
 
 export interface StopCommand {

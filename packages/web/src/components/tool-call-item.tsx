@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/icons";
 
 interface ToolCallItemProps {
-  event: SandboxEvent;
+  event: Extract<SandboxEvent, { type: "tool_call" }>;
   isExpanded: boolean;
   onToggle: () => void;
   showTime?: boolean;

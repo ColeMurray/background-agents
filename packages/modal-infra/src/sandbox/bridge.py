@@ -1408,6 +1408,7 @@ class AgentBridge:
                 {
                     "type": "push_error",
                     "error": "No repository found",
+                    "timestamp": time.time(),
                 }
             )
             return
@@ -1422,6 +1423,7 @@ class AgentBridge:
                         "type": "push_error",
                         "error": "Push failed - missing push specification",
                         "branchName": branch_name,
+                        "timestamp": time.time(),
                     }
                 )
                 return
@@ -1433,6 +1435,7 @@ class AgentBridge:
                         "type": "push_error",
                         "error": "Push failed - missing target branch",
                         "branchName": "",
+                        "timestamp": time.time(),
                     }
                 )
                 return
@@ -1449,6 +1452,7 @@ class AgentBridge:
                         "type": "push_error",
                         "error": "Push failed - invalid push specification",
                         "branchName": branch_name,
+                        "timestamp": time.time(),
                     }
                 )
                 return
@@ -1510,6 +1514,7 @@ class AgentBridge:
                             f"after {int(self.GIT_PUSH_TIMEOUT_SECONDS)}s"
                         ),
                         "branchName": branch_name,
+                        "timestamp": time.time(),
                     }
                 )
                 return
@@ -1521,6 +1526,7 @@ class AgentBridge:
                         "type": "push_error",
                         "error": "Push failed - authentication may be required",
                         "branchName": branch_name,
+                        "timestamp": time.time(),
                     }
                 )
             else:
@@ -1529,6 +1535,7 @@ class AgentBridge:
                     {
                         "type": "push_complete",
                         "branchName": branch_name,
+                        "timestamp": time.time(),
                     }
                 )
 
@@ -1539,6 +1546,7 @@ class AgentBridge:
                     "type": "push_error",
                     "error": str(e),
                     "branchName": branch_name,
+                    "timestamp": time.time(),
                 }
             )
 

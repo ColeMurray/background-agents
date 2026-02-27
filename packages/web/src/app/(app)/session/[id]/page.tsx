@@ -40,15 +40,17 @@ import {
 } from "@/components/ui/icons";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 
+type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
+
 // Event grouping types
 type EventGroup =
-  | { type: "tool_group"; events: SandboxEvent[]; id: string }
+  | { type: "tool_group"; events: ToolCallEvent[]; id: string }
   | { type: "single"; event: SandboxEvent; id: string };
 
 // Group consecutive tool calls of the same type
 function groupEvents(events: SandboxEvent[]): EventGroup[] {
   const groups: EventGroup[] = [];
-  let currentToolGroup: SandboxEvent[] = [];
+  let currentToolGroup: ToolCallEvent[] = [];
   let groupIndex = 0;
 
   const flushToolGroup = () => {
@@ -78,7 +80,7 @@ function groupEvents(events: SandboxEvent[]): EventGroup[] {
       groups.push({
         type: "single",
         event,
-        id: `single-${event.type}-${event.messageId || event.timestamp}-${groupIndex++}`,
+        id: `single-${event.type}-${("messageId" in event ? event.messageId : undefined) || event.timestamp}-${groupIndex++}`,
       });
     }
   }
@@ -481,12 +483,12 @@ function SessionContent({
 
   // Deduplicate and group events for rendering
   const groupedEvents = useMemo(() => {
-    const filteredEvents: SandboxEvent[] = [];
+    const filteredEvents: Array<SandboxEvent | null> = [];
     const seenToolCalls = new Map<string, number>();
     const seenCompletions = new Set<string>();
     const seenTokens = new Map<string, number>();
 
-    for (const event of events as SandboxEvent[]) {
+    for (const event of events) {
       if (event.type === "tool_call" && event.callId) {
         // Deduplicate tool_call events by callId - keep the latest (most complete) one
         const existingIdx = seenToolCalls.get(event.callId);
@@ -506,7 +508,7 @@ function SessionContent({
         // Deduplicate tokens by messageId - keep latest at its chronological position
         const existingIdx = seenTokens.get(event.messageId);
         if (existingIdx !== undefined) {
-          filteredEvents[existingIdx] = null as unknown as SandboxEvent;
+          filteredEvents[existingIdx] = null;
         }
         seenTokens.set(event.messageId, filteredEvents.length);
         filteredEvents.push(event);
@@ -516,7 +518,7 @@ function SessionContent({
       }
     }
 
-    return groupEvents(filteredEvents.filter(Boolean) as SandboxEvent[]);
+    return groupEvents(filteredEvents.filter((event): event is SandboxEvent => event !== null));
   }, [events]);
 
   const resolvedRepoOwner = sessionState?.repoOwner ?? fallbackSessionInfo.repoOwner;

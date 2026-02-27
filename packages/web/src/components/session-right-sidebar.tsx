@@ -12,34 +12,11 @@ import { ChildSessionsSection } from "./sidebar/child-sessions-section";
 import { extractLatestTasks } from "@/lib/tasks";
 import { extractChangedFiles } from "@/lib/files";
 import type { Artifact, SandboxEvent } from "@/types/session";
-
-interface SessionState {
-  id: string;
-  title: string | null;
-  repoOwner: string;
-  repoName: string;
-  branchName: string | null;
-  baseBranch: string;
-  status: string;
-  sandboxStatus: string;
-  messageCount: number;
-  createdAt: number;
-  model?: string;
-  reasoningEffort?: string;
-  parentSessionId?: string | null;
-}
-
-interface Participant {
-  userId: string;
-  name: string;
-  avatar?: string;
-  status: "active" | "idle" | "away";
-  lastSeen: number;
-}
+import type { ParticipantPresence, SessionState } from "@open-inspect/shared";
 
 interface SessionRightSidebarProps {
   sessionState: SessionState | null;
-  participants: Participant[];
+  participants: ParticipantPresence[];
   events: SandboxEvent[];
   artifacts: Artifact[];
 }
