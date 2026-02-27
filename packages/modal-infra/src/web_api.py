@@ -605,6 +605,7 @@ async def api_build_repo_image(
         default_branch = request.get("default_branch", "main")
         build_id = request.get("build_id", "")
         callback_url = request.get("callback_url", "")
+        user_env_vars = request.get("user_env_vars") or None
 
         if not repo_owner or not repo_name:
             raise HTTPException(status_code=400, detail="repo_owner and repo_name are required")
@@ -619,6 +620,7 @@ async def api_build_repo_image(
             default_branch=default_branch,
             callback_url=callback_url,
             build_id=build_id,
+            user_env_vars=user_env_vars,
         )
 
         return {

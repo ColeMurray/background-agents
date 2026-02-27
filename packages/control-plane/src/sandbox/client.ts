@@ -98,6 +98,7 @@ export interface BuildRepoImageRequest {
   defaultBranch?: string;
   buildId: string;
   callbackUrl: string;
+  userEnvVars?: Record<string, string>;
 }
 
 export interface BuildRepoImageResponse {
@@ -547,6 +548,7 @@ export class ModalClient {
           default_branch: request.defaultBranch || "main",
           build_id: request.buildId,
           callback_url: request.callbackUrl,
+          user_env_vars: request.userEnvVars,
         }),
       });
 
