@@ -41,6 +41,8 @@ export type EventType =
   | "push_error"
   | "user_message";
 export type ParticipantRole = "owner" | "member";
+export type SpawnSource = "user" | "agent";
+export type ConfidenceLevel = "high" | "medium" | "low";
 
 // Participant in a session
 export interface SessionParticipant {
@@ -65,7 +67,7 @@ export interface Session {
   opencodeSessionId: string | null;
   status: SessionStatus;
   parentSessionId: string | null;
-  spawnSource: "user" | "agent";
+  spawnSource: SpawnSource;
   spawnDepth: number;
   createdAt: number;
   updatedAt: number;
@@ -128,7 +130,7 @@ export interface PullRequest {
   title: string;
   body: string;
   url: string;
-  state: "open" | "closed" | "merged";
+  state: "open" | "closed" | "merged" | "draft";
   headRef: string;
   baseRef: string;
   createdAt: string;
@@ -376,7 +378,7 @@ export interface ControlPlaneReposResponse {
 
 export interface ClassificationResult {
   repo: RepoConfig | null;
-  confidence: "high" | "medium" | "low";
+  confidence: ConfidenceLevel;
   reasoning: string;
   alternatives?: RepoConfig[];
   needsClarification: boolean;

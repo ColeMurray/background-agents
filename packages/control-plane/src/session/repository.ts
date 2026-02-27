@@ -20,6 +20,7 @@ import type {
   MessageStatus,
   MessageSource,
   ParticipantRole,
+  SpawnSource,
   ArtifactType,
   SandboxEvent,
 } from "../types";
@@ -66,7 +67,7 @@ export interface UpsertSessionData {
   reasoningEffort?: string | null;
   status: SessionStatus;
   parentSessionId?: string | null;
-  spawnSource?: "user" | "agent";
+  spawnSource?: SpawnSource;
   spawnDepth?: number;
   createdAt: number;
   updatedAt: number;

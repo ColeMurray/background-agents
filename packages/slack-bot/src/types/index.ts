@@ -53,7 +53,7 @@ export interface ThreadContext {
 /**
  * Result of repository classification.
  */
-export type { ClassificationResult } from "@open-inspect/shared";
+export type { ClassificationResult, ConfidenceLevel } from "@open-inspect/shared";
 
 /**
  * Slack event types.

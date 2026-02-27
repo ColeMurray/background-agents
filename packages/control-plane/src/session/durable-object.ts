@@ -53,6 +53,7 @@ import type {
   SessionStatus,
   SandboxStatus,
   ParticipantRole,
+  SpawnSource,
 } from "../types";
 import type { SpawnContext } from "@open-inspect/shared";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
@@ -1570,7 +1571,7 @@ export class SessionDO extends DurableObject<Env> {
       scmToken?: string | null; // Plain SCM token (will be encrypted)
       scmTokenEncrypted?: string | null; // Pre-encrypted SCM token
       parentSessionId?: string | null;
-      spawnSource?: "user" | "agent";
+      spawnSource?: SpawnSource;
       spawnDepth?: number;
     };
 

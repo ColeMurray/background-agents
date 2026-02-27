@@ -5,6 +5,8 @@
  * enabling unit testing and future provider support.
  */
 
+import type { CorrelationContext } from "../logger";
+
 /** Default sandbox lifetime in seconds (2 hours). */
 export const DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200;
 
@@ -19,18 +21,6 @@ export interface SandboxProviderCapabilities {
   supportsRestore: boolean;
   /** Whether the provider supports pre-warming sandboxes */
   supportsWarm: boolean;
-}
-
-/**
- * Optional request correlation context propagated to provider calls.
- *
- * Use snake_case to match transport headers (`x-trace-id`, `x-request-id`).
- */
-export interface CorrelationContext {
-  trace_id?: string;
-  request_id?: string;
-  session_id?: string;
-  sandbox_id?: string;
 }
 
 /**
