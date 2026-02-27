@@ -153,6 +153,7 @@ describe("SessionSandboxEventProcessor", () => {
     await h.processor.processSandboxEvent({
       type: "push_complete",
       branchName: "feature/test",
+      timestamp: 1000,
     });
 
     await expect(pushPromise).resolves.toEqual({ success: true });
@@ -195,6 +196,7 @@ describe("SessionSandboxEventProcessor", () => {
       const event = {
         type: "push_complete",
         branchName: "feature/test",
+        timestamp: 2000,
         ackId: "push_complete:msg-2",
       } as unknown as SandboxEvent;
 

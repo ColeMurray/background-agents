@@ -20,9 +20,7 @@ export interface Artifact {
   createdAt: number;
 }
 
-type SharedSandboxEventWithTimestamp = SharedSandboxEvent & { timestamp: number };
-
-export type SandboxEvent = SharedSandboxEventWithTimestamp;
+export type SandboxEvent = SharedSandboxEvent;
 
 export interface Task {
   content: string;
