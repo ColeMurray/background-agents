@@ -96,7 +96,7 @@ async function handleWebhook(
   };
 
   const start = Date.now();
-  let result: HandlerResult | undefined;
+  let result: HandlerResult;
 
   try {
     result = await dispatchHandler(env, log, event, p, payload, traceId);
