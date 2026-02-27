@@ -21,6 +21,7 @@ import {
   handleReviewRequested,
   handleIssueComment,
   handleReviewComment,
+  type HandlerResult,
 } from "./handlers";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -76,6 +77,62 @@ async function handleWebhook(
   deliveryId: string | undefined
 ): Promise<void> {
   const p = payload as Record<string, unknown>;
+  const repo = p.repository
+    ? `${(p.repository as Record<string, unknown> & { owner: { login: string }; name: string }).owner.login}/${(p.repository as Record<string, unknown> & { name: string }).name}`
+    : undefined;
+  const sender = (p.sender as { login?: string } | undefined)?.login;
+  const pullNumber =
+    (p.pull_request as { number?: number } | undefined)?.number ??
+    (p.issue as { number?: number } | undefined)?.number;
+
+  const wideEventBase = {
+    trace_id: traceId,
+    delivery_id: deliveryId,
+    event_type: event,
+    action: p.action,
+    repo,
+    pull_number: pullNumber,
+    sender,
+  };
+
+  const start = Date.now();
+  let result: HandlerResult | undefined;
+
+  try {
+    result = await dispatchHandler(env, log, event, p, payload, traceId);
+  } catch (err) {
+    log.info("webhook.handled", {
+      ...wideEventBase,
+      outcome: "error",
+      duration_ms: Date.now() - start,
+      error: err instanceof Error ? err : new Error(String(err)),
+    });
+    throw err;
+  }
+
+  const wideEvent: Record<string, unknown> = {
+    ...wideEventBase,
+    outcome: result.outcome,
+    duration_ms: Date.now() - start,
+  };
+  if (result.outcome === "skipped") {
+    wideEvent.skip_reason = result.skip_reason;
+  } else {
+    wideEvent.session_id = result.session_id;
+    wideEvent.message_id = result.message_id;
+    wideEvent.handler_action = result.handler_action;
+  }
+  log.info("webhook.handled", wideEvent);
+}
+
+function dispatchHandler(
+  env: Env,
+  log: Logger,
+  event: string | undefined,
+  p: Record<string, unknown>,
+  payload: unknown,
+  traceId: string
+): Promise<HandlerResult> {
   switch (event) {
     case "pull_request":
       if (p.action === "opened") {
@@ -84,24 +141,32 @@ async function handleWebhook(
       if (p.action === "review_requested") {
         return handleReviewRequested(env, log, payload as ReviewRequestedPayload, traceId);
       }
-      break;
+      return Promise.resolve({
+        outcome: "skipped",
+        skip_reason: "unsupported_action",
+      });
     case "issue_comment":
       if (p.action === "created") {
         return handleIssueComment(env, log, payload as IssueCommentPayload, traceId);
       }
-      break;
+      return Promise.resolve({
+        outcome: "skipped",
+        skip_reason: "unsupported_action",
+      });
     case "pull_request_review_comment":
       if (p.action === "created") {
         return handleReviewComment(env, log, payload as ReviewCommentPayload, traceId);
       }
-      break;
+      return Promise.resolve({
+        outcome: "skipped",
+        skip_reason: "unsupported_action",
+      });
+    default:
+      return Promise.resolve({
+        outcome: "skipped",
+        skip_reason: "unsupported_event",
+      });
   }
-  log.debug("webhook.ignored", {
-    event_type: event,
-    action: p?.action,
-    trace_id: traceId,
-    delivery_id: deliveryId,
-  });
 }
 
 export default app;
