@@ -183,6 +183,7 @@ async def build_repo_image(
     default_branch: str = "main",
     callback_url: str = "",
     build_id: str = "",
+    user_env_vars: dict[str, str] | None = None,
 ) -> None:
     """
     Async worker: create build sandbox, await exit, snapshot, callback.
@@ -196,6 +197,7 @@ async def build_repo_image(
         default_branch: Branch to clone and build
         callback_url: URL to POST success result to
         build_id: Build identifier from the control plane
+        user_env_vars: User-defined env vars
     """
     from ..sandbox.manager import SandboxManager
 
@@ -224,6 +226,7 @@ async def build_repo_image(
             repo_name=repo_name,
             default_branch=default_branch,
             clone_token=clone_token,
+            user_env_vars=user_env_vars,
         )
 
         # 3. Stream stdout until build completes (sandbox stays alive for snapshotting)

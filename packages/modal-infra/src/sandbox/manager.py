@@ -200,6 +200,7 @@ class SandboxManager:
         repo_name: str,
         default_branch: str = "main",
         clone_token: str = "",
+        user_env_vars: dict[str, str] | None = None,
     ) -> SandboxHandle:
         """
         Create a sandbox specifically for image building.
@@ -215,14 +216,20 @@ class SandboxManager:
         start_time = time.time()
         sandbox_id = f"build-{repo_owner}-{repo_name}-{int(time.time() * 1000)}"
 
-        env_vars: dict[str, str] = {
+        # Prepare environment variables (user vars first, system vars override)
+        env_vars: dict[str, str] = {}
+
+        if user_env_vars:
+            env_vars.update(user_env_vars)
+
+        env_vars.update({
             "PYTHONUNBUFFERED": "1",
             "SANDBOX_ID": sandbox_id,
             "REPO_OWNER": repo_owner,
             "REPO_NAME": repo_name,
             "IMAGE_BUILD_MODE": "true",
             "SESSION_CONFIG": json.dumps({"branch": default_branch}),
-        }
+        })
 
         self._inject_vcs_env_vars(env_vars, clone_token or None)
 

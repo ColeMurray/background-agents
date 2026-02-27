@@ -10,10 +10,21 @@
 
 import { RepoImageStore } from "../db/repo-images";
 import { RepoMetadataStore } from "../db/repo-metadata";
+import { GlobalSecretsStore } from "../db/global-secrets";
+import { RepoSecretsStore } from "../db/repo-secrets";
+import { mergeSecrets } from "../db/secrets-validation";
 import { createModalClient } from "../sandbox/client";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
-import { type Route, type RequestContext, parsePattern, json, error } from "./shared";
+import {
+  type Route,
+  type RequestContext,
+  parsePattern,
+  json,
+  error,
+  createRouteSourceControlProvider,
+  resolveInstalledRepo,
+} from "./shared";
 
 const logger = createLogger("router:repo-images");
 
@@ -192,6 +203,51 @@ async function handleTriggerBuild(
     // Construct callback URL
     const callbackUrl = `${env.WORKER_URL}/repo-images/build-complete`;
 
+    // Best-effort: fetch user secrets for the build sandbox
+    let userEnvVars: Record<string, string> | undefined;
+    if (env.REPO_SECRETS_ENCRYPTION_KEY) {
+      let globalSecrets: Record<string, string> = {};
+      try {
+        const globalStore = new GlobalSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+        globalSecrets = await globalStore.getDecryptedSecrets();
+      } catch (e) {
+        logger.warn("repo_image.global_secrets_failed", {
+          error: e instanceof Error ? e.message : String(e),
+          repo_owner: owner,
+          repo_name: name,
+        });
+      }
+
+      let repoSecrets: Record<string, string> = {};
+      try {
+        const provider = createRouteSourceControlProvider(env);
+        const resolved = await resolveInstalledRepo(provider, owner, name);
+        if (resolved) {
+          const repoStore = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+          repoSecrets = await repoStore.getDecryptedSecrets(resolved.repoId);
+        }
+      } catch (e) {
+        logger.warn("repo_image.repo_secrets_failed", {
+          error: e instanceof Error ? e.message : String(e),
+          repo_owner: owner,
+          repo_name: name,
+        });
+      }
+
+      const { merged, totalBytes } = mergeSecrets(globalSecrets, repoSecrets);
+      if (Object.keys(merged).length > 0) {
+        userEnvVars = merged;
+        logger.info("repo_image.secrets_loaded", {
+          global_count: Object.keys(globalSecrets).length,
+          repo_count: Object.keys(repoSecrets).length,
+          merged_count: Object.keys(merged).length,
+          payload_bytes: totalBytes,
+          repo_owner: owner,
+          repo_name: name,
+        });
+      }
+    }
+
     // Trigger build on Modal
     const client = createModalClient(env.MODAL_API_SECRET, env.MODAL_WORKSPACE);
     await client.buildRepoImage(
@@ -201,6 +257,7 @@ async function handleTriggerBuild(
         defaultBranch: "main",
         buildId,
         callbackUrl,
+        userEnvVars,
       },
       { trace_id: ctx.trace_id, request_id: ctx.request_id }
     );
