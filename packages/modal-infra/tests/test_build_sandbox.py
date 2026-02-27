@@ -198,3 +198,59 @@ async def test_returns_sandbox_handle(monkeypatch):
     assert handle.sandbox_id.startswith("build-acme-my-repo-")
     assert handle.modal_object_id == "obj-build-123"
     assert handle.created_at > 0
+
+
+@pytest.mark.asyncio
+async def test_user_env_vars_injected(monkeypatch):
+    """User env vars should appear in sandbox env when provided."""
+    captured = {}
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+
+    manager = SandboxManager()
+    await manager.create_build_sandbox(
+        repo_owner="acme",
+        repo_name="my-repo",
+        user_env_vars={"NPM_TOKEN": "tok_abc", "CUSTOM_VAR": "hello"},
+    )
+
+    env = captured["env"]
+    assert env["NPM_TOKEN"] == "tok_abc"
+    assert env["CUSTOM_VAR"] == "hello"
+    # System vars still present
+    assert env["IMAGE_BUILD_MODE"] == "true"
+    assert env["REPO_OWNER"] == "acme"
+
+
+@pytest.mark.asyncio
+async def test_user_env_vars_none_by_default(monkeypatch):
+    """When user_env_vars is None, only system vars should be present."""
+    captured = {}
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+
+    manager = SandboxManager()
+    await manager.create_build_sandbox(
+        repo_owner="acme",
+        repo_name="my-repo",
+    )
+
+    env = captured["env"]
+    assert "NPM_TOKEN" not in env
+    assert env["IMAGE_BUILD_MODE"] == "true"
+
+
+@pytest.mark.asyncio
+async def test_system_vars_override_user_env_vars(monkeypatch):
+    """System vars like IMAGE_BUILD_MODE must not be overridden by user env vars."""
+    captured = {}
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+
+    manager = SandboxManager()
+    await manager.create_build_sandbox(
+        repo_owner="acme",
+        repo_name="my-repo",
+        user_env_vars={"IMAGE_BUILD_MODE": "false", "SANDBOX_ID": "evil"},
+    )
+
+    env = captured["env"]
+    assert env["IMAGE_BUILD_MODE"] == "true"
+    assert env["SANDBOX_ID"].startswith("build-acme-my-repo-")
