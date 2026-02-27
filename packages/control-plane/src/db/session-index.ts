@@ -152,6 +152,15 @@ export class SessionIndexStore {
     };
   }
 
+  async updateTitle(id: string, title: string): Promise<boolean> {
+    const result = await this.db
+      .prepare("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?")
+      .bind(title, Date.now(), id)
+      .run();
+
+    return (result.meta.changes ?? 0) > 0;
+  }
+
   async updateStatus(id: string, status: SessionStatus, updatedAt = Date.now()): Promise<boolean> {
     // Protect against out-of-order async writes by only applying monotonic updated_at values.
     const result = await this.db

@@ -299,14 +299,30 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           break;
 
         case "artifact_created":
-          setArtifacts((prev) => {
-            // Avoid duplicates
-            const existing = prev.find((a) => a.id === data.artifact.id);
-            if (existing) {
-              return prev.map((a) => (a.id === data.artifact.id ? toUiArtifact(data.artifact) : a));
-            }
-            return [...prev, toUiArtifact(data.artifact)];
-          });
+          if (data.artifact) {
+            setArtifacts((prev) => {
+              // Avoid duplicates
+              const existing = prev.find((a) => a.id === data.artifact!.id);
+              if (existing) {
+                return prev.map((a) => (a.id === data.artifact!.id ? data.artifact! : a));
+              }
+              return [...prev, data.artifact!];
+            });
+          }
+          break;
+
+        case "artifact_updated":
+          if (data.artifact) {
+            setArtifacts((prev) =>
+              prev.map((a) => (a.id === data.artifact!.id ? data.artifact! : a))
+            );
+          }
+          break;
+
+        case "session_title":
+          if (data.title) {
+            setSessionState((prev) => (prev ? { ...prev, title: data.title! } : null));
+          }
           break;
 
         case "session_status":

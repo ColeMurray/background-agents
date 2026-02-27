@@ -174,6 +174,11 @@ export class SessionDO extends DurableObject<Env> {
       path: "/internal/ws-token",
       handler: (req) => this.handleGenerateWsToken(req),
     },
+    {
+      method: "POST",
+      path: "/internal/update-title",
+      handler: (req) => this.handleUpdateTitle(req),
+    },
     { method: "POST", path: "/internal/archive", handler: (req) => this.handleArchive(req) },
     { method: "POST", path: "/internal/unarchive", handler: (req) => this.handleUnarchive(req) },
     {
@@ -2021,6 +2026,58 @@ export class SessionDO extends DurableObject<Env> {
       token: plainToken,
       participantId: participant.id,
     });
+  }
+
+  /**
+   * Handle update session title request
+   * Updates the session's title
+   * Only session participants are authorized to update the title
+   */
+  private async handleUpdateTitle(request: Request): Promise<Response> {
+    const session = this.getSession();
+
+    if (!session) {
+      return Response.json({ error: "Session not found" }, { status: 404 });
+    }
+
+    let body: { userId?: string; title?: string };
+
+    try {
+      body = (await request.json()) as { userId?: string; title: string };
+    } catch (_error) {
+      return Response.json({ error: "Invalid request body" }, { status: 400 });
+    }
+
+    if (!body.userId) {
+      return Response.json({ error: "userId is required" }, { status: 400 });
+    }
+
+    if (typeof body.title !== "string" || body.title.trim().length === 0) {
+      return Response.json({ error: "title must be a non-empty string" }, { status: 400 });
+    }
+
+    if (body.title.length > 200) {
+      return Response.json({ error: "title must be 200 characters or fewer" }, { status: 400 });
+    }
+
+    // verify user is a session participant
+    const participant = this.participantService.getByUserId(body.userId);
+    if (!participant) {
+      return Response.json(
+        { error: "Not authorized to update the session title" },
+        { status: 403 }
+      );
+    }
+
+    const now = Date.now();
+    this.repository.updateSessionTitle(session.id, body.title, now);
+
+    this.broadcast({
+      type: "session_title",
+      title: body.title,
+    });
+
+    return Response.json({ title: body.title });
   }
 
   /**

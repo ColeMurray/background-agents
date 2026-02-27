@@ -216,12 +216,35 @@ function SessionPageContent() {
     { throwOnError: false }
   );
 
+  const { trigger: triggerRename } = useSWRMutation(
+    `/api/sessions/${sessionId}/title`,
+    (url: string, { arg }: { arg: { title: string } }) =>
+      fetch(url, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: arg.title }),
+      }).then((r) => {
+        if (r.ok) {
+          mutate("/api/sessions");
+          return true;
+        }
+        console.error("Failed to update session title");
+        return false;
+      }),
+    { throwOnError: false }
+  );
+
   const handleArchive = useCallback(async () => {
     const didArchive = await triggerArchive();
     if (didArchive) {
       router.push("/");
     }
   }, [router, triggerArchive]);
+
+  const renameSession = useCallback(
+    async (title: string) => triggerRename({ title }),
+    [triggerRename]
+  );
 
   const { trigger: handleUnarchive } = useSWRMutation(
     `/api/sessions/${sessionId}/unarchive`,
@@ -326,6 +349,7 @@ function SessionPageContent() {
       stopExecution={stopExecution}
       handleArchive={handleArchive}
       handleUnarchive={handleUnarchive}
+      renameSession={renameSession}
       loadingHistory={loadingHistory}
       loadOlderEvents={loadOlderEvents}
       modelOptions={enabledModelOptions}
@@ -360,6 +384,7 @@ function SessionContent({
   stopExecution,
   handleArchive,
   handleUnarchive,
+  renameSession,
   loadingHistory,
   loadOlderEvents,
   modelOptions,
@@ -390,6 +415,7 @@ function SessionContent({
   stopExecution: () => void;
   handleArchive: () => void | Promise<void>;
   handleUnarchive: () => void | Promise<void>;
+  renameSession: (title: string) => Promise<boolean | undefined>;
   loadingHistory: boolean;
   loadOlderEvents: () => void;
   modelOptions: ModelCategory[];
@@ -398,7 +424,17 @@ function SessionContent({
   const { isOpen, toggle } = useSidebarContext();
   const isBelowLg = useMediaQuery("(max-width: 1023px)");
   const isPhone = useMediaQuery("(max-width: 767px)");
+  const resolvedRepoOwner = sessionState?.repoOwner ?? fallbackSessionInfo.repoOwner;
+  const resolvedRepoName = sessionState?.repoName ?? fallbackSessionInfo.repoName;
+  const fallbackRepoLabel =
+    resolvedRepoOwner && resolvedRepoName
+      ? `${resolvedRepoOwner}/${resolvedRepoName}`
+      : "Loading session...";
+  const resolvedTitle = sessionState?.title || fallbackSessionInfo.title || fallbackRepoLabel;
+
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [title, setTitle] = useState(resolvedTitle);
   const [sheetDragY, setSheetDragY] = useState(0);
   const sheetDragYRef = useRef(0);
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
@@ -433,6 +469,31 @@ function SessionContent({
     });
   }, [resetSheetDragState]);
 
+  const handleStartRename = () => {
+    setTitle(resolvedTitle);
+    setIsRenaming(true);
+  };
+
+  const handleRenameSubmit = async () => {
+    if (!sessionState) return;
+
+    const trimmed = title.trim();
+
+    if (!trimmed || trimmed === sessionState.title) {
+      setIsRenaming(false);
+      return;
+    }
+
+    const previousTitle = sessionState.title ?? "";
+    setIsRenaming(false);
+
+    const success = await renameSession(trimmed);
+    if (!success) {
+      setTitle(previousTitle);
+      setIsRenaming(true);
+    }
+  };
+
   const handleSheetTouchStart = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
     const startY = event.touches[0]?.clientY;
     sheetTouchStartYRef.current = startY ?? null;
@@ -466,6 +527,10 @@ function SessionContent({
     setSheetDragY(0);
     sheetTouchStartYRef.current = null;
   }, [closeDetails]);
+
+  useEffect(() => {
+    if (!isRenaming) setTitle(sessionState?.title ?? "");
+  }, [sessionState?.title, isRenaming]);
 
   useEffect(() => {
     if (isBelowLg) return;
@@ -572,7 +637,33 @@ function SessionContent({
               </button>
             )}
             <div>
-              <h1 className="font-medium text-foreground">{sessionDisplayInfo.title}</h1>
+              {isRenaming ? (
+                <input
+                  autoFocus
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  onFocus={(e) => e.currentTarget.select()}
+                  onBlur={handleRenameSubmit}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleRenameSubmit();
+                    }
+                    if (e.key === "Escape") {
+                      setIsRenaming(false);
+                    }
+                  }}
+                  className="text-sm bg-transparent text-foreground outline-none focus:ring-inset focus:ring-ring font-medium max-w-40 truncate"
+                />
+              ) : (
+                <h1
+                  className="font-medium text-foreground max-w-40 truncate cursor-text"
+                  onClick={handleStartRename}
+                  title="Click to rename"
+                >
+                  {sessionDisplayInfo.title}
+                </h1>
+              )}
               <p className="text-sm text-muted-foreground">{sessionDisplayInfo.repoLabel}</p>
             </div>
           </div>
@@ -668,9 +759,8 @@ function SessionContent({
           className={`fixed inset-0 z-50 lg:hidden ${isDetailsOpen ? "" : "pointer-events-none"}`}
         >
           <div
-            className={`absolute inset-0 bg-black/50 transition-opacity duration-200 ${
-              isDetailsOpen ? "opacity-100" : "opacity-0"
-            }`}
+            className={`absolute inset-0 bg-black/50 transition-opacity duration-200 ${isDetailsOpen ? "opacity-100" : "opacity-0"
+              }`}
             onClick={closeDetails}
           />
 
