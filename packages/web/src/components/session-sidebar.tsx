@@ -352,9 +352,9 @@ function ChildSessionListItem({
         isActive ? "border-l-accent bg-accent-muted" : "border-l-transparent hover:bg-muted"
       }`}
     >
-      <div className="flex items-center gap-1.5 text-xs">
-        <span className="truncate font-medium text-foreground">{displayTitle}</span>
-        <span className="shrink-0 text-muted-foreground">{relativeTime}</span>
+      <div className="text-xs">
+        <div className="truncate font-medium text-foreground">{displayTitle}</div>
+        <div className="mt-0.5 text-muted-foreground">{relativeTime}</div>
       </div>
     </Link>
   );

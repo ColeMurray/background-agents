@@ -51,12 +51,12 @@ export function ChildSessionsSection({ sessionId }: ChildSessionsSectionProps) {
             href={`/session/${child.id}`}
             className="block p-2 hover:bg-muted transition-colors rounded"
           >
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex min-w-0 items-center gap-1.5">
-                <span className="text-sm truncate">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <span className="text-sm truncate block">
                   {child.title || `${child.repoOwner}/${child.repoName}`}
                 </span>
-                <span className="text-xs text-muted-foreground shrink-0">
+                <span className="text-xs text-muted-foreground mt-0.5 block">
                   {formatRelativeTime(child.updatedAt || child.createdAt)}
                 </span>
               </div>
