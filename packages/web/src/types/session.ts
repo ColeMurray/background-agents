@@ -22,14 +22,7 @@ export interface Artifact {
 
 type SharedSandboxEventWithTimestamp = SharedSandboxEvent & { timestamp: number };
 
-type UiSyntheticTokenEvent = {
-  type: "token";
-  content: string;
-  messageId: string;
-  timestamp: number;
-};
-
-export type SandboxEvent = SharedSandboxEventWithTimestamp | UiSyntheticTokenEvent;
+export type SandboxEvent = SharedSandboxEventWithTimestamp;
 
 export interface Task {
   content: string;
