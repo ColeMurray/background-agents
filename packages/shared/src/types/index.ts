@@ -279,6 +279,12 @@ export type ServerMessage =
       cursor: { timestamp: number; id: string } | null;
     }
   | { type: "session_status"; status: SessionStatus }
+  | {
+      type: "child_session_update";
+      childSessionId: string;
+      status: SessionStatus;
+      title: string | null;
+    }
   | { type: "error"; code: string; message: string };
 
 // Session state sent to clients

@@ -188,6 +188,11 @@ export class SessionDO extends DurableObject<Env> {
     { method: "GET", path: "/internal/spawn-context", handler: () => this.handleGetSpawnContext() },
     { method: "GET", path: "/internal/child-summary", handler: () => this.handleGetChildSummary() },
     { method: "POST", path: "/internal/cancel", handler: () => this.handleCancel() },
+    {
+      method: "POST",
+      path: "/internal/child-session-update",
+      handler: (req) => this.handleChildSessionUpdate(req),
+    },
   ];
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -1245,7 +1250,49 @@ export class SessionDO extends DurableObject<Env> {
 
     this.broadcast({ type: "session_status", status });
 
+    // Notify parent session (if this is a child) so its UI can refresh
+    this.notifyParentOfStatusChange(session, publicSessionId, status);
+
     return true;
+  }
+
+  /**
+   * Fire-and-forget notification to the parent session so its connected clients
+   * can refresh the child-sessions list in real time.
+   */
+  private notifyParentOfStatusChange(
+    session: Pick<SessionRow, "parent_session_id" | "title">,
+    childSessionId: string,
+    status: SessionStatus
+  ): void {
+    const parentId = session.parent_session_id;
+    if (!parentId || !this.env.SESSION) return;
+
+    const parentDoId = this.env.SESSION.idFromName(parentId);
+    const parentStub = this.env.SESSION.get(parentDoId);
+
+    this.ctx.waitUntil(
+      parentStub
+        .fetch(
+          new Request("http://internal/internal/child-session-update", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              childSessionId,
+              status,
+              title: session.title,
+            }),
+          })
+        )
+        .catch((error) => {
+          this.log.error("notify_parent.failed", {
+            parent_id: parentId,
+            child_id: childSessionId,
+            status,
+            error,
+          });
+        })
+    );
   }
 
   private async reconcileSessionStatusAfterExecution(success: boolean): Promise<void> {
@@ -2113,6 +2160,27 @@ export class SessionDO extends DurableObject<Env> {
     };
 
     return Response.json(detail);
+  }
+
+  private async handleChildSessionUpdate(request: Request): Promise<Response> {
+    const body = (await request.json()) as {
+      childSessionId: string;
+      status: SessionStatus;
+      title: string | null;
+    };
+
+    if (!body.childSessionId || !body.status) {
+      return Response.json({ error: "childSessionId and status are required" }, { status: 400 });
+    }
+
+    this.broadcast({
+      type: "child_session_update",
+      childSessionId: body.childSessionId,
+      status: body.status,
+      title: body.title ?? null,
+    });
+
+    return Response.json({ ok: true });
   }
 
   private async handleCancel(): Promise<Response> {

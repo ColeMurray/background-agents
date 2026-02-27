@@ -2,7 +2,14 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
-import { initNamedSession, seedSandboxAuth, queryDO, seedEvents } from "./helpers";
+import {
+  initNamedSession,
+  seedSandboxAuth,
+  queryDO,
+  seedEvents,
+  openClientWs,
+  collectMessages,
+} from "./helpers";
 
 describe("Child session operations (list, get, cancel)", () => {
   beforeEach(cleanD1Tables);
@@ -261,6 +268,95 @@ describe("Child session operations (list, get, cancel)", () => {
       );
 
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe("POST /internal/child-session-update", () => {
+    it("broadcasts child_session_update to authenticated clients", async () => {
+      const pName = parentName();
+      await initNamedSession(pName, { repoOwner: "acme", repoName: "web-app" });
+
+      // Seed D1 row so WS token generation works
+      const store = new SessionIndexStore(env.DB);
+      const now = Date.now();
+      await store.create({
+        id: pName,
+        title: "Parent",
+        repoOwner: "acme",
+        repoName: "web-app",
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: null,
+        baseBranch: null,
+        status: "active",
+        spawnDepth: 0,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      // Subscribe a WebSocket client on the parent
+      const { ws } = await openClientWs(pName, { subscribe: true });
+
+      // Collect messages, waiting for child_session_update
+      const collector = collectMessages(ws, {
+        until: (msg) => msg.type === "child_session_update",
+        timeoutMs: 2000,
+      });
+
+      // Call the internal endpoint directly on the parent DO
+      const parentStub = env.SESSION.get(env.SESSION.idFromName(pName));
+      const res = await parentStub.fetch("http://internal/internal/child-session-update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          childSessionId: "child-abc-123",
+          status: "created",
+          title: "Fix the tests",
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json<{ ok: boolean }>();
+      expect(body.ok).toBe(true);
+
+      // Verify the WebSocket client received the broadcast
+      const messages = await collector;
+      const update = messages.find((m) => m.type === "child_session_update");
+      expect(update).toBeDefined();
+      expect(update!.childSessionId).toBe("child-abc-123");
+      expect(update!.status).toBe("created");
+      expect(update!.title).toBe("Fix the tests");
+
+      ws.close();
+    });
+
+    it("returns 400 when childSessionId is missing", async () => {
+      const pName = parentName();
+      const { stub } = await initNamedSession(pName);
+
+      const res = await stub.fetch("http://internal/internal/child-session-update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "created", title: "No ID" }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json<{ error: string }>();
+      expect(body.error).toContain("childSessionId");
+    });
+
+    it("returns 400 when status is missing", async () => {
+      const pName = parentName();
+      const { stub } = await initNamedSession(pName);
+
+      const res = await stub.fetch("http://internal/internal/child-session-update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ childSessionId: "child-1", title: "No status" }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json<{ error: string }>();
+      expect(body.error).toContain("status");
     });
   });
 });

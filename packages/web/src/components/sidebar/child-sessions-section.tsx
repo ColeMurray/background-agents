@@ -30,10 +30,12 @@ function statusBadgeVariant(status: string) {
 
 export function ChildSessionsSection({ sessionId }: ChildSessionsSectionProps) {
   const { data } = useSWR<{ children: SessionItem[] }>(`/api/sessions/${sessionId}/children`, {
+    // Primary refresh is event-driven via WebSocket child_session_update → SWR mutate().
+    // This is a safety-net fallback for missed WS messages during reconnections.
     refreshInterval: (latestData) => {
       if (!latestData?.children?.length) return 0;
       const hasActiveChild = latestData.children.some((c) => !TERMINAL_STATUSES.has(c.status));
-      return hasActiveChild ? 10_000 : 0;
+      return hasActiveChild ? 30_000 : 0;
     },
   });
 

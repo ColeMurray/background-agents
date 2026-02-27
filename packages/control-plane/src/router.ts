@@ -1348,6 +1348,29 @@ async function handleSpawnChild(
     return error("Failed to enqueue child session prompt", 500);
   }
 
+  // Notify parent session so connected clients can refresh child list
+  ctx.executionCtx?.waitUntil(
+    parentStub
+      .fetch(
+        internalRequest(
+          "http://internal/internal/child-session-update",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              childSessionId: childId,
+              status: "created",
+              title: body.title,
+            }),
+          },
+          ctx
+        )
+      )
+      .catch((err) => {
+        logger.error("session.notify_parent_spawn.failed", { error: err });
+      })
+  );
+
   return json({ sessionId: childId, status: "created" }, 201);
 }
 
