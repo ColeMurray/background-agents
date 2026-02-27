@@ -222,14 +222,16 @@ class SandboxManager:
         if user_env_vars:
             env_vars.update(user_env_vars)
 
-        env_vars.update({
-            "PYTHONUNBUFFERED": "1",
-            "SANDBOX_ID": sandbox_id,
-            "REPO_OWNER": repo_owner,
-            "REPO_NAME": repo_name,
-            "IMAGE_BUILD_MODE": "true",
-            "SESSION_CONFIG": json.dumps({"branch": default_branch}),
-        })
+        env_vars.update(
+            {
+                "PYTHONUNBUFFERED": "1",
+                "SANDBOX_ID": sandbox_id,
+                "REPO_OWNER": repo_owner,
+                "REPO_NAME": repo_name,
+                "IMAGE_BUILD_MODE": "true",
+                "SESSION_CONFIG": json.dumps({"branch": default_branch}),
+            }
+        )
 
         self._inject_vcs_env_vars(env_vars, clone_token or None)
 
