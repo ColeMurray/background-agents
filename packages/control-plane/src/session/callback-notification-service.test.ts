@@ -343,5 +343,39 @@ describe("CallbackNotificationService", () => {
       const fetchMock = (h.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
       expect(fetchMock).not.toHaveBeenCalled();
     });
+
+    it("skips when callback_context JSON is invalid", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: "{not-json}",
+        source: "slack",
+      });
+
+      await harness.service.notifyToolCall("msg-1", { type: "tool_call", tool: "bash" });
+
+      expect(harness.log.warn).toHaveBeenCalledWith(
+        "Invalid callback context JSON, skipping notification",
+        expect.objectContaining({ message_id: "msg-1", source: "slack" })
+      );
+      expect(
+        (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
+      ).not.toHaveBeenCalled();
+    });
+
+    it("skips when callback_context schema is invalid", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({ source: "slack", channel: "C123" }),
+        source: "slack",
+      });
+
+      await harness.service.notifyToolCall("msg-1", { type: "tool_call", tool: "bash" });
+
+      expect(harness.log.warn).toHaveBeenCalledWith(
+        "Invalid callback context schema, skipping notification",
+        expect.objectContaining({ message_id: "msg-1", source: "slack" })
+      );
+      expect(
+        (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
+      ).not.toHaveBeenCalled();
+    });
   });
 });
