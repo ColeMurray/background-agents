@@ -11,6 +11,7 @@ import type {
   ToolCallSummary,
   ArtifactInfo,
 } from "../types";
+import type { ArtifactType } from "@open-inspect/shared";
 import { generateInternalToken } from "../utils/internal";
 import { createLogger } from "../logger";
 
@@ -100,11 +101,8 @@ export async function extractAgentResponse(
     // Fallback artifact extraction from events (historical behavior)
     const eventArtifacts: ArtifactInfo[] = allEvents
       .filter((e) => e.type === "artifact")
-      .map((e) => ({
-        type: String(e.data.artifactType ?? "unknown"),
-        url: String(e.data.url ?? ""),
-        label: getArtifactLabel(e.data),
-      }));
+      .map((e) => toEventArtifactInfo(e.data))
+      .filter((artifact: ArtifactInfo | null): artifact is ArtifactInfo => artifact !== null);
 
     const artifacts = await fetchSessionArtifacts(env, sessionId, headers, base);
     const finalArtifacts = artifacts.length > 0 ? artifacts : eventArtifacts;
@@ -167,7 +165,7 @@ async function fetchSessionArtifacts(
 
     const data = (await response.json()) as ListArtifactsResponse;
     return data.artifacts.map((artifact) => ({
-      type: String(artifact.type ?? "unknown"),
+      type: artifact.type,
       url: artifact.url ? String(artifact.url) : "",
       label: getArtifactLabelFromArtifact(artifact.type, artifact.metadata),
       metadata: artifact.metadata ?? null,
@@ -225,7 +223,7 @@ function getArtifactLabel(data: Record<string, unknown>): string {
 }
 
 function getArtifactLabelFromArtifact(
-  type: string,
+  type: ArtifactType,
   metadata: Record<string, unknown> | null
 ): string {
   if (type === "pr") {
@@ -237,4 +235,21 @@ function getArtifactLabelFromArtifact(
     return `Branch: ${branchName ?? "branch"}`;
   }
   return type;
+}
+
+function toEventArtifactInfo(data: Record<string, unknown>): ArtifactInfo | null {
+  const type = toArtifactType(data.artifactType);
+  if (!type) return null;
+
+  return {
+    type,
+    url: String(data.url ?? ""),
+    label: getArtifactLabel(data),
+  };
+}
+
+function toArtifactType(value: unknown): ArtifactType | null {
+  return value === "pr" || value === "screenshot" || value === "preview" || value === "branch"
+    ? value
+    : null;
 }

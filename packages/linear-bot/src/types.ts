@@ -71,50 +71,12 @@ export interface TeamRepoMapping {
 /**
  * Dynamic repo config from control plane.
  */
-export interface RepoConfig {
-  id: string;
-  owner: string;
-  name: string;
-  fullName: string;
-  displayName: string;
-  description: string;
-  defaultBranch: string;
-  private: boolean;
-  aliases?: string[];
-  keywords?: string[];
-}
-
-/**
- * Repository metadata from the control plane API.
- */
-export interface RepoMetadata {
-  description?: string;
-  aliases?: string[];
-  keywords?: string[];
-}
-
-/**
- * Repository as returned by the control plane API.
- */
-export interface ControlPlaneRepo {
-  id: number;
-  owner: string;
-  name: string;
-  fullName: string;
-  description: string | null;
-  private: boolean;
-  defaultBranch: string;
-  metadata?: RepoMetadata;
-}
-
-/**
- * Response from the control plane /repos endpoint.
- */
-export interface ControlPlaneReposResponse {
-  repos: ControlPlaneRepo[];
-  cached: boolean;
-  cachedAt: string;
-}
+export type {
+  RepoConfig,
+  RepoMetadata,
+  ControlPlaneRepo,
+  ControlPlaneReposResponse,
+} from "@open-inspect/shared";
 
 /**
  * Project→repo mapping stored in KV under "config:project-repos".
@@ -178,69 +140,23 @@ export interface ToolCallCallback {
 
 // ─── Classification Types ────────────────────────────────────────────────────
 
-export interface ClassificationResult {
-  repo: RepoConfig | null;
-  confidence: "high" | "medium" | "low";
-  reasoning: string;
-  alternatives?: RepoConfig[];
-  needsClarification: boolean;
-}
+export type { ClassificationResult } from "@open-inspect/shared";
 
 // ─── Event / Artifact Types ──────────────────────────────────────────────────
 
-export interface EventResponse {
-  id: string;
-  type: string;
-  data: Record<string, unknown>;
-  messageId: string | null;
-  createdAt: number;
-}
-
-export interface ListEventsResponse {
-  events: EventResponse[];
-  cursor?: string;
-  hasMore: boolean;
-}
-
-export interface ArtifactResponse {
-  id: string;
-  type: string;
-  url: string | null;
-  metadata: Record<string, unknown> | null;
-  createdAt: number;
-}
-
-export interface ListArtifactsResponse {
-  artifacts: ArtifactResponse[];
-}
-
-export interface ToolCallSummary {
-  tool: string;
-  summary: string;
-}
-
-export interface ArtifactInfo {
-  type: string;
-  url: string;
-  label: string;
-  metadata?: Record<string, unknown> | null;
-}
-
-export interface AgentResponse {
-  textContent: string;
-  toolCalls: ToolCallSummary[];
-  artifacts: ArtifactInfo[];
-  success: boolean;
-}
+export type {
+  EventResponse,
+  ListEventsResponse,
+  ArtifactResponse,
+  ListArtifactsResponse,
+  ToolCallSummary,
+  ArtifactInfo,
+  AgentResponse,
+} from "@open-inspect/shared";
 
 // ─── User Preferences ────────────────────────────────────────────────────────
 
-export interface UserPreferences {
-  userId: string;
-  model: string;
-  reasoningEffort?: string;
-  updatedAt: number;
-}
+export type { UserPreferences } from "@open-inspect/shared";
 
 // ─── Linear Issue Details ────────────────────────────────────────────────────
 

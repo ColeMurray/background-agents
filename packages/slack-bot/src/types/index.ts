@@ -32,52 +32,12 @@ export interface Env {
 /**
  * Repository configuration for the classifier.
  */
-export interface RepoConfig {
-  id: string;
-  owner: string;
-  name: string;
-  fullName: string;
-  displayName: string;
-  description: string;
-  defaultBranch: string;
-  private: boolean;
-  aliases?: string[];
-  keywords?: string[];
-  channelAssociations?: string[];
-}
-
-/**
- * Repository metadata from the control plane API.
- */
-export interface RepoMetadata {
-  description?: string;
-  aliases?: string[];
-  channelAssociations?: string[];
-  keywords?: string[];
-}
-
-/**
- * Repository as returned by the control plane API.
- */
-export interface ControlPlaneRepo {
-  id: number;
-  owner: string;
-  name: string;
-  fullName: string;
-  description: string | null;
-  private: boolean;
-  defaultBranch: string;
-  metadata?: RepoMetadata;
-}
-
-/**
- * Response from the control plane /repos endpoint.
- */
-export interface ControlPlaneReposResponse {
-  repos: ControlPlaneRepo[];
-  cached: boolean;
-  cachedAt: string;
-}
+export type {
+  RepoConfig,
+  RepoMetadata,
+  ControlPlaneRepo,
+  ControlPlaneReposResponse,
+} from "@open-inspect/shared";
 
 /**
  * Thread context for classification.
@@ -93,13 +53,7 @@ export interface ThreadContext {
 /**
  * Result of repository classification.
  */
-export interface ClassificationResult {
-  repo: RepoConfig | null;
-  confidence: "high" | "medium" | "low";
-  reasoning: string;
-  alternatives?: RepoConfig[];
-  needsClarification: boolean;
-}
+export type { ClassificationResult } from "@open-inspect/shared";
 
 /**
  * Slack event types.
@@ -182,75 +136,13 @@ export interface CompletionCallback {
 /**
  * Event response from control-plane events API.
  */
-export interface EventResponse {
-  id: string;
-  type: string;
-  data: Record<string, unknown>;
-  messageId: string | null;
-  createdAt: number;
-}
-
-/**
- * List events response from control-plane.
- */
-export interface ListEventsResponse {
-  events: EventResponse[];
-  cursor?: string;
-  hasMore: boolean;
-}
-
-/**
- * Artifact response from control-plane artifacts API.
- */
-export interface ArtifactResponse {
-  id: string;
-  type: string;
-  url: string | null;
-  metadata: Record<string, unknown> | null;
-  createdAt: number;
-}
-
-/**
- * List artifacts response from control-plane.
- */
-export interface ListArtifactsResponse {
-  artifacts: ArtifactResponse[];
-}
-
-/**
- * Tool call summary for Slack display.
- */
-export interface ToolCallSummary {
-  tool: string;
-  summary: string;
-}
-
-/**
- * Artifact information (PRs, branches, etc.).
- */
-export interface ArtifactInfo {
-  type: string;
-  url: string;
-  label: string;
-  metadata?: Record<string, unknown> | null;
-}
-
-/**
- * Aggregated agent response for display.
- */
-export interface AgentResponse {
-  textContent: string;
-  toolCalls: ToolCallSummary[];
-  artifacts: ArtifactInfo[];
-  success: boolean;
-}
-
-/**
- * User preferences stored in KV.
- */
-export interface UserPreferences {
-  userId: string;
-  model: string;
-  reasoningEffort?: string;
-  updatedAt: number;
-}
+export type {
+  EventResponse,
+  ListEventsResponse,
+  ArtifactResponse,
+  ListArtifactsResponse,
+  ToolCallSummary,
+  ArtifactInfo,
+  AgentResponse,
+  UserPreferences,
+} from "@open-inspect/shared";

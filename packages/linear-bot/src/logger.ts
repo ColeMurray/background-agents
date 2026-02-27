@@ -3,6 +3,9 @@
  * Same contract as the control-plane and slack-bot loggers.
  */
 
+import type { Logger } from "@open-inspect/shared";
+export type { Logger } from "@open-inspect/shared";
+
 const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 } as const;
 type LogLevel = keyof typeof LEVELS;
 
@@ -14,14 +17,6 @@ const CONSOLE_METHOD: Record<LogLevel, "log" | "warn" | "error"> = {
   warn: "warn",
   error: "error",
 };
-
-export interface Logger {
-  debug(msg: string, data?: Record<string, unknown>): void;
-  info(msg: string, data?: Record<string, unknown>): void;
-  warn(msg: string, data?: Record<string, unknown>): void;
-  error(msg: string, data?: Record<string, unknown>): void;
-  child(context: Record<string, unknown>): Logger;
-}
 
 function stripReserved(obj: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};

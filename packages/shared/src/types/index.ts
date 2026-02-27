@@ -26,7 +26,20 @@ export type GitSyncStatus = "pending" | "in_progress" | "completed" | "failed";
 export type MessageStatus = "pending" | "processing" | "completed" | "failed";
 export type MessageSource = "web" | "slack" | "linear" | "extension" | "github";
 export type ArtifactType = "pr" | "screenshot" | "preview" | "branch";
-export type EventType = "tool_call" | "tool_result" | "token" | "error" | "git_sync";
+export type EventType =
+  | "heartbeat"
+  | "token"
+  | "tool_call"
+  | "step_start"
+  | "step_finish"
+  | "tool_result"
+  | "git_sync"
+  | "error"
+  | "execution_complete"
+  | "artifact"
+  | "push_complete"
+  | "push_error"
+  | "user_message";
 export type ParticipantRole = "owner" | "member";
 
 // Participant in a session
@@ -336,6 +349,97 @@ export interface RepoMetadata {
 
 export interface EnrichedRepository extends InstallationRepository {
   metadata?: RepoMetadata;
+}
+
+// Bot package shared types
+export interface RepoConfig {
+  id: string;
+  owner: string;
+  name: string;
+  fullName: string;
+  displayName: string;
+  description: string;
+  defaultBranch: string;
+  private: boolean;
+  aliases?: string[];
+  keywords?: string[];
+  channelAssociations?: string[];
+}
+
+export type ControlPlaneRepo = EnrichedRepository;
+
+export interface ControlPlaneReposResponse {
+  repos: ControlPlaneRepo[];
+  cached: boolean;
+  cachedAt: string;
+}
+
+export interface ClassificationResult {
+  repo: RepoConfig | null;
+  confidence: "high" | "medium" | "low";
+  reasoning: string;
+  alternatives?: RepoConfig[];
+  needsClarification: boolean;
+}
+
+export interface EventResponse {
+  id: string;
+  type: EventType;
+  data: Record<string, unknown>;
+  messageId: string | null;
+  createdAt: number;
+}
+
+export interface ListEventsResponse {
+  events: EventResponse[];
+  cursor?: string;
+  hasMore: boolean;
+}
+
+export interface ArtifactResponse {
+  id: string;
+  type: ArtifactType;
+  url: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: number;
+}
+
+export interface ListArtifactsResponse {
+  artifacts: ArtifactResponse[];
+}
+
+export interface ToolCallSummary {
+  tool: string;
+  summary: string;
+}
+
+export interface ArtifactInfo {
+  type: ArtifactType;
+  url: string;
+  label: string;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface AgentResponse {
+  textContent: string;
+  toolCalls: ToolCallSummary[];
+  artifacts: ArtifactInfo[];
+  success: boolean;
+}
+
+export interface UserPreferences {
+  userId: string;
+  model: string;
+  reasoningEffort?: string;
+  updatedAt: number;
+}
+
+export interface Logger {
+  debug(msg: string, data?: Record<string, unknown>): void;
+  info(msg: string, data?: Record<string, unknown>): void;
+  warn(msg: string, data?: Record<string, unknown>): void;
+  error(msg: string, data?: Record<string, unknown>): void;
+  child(context: Record<string, unknown>): Logger;
 }
 
 // ─── Callback Context (discriminated union) ──────────────────────────────────
