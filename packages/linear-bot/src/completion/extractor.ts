@@ -12,6 +12,7 @@ import type {
   ToolCallSummary,
   ArtifactInfo,
 } from "../types";
+import type { ArtifactType } from "@open-inspect/shared";
 import { generateInternalToken } from "../utils/internal";
 import { createLogger } from "../logger";
 
@@ -78,11 +79,8 @@ export async function extractAgentResponse(
     // Fetch artifacts
     const eventArtifacts: ArtifactInfo[] = allEvents
       .filter((e) => e.type === "artifact")
-      .map((e) => ({
-        type: String(e.data.artifactType ?? "unknown"),
-        url: String(e.data.url ?? ""),
-        label: getArtifactLabel(e.data),
-      }));
+      .map((e) => toEventArtifactInfo(e.data))
+      .filter((artifact: ArtifactInfo | null): artifact is ArtifactInfo => artifact !== null);
 
     const artifacts = await fetchSessionArtifacts(env, sessionId, headers, base);
     const finalArtifacts = artifacts.length > 0 ? artifacts : eventArtifacts;
@@ -131,7 +129,7 @@ async function fetchSessionArtifacts(
 
     const data = (await response.json()) as ListArtifactsResponse;
     return data.artifacts.map((a) => ({
-      type: String(a.type ?? "unknown"),
+      type: a.type,
       url: a.url ? String(a.url) : "",
       label: getArtifactLabelFromArtifact(a.type, a.metadata),
       metadata: a.metadata ?? null,
@@ -181,12 +179,29 @@ function getArtifactLabel(data: Record<string, unknown>): string {
 }
 
 function getArtifactLabelFromArtifact(
-  type: string,
+  type: ArtifactType,
   metadata: Record<string, unknown> | null
 ): string {
   if (type === "pr") return metadata?.number ? `PR #${metadata.number}` : "Pull Request";
   if (type === "branch") return `Branch: ${metadata?.head ?? "branch"}`;
   return type;
+}
+
+function toEventArtifactInfo(data: Record<string, unknown>): ArtifactInfo | null {
+  const type = toArtifactType(data.artifactType);
+  if (!type) return null;
+
+  return {
+    type,
+    url: String(data.url ?? ""),
+    label: getArtifactLabel(data),
+  };
+}
+
+function toArtifactType(value: unknown): ArtifactType | null {
+  return value === "pr" || value === "screenshot" || value === "preview" || value === "branch"
+    ? value
+    : null;
 }
 
 /**
