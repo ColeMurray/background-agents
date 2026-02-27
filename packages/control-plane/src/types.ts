@@ -7,6 +7,7 @@ import type {
   EventType,
   MessageSource,
   MessageStatus,
+  ParticipantRole,
   SessionStatus,
 } from "@open-inspect/shared";
 
@@ -14,10 +15,13 @@ export type {
   ArtifactType,
   Attachment,
   ClientMessage,
+  CreateSessionRequest,
+  CreateSessionResponse,
   EventType,
   GitSyncStatus,
   MessageSource,
   MessageStatus,
+  ParticipantRole,
   ParticipantPresence,
   SandboxEvent,
   SandboxStatus,
@@ -72,9 +76,6 @@ export interface Env {
   LOG_LEVEL?: string; // "debug" | "info" | "warn" | "error" (default: "info")
 }
 
-// Participant role
-export type ParticipantRole = "owner" | "member";
-
 // Client info (stored in DO memory)
 export interface ClientInfo {
   participantId: string;
@@ -86,21 +87,6 @@ export interface ClientInfo {
   clientId: string;
   ws: WebSocket;
   lastFetchHistoryAt?: number;
-}
-
-// API response types
-export interface CreateSessionRequest {
-  repoOwner: string;
-  repoName: string;
-  title?: string;
-  model?: string; // LLM model to use (e.g., "anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-5")
-  reasoningEffort?: string; // Reasoning effort level (e.g., "high", "max")
-  branch?: string; // Git branch to work on (defaults to repo's default branch)
-}
-
-export interface CreateSessionResponse {
-  sessionId: string;
-  status: SessionStatus;
 }
 
 export interface SessionResponse {

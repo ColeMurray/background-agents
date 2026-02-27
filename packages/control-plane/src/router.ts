@@ -16,6 +16,7 @@ import { UserScmTokenStore, DEFAULT_TOKEN_LIFETIME_MS } from "./db/user-scm-toke
 import {
   getValidModelOrDefault,
   isValidReasoningEffort,
+  type SessionStatus,
   type CallbackContext,
   type SpawnChildSessionRequest,
   type SpawnContext,
@@ -43,6 +44,20 @@ const logger = createLogger("router");
 const MAX_SPAWN_DEPTH = 2;
 const MAX_CONCURRENT_CHILDREN = 5;
 const MAX_TOTAL_CHILDREN = 15;
+
+const SESSION_STATUSES: SessionStatus[] = [
+  "created",
+  "active",
+  "completed",
+  "failed",
+  "archived",
+  "cancelled",
+];
+
+function parseSessionStatus(value: string | null): SessionStatus | undefined {
+  if (!value) return undefined;
+  return SESSION_STATUSES.includes(value as SessionStatus) ? (value as SessionStatus) : undefined;
+}
 
 /**
  * Create a Request to a Durable Object stub with correlation headers.
@@ -553,8 +568,18 @@ async function handleListSessions(
   const url = new URL(request.url);
   const limit = Math.min(parseInt(url.searchParams.get("limit") || "50"), 100);
   const offset = parseInt(url.searchParams.get("offset") || "0");
-  const status = url.searchParams.get("status") || undefined;
-  const excludeStatus = url.searchParams.get("excludeStatus") || undefined;
+  const statusParam = url.searchParams.get("status");
+  const excludeStatusParam = url.searchParams.get("excludeStatus");
+  const status = parseSessionStatus(statusParam);
+  const excludeStatus = parseSessionStatus(excludeStatusParam);
+
+  if (statusParam && !status) {
+    return error("Invalid status", 400);
+  }
+
+  if (excludeStatusParam && !excludeStatus) {
+    return error("Invalid excludeStatus", 400);
+  }
 
   const store = new SessionIndexStore(env.DB);
   const result = await store.list({ status, excludeStatus, limit, offset });

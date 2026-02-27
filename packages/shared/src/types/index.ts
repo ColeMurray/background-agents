@@ -27,6 +27,7 @@ export type MessageStatus = "pending" | "processing" | "completed" | "failed";
 export type MessageSource = "web" | "slack" | "linear" | "extension" | "github";
 export type ArtifactType = "pr" | "screenshot" | "preview" | "branch";
 export type EventType = "tool_call" | "tool_result" | "token" | "error" | "git_sync";
+export type ParticipantRole = "owner" | "member";
 
 // Participant in a session
 export interface SessionParticipant {
@@ -35,7 +36,7 @@ export interface SessionParticipant {
   scmLogin: string | null;
   scmName: string | null;
   scmEmail: string | null;
-  role: "owner" | "member";
+  role: ParticipantRole;
 }
 
 // Session state
