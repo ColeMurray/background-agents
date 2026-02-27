@@ -9,6 +9,8 @@
 
 import type { Logger } from "../logger";
 import type { SessionRow } from "./types";
+import type { CallbackContext } from "@open-inspect/shared";
+import { CallbackContextSchema } from "./validation";
 
 /**
  * Narrow repository interface — only the methods CallbackNotificationService needs.
@@ -51,6 +53,36 @@ export class CallbackNotificationService {
     this.env = deps.env;
     this.log = deps.log;
     this.getSessionId = deps.getSessionId;
+  }
+
+  private parseCallbackContext(
+    callbackContext: string,
+    messageId: string,
+    source: string | null
+  ): CallbackContext | null {
+    let parsedContext: unknown;
+    try {
+      parsedContext = JSON.parse(callbackContext) as unknown;
+    } catch (error) {
+      this.log.warn("Invalid callback context JSON, skipping notification", {
+        message_id: messageId,
+        source,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+
+    const contextResult = CallbackContextSchema.safeParse(parsedContext);
+    if (!contextResult.success) {
+      this.log.warn("Invalid callback context schema, skipping notification", {
+        message_id: messageId,
+        source,
+        error: contextResult.error.format(),
+      });
+      return null;
+    }
+
+    return contextResult.data;
   }
 
   /**
@@ -119,7 +151,10 @@ export class CallbackNotificationService {
 
     const sessionId = this.getSessionId();
 
-    const context = JSON.parse(message.callback_context);
+    const context = this.parseCallbackContext(message.callback_context, messageId, source);
+    if (!context) {
+      return;
+    }
     const timestamp = Date.now();
 
     // Build payload without signature
@@ -233,7 +268,10 @@ export class CallbackNotificationService {
     }
 
     const sessionId = this.getSessionId();
-    const context = JSON.parse(message.callback_context);
+    const context = this.parseCallbackContext(message.callback_context, messageId, source);
+    if (!context) {
+      return;
+    }
 
     const payloadData = {
       sessionId,

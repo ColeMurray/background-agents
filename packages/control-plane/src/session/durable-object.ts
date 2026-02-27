@@ -46,7 +46,6 @@ import {
 import type {
   Env,
   ClientInfo,
-  ClientMessage,
   ServerMessage,
   SandboxEvent,
   SessionState,
@@ -69,6 +68,7 @@ import { CallbackNotificationService } from "./callback-notification-service";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
+import { ClientMessageSchema, SandboxEventSchema } from "./validation";
 
 /**
  * Valid event types for filtering.
@@ -821,8 +821,17 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async handleSandboxMessage(ws: WebSocket, message: string): Promise<void> {
     try {
-      const event = JSON.parse(message) as SandboxEvent;
-      await this.processSandboxEvent(event);
+      const parsed = JSON.parse(message) as unknown;
+      const eventResult = SandboxEventSchema.safeParse(parsed);
+      if (!eventResult.success) {
+        this.log.warn("Invalid sandbox message", {
+          event: "ws.invalid_sandbox_message",
+          error: eventResult.error.format(),
+        });
+        return;
+      }
+
+      await this.processSandboxEvent(eventResult.data);
     } catch (e) {
       this.log.error("Error processing sandbox message", {
         error: e instanceof Error ? e : String(e),
@@ -835,7 +844,22 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async handleClientMessage(ws: WebSocket, message: string): Promise<void> {
     try {
-      const data = JSON.parse(message) as ClientMessage;
+      const parsed = JSON.parse(message) as unknown;
+      const dataResult = ClientMessageSchema.safeParse(parsed);
+      if (!dataResult.success) {
+        this.log.warn("Invalid client message", {
+          event: "ws.invalid_client_message",
+          error: dataResult.error.format(),
+        });
+        this.safeSend(ws, {
+          type: "error",
+          code: "INVALID_MESSAGE",
+          message: "Failed to process message",
+        });
+        return;
+      }
+
+      const data = dataResult.data;
 
       switch (data.type) {
         case "ping":
@@ -1718,8 +1742,27 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   private async handleSandboxEvent(request: Request): Promise<Response> {
-    const event = (await request.json()) as SandboxEvent;
-    await this.processSandboxEvent(event);
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch (error) {
+      this.log.warn("Invalid sandbox event payload", {
+        event: "http.invalid_sandbox_event_json",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return Response.json({ error: "Invalid JSON payload" }, { status: 400 });
+    }
+
+    const eventResult = SandboxEventSchema.safeParse(body);
+    if (!eventResult.success) {
+      this.log.warn("Invalid sandbox event payload", {
+        event: "http.invalid_sandbox_event_schema",
+        error: eventResult.error.format(),
+      });
+      return Response.json({ error: "Invalid sandbox event payload" }, { status: 400 });
+    }
+
+    await this.processSandboxEvent(eventResult.data);
     return Response.json({ status: "ok" });
   }
 

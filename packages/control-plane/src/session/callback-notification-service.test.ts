@@ -7,6 +7,23 @@ import {
   type CallbackServiceDeps,
 } from "./callback-notification-service";
 
+const SLACK_CONTEXT = {
+  source: "slack" as const,
+  channel: "C123",
+  threadTs: "1234.5678",
+  repoFullName: "open-inspect/repo",
+  model: "openai/gpt-5",
+};
+
+const LINEAR_CONTEXT = {
+  source: "linear" as const,
+  issueId: "LIN-123",
+  issueIdentifier: "LIN-123",
+  issueUrl: "https://linear.app/team/issue/LIN-123",
+  repoFullName: "open-inspect/repo",
+  model: "openai/gpt-5",
+};
+
 // ---- Mock factories ----
 
 function createMockLogger(): Logger {
@@ -101,7 +118,7 @@ describe("CallbackNotificationService", () => {
     it("skips when no INTERNAL_CALLBACK_SECRET", async () => {
       const h = createTestHarness({ env: { INTERNAL_CALLBACK_SECRET: undefined } });
       vi.mocked(h.repository.getMessageCallbackContext).mockReturnValue({
-        callback_context: JSON.stringify({ channel: "C123" }),
+        callback_context: JSON.stringify(SLACK_CONTEXT),
         source: "slack",
       });
 
@@ -117,7 +134,7 @@ describe("CallbackNotificationService", () => {
         env: { SLACK_BOT: undefined, LINEAR_BOT: undefined },
       });
       vi.mocked(h.repository.getMessageCallbackContext).mockReturnValue({
-        callback_context: JSON.stringify({ channel: "C123" }),
+        callback_context: JSON.stringify(SLACK_CONTEXT),
         source: "slack",
       });
 
@@ -131,7 +148,7 @@ describe("CallbackNotificationService", () => {
 
     it("calls binding with signed payload on success", async () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
-        callback_context: JSON.stringify({ channel: "C123", threadTs: "1234.5678" }),
+        callback_context: JSON.stringify(SLACK_CONTEXT),
         source: "slack",
       });
 
@@ -158,7 +175,7 @@ describe("CallbackNotificationService", () => {
         sessionId: "session-123",
         messageId: "msg-1",
         success: true,
-        context: { channel: "C123", threadTs: "1234.5678" },
+        context: SLACK_CONTEXT,
       });
       expect(body.signature).toEqual(expect.any(String));
       expect(body.timestamp).toEqual(expect.any(Number));
@@ -171,7 +188,7 @@ describe("CallbackNotificationService", () => {
 
     it("retries once on fetch failure", async () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
-        callback_context: JSON.stringify({ channel: "C123" }),
+        callback_context: JSON.stringify(SLACK_CONTEXT),
         source: "slack",
       });
 
@@ -193,7 +210,7 @@ describe("CallbackNotificationService", () => {
 
     it("routes to LINEAR_BOT for linear source", async () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
-        callback_context: JSON.stringify({ issueId: "LIN-123" }),
+        callback_context: JSON.stringify(LINEAR_CONTEXT),
         source: "linear",
       });
 
@@ -211,12 +228,46 @@ describe("CallbackNotificationService", () => {
       const slackFetch = (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
       expect(slackFetch).not.toHaveBeenCalled();
     });
+
+    it("skips when callback_context JSON is invalid", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: "{not-json}",
+        source: "slack",
+      });
+
+      await harness.service.notifyComplete("msg-1", true);
+
+      expect(harness.log.warn).toHaveBeenCalledWith(
+        "Invalid callback context JSON, skipping notification",
+        expect.objectContaining({ message_id: "msg-1", source: "slack" })
+      );
+      expect(
+        (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
+      ).not.toHaveBeenCalled();
+    });
+
+    it("skips when callback_context schema is invalid", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({ source: "slack", channel: "C123" }),
+        source: "slack",
+      });
+
+      await harness.service.notifyComplete("msg-1", true);
+
+      expect(harness.log.warn).toHaveBeenCalledWith(
+        "Invalid callback context schema, skipping notification",
+        expect.objectContaining({ message_id: "msg-1", source: "slack" })
+      );
+      expect(
+        (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
+      ).not.toHaveBeenCalled();
+    });
   });
 
   describe("notifyToolCall", () => {
     it("skips when throttled (< 3s since last call)", async () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
-        callback_context: JSON.stringify({ channel: "C123" }),
+        callback_context: JSON.stringify(SLACK_CONTEXT),
         source: "slack",
       });
 
@@ -236,7 +287,7 @@ describe("CallbackNotificationService", () => {
 
     it("fires callback on first call", async () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
-        callback_context: JSON.stringify({ channel: "C123" }),
+        callback_context: JSON.stringify(SLACK_CONTEXT),
         source: "slack",
       });
 
@@ -266,7 +317,7 @@ describe("CallbackNotificationService", () => {
         args: { cmd: "ls" },
         callId: "call-1",
         status: "running",
-        context: { channel: "C123" },
+        context: SLACK_CONTEXT,
       });
       expect(body.signature).toEqual(expect.any(String));
     });
@@ -283,7 +334,7 @@ describe("CallbackNotificationService", () => {
     it("skips when no secret configured", async () => {
       const h = createTestHarness({ env: { INTERNAL_CALLBACK_SECRET: undefined } });
       vi.mocked(h.repository.getMessageCallbackContext).mockReturnValue({
-        callback_context: JSON.stringify({ channel: "C123" }),
+        callback_context: JSON.stringify(SLACK_CONTEXT),
         source: "slack",
       });
 

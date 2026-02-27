@@ -14,7 +14,8 @@
   },
   "dependencies": {
     "@cloudflare/workers-types": "^4.20241230.0",
-    "@open-inspect/shared": "file:../shared"
+    "@open-inspect/shared": "file:../shared",
+    "zod": "^3.24.2"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.12.10",
