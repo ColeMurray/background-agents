@@ -3,15 +3,7 @@
  */
 
 import { diffLines } from "diff";
-import type { FileChange } from "@/types/session";
-
-interface SandboxEvent {
-  type: string;
-  tool?: string;
-  args?: Record<string, unknown>;
-  status?: string;
-  timestamp: number;
-}
+import type { FileChange, SandboxEvent } from "@/types/session";
 
 /**
  * Count the number of lines in a string.

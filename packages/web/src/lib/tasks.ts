@@ -4,6 +4,8 @@
 
 import type { SandboxEvent, Task } from "@/types/session";
 
+type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
+
 interface TodoWriteArgs {
   todos?: Array<{
     content: string;
@@ -20,7 +22,10 @@ export function extractLatestTasks(events: SandboxEvent[]): Task[] {
   // Find all TodoWrite events, get the latest one
   // Use case-insensitive comparison — OpenCode may report tool names in lowercase
   const todoWriteEvents = events
-    .filter((event) => event.type === "tool_call" && event.tool?.toLowerCase() === "todowrite")
+    .filter(
+      (event): event is ToolCallEvent =>
+        event.type === "tool_call" && event.tool?.toLowerCase() === "todowrite"
+    )
     .sort((a, b) => b.timestamp - a.timestamp);
 
   if (todoWriteEvents.length === 0) {

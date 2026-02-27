@@ -62,6 +62,7 @@ function collapseTokenEvents(
   pendingTextRef: React.MutableRefObject<{
     content: string;
     messageId: string;
+    sandboxId: string;
     timestamp: number;
   } | null>
 ): SandboxEvent[] {
@@ -71,6 +72,7 @@ function collapseTokenEvents(
       pendingTextRef.current = {
         content: evt.content,
         messageId: evt.messageId,
+        sandboxId: evt.sandboxId,
         timestamp: evt.timestamp,
       };
     } else if (evt.type === "execution_complete") {
@@ -81,6 +83,7 @@ function collapseTokenEvents(
           type: "token",
           content: pending.content,
           messageId: pending.messageId,
+          sandboxId: pending.sandboxId,
           timestamp: pending.timestamp,
         });
       }
@@ -100,7 +103,7 @@ function parseWsMessage(raw: unknown): WsMessage | null {
 
 function toUiSandboxEvent(event: SharedSandboxEvent): SandboxEvent {
   return {
-    ...(event as unknown as SandboxEvent),
+    ...event,
     timestamp: typeof event.timestamp === "number" ? event.timestamp : Date.now() / 1000,
   };
 }
@@ -128,9 +131,12 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   const wsTokenRef = useRef<string | null>(null);
   // Accumulates text during streaming, displayed only on completion to avoid duplicate display.
   // Stores only the latest token since token events contain the full accumulated text (not incremental).
-  const pendingTextRef = useRef<{ content: string; messageId: string; timestamp: number } | null>(
-    null
-  );
+  const pendingTextRef = useRef<{
+    content: string;
+    messageId: string;
+    sandboxId: string;
+    timestamp: number;
+  } | null>(null);
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [replaying, setReplaying] = useState(true);
@@ -164,6 +170,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
       pendingTextRef.current = {
         content: event.content,
         messageId: event.messageId,
+        sandboxId: event.sandboxId,
         timestamp: event.timestamp,
       };
     } else if (event.type === "execution_complete") {
@@ -177,6 +184,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
             type: "token",
             content: pending.content,
             messageId: pending.messageId,
+            sandboxId: pending.sandboxId,
             timestamp: pending.timestamp,
           },
         ]);
@@ -540,6 +548,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           type: "token",
           content: pending.content,
           messageId: pending.messageId,
+          sandboxId: pending.sandboxId,
           timestamp: pending.timestamp,
         },
       ]);

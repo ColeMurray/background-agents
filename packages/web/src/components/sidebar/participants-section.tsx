@@ -1,14 +1,9 @@
 "use client";
 
-interface Participant {
-  userId: string;
-  name: string;
-  avatar?: string;
-  status: "active" | "idle" | "away";
-}
+import type { ParticipantPresence } from "@open-inspect/shared";
 
 interface ParticipantsSectionProps {
-  participants: Participant[];
+  participants: ParticipantPresence[];
 }
 
 export function ParticipantsSection({ participants }: ParticipantsSectionProps) {
@@ -22,7 +17,7 @@ export function ParticipantsSection({ participants }: ParticipantsSectionProps) 
       {/* Avatar stack */}
       <div className="flex -space-x-2">
         {participants.slice(0, 4).map((participant) => (
-          <div key={participant.userId} className="relative" title={participant.name}>
+          <div key={participant.participantId} className="relative" title={participant.name}>
             {participant.avatar ? (
               <img
                 src={participant.avatar}

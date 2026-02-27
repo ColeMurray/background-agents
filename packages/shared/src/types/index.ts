@@ -203,14 +203,14 @@ export type SandboxEvent =
       type: "push_complete";
       branchName: string;
       sandboxId?: string;
-      timestamp?: number;
+      timestamp: number;
     }
   | {
       type: "push_error";
       branchName: string;
       error: string;
       sandboxId?: string;
-      timestamp?: number;
+      timestamp: number;
     }
   | {
       type: "user_message";

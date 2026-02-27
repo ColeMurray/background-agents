@@ -56,12 +56,13 @@ async def test_handle_push_sends_push_complete_on_success(tmp_path: Path):
     ):
         await bridge._handle_push(_push_command())
 
-    bridge._send_event.assert_awaited_once_with(
-        {
-            "type": "push_complete",
-            "branchName": "feature/test",
-        }
-    )
+    bridge._send_event.assert_awaited_once()
+    await_args = bridge._send_event.await_args
+    assert await_args is not None
+    event = await_args.args[0]
+    assert event["type"] == "push_complete"
+    assert event["branchName"] == "feature/test"
+    assert isinstance(event["timestamp"], float)
     process.terminate.assert_not_called()
     process.kill.assert_not_called()
 
@@ -77,13 +78,14 @@ async def test_handle_push_sends_auth_error_on_nonzero_exit(tmp_path: Path):
     ):
         await bridge._handle_push(_push_command())
 
-    bridge._send_event.assert_awaited_once_with(
-        {
-            "type": "push_error",
-            "error": "Push failed - authentication may be required",
-            "branchName": "feature/test",
-        }
-    )
+    bridge._send_event.assert_awaited_once()
+    await_args = bridge._send_event.await_args
+    assert await_args is not None
+    event = await_args.args[0]
+    assert event["type"] == "push_error"
+    assert event["error"] == "Push failed - authentication may be required"
+    assert event["branchName"] == "feature/test"
+    assert isinstance(event["timestamp"], float)
     process.terminate.assert_not_called()
     process.kill.assert_not_called()
 
@@ -117,10 +119,11 @@ async def test_handle_push_timeout_terminates_process_and_sends_error(tmp_path: 
     process.terminate.assert_called_once()
     process.wait.assert_awaited_once()
     process.kill.assert_not_called()
-    bridge._send_event.assert_awaited_once_with(
-        {
-            "type": "push_error",
-            "error": "Push failed - git push timed out after 42s",
-            "branchName": "feature/test",
-        }
-    )
+    bridge._send_event.assert_awaited_once()
+    await_args = bridge._send_event.await_args
+    assert await_args is not None
+    event = await_args.args[0]
+    assert event["type"] == "push_error"
+    assert event["error"] == "Push failed - git push timed out after 42s"
+    assert event["branchName"] == "feature/test"
+    assert isinstance(event["timestamp"], float)
