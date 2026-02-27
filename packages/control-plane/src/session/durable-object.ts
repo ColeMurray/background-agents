@@ -1261,7 +1261,7 @@ export class SessionDO extends DurableObject<Env> {
    * can refresh the child-sessions list in real time.
    */
   private notifyParentOfStatusChange(
-    session: { parent_session_id: string | null; title: string | null },
+    session: Pick<SessionRow, "parent_session_id" | "title">,
     childSessionId: string,
     status: SessionStatus
   ): void {
@@ -2165,7 +2165,7 @@ export class SessionDO extends DurableObject<Env> {
   private async handleChildSessionUpdate(request: Request): Promise<Response> {
     const body = (await request.json()) as {
       childSessionId: string;
-      status: string;
+      status: SessionStatus;
       title: string | null;
     };
 
