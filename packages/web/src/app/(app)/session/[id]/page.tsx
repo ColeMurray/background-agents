@@ -41,6 +41,7 @@ import {
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
+import type { SessionItem } from "@/components/session-sidebar";
 
 // Event grouping types
 type EventGroup =
@@ -54,6 +55,8 @@ type FallbackSessionInfo = {
   repoName: string | null;
   title: string | null;
 };
+
+type SessionsResponse = { sessions: SessionItem[] };
 
 // Group consecutive tool calls of the same type
 function groupEvents(events: SandboxEvent[]): EventGroup[] {
@@ -224,10 +227,7 @@ function SessionPageContent() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: arg.title }),
       }).then((r) => {
-        if (r.ok) {
-          mutate("/api/sessions");
-          return true;
-        }
+        if (r.ok) return true;
         console.error("Failed to update session title");
         return false;
       }),
@@ -242,8 +242,41 @@ function SessionPageContent() {
   }, [router, triggerArchive]);
 
   const renameSession = useCallback(
-    async (title: string) => triggerRename({ title }),
-    [triggerRename]
+    async (title: string) => {
+      const updatedAt = Date.now();
+      const updateSessionsTitle = (data?: SessionsResponse): SessionsResponse => {
+        if (!data?.sessions) return { sessions: [] };
+        return {
+          ...data,
+          sessions: data.sessions.map((session) =>
+            session.id === sessionId ? { ...session, title, updatedAt } : session
+          ),
+        };
+      };
+
+      try {
+        await mutate<SessionsResponse>(
+          "/api/sessions",
+          async (currentData?: SessionsResponse) => {
+            const success = await triggerRename({ title });
+            if (!success) {
+              throw new Error("Failed to update session title");
+            }
+            return updateSessionsTitle(currentData);
+          },
+          {
+            optimisticData: updateSessionsTitle,
+            rollbackOnError: true,
+            populateCache: true,
+            revalidate: true,
+          }
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [sessionId, triggerRename]
   );
 
   const { trigger: handleUnarchive } = useSWRMutation(
@@ -430,11 +463,12 @@ function SessionContent({
     resolvedRepoOwner && resolvedRepoName
       ? `${resolvedRepoOwner}/${resolvedRepoName}`
       : "Loading session...";
-  const resolvedTitle = sessionState?.title || fallbackSessionInfo.title || fallbackRepoLabel;
+  const baseResolvedTitle = sessionState?.title ?? fallbackSessionInfo.title ?? fallbackRepoLabel;
 
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
-  const [title, setTitle] = useState(resolvedTitle);
+  const [title, setTitle] = useState(baseResolvedTitle);
+  const [optimisticTitle, setOptimisticTitle] = useState<string | null>(null);
   const [sheetDragY, setSheetDragY] = useState(0);
   const sheetDragYRef = useRef(0);
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
@@ -479,20 +513,32 @@ function SessionContent({
 
     const trimmed = title.trim();
 
-    if (!trimmed || trimmed === sessionState.title) {
+    if (!trimmed || trimmed === resolvedTitle) {
       setIsRenaming(false);
       return;
     }
 
-    const previousTitle = sessionState.title ?? "";
+    const previousTitle = resolvedTitle;
     setIsRenaming(false);
+    setOptimisticTitle(trimmed);
 
     const success = await renameSession(trimmed);
     if (!success) {
+      setOptimisticTitle(null);
       setTitle(previousTitle);
       setIsRenaming(true);
     }
   };
+
+  const resolvedTitle =
+    optimisticTitle ?? sessionState?.title ?? fallbackSessionInfo.title ?? fallbackRepoLabel;
+
+  useEffect(() => {
+    if (!optimisticTitle) return;
+    if (sessionState?.title === optimisticTitle) {
+      setOptimisticTitle(null);
+    }
+  }, [optimisticTitle, sessionState?.title]);
 
   const handleSheetTouchStart = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
     const startY = event.touches[0]?.clientY;
