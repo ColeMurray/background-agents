@@ -17,6 +17,8 @@ export interface GitHubBotSettings {
   model?: string;
   reasoningEffort?: string;
   allowedTriggerUsers?: string[];
+  codeReviewInstructions?: string;
+  commentActionInstructions?: string;
 }
 
 /** Overridable behavior settings for the Linear bot. Used at both global (defaults) and per-repo (overrides) levels. */

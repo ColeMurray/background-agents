@@ -1,3 +1,8 @@
+function buildCustomInstructionsSection(instructions: string | null | undefined): string {
+  if (!instructions?.trim()) return "";
+  return `\n## Custom Instructions\n${instructions}`;
+}
+
 function buildCommentGuidelines(isPublicRepo: boolean): string {
   const visibility = isPublicRepo
     ? "\n- This is a PUBLIC repository. Be especially careful not to expose secrets, internal URLs, or infrastructure details."
@@ -39,8 +44,10 @@ export function buildCodeReviewPrompt(params: {
   base: string;
   head: string;
   isPublic: boolean;
+  codeReviewInstructions?: string | null;
 }): string {
-  const { owner, repo, number, title, body, author, base, head, isPublic } = params;
+  const { owner, repo, number, title, body, author, base, head, isPublic, codeReviewInstructions } =
+    params;
 
   return `You are reviewing Pull Request #${number} in ${owner}/${repo}.
 The repository has been cloned and you are on the ${head} branch.
@@ -79,7 +86,7 @@ ${body ?? "_No description provided._"}
      -f commit_id="$(gh api repos/${owner}/${repo}/pulls/${number} --jq '.head.sha')" \\
      -f line=<line number> \\
      -f side="RIGHT"
-
+${buildCustomInstructionsSection(codeReviewInstructions)}
 ${buildCommentGuidelines(isPublic)}`;
 }
 
@@ -96,6 +103,7 @@ export function buildCommentActionPrompt(params: {
   filePath?: string;
   diffHunk?: string;
   commentId?: number;
+  commentActionInstructions?: string | null;
 }): string {
   const {
     owner,
@@ -110,6 +118,7 @@ export function buildCommentActionPrompt(params: {
     filePath,
     diffHunk,
     commentId,
+    commentActionInstructions,
   } = params;
 
   const intro = head
@@ -153,6 +162,6 @@ ${buildUntrustedUserContentBlock({
    gh api repos/${owner}/${repo}/issues/${number}/comments \\
      --method POST \\
      -f body="<summary of what you did or your response>"${replyInstruction}
-
+${buildCustomInstructionsSection(commentActionInstructions)}
 ${buildCommentGuidelines(isPublic)}`;
 }

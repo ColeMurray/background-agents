@@ -250,12 +250,16 @@ describe("Integration settings API", () => {
           autoReviewOnOpen: boolean;
           enabledRepos: string[] | null;
           allowedTriggerUsers: string[] | null;
+          codeReviewInstructions: string | null;
+          commentActionInstructions: string | null;
         };
       }>();
       expect(body.config.model).toBeNull();
       expect(body.config.autoReviewOnOpen).toBe(true);
       expect(body.config.enabledRepos).toBeNull();
       expect(body.config.allowedTriggerUsers).toBeNull();
+      expect(body.config.codeReviewInstructions).toBeNull();
+      expect(body.config.commentActionInstructions).toBeNull();
     });
 
     it("returns allowedTriggerUsers in resolved config from defaults", async () => {
@@ -282,6 +286,62 @@ describe("Integration settings API", () => {
         };
       }>();
       expect(body.config.allowedTriggerUsers).toEqual(["alice", "bob"]);
+    });
+
+    it("round-trips codeReviewInstructions through resolved endpoint", async () => {
+      const headers = await authHeaders();
+
+      await SELF.fetch("https://test.local/integration-settings/github", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          settings: {
+            defaults: { codeReviewInstructions: "Focus on security." },
+          },
+        }),
+      });
+
+      const res = await SELF.fetch(
+        "https://test.local/integration-settings/github/resolved/acme/widgets",
+        { headers }
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json<{
+        config: { codeReviewInstructions: string | null };
+      }>();
+      expect(body.config.codeReviewInstructions).toBe("Focus on security.");
+    });
+
+    it("repo override codeReviewInstructions wins over global default", async () => {
+      const headers = await authHeaders();
+
+      await SELF.fetch("https://test.local/integration-settings/github", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          settings: {
+            defaults: { codeReviewInstructions: "Global instructions." },
+          },
+        }),
+      });
+
+      await SELF.fetch("https://test.local/integration-settings/github/repos/acme/widgets", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          settings: { codeReviewInstructions: "Repo-specific instructions." },
+        }),
+      });
+
+      const res = await SELF.fetch(
+        "https://test.local/integration-settings/github/resolved/acme/widgets",
+        { headers }
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json<{
+        config: { codeReviewInstructions: string | null };
+      }>();
+      expect(body.config.codeReviewInstructions).toBe("Repo-specific instructions.");
     });
 
     it("per-repo allowedTriggerUsers overrides global default", async () => {

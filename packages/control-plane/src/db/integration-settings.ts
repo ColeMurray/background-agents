@@ -201,6 +201,20 @@ export class IntegrationSettingsStore {
   private validateAndNormalizeGitHubSettings(settings: GitHubBotSettings): GitHubBotSettings {
     this.validateModelAndEffort(settings);
 
+    if (
+      settings.codeReviewInstructions !== undefined &&
+      typeof settings.codeReviewInstructions !== "string"
+    ) {
+      throw new IntegrationSettingsValidationError("codeReviewInstructions must be a string");
+    }
+
+    if (
+      settings.commentActionInstructions !== undefined &&
+      typeof settings.commentActionInstructions !== "string"
+    ) {
+      throw new IntegrationSettingsValidationError("commentActionInstructions must be a string");
+    }
+
     if (settings.allowedTriggerUsers !== undefined) {
       if (
         !Array.isArray(settings.allowedTriggerUsers) ||

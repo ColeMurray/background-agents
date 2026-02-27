@@ -78,7 +78,7 @@ export function GitHubIntegrationSettings() {
 
       <Section
         title="Repository Overrides"
-        description="Set model and reasoning overrides for specific repositories."
+        description="Set model, reasoning, and custom instruction overrides for specific repositories."
       >
         <RepoOverridesSection
           overrides={repoOverrides}
@@ -110,6 +110,12 @@ function GlobalSettingsSection({
   const [triggerUserMode, setTriggerUserMode] = useState<"write_access" | "specific">(
     settings?.defaults?.allowedTriggerUsers === undefined ? "write_access" : "specific"
   );
+  const [codeReviewInstructions, setCodeReviewInstructions] = useState(
+    settings?.defaults?.codeReviewInstructions ?? ""
+  );
+  const [commentActionInstructions, setCommentActionInstructions] = useState(
+    settings?.defaults?.commentActionInstructions ?? ""
+  );
   const [newUsername, setNewUsername] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -127,6 +133,8 @@ function GlobalSettingsSection({
         setTriggerUserMode(
           settings.defaults?.allowedTriggerUsers === undefined ? "write_access" : "specific"
         );
+        setCodeReviewInstructions(settings.defaults?.codeReviewInstructions ?? "");
+        setCommentActionInstructions(settings.defaults?.commentActionInstructions ?? "");
       }
       setInitialized(true);
     }
@@ -157,6 +165,8 @@ function GlobalSettingsSection({
         setRepoScopeMode("all");
         setAllowedTriggerUsers([]);
         setTriggerUserMode("write_access");
+        setCodeReviewInstructions("");
+        setCommentActionInstructions("");
         setNewUsername("");
         setDirty(false);
         setSuccess("Settings reset to defaults.");
@@ -180,6 +190,8 @@ function GlobalSettingsSection({
       defaults: {
         autoReviewOnOpen,
         ...(triggerUserMode === "specific" ? { allowedTriggerUsers } : {}),
+        ...(codeReviewInstructions ? { codeReviewInstructions } : {}),
+        ...(commentActionInstructions ? { commentActionInstructions } : {}),
       },
     };
 
@@ -413,6 +425,50 @@ function GlobalSettingsSection({
         )}
       </div>
 
+      <div className="mb-4">
+        <label className="block text-sm font-medium text-foreground mb-1">
+          Code Review Instructions
+        </label>
+        <p className="text-xs text-muted-foreground mb-2">
+          Custom instructions appended to code review prompts. Use this to focus reviews on specific
+          areas or coding standards.
+        </p>
+        <textarea
+          value={codeReviewInstructions}
+          onChange={(e) => {
+            setCodeReviewInstructions(e.target.value);
+            setDirty(true);
+            setError("");
+            setSuccess("");
+          }}
+          rows={3}
+          placeholder="e.g., Focus on security best practices and ensure all API endpoints validate input."
+          className="w-full px-3 py-2 text-sm border border-border rounded-sm bg-background text-foreground placeholder:text-muted-foreground resize-y"
+        />
+      </div>
+
+      <div className="mb-4">
+        <label className="block text-sm font-medium text-foreground mb-1">
+          Comment Action Instructions
+        </label>
+        <p className="text-xs text-muted-foreground mb-2">
+          Custom instructions appended to comment action prompts (@mention responses). Use this to
+          guide how the bot responds to comments.
+        </p>
+        <textarea
+          value={commentActionInstructions}
+          onChange={(e) => {
+            setCommentActionInstructions(e.target.value);
+            setDirty(true);
+            setError("");
+            setSuccess("");
+          }}
+          rows={3}
+          placeholder="e.g., Always run tests before pushing changes. Prefer minimal diffs."
+          className="w-full px-3 py-2 text-sm border border-border rounded-sm bg-background text-foreground placeholder:text-muted-foreground resize-y"
+        />
+      </div>
+
       <div className="flex items-center gap-2">
         <Button onClick={handleSave} disabled={saving || !dirty}>
           {saving ? "Saving..." : "Save"}
@@ -535,6 +591,18 @@ function RepoOverrideRow({
   const [allowedTriggerUsers, setAllowedTriggerUsers] = useState<string[]>(
     entry.settings.allowedTriggerUsers ?? []
   );
+  const [codeReviewMode, setCodeReviewMode] = useState<"global" | "override">(
+    entry.settings.codeReviewInstructions !== undefined ? "override" : "global"
+  );
+  const [codeReviewInstructions, setCodeReviewInstructions] = useState(
+    entry.settings.codeReviewInstructions ?? ""
+  );
+  const [commentActionMode, setCommentActionMode] = useState<"global" | "override">(
+    entry.settings.commentActionInstructions !== undefined ? "override" : "global"
+  );
+  const [commentActionInstructions, setCommentActionInstructions] = useState(
+    entry.settings.commentActionInstructions ?? ""
+  );
   const [newUsername, setNewUsername] = useState("");
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -560,6 +628,9 @@ function RepoOverrideRow({
     if (model) settings.model = model;
     if (effort) settings.reasoningEffort = effort;
     if (triggerUserMode === "override") settings.allowedTriggerUsers = allowedTriggerUsers;
+    if (codeReviewMode === "override") settings.codeReviewInstructions = codeReviewInstructions;
+    if (commentActionMode === "override")
+      settings.commentActionInstructions = commentActionInstructions;
 
     try {
       const res = await fetch(`/api/integration-settings/github/repos/${owner}/${name}`, {
@@ -735,6 +806,68 @@ function RepoOverrideRow({
               </p>
             )}
           </>
+        )}
+      </div>
+
+      <div>
+        <p className="text-xs font-medium text-muted-foreground mb-1">Code Review Instructions</p>
+        <div className="flex items-center gap-2 mb-1">
+          <Select
+            value={codeReviewMode}
+            onChange={(e) => {
+              setCodeReviewMode(e.target.value as "global" | "override");
+              setDirty(true);
+            }}
+            className="w-48"
+            density="compact"
+          >
+            <option value="global">Use global default</option>
+            <option value="override">Override for this repo</option>
+          </Select>
+        </div>
+        {codeReviewMode === "override" && (
+          <textarea
+            value={codeReviewInstructions}
+            onChange={(e) => {
+              setCodeReviewInstructions(e.target.value);
+              setDirty(true);
+            }}
+            rows={2}
+            placeholder="Custom review instructions for this repo..."
+            className="w-full px-2 py-1 text-xs border border-border rounded-sm bg-background text-foreground placeholder:text-muted-foreground resize-y"
+          />
+        )}
+      </div>
+
+      <div>
+        <p className="text-xs font-medium text-muted-foreground mb-1">
+          Comment Action Instructions
+        </p>
+        <div className="flex items-center gap-2 mb-1">
+          <Select
+            value={commentActionMode}
+            onChange={(e) => {
+              setCommentActionMode(e.target.value as "global" | "override");
+              setDirty(true);
+            }}
+            className="w-48"
+            density="compact"
+          >
+            <option value="global">Use global default</option>
+            <option value="override">Override for this repo</option>
+          </Select>
+        </div>
+        {commentActionMode === "override" && (
+          <textarea
+            value={commentActionInstructions}
+            onChange={(e) => {
+              setCommentActionInstructions(e.target.value);
+              setDirty(true);
+            }}
+            rows={2}
+            placeholder="Custom comment action instructions for this repo..."
+            className="w-full px-2 py-1 text-xs border border-border rounded-sm bg-background text-foreground placeholder:text-muted-foreground resize-y"
+          />
         )}
       </div>
     </div>

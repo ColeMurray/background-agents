@@ -26,6 +26,8 @@ vi.mock("../src/utils/integration-config", () => ({
     autoReviewOnOpen: true,
     enabledRepos: null,
     allowedTriggerUsers: null,
+    codeReviewInstructions: null,
+    commentActionInstructions: null,
   }),
 }));
 
@@ -35,6 +37,8 @@ const defaultConfig: ResolvedGitHubConfig = {
   autoReviewOnOpen: true,
   enabledRepos: null,
   allowedTriggerUsers: null,
+  codeReviewInstructions: null,
+  commentActionInstructions: null,
 };
 
 import {
@@ -744,5 +748,81 @@ describe("integration config", () => {
 
     // Config fetch should NOT happen for cheap early exits
     expect(getGitHubConfig).not.toHaveBeenCalled();
+  });
+
+  it("codeReviewInstructions flows into review prompt (handleReviewRequested)", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      codeReviewInstructions: "Focus on security.",
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleReviewRequested(env, log, reviewRequestedPayload, "trace-review-instr");
+
+    const cpFetch = getControlPlaneFetch(env);
+    const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
+    expect(promptBody.content).toContain("## Custom Instructions");
+    expect(promptBody.content).toContain("Focus on security.");
+  });
+
+  it("commentActionInstructions flows into comment prompt (handleIssueComment)", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      commentActionInstructions: "Run tests first.",
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleIssueComment(env, log, issueCommentPayload, "trace-comment-instr");
+
+    const cpFetch = getControlPlaneFetch(env);
+    const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
+    expect(promptBody.content).toContain("## Custom Instructions");
+    expect(promptBody.content).toContain("Run tests first.");
+  });
+
+  it("codeReviewInstructions flows into review prompt (handlePullRequestOpened)", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      codeReviewInstructions: "Check for SQL injection.",
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-pr-instr");
+
+    const cpFetch = getControlPlaneFetch(env);
+    const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
+    expect(promptBody.content).toContain("## Custom Instructions");
+    expect(promptBody.content).toContain("Check for SQL injection.");
+  });
+
+  it("commentActionInstructions flows into comment prompt (handleReviewComment)", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      commentActionInstructions: "Prefer minimal diffs.",
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleReviewComment(env, log, reviewCommentPayload, "trace-rc-instr");
+
+    const cpFetch = getControlPlaneFetch(env);
+    const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
+    expect(promptBody.content).toContain("## Custom Instructions");
+    expect(promptBody.content).toContain("Prefer minimal diffs.");
+  });
+
+  it("null instructions produce no Custom Instructions section (backward compat)", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({ ...defaultConfig });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleReviewRequested(env, log, reviewRequestedPayload, "trace-null-instr");
+
+    const cpFetch = getControlPlaneFetch(env);
+    const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
+    expect(promptBody.content).not.toContain("## Custom Instructions");
   });
 });

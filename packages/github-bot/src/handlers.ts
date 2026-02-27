@@ -207,6 +207,7 @@ export async function handleReviewRequested(
     base: pr.base.ref,
     head: pr.head.ref,
     isPublic: !repo.private,
+    codeReviewInstructions: config.codeReviewInstructions,
   });
 
   const messageId = await sendPrompt(env.CONTROL_PLANE, headers, sessionId, {
@@ -295,6 +296,7 @@ export async function handlePullRequestOpened(
     base: pr.base.ref,
     head: pr.head.ref,
     isPublic: !repo.private,
+    codeReviewInstructions: config.codeReviewInstructions,
   });
 
   const messageId = await sendPrompt(env.CONTROL_PLANE, headers, sessionId, {
@@ -387,6 +389,7 @@ export async function handleIssueComment(
     commentBody,
     commenter: sender.login,
     isPublic: !repo.private,
+    commentActionInstructions: config.commentActionInstructions,
   });
 
   const messageId = await sendPrompt(env.CONTROL_PLANE, headers, sessionId, {
@@ -479,6 +482,7 @@ export async function handleReviewComment(
     filePath: comment.path,
     diffHunk: comment.diff_hunk,
     commentId: comment.id,
+    commentActionInstructions: config.commentActionInstructions,
   });
 
   const messageId = await sendPrompt(env.CONTROL_PLANE, headers, sessionId, {

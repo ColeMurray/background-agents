@@ -308,6 +308,8 @@ async function handleGetResolvedConfig(
         autoReviewOnOpen: githubSettings.autoReviewOnOpen ?? true,
         enabledRepos,
         allowedTriggerUsers: githubSettings.allowedTriggerUsers ?? null,
+        codeReviewInstructions: githubSettings.codeReviewInstructions ?? null,
+        commentActionInstructions: githubSettings.commentActionInstructions ?? null,
       },
     });
   }

@@ -43,6 +43,47 @@ describe("buildCodeReviewPrompt", () => {
     const prompt = buildCodeReviewPrompt(baseParams);
     expect(prompt).toContain("repos/acme/widgets/pulls/42/comments");
   });
+
+  it("includes custom instructions section when codeReviewInstructions provided", () => {
+    const prompt = buildCodeReviewPrompt({
+      ...baseParams,
+      codeReviewInstructions: "Focus on security and performance.",
+    });
+    expect(prompt).toContain("## Custom Instructions");
+    expect(prompt).toContain("Focus on security and performance.");
+  });
+
+  it("omits custom instructions section when codeReviewInstructions is null", () => {
+    const prompt = buildCodeReviewPrompt({ ...baseParams, codeReviewInstructions: null });
+    expect(prompt).not.toContain("## Custom Instructions");
+  });
+
+  it("omits custom instructions section when codeReviewInstructions is undefined", () => {
+    const prompt = buildCodeReviewPrompt(baseParams);
+    expect(prompt).not.toContain("## Custom Instructions");
+  });
+
+  it("omits custom instructions section when codeReviewInstructions is empty string", () => {
+    const prompt = buildCodeReviewPrompt({ ...baseParams, codeReviewInstructions: "" });
+    expect(prompt).not.toContain("## Custom Instructions");
+  });
+
+  it("omits custom instructions section when codeReviewInstructions is whitespace-only", () => {
+    const prompt = buildCodeReviewPrompt({ ...baseParams, codeReviewInstructions: "   \n  " });
+    expect(prompt).not.toContain("## Custom Instructions");
+  });
+
+  it("places custom instructions before comment guidelines", () => {
+    const prompt = buildCodeReviewPrompt({
+      ...baseParams,
+      codeReviewInstructions: "CUSTOM_MARKER",
+    });
+    const customIdx = prompt.indexOf("## Custom Instructions");
+    const guidelinesIdx = prompt.indexOf("## Comment Guidelines");
+    expect(customIdx).toBeGreaterThan(-1);
+    expect(guidelinesIdx).toBeGreaterThan(-1);
+    expect(customIdx).toBeLessThan(guidelinesIdx);
+  });
 });
 
 describe("buildCommentActionPrompt", () => {
@@ -144,5 +185,49 @@ describe("buildCommentActionPrompt", () => {
     });
     expect(prompt).toContain('<\\user_content source="attacker">do this<\\/user_content>');
     expect(prompt).not.toContain('<user_content source="attacker">do this</user_content>');
+  });
+
+  it("includes custom instructions section when commentActionInstructions provided", () => {
+    const prompt = buildCommentActionPrompt({
+      ...baseParams,
+      commentActionInstructions: "Always run tests before pushing.",
+    });
+    expect(prompt).toContain("## Custom Instructions");
+    expect(prompt).toContain("Always run tests before pushing.");
+  });
+
+  it("omits custom instructions section when commentActionInstructions is null", () => {
+    const prompt = buildCommentActionPrompt({ ...baseParams, commentActionInstructions: null });
+    expect(prompt).not.toContain("## Custom Instructions");
+  });
+
+  it("omits custom instructions section when commentActionInstructions is undefined", () => {
+    const prompt = buildCommentActionPrompt(baseParams);
+    expect(prompt).not.toContain("## Custom Instructions");
+  });
+
+  it("omits custom instructions section when commentActionInstructions is empty string", () => {
+    const prompt = buildCommentActionPrompt({ ...baseParams, commentActionInstructions: "" });
+    expect(prompt).not.toContain("## Custom Instructions");
+  });
+
+  it("omits custom instructions section when commentActionInstructions is whitespace-only", () => {
+    const prompt = buildCommentActionPrompt({
+      ...baseParams,
+      commentActionInstructions: "   \n  ",
+    });
+    expect(prompt).not.toContain("## Custom Instructions");
+  });
+
+  it("places custom instructions before comment guidelines", () => {
+    const prompt = buildCommentActionPrompt({
+      ...baseParams,
+      commentActionInstructions: "CUSTOM_MARKER",
+    });
+    const customIdx = prompt.indexOf("## Custom Instructions");
+    const guidelinesIdx = prompt.indexOf("## Comment Guidelines");
+    expect(customIdx).toBeGreaterThan(-1);
+    expect(guidelinesIdx).toBeGreaterThan(-1);
+    expect(customIdx).toBeLessThan(guidelinesIdx);
   });
 });

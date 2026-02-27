@@ -7,6 +7,8 @@ export interface ResolvedGitHubConfig {
   autoReviewOnOpen: boolean;
   enabledRepos: string[] | null;
   allowedTriggerUsers: string[] | null;
+  codeReviewInstructions: string | null;
+  commentActionInstructions: string | null;
 }
 
 const FAIL_CLOSED: Omit<ResolvedGitHubConfig, "model"> = {
@@ -14,6 +16,8 @@ const FAIL_CLOSED: Omit<ResolvedGitHubConfig, "model"> = {
   autoReviewOnOpen: false,
   enabledRepos: [],
   allowedTriggerUsers: [],
+  codeReviewInstructions: null,
+  commentActionInstructions: null,
 };
 
 export async function getGitHubConfig(env: Env, repo: string): Promise<ResolvedGitHubConfig> {
@@ -41,6 +45,8 @@ export async function getGitHubConfig(env: Env, repo: string): Promise<ResolvedG
       autoReviewOnOpen: boolean;
       enabledRepos: string[] | null;
       allowedTriggerUsers: string[] | null;
+      codeReviewInstructions: string | null;
+      commentActionInstructions: string | null;
     } | null;
   };
 
@@ -51,6 +57,8 @@ export async function getGitHubConfig(env: Env, repo: string): Promise<ResolvedG
       autoReviewOnOpen: true,
       enabledRepos: null,
       allowedTriggerUsers: null,
+      codeReviewInstructions: null,
+      commentActionInstructions: null,
     };
   }
 
@@ -60,5 +68,7 @@ export async function getGitHubConfig(env: Env, repo: string): Promise<ResolvedG
     autoReviewOnOpen: data.config.autoReviewOnOpen,
     enabledRepos: data.config.enabledRepos,
     allowedTriggerUsers: data.config.allowedTriggerUsers,
+    codeReviewInstructions: data.config.codeReviewInstructions,
+    commentActionInstructions: data.config.commentActionInstructions,
   };
 }

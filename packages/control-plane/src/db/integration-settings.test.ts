@@ -373,6 +373,44 @@ describe("IntegrationSettingsStore", () => {
         })
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
+
+    it("accepts valid codeReviewInstructions string", async () => {
+      await expect(
+        store.setRepoSettings("github", "acme/widgets", {
+          codeReviewInstructions: "Focus on security.",
+        })
+      ).resolves.not.toThrow();
+
+      const result = await store.getRepoSettings("github", "acme/widgets");
+      expect(result?.codeReviewInstructions).toBe("Focus on security.");
+    });
+
+    it("rejects non-string codeReviewInstructions", async () => {
+      await expect(
+        store.setRepoSettings("github", "acme/widgets", {
+          codeReviewInstructions: 123 as unknown as string,
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("accepts valid commentActionInstructions string", async () => {
+      await expect(
+        store.setRepoSettings("github", "acme/widgets", {
+          commentActionInstructions: "Run tests first.",
+        })
+      ).resolves.not.toThrow();
+
+      const result = await store.getRepoSettings("github", "acme/widgets");
+      expect(result?.commentActionInstructions).toBe("Run tests first.");
+    });
+
+    it("rejects non-string commentActionInstructions", async () => {
+      await expect(
+        store.setRepoSettings("github", "acme/widgets", {
+          commentActionInstructions: true as unknown as string,
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
   });
 
   describe("merge logic (getResolvedConfig)", () => {
@@ -516,6 +554,48 @@ describe("IntegrationSettingsStore", () => {
       const config = await store.getResolvedConfig("github", "acme/widgets");
       expect(config.settings.allowedTriggerUsers).toEqual(["alice", "bob"]);
       expect(config.settings.model).toBe("anthropic/claude-opus-4-6");
+    });
+
+    it("global codeReviewInstructions surfaces in resolved config", async () => {
+      await store.setGlobal("github", {
+        defaults: { codeReviewInstructions: "Focus on security." },
+      });
+
+      const config = await store.getResolvedConfig("github", "acme/widgets");
+      expect(config.settings.codeReviewInstructions).toBe("Focus on security.");
+    });
+
+    it("repo override codeReviewInstructions replaces global default", async () => {
+      await store.setGlobal("github", {
+        defaults: { codeReviewInstructions: "Global instructions." },
+      });
+      await store.setRepoSettings("github", "acme/widgets", {
+        codeReviewInstructions: "Repo-specific instructions.",
+      });
+
+      const config = await store.getResolvedConfig("github", "acme/widgets");
+      expect(config.settings.codeReviewInstructions).toBe("Repo-specific instructions.");
+    });
+
+    it("global commentActionInstructions surfaces in resolved config", async () => {
+      await store.setGlobal("github", {
+        defaults: { commentActionInstructions: "Run tests first." },
+      });
+
+      const config = await store.getResolvedConfig("github", "acme/widgets");
+      expect(config.settings.commentActionInstructions).toBe("Run tests first.");
+    });
+
+    it("repo override commentActionInstructions replaces global default", async () => {
+      await store.setGlobal("github", {
+        defaults: { commentActionInstructions: "Global comment instructions." },
+      });
+      await store.setRepoSettings("github", "acme/widgets", {
+        commentActionInstructions: "Repo comment instructions.",
+      });
+
+      const config = await store.getResolvedConfig("github", "acme/widgets");
+      expect(config.settings.commentActionInstructions).toBe("Repo comment instructions.");
     });
   });
 
