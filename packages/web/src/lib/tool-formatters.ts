@@ -1,5 +1,7 @@
 import type { SandboxEvent } from "@/types/session";
 
+type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
+
 /**
  * Extract just the filename from a file path
  */
@@ -118,7 +120,7 @@ export interface FormattedToolCall {
  * Tool names are normalized to lowercase for matching since OpenCode may
  * report them in different cases (e.g., "todowrite" vs "TodoWrite")
  */
-export function formatToolCall(event: SandboxEvent): FormattedToolCall {
+export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
   const { tool, args, output } = event;
   const normalizedTool = tool?.toLowerCase() || "unknown";
 
@@ -270,7 +272,7 @@ export function formatToolCall(event: SandboxEvent): FormattedToolCall {
 /**
  * Get a compact summary for a group of tool calls
  */
-export function formatToolGroup(events: SandboxEvent[]): {
+export function formatToolGroup(events: ToolCallEvent[]): {
   toolName: string;
   count: number;
   summary: string;

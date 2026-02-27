@@ -1,3 +1,5 @@
+import type { SandboxEvent as SharedSandboxEvent } from "@open-inspect/shared";
+
 // Session-related type definitions
 
 export interface Artifact {
@@ -18,26 +20,16 @@ export interface Artifact {
   createdAt: number;
 }
 
-export interface SandboxEvent {
-  type: string;
-  content?: string;
-  messageId?: string;
-  tool?: string;
-  args?: Record<string, unknown>;
-  callId?: string;
-  result?: string;
-  error?: string;
-  success?: boolean;
-  status?: string;
-  output?: string;
-  sha?: string;
+type SharedSandboxEventWithTimestamp = SharedSandboxEvent & { timestamp: number };
+
+type UiSyntheticTokenEvent = {
+  type: "token";
+  content: string;
+  messageId: string;
   timestamp: number;
-  author?: {
-    participantId: string;
-    name: string;
-    avatar?: string;
-  };
-}
+};
+
+export type SandboxEvent = SharedSandboxEventWithTimestamp | UiSyntheticTokenEvent;
 
 export interface Task {
   content: string;

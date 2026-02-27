@@ -100,7 +100,7 @@ function parseWsMessage(raw: unknown): WsMessage | null {
 
 function toUiSandboxEvent(event: SharedSandboxEvent): SandboxEvent {
   return {
-    ...(event as unknown as SandboxEvent),
+    ...event,
     timestamp: typeof event.timestamp === "number" ? event.timestamp : Date.now() / 1000,
   };
 }

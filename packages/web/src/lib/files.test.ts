@@ -1,14 +1,18 @@
 import { describe, it, expect } from "vitest";
 import { extractChangedFiles, parseApplyPatch } from "./files";
+import type { SandboxEvent } from "@/types/session";
 
-function makeEvent(overrides: Record<string, unknown> = {}) {
+type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
+
+function makeEvent(overrides: Partial<ToolCallEvent> = {}): ToolCallEvent {
   return {
-    type: "tool_call" as string,
-    tool: "Edit" as string | undefined,
-    args: { filePath: "src/index.ts", oldString: "a\nb", newString: "a\nb\nc" } as
-      | Record<string, unknown>
-      | undefined,
-    status: "completed" as string | undefined,
+    type: "tool_call",
+    tool: "Edit",
+    args: { filePath: "src/index.ts", oldString: "a\nb", newString: "a\nb\nc" },
+    callId: "call-1",
+    messageId: "message-1",
+    sandboxId: "sandbox-1",
+    status: "completed",
     timestamp: 1000,
     ...overrides,
   };
@@ -20,7 +24,15 @@ describe("extractChangedFiles", () => {
   });
 
   it("ignores non-tool_call events", () => {
-    const events = [makeEvent({ type: "token" })];
+    const events: SandboxEvent[] = [
+      {
+        type: "token",
+        content: "partial",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 1000,
+      },
+    ];
     expect(extractChangedFiles(events)).toEqual([]);
   });
 
