@@ -24,6 +24,7 @@ export interface SessionInternalRouteHandlers {
   listMessages: SessionInternalRouteHandler;
   createPr: SessionInternalRouteHandler;
   wsToken: SessionInternalRouteHandler;
+  updateTitle: SessionInternalRouteHandler;
   archive: SessionInternalRouteHandler;
   unarchive: SessionInternalRouteHandler;
   verifySandboxToken: SessionInternalRouteHandler;
@@ -62,6 +63,7 @@ export function createSessionInternalRoutes(
     { method: "GET", path: SessionInternalPaths.messages, handler: handlers.listMessages },
     { method: "POST", path: SessionInternalPaths.createPr, handler: handlers.createPr },
     { method: "POST", path: SessionInternalPaths.wsToken, handler: handlers.wsToken },
+    { method: "POST", path: SessionInternalPaths.updateTitle, handler: handlers.updateTitle },
     { method: "POST", path: SessionInternalPaths.archive, handler: handlers.archive },
     { method: "POST", path: SessionInternalPaths.unarchive, handler: handlers.unarchive },
     {
