@@ -39,6 +39,25 @@ interface PatchSummary {
   firstOperation: PatchOperation | null;
 }
 
+function getStringArg(
+  args: Record<string, unknown> | undefined,
+  ...keys: string[]
+): string | undefined {
+  for (const key of keys) {
+    const value = args?.[key];
+    if (typeof value === "string") return value;
+  }
+  return undefined;
+}
+
+function getArrayArg(
+  args: Record<string, unknown> | undefined,
+  key: string
+): unknown[] | undefined {
+  const value = args?.[key];
+  return Array.isArray(value) ? value : undefined;
+}
+
 function summarizeApplyPatch(patchText: string | undefined): PatchSummary {
   if (!patchText) {
     return {
@@ -127,7 +146,7 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
   switch (normalizedTool) {
     case "read": {
       // OpenCode uses filePath (camelCase)
-      const filePath = (args?.filePath ?? args?.file_path) as string | undefined;
+      const filePath = getStringArg(args, "filePath", "file_path");
       const lineCount = countLines(output);
       return {
         toolName: "Read",
@@ -140,7 +159,7 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
     }
 
     case "edit": {
-      const filePath = (args?.filePath ?? args?.file_path) as string | undefined;
+      const filePath = getStringArg(args, "filePath", "file_path");
       return {
         toolName: "Edit",
         summary: filePath ? basename(filePath) : "file",
@@ -150,7 +169,7 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
     }
 
     case "write": {
-      const filePath = (args?.filePath ?? args?.file_path) as string | undefined;
+      const filePath = getStringArg(args, "filePath", "file_path");
       return {
         toolName: "Write",
         summary: filePath ? basename(filePath) : "file",
@@ -160,7 +179,7 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
     }
 
     case "bash": {
-      const command = args?.command as string | undefined;
+      const command = getStringArg(args, "command");
       return {
         toolName: "Bash",
         summary: truncate(command, 50),
@@ -170,7 +189,7 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
     }
 
     case "grep": {
-      const pattern = args?.pattern as string | undefined;
+      const pattern = getStringArg(args, "pattern");
       const matchCount = output ? countLines(output) : 0;
       return {
         toolName: "Grep",
@@ -183,7 +202,7 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
     }
 
     case "glob": {
-      const pattern = args?.pattern as string | undefined;
+      const pattern = getStringArg(args, "pattern");
       const fileCount = output ? countLines(output) : 0;
       return {
         toolName: "Glob",
@@ -196,8 +215,8 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
     }
 
     case "task": {
-      const description = args?.description as string | undefined;
-      const prompt = args?.prompt as string | undefined;
+      const description = getStringArg(args, "description");
+      const prompt = getStringArg(args, "prompt");
       return {
         toolName: "Task",
         summary: description ? truncate(description, 40) : prompt ? truncate(prompt, 40) : "task",
@@ -207,7 +226,7 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
     }
 
     case "webfetch": {
-      const url = args?.url as string | undefined;
+      const url = getStringArg(args, "url");
       return {
         toolName: "WebFetch",
         summary: url ? truncate(url, 40) : "url",
@@ -217,7 +236,7 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
     }
 
     case "websearch": {
-      const query = args?.query as string | undefined;
+      const query = getStringArg(args, "query");
       return {
         toolName: "WebSearch",
         summary: query ? `"${truncate(query, 40)}"` : "search",
@@ -227,7 +246,7 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
     }
 
     case "todowrite": {
-      const todos = args?.todos as unknown[] | undefined;
+      const todos = getArrayArg(args, "todos");
       return {
         toolName: "TodoWrite",
         summary: todos ? `${todos.length} item${todos.length === 1 ? "" : "s"}` : "todos",
@@ -237,7 +256,7 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
     }
 
     case "apply_patch": {
-      const patchText = args?.patchText as string | undefined;
+      const patchText = getStringArg(args, "patchText");
       const patchSummary = summarizeApplyPatch(patchText);
 
       let summary = "patch";

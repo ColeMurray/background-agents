@@ -33,6 +33,30 @@ export {
 
 const log = createLogger("handler");
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readStringField(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  return typeof value === "string" ? value : null;
+}
+
+function isAgentSessionWebhookPayload(payload: unknown): payload is AgentSessionWebhook {
+  if (!isObjectRecord(payload)) return false;
+
+  const type = readStringField(payload, "type");
+  const action = readStringField(payload, "action");
+  const organizationId = readStringField(payload, "organizationId");
+  const agentSession = payload.agentSession;
+
+  if (!type || !action || !organizationId || !isObjectRecord(agentSession)) {
+    return false;
+  }
+
+  return typeof agentSession.id === "string";
+}
+
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
 const app = new Hono<{ Bindings: Env }>();
@@ -94,15 +118,29 @@ app.post("/webhook", async (c) => {
     return c.json({ error: "Invalid signature" }, 401);
   }
 
-  const payload = JSON.parse(body) as Record<string, unknown>;
-  const eventType = payload.type as string;
-  const action = payload.action as string;
+  const payload: unknown = JSON.parse(body);
+  if (!isObjectRecord(payload)) {
+    log.warn("webhook.invalid_payload", { trace_id: traceId, reason: "payload_not_object" });
+    return c.json({ error: "Invalid payload" }, 400);
+  }
+
+  const eventType = readStringField(payload, "type") ?? "unknown";
+  const action = readStringField(payload, "action") ?? "unknown";
 
   if (eventType === "AgentSessionEvent") {
     // Deduplicate: use agentSession.id + action as key
-    const agentSession = payload.agentSession as { id: string } | undefined;
+    const agentSession = isObjectRecord(payload.agentSession) ? payload.agentSession : undefined;
     if (agentSession) {
-      const eventKey = `${agentSession.id}:${action}`;
+      const agentSessionId = readStringField(agentSession, "id");
+      if (!agentSessionId) {
+        log.warn("webhook.invalid_payload", {
+          trace_id: traceId,
+          reason: "missing_agent_session_id",
+        });
+        return c.json({ error: "Invalid payload" }, 400);
+      }
+
+      const eventKey = `${agentSessionId}:${action}`;
       const isDuplicate = await isDuplicateEvent(c.env, eventKey);
       if (isDuplicate) {
         log.info("webhook.deduplicated", { trace_id: traceId, event_key: eventKey });
@@ -110,9 +148,15 @@ app.post("/webhook", async (c) => {
       }
     }
 
-    c.executionCtx.waitUntil(
-      handleAgentSessionEvent(payload as unknown as AgentSessionWebhook, c.env, traceId)
-    );
+    if (!isAgentSessionWebhookPayload(payload)) {
+      log.warn("webhook.invalid_payload", {
+        trace_id: traceId,
+        reason: "invalid_agent_session_event_shape",
+      });
+      return c.json({ error: "Invalid payload" }, 400);
+    }
+
+    c.executionCtx.waitUntil(handleAgentSessionEvent(payload, c.env, traceId));
 
     log.info("http.request", {
       trace_id: traceId,
