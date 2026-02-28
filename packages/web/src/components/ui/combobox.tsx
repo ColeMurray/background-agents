@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback, useId, type ReactNode } from "react";
+import { useState, useRef, useEffect, useCallback, useId, useMemo, type ReactNode } from "react";
 import { CheckIcon } from "@/components/ui/icons";
 
 export interface ComboboxOption<T = string> {
@@ -79,7 +79,6 @@ export function Combobox<T = string>({
   useEffect(() => {
     if (!open) {
       setQuery("");
-      setActiveIndex(-1);
       return;
     }
     if (searchable) {
@@ -88,15 +87,18 @@ export function Combobox<T = string>({
     }
   }, [open, searchable]);
 
-  const normalizedQuery = query.trim().toLowerCase();
+  const normalizedQuery = useMemo(() => query.trim().toLowerCase(), [query]);
 
-  const defaultFilter = (option: ComboboxOption<T>, q: string) =>
-    option.label.toLowerCase().includes(q) ||
-    (option.description?.toLowerCase().includes(q) ?? false);
+  const defaultFilter = useCallback(
+    (option: ComboboxOption<T>, q: string) =>
+      option.label.toLowerCase().includes(q) ||
+      (option.description?.toLowerCase().includes(q) ?? false),
+    []
+  );
 
-  const filterOption = filterFn || defaultFilter;
+  const filterOption = filterFn ?? defaultFilter;
 
-  const filteredItems = (() => {
+  const filteredItems = useMemo(() => {
     if (!normalizedQuery) return items;
 
     if (isGrouped(items)) {
@@ -109,33 +111,28 @@ export function Combobox<T = string>({
     }
 
     return items.filter((opt) => filterOption(opt, normalizedQuery));
-  })();
+  }, [items, normalizedQuery, filterOption]);
 
-  const flatOptions = flattenOptions(filteredItems);
+  const flatOptions = useMemo(() => flattenOptions(filteredItems), [filteredItems]);
 
   const hasResults = flatOptions.length > 0;
 
-  // Reset active index when filtered results change (e.g. typing in search)
+  // When the dropdown opens, activate the currently selected option.
+  // When the search query changes while open, reset to the first result.
   useEffect(() => {
-    if (open && flatOptions.length > 0) {
-      setActiveIndex(0);
-    } else {
+    if (!open) {
       setActiveIndex(-1);
+      return;
     }
-    // Use normalizedQuery as dependency instead of flatOptions to avoid reference issues
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [normalizedQuery, open]);
-
-  // Set initial active index to the selected value when opening
-  useEffect(() => {
-    if (!open) return;
-    const selectedIdx = flatOptions.findIndex((opt) => opt.value === value);
-    if (selectedIdx >= 0) {
-      setActiveIndex(selectedIdx);
+    if (normalizedQuery) {
+      // Query changed while open — point to first filtered result (or nothing).
+      setActiveIndex(flatOptions.length > 0 ? 0 : -1);
+    } else {
+      // Dropdown just opened (or query cleared) — activate the selected option.
+      const selectedIdx = flatOptions.findIndex((opt) => opt.value === value);
+      setActiveIndex(selectedIdx >= 0 ? selectedIdx : flatOptions.length > 0 ? 0 : -1);
     }
-    // Only run when dropdown opens
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, normalizedQuery, flatOptions, value]);
 
   // Scroll active option into view
   useEffect(() => {
