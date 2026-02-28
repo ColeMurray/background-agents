@@ -14,6 +14,11 @@ const log = createLogger("modal-client");
 // Modal app name
 const MODAL_APP_NAME = "open-inspect";
 
+const DEFAULT_MODAL_REQUEST_TIMEOUT_MS = 15_000;
+const SANDBOX_LIFECYCLE_REQUEST_TIMEOUT_MS = 30_000;
+const SAFE_RETRY_MAX_ATTEMPTS = 2;
+const RETRY_BASE_DELAY_MS = 250;
+
 /**
  * Construct the Modal base URL from workspace name.
  * Modal endpoint URLs follow the pattern: https://{workspace}--{app-name}
@@ -128,7 +133,14 @@ export interface SnapshotInfo {
 interface ModalApiResponse<T> {
   success: boolean;
   data?: T;
-  error?: string;
+  error?: string | ModalApiErrorPayload;
+}
+
+interface ModalApiErrorPayload {
+  code?: string;
+  message?: string;
+  status_code?: number;
+  details?: unknown;
 }
 
 /**
@@ -138,11 +150,18 @@ interface ModalApiResponse<T> {
 export class ModalApiError extends Error {
   constructor(
     message: string,
-    public readonly status: number
+    public readonly status: number,
+    public readonly code?: string,
+    public readonly details?: unknown
   ) {
     super(message);
     this.name = "ModalApiError";
   }
+}
+
+interface FetchPolicy {
+  timeoutMs?: number;
+  maxAttempts?: number;
 }
 
 /**
@@ -178,6 +197,114 @@ export class ModalClient {
     this.restoreSandboxUrl = `${baseUrl}-api-restore-sandbox.modal.run`;
     this.buildRepoImageUrl = `${baseUrl}-api-build-repo-image.modal.run`;
     this.deleteProviderImageUrl = `${baseUrl}-api-delete-provider-image.modal.run`;
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private parseErrorPayload(payload: unknown): ModalApiErrorPayload | undefined {
+    if (!payload || typeof payload !== "object") return undefined;
+    const candidate = payload as Record<string, unknown>;
+    const errorValue = candidate.error;
+    if (typeof errorValue === "string") {
+      return { message: errorValue };
+    }
+    if (errorValue && typeof errorValue === "object") {
+      return errorValue as ModalApiErrorPayload;
+    }
+    return undefined;
+  }
+
+  private extractErrorMessage(
+    errorPayload: ModalApiErrorPayload | undefined,
+    fallback: string
+  ): string {
+    if (errorPayload?.message && errorPayload.message.trim().length > 0) {
+      return errorPayload.message;
+    }
+    return fallback;
+  }
+
+  private async fetchWithPolicy(
+    url: string,
+    init: RequestInit,
+    policy: FetchPolicy = {}
+  ): Promise<Response> {
+    const timeoutMs = policy.timeoutMs ?? DEFAULT_MODAL_REQUEST_TIMEOUT_MS;
+    const maxAttempts = Math.max(1, policy.maxAttempts ?? 1);
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const controller = new AbortController();
+      const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const response = await fetch(url, {
+          ...init,
+          signal: controller.signal,
+        });
+
+        if (
+          attempt < maxAttempts &&
+          (response.status === 502 || response.status === 503 || response.status === 504)
+        ) {
+          await this.sleep(RETRY_BASE_DELAY_MS * attempt);
+          continue;
+        }
+
+        return response;
+      } catch (error) {
+        lastError = error;
+        const isAbortError = error instanceof Error && error.name === "AbortError";
+        const isNetworkError =
+          error instanceof Error &&
+          (error.message.toLowerCase().includes("fetch") ||
+            error.message.toLowerCase().includes("network") ||
+            error.message.toLowerCase().includes("timed out") ||
+            error.message.toLowerCase().includes("econn") ||
+            error.message.toLowerCase().includes("reset"));
+
+        if (attempt >= maxAttempts || (!isAbortError && !isNetworkError)) {
+          throw error;
+        }
+
+        await this.sleep(RETRY_BASE_DELAY_MS * attempt);
+      } finally {
+        clearTimeout(timeoutHandle);
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error("Modal request failed");
+  }
+
+  private async parseApiError(response: Response): Promise<ModalApiError> {
+    const fallbackMessage = `Modal API error: HTTP ${response.status}`;
+    const contentType = response.headers.get("content-type") || "";
+
+    if (contentType.includes("application/json")) {
+      const json = (await response.json()) as unknown;
+      const payload = this.parseErrorPayload(json);
+      return new ModalApiError(
+        this.extractErrorMessage(payload, fallbackMessage),
+        response.status,
+        payload?.code,
+        payload?.details
+      );
+    }
+
+    const text = await response.text();
+    return new ModalApiError(text || fallbackMessage, response.status);
+  }
+
+  private resolveResultError(result: ModalApiResponse<unknown>): string {
+    if (typeof result.error === "string") {
+      return result.error;
+    }
+    if (result.error?.message) {
+      return result.error.message;
+    }
+    return "Unknown error";
   }
 
   /**
@@ -225,33 +352,36 @@ export class ModalClient {
 
     try {
       const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.createSandboxUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          session_id: request.sessionId,
-          sandbox_id: request.sandboxId || null, // Use control-plane-generated ID
-          repo_owner: request.repoOwner,
-          repo_name: request.repoName,
-          control_plane_url: request.controlPlaneUrl,
-          sandbox_auth_token: request.sandboxAuthToken,
-          snapshot_id: request.snapshotId || null,
-          opencode_session_id: request.opencodeSessionId || null,
-          provider: request.provider || "anthropic",
-          model: request.model || "claude-sonnet-4-6",
-          user_env_vars: request.userEnvVars || null,
-          repo_image_id: request.repoImageId || null,
-          repo_image_sha: request.repoImageSha || null,
-          timeout_seconds: request.timeoutSeconds || null,
-          branch: request.branch || null,
-        }),
-      });
+      const response = await this.fetchWithPolicy(
+        this.createSandboxUrl,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            session_id: request.sessionId,
+            sandbox_id: request.sandboxId || null, // Use control-plane-generated ID
+            repo_owner: request.repoOwner,
+            repo_name: request.repoName,
+            control_plane_url: request.controlPlaneUrl,
+            sandbox_auth_token: request.sandboxAuthToken,
+            snapshot_id: request.snapshotId || null,
+            opencode_session_id: request.opencodeSessionId || null,
+            provider: request.provider || "anthropic",
+            model: request.model || "claude-sonnet-4-6",
+            user_env_vars: request.userEnvVars || null,
+            repo_image_id: request.repoImageId || null,
+            repo_image_sha: request.repoImageSha || null,
+            timeout_seconds: request.timeoutSeconds || null,
+            branch: request.branch || null,
+          }),
+        },
+        { timeoutMs: SANDBOX_LIFECYCLE_REQUEST_TIMEOUT_MS }
+      );
 
       httpStatus = response.status;
 
       if (!response.ok) {
-        const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
+        throw await this.parseApiError(response);
       }
 
       const result = (await response.json()) as ModalApiResponse<{
@@ -262,7 +392,7 @@ export class ModalClient {
       }>;
 
       if (!result.success || !result.data) {
-        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
+        throw new Error(`Modal API error: ${this.resolveResultError(result)}`);
       }
 
       outcome = "success";
@@ -301,32 +431,35 @@ export class ModalClient {
 
     try {
       const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.restoreSandboxUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          snapshot_image_id: request.snapshotImageId,
-          session_config: {
-            session_id: request.sessionId,
-            repo_owner: request.repoOwner,
-            repo_name: request.repoName,
-            provider: request.provider,
-            model: request.model,
-            branch: request.branch || null,
-          },
-          sandbox_id: request.sandboxId,
-          control_plane_url: request.controlPlaneUrl,
-          sandbox_auth_token: request.sandboxAuthToken,
-          user_env_vars: request.userEnvVars || null,
-          timeout_seconds: request.timeoutSeconds || null,
-        }),
-      });
+      const response = await this.fetchWithPolicy(
+        this.restoreSandboxUrl,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            snapshot_image_id: request.snapshotImageId,
+            session_config: {
+              session_id: request.sessionId,
+              repo_owner: request.repoOwner,
+              repo_name: request.repoName,
+              provider: request.provider,
+              model: request.model,
+              branch: request.branch || null,
+            },
+            sandbox_id: request.sandboxId,
+            control_plane_url: request.controlPlaneUrl,
+            sandbox_auth_token: request.sandboxAuthToken,
+            user_env_vars: request.userEnvVars || null,
+            timeout_seconds: request.timeoutSeconds || null,
+          }),
+        },
+        { timeoutMs: SANDBOX_LIFECYCLE_REQUEST_TIMEOUT_MS }
+      );
 
       httpStatus = response.status;
 
       if (!response.ok) {
-        const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
+        throw await this.parseApiError(response);
       }
 
       const result = (await response.json()) as ModalApiResponse<{
@@ -335,7 +468,7 @@ export class ModalClient {
       }>;
 
       if (!result.success) {
-        return { success: false, error: result.error || "Unknown restore error" };
+        return { success: false, error: this.resolveResultError(result) };
       }
 
       outcome = "success";
@@ -373,26 +506,29 @@ export class ModalClient {
 
     try {
       const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.snapshotSandboxUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          sandbox_id: request.providerObjectId,
-          session_id: request.sessionId,
-          reason: request.reason,
-        }),
-      });
+      const response = await this.fetchWithPolicy(
+        this.snapshotSandboxUrl,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            sandbox_id: request.providerObjectId,
+            session_id: request.sessionId,
+            reason: request.reason,
+          }),
+        },
+        { timeoutMs: SANDBOX_LIFECYCLE_REQUEST_TIMEOUT_MS }
+      );
 
       httpStatus = response.status;
 
       if (!response.ok) {
-        const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
+        throw await this.parseApiError(response);
       }
 
       const result = (await response.json()) as ModalApiResponse<{ image_id: string }>;
       if (!result.success) {
-        return { success: false, error: result.error || "Unknown snapshot error" };
+        return { success: false, error: this.resolveResultError(result) };
       }
 
       if (!result.data?.image_id) {
@@ -430,21 +566,24 @@ export class ModalClient {
 
     try {
       const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.warmSandboxUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          repo_owner: request.repoOwner,
-          repo_name: request.repoName,
-          control_plane_url: request.controlPlaneUrl || "",
-        }),
-      });
+      const response = await this.fetchWithPolicy(
+        this.warmSandboxUrl,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            repo_owner: request.repoOwner,
+            repo_name: request.repoName,
+            control_plane_url: request.controlPlaneUrl || "",
+          }),
+        },
+        { timeoutMs: DEFAULT_MODAL_REQUEST_TIMEOUT_MS }
+      );
 
       httpStatus = response.status;
 
       if (!response.ok) {
-        const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
+        throw await this.parseApiError(response);
       }
 
       const result = (await response.json()) as ModalApiResponse<{
@@ -453,7 +592,7 @@ export class ModalClient {
       }>;
 
       if (!result.success || !result.data) {
-        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
+        throw new Error(`Modal API error: ${this.resolveResultError(result)}`);
       }
 
       outcome = "success";
@@ -481,10 +620,17 @@ export class ModalClient {
    * Note: Health endpoint does not require authentication.
    */
   async health(): Promise<{ status: string; service: string }> {
-    const response = await fetch(this.healthUrl);
+    const response = await this.fetchWithPolicy(
+      this.healthUrl,
+      { method: "GET" },
+      {
+        timeoutMs: DEFAULT_MODAL_REQUEST_TIMEOUT_MS,
+        maxAttempts: SAFE_RETRY_MAX_ATTEMPTS,
+      }
+    );
 
     if (!response.ok) {
-      throw new ModalApiError(`Modal API error: ${response.status}`, response.status);
+      throw await this.parseApiError(response);
     }
 
     const result = (await response.json()) as ModalApiResponse<{
@@ -493,7 +639,7 @@ export class ModalClient {
     }>;
 
     if (!result.success || !result.data) {
-      throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
+      throw new Error(`Modal API error: ${this.resolveResultError(result)}`);
     }
 
     return result.data;
@@ -510,7 +656,11 @@ export class ModalClient {
     const url = `${this.snapshotUrl}?repo_owner=${encodeURIComponent(repoOwner)}&repo_name=${encodeURIComponent(repoName)}`;
 
     const headers = await this.getGetHeaders(correlation);
-    const response = await fetch(url, { headers });
+    const response = await this.fetchWithPolicy(
+      url,
+      { method: "GET", headers },
+      { timeoutMs: DEFAULT_MODAL_REQUEST_TIMEOUT_MS, maxAttempts: SAFE_RETRY_MAX_ATTEMPTS }
+    );
 
     if (!response.ok) {
       return null;
@@ -539,24 +689,27 @@ export class ModalClient {
 
     try {
       const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.buildRepoImageUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          repo_owner: request.repoOwner,
-          repo_name: request.repoName,
-          default_branch: request.defaultBranch || "main",
-          build_id: request.buildId,
-          callback_url: request.callbackUrl,
-          user_env_vars: request.userEnvVars,
-        }),
-      });
+      const response = await this.fetchWithPolicy(
+        this.buildRepoImageUrl,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            repo_owner: request.repoOwner,
+            repo_name: request.repoName,
+            default_branch: request.defaultBranch || "main",
+            build_id: request.buildId,
+            callback_url: request.callbackUrl,
+            user_env_vars: request.userEnvVars,
+          }),
+        },
+        { timeoutMs: DEFAULT_MODAL_REQUEST_TIMEOUT_MS }
+      );
 
       httpStatus = response.status;
 
       if (!response.ok) {
-        const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
+        throw await this.parseApiError(response);
       }
 
       const result = (await response.json()) as ModalApiResponse<{
@@ -565,7 +718,7 @@ export class ModalClient {
       }>;
 
       if (!result.success || !result.data) {
-        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
+        throw new Error(`Modal API error: ${this.resolveResultError(result)}`);
       }
 
       outcome = "success";
@@ -603,19 +756,22 @@ export class ModalClient {
 
     try {
       const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.deleteProviderImageUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          provider_image_id: request.providerImageId,
-        }),
-      });
+      const response = await this.fetchWithPolicy(
+        this.deleteProviderImageUrl,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            provider_image_id: request.providerImageId,
+          }),
+        },
+        { timeoutMs: DEFAULT_MODAL_REQUEST_TIMEOUT_MS, maxAttempts: SAFE_RETRY_MAX_ATTEMPTS }
+      );
 
       httpStatus = response.status;
 
       if (!response.ok) {
-        const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
+        throw await this.parseApiError(response);
       }
 
       const result = (await response.json()) as ModalApiResponse<{
@@ -624,7 +780,7 @@ export class ModalClient {
       }>;
 
       if (!result.success || !result.data) {
-        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
+        throw new Error(`Modal API error: ${this.resolveResultError(result)}`);
       }
 
       outcome = "success";

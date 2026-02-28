@@ -15,6 +15,7 @@ import os
 import time
 
 from fastapi import Header, HTTPException
+from fastapi.responses import JSONResponse
 from modal import fastapi_endpoint
 
 from .app import (
@@ -30,6 +31,55 @@ from .log_config import configure_logging, get_logger
 
 configure_logging()
 log = get_logger("web_api")
+
+
+def _error_code_for_status(status_code: int) -> str:
+    if status_code == 400:
+        return "bad_request"
+    if status_code == 401:
+        return "unauthorized"
+    if status_code == 403:
+        return "forbidden"
+    if status_code == 404:
+        return "not_found"
+    if status_code == 409:
+        return "conflict"
+    if status_code == 422:
+        return "validation_error"
+    if status_code == 429:
+        return "rate_limited"
+    if status_code == 503:
+        return "service_unavailable"
+    if status_code >= 500:
+        return "internal_error"
+    return "request_failed"
+
+
+def success_response(data: dict | None, status_code: int = 200) -> JSONResponse:
+    return JSONResponse(status_code=status_code, content={"success": True, "data": data})
+
+
+def error_response(
+    *, status_code: int, message: str, code: str | None = None, details: dict | None = None
+) -> JSONResponse:
+    error_payload = {
+        "code": code or _error_code_for_status(status_code),
+        "message": message,
+        "status_code": status_code,
+    }
+    if details is not None:
+        error_payload["details"] = details
+    return JSONResponse(status_code=status_code, content={"success": False, "error": error_payload})
+
+
+def _http_exception_message(exc: HTTPException) -> str:
+    if isinstance(exc.detail, str):
+        return exc.detail
+    if isinstance(exc.detail, dict):
+        detail_message = exc.detail.get("message")
+        if isinstance(detail_message, str) and detail_message:
+            return detail_message
+    return "Request failed"
 
 
 def require_auth(authorization: str | None) -> None:
@@ -86,7 +136,7 @@ async def api_create_sandbox(
     x_request_id: str | None = Header(None),
     x_session_id: str | None = Header(None),
     x_sandbox_id: str | None = Header(None),
-) -> dict:
+) -> dict | JSONResponse:
     """
     HTTP endpoint to create a sandbox.
 
@@ -109,16 +159,44 @@ async def api_create_sandbox(
     http_status = 200
     outcome = "success"
 
-    require_auth(authorization)
-
-    control_plane_url = request.get("control_plane_url")
-    require_valid_control_plane_url(control_plane_url)
-
     try:
+        require_auth(authorization)
+
+        control_plane_url = request.get("control_plane_url")
+        require_valid_control_plane_url(control_plane_url)
+        if not isinstance(control_plane_url, str):
+            control_plane_url = ""
+
         # Import types and manager directly
         from .auth.github_app import generate_installation_token
-        from .sandbox.manager import SandboxConfig, SandboxManager
+        from .sandbox.manager import (
+            DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+            SandboxConfig,
+            SandboxManager,
+        )
         from .sandbox.types import SessionConfig
+
+        session_id = request.get("session_id")
+        repo_owner = request.get("repo_owner")
+        repo_name = request.get("repo_name")
+        sandbox_auth_token = request.get("sandbox_auth_token")
+
+        if not isinstance(session_id, str) or not session_id:
+            raise HTTPException(status_code=400, detail="session_id is required")
+        if not isinstance(repo_owner, str) or not repo_owner:
+            raise HTTPException(status_code=400, detail="repo_owner is required")
+        if not isinstance(repo_name, str) or not repo_name:
+            raise HTTPException(status_code=400, detail="repo_name is required")
+        if not isinstance(sandbox_auth_token, str) or not sandbox_auth_token:
+            raise HTTPException(status_code=400, detail="sandbox_auth_token is required")
+
+        timeout_seconds_raw = request.get("timeout_seconds")
+        timeout_seconds = DEFAULT_SANDBOX_TIMEOUT_SECONDS
+        if timeout_seconds_raw is not None:
+            try:
+                timeout_seconds = int(timeout_seconds_raw)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="timeout_seconds must be an integer")
 
         manager = SandboxManager()
 
@@ -139,9 +217,9 @@ async def api_create_sandbox(
             log.warn("github.token_error", exc=e)
 
         session_config = SessionConfig(
-            session_id=request.get("session_id"),
-            repo_owner=request.get("repo_owner"),
-            repo_name=request.get("repo_name"),
+            session_id=session_id,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
             branch=request.get("branch"),
             opencode_session_id=request.get("opencode_session_id"),
             provider=request.get("provider", "anthropic"),
@@ -149,13 +227,14 @@ async def api_create_sandbox(
         )
 
         config = SandboxConfig(
-            repo_owner=request.get("repo_owner"),
-            repo_name=request.get("repo_name"),
+            repo_owner=repo_owner,
+            repo_name=repo_name,
             sandbox_id=request.get("sandbox_id"),  # Use control-plane-provided ID for auth
             snapshot_id=request.get("snapshot_id"),
             session_config=session_config,
             control_plane_url=control_plane_url,
-            sandbox_auth_token=request.get("sandbox_auth_token"),
+            sandbox_auth_token=sandbox_auth_token,
+            timeout_seconds=timeout_seconds,
             clone_token=github_app_token,
             user_env_vars=request.get("user_env_vars") or None,
             repo_image_id=request.get("repo_image_id") or None,
@@ -164,20 +243,31 @@ async def api_create_sandbox(
 
         handle = await manager.create_sandbox(config)
 
-        return {
-            "success": True,
-            "data": {
+        return success_response(
+            {
                 "sandbox_id": handle.sandbox_id,
                 "modal_object_id": handle.modal_object_id,  # Modal's internal ID for snapshot API
                 "status": handle.status.value,
                 "created_at": handle.created_at,
-            },
-        }
+            }
+        )
+    except HTTPException as e:
+        outcome = "error"
+        http_status = e.status_code
+        return error_response(
+            status_code=e.status_code,
+            message=_http_exception_message(e),
+            details=e.detail if isinstance(e.detail, dict) else None,
+        )
     except Exception as e:
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_create_sandbox")
-        return {"success": False, "error": str(e)}
+        return error_response(
+            status_code=500,
+            message="Failed to create sandbox",
+            details={"exception": e.__class__.__name__},
+        )
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -208,7 +298,7 @@ async def api_warm_sandbox(
     x_request_id: str | None = Header(None),
     x_session_id: str | None = Header(None),
     x_sandbox_id: str | None = Header(None),
-) -> dict:
+) -> dict | JSONResponse:
     """
     HTTP endpoint to warm a sandbox.
 
@@ -225,33 +315,53 @@ async def api_warm_sandbox(
     http_status = 200
     outcome = "success"
 
-    require_auth(authorization)
-
-    control_plane_url = request.get("control_plane_url", "")
-    require_valid_control_plane_url(control_plane_url)
-
     try:
+        require_auth(authorization)
+
+        control_plane_url = request.get("control_plane_url", "")
+        if not isinstance(control_plane_url, str):
+            control_plane_url = ""
+        require_valid_control_plane_url(control_plane_url)
+
+        repo_owner = request.get("repo_owner")
+        repo_name = request.get("repo_name")
+        if not isinstance(repo_owner, str) or not repo_owner:
+            raise HTTPException(status_code=400, detail="repo_owner is required")
+        if not isinstance(repo_name, str) or not repo_name:
+            raise HTTPException(status_code=400, detail="repo_name is required")
+
         from .sandbox.manager import SandboxManager
 
         manager = SandboxManager()
         handle = await manager.warm_sandbox(
-            repo_owner=request.get("repo_owner"),
-            repo_name=request.get("repo_name"),
+            repo_owner=repo_owner,
+            repo_name=repo_name,
             control_plane_url=control_plane_url,
         )
 
-        return {
-            "success": True,
-            "data": {
+        return success_response(
+            {
                 "sandbox_id": handle.sandbox_id,
                 "status": handle.status.value,
-            },
-        }
+            }
+        )
+    except HTTPException as e:
+        outcome = "error"
+        http_status = e.status_code
+        return error_response(
+            status_code=e.status_code,
+            message=_http_exception_message(e),
+            details=e.detail if isinstance(e.detail, dict) else None,
+        )
     except Exception as e:
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_warm_sandbox")
-        return {"success": False, "error": str(e)}
+        return error_response(
+            status_code=500,
+            message="Failed to warm sandbox",
+            details={"exception": e.__class__.__name__},
+        )
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -290,7 +400,7 @@ def api_snapshot(
     x_request_id: str | None = Header(None),
     x_session_id: str | None = Header(None),
     x_sandbox_id: str | None = Header(None),
-) -> dict:
+) -> dict | JSONResponse:
     """
     Get latest snapshot for a repository.
 
@@ -302,22 +412,34 @@ def api_snapshot(
     http_status = 200
     outcome = "success"
 
-    require_auth(authorization)
-
     try:
+        require_auth(authorization)
+
         from .registry.store import SnapshotStore
 
         store = SnapshotStore()
         snapshot = store.get_latest_snapshot(repo_owner, repo_name)
 
         if snapshot:
-            return {"success": True, "data": snapshot.model_dump()}
-        return {"success": True, "data": None}
+            return success_response(snapshot.model_dump())
+        return success_response(None)
+    except HTTPException as e:
+        outcome = "error"
+        http_status = e.status_code
+        return error_response(
+            status_code=e.status_code,
+            message=_http_exception_message(e),
+            details=e.detail if isinstance(e.detail, dict) else None,
+        )
     except Exception as e:
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_snapshot")
-        return {"success": False, "error": str(e)}
+        return error_response(
+            status_code=500,
+            message="Failed to fetch snapshot",
+            details={"exception": e.__class__.__name__},
+        )
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -344,7 +466,7 @@ async def api_snapshot_sandbox(
     x_request_id: str | None = Header(None),
     x_session_id: str | None = Header(None),
     x_sandbox_id: str | None = Header(None),
-) -> dict:
+) -> dict | JSONResponse:
     """
     Take a filesystem snapshot of a running sandbox using Modal's native API.
 
@@ -375,14 +497,15 @@ async def api_snapshot_sandbox(
     start_time = time.time()
     http_status = 200
     outcome = "success"
-
-    require_auth(authorization)
-
-    sandbox_id = request.get("sandbox_id")
-    if not sandbox_id:
-        raise HTTPException(status_code=400, detail="sandbox_id is required")
+    sandbox_id: str | None = None
 
     try:
+        require_auth(authorization)
+
+        sandbox_id = request.get("sandbox_id")
+        if not sandbox_id:
+            raise HTTPException(status_code=400, detail="sandbox_id is required")
+
         from .sandbox.manager import SandboxManager
 
         session_id = request.get("session_id")
@@ -398,24 +521,31 @@ async def api_snapshot_sandbox(
         # Take filesystem snapshot using Modal's native API (sync method)
         image_id = manager.take_snapshot(handle)
 
-        return {
-            "success": True,
-            "data": {
+        return success_response(
+            {
                 "image_id": image_id,
                 "sandbox_id": sandbox_id,
                 "session_id": session_id,
                 "reason": reason,
-            },
-        }
+            }
+        )
     except HTTPException as e:
         outcome = "error"
         http_status = e.status_code
-        raise
+        return error_response(
+            status_code=e.status_code,
+            message=_http_exception_message(e),
+            details=e.detail if isinstance(e.detail, dict) else None,
+        )
     except Exception as e:
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_snapshot_sandbox")
-        return {"success": False, "error": str(e)}
+        return error_response(
+            status_code=500,
+            message="Failed to snapshot sandbox",
+            details={"exception": e.__class__.__name__},
+        )
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -442,7 +572,7 @@ async def api_restore_sandbox(
     x_request_id: str | None = Header(None),
     x_session_id: str | None = Header(None),
     x_sandbox_id: str | None = Header(None),
-) -> dict:
+) -> dict | JSONResponse:
     """
     Create a new sandbox from a filesystem snapshot.
 
@@ -480,16 +610,18 @@ async def api_restore_sandbox(
     http_status = 200
     outcome = "success"
 
-    require_auth(authorization)
-
-    control_plane_url = request.get("control_plane_url", "")
-    require_valid_control_plane_url(control_plane_url)
-
-    snapshot_image_id = request.get("snapshot_image_id")
-    if not snapshot_image_id:
-        raise HTTPException(status_code=400, detail="snapshot_image_id is required")
-
     try:
+        require_auth(authorization)
+
+        control_plane_url = request.get("control_plane_url", "")
+        if not isinstance(control_plane_url, str):
+            control_plane_url = ""
+        require_valid_control_plane_url(control_plane_url)
+
+        snapshot_image_id = request.get("snapshot_image_id")
+        if not snapshot_image_id:
+            raise HTTPException(status_code=400, detail="snapshot_image_id is required")
+
         from .auth.github_app import generate_installation_token
         from .sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxManager
 
@@ -497,7 +629,13 @@ async def api_restore_sandbox(
         sandbox_id = request.get("sandbox_id")
         sandbox_auth_token = request.get("sandbox_auth_token", "")
         user_env_vars = request.get("user_env_vars") or None
-        timeout_seconds = int(request.get("timeout_seconds", DEFAULT_SANDBOX_TIMEOUT_SECONDS))
+        timeout_seconds_raw = request.get("timeout_seconds")
+        timeout_seconds = DEFAULT_SANDBOX_TIMEOUT_SECONDS
+        if timeout_seconds_raw is not None:
+            try:
+                timeout_seconds = int(timeout_seconds_raw)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="timeout_seconds must be an integer")
 
         manager = SandboxManager()
 
@@ -528,23 +666,30 @@ async def api_restore_sandbox(
             timeout_seconds=timeout_seconds,
         )
 
-        return {
-            "success": True,
-            "data": {
+        return success_response(
+            {
                 "sandbox_id": handle.sandbox_id,
                 "modal_object_id": handle.modal_object_id,
                 "status": handle.status.value,
-            },
-        }
+            }
+        )
     except HTTPException as e:
         outcome = "error"
         http_status = e.status_code
-        raise
+        return error_response(
+            status_code=e.status_code,
+            message=_http_exception_message(e),
+            details=e.detail if isinstance(e.detail, dict) else None,
+        )
     except Exception as e:
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_restore_sandbox")
-        return {"success": False, "error": str(e)}
+        return error_response(
+            status_code=500,
+            message="Failed to restore sandbox",
+            details={"exception": e.__class__.__name__},
+        )
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -572,7 +717,7 @@ async def api_build_repo_image(
     authorization: str | None = Header(None),
     x_trace_id: str | None = Header(None),
     x_request_id: str | None = Header(None),
-) -> dict:
+) -> dict | JSONResponse:
     """
     Kick off an async image build. Returns immediately.
 
@@ -595,9 +740,9 @@ async def api_build_repo_image(
     http_status = 200
     outcome = "success"
 
-    require_auth(authorization)
-
     try:
+        require_auth(authorization)
+
         from .scheduler.image_builder import build_repo_image
 
         repo_owner = request.get("repo_owner")
@@ -623,22 +768,29 @@ async def api_build_repo_image(
             user_env_vars=user_env_vars,
         )
 
-        return {
-            "success": True,
-            "data": {
+        return success_response(
+            {
                 "build_id": build_id,
                 "status": "building",
-            },
-        }
+            }
+        )
     except HTTPException as e:
         outcome = "error"
         http_status = e.status_code
-        raise
+        return error_response(
+            status_code=e.status_code,
+            message=_http_exception_message(e),
+            details=e.detail if isinstance(e.detail, dict) else None,
+        )
     except Exception as e:
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_build_repo_image")
-        return {"success": False, "error": str(e)}
+        return error_response(
+            status_code=500,
+            message="Failed to start image build",
+            details={"exception": e.__class__.__name__},
+        )
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -664,7 +816,7 @@ async def api_delete_provider_image(
     authorization: str | None = Header(None),
     x_trace_id: str | None = Header(None),
     x_request_id: str | None = Header(None),
-) -> dict:
+) -> dict | JSONResponse:
     """
     Delete a single provider image (best-effort).
 
@@ -679,13 +831,13 @@ async def api_delete_provider_image(
     http_status = 200
     outcome = "success"
 
-    require_auth(authorization)
-
-    provider_image_id = request.get("provider_image_id")
-    if not provider_image_id:
-        raise HTTPException(status_code=400, detail="provider_image_id is required")
-
     try:
+        require_auth(authorization)
+
+        provider_image_id = request.get("provider_image_id")
+        if not provider_image_id:
+            raise HTTPException(status_code=400, detail="provider_image_id is required")
+
         # Modal doesn't have an explicit delete API for images;
         # images are garbage-collected when no longer referenced.
         # We log the request for auditability.
@@ -694,22 +846,29 @@ async def api_delete_provider_image(
             provider_image_id=provider_image_id,
         )
 
-        return {
-            "success": True,
-            "data": {
+        return success_response(
+            {
                 "provider_image_id": provider_image_id,
                 "deleted": True,
-            },
-        }
+            }
+        )
     except HTTPException as e:
         outcome = "error"
         http_status = e.status_code
-        raise
+        return error_response(
+            status_code=e.status_code,
+            message=_http_exception_message(e),
+            details=e.detail if isinstance(e.detail, dict) else None,
+        )
     except Exception as e:
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_delete_provider_image")
-        return {"success": False, "error": str(e)}
+        return error_response(
+            status_code=500,
+            message="Failed to delete provider image",
+            details={"exception": e.__class__.__name__},
+        )
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(

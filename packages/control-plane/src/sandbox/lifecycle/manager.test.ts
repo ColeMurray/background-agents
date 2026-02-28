@@ -304,6 +304,112 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.createSandbox).toHaveBeenCalledWith(expect.objectContaining({ userEnvVars }));
     });
 
+    it("passes child timeout seconds to fresh sandbox create", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession({ spawn_source: "agent" }), sandbox);
+      const provider = createMockProvider();
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutSeconds: 3600 })
+      );
+    });
+
+    it("passes child timeout seconds to snapshot restore", async () => {
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "img-abc123",
+      });
+      const storage = createMockStorage(createMockSession({ spawn_source: "agent" }), sandbox);
+      const provider = createMockProvider();
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutSeconds: 3600 })
+      );
+    });
+
+    it("passes correlation context for create and restore provider calls", async () => {
+      const createSandboxState = createMockSandbox({
+        status: "pending",
+        created_at: Date.now() - 60000,
+      });
+      const createStorage = createMockStorage(createMockSession(), createSandboxState);
+      const provider = createMockProvider();
+      const createManager = new SandboxLifecycleManager(
+        provider,
+        createStorage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await createManager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          correlation: expect.objectContaining({
+            trace_id: expect.any(String),
+            request_id: expect.any(String),
+            session_id: "test-session",
+            sandbox_id: expect.stringMatching(/^sandbox-testowner-testrepo-/),
+          }),
+        })
+      );
+
+      const restoreSandboxState = createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "img-restore",
+      });
+      const restoreStorage = createMockStorage(createMockSession(), restoreSandboxState);
+      const restoreManager = new SandboxLifecycleManager(
+        provider,
+        restoreStorage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await restoreManager.spawnSandbox();
+
+      expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          correlation: expect.objectContaining({
+            trace_id: expect.any(String),
+            request_id: expect.any(String),
+            session_id: "test-session",
+            sandbox_id: expect.stringMatching(/^sandbox-testowner-testrepo-/),
+          }),
+        })
+      );
+    });
+
     it("respects circuit breaker blocking", async () => {
       const now = Date.now();
       const sandbox = createMockSandbox({
@@ -676,6 +782,35 @@ describe("SandboxLifecycleManager", () => {
       await manager.triggerSnapshot("execution_complete");
 
       expect(storage.calls).toContain("updateSandboxSnapshotImageId:custom-snapshot-id");
+    });
+
+    it("passes correlation context for snapshot provider calls", async () => {
+      const sandbox = createMockSandbox({ status: "ready", modal_sandbox_id: "sandbox-modal-123" });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const provider = createMockProvider();
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.triggerSnapshot("execution_complete");
+
+      expect(provider.takeSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          correlation: expect.objectContaining({
+            trace_id: expect.any(String),
+            request_id: expect.any(String),
+            session_id: "test-session",
+            sandbox_id: "sandbox-modal-123",
+          }),
+        })
+      );
     });
 
     it("handles snapshot errors gracefully", async () => {

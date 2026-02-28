@@ -13,6 +13,7 @@
 import type { SandboxStatus } from "../../types";
 import type { SandboxRow, SessionRow } from "../../session/types";
 import { SandboxProviderError, type SandboxProvider, type CreateSandboxConfig } from "../provider";
+import type { CorrelationContext } from "../../logger";
 import {
   evaluateCircuitBreaker,
   evaluateSpawnDecision,
@@ -193,6 +194,9 @@ export class SandboxLifecycleManager {
   /** Session-scoped logger. Falls back to module-level logger if no sessionId configured. */
   private readonly log: Logger;
 
+  /** Generates correlation IDs for provider API calls. */
+  private readonly generateCorrelationId: () => string;
+
   constructor(
     private readonly provider: SandboxProvider,
     private readonly storage: SandboxStorage,
@@ -205,6 +209,21 @@ export class SandboxLifecycleManager {
     private readonly repoImageLookup?: RepoImageLookup
   ) {
     this.log = config.sessionId ? log.child({ session_id: config.sessionId }) : log;
+    this.generateCorrelationId = () => {
+      if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID();
+      }
+      return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    };
+  }
+
+  private buildCorrelationContext(sessionId: string, sandboxId: string): CorrelationContext {
+    return {
+      trace_id: this.generateCorrelationId(),
+      request_id: this.generateCorrelationId(),
+      session_id: sessionId,
+      sandbox_id: sandboxId,
+    };
   }
 
   /**
@@ -372,6 +391,7 @@ export class SandboxLifecycleManager {
         repoImageSha,
         timeoutSeconds,
         branch: session.base_branch,
+        correlation: this.buildCorrelationContext(sessionId, expectedSandboxId),
       };
 
       const result = await this.provider.createSandbox(createConfig);
@@ -489,6 +509,10 @@ export class SandboxLifecycleManager {
         userEnvVars,
         timeoutSeconds,
         branch: session.base_branch,
+        correlation: this.buildCorrelationContext(
+          session.session_name || session.id,
+          expectedSandboxId
+        ),
       });
 
       if (result.success) {
@@ -585,6 +609,10 @@ export class SandboxLifecycleManager {
         providerObjectId: sandbox.modal_object_id,
         sessionId: session.session_name || session.id,
         reason,
+        correlation: this.buildCorrelationContext(
+          session.session_name || session.id,
+          sandbox.modal_sandbox_id || sandbox.id
+        ),
       });
 
       if (result.success && result.imageId) {

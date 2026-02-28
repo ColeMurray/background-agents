@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxConfig, SandboxManager
@@ -360,3 +362,31 @@ async def test_restore_vcs_env_vars(monkeypatch):
     # GitHub-specific vars not set for Bitbucket
     assert "GITHUB_APP_TOKEN" not in env
     assert "GITHUB_TOKEN" not in env
+
+
+@pytest.mark.asyncio
+async def test_restore_preserves_branch_in_session_config(monkeypatch):
+    """restore_from_snapshot should include branch in SESSION_CONFIG."""
+    captured = {}
+
+    class FakeImage:
+        object_id = "img-123"
+
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+
+    manager = SandboxManager()
+    await manager.restore_from_snapshot(
+        snapshot_image_id="img-branch",
+        session_config={
+            "repo_owner": "acme",
+            "repo_name": "repo",
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-6",
+            "session_id": "sess-branch",
+            "branch": "feature/test-branch",
+        },
+    )
+
+    session_config = json.loads(captured["env"]["SESSION_CONFIG"])
+    assert session_config["branch"] == "feature/test-branch"
