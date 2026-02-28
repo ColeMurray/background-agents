@@ -47,6 +47,14 @@ type EventGroup =
   | { type: "tool_group"; events: ToolCallEvent[]; id: string }
   | { type: "single"; event: SandboxEvent; id: string };
 
+type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
+
+type FallbackSessionInfo = {
+  repoOwner: string | null;
+  repoName: string | null;
+  title: string | null;
+};
+
 // Group consecutive tool calls of the same type
 function groupEvents(events: SandboxEvent[]): EventGroup[] {
   const groups: EventGroup[] = [];
@@ -89,6 +97,65 @@ function groupEvents(events: SandboxEvent[]): EventGroup[] {
   flushToolGroup();
 
   return groups;
+}
+
+function dedupeAndGroupEvents(events: SandboxEvent[]): EventGroup[] {
+  const filteredEvents: Array<SandboxEvent | null> = [];
+  const seenToolCalls = new Map<string, number>();
+  const seenCompletions = new Set<string>();
+  const seenTokens = new Map<string, number>();
+
+  for (const event of events) {
+    if (event.type === "tool_call" && event.callId) {
+      // Deduplicate tool_call events by callId - keep the latest (most complete) one
+      const existingIdx = seenToolCalls.get(event.callId);
+      if (existingIdx !== undefined) {
+        filteredEvents[existingIdx] = event;
+      } else {
+        seenToolCalls.set(event.callId, filteredEvents.length);
+        filteredEvents.push(event);
+      }
+    } else if (event.type === "execution_complete" && event.messageId) {
+      // Skip duplicate execution_complete for the same message
+      if (!seenCompletions.has(event.messageId)) {
+        seenCompletions.add(event.messageId);
+        filteredEvents.push(event);
+      }
+    } else if (event.type === "token" && event.messageId) {
+      // Deduplicate tokens by messageId - keep latest at its chronological position
+      const existingIdx = seenTokens.get(event.messageId);
+      if (existingIdx !== undefined) {
+        filteredEvents[existingIdx] = null;
+      }
+      seenTokens.set(event.messageId, filteredEvents.length);
+      filteredEvents.push(event);
+    } else {
+      // All other events (user_message, git_sync, etc.) - add as-is
+      filteredEvents.push(event);
+    }
+  }
+
+  return groupEvents(filteredEvents.filter((event): event is SandboxEvent => event !== null));
+}
+
+function resolveSessionDisplayInfo(
+  sessionState: SessionState,
+  fallbackSessionInfo: FallbackSessionInfo
+): {
+  repoLabel: string;
+  title: string;
+} {
+  const resolvedRepoOwner = sessionState?.repoOwner ?? fallbackSessionInfo.repoOwner;
+  const resolvedRepoName = sessionState?.repoName ?? fallbackSessionInfo.repoName;
+  const repoLabel =
+    resolvedRepoOwner && resolvedRepoName
+      ? `${resolvedRepoOwner}/${resolvedRepoName}`
+      : "Loading session...";
+
+  return {
+    repoLabel,
+    title: sessionState?.title || fallbackSessionInfo.title || repoLabel,
+  };
 }
 
 export default function SessionPage() {
@@ -298,7 +365,7 @@ function SessionContent({
   modelOptions,
   fallbackSessionInfo,
 }: {
-  sessionState: ReturnType<typeof useSessionSocket>["sessionState"];
+  sessionState: SessionState;
   connected: boolean;
   connecting: boolean;
   replaying: boolean;
@@ -326,11 +393,7 @@ function SessionContent({
   loadingHistory: boolean;
   loadOlderEvents: () => void;
   modelOptions: ModelCategory[];
-  fallbackSessionInfo: {
-    repoOwner: string | null;
-    repoName: string | null;
-    title: string | null;
-  };
+  fallbackSessionInfo: FallbackSessionInfo;
 }) {
   const { isOpen, toggle } = useSidebarContext();
   const isBelowLg = useMediaQuery("(max-width: 1023px)");
@@ -482,52 +545,12 @@ function SessionContent({
   }, [events, messagesEndRef]);
 
   // Deduplicate and group events for rendering
-  const groupedEvents = useMemo(() => {
-    const filteredEvents: Array<SandboxEvent | null> = [];
-    const seenToolCalls = new Map<string, number>();
-    const seenCompletions = new Set<string>();
-    const seenTokens = new Map<string, number>();
+  const groupedEvents = useMemo(() => dedupeAndGroupEvents(events), [events]);
 
-    for (const event of events) {
-      if (event.type === "tool_call" && event.callId) {
-        // Deduplicate tool_call events by callId - keep the latest (most complete) one
-        const existingIdx = seenToolCalls.get(event.callId);
-        if (existingIdx !== undefined) {
-          filteredEvents[existingIdx] = event;
-        } else {
-          seenToolCalls.set(event.callId, filteredEvents.length);
-          filteredEvents.push(event);
-        }
-      } else if (event.type === "execution_complete" && event.messageId) {
-        // Skip duplicate execution_complete for the same message
-        if (!seenCompletions.has(event.messageId)) {
-          seenCompletions.add(event.messageId);
-          filteredEvents.push(event);
-        }
-      } else if (event.type === "token" && event.messageId) {
-        // Deduplicate tokens by messageId - keep latest at its chronological position
-        const existingIdx = seenTokens.get(event.messageId);
-        if (existingIdx !== undefined) {
-          filteredEvents[existingIdx] = null;
-        }
-        seenTokens.set(event.messageId, filteredEvents.length);
-        filteredEvents.push(event);
-      } else {
-        // All other events (user_message, git_sync, etc.) - add as-is
-        filteredEvents.push(event);
-      }
-    }
-
-    return groupEvents(filteredEvents.filter((event): event is SandboxEvent => event !== null));
-  }, [events]);
-
-  const resolvedRepoOwner = sessionState?.repoOwner ?? fallbackSessionInfo.repoOwner;
-  const resolvedRepoName = sessionState?.repoName ?? fallbackSessionInfo.repoName;
-  const fallbackRepoLabel =
-    resolvedRepoOwner && resolvedRepoName
-      ? `${resolvedRepoOwner}/${resolvedRepoName}`
-      : "Loading session...";
-  const resolvedTitle = sessionState?.title || fallbackSessionInfo.title || fallbackRepoLabel;
+  const sessionDisplayInfo = useMemo(
+    () => resolveSessionDisplayInfo(sessionState, fallbackSessionInfo),
+    [fallbackSessionInfo, sessionState]
+  );
   const showTimelineSkeleton = events.length === 0 && (connecting || replaying);
 
   return (
@@ -547,8 +570,8 @@ function SessionContent({
               </button>
             )}
             <div>
-              <h1 className="font-medium text-foreground">{resolvedTitle}</h1>
-              <p className="text-sm text-muted-foreground">{fallbackRepoLabel}</p>
+              <h1 className="font-medium text-foreground">{sessionDisplayInfo.title}</h1>
+              <p className="text-sm text-muted-foreground">{sessionDisplayInfo.repoLabel}</p>
             </div>
           </div>
           <div className="flex items-center gap-4">
