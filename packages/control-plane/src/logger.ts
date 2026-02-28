@@ -126,4 +126,8 @@ export interface CorrelationContext {
   trace_id: string;
   /** Per-hop request ID (short UUID), propagated via x-request-id header */
   request_id: string;
+  /** Optional session ID for deeper correlation in downstream services. */
+  session_id?: string;
+  /** Optional sandbox ID for sandbox-scoped operations. */
+  sandbox_id?: string;
 }

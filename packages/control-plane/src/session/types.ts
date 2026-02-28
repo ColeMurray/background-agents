@@ -10,9 +10,11 @@ import type {
   MessageStatus,
   MessageSource,
   ParticipantRole,
+  SpawnSource,
   ArtifactType,
   EventType,
 } from "../types";
+import type { GitPushSpec } from "../source-control";
 
 // Database row types (match SQLite schema)
 
@@ -32,7 +34,7 @@ export interface SessionRow {
   reasoning_effort: string | null; // Reasoning effort level (e.g., "high", "max")
   status: SessionStatus;
   parent_session_id: string | null;
-  spawn_source: "user" | "agent";
+  spawn_source: SpawnSource;
   spawn_depth: number;
   created_at: number;
   updated_at: number;
@@ -136,12 +138,18 @@ export interface AckCommand {
   ackId: string;
 }
 
+export interface PushCommand {
+  type: "push";
+  pushSpec: GitPushSpec;
+}
+
 export type SandboxCommand =
   | PromptCommand
   | StopCommand
   | SnapshotCommand
   | ShutdownCommand
-  | AckCommand;
+  | AckCommand
+  | PushCommand;
 
 // Internal session update types
 
