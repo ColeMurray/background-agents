@@ -153,6 +153,7 @@ jobs:
           npm run build -w @open-inspect/slack-bot
           npm run build -w @open-inspect/github-bot
           npm run build -w @open-inspect/linear-bot
+          npm run build -w @open-inspect/teams-bot
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -209,6 +210,10 @@ jobs:
           TF_VAR_linear_client_id: ${{ secrets.LINEAR_CLIENT_ID }}
           TF_VAR_linear_client_secret: ${{ secrets.LINEAR_CLIENT_SECRET }}
           TF_VAR_linear_webhook_secret: ${{ secrets.LINEAR_WEBHOOK_SECRET }}
+          TF_VAR_enable_teams_bot: "${{ secrets.ENABLE_TEAMS_BOT || 'false' }}"
+          TF_VAR_microsoft_app_id: ${{ secrets.MICROSOFT_APP_ID }}
+          TF_VAR_microsoft_app_password: ${{ secrets.MICROSOFT_APP_PASSWORD }}
+          TF_VAR_microsoft_tenant_id: ${{ secrets.MICROSOFT_TENANT_ID }}
           TF_VAR_web_platform: "${{ secrets.WEB_PLATFORM || 'vercel' }}"
 
       - name: Post Plan Results
@@ -274,6 +279,7 @@ jobs:
           npm run build -w @open-inspect/slack-bot
           npm run build -w @open-inspect/github-bot
           npm run build -w @open-inspect/linear-bot
+          npm run build -w @open-inspect/teams-bot
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -332,6 +338,10 @@ jobs:
           TF_VAR_linear_client_id: ${{ secrets.LINEAR_CLIENT_ID }}
           TF_VAR_linear_client_secret: ${{ secrets.LINEAR_CLIENT_SECRET }}
           TF_VAR_linear_webhook_secret: ${{ secrets.LINEAR_WEBHOOK_SECRET }}
+          TF_VAR_enable_teams_bot: "${{ secrets.ENABLE_TEAMS_BOT || 'false' }}"
+          TF_VAR_microsoft_app_id: ${{ secrets.MICROSOFT_APP_ID }}
+          TF_VAR_microsoft_app_password: ${{ secrets.MICROSOFT_APP_PASSWORD }}
+          TF_VAR_microsoft_tenant_id: ${{ secrets.MICROSOFT_TENANT_ID }}
           TF_VAR_web_platform: "${{ secrets.WEB_PLATFORM || 'vercel' }}"
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}

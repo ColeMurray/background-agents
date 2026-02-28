@@ -6,6 +6,8 @@ import {
   type IntegrationSettingsMap,
   type GitHubBotSettings,
   type LinearBotSettings,
+  type TeamsBotSettings,
+  TEAMS_TYPING_MODES,
 } from "@open-inspect/shared";
 
 export class IntegrationSettingsValidationError extends Error {
@@ -179,6 +181,10 @@ export class IntegrationSettingsStore {
       this.validateLinearSettings(settings as LinearBotSettings);
     }
 
+    if (integrationId === "teams") {
+      this.validateTeamsSettings(settings as TeamsBotSettings);
+    }
+
     return settings;
   }
 
@@ -231,6 +237,17 @@ export class IntegrationSettingsStore {
     }
 
     return settings;
+  }
+
+  private validateTeamsSettings(settings: TeamsBotSettings): void {
+    this.validateModelAndEffort(settings);
+
+    const validModes = TEAMS_TYPING_MODES.map((m) => m.value);
+    if (settings.typingMode !== undefined && !validModes.includes(settings.typingMode)) {
+      throw new IntegrationSettingsValidationError(
+        `Invalid typingMode: ${settings.typingMode}. Must be one of: ${validModes.join(", ")}`
+      );
+    }
   }
 
   private validateLinearSettings(settings: LinearBotSettings): void {

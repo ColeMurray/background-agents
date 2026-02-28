@@ -49,6 +49,12 @@ module "control_plane_worker" {
         binding_name = "LINEAR_BOT"
         service_name = "open-inspect-linear-bot-${local.name_suffix}"
       }
+    ] : [],
+    var.enable_teams_bot ? [
+      {
+        binding_name = "TEAMS_BOT"
+        service_name = "open-inspect-teams-bot-${local.name_suffix}"
+      }
     ] : []
   )
 
@@ -86,5 +92,5 @@ module "control_plane_worker" {
   compatibility_flags = ["nodejs_compat"]
   migration_tag       = "v1"
 
-  depends_on = [null_resource.control_plane_build, module.session_index_kv, null_resource.d1_migrations, module.linear_bot_worker]
+  depends_on = [null_resource.control_plane_build, module.session_index_kv, null_resource.d1_migrations, module.linear_bot_worker, module.teams_bot_worker]
 }

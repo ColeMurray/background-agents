@@ -9,6 +9,7 @@ import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { GitHubIntegrationSettings } from "@/components/settings/integrations/github-integration-settings";
 import { LinearIntegrationSettings } from "@/components/settings/integrations/linear-integration-settings";
+import { TeamsIntegrationSettings } from "@/components/settings/integrations/teams-integration-settings";
 
 function getIntegration(id: string) {
   return INTEGRATION_DEFINITIONS.find((d) => d.id === id);
@@ -17,6 +18,7 @@ function getIntegration(id: string) {
 function IntegrationDetail({ integrationId }: { integrationId: IntegrationId }) {
   if (integrationId === "github") return <GitHubIntegrationSettings />;
   if (integrationId === "linear") return <LinearIntegrationSettings />;
+  if (integrationId === "teams") return <TeamsIntegrationSettings />;
   return null;
 }
 

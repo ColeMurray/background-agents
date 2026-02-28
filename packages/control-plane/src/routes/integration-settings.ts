@@ -7,6 +7,7 @@ import {
   type GitHubBotSettings,
   type IntegrationId,
   type LinearBotSettings,
+  type TeamsBotSettings,
 } from "@open-inspect/shared";
 import {
   IntegrationSettingsStore,
@@ -332,6 +333,27 @@ async function handleGetResolvedConfig(
         allowUserPreferenceOverride: linearSettings.allowUserPreferenceOverride ?? true,
         allowLabelModelOverride: linearSettings.allowLabelModelOverride ?? true,
         emitToolProgressActivities: linearSettings.emitToolProgressActivities ?? true,
+        enabledRepos,
+      },
+    });
+  }
+
+  if (id === "teams") {
+    const teamsSettings = settings as TeamsBotSettings;
+    const teamsReasoningEffort =
+      teamsSettings.model &&
+      teamsSettings.reasoningEffort &&
+      !isValidReasoningEffort(teamsSettings.model, teamsSettings.reasoningEffort)
+        ? null
+        : (teamsSettings.reasoningEffort ?? null);
+
+    return json({
+      integrationId: id,
+      repo,
+      config: {
+        model: teamsSettings.model ?? null,
+        reasoningEffort: teamsReasoningEffort,
+        typingMode: teamsSettings.typingMode ?? null,
         enabledRepos,
       },
     });
