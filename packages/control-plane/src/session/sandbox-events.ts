@@ -67,11 +67,13 @@ export class SessionSandboxEventProcessor {
     }
 
     if (event.type === "step_start" || event.type === "step_finish") {
+      this.deps.updateLastActivity(now);
       this.deps.broadcast({ type: "sandbox_event", event });
       return;
     }
 
     if (event.type === "tool_call") {
+      this.deps.updateLastActivity(now);
       if (shouldPersistToolCallEvent(event.status)) {
         this.deps.repository.createEvent({
           id: generateId(),
