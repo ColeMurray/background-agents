@@ -412,23 +412,26 @@ function SessionContent({
   const prevScrollHeightRef = useRef(0);
   const isNearBottomRef = useRef(true);
 
-  const closeDetails = useCallback(() => {
-    setIsDetailsOpen(false);
+  const resetSheetDragState = useCallback(() => {
     setSheetDragY(0);
     sheetDragYRef.current = 0;
-    detailsButtonRef.current?.focus();
   }, []);
+
+  const closeDetails = useCallback(() => {
+    setIsDetailsOpen(false);
+    resetSheetDragState();
+    detailsButtonRef.current?.focus();
+  }, [resetSheetDragState]);
 
   const toggleDetails = useCallback(() => {
     setIsDetailsOpen((prev) => {
       const next = !prev;
       if (!next) {
-        setSheetDragY(0);
-        sheetDragYRef.current = 0;
+        resetSheetDragState();
       }
       return next;
     });
-  }, []);
+  }, [resetSheetDragState]);
 
   const handleSheetTouchStart = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
     const startY = event.touches[0]?.clientY;
@@ -467,9 +470,8 @@ function SessionContent({
   useEffect(() => {
     if (isBelowLg) return;
     setIsDetailsOpen(false);
-    setSheetDragY(0);
-    sheetDragYRef.current = 0;
-  }, [isBelowLg]);
+    resetSheetDragState();
+  }, [isBelowLg, resetSheetDragState]);
 
   useEffect(() => {
     if (!isDetailsOpen) return;
