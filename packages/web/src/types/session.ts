@@ -33,20 +33,3 @@ export interface FileChange {
   additions: number;
   deletions: number;
 }
-
-export interface ChildSession {
-  id: string;
-  description: string;
-  prNumber?: number;
-  prState?: "open" | "merged" | "closed" | "draft";
-  platform?: string;
-}
-
-export interface SessionMetadata {
-  title: string;
-  model?: string;
-  branchName?: string;
-  projectTag?: string;
-  createdAt: number;
-  updatedAt?: number;
-}
