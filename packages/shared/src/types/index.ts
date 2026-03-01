@@ -295,6 +295,7 @@ export type ServerMessage =
       cursor: { timestamp: number; id: string } | null;
     }
   | { type: "session_status"; status: SessionStatus }
+  | { type: "session_title"; title: string }
   | {
       type: "child_session_update";
       childSessionId: string;
