@@ -24,3 +24,11 @@ module "linear_kv" {
   account_id     = var.cloudflare_account_id
   namespace_name = "open-inspect-linear-kv-${local.name_suffix}"
 }
+
+module "teams_kv" {
+  count  = var.enable_teams_bot ? 1 : 0
+  source = "../../modules/cloudflare-kv"
+
+  account_id     = var.cloudflare_account_id
+  namespace_name = "open-inspect-teams-kv-${local.name_suffix}"
+}

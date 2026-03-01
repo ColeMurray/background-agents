@@ -21,6 +21,7 @@ Three tiers connected by WebSockets:
 - `slack-bot` — Slack messages → coding sessions
 - `github-bot` — PR review assignments and @mention commands
 - `linear-bot` — Linear agent webhooks → coding sessions
+- `teams-bot` — Microsoft Teams messages → coding sessions
 
 **Data flow**: User prompt → web client → control plane DO (WebSocket) → Modal sandbox → streaming
 events back through the same WebSocket chain.
@@ -28,7 +29,7 @@ events back through the same WebSocket chain.
 ### Package Dependency Graph
 
 ```
-@open-inspect/shared  ←  control-plane, web, slack-bot, github-bot, linear-bot
+@open-inspect/shared  ←  control-plane, web, slack-bot, github-bot, linear-bot, teams-bot
 ```
 
 **Build `@open-inspect/shared` first** whenever you change shared types. Other packages import from
@@ -44,6 +45,7 @@ it at build time.
 | `slack-bot`     | TypeScript / CF Workers + Hono     | Slack event handler, session creation                       |
 | `github-bot`    | TypeScript / CF Workers + Hono     | PR review and @mention webhook handler                      |
 | `linear-bot`    | TypeScript / CF Workers + Hono     | Linear agent webhook handler                                |
+| `teams-bot`     | TypeScript / CF Workers + Hono     | Microsoft Teams Bot Framework handler                       |
 | `modal-infra`   | Python 3.12 / Modal + FastAPI      | Sandbox lifecycle, WebSocket bridge to control plane        |
 
 ## Common Commands
@@ -66,6 +68,7 @@ npm test -w @open-inspect/web
 npm test -w @open-inspect/github-bot
 npm test -w @open-inspect/slack-bot
 npm test -w @open-inspect/linear-bot
+npm test -w @open-inspect/teams-bot
 
 # Tests — Python (pytest)
 cd packages/modal-infra && pytest tests/ -v
@@ -83,7 +86,7 @@ All TypeScript packages use **Vitest**; Python uses **pytest** + pytest-asyncio.
 - **control-plane unit**: co-located as `src/**/*.test.ts` — run in Node environment
 - **control-plane integration**: separate `test/integration/*.test.ts` — run in workerd via
   `@cloudflare/vitest-pool-workers` with real D1 bindings
-- **web, slack-bot, linear-bot**: co-located `src/**/*.test.ts`
+- **web, slack-bot, linear-bot, teams-bot**: co-located `src/**/*.test.ts`
 - **github-bot**: separate `test/*.test.ts`
 - **modal-infra**: `tests/test_*.py`
 

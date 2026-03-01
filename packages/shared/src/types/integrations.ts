@@ -1,6 +1,6 @@
 // Integration settings types
 
-export type IntegrationId = "github" | "linear";
+export type IntegrationId = "github" | "linear" | "teams";
 
 /** Enforces the common shape for all integration configurations. */
 export interface IntegrationEntry<TRepo extends object = Record<string, unknown>> {
@@ -30,15 +30,40 @@ export interface LinearBotSettings {
   emitToolProgressActivities?: boolean;
 }
 
+/**
+ * Controls when "Bot is typing..." indicators appear in Teams conversations.
+ * - "response": show typing when generating the completion response (default)
+ * - "never": never show typing indicators
+ *
+ * Future: add "thinking" mode once real-time event streaming from the control
+ * plane to the Teams bot is available, so we can show typing during the full
+ * agent execution — not just the completion callback.
+ */
+export type TeamsTypingMode = "response" | "never";
+
+export const TEAMS_TYPING_MODES: { value: TeamsTypingMode; label: string }[] = [
+  { value: "response", label: "Response only" },
+  { value: "never", label: "Disabled" },
+];
+
+/** Overridable behavior settings for the Teams bot. Used at both global (defaults) and per-repo (overrides) levels. */
+export interface TeamsBotSettings {
+  model?: string;
+  reasoningEffort?: string;
+  typingMode?: TeamsTypingMode;
+}
+
 /** Maps each integration ID to its global and per-repo settings types. */
 export interface IntegrationSettingsMap {
   github: IntegrationEntry<GitHubBotSettings>;
   linear: IntegrationEntry<LinearBotSettings>;
+  teams: IntegrationEntry<TeamsBotSettings>;
 }
 
 /** Derived type for the GitHub bot global config. */
 export type GitHubGlobalConfig = IntegrationSettingsMap["github"]["global"];
 export type LinearGlobalConfig = IntegrationSettingsMap["linear"]["global"];
+export type TeamsGlobalConfig = IntegrationSettingsMap["teams"]["global"];
 
 export const INTEGRATION_DEFINITIONS: {
   id: IntegrationId;
@@ -54,5 +79,10 @@ export const INTEGRATION_DEFINITIONS: {
     id: "linear",
     name: "Linear Agent",
     description: "Issue-driven coding sessions from Linear agent mentions",
+  },
+  {
+    id: "teams",
+    name: "Microsoft Teams Bot",
+    description: "Channel bot with threaded coding sessions",
   },
 ];

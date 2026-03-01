@@ -27,6 +27,7 @@ export interface CallbackServiceEnv {
   INTERNAL_CALLBACK_SECRET?: string;
   SLACK_BOT?: Fetcher;
   LINEAR_BOT?: Fetcher;
+  TEAMS_BOT?: Fetcher;
 }
 
 /**
@@ -82,6 +83,8 @@ export class CallbackNotificationService {
         return this.env.LINEAR_BOT;
       case "slack":
         return this.env.SLACK_BOT;
+      case "teams":
+        return this.env.TEAMS_BOT;
       default:
         // Default to SLACK_BOT for backward compatibility (web sources, etc.)
         return this.env.SLACK_BOT;

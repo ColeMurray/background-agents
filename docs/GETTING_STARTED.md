@@ -45,6 +45,7 @@ Create accounts on these services before continuing:
 | [Anthropic](https://console.anthropic.com)       | Claude API                                                     |
 | [Slack](https://api.slack.com/apps) _(optional)_ | Slack bot integration                                          |
 | GitHub App Webhooks _(optional)_                 | GitHub bot (PR reviews)                                        |
+| [Azure](https://portal.azure.com) _(optional)_   | Microsoft Teams bot integration                                |
 
 ### Required Tools
 
@@ -336,6 +337,12 @@ enable_github_bot      = false
 github_webhook_secret  = ""          # From Step 5 (required if enabled)
 github_bot_username    = ""          # e.g., "my-app[bot]" (your GitHub App's bot login)
 
+# Teams Bot (set enable_teams_bot = true to deploy the Teams bot worker)
+enable_teams_bot        = false
+microsoft_app_id        = ""         # From Azure Bot registration
+microsoft_app_password  = ""         # Client secret from Azure Bot registration
+microsoft_tenant_id     = ""         # Azure AD Tenant ID
+
 # API Keys
 anthropic_api_key = "sk-ant-..."
 
@@ -384,7 +391,7 @@ enable_service_bindings        = false
 
 ```bash
 # From the repository root
-npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot -w @open-inspect/github-bot
+npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot -w @open-inspect/github-bot -w @open-inspect/teams-bot
 ```
 
 Then run:
@@ -508,6 +515,56 @@ Or construct it from your App's slug: if your app is named `My-Inspect-App`, the
 
 ---
 
+## Step 7d: Complete Teams Bot Setup (If Using Teams)
+
+Now that the Teams bot worker is deployed, register a bot in Azure and point it at the worker.
+
+### Register an Azure Bot
+
+1. Go to [Azure Portal](https://portal.azure.com) → **Create a resource** → search **Azure Bot**
+2. Click **Create** and fill in:
+   - **Bot handle**: `open-inspect` (or any unique name)
+   - **Type of App**: **Single Tenant** (recommended) or Multi Tenant
+   - **Creation type**: **Create new Microsoft App ID**
+3. After creation, go to the bot resource → **Configuration**:
+   - **Messaging endpoint**:
+     ```
+     https://open-inspect-teams-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/api/messages
+     ```
+   - Note the **Microsoft App ID**
+4. Go to **Configuration → Manage Password** (links to Azure AD App Registration):
+   - Under **Certificates & secrets**, create a new **Client secret**
+   - Note the **Secret Value** (this is `microsoft_app_password`)
+5. Note the **Directory (tenant) ID** from the App Registration **Overview** page
+
+### Enable the Teams Channel
+
+1. In the Azure Bot resource, go to **Channels**
+2. Click **Microsoft Teams** → **Save** to enable it
+3. Open Teams and search for your bot by name to start chatting
+
+### Update Terraform Variables
+
+Ensure your `terraform.tfvars` has:
+
+```hcl
+enable_teams_bot       = true
+microsoft_app_id       = "your-app-id"
+microsoft_app_password = "your-client-secret"
+microsoft_tenant_id    = "your-tenant-id"
+```
+
+Then run `terraform apply`.
+
+### Usage
+
+- **Channel threads**: @mention the bot in a channel; it creates a session and replies in the thread
+- **Direct messages**: Message the bot directly for 1:1 sessions
+- **Settings**: Type `settings` to configure your preferred model and reasoning effort
+- **Reset**: Type `reset` or `new` to clear the current session and start fresh
+
+---
+
 ## Step 8: Deploy the Web App
 
 ### If using Cloudflare (`web_platform = "cloudflare"`)
@@ -621,6 +678,10 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `ENABLE_GITHUB_BOT`           | `true` to deploy GitHub bot worker (or empty to skip)                         |
 | `GH_WEBHOOK_SECRET`           | GitHub webhook secret (required if GitHub bot enabled)                        |
 | `GH_BOT_USERNAME`             | GitHub App bot username, e.g., `my-app[bot]` (required if GitHub bot enabled) |
+| `ENABLE_TEAMS_BOT`            | `true` to deploy Teams bot, `false` to skip (default: `false`)                |
+| `MICROSOFT_APP_ID`            | Azure Bot App ID (required if Teams bot enabled)                              |
+| `MICROSOFT_APP_PASSWORD`      | Azure Bot client secret (required if Teams bot enabled)                       |
+| `MICROSOFT_TENANT_ID`         | Azure AD tenant ID (required if Teams bot enabled)                            |
 
 **Bulk upload secrets with `gh` CLI:**
 
@@ -710,12 +771,13 @@ Terraform references the built worker bundles. Build them before running `terraf
 npm run build -w @open-inspect/shared
 
 # Build workers (required before Terraform)
-npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot -w @open-inspect/github-bot
+npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot -w @open-inspect/github-bot -w @open-inspect/teams-bot
 
 # Verify bundles exist
 ls packages/control-plane/dist/index.js
 ls packages/slack-bot/dist/index.js
 ls packages/github-bot/dist/index.js  # Only if enable_github_bot = true
+ls packages/teams-bot/dist/index.js  # Only if enable_teams_bot = true
 ```
 
 ### Slack bot not responding
@@ -746,6 +808,16 @@ If the bot doesn't see the original message when tagged in a thread reply:
 4. Check that `github_bot_username` matches your App's bot login (e.g., `my-app[bot]`)
 5. For PR reviews, ensure the bot is assigned as a reviewer (not just mentioned)
 6. For comment actions, ensure the bot is @mentioned in a **PR** comment (not an issue)
+
+### Teams bot not responding
+
+1. Verify the messaging endpoint in Azure Bot Configuration matches
+   `https://open-inspect-teams-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/api/messages`
+2. Confirm `enable_teams_bot = true` in terraform.tfvars and the worker is deployed
+3. Check that `microsoft_app_id`, `microsoft_app_password`, and `microsoft_tenant_id` are correct
+4. Ensure the Microsoft Teams channel is enabled on the Azure Bot resource
+5. Check the bot health endpoint:
+   `curl https://open-inspect-teams-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/health`
 
 ### Durable Objects / Service Binding errors
 
