@@ -28,7 +28,7 @@ interface Message {
 
 type SessionState = SharedSessionState;
 type Participant = ParticipantPresence;
-type WsMessage = ServerMessage | { type: "artifact_updated"; artifact: Artifact };
+type WsMessage = ServerMessage;
 
 interface UseSessionSocketReturn {
   connected: boolean;
@@ -307,10 +307,6 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
             }
             return [...prev, toUiArtifact(data.artifact)];
           });
-          break;
-
-        case "artifact_updated":
-          setArtifacts((prev) => prev.map((a) => (a.id === data.artifact.id ? data.artifact : a)));
           break;
 
         case "session_status":

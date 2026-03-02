@@ -140,7 +140,7 @@ export interface ToolCallCallback {
 
 // ─── Classification Types ────────────────────────────────────────────────────
 
-export type { ClassificationResult } from "@open-inspect/shared";
+export type { ClassificationResult, ConfidenceLevel } from "@open-inspect/shared";
 
 // ─── Event / Artifact Types ──────────────────────────────────────────────────
 

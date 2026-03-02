@@ -7,6 +7,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import type { Env, RepoConfig, ThreadContext, ClassificationResult } from "../types";
+import type { ConfidenceLevel } from "@open-inspect/shared";
 import { getAvailableRepos, buildRepoDescriptions, getReposByChannel } from "./repos";
 import { createLogger } from "../logger";
 
@@ -107,7 +108,7 @@ Return your decision by calling the ${CLASSIFY_REPO_TOOL_NAME} tool with:
  */
 interface LLMResponse {
   repoId: string | null;
-  confidence: "high" | "medium" | "low";
+  confidence: ConfidenceLevel;
   reasoning: string;
   alternatives: string[];
 }

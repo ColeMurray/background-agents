@@ -62,6 +62,7 @@ export function Combobox<T = string>({
   const containerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const wasOpenRef = useRef(false);
   const instanceId = useId();
   const listboxId = `${instanceId}-listbox`;
   const optionIdPrefix = `${instanceId}-option`;
@@ -122,20 +123,20 @@ export function Combobox<T = string>({
     } else {
       setActiveIndex(-1);
     }
-    // Use normalizedQuery as dependency instead of flatOptions to avoid reference issues
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [normalizedQuery, open]);
+  }, [flatOptions, open]);
 
   // Set initial active index to the selected value when opening
   useEffect(() => {
-    if (!open) return;
+    const justOpened = open && !wasOpenRef.current;
+    wasOpenRef.current = open;
+
+    if (!justOpened) return;
+
     const selectedIdx = flatOptions.findIndex((opt) => opt.value === value);
     if (selectedIdx >= 0) {
       setActiveIndex(selectedIdx);
     }
-    // Only run when dropdown opens
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [flatOptions, open, value]);
 
   // Scroll active option into view
   useEffect(() => {

@@ -7,7 +7,7 @@
 
 import { generateInternalToken } from "@open-inspect/shared";
 import { createLogger } from "../logger";
-import type { CorrelationContext } from "./provider";
+import type { CorrelationContext } from "../logger";
 
 const log = createLogger("modal-client");
 

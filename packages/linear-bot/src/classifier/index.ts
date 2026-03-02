@@ -4,6 +4,7 @@
  */
 
 import type { Env, RepoConfig, ClassificationResult } from "../types";
+import type { ConfidenceLevel } from "@open-inspect/shared";
 import { getAvailableRepos, buildRepoDescriptions } from "./repos";
 import { createLogger } from "../logger";
 
@@ -13,7 +14,7 @@ const CLASSIFY_REPO_TOOL_NAME = "classify_repository";
 
 interface ClassifyToolInput {
   repoId: string | null;
-  confidence: "high" | "medium" | "low";
+  confidence: ConfidenceLevel;
   reasoning: string;
   alternatives: string[];
 }
@@ -135,7 +136,7 @@ async function callAnthropic(apiKey: string, prompt: string): Promise<ClassifyTo
   const input = toolBlock.input as Record<string, unknown>;
   return {
     repoId: input.repoId === null ? null : typeof input.repoId === "string" ? input.repoId : null,
-    confidence: (input.confidence as "high" | "medium" | "low") || "low",
+    confidence: (input.confidence as ConfidenceLevel) || "low",
     reasoning: String(input.reasoning || ""),
     alternatives: Array.isArray(input.alternatives)
       ? input.alternatives.filter((a): a is string => typeof a === "string")

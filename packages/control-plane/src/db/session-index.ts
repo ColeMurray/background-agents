@@ -1,4 +1,4 @@
-import type { SessionStatus } from "@open-inspect/shared";
+import type { SessionStatus, SpawnSource } from "@open-inspect/shared";
 
 export interface SessionEntry {
   id: string;
@@ -10,7 +10,7 @@ export interface SessionEntry {
   baseBranch: string | null;
   status: SessionStatus;
   parentSessionId?: string | null;
-  spawnSource?: "user" | "agent";
+  spawnSource?: SpawnSource;
   spawnDepth?: number;
   createdAt: number;
   updatedAt: number;
@@ -26,7 +26,7 @@ interface SessionRow {
   base_branch: string | null;
   status: SessionStatus;
   parent_session_id: string | null;
-  spawn_source: "user" | "agent";
+  spawn_source: SpawnSource;
   spawn_depth: number;
   created_at: number;
   updated_at: number;

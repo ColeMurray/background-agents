@@ -82,6 +82,15 @@ function isAbsoluteHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
 }
 
+function isServiceBinding(value: unknown): value is ServiceBinding {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "fetch" in value &&
+    typeof value.fetch === "function"
+  );
+}
+
 /**
  * Try to get the Cloudflare Workers service binding for the control plane.
  * Returns null when not running on Cloudflare Workers.
@@ -90,10 +99,8 @@ async function getServiceBinding(): Promise<ServiceBinding | null> {
   try {
     const { getCloudflareContext } = await import("@opennextjs/cloudflare");
     const ctx = await getCloudflareContext({ async: true });
-    const binding = (ctx.env as Record<string, unknown>)["CONTROL_PLANE_WORKER"] as
-      | ServiceBinding
-      | undefined;
-    return binding ?? null;
+    const binding = (ctx as { env?: { CONTROL_PLANE_WORKER?: unknown } }).env?.CONTROL_PLANE_WORKER;
+    return isServiceBinding(binding) ? binding : null;
   } catch (err) {
     // Expected on non-Cloudflare runtimes (missing package). Log on edge
     // so binding misconfigurations don't silently fall back to URL fetch.

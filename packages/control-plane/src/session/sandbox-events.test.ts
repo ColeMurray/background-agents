@@ -67,6 +67,7 @@ function createProcessor() {
     reconcileSessionStatusAfterExecution,
     scheduleInactivityCheck,
     processMessageQueue,
+    updateLastActivity,
     waitUntil,
   };
 }
@@ -161,6 +162,73 @@ describe("SessionSandboxEventProcessor", () => {
       sandboxWs,
       expect.objectContaining({ type: "push" })
     );
+  });
+
+  describe("activity tracking for intermediate events", () => {
+    it("resets activity timer on tool_call", async () => {
+      const h = createProcessor();
+      await h.processor.processSandboxEvent({
+        type: "tool_call",
+        tool: "bash",
+        args: { command: "ls" },
+        callId: "call-1",
+        status: "running",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1000,
+      });
+
+      expect(h.updateLastActivity).toHaveBeenCalledWith(expect.any(Number));
+    });
+
+    it("resets activity timer on step_start", async () => {
+      const h = createProcessor();
+      await h.processor.processSandboxEvent({
+        type: "step_start",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1000,
+      });
+
+      expect(h.updateLastActivity).toHaveBeenCalledWith(expect.any(Number));
+    });
+
+    it("resets activity timer on step_finish", async () => {
+      const h = createProcessor();
+      await h.processor.processSandboxEvent({
+        type: "step_finish",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1000,
+      });
+
+      expect(h.updateLastActivity).toHaveBeenCalledWith(expect.any(Number));
+    });
+
+    it("does not reset activity timer on heartbeat", async () => {
+      const h = createProcessor();
+      await h.processor.processSandboxEvent({
+        type: "heartbeat",
+        sandboxId: "sb-1",
+        status: "ready",
+        timestamp: 1000,
+      });
+
+      expect(h.updateLastActivity).not.toHaveBeenCalled();
+    });
+
+    it("does not reset activity timer on token", async () => {
+      const h = createProcessor();
+      await h.processor.processSandboxEvent({
+        type: "token",
+        content: "hello",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1000,
+      });
+
+      expect(h.updateLastActivity).not.toHaveBeenCalled();
+    });
   });
 
   describe("ACK mechanism", () => {

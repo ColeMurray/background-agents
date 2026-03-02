@@ -23,6 +23,7 @@ export type {
   MessageStatus,
   ParticipantRole,
   ParticipantPresence,
+  SpawnSource,
   SandboxEvent,
   SandboxStatus,
   ServerMessage,

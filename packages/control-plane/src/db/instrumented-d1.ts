@@ -96,9 +96,19 @@ export function createRequestMetrics(): RequestMetrics {
 /** Symbol used to store the original D1PreparedStatement on instrumented wrappers. */
 const ORIGINAL_STMT = Symbol("originalD1Statement");
 
+type WrappedStatement = D1PreparedStatement & { [ORIGINAL_STMT]?: D1PreparedStatement };
+
+type RawCapableStatement = D1PreparedStatement & {
+  raw: (options?: Record<string, unknown>) => Promise<unknown[]>;
+};
+
+function hasRawMethod(statement: D1PreparedStatement): statement is RawCapableStatement {
+  return "raw" in statement && typeof statement.raw === "function";
+}
+
 /** Extract the underlying D1PreparedStatement from an instrumented wrapper (or return as-is). */
 function unwrapStatement(stmt: D1PreparedStatement): D1PreparedStatement {
-  return (stmt as unknown as Record<symbol, D1PreparedStatement>)[ORIGINAL_STMT] ?? stmt;
+  return (stmt as WrappedStatement)[ORIGINAL_STMT] ?? stmt;
 }
 
 /**
@@ -152,15 +162,16 @@ function instrumentStatement(
 
     async raw(options?: Record<string, unknown>) {
       const start = Date.now();
-      const result = await (
-        stmt as unknown as { raw: (o?: Record<string, unknown>) => Promise<unknown[]> }
-      ).raw(options);
+      if (!hasRawMethod(stmt)) {
+        throw new Error("D1PreparedStatement.raw() is not available in this runtime");
+      }
+      const result = await stmt.raw(options);
       metrics.d1Queries.push({ query_ms: Date.now() - start });
       return result;
     },
-  } as unknown as D1PreparedStatement;
+  } as D1PreparedStatement as WrappedStatement;
 
-  (wrapper as unknown as Record<symbol, D1PreparedStatement>)[ORIGINAL_STMT] = stmt;
+  wrapper[ORIGINAL_STMT] = stmt;
   return wrapper;
 }
 
