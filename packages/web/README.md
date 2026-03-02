@@ -87,6 +87,9 @@ ALLOWED_EMAIL_DOMAINS=example.com,corp.io  # Comma-separated email domains
 
 # Control Plane
 CONTROL_PLANE_URL=http://localhost:8787
+# On Cloudflare Workers: auto | binding | direct
+# Use direct when pointing at a Cloudflare Tunnel/custom-domain target.
+CONTROL_PLANE_FETCH_MODE=auto
 NEXT_PUBLIC_WS_URL=ws://localhost:8787
 ```
 

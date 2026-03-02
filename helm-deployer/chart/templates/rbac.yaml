@@ -1,0 +1,29 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "helm-deployer.fullname" . }}-release-manager
+  namespace: {{ .Values.helm.targetNamespace | quote }}
+  labels:
+    {{- include "helm-deployer.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps", "secrets"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "helm-deployer.fullname" . }}-release-manager
+  namespace: {{ .Values.helm.targetNamespace | quote }}
+  labels:
+    {{- include "helm-deployer.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "helm-deployer.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "helm-deployer.fullname" . }}-release-manager
+{{- end }}

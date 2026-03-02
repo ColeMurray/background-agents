@@ -75,8 +75,8 @@ export function AgentsSettings() {
       <h2 className="text-xl font-semibold text-foreground mb-1">Default agents</h2>
       <p className="text-sm text-muted-foreground mb-6">
         Set a default OpenCode primary agent per repository. Agents are read from{" "}
-        <code className="text-xs bg-muted px-1 rounded">.opencode/agents/*.md</code> (Primary agents only).
-         If none is selected, the default OpenCode agent is used when starting a session.
+        <code className="text-xs bg-muted px-1 rounded">.opencode/agents/*.md</code> (Primary agents
+        only). If none is selected, the default OpenCode agent is used when starting a session.
       </p>
 
       {error && (

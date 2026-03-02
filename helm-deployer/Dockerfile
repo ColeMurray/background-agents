@@ -1,8 +1,8 @@
 FROM node:22-alpine
 
 # Install Helm
-RUN apk add --no-cache curl bash && \
-    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-4 | bash
+RUN apk add --no-cache curl openssl bash && \
+    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
 # Install kubectl
 RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && \
@@ -11,7 +11,7 @@ RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/s
 WORKDIR /app
 
 # Copy the Helm chart
-COPY ../helm-chart /charts/open-inspect-sandbox
+COPY ./helm-chart/ /charts/open-inspect-sandbox
 
 # Copy the deployer service
 COPY package.json index.mjs ./

@@ -19,9 +19,11 @@ import crypto from "node:crypto";
 
 const { process, Buffer, console } = globalThis;
 
-const PORT = parseInt(process.env.PORT || "8090");
+const PORT = parseInt(process.env.PORT || "80");
 const API_SECRET = process.env.HELM_API_SECRET || "";
 const CHART_PATH = process.env.CHART_PATH || "/charts/open-inspect-sandbox";
+const HELM_NAMESPACE = process.env.HELM_NAMESPACE || "";
+const HELM_CREATE_NAMESPACE = process.env.HELM_CREATE_NAMESPACE === "true";
 
 /**
  * Verify a Bearer token using the same HMAC scheme as the control plane.
@@ -44,10 +46,7 @@ function verifyToken(authorization) {
   if (Math.abs(now - timestamp) > 5 * 60 * 1000) return false;
 
   // Verify HMAC
-  const expected = crypto
-    .createHmac("sha256", API_SECRET)
-    .update(timestampHex)
-    .digest("hex");
+  const expected = crypto.createHmac("sha256", API_SECRET).update(timestampHex).digest("hex");
 
   return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
 }
@@ -119,7 +118,22 @@ function handleDeploy(body) {
 
   const setString = setArgs.map((s) => `--set ${s}`).join(" ");
 
-  const cmd = `helm install ${releaseName} ${CHART_PATH} --namespace ${namespace} --create-namespace ${setString} --wait --timeout 5m`;
+  const targetNamespace = HELM_NAMESPACE || namespace;
+  if (!targetNamespace) {
+    return {
+      success: false,
+      releaseName,
+      sandboxId,
+      status: "failed",
+      createdAt: Date.now(),
+      error: "namespace is required",
+    };
+  }
+
+  const createNamespaceFlag = HELM_CREATE_NAMESPACE ? "--create-namespace" : "";
+  const cmd =
+    `helm install ${releaseName} ${CHART_PATH} --namespace ${targetNamespace} ${createNamespaceFlag} ` +
+    `${setString} --wait --timeout 5m`;
 
   console.log(`[deployer] Installing release: ${releaseName}`);
   try {
@@ -127,7 +141,14 @@ function handleDeploy(body) {
   } catch (err) {
     const stderr = err.stderr ? err.stderr.toString() : err.message;
     console.error(`[deployer] Install failed: ${stderr}`);
-    return { success: false, releaseName, sandboxId, status: "failed", createdAt: Date.now(), error: stderr };
+    return {
+      success: false,
+      releaseName,
+      sandboxId,
+      status: "failed",
+      createdAt: Date.now(),
+      error: stderr,
+    };
   }
 
   console.log(`[deployer] Release installed: ${releaseName}`);
@@ -139,8 +160,12 @@ function handleDeploy(body) {
  */
 function handleDelete(body) {
   const { releaseName, namespace } = body;
+  const targetNamespace = HELM_NAMESPACE || namespace;
+  if (!targetNamespace) {
+    return { success: false, releaseName, deleted: false, error: "namespace is required" };
+  }
 
-  const cmd = `helm uninstall ${releaseName} --namespace ${namespace}`;
+  const cmd = `helm uninstall ${releaseName} --namespace ${targetNamespace}`;
   console.log(`[deployer] Uninstalling release: ${releaseName}`);
   try {
     execSync(cmd, { stdio: "pipe", timeout: 120000 });
