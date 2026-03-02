@@ -24,7 +24,7 @@ export type SandboxStatus =
   | "failed";
 export type GitSyncStatus = "pending" | "in_progress" | "completed" | "failed";
 export type MessageStatus = "pending" | "processing" | "completed" | "failed";
-export type MessageSource = "web" | "slack" | "linear" | "extension" | "github";
+export type MessageSource = "web" | "slack" | "linear" | "extension" | "github" | "automation";
 export type ArtifactType = "pr" | "screenshot" | "preview" | "branch";
 export type EventType =
   | "heartbeat"
@@ -41,7 +41,7 @@ export type EventType =
   | "push_error"
   | "user_message";
 export type ParticipantRole = "owner" | "member";
-export type SpawnSource = "user" | "agent";
+export type SpawnSource = "user" | "agent" | "automation";
 export type ConfidenceLevel = "high" | "medium" | "low";
 
 // Participant in a session
@@ -468,7 +468,17 @@ export interface LinearCallbackContext {
   emitToolProgressActivities?: boolean;
 }
 
-export type CallbackContext = SlackCallbackContext | LinearCallbackContext;
+export interface AutomationCallbackContext {
+  source: "automation";
+  automationId: string;
+  runId: string;
+  automationName: string;
+}
+
+export type CallbackContext =
+  | SlackCallbackContext
+  | LinearCallbackContext
+  | AutomationCallbackContext;
 
 // API response types
 export interface CreateSessionRequest {
@@ -537,6 +547,79 @@ export interface ChildSessionDetail {
   sandbox: { status: SandboxStatus } | null;
   artifacts: Array<{ type: string; url: string; metadata: unknown }>;
   recentEvents: Array<{ type: string; data: unknown; createdAt: number }>;
+}
+
+// ─── Automation Engine ────────────────────────────────────────────────────────
+
+export type AutomationTriggerType = "schedule";
+
+export type AutomationRunStatus = "starting" | "running" | "completed" | "failed" | "skipped";
+
+export interface Automation {
+  id: string;
+  name: string;
+  repoOwner: string;
+  repoName: string;
+  baseBranch: string;
+  repoId: number | null;
+  instructions: string;
+  triggerType: AutomationTriggerType;
+  scheduleCron: string | null;
+  scheduleTz: string;
+  model: string;
+  enabled: boolean;
+  nextRunAt: number | null;
+  consecutiveFailures: number;
+  createdBy: string;
+  createdAt: number;
+  updatedAt: number;
+  deletedAt: number | null;
+}
+
+export interface CreateAutomationRequest {
+  name: string;
+  repoOwner: string;
+  repoName: string;
+  baseBranch?: string;
+  instructions: string;
+  triggerType?: AutomationTriggerType;
+  scheduleCron: string;
+  scheduleTz: string;
+  model?: string;
+}
+
+export interface UpdateAutomationRequest {
+  name?: string;
+  instructions?: string;
+  scheduleCron?: string;
+  scheduleTz?: string;
+  model?: string;
+  baseBranch?: string;
+}
+
+export interface AutomationRun {
+  id: string;
+  automationId: string;
+  sessionId: string | null;
+  status: AutomationRunStatus;
+  skipReason: string | null;
+  failureReason: string | null;
+  scheduledAt: number;
+  startedAt: number | null;
+  completedAt: number | null;
+  createdAt: number;
+  sessionTitle: string | null;
+  artifactSummary: string | null;
+}
+
+export interface ListAutomationsResponse {
+  automations: Automation[];
+  total: number;
+}
+
+export interface ListAutomationRunsResponse {
+  runs: AutomationRun[];
+  total: number;
 }
 
 export * from "./integrations";

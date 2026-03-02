@@ -461,6 +461,25 @@ export function DataControlsIcon({ className }: IconProps) {
   );
 }
 
+export function AutomationsIcon({ className }: IconProps) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 24 24"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M21.5 2v6h-6" />
+      <path d="M2.5 22v-6h6" />
+      <path d="M2.5 11.5a10 10 0 0 1 18.8-4.3" />
+      <path d="M21.5 12.5a10 10 0 0 1-18.8 4.2" />
+    </svg>
+  );
+}
+
 export function IntegrationsIcon({ className }: IconProps) {
   return (
     <svg

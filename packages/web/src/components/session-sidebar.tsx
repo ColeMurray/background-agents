@@ -13,6 +13,7 @@ import {
   InspectIcon,
   PlusIcon,
   SettingsIcon,
+  AutomationsIcon,
   BranchIcon,
 } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
@@ -134,6 +135,17 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           >
             <PlusIcon className="w-4 h-4" />
           </Button>
+          <Link
+            href="/automations"
+            className={`p-1.5 transition ${
+              pathname?.startsWith("/automations")
+                ? "text-foreground bg-muted"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
+            }`}
+            title="Automations"
+          >
+            <AutomationsIcon className="w-4 h-4" />
+          </Link>
           <Link
             href="/settings"
             className={`p-1.5 transition ${

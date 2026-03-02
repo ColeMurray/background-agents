@@ -77,14 +77,19 @@ module "control_plane_worker" {
   ]
 
   durable_objects = [
-    { binding_name = "SESSION", class_name = "SessionDO" }
+    { binding_name = "SESSION", class_name = "SessionDO" },
+    { binding_name = "SCHEDULER", class_name = "SchedulerDO" },
   ]
 
   enable_durable_object_bindings = var.enable_durable_object_bindings
 
   compatibility_date  = "2024-09-23"
   compatibility_flags = ["nodejs_compat"]
-  migration_tag       = "v1"
+  migration_tag       = "v2"
+  migration_old_tag   = "v1"
+  new_sqlite_classes  = ["SchedulerDO"]
+
+  cron_triggers = ["* * * * *"]
 
   depends_on = [null_resource.control_plane_build, module.session_index_kv, null_resource.d1_migrations, module.linear_bot_worker]
 }

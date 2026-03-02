@@ -92,6 +92,24 @@ variable "migration_tag" {
   default     = "v1"
 }
 
+variable "migration_old_tag" {
+  description = "Previous migration tag (for incremental DO migrations). Set when adding new DO classes to an existing worker."
+  type        = string
+  default     = null
+}
+
+variable "new_sqlite_classes" {
+  description = "DO class names that are NEW in this migration step. Only these are declared as new_sqlite_classes in the migration (not all durable_objects). If empty, defaults to all durable_objects class names (for fresh deployments)."
+  type        = list(string)
+  default     = []
+}
+
+variable "cron_triggers" {
+  description = "List of cron expressions for the worker's scheduled() handler"
+  type        = list(string)
+  default     = []
+}
+
 variable "compatibility_date" {
   description = "Compatibility date for the worker"
   type        = string
