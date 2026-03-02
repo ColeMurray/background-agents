@@ -1,0 +1,49 @@
+{{/*
+CronJob that runs hourly to clean up sandbox pods that have exceeded their TTL.
+This is a safety net — pods also have activeDeadlineSeconds set.
+Install this once in the namespace, not per-release.
+*/}}
+{{- if eq .Release.Name "sandbox-cleanup" }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: sandbox-ttl-cleanup
+  labels:
+    app.kubernetes.io/name: sandbox-cleanup
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: sandbox-cleanup
+          restartPolicy: Never
+          containers:
+            - name: cleanup
+              image: bitnami/kubectl:latest
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  set -e
+                  TTL={{ .Values.sandboxTtlSeconds }}
+                  NOW=$(date +%s)
+
+                  # Find pods with the open-inspect label that have exceeded TTL
+                  kubectl get pods -l app.kubernetes.io/name=open-inspect-sandbox \
+                    -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.annotations.open-inspect/created-at}{"\n"}{end}' | \
+                  while IFS=$'\t' read -r POD_NAME CREATED_AT; do
+                    if [ -z "$CREATED_AT" ]; then continue; fi
+                    CREATED_TS=$(date -d "$CREATED_AT" +%s 2>/dev/null || echo 0)
+                    AGE=$((NOW - CREATED_TS))
+                    if [ "$AGE" -gt "$TTL" ]; then
+                      echo "Deleting expired sandbox pod: $POD_NAME (age: ${AGE}s, ttl: ${TTL}s)"
+                      kubectl delete pod "$POD_NAME" --grace-period=30
+                      # Also clean up the helm release
+                      helm uninstall "$POD_NAME" --namespace {{ .Values.namespace }} 2>/dev/null || true
+                    fi
+                  done
+
+                  echo "Cleanup complete"
+{{- end }}

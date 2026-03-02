@@ -38,20 +38,68 @@ variable "vercel_team_id" {
 }
 
 variable "modal_token_id" {
-  description = "Modal API token ID"
+  description = "Modal API token ID (required when sandbox_provider = 'modal')"
   type        = string
   sensitive   = true
+  default     = "unused"
 }
 
 variable "modal_token_secret" {
-  description = "Modal API token secret"
+  description = "Modal API token secret (required when sandbox_provider = 'modal')"
   type        = string
   sensitive   = true
+  default     = "unused"
 }
 
 variable "modal_workspace" {
-  description = "Modal workspace name (used in endpoint URLs)"
+  description = "Modal workspace name (used in endpoint URLs, required when sandbox_provider = 'modal')"
   type        = string
+  default     = "unused"
+}
+
+# =============================================================================
+# Sandbox Provider Selection
+# =============================================================================
+
+variable "sandbox_provider" {
+  description = "Sandbox provider: 'modal' (default) or 'helm' (Kubernetes via Helm chart)"
+  type        = string
+  default     = "modal"
+
+  validation {
+    condition     = contains(["modal", "helm"], var.sandbox_provider)
+    error_message = "sandbox_provider must be 'modal' or 'helm'."
+  }
+}
+
+# =============================================================================
+# Helm Provider Configuration (required when sandbox_provider = "helm")
+# =============================================================================
+
+variable "helm_api_url" {
+  description = "Base URL of the Helm deployer API service"
+  type        = string
+  default     = ""
+}
+
+variable "helm_api_secret" {
+  description = "Shared secret for authenticating with the Helm deployer API (generate with: openssl rand -hex 32)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "helm_namespace" {
+  description = "Kubernetes namespace for sandbox pods"
+  type        = string
+  default     = "open-inspect"
+}
+
+variable "cloudflare_tunnel_token" {
+  description = "Cloudflare tunnel token for sandbox connectivity"
+  type        = string
+  sensitive   = true
+  default     = ""
 }
 
 # =============================================================================

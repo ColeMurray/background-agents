@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sandbox.fullname" . }}
+  labels:
+    {{- include "sandbox.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "sandbox.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: proxy
+      port: {{ .Values.reverseProxy.port }}
+      targetPort: proxy
+    - name: opencode
+      port: {{ .Values.opencode.port }}
+      targetPort: opencode
+    - name: terminal
+      port: {{ .Values.ttyd.port }}
+      targetPort: ttyd
+    - name: browser
+      port: {{ .Values.browser.port }}
+      targetPort: browser

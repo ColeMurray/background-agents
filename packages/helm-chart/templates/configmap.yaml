@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sandbox.fullname" . }}-config
+  labels:
+    {{- include "sandbox.labels" . | nindent 4 }}
+data:
+  SANDBOX_ID: {{ .Values.sandbox.sandboxId | quote }}
+  SESSION_ID: {{ .Values.sandbox.sessionId | quote }}
+  CONTROL_PLANE_URL: {{ .Values.sandbox.controlPlaneUrl | quote }}
+  REPO_OWNER: {{ .Values.sandbox.repoOwner | quote }}
+  REPO_NAME: {{ .Values.sandbox.repoName | quote }}
+  PROVIDER: {{ .Values.sandbox.provider | quote }}
+  MODEL: {{ .Values.sandbox.model | quote }}
+  BRANCH: {{ .Values.sandbox.branch | quote }}
+  VCS_HOST: {{ .Values.git.vcsHost | quote }}
+  VCS_CLONE_USERNAME: {{ .Values.git.vcsCloneUsername | quote }}
+  OPENCODE_PORT: {{ .Values.opencode.port | quote }}
+  REDIS_URL: "redis://localhost:{{ .Values.redis.port }}"
+  MONGODB_URL: "mongodb://localhost:{{ .Values.mongodb.port }}"
+  RABBITMQ_URL: "amqp://guest:guest@localhost:{{ .Values.rabbitmq.ports.amqp }}"
+  KAFKA_BROKER: "localhost:{{ .Values.redpanda.ports.kafka }}"
+  MINIO_ENDPOINT: "http://localhost:{{ .Values.minio.ports.api }}"
+  JAEGER_ENDPOINT: "http://localhost:{{ .Values.jaeger.ports.otlp }}"
+  MAILDEV_SMTP: "localhost:{{ .Values.maildev.ports.smtp }}"
+  SANDBOX_TTL_SECONDS: {{ .Values.sandboxTtlSeconds | quote }}

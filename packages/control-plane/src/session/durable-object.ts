@@ -13,6 +13,7 @@ import { generateId, hashToken, timingSafeEqual } from "../auth/crypto";
 import { getGitHubAppConfig } from "../auth/github-app";
 import { createModalClient } from "../sandbox/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
+import { createHelmProvider } from "../sandbox/providers/helm-provider";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import {
@@ -378,14 +379,29 @@ export class SessionDO extends DurableObject<Env> {
    * Create the lifecycle manager with all required adapters.
    */
   private createLifecycleManager(): SandboxLifecycleManager {
-    // Verify Modal configuration
-    if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {
-      throw new Error("MODAL_API_SECRET and MODAL_WORKSPACE are required for lifecycle manager");
-    }
+    // Select provider based on environment configuration
+    const sandboxProvider = this.env.SANDBOX_PROVIDER || "modal";
+    let provider;
 
-    // Create Modal provider
-    const modalClient = createModalClient(this.env.MODAL_API_SECRET, this.env.MODAL_WORKSPACE);
-    const provider = createModalProvider(modalClient);
+    if (sandboxProvider === "helm") {
+      // Helm/Kubernetes provider
+      if (!this.env.HELM_API_URL || !this.env.HELM_API_SECRET) {
+        throw new Error("HELM_API_URL and HELM_API_SECRET are required for Helm provider");
+      }
+      provider = createHelmProvider({
+        apiUrl: this.env.HELM_API_URL,
+        apiSecret: this.env.HELM_API_SECRET,
+        namespace: this.env.HELM_NAMESPACE || "open-inspect",
+        tunnelToken: this.env.CLOUDFLARE_TUNNEL_TOKEN || "",
+      });
+    } else {
+      // Modal provider (default)
+      if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {
+        throw new Error("MODAL_API_SECRET and MODAL_WORKSPACE are required for lifecycle manager");
+      }
+      const modalClient = createModalClient(this.env.MODAL_API_SECRET, this.env.MODAL_WORKSPACE);
+      provider = createModalProvider(modalClient);
+    }
 
     // Storage adapter
     const storage: SandboxStorage = {

@@ -1,0 +1,204 @@
+# Open-Inspect Sandbox Helm Chart Values
+
+# -- Sandbox environment TTL (cleanup after this duration)
+sandboxTtlSeconds: 86400 # 24 hours
+
+# -- Namespace for sandbox releases
+namespace: open-inspect
+
+# -- OpenCode coding agent
+opencode:
+  image: node:22-bookworm
+  port: 4096
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+
+# -- Reverse proxy (Node 22 backend/frontend app)
+reverseProxy:
+  image: node:22-bookworm
+  port: 3000
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+# -- Browser for MCP (Playwright/Chromium)
+browser:
+  image: mcr.microsoft.com/playwright:v1.49.0-noble
+  port: 9222
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "2Gi"
+
+# -- ttyd for terminal streaming in browser
+ttyd:
+  image: tsl0922/ttyd:latest
+  port: 7681
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+# -- MongoDB
+mongodb:
+  image: mongo:7
+  port: 27017
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+# -- Jaeger (all-in-one)
+jaeger:
+  image: jaegertracing/all-in-one:1.54
+  ports:
+    ui: 16686
+    collector: 14268
+    otlp: 4317
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+# -- RedPanda (Kafka-compatible)
+redpanda:
+  image: redpandadata/redpanda:v24.3.1
+  ports:
+    kafka: 9092
+    admin: 9644
+    schemaRegistry: 8081
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+# -- RedPanda Console
+redpandaConsole:
+  image: redpandadata/console:v2.8.0
+  port: 8080
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+
+# -- RabbitMQ
+rabbitmq:
+  image: rabbitmq:3.13-management
+  ports:
+    amqp: 5672
+    management: 15672
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "512Mi"
+
+# -- Maildev
+maildev:
+  image: maildev/maildev:2.1.0
+  ports:
+    smtp: 1025
+    web: 1080
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+
+# -- MinIO
+minio:
+  image: minio/minio:latest
+  ports:
+    api: 9000
+    console: 9001
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+  accessKey: minioadmin
+  secretKey: minioadmin
+
+# -- Redis
+redis:
+  image: redis:7-alpine
+  port: 6379
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+
+# -- Kafka Connect
+kafkaConnect:
+  image: confluentinc/cp-kafka-connect:7.7.1
+  port: 8083
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+# -- Cloudflare Tunnel
+cloudflareTunnel:
+  image: cloudflare/cloudflared:latest
+  # Set via environment/secrets at deploy time
+  tunnelToken: ""
+
+# -- Sandbox configuration (passed from control plane)
+sandbox:
+  controlPlaneUrl: ""
+  sandboxAuthToken: ""
+  sandboxId: ""
+  sessionId: ""
+  repoOwner: ""
+  repoName: ""
+  provider: "anthropic"
+  model: "claude-sonnet-4-6"
+  branch: "main"
+
+# -- Git configuration
+git:
+  cloneToken: ""
+  vcsHost: "github.com"
+  vcsCloneUsername: "x-access-token"
+
+# -- API keys (set via secrets)
+anthropicApiKey: ""
