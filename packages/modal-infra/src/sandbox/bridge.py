@@ -20,12 +20,24 @@ import tempfile
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import httpx
 import websockets
-from websockets import ClientConnection, State
 from websockets.exceptions import InvalidStatus
+
+if TYPE_CHECKING:
+    try:
+        from websockets import ClientConnection
+    except ImportError:
+        from websockets.legacy.client import WebSocketClientProtocol as ClientConnection
+else:
+    ClientConnection = Any
+
+try:
+    from websockets import State
+except ImportError:
+    from websockets.protocol import State
 
 from .log_config import configure_logging, get_logger
 from .types import GitUser

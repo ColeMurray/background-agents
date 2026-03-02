@@ -17,6 +17,8 @@ import http from "node:http";
 import { execSync } from "node:child_process";
 import crypto from "node:crypto";
 
+const { process, Buffer, console } = globalThis;
+
 const PORT = parseInt(process.env.PORT || "8090");
 const API_SECRET = process.env.HELM_API_SECRET || "";
 const CHART_PATH = process.env.CHART_PATH || "/charts/open-inspect-sandbox";
@@ -151,7 +153,7 @@ function handleDelete(body) {
 }
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://localhost`);
+  const url = new globalThis.URL(req.url, `http://localhost`);
 
   if (url.pathname === "/health" && req.method === "GET") {
     return jsonResponse(res, 200, { status: "ok", service: "open-inspect-helm-deployer" });

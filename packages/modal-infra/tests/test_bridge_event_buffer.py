@@ -11,9 +11,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from websockets import State
 
-from src.sandbox.bridge import AgentBridge
+from src.sandbox.bridge import AgentBridge, State
 from tests.conftest import MockResponse
 
 
