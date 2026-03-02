@@ -144,7 +144,7 @@ resource "cloudflare_workers_route" "this" {
 # Optional: Cron Triggers
 # =============================================================================
 
-resource "cloudflare_worker_cron_trigger" "this" {
+resource "cloudflare_workers_cron_trigger" "this" {
   count = length(var.cron_triggers) > 0 ? 1 : 0
 
   account_id  = var.account_id
