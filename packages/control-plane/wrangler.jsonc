@@ -15,4 +15,11 @@
     },
   ],
   "kv_namespaces": [{ "binding": "REPOS_CACHE", "id": "00000000000000000000000000000000" }],
+  "vpc_services": [
+    {
+        "binding": "VPC_SERVICE",
+        "service_id": "019cb052-716e-7d82-9e3a-43ce87886afc",
+        "remote": true
+    }
+  ],
 }

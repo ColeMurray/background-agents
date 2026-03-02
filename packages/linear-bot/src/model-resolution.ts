@@ -28,6 +28,21 @@ export function resolveStaticRepo(
   );
 }
 
+export type SessionMode = "plan" | "apply";
+
+/**
+ * Extract session mode from issue labels.
+ * "plan" → analyze and write a plan only; "apply" → implement changes (default).
+ */
+export function extractModeFromLabels(labels: Array<{ name: string }>): SessionMode | null {
+  for (const label of labels) {
+    const lower = label.name.toLowerCase();
+    if (lower === "plan") return "plan";
+    if (lower === "apply") return "apply";
+  }
+  return null;
+}
+
 const MODEL_LABEL_MAP: Record<string, string> = {
   haiku: "anthropic/claude-haiku-4-5",
   sonnet: "anthropic/claude-sonnet-4-5",

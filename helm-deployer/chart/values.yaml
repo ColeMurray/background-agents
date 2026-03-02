@@ -1,0 +1,83 @@
+replicaCount: 1
+
+image:
+  repository: "public.ecr.aws/x5s6v8v4/helm-deployer/node"
+  tag: "22-alpine-v3"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+nodeSelector:
+  kubernetes.io/arch: amd64
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+apiSecret:
+  create: true
+  value: ""
+  existingSecretName: ""
+  existingSecretKey: HELM_API_SECRET
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8090
+
+helm:
+  chartPath: /charts/open-inspect-sandbox
+  # When set, all deploy/delete requests are forced into this namespace.
+  targetNamespace: open-inspect
+  # Keep false for least privilege RBAC (no cluster-scoped namespace create permission).
+  createNamespace: false
+
+rbac:
+  create: true
+
+cloudflareTunnel:
+  enabled: false
+  image:
+    repository: cloudflare/cloudflared
+    tag: latest
+    pullPolicy: IfNotPresent
+  token:
+    create: true
+    value: ""
+    existingSecretName: ""
+    existingSecretKey: TUNNEL_TOKEN
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi

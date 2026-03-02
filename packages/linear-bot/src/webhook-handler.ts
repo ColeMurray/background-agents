@@ -26,8 +26,10 @@ import { makePlan } from "./plan";
 import {
   resolveStaticRepo,
   extractModelFromLabels,
+  extractModeFromLabels,
   resolveSessionModelSettings,
 } from "./model-resolution";
+import type { SessionMode } from "./model-resolution";
 import {
   getTeamRepoMapping,
   getProjectRepoMapping,
@@ -203,6 +205,9 @@ async function handleNewSession(
   const comment = webhook.agentSession.comment;
   const orgId = webhook.organizationId;
 
+  // Determine mode early from webhook labels (refined after fetching full details)
+  const earlyMode: SessionMode = extractModeFromLabels(issue.labels ?? []) ?? "apply";
+
   const client = await getLinearClient(env, orgId);
   if (!client) {
     log.error("agent_session.no_oauth_token", {
@@ -213,7 +218,7 @@ async function handleNewSession(
     return;
   }
 
-  await updateAgentSession(client, agentSessionId, { plan: makePlan("start") });
+  await updateAgentSession(client, agentSessionId, { plan: makePlan("start", earlyMode) });
   await emitAgentActivity(
     client,
     agentSessionId,
@@ -228,6 +233,7 @@ async function handleNewSession(
   const issueDetails = await fetchIssueDetails(client, issue.id);
   const labels = issueDetails?.labels || issue.labels || [];
   const labelNames = labels.map((l) => l.name);
+  const mode: SessionMode = extractModeFromLabels(labels) ?? earlyMode;
   const projectInfo = issueDetails?.project || issue.project;
 
   // ─── Resolve repo ─────────────────────────────────────────────────────
@@ -387,13 +393,13 @@ async function handleNewSession(
 
   // ─── Create session ───────────────────────────────────────────────────
 
-  await updateAgentSession(client, agentSessionId, { plan: makePlan("repo_resolved") });
+  await updateAgentSession(client, agentSessionId, { plan: makePlan("repo_resolved", mode) });
   await emitAgentActivity(
     client,
     agentSessionId,
     {
       type: "thought",
-      body: `Creating coding session on ${repoFullName} (model: ${model})...`,
+      body: `Creating coding session on ${repoFullName} (model: ${model}, mode: ${mode})...`,
     },
     true
   );
@@ -409,6 +415,7 @@ async function handleNewSession(
       title: `${issue.identifier}: ${issue.title}`,
       model,
       reasoningEffort,
+      sandboxProvider: mode === "plan" ? "modal" : "helm",
     }),
   });
 
@@ -452,13 +459,18 @@ async function handleNewSession(
     externalUrls: [
       { label: "View Session", url: `${env.WEB_APP_URL}/session/${session.sessionId}` },
     ],
-    plan: makePlan("session_created"),
+    plan: makePlan("session_created", mode),
   });
 
   // ─── Build and send prompt ────────────────────────────────────────────
 
   // Prefer Linear's promptContext (includes issue, comments, guidance)
-  const prompt = webhook.agentSession.promptContext || buildPrompt(issue, issueDetails, comment);
+  const basePrompt =
+    webhook.agentSession.promptContext || buildPrompt(issue, issueDetails, comment, mode);
+  const prompt =
+    mode === "plan" && webhook.agentSession.promptContext
+      ? `${basePrompt}\n\nIMPORTANT: You are in PLAN mode. Do NOT make any code changes or create a pull request. Instead, analyze the codebase and provide a detailed implementation plan that includes the files to modify, the specific changes needed, and any risks or considerations.`
+      : basePrompt;
   const callbackContext: CallbackContext = {
     source: "linear",
     issueId: issue.id,
@@ -509,7 +521,7 @@ async function handleNewSession(
 
   await emitAgentActivity(client, agentSessionId, {
     type: "response",
-    body: `Working on \`${repoFullName}\` with **${model}**.\n\n${classificationReasoning ? `*${classificationReasoning}*\n\n` : ""}[View session](${env.WEB_APP_URL}/session/${session.sessionId})`,
+    body: `${mode === "plan" ? "Planning" : "Working on"} \`${repoFullName}\` with **${model}**.\n\n${classificationReasoning ? `*${classificationReasoning}*\n\n` : ""}[View session](${env.WEB_APP_URL}/session/${session.sessionId})`,
   });
 
   log.info("agent_session.session_created", {
@@ -518,6 +530,7 @@ async function handleNewSession(
     agent_session_id: agentSessionId,
     issue_identifier: issue.identifier,
     repo: repoFullName,
+    mode,
     model,
     classification_reasoning: classificationReasoning,
     duration_ms: Date.now() - startTime,
@@ -569,7 +582,8 @@ export async function handleAgentSessionEvent(
 function buildPrompt(
   issue: { identifier: string; title: string; description?: string | null; url: string },
   issueDetails: LinearIssueDetails | null,
-  comment?: { body: string } | null
+  comment?: { body: string } | null,
+  mode: SessionMode = "apply"
 ): string {
   const parts: string[] = [
     `Linear Issue: ${issue.identifier} — ${issue.title}`,
@@ -612,10 +626,17 @@ function buildPrompt(
     parts.push("", "---", `**Agent instruction:** ${comment.body}`);
   }
 
-  parts.push(
-    "",
-    "Please implement the changes described in this issue. Create a pull request when done."
-  );
+  if (mode === "plan") {
+    parts.push(
+      "",
+      "IMPORTANT: You are in PLAN mode. Do NOT make any code changes or create a pull request. Instead, analyze the codebase and provide a detailed implementation plan that includes the files to modify, the specific changes needed, and any risks or considerations."
+    );
+  } else {
+    parts.push(
+      "",
+      "Please implement the changes described in this issue. Create a pull request when done."
+    );
+  }
 
   return parts.join("\n");
 }

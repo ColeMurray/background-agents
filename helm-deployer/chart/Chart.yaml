@@ -1,0 +1,6 @@
+apiVersion: v2
+name: helm-deployer
+description: Deploys the Open-Inspect Helm deployer service on Kubernetes/EKS
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

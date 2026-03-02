@@ -69,6 +69,8 @@ export interface UpsertSessionData {
   parentSessionId?: string | null;
   spawnSource?: SpawnSource;
   spawnDepth?: number;
+  defaultAgent?: string | null;
+  sandboxProvider?: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -225,8 +227,8 @@ export class SessionRepository {
 
   upsertSession(data: UpsertSessionData): void {
     this.sql.exec(
-      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, default_agent, sandbox_provider, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.sessionName,
       data.title,
@@ -240,6 +242,8 @@ export class SessionRepository {
       data.parentSessionId ?? null,
       data.spawnSource ?? "user",
       data.spawnDepth ?? 0,
+      data.defaultAgent ?? null,
+      data.sandboxProvider ?? null,
       data.createdAt,
       data.updatedAt
     );

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractModelFromLabels,
+  extractModeFromLabels,
   resolveSessionModelSettings,
   resolveStaticRepo,
 } from "../model-resolution";
@@ -28,6 +29,35 @@ describe("extractModelFromLabels", () => {
 
   it("returns null for empty labels", () => {
     expect(extractModelFromLabels([])).toBeNull();
+  });
+});
+
+// ─── extractModeFromLabels ────────────────────────────────────────────────────
+
+describe("extractModeFromLabels", () => {
+  it("returns 'plan' for plan label", () => {
+    expect(extractModeFromLabels([{ name: "plan" }])).toBe("plan");
+  });
+
+  it("returns 'apply' for apply label", () => {
+    expect(extractModeFromLabels([{ name: "apply" }])).toBe("apply");
+  });
+
+  it("is case-insensitive", () => {
+    expect(extractModeFromLabels([{ name: "Plan" }])).toBe("plan");
+    expect(extractModeFromLabels([{ name: "APPLY" }])).toBe("apply");
+  });
+
+  it("returns null when no mode labels present", () => {
+    expect(extractModeFromLabels([{ name: "bug" }, { name: "urgent" }])).toBeNull();
+  });
+
+  it("returns null for empty labels", () => {
+    expect(extractModeFromLabels([])).toBeNull();
+  });
+
+  it("returns first matching mode when both present", () => {
+    expect(extractModeFromLabels([{ name: "plan" }, { name: "apply" }])).toBe("plan");
   });
 });
 

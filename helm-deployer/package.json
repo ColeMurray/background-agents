@@ -1,0 +1,11 @@
+{
+  "name": "@open-inspect/helm-deployer",
+  "version": "0.1.0",
+  "description": "HTTP API service that deploys sandbox Helm chart releases",
+  "type": "module",
+  "main": "index.mjs",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {}
+}

@@ -195,6 +195,7 @@ export class SessionMessageQueue {
       content: message.content,
       model: resolvedModel,
       reasoningEffort: resolvedEffort,
+      agent: session?.default_agent ?? undefined,
       author: {
         userId: author?.user_id ?? "unknown",
         scmName: author?.scm_name ?? null,

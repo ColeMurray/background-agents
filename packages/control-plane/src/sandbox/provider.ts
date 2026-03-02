@@ -57,6 +57,8 @@ export interface CreateSandboxConfig {
   timeoutSeconds?: number;
   /** Git branch to work on (defaults to repo's default branch) */
   branch?: string;
+  /** OpenCode primary agent id (e.g. from .opencode/agents/foo.md). Omit for default. */
+  agent?: string;
 }
 
 /**
@@ -101,6 +103,8 @@ export interface RestoreConfig {
   timeoutSeconds?: number;
   /** Git branch to work on (defaults to repo's default branch) */
   branch?: string;
+  /** OpenCode primary agent id. Omit for default. */
+  agent?: string;
   /** Correlation context for downstream tracing */
   correlation?: CorrelationContext;
 }

@@ -31,6 +31,14 @@ export {
 // Modal provider
 export { ModalSandboxProvider, createModalProvider } from "./providers/modal-provider";
 
+// Helm provider
+export {
+  HelmSandboxProvider,
+  HelmApiClient,
+  createHelmProvider,
+  type HelmApiConfig,
+} from "./providers/helm-provider";
+
 // Lifecycle decisions
 export {
   evaluateCircuitBreaker,

@@ -54,27 +54,48 @@ module "control_plane_worker" {
 
   enable_service_bindings = var.enable_service_bindings
 
-  plain_text_bindings = [
-    { name = "GITHUB_CLIENT_ID", value = var.github_client_id },
-    { name = "WEB_APP_URL", value = local.web_app_url },
-    { name = "WORKER_URL", value = local.control_plane_url },
-    { name = "MODAL_WORKSPACE", value = var.modal_workspace },
-    { name = "DEPLOYMENT_NAME", value = var.deployment_name },
-  ]
+  plain_text_bindings = concat(
+    [
+      { name = "GITHUB_CLIENT_ID", value = var.github_client_id },
+      { name = "WEB_APP_URL", value = local.web_app_url },
+      { name = "WORKER_URL", value = local.control_plane_url },
+      { name = "DEPLOYMENT_NAME", value = var.deployment_name },
+      { name = "SANDBOX_PROVIDER", value = var.sandbox_provider },
+    ],
+    # Modal-specific bindings
+    var.sandbox_provider == "modal" ? [
+      { name = "MODAL_WORKSPACE", value = var.modal_workspace },
+    ] : [],
+    # Helm-specific bindings
+    var.sandbox_provider == "helm" ? [
+      { name = "HELM_API_URL", value = var.helm_api_url },
+      { name = "HELM_NAMESPACE", value = var.helm_namespace },
+    ] : []
+  )
 
-  secrets = [
-    { name = "GITHUB_CLIENT_SECRET", value = var.github_client_secret },
-    { name = "TOKEN_ENCRYPTION_KEY", value = var.token_encryption_key },
-    { name = "REPO_SECRETS_ENCRYPTION_KEY", value = var.repo_secrets_encryption_key },
-    { name = "MODAL_TOKEN_ID", value = var.modal_token_id },
-    { name = "MODAL_TOKEN_SECRET", value = var.modal_token_secret },
-    { name = "MODAL_API_SECRET", value = var.modal_api_secret },
-    { name = "INTERNAL_CALLBACK_SECRET", value = var.internal_callback_secret },
-    # GitHub App credentials for /repos endpoint (listInstallationRepositories)
-    { name = "GITHUB_APP_ID", value = var.github_app_id },
-    { name = "GITHUB_APP_PRIVATE_KEY", value = var.github_app_private_key },
-    { name = "GITHUB_APP_INSTALLATION_ID", value = var.github_app_installation_id },
-  ]
+  secrets = concat(
+    [
+      { name = "GITHUB_CLIENT_SECRET", value = var.github_client_secret },
+      { name = "TOKEN_ENCRYPTION_KEY", value = var.token_encryption_key },
+      { name = "REPO_SECRETS_ENCRYPTION_KEY", value = var.repo_secrets_encryption_key },
+      { name = "INTERNAL_CALLBACK_SECRET", value = var.internal_callback_secret },
+      # GitHub App credentials for /repos endpoint (listInstallationRepositories)
+      { name = "GITHUB_APP_ID", value = var.github_app_id },
+      { name = "GITHUB_APP_PRIVATE_KEY", value = var.github_app_private_key },
+      { name = "GITHUB_APP_INSTALLATION_ID", value = var.github_app_installation_id },
+    ],
+    # Modal-specific secrets
+    var.sandbox_provider == "modal" ? [
+      { name = "MODAL_TOKEN_ID", value = var.modal_token_id },
+      { name = "MODAL_TOKEN_SECRET", value = var.modal_token_secret },
+      { name = "MODAL_API_SECRET", value = var.modal_api_secret },
+    ] : [],
+    # Helm-specific secrets
+    var.sandbox_provider == "helm" ? [
+      { name = "HELM_API_SECRET", value = var.helm_api_secret },
+      { name = "CLOUDFLARE_TUNNEL_TOKEN", value = var.cloudflare_tunnel_token },
+    ] : []
+  )
 
   durable_objects = [
     { binding_name = "SESSION", class_name = "SessionDO" }

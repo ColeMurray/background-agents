@@ -36,6 +36,8 @@ export interface SessionRow {
   parent_session_id: string | null;
   spawn_source: SpawnSource;
   spawn_depth: number;
+  default_agent: string | null;
+  sandbox_provider: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -113,6 +115,7 @@ export interface PromptCommand {
   content: string;
   model?: string; // LLM model for per-message override
   reasoningEffort?: string; // Reasoning effort level
+  agent?: string; // OpenCode primary agent id (e.g. from .opencode/agents/foo.md)
   author: {
     userId: string;
     scmName: string | null;

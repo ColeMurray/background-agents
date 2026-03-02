@@ -17,6 +17,7 @@ export default tseslint.config(
       "**/coverage/**",
       "opencode-reference/**",
       "**/*.d.ts",
+      "helm-deployer/**",
       // Bundled/generated files
       "packages/modal-infra/**/*.js",
     ],

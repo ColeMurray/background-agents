@@ -69,6 +69,15 @@ export interface Env {
   CF_ACCOUNT_ID?: string; // Cloudflare account ID
   MODAL_WORKSPACE?: string; // Modal workspace name (used in Modal endpoint URLs)
 
+  // Sandbox provider selection ("modal" or "helm", defaults to "modal")
+  SANDBOX_PROVIDER?: string;
+
+  // Helm provider configuration (required when SANDBOX_PROVIDER = "helm")
+  HELM_API_URL?: string; // Base URL of the Helm deployer API
+  HELM_API_SECRET?: string; // Shared secret for Helm deployer auth
+  HELM_NAMESPACE?: string; // Kubernetes namespace for sandbox pods (default: "open-inspect")
+  CLOUDFLARE_TUNNEL_TOKEN?: string; // Cloudflare tunnel token for sandbox connectivity
+
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)
   EXECUTION_TIMEOUT_MS?: string; // Max processing time before auto-fail (default: 5400000 = 90 min)

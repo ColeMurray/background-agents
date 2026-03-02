@@ -9,6 +9,7 @@ import {
   DataControlsIcon,
   IntegrationsIcon,
   ChevronRightIcon,
+  SparkleIcon,
 } from "@/components/ui/icons";
 
 const NAV_ITEMS = [
@@ -21,6 +22,11 @@ const NAV_ITEMS = [
     id: "models",
     label: "Models",
     icon: ModelIcon,
+  },
+  {
+    id: "agents",
+    label: "Agents",
+    icon: SparkleIcon,
   },
   {
     id: "images",

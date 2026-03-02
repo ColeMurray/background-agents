@@ -28,6 +28,7 @@ import {
 export {
   resolveStaticRepo,
   extractModelFromLabels,
+  extractModeFromLabels,
   resolveSessionModelSettings,
 } from "./model-resolution";
 

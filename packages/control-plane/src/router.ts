@@ -10,6 +10,7 @@ import {
   SourceControlProviderError,
   type SourceControlProviderName,
 } from "./source-control";
+import { AgentDefaultsStore } from "./db/agent-defaults";
 import { SessionIndexStore } from "./db/session-index";
 import { UserScmTokenStore, DEFAULT_TOKEN_LIFETIME_MS } from "./db/user-scm-tokens";
 
@@ -33,6 +34,7 @@ import {
   resolveInstalledRepo,
 } from "./routes/shared";
 import { integrationSettingsRoutes } from "./routes/integration-settings";
+import { agentDefaultsRoutes } from "./routes/agent-defaults";
 import { modelPreferencesRoutes } from "./routes/model-preferences";
 import { reposRoutes } from "./routes/repos";
 import { repoImageRoutes } from "./routes/repo-images";
@@ -431,6 +433,9 @@ const routes: Route[] = [
   // Model preferences
   ...modelPreferencesRoutes,
 
+  // Agent defaults (per-user, per-repo default OpenCode agent)
+  ...agentDefaultsRoutes,
+
   // Integration settings
   ...integrationSettingsRoutes,
 
@@ -673,6 +678,17 @@ async function handleCreateSession(
       ? body.reasoningEffort
       : null;
 
+  // Resolve agent: explicit body.agent, else user's default for this repo, else null
+  let agent: string | null = body.agent ?? null;
+  if (agent === null && env.DB) {
+    try {
+      const agentStore = new AgentDefaultsStore(env.DB);
+      agent = await agentStore.get(userId, repoOwner, repoName);
+    } catch {
+      agent = null;
+    }
+  }
+
   // Initialize session with user info and optional encrypted token
   const initResponse = await stub.fetch(
     internalRequest(
@@ -690,11 +706,13 @@ async function handleCreateSession(
           title: body.title,
           model,
           reasoningEffort,
+          agent,
           userId,
           scmLogin,
           scmName,
           scmEmail,
           scmTokenEncrypted,
+          sandboxProvider: body.sandboxProvider ?? null,
         }),
       },
       ctx

@@ -19,10 +19,15 @@ venv/
 # Reference code (vendored)
 opencode-reference/
 
+helm-deployer/
+
 # Lock files
 package-lock.json
 pnpm-lock.yaml
 yarn.lock
+
+# Helm chart templates (Go template YAML, not parseable by prettier)
+packages/helm-chart/templates/
 
 # Generated files
 *.d.ts

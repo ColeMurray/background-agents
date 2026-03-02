@@ -337,6 +337,102 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
   }
 
   /**
+   * List directory contents via GitHub Contents API (app-level auth).
+   */
+  async listRepositoryDirectory(
+    config: GetRepositoryConfig,
+    path: string
+  ): Promise<{ name: string; path: string; type: "file" | "dir" }[]> {
+    if (!this.appConfig) {
+      throw new SourceControlProviderError(
+        "GitHub App not configured - cannot list repository directory",
+        "permanent"
+      );
+    }
+    const token = await getCachedInstallationToken(
+      this.appConfig,
+      this.kvCache ? { REPOS_CACHE: this.kvCache } : undefined
+    );
+    const encodedPath = encodeURIComponent(path);
+    const url = `${GITHUB_API_BASE}/repos/${config.owner}/${config.name}/contents/${encodedPath}`;
+    const response = await fetchWithTimeout(url, {
+      headers: {
+        Accept: "application/vnd.github.v3+json",
+        Authorization: `Bearer ${token}`,
+        "User-Agent": USER_AGENT,
+      },
+    });
+    if (response.status === 404) {
+      return [];
+    }
+    if (!response.ok) {
+      const errText = await response.text();
+      throw SourceControlProviderError.fromFetchError(
+        `Failed to list directory: ${response.status} ${errText}`,
+        new Error(errText),
+        response.status
+      );
+    }
+    const data = await response.json();
+    if (!Array.isArray(data)) {
+      return [];
+    }
+    return data.map((entry: { name: string; path: string; type: string }) => ({
+      name: entry.name,
+      path: entry.path,
+      type: entry.type === "dir" ? "dir" : "file",
+    }));
+  }
+
+  /**
+   * Get file content via GitHub Contents API (app-level auth).
+   */
+  async getRepositoryFileContent(
+    config: GetRepositoryConfig,
+    path: string
+  ): Promise<string | null> {
+    if (!this.appConfig) {
+      throw new SourceControlProviderError(
+        "GitHub App not configured - cannot get file content",
+        "permanent"
+      );
+    }
+    const token = await getCachedInstallationToken(
+      this.appConfig,
+      this.kvCache ? { REPOS_CACHE: this.kvCache } : undefined
+    );
+    const encodedPath = encodeURIComponent(path);
+    const url = `${GITHUB_API_BASE}/repos/${config.owner}/${config.name}/contents/${encodedPath}`;
+    const response = await fetchWithTimeout(url, {
+      headers: {
+        Accept: "application/vnd.github.v3+json",
+        Authorization: `Bearer ${token}`,
+        "User-Agent": USER_AGENT,
+      },
+    });
+    if (response.status === 404 || !response.ok) {
+      return null;
+    }
+    const data = (await response.json()) as { content?: string; encoding?: string };
+    if (!data.content) {
+      return null;
+    }
+    if (data.encoding === "base64") {
+      try {
+        const binary = atob(data.content.replace(/\s/g, ""));
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        return new TextDecoder().decode(bytes);
+      } catch {
+        return null;
+      }
+    }
+    return data.content;
+  }
+
+  /**
    * Add labels to a pull request.
    * This is a best-effort operation - failures are logged but don't fail the PR creation.
    */

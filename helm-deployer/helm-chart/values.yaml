@@ -1,0 +1,228 @@
+# Open-Inspect Sandbox Helm Chart Values
+
+# -- Sandbox environment TTL (cleanup after this duration)
+sandboxTtlSeconds: 86400 # 24 hours
+
+# -- Namespace for sandbox releases
+namespace: open-inspect
+
+# -- OpenCode coding agent
+opencode:
+  image: public.ecr.aws/docker/library/node:22-alpine3.23
+  port: 4096
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+
+# -- Reverse proxy (Node 22 backend/frontend app)
+reverseProxy:
+  image: public.ecr.aws/docker/library/node:22-alpine3.23
+  port: 3000
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+# -- Browser for MCP (Playwright/Chromium)
+browser:
+  image: mcr.microsoft.com/playwright:v1.49.0-noble
+  port: 9222
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "2Gi"
+
+# -- ttyd for terminal streaming in browser
+ttyd:
+  image: tsl0922/ttyd:@sha256:6609dc1715ea39b331d1f5c8840abb84fcea2992f0b7e7cf55664fe318479752
+  port: 7681
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+# -- Python bridge process (streams OpenCode events to control plane)
+bridge:
+  image: public.ecr.aws/docker/library/python:3.13-slim
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+
+# -- MongoDB (Atlas local — same image pinned in compose.local.yml)
+mongodb:
+  image: "mongodb/mongodb-atlas-local@sha256:52cb0efa52ab6d498708f6078eb01aee813495ecb972dfd95d22c599ec9b30c6"
+  port: 27017
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+# -- Jaeger (all-in-one, v2.x with OTLP)
+jaeger:
+  image: public.ecr.aws/bitnami/jaeger:2
+  ports:
+    ui: 16686
+    otlpGrpc: 4317
+    otlpHttp: 4318
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+# -- RedPanda (Kafka-compatible)
+redpanda:
+  image: docker.redpanda.com/redpandadata/redpanda:v24.3.18
+  ports:
+    kafka: 9092
+    admin: 9644
+    schemaRegistry: 8081
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+# -- RedPanda Console
+redpandaConsole:
+  image: docker.redpanda.com/redpandadata/console:v3.1.2
+  port: 8080
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+
+# -- RabbitMQ (with delayed-message-exchange plugin, matches compose.premise.yml)
+rabbitmq:
+  image: heidiks/rabbitmq-delayed-message-exchange:4.0.2-management
+  ports:
+    amqp: 5672
+    management: 15672
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "512Mi"
+
+# -- Maildev
+maildev:
+  image: maildev/maildev@sha256:180ef51f65eefebb0e7122d8308813c1fd7bff164bc440ce5a3c2feee167a810
+  ports:
+    smtp: 1025
+    web: 1080
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+
+# -- MinIO
+minio:
+  image: public.ecr.aws/bitnami/minio:2023-debian-11
+  ports:
+    api: 9000
+    console: 9001
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+  accessKey: minio
+  secretKey: minio123
+
+# -- Redis
+redis:
+  image: public.ecr.aws/docker/library/redis:7
+  port: 6379
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+
+# -- Prometheus (matches compose.tracing.yml)
+prometheus:
+  image: public.ecr.aws/bitnami/prometheus:latest
+  port: 9090
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+# -- Kafka Connect
+kafkaConnect:
+  image: confluentinc/cp-kafka-connect:7.7.1
+  port: 8083
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+# -- Cloudflare Tunnel
+cloudflareTunnel:
+  image: cloudflare/cloudflared:latest
+  # Set via environment/secrets at deploy time
+  tunnelToken: ""
+
+# -- Sandbox configuration (passed from control plane)
+sandbox:
+  controlPlaneUrl: ""
+  sandboxAuthToken: ""
+  sandboxId: ""
+  sessionId: ""
+  repoOwner: ""
+  repoName: ""
+  provider: "anthropic"
+  model: "claude-sonnet-4-6"
+  branch: "main"
+  agent: ""
+
+# -- Git configuration
+git:
+  cloneToken: ""
+  vcsHost: "github.com"
+  vcsCloneUsername: "x-access-token"
+
+# -- API keys (set via secrets)
+anthropicApiKey: ""

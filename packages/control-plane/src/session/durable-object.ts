@@ -13,6 +13,7 @@ import { generateId, hashToken, timingSafeEqual } from "../auth/crypto";
 import { getGitHubAppConfig } from "../auth/github-app";
 import { createModalClient } from "../sandbox/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
+import { createHelmProvider } from "../sandbox/providers/helm-provider";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import {
@@ -379,14 +380,30 @@ export class SessionDO extends DurableObject<Env> {
    * Create the lifecycle manager with all required adapters.
    */
   private createLifecycleManager(): SandboxLifecycleManager {
-    // Verify Modal configuration
-    if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {
-      throw new Error("MODAL_API_SECRET and MODAL_WORKSPACE are required for lifecycle manager");
-    }
+    // Select provider: per-session override takes precedence over environment configuration
+    const session = this.repository.getSession();
+    const sandboxProvider = session?.sandbox_provider || this.env.SANDBOX_PROVIDER || "modal";
+    let provider;
 
-    // Create Modal provider
-    const modalClient = createModalClient(this.env.MODAL_API_SECRET, this.env.MODAL_WORKSPACE);
-    const provider = createModalProvider(modalClient);
+    if (sandboxProvider === "helm") {
+      // Helm/Kubernetes provider
+      if (!this.env.HELM_API_URL || !this.env.HELM_API_SECRET) {
+        throw new Error("HELM_API_URL and HELM_API_SECRET are required for Helm provider");
+      }
+      provider = createHelmProvider({
+        apiUrl: this.env.HELM_API_URL,
+        apiSecret: this.env.HELM_API_SECRET,
+        namespace: this.env.HELM_NAMESPACE || "open-inspect",
+        tunnelToken: this.env.CLOUDFLARE_TUNNEL_TOKEN || "",
+      });
+    } else {
+      // Modal provider (default)
+      if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {
+        throw new Error("MODAL_API_SECRET and MODAL_WORKSPACE are required for lifecycle manager");
+      }
+      const modalClient = createModalClient(this.env.MODAL_API_SECRET, this.env.MODAL_WORKSPACE);
+      provider = createModalProvider(modalClient);
+    }
 
     // Storage adapter
     const storage: SandboxStorage = {
@@ -448,7 +465,6 @@ export class SessionDO extends DurableObject<Env> {
       `https://open-inspect-control-plane.${this.env.CF_ACCOUNT_ID || "workers"}.workers.dev`;
 
     // Resolve sessionId for lifecycle manager logging context
-    const session = this.repository.getSession();
     const sessionId = session?.session_name || session?.id || this.ctx.id.toString();
 
     const config = {
@@ -1564,6 +1580,8 @@ export class SessionDO extends DurableObject<Env> {
       title?: string;
       model?: string; // LLM model to use
       reasoningEffort?: string; // Reasoning effort level
+      agent?: string | null; // OpenCode primary agent id (e.g. from .opencode/agents/foo.md)
+      sandboxProvider?: string | null; // Infrastructure provider override ("modal" or "helm")
       userId: string;
       scmLogin?: string;
       scmName?: string;
@@ -1623,6 +1641,8 @@ export class SessionDO extends DurableObject<Env> {
       parentSessionId: body.parentSessionId ?? null,
       spawnSource: body.spawnSource ?? "user",
       spawnDepth: body.spawnDepth ?? 0,
+      defaultAgent: body.agent ?? null,
+      sandboxProvider: body.sandboxProvider ?? null,
       createdAt: now,
       updatedAt: now,
     });

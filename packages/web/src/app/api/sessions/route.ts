@@ -61,6 +61,7 @@ export async function POST(request: NextRequest) {
       reasoningEffort: body.reasoningEffort,
       branch: body.branch,
       title: body.title,
+      agent: body.agent,
       scmToken: accessToken,
       userId,
       scmLogin: user.login,

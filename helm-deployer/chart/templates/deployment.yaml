@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "helm-deployer.fullname" . }}
+  labels:
+    {{- include "helm-deployer.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "helm-deployer.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "helm-deployer.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "helm-deployer.serviceAccountName" . }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: helm-deployer
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: PORT
+              value: {{ .Values.service.targetPort | quote }}
+            - name: CHART_PATH
+              value: {{ .Values.helm.chartPath | quote }}
+            - name: HOME
+              value: /tmp
+            - name: XDG_CACHE_HOME
+              value: /tmp/.cache
+            - name: XDG_CONFIG_HOME
+              value: /tmp/.config
+            - name: XDG_DATA_HOME
+              value: /tmp/.local/share
+            - name: HELM_NAMESPACE
+              value: {{ .Values.helm.targetNamespace | quote }}
+            - name: HELM_CREATE_NAMESPACE
+              value: {{ .Values.helm.createNamespace | quote }}
+            - name: HELM_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ if .Values.apiSecret.existingSecretName }}{{ .Values.apiSecret.existingSecretName }}{{ else if .Values.apiSecret.create }}{{ printf "%s-api" (include "helm-deployer.fullname" .) }}{{ else }}{{ required "values.apiSecret.existingSecretName is required when values.apiSecret.create=false" .Values.apiSecret.existingSecretName }}{{ end }}
+                  key: {{ .Values.apiSecret.existingSecretKey | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+        {{- if .Values.cloudflareTunnel.enabled }}
+        - name: cloudflared
+          image: "{{ .Values.cloudflareTunnel.image.repository }}:{{ .Values.cloudflareTunnel.image.tag }}"
+          imagePullPolicy: {{ .Values.cloudflareTunnel.image.pullPolicy }}
+          args:
+            - tunnel
+            - --no-autoupdate
+            - run
+          env:
+            - name: TUNNEL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ if .Values.cloudflareTunnel.token.existingSecretName }}{{ .Values.cloudflareTunnel.token.existingSecretName }}{{ else if .Values.cloudflareTunnel.token.create }}{{ printf "%s-tunnel" (include "helm-deployer.fullname" .) }}{{ else }}{{ required "values.cloudflareTunnel.token.existingSecretName is required when cloudflareTunnel.token.create=false" .Values.cloudflareTunnel.token.existingSecretName }}{{ end }}
+                  key: {{ .Values.cloudflareTunnel.token.existingSecretKey | quote }}
+          resources:
+            {{- toYaml .Values.cloudflareTunnel.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+        {{- end }}

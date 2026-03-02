@@ -478,6 +478,10 @@ export interface CreateSessionRequest {
   model?: string;
   reasoningEffort?: string;
   branch?: string;
+  /** OpenCode primary agent id (e.g. from .opencode/agents/foo.md). Omit for default. */
+  agent?: string;
+  /** Override the infrastructure provider for this session ("modal" or "helm"). */
+  sandboxProvider?: "modal" | "helm";
 }
 
 export interface CreateSessionResponse {
