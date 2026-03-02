@@ -712,6 +712,7 @@ async function handleCreateSession(
           scmName,
           scmEmail,
           scmTokenEncrypted,
+          sandboxProvider: body.sandboxProvider ?? null,
         }),
       },
       ctx

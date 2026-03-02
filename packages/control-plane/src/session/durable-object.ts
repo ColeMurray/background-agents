@@ -379,8 +379,9 @@ export class SessionDO extends DurableObject<Env> {
    * Create the lifecycle manager with all required adapters.
    */
   private createLifecycleManager(): SandboxLifecycleManager {
-    // Select provider based on environment configuration
-    const sandboxProvider = this.env.SANDBOX_PROVIDER || "modal";
+    // Select provider: per-session override takes precedence over environment configuration
+    const session = this.repository.getSession();
+    const sandboxProvider = session?.sandbox_provider || this.env.SANDBOX_PROVIDER || "modal";
     let provider;
 
     if (sandboxProvider === "helm") {
@@ -463,7 +464,6 @@ export class SessionDO extends DurableObject<Env> {
       `https://open-inspect-control-plane.${this.env.CF_ACCOUNT_ID || "workers"}.workers.dev`;
 
     // Resolve sessionId for lifecycle manager logging context
-    const session = this.repository.getSession();
     const sessionId = session?.session_name || session?.id || this.ctx.id.toString();
 
     const config = {
@@ -1580,6 +1580,7 @@ export class SessionDO extends DurableObject<Env> {
       model?: string; // LLM model to use
       reasoningEffort?: string; // Reasoning effort level
       agent?: string | null; // OpenCode primary agent id (e.g. from .opencode/agents/foo.md)
+      sandboxProvider?: string | null; // Infrastructure provider override ("modal" or "helm")
       userId: string;
       scmLogin?: string;
       scmName?: string;
@@ -1640,6 +1641,7 @@ export class SessionDO extends DurableObject<Env> {
       spawnSource: body.spawnSource ?? "user",
       spawnDepth: body.spawnDepth ?? 0,
       defaultAgent: body.agent ?? null,
+      sandboxProvider: body.sandboxProvider ?? null,
       createdAt: now,
       updatedAt: now,
     });

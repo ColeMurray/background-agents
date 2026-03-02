@@ -35,6 +35,7 @@ export interface SessionRow {
   spawn_source: "user" | "agent";
   spawn_depth: number;
   default_agent: string | null;
+  sandbox_provider: string | null;
   created_at: number;
   updated_at: number;
 }

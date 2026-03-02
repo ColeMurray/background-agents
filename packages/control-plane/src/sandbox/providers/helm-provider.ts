@@ -84,13 +84,37 @@ export interface HelmDeleteResponse {
  * receives authenticated requests and runs `helm install/uninstall`.
  */
 export class HelmApiClient {
-  constructor(private readonly config: HelmApiConfig) {
+  private readonly config: HelmApiConfig;
+
+  constructor(config: HelmApiConfig) {
     if (!config.apiUrl) {
       throw new Error("HelmApiClient requires apiUrl");
     }
     if (!config.apiSecret) {
       throw new Error("HelmApiClient requires apiSecret");
     }
+
+    this.config = {
+      ...config,
+      apiUrl: HelmApiClient.normalizeApiUrl(config.apiUrl),
+    };
+  }
+
+  private static normalizeApiUrl(apiUrl: string): string {
+    const trimmed = apiUrl.trim();
+    const withProtocol = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(trimmed)
+      ? trimmed
+      : `http://${trimmed}`;
+    const withoutTrailingSlash = withProtocol.replace(/\/+$/, "");
+
+    try {
+      // Validate URL shape early so bad config fails fast.
+      new URL(withoutTrailingSlash);
+    } catch {
+      throw new Error(`Invalid Helm API URL: ${apiUrl}`);
+    }
+
+    return withoutTrailingSlash;
   }
 
   private async getHeaders(): Promise<Record<string, string>> {
