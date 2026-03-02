@@ -19,6 +19,9 @@ spec:
       emptyDir: {}
     - name: shared-tmp
       emptyDir: {}
+    - name: bridge-runtime
+      configMap:
+        name: {{ include "sandbox.fullname" . }}-bridge
     - name: mongodb-data
       emptyDir: {}
     - name: redis-data
@@ -81,6 +84,49 @@ spec:
         periodSeconds: 5
 
     # ========================================
+    # Python Bridge (OpenCode -> control plane streaming)
+    # ========================================
+    - name: bridge
+      image: {{ .Values.bridge.image }}
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -e
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates
+          rm -rf /var/lib/apt/lists/*
+
+          pip install --no-cache-dir \
+            httpx \
+            websockets \
+            "pydantic>=2.0"
+
+          exec python -m sandbox.bridge \
+            --sandbox-id "$SANDBOX_ID" \
+            --session-id "$SESSION_ID" \
+            --control-plane "$CONTROL_PLANE_URL" \
+            --token "$SANDBOX_AUTH_TOKEN" \
+            --opencode-port "$OPENCODE_PORT"
+      envFrom:
+        - configMapRef:
+            name: {{ include "sandbox.fullname" . }}-config
+        - secretRef:
+            name: {{ include "sandbox.fullname" . }}-secrets
+      env:
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: PYTHONPATH
+          value: "/app"
+      volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+        - name: bridge-runtime
+          mountPath: /app/sandbox
+          readOnly: true
+      resources:
+        {{- toYaml .Values.bridge.resources | nindent 8 }}
+
+    # ========================================
     # Reverse Proxy (Node 22 backend/frontend)
     # ========================================
     - name: reverse-proxy
@@ -94,14 +140,15 @@ spec:
           import { URL } from "node:url";
 
           const ROUTES = {
-            "/opencode": { target: `http://localhost:${process.env.OPENCODE_PORT || 4096}`, strip: "/opencode" },
-            "/terminal": { target: `http://localhost:7681`, strip: "/terminal" },
-            "/browser":  { target: `http://localhost:9222`, strip: "/browser" },
-            "/jaeger":   { target: `http://localhost:16686`, strip: "/jaeger" },
-            "/redpanda":  { target: `http://localhost:8080`, strip: "/redpanda" },
-            "/rabbitmq": { target: `http://localhost:15672`, strip: "/rabbitmq" },
-            "/maildev":  { target: `http://localhost:1080`, strip: "/maildev" },
-            "/minio":    { target: `http://localhost:9001`, strip: "/minio" },
+            "/opencode":    { target: `http://localhost:${process.env.OPENCODE_PORT || 4096}`, strip: "/opencode" },
+            "/terminal":    { target: `http://localhost:7681`, strip: "/terminal" },
+            "/browser":     { target: `http://localhost:9222`, strip: "/browser" },
+            "/jaeger":      { target: `http://localhost:16686`, strip: "/jaeger" },
+            "/redpanda":    { target: `http://localhost:8080`, strip: "/redpanda" },
+            "/rabbitmq":    { target: `http://localhost:15672`, strip: "/rabbitmq" },
+            "/maildev":     { target: `http://localhost:1080`, strip: "/maildev" },
+            "/minio":       { target: `http://localhost:9001`, strip: "/minio" },
+            "/prometheus":  { target: `http://localhost:9090`, strip: "/prometheus" },
           };
 
           function findRoute(pathname) {
@@ -261,20 +308,51 @@ spec:
         {{- toYaml .Values.mongodb.resources | nindent 8 }}
 
     # ========================================
-    # Jaeger (all-in-one)
+    # Jaeger (v2.x all-in-one with OTLP)
     # ========================================
     - name: jaeger
       image: {{ .Values.jaeger.image }}
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          cat > /tmp/jaeger-config.yml << 'EOF'
+          service:
+            extensions: [jaeger_storage, jaeger_query]
+            pipelines:
+              traces:
+                receivers: [otlp]
+                processors: [batch]
+                exporters: [jaeger_storage_exporter]
+          extensions:
+            jaeger_storage:
+              backends:
+                mem_store:
+                  memory:
+                    max_traces: 100000
+            jaeger_query:
+              storage:
+                traces: mem_store
+          receivers:
+            otlp:
+              protocols:
+                grpc:
+                  endpoint: 0.0.0.0:{{ .Values.jaeger.ports.otlpGrpc }}
+                http:
+                  endpoint: 0.0.0.0:{{ .Values.jaeger.ports.otlpHttp }}
+          processors:
+            batch:
+          exporters:
+            jaeger_storage_exporter:
+              trace_storage: mem_store
+          EOF
+          exec jaeger --config /tmp/jaeger-config.yml
       ports:
         - name: jaeger-ui
           containerPort: {{ .Values.jaeger.ports.ui }}
-        - name: jaeger-collector
-          containerPort: {{ .Values.jaeger.ports.collector }}
-        - name: jaeger-otlp
-          containerPort: {{ .Values.jaeger.ports.otlp }}
-      env:
-        - name: COLLECTOR_OTLP_ENABLED
-          value: "true"
+        - name: jaeger-otlp-grpc
+          containerPort: {{ .Values.jaeger.ports.otlpGrpc }}
+        - name: jaeger-otlp-http
+          containerPort: {{ .Values.jaeger.ports.otlpHttp }}
       resources:
         {{- toYaml .Values.jaeger.resources | nindent 8 }}
 
@@ -314,16 +392,33 @@ spec:
     # ========================================
     - name: redpanda-console
       image: {{ .Values.redpandaConsole.image }}
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          echo "$CONSOLE_CONFIG_FILE" > /tmp/config.yml
+          exec /app/console
       ports:
         - name: rp-console
           containerPort: {{ .Values.redpandaConsole.port }}
       env:
-        - name: KAFKA_BROKERS
-          value: "localhost:{{ .Values.redpanda.ports.kafka }}"
-        - name: KAFKA_SCHEMAREGISTRY_ENABLED
+        - name: CONSOLE_DISABLE_ENTERPRISE
           value: "true"
-        - name: KAFKA_SCHEMAREGISTRY_URLS
-          value: "http://localhost:{{ .Values.redpanda.ports.schemaRegistry }}"
+        - name: CONFIG_FILEPATH
+          value: /tmp/config.yml
+        - name: CONSOLE_CONFIG_FILE
+          value: |
+            kafka:
+              brokers: ["localhost:{{ .Values.redpanda.ports.kafka }}"]
+            schemaRegistry:
+              enabled: true
+              urls: ["http://localhost:{{ .Values.redpanda.ports.schemaRegistry }}"]
+            kafkaConnect:
+              enabled: true
+              clusters:
+                - name: sandbox-connect
+                  url: http://localhost:{{ .Values.kafkaConnect.port }}
+                  tls:
+                    enabled: false
       resources:
         {{- toYaml .Values.redpandaConsole.resources | nindent 8 }}
 
@@ -434,6 +529,32 @@ spec:
           value: "1"
       resources:
         {{- toYaml .Values.kafkaConnect.resources | nindent 8 }}
+
+    # ========================================
+    # Prometheus
+    # ========================================
+    - name: prometheus
+      image: {{ .Values.prometheus.image }}
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          cat > /tmp/prometheus.yml << 'EOF'
+          global:
+            scrape_interval: 15s
+          scrape_configs:
+            - job_name: prometheus
+              static_configs:
+                - targets: ['localhost:{{ .Values.prometheus.port }}']
+          EOF
+          exec /bin/prometheus \
+            --config.file=/tmp/prometheus.yml \
+            --storage.tsdb.path=/tmp/prometheus-data \
+            --web.listen-address=0.0.0.0:{{ .Values.prometheus.port }}
+      ports:
+        - name: prometheus
+          containerPort: {{ .Values.prometheus.port }}
+      resources:
+        {{- toYaml .Values.prometheus.resources | nindent 8 }}
 
     # ========================================
     # Cloudflare Tunnel

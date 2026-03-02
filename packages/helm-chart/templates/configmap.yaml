@@ -13,6 +13,7 @@ data:
   PROVIDER: {{ .Values.sandbox.provider | quote }}
   MODEL: {{ .Values.sandbox.model | quote }}
   BRANCH: {{ .Values.sandbox.branch | quote }}
+  SESSION_CONFIG: {{ dict "session_id" .Values.sandbox.sessionId "repo_owner" .Values.sandbox.repoOwner "repo_name" .Values.sandbox.repoName "branch" .Values.sandbox.branch "provider" .Values.sandbox.provider "model" .Values.sandbox.model "agent" .Values.sandbox.agent | toJson | quote }}
   VCS_HOST: {{ .Values.git.vcsHost | quote }}
   VCS_CLONE_USERNAME: {{ .Values.git.vcsCloneUsername | quote }}
   OPENCODE_PORT: {{ .Values.opencode.port | quote }}
@@ -21,6 +22,6 @@ data:
   RABBITMQ_URL: "amqp://guest:guest@localhost:{{ .Values.rabbitmq.ports.amqp }}"
   KAFKA_BROKER: "localhost:{{ .Values.redpanda.ports.kafka }}"
   MINIO_ENDPOINT: "http://localhost:{{ .Values.minio.ports.api }}"
-  JAEGER_ENDPOINT: "http://localhost:{{ .Values.jaeger.ports.otlp }}"
+  JAEGER_ENDPOINT: "http://localhost:{{ .Values.jaeger.ports.otlpHttp }}"
   MAILDEV_SMTP: "localhost:{{ .Values.maildev.ports.smtp }}"
   SANDBOX_TTL_SECONDS: {{ .Values.sandboxTtlSeconds | quote }}
