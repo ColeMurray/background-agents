@@ -69,6 +69,7 @@ vi.mock("../db/global-secrets", () => ({
 }));
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
+  const { sandbox_provider, ...restOverrides } = overrides;
   return {
     id: "session-1",
     session_name: "session-name-1",
@@ -88,9 +89,10 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     spawn_source: "user" as const,
     spawn_depth: 0,
     default_agent: null,
+    sandbox_provider: sandbox_provider ?? null,
     created_at: 1,
     updated_at: 1,
-    ...overrides,
+    ...restOverrides,
   };
 }
 

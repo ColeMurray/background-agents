@@ -23,6 +23,7 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
 }
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
+  const { sandbox_provider, ...restOverrides } = overrides;
   return {
     id: "sess-1",
     session_name: "s1",
@@ -42,9 +43,10 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     spawn_source: "user" as const,
     spawn_depth: 0,
     default_agent: null,
+    sandbox_provider: sandbox_provider ?? null,
     created_at: 1000,
     updated_at: 1000,
-    ...overrides,
+    ...restOverrides,
   };
 }
 
