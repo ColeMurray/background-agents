@@ -580,6 +580,17 @@ class AgentBridge:
             self.log.debug("bridge.unknown_command", cmd_type=cmd_type)
         return None
 
+    def _get_session_config_agent(self) -> str | None:
+        """Read agent from SESSION_CONFIG env (set by entrypoint)."""
+        raw = os.environ.get("SESSION_CONFIG")
+        if not raw:
+            return None
+        try:
+            config = json.loads(raw)
+            return config.get("agent") or None
+        except (json.JSONDecodeError, TypeError):
+            return None
+
     async def _handle_prompt(self, cmd: dict[str, Any]) -> None:
         """Handle prompt command - send to OpenCode and stream response."""
         message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
@@ -587,6 +598,7 @@ class AgentBridge:
         content = cmd.get("content", "")
         model = cmd.get("model")
         reasoning_effort = cmd.get("reasoningEffort")
+        agent = cmd.get("agent") or self._get_session_config_agent()
         author_data = cmd.get("author", {})
         start_time = time.time()
         outcome = "success"
@@ -614,7 +626,7 @@ class AgentBridge:
             had_error = False
             error_message = None
             async for event in self._stream_opencode_response_sse(
-                message_id, content, model, reasoning_effort
+                message_id, content, model, reasoning_effort, agent=agent
             ):
                 if event.get("type") == "error":
                     had_error = True
@@ -761,6 +773,7 @@ class AgentBridge:
         model: str | None,
         opencode_message_id: str | None = None,
         reasoning_effort: str | None = None,
+        agent: str | None = None,
     ) -> dict[str, Any]:
         """Build request body for OpenCode prompt requests.
 
@@ -771,11 +784,15 @@ class AgentBridge:
                                  When provided, OpenCode uses this as the user message ID,
                                  and assistant responses will have parentID pointing to it.
             reasoning_effort: Optional reasoning effort level (e.g., "high", "max")
+            agent: Optional OpenCode primary agent id (e.g. from .opencode/agents/foo.md).
         """
         request_body: dict[str, Any] = {"parts": [{"type": "text", "text": content}]}
 
         if opencode_message_id:
             request_body["messageID"] = opencode_message_id
+
+        if agent:
+            request_body["agent"] = agent
 
         if model:
             if "/" in model:
@@ -863,6 +880,7 @@ class AgentBridge:
         content: str,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        agent: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream response from OpenCode using Server-Sent Events.
 
@@ -883,7 +901,7 @@ class AgentBridge:
 
         opencode_message_id = OpenCodeIdentifier.ascending("message")
         request_body = self._build_prompt_request_body(
-            content, model, opencode_message_id, reasoning_effort
+            content, model, opencode_message_id, reasoning_effort, agent=agent
         )
 
         sse_url = f"{self.opencode_base_url}/event"

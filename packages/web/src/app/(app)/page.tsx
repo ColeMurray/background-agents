@@ -2,7 +2,7 @@
 
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { mutate } from "swr";
+import useSWR, { mutate } from "swr";
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { useSidebarContext } from "@/components/sidebar-layout";
@@ -25,12 +25,18 @@ import {
   BranchIcon,
   ChevronDownIcon,
   SendIcon,
+  SparkleIcon,
 } from "@/components/ui/icons";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 
 const LAST_SELECTED_REPO_STORAGE_KEY = "open-inspect-last-selected-repo";
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
+
+interface RepoPrimaryAgent {
+  id: string;
+  description?: string;
+}
 
 export default function Home() {
   const { data: session } = useSession();
@@ -42,6 +48,7 @@ export default function Home() {
     getDefaultReasoningEffort(DEFAULT_MODEL)
   );
   const [selectedBranch, setSelectedBranch] = useState<string>("");
+  const [selectedAgent, setSelectedAgent] = useState<string>("");
   const [prompt, setPrompt] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
@@ -55,6 +62,20 @@ export default function Home() {
   const selectedRepoOwner = selectedRepo.split("/")[0] ?? "";
   const selectedRepoName = selectedRepo.split("/")[1] ?? "";
   const { branches, loading: loadingBranches } = useBranches(selectedRepoOwner, selectedRepoName);
+
+  const { data: agentsData } = useSWR<{ agents: RepoPrimaryAgent[] }>(
+    selectedRepoOwner && selectedRepoName
+      ? `/api/repos/${encodeURIComponent(selectedRepoOwner)}/${encodeURIComponent(selectedRepoName)}/agents`
+      : null,
+    (url: string) => fetch(url).then((r) => r.json())
+  );
+  const { data: defaultAgentData } = useSWR<{ defaultAgent: string | null }>(
+    selectedRepoOwner && selectedRepoName
+      ? `/api/agent-defaults?repoOwner=${encodeURIComponent(selectedRepoOwner)}&repoName=${encodeURIComponent(selectedRepoName)}`
+      : null,
+    (url: string) => fetch(url).then((r) => r.json())
+  );
+  const repoAgents = agentsData?.agents ?? [];
 
   // Auto-select repo when repos load
   useEffect(() => {
@@ -108,6 +129,16 @@ export default function Home() {
   }, [selectedModel, reasoningEffort]);
 
   useEffect(() => {
+    if (defaultAgentData && selectedRepoOwner && selectedRepoName) {
+      setSelectedAgent(defaultAgentData.defaultAgent ?? "");
+    }
+  }, [selectedRepoOwner, selectedRepoName, defaultAgentData]);
+
+  useEffect(() => {
+    setSelectedAgent("");
+  }, [selectedRepo]);
+
+  useEffect(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
@@ -142,6 +173,7 @@ export default function Home() {
             model: selectedModel,
             reasoningEffort,
             branch: selectedBranch || undefined,
+            agent: selectedAgent || undefined,
           }),
           signal: abortController.signal,
         });
@@ -175,7 +207,14 @@ export default function Home() {
 
     sessionCreationPromise.current = promise;
     return promise;
-  }, [selectedRepo, selectedModel, reasoningEffort, selectedBranch, pendingSessionId]);
+  }, [
+    selectedRepo,
+    selectedModel,
+    reasoningEffort,
+    selectedBranch,
+    selectedAgent,
+    pendingSessionId,
+  ]);
 
   // Reset selections when model preferences change
   useEffect(() => {
@@ -260,6 +299,11 @@ export default function Home() {
     }
   };
 
+  const agentOptions = [
+    { value: "", label: "OpenCode default" },
+    ...repoAgents.map((a) => ({ value: a.id, label: a.id })),
+  ];
+
   return (
     <HomeContent
       isAuthenticated={!!session}
@@ -275,6 +319,9 @@ export default function Home() {
       setSelectedModel={handleModelChange}
       reasoningEffort={reasoningEffort}
       setReasoningEffort={setReasoningEffort}
+      selectedAgent={selectedAgent}
+      setSelectedAgent={setSelectedAgent}
+      agentOptions={agentOptions}
       prompt={prompt}
       handlePromptChange={handlePromptChange}
       creating={creating}
@@ -300,6 +347,9 @@ function HomeContent({
   setSelectedModel,
   reasoningEffort,
   setReasoningEffort,
+  selectedAgent,
+  setSelectedAgent,
+  agentOptions,
   prompt,
   handlePromptChange,
   creating,
@@ -321,6 +371,9 @@ function HomeContent({
   setSelectedModel: (value: string) => void;
   reasoningEffort: string | undefined;
   setReasoningEffort: (value: string | undefined) => void;
+  selectedAgent: string;
+  setSelectedAgent: (value: string) => void;
+  agentOptions: { value: string; label: string }[];
   prompt: string;
   handlePromptChange: (value: string) => void;
   creating: boolean;
@@ -474,6 +527,29 @@ function HomeContent({
                       <ChevronDownIcon className="w-3 h-3" />
                     </Combobox>
 
+                    {/* Agent selector */}
+                    <Combobox
+                      value={selectedAgent}
+                      onChange={(value) => setSelectedAgent(value)}
+                      items={agentOptions.map((o) => ({ value: o.value, label: o.label }))}
+                      searchable={agentOptions.length > 5}
+                      searchPlaceholder="Search agents..."
+                      filterFn={(option, query) =>
+                        option.label.toLowerCase().includes(query.toLowerCase())
+                      }
+                      direction="up"
+                      dropdownWidth="w-56"
+                      disabled={creating || !selectedRepo}
+                      triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
+                    >
+                      <SparkleIcon className="w-3.5 h-3.5" />
+                      <span className="truncate max-w-[9rem] sm:max-w-none">
+                        {agentOptions.find((o) => o.value === selectedAgent)?.label ??
+                          "OpenCode default"}
+                      </span>
+                      <ChevronDownIcon className="w-3 h-3" />
+                    </Combobox>
+
                     {/* Model selector */}
                     <Combobox
                       value={selectedModel}
@@ -507,11 +583,6 @@ function HomeContent({
                       disabled={creating}
                     />
                   </div>
-
-                  {/* Right side - Agent label */}
-                  <span className="hidden sm:inline text-sm text-muted-foreground">
-                    build agent
-                  </span>
                 </div>
               </div>
 

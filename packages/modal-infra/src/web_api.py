@@ -146,6 +146,7 @@ async def api_create_sandbox(
             opencode_session_id=request.get("opencode_session_id"),
             provider=request.get("provider", "anthropic"),
             model=request.get("model", "claude-sonnet-4-6"),
+            agent=request.get("agent"),
         )
 
         config = SandboxConfig(

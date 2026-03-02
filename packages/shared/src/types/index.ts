@@ -476,6 +476,8 @@ export interface CreateSessionRequest {
   model?: string;
   reasoningEffort?: string;
   branch?: string;
+  /** OpenCode primary agent id (e.g. from .opencode/agents/foo.md). Omit for default. */
+  agent?: string;
 }
 
 export interface CreateSessionResponse {

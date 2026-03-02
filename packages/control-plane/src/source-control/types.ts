@@ -292,4 +292,26 @@ export interface SourceControlProvider {
    * Build provider-specific git push specification for bridge execution.
    */
   buildGitPushSpec(config: BuildGitPushSpecConfig): GitPushSpec;
+
+  /**
+   * List directory contents in a repository (app-level auth).
+   * Used e.g. to list .opencode/agents/ for primary agent discovery.
+   *
+   * @param config - Repository identifier (owner/name)
+   * @param path - Path within the repo (e.g. ".opencode/agents")
+   * @returns List of entries; empty array if path does not exist or is not a directory
+   */
+  listRepositoryDirectory(
+    config: GetRepositoryConfig,
+    path: string
+  ): Promise<{ name: string; path: string; type: "file" | "dir" }[]>;
+
+  /**
+   * Get file content from a repository (app-level auth).
+   *
+   * @param config - Repository identifier (owner/name)
+   * @param path - Path to the file within the repo
+   * @returns File content as string, or null if not found / not a file
+   */
+  getRepositoryFileContent(config: GetRepositoryConfig, path: string): Promise<string | null>;
 }

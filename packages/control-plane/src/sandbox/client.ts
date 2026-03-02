@@ -38,6 +38,7 @@ export interface CreateSandboxRequest {
   repoImageSha?: string | null;
   timeoutSeconds?: number;
   branch?: string;
+  agent?: string;
 }
 
 export interface CreateSandboxResponse {
@@ -60,6 +61,7 @@ export interface RestoreSandboxRequest {
   userEnvVars?: Record<string, string>;
   timeoutSeconds?: number;
   branch?: string;
+  agent?: string;
 }
 
 export interface RestoreSandboxResponse {
@@ -244,6 +246,7 @@ export class ModalClient {
           repo_image_sha: request.repoImageSha || null,
           timeout_seconds: request.timeoutSeconds || null,
           branch: request.branch || null,
+          agent: request.agent || null,
         }),
       });
 
@@ -313,6 +316,7 @@ export class ModalClient {
             provider: request.provider,
             model: request.model,
             branch: request.branch || null,
+            agent: request.agent || null,
           },
           sandbox_id: request.sandboxId,
           control_plane_url: request.controlPlaneUrl,

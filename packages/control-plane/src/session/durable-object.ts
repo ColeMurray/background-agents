@@ -1563,6 +1563,7 @@ export class SessionDO extends DurableObject<Env> {
       title?: string;
       model?: string; // LLM model to use
       reasoningEffort?: string; // Reasoning effort level
+      agent?: string | null; // OpenCode primary agent id (e.g. from .opencode/agents/foo.md)
       userId: string;
       scmLogin?: string;
       scmName?: string;
@@ -1622,6 +1623,7 @@ export class SessionDO extends DurableObject<Env> {
       parentSessionId: body.parentSessionId ?? null,
       spawnSource: body.spawnSource ?? "user",
       spawnDepth: body.spawnDepth ?? 0,
+      defaultAgent: body.agent ?? null,
       createdAt: now,
       updatedAt: now,
     });

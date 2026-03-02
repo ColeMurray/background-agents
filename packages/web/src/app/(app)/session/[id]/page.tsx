@@ -819,9 +819,6 @@ function SessionContent({
                   disabled={isProcessing}
                 />
               </div>
-
-              {/* Right side - Agent label */}
-              <span className="hidden sm:inline text-sm text-muted-foreground">build agent</span>
             </div>
           </div>
         </form>

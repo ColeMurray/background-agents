@@ -372,6 +372,7 @@ export class SandboxLifecycleManager {
         repoImageSha,
         timeoutSeconds,
         branch: session.base_branch,
+        agent: session.default_agent ?? undefined,
       };
 
       const result = await this.provider.createSandbox(createConfig);
@@ -489,6 +490,7 @@ export class SandboxLifecycleManager {
         userEnvVars,
         timeoutSeconds,
         branch: session.base_branch,
+        agent: session.default_agent ?? undefined,
       });
 
       if (result.success) {

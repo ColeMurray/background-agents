@@ -6,6 +6,7 @@ import { useSidebarContext } from "@/components/sidebar-layout";
 import { SettingsNav, type SettingsCategory } from "@/components/settings/settings-nav";
 import { SecretsSettings } from "@/components/settings/secrets-settings";
 import { ModelsSettings } from "@/components/settings/models-settings";
+import { AgentsSettings } from "@/components/settings/agents-settings";
 import { DataControlsSettings } from "@/components/settings/data-controls-settings";
 import { KeyboardShortcutsSettings } from "@/components/settings/keyboard-shortcuts-settings";
 import { IntegrationsSettings } from "@/components/settings/integrations-settings";
@@ -17,6 +18,7 @@ import { useIsMobile } from "@/hooks/use-media-query";
 const CATEGORY_LABELS: Record<SettingsCategory, string> = {
   secrets: "Secrets",
   models: "Models",
+  agents: "Agents",
   images: "Images",
   "keyboard-shortcuts": "Keyboard",
   "data-controls": "Data Controls",
@@ -26,6 +28,7 @@ const CATEGORY_LABELS: Record<SettingsCategory, string> = {
 const VALID_CATEGORIES = new Set<string>([
   "secrets",
   "models",
+  "agents",
   "images",
   "keyboard-shortcuts",
   "data-controls",
@@ -59,6 +62,7 @@ export default function SettingsPage() {
     <>
       {activeCategory === "secrets" && <SecretsSettings />}
       {activeCategory === "models" && <ModelsSettings />}
+      {activeCategory === "agents" && <AgentsSettings />}
       {activeCategory === "images" && <ImagesSettings />}
       {activeCategory === "keyboard-shortcuts" && <KeyboardShortcutsSettings />}
       {activeCategory === "data-controls" && <DataControlsSettings />}

@@ -18,7 +18,23 @@ import {
   json,
   error,
   createRouteSourceControlProvider,
+  resolveInstalledRepo,
 } from "./shared";
+
+const OPENCODE_AGENTS_PATH = ".opencode/agents";
+
+/** Parse YAML frontmatter from markdown and return { mode, description }. */
+function parseAgentFrontmatter(content: string): { mode?: string; description?: string } {
+  const match = content.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!match) return {};
+  const front = match[1];
+  const modeMatch = front.match(/^mode:\s*["']?(\w+)["']?\s*$/m);
+  const descMatch = front.match(/^description:\s*["']?([^"'\n]*?)["']?\s*$/m);
+  return {
+    mode: modeMatch ? modeMatch[1] : undefined,
+    description: descMatch ? descMatch[1].trim() : undefined,
+  };
+}
 
 const logger = createLogger("router:repos");
 
@@ -331,6 +347,67 @@ async function handleListBranches(
   }
 }
 
+export interface RepoPrimaryAgent {
+  id: string;
+  description?: string;
+}
+
+/**
+ * List primary OpenCode agents for a repository (.opencode/agents/*.md with mode: primary).
+ */
+async function handleListRepoAgents(
+  _request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  _ctx: RequestContext
+): Promise<Response> {
+  const owner = match.groups?.owner;
+  const name = match.groups?.name;
+
+  if (!owner || !name) {
+    return error("Owner and name are required");
+  }
+
+  try {
+    const provider = createRouteSourceControlProvider(env);
+    const resolved = await resolveInstalledRepo(provider, owner, name);
+    if (!resolved) {
+      return error("Repository is not installed for the GitHub App", 404);
+    }
+
+    const entries = await provider.listRepositoryDirectory(
+      { owner: resolved.repoOwner, name: resolved.repoName },
+      OPENCODE_AGENTS_PATH
+    );
+
+    const agents: RepoPrimaryAgent[] = [];
+    for (const entry of entries) {
+      if (entry.type !== "file" || !entry.name.endsWith(".md")) continue;
+      const content = await provider.getRepositoryFileContent(
+        { owner: resolved.repoOwner, name: resolved.repoName },
+        entry.path
+      );
+      if (!content) continue;
+      const { mode, description } = parseAgentFrontmatter(content);
+      if (mode !== "primary") continue;
+      const id = entry.name.replace(/\.md$/i, "");
+      agents.push({ id, description: description || undefined });
+    }
+
+    return json({ agents });
+  } catch (e) {
+    if (e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus) {
+      return error("SCM provider not configured", 500);
+    }
+    logger.error("Failed to list repo agents", {
+      error: e instanceof Error ? e : String(e),
+      repo_owner: owner,
+      repo_name: name,
+    });
+    return error("Failed to list repo agents", 500);
+  }
+}
+
 export const reposRoutes: Route[] = [
   {
     method: "GET",
@@ -351,5 +428,10 @@ export const reposRoutes: Route[] = [
     method: "GET",
     pattern: parsePattern("/repos/:owner/:name/branches"),
     handler: handleListBranches,
+  },
+  {
+    method: "GET",
+    pattern: parsePattern("/repos/:owner/:name/agents"),
+    handler: handleListRepoAgents,
   },
 ];
