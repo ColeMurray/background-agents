@@ -47,7 +47,7 @@ class SandboxSupervisor:
     START_SCRIPT_PATH = ".openinspect/start.sh"
     DEFAULT_SETUP_TIMEOUT_SECONDS = 300
     DEFAULT_START_TIMEOUT_SECONDS = 120
-    CLONE_DEPTH_COMMITS = "100"
+    CLONE_DEPTH_COMMITS = 100
 
     def __init__(self):
         self.opencode_process: asyncio.subprocess.Process | None = None
@@ -134,7 +134,7 @@ class SandboxSupervisor:
                 "git",
                 "clone",
                 "--depth",
-                self.CLONE_DEPTH_COMMITS,
+                str(self.CLONE_DEPTH_COMMITS),
                 "--branch",
                 base_branch,
                 clone_url,
