@@ -1,5 +1,6 @@
 interface IconProps {
   className?: string;
+  "aria-hidden"?: boolean | "true" | "false";
 }
 
 // --- Navigation & Layout ---
@@ -175,9 +176,9 @@ export function MoreIcon({ className }: IconProps) {
 
 // --- Status & Info ---
 
-export function ClockIcon({ className }: IconProps) {
+export function ClockIcon({ className, ...props }: IconProps) {
   return (
-    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" {...props}>
       <circle cx="12" cy="12" r="10" strokeWidth={2} />
       <path strokeLinecap="round" strokeWidth={2} d="M12 6v6l4 2" />
     </svg>
@@ -338,9 +339,9 @@ export function TerminalIcon({ className }: IconProps) {
   );
 }
 
-export function BoltIcon({ className }: IconProps) {
+export function BoltIcon({ className, ...props }: IconProps) {
   return (
-    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" {...props}>
       <path
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -364,9 +365,9 @@ export function GlobeIcon({ className }: IconProps) {
   );
 }
 
-export function FolderIcon({ className }: IconProps) {
+export function FolderIcon({ className, ...props }: IconProps) {
   return (
-    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" {...props}>
       <path
         strokeLinecap="round"
         strokeLinejoin="round"

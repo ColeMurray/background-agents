@@ -6,7 +6,7 @@ import { describeCron } from "@open-inspect/shared";
 import type { Automation } from "@open-inspect/shared";
 import { AutomationStatusBadge } from "@/components/automations/automation-status-badge";
 import { Button } from "@/components/ui/button";
-import { RepoIcon, ClockIcon, BoltIcon } from "@/components/ui/icons";
+import { FolderIcon, ClockIcon, BoltIcon } from "@/components/ui/icons";
 import { formatRelativeTime } from "@/lib/time";
 
 interface AutomationsListProps {
@@ -62,7 +62,7 @@ export function AutomationsList({
               )}
               <Button variant="ghost" size="xs" onClick={() => onTrigger(automation.id)}>
                 <span className="flex items-center gap-1">
-                  <BoltIcon className="w-3 h-3" />
+                  <BoltIcon className="w-3 h-3" aria-hidden="true" />
                   Trigger
                 </span>
               </Button>
@@ -97,11 +97,11 @@ export function AutomationsList({
           {/* Metadata: icon-paired items */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs text-muted-foreground">
             <span className="inline-flex items-center gap-1">
-              <RepoIcon className="w-3 h-3 flex-shrink-0" />
+              <FolderIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
               {automation.repoOwner}/{automation.repoName}
             </span>
             <span className="inline-flex items-center gap-1">
-              <ClockIcon className="w-3 h-3 flex-shrink-0" />
+              <ClockIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
               {automation.scheduleCron
                 ? describeCron(automation.scheduleCron, automation.scheduleTz)
                 : "No schedule"}
