@@ -117,6 +117,18 @@ function GlobalSettingsSection({
   const [emitToolProgressActivities, setEmitToolProgressActivities] = useState(
     settings?.defaults?.emitToolProgressActivities ?? true
   );
+  const [updateIssueStatus, setUpdateIssueStatus] = useState(
+    settings?.defaults?.updateIssueStatus ?? false
+  );
+  const [inProgressStateName, setInProgressStateName] = useState(
+    settings?.defaults?.statusMapping?.inProgressStateName ?? "In Progress"
+  );
+  const [completedStateName, setCompletedStateName] = useState(
+    settings?.defaults?.statusMapping?.completedStateName ?? "In Review"
+  );
+  const [cancelledStateName, setCancelledStateName] = useState(
+    settings?.defaults?.statusMapping?.cancelledStateName ?? ""
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -133,6 +145,12 @@ function GlobalSettingsSection({
         setAllowUserPreferenceOverride(settings.defaults?.allowUserPreferenceOverride ?? true);
         setAllowLabelModelOverride(settings.defaults?.allowLabelModelOverride ?? true);
         setEmitToolProgressActivities(settings.defaults?.emitToolProgressActivities ?? true);
+        setUpdateIssueStatus(settings.defaults?.updateIssueStatus ?? false);
+        setInProgressStateName(
+          settings.defaults?.statusMapping?.inProgressStateName ?? "In Progress"
+        );
+        setCompletedStateName(settings.defaults?.statusMapping?.completedStateName ?? "In Review");
+        setCancelledStateName(settings.defaults?.statusMapping?.cancelledStateName ?? "");
       }
       setInitialized(true);
     }
@@ -165,6 +183,10 @@ function GlobalSettingsSection({
         setAllowUserPreferenceOverride(true);
         setAllowLabelModelOverride(true);
         setEmitToolProgressActivities(true);
+        setUpdateIssueStatus(false);
+        setInProgressStateName("In Progress");
+        setCompletedStateName("In Review");
+        setCancelledStateName("");
         setDirty(false);
         setSuccess("Settings reset to defaults.");
       } else {
@@ -187,7 +209,16 @@ function GlobalSettingsSection({
       allowUserPreferenceOverride,
       allowLabelModelOverride,
       emitToolProgressActivities,
+      updateIssueStatus,
     };
+
+    if (updateIssueStatus) {
+      defaults.statusMapping = {
+        inProgressStateName: inProgressStateName || "In Progress",
+        completedStateName: completedStateName || "In Review",
+        cancelledStateName: cancelledStateName || null,
+      };
+    }
 
     if (model) defaults.model = model;
     if (effort) defaults.reasoningEffort = effort;
@@ -336,6 +367,74 @@ function GlobalSettingsSection({
             className="rounded border-border"
           />
         </label>
+      </div>
+
+      <div className="mb-4">
+        <p className="text-sm font-medium text-foreground mb-2">Issue Status Updates</p>
+        <label className="flex items-center justify-between px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm mb-2">
+          <span>Update issue status automatically</span>
+          <input
+            type="checkbox"
+            checked={updateIssueStatus}
+            onChange={() => {
+              setUpdateIssueStatus(!updateIssueStatus);
+              setDirty(true);
+              setError("");
+              setSuccess("");
+            }}
+            className="rounded border-border"
+          />
+        </label>
+
+        {updateIssueStatus && (
+          <div className="grid sm:grid-cols-3 gap-2">
+            <label className="text-sm">
+              <span className="block text-muted-foreground mb-1">In Progress state</span>
+              <input
+                type="text"
+                value={inProgressStateName}
+                onChange={(e) => {
+                  setInProgressStateName(e.target.value);
+                  setDirty(true);
+                  setError("");
+                  setSuccess("");
+                }}
+                placeholder="In Progress"
+                className="w-full px-2 py-1 text-sm border border-border rounded-sm bg-background"
+              />
+            </label>
+            <label className="text-sm">
+              <span className="block text-muted-foreground mb-1">Completed state</span>
+              <input
+                type="text"
+                value={completedStateName}
+                onChange={(e) => {
+                  setCompletedStateName(e.target.value);
+                  setDirty(true);
+                  setError("");
+                  setSuccess("");
+                }}
+                placeholder="In Review"
+                className="w-full px-2 py-1 text-sm border border-border rounded-sm bg-background"
+              />
+            </label>
+            <label className="text-sm">
+              <span className="block text-muted-foreground mb-1">Cancelled state</span>
+              <input
+                type="text"
+                value={cancelledStateName}
+                onChange={(e) => {
+                  setCancelledStateName(e.target.value);
+                  setDirty(true);
+                  setError("");
+                  setSuccess("");
+                }}
+                placeholder="Leave empty to skip"
+                className="w-full px-2 py-1 text-sm border border-border rounded-sm bg-background"
+              />
+            </label>
+          </div>
+        )}
       </div>
 
       <div className="mb-4">
@@ -531,6 +630,18 @@ function RepoOverrideRow({
   const [emitToolProgressActivities, setEmitToolProgressActivities] = useState(
     entry.settings.emitToolProgressActivities ?? true
   );
+  const [updateIssueStatus, setUpdateIssueStatus] = useState(
+    entry.settings.updateIssueStatus ?? false
+  );
+  const [inProgressStateName, setInProgressStateName] = useState(
+    entry.settings.statusMapping?.inProgressStateName ?? "In Progress"
+  );
+  const [completedStateName, setCompletedStateName] = useState(
+    entry.settings.statusMapping?.completedStateName ?? "In Review"
+  );
+  const [cancelledStateName, setCancelledStateName] = useState(
+    entry.settings.statusMapping?.cancelledStateName ?? ""
+  );
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
@@ -555,7 +666,15 @@ function RepoOverrideRow({
       allowUserPreferenceOverride,
       allowLabelModelOverride,
       emitToolProgressActivities,
+      updateIssueStatus,
     };
+    if (updateIssueStatus) {
+      settings.statusMapping = {
+        inProgressStateName: inProgressStateName || "In Progress",
+        completedStateName: completedStateName || "In Review",
+        cancelledStateName: cancelledStateName || null,
+      };
+    }
     if (model) settings.model = model;
     if (effort) settings.reasoningEffort = effort;
 
@@ -678,6 +797,63 @@ function RepoOverrideRow({
           />
         </label>
       </div>
+
+      <label className="flex items-center justify-between px-2 py-1 text-sm border border-border rounded-sm">
+        <span>Update issue status</span>
+        <input
+          type="checkbox"
+          checked={updateIssueStatus}
+          onChange={() => {
+            setUpdateIssueStatus(!updateIssueStatus);
+            setDirty(true);
+          }}
+          className="rounded border-border"
+        />
+      </label>
+
+      {updateIssueStatus && (
+        <div className="grid sm:grid-cols-3 gap-2">
+          <label className="text-sm">
+            <span className="block text-muted-foreground mb-1">In Progress state</span>
+            <input
+              type="text"
+              value={inProgressStateName}
+              onChange={(e) => {
+                setInProgressStateName(e.target.value);
+                setDirty(true);
+              }}
+              placeholder="In Progress"
+              className="w-full px-2 py-1 text-sm border border-border rounded-sm bg-background"
+            />
+          </label>
+          <label className="text-sm">
+            <span className="block text-muted-foreground mb-1">Completed state</span>
+            <input
+              type="text"
+              value={completedStateName}
+              onChange={(e) => {
+                setCompletedStateName(e.target.value);
+                setDirty(true);
+              }}
+              placeholder="In Review"
+              className="w-full px-2 py-1 text-sm border border-border rounded-sm bg-background"
+            />
+          </label>
+          <label className="text-sm">
+            <span className="block text-muted-foreground mb-1">Cancelled state</span>
+            <input
+              type="text"
+              value={cancelledStateName}
+              onChange={(e) => {
+                setCancelledStateName(e.target.value);
+                setDirty(true);
+              }}
+              placeholder="Leave empty to skip"
+              className="w-full px-2 py-1 text-sm border border-border rounded-sm bg-background"
+            />
+          </label>
+        </div>
+      )}
 
       <div className="flex items-center gap-2">
         <Button size="sm" onClick={handleSave} disabled={saving || !dirty}>
