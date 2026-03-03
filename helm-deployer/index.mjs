@@ -25,6 +25,90 @@ const CHART_PATH = process.env.CHART_PATH || "/charts/open-inspect-sandbox";
 const HELM_NAMESPACE = process.env.HELM_NAMESPACE || "";
 const HELM_CREATE_NAMESPACE = process.env.HELM_CREATE_NAMESPACE === "true";
 const AUTH_DEBUG = process.env.AUTH_DEBUG === "true";
+const INGRESS_ENABLED = process.env.INGRESS_ENABLED === "true";
+const INGRESS_CLASS_NAME = process.env.INGRESS_CLASS_NAME || "";
+const INGRESS_BASE_DOMAIN = process.env.INGRESS_BASE_DOMAIN || "";
+
+// ---------------------------------------------------------------------------
+// Environment number pool (0000–9999)
+//
+// Each sandbox with ingress enabled gets a unique 4-digit number used as its
+// subdomain prefix (env-NNNN.<baseDomain>). The pool is kept in memory; state
+// is recovered from existing Kubernetes Ingress resources on startup so that
+// a deployer restart does not re-assign numbers that are already in use.
+// ---------------------------------------------------------------------------
+
+const ENV_NUMBER_MAX = 9999;
+
+/** Maps releaseName → envNumber (integer 0–9999). */
+const assignedEnvNumbers = new Map();
+
+/** Fast membership check for which numbers are currently in use. */
+const usedEnvNumbers = new Set();
+
+/**
+ * Recover environment number assignments from existing Ingress resources.
+ * Called once on startup so that a pod restart doesn't double-assign numbers.
+ */
+function initEnvPool(namespace) {
+  if (!INGRESS_ENABLED || !namespace) return;
+  try {
+    const jsonOutput = execSync(
+      `kubectl get ingress -n ${namespace} -l app.kubernetes.io/name=open-inspect-sandbox -o json`,
+      { stdio: "pipe", timeout: 15000 },
+    )
+      .toString()
+      .trim();
+
+    if (!jsonOutput) return;
+    const ingresses = JSON.parse(jsonOutput);
+    let recovered = 0;
+    for (const item of ingresses.items || []) {
+      const releaseName = item.metadata?.labels?.["app.kubernetes.io/instance"];
+      const envNumStr = item.metadata?.annotations?.["open-inspect/env-number"];
+      if (!releaseName || !envNumStr) continue;
+      const envNum = parseInt(envNumStr, 10);
+      if (!Number.isFinite(envNum) || envNum < 0 || envNum > ENV_NUMBER_MAX) continue;
+      assignedEnvNumbers.set(releaseName, envNum);
+      usedEnvNumbers.add(envNum);
+      recovered++;
+    }
+    console.log(`[deployer] Recovered ${recovered} env number assignments from Kubernetes`);
+  } catch (err) {
+    console.warn(`[deployer] Failed to recover env pool from Kubernetes (continuing): ${err.message}`);
+  }
+}
+
+/**
+ * Allocate the lowest available environment number for a release.
+ * Returns a 4-digit zero-padded string (e.g. "0042"), or null if exhausted.
+ * Idempotent: calling with the same releaseName returns the same number.
+ */
+function allocateEnvNumber(releaseName) {
+  if (assignedEnvNumbers.has(releaseName)) {
+    return String(assignedEnvNumbers.get(releaseName)).padStart(4, "0");
+  }
+  for (let n = 0; n <= ENV_NUMBER_MAX; n++) {
+    if (!usedEnvNumbers.has(n)) {
+      usedEnvNumbers.add(n);
+      assignedEnvNumbers.set(releaseName, n);
+      return String(n).padStart(4, "0");
+    }
+  }
+  return null; // pool exhausted (all 10 000 slots in use)
+}
+
+/**
+ * Release an environment number back to the pool when a sandbox is deleted.
+ */
+function releaseEnvNumber(releaseName) {
+  const n = assignedEnvNumbers.get(releaseName);
+  if (n !== undefined) {
+    usedEnvNumbers.delete(n);
+    assignedEnvNumbers.delete(releaseName);
+    console.log(`[deployer] Released env number ${String(n).padStart(4, "0")} from ${releaseName}`);
+  }
+}
 
 function verifyToken(authorization) {
   if (!API_SECRET) {
@@ -173,10 +257,32 @@ function handleDeploy(body) {
     }
   }
 
+  // Assign an ingress environment number when ingress is enabled.
+  let envNumber = null;
+  if (INGRESS_ENABLED && INGRESS_BASE_DOMAIN) {
+    envNumber = allocateEnvNumber(releaseName);
+    if (!envNumber) {
+      return {
+        success: false,
+        releaseName,
+        sandboxId,
+        status: "failed",
+        createdAt: Date.now(),
+        error: "env number pool exhausted: all 10 000 slots (0000–9999) are in use",
+      };
+    }
+    setArgs.push(`ingress.enabled=true`);
+    setArgs.push(`ingress.baseDomain=${INGRESS_BASE_DOMAIN}`);
+    setArgs.push(`ingress.envNumber=${envNumber}`);
+    if (INGRESS_CLASS_NAME) setArgs.push(`ingress.className=${INGRESS_CLASS_NAME}`);
+  }
+
   const setString = setArgs.map((s) => `--set ${s}`).join(" ");
 
   const targetNamespace = HELM_NAMESPACE || namespace;
   if (!targetNamespace) {
+    // Free the env number — helm install won't run.
+    if (envNumber) releaseEnvNumber(releaseName);
     return {
       success: false,
       releaseName,
@@ -192,12 +298,14 @@ function handleDeploy(body) {
     `helm install ${releaseName} ${CHART_PATH} --namespace ${targetNamespace} ${createNamespaceFlag} ` +
     `${setString} --wait --timeout 5m`;
 
-  console.log(`[deployer] Installing release: ${releaseName}`);
+  console.log(`[deployer] Installing release: ${releaseName}${envNumber ? ` (env-${envNumber})` : ""}`);
   try {
     execSync(cmd, { stdio: "pipe", timeout: 360000 });
   } catch (err) {
     const stderr = err.stderr ? err.stderr.toString() : err.message;
     console.error(`[deployer] Install failed: ${stderr}`);
+    // Return the env number to the pool so it can be reused.
+    if (envNumber) releaseEnvNumber(releaseName);
     return {
       success: false,
       releaseName,
@@ -209,7 +317,14 @@ function handleDeploy(body) {
   }
 
   console.log(`[deployer] Release installed: ${releaseName}`);
-  return { success: true, releaseName, sandboxId, status: "deployed", createdAt: Date.now() };
+  return {
+    success: true,
+    releaseName,
+    sandboxId,
+    status: "deployed",
+    createdAt: Date.now(),
+    ...(envNumber && { envNumber, ingressHost: `env-${envNumber}.${INGRESS_BASE_DOMAIN}` }),
+  };
 }
 
 /**
@@ -259,6 +374,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === "/delete" && req.method === "POST") {
     const body = await readBody(req);
     const result = handleDelete(body);
+    if (result.success) releaseEnvNumber(body.releaseName);
     return jsonResponse(res, result.success ? 200 : 500, result);
   }
 
@@ -267,4 +383,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`[helm-deployer] Listening on :${PORT}`);
+  // Recover env number assignments from existing Kubernetes Ingress resources
+  // so that a restart does not re-assign numbers already in use.
+  initEnvPool(HELM_NAMESPACE);
 });

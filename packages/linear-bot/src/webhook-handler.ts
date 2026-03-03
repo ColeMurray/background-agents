@@ -126,13 +126,16 @@ async function handleFollowUp(
   if (!existingSession) return;
 
   const followUpContent = agentActivity?.body || comment?.body || "Follow-up on the issue.";
+  const isPlanMode = existingSession.mode === "plan";
 
   await emitAgentActivity(
     client,
     agentSessionId,
     {
       type: "thought",
-      body: "Processing follow-up message...",
+      body: isPlanMode
+        ? "Processing feedback to revise the plan..."
+        : "Processing follow-up message...",
     },
     true
   );
@@ -141,7 +144,7 @@ async function handleFollowUp(
   let sessionContext = "";
   try {
     const eventsRes = await env.CONTROL_PLANE.fetch(
-      `https://internal/sessions/${existingSession.sessionId}/events?limit=20`,
+      `https://internal/sessions/${existingSession.sessionId}/events?limit=50`,
       { method: "GET", headers }
     );
     if (eventsRes.ok) {
@@ -152,12 +155,19 @@ async function handleFollowUp(
       if (recentTokens.length > 0) {
         const lastContent = String(recentTokens[0].data.content ?? "");
         if (lastContent) {
-          sessionContext = `\n\n---\n**Previous agent response (summary):**\n${lastContent.slice(0, 500)}`;
+          sessionContext = `\n\n---\n**Previous agent response:**\n${lastContent}`;
         }
       }
     }
   } catch {
     /* best effort */
+  }
+
+  let promptContent: string;
+  if (isPlanMode) {
+    promptContent = `Follow-up on ${issue.identifier} — the user has provided feedback on the plan. Please revise the plan based on their comments and provide an updated implementation plan.\n\n**User feedback:**\n${followUpContent}${sessionContext}\n\nIMPORTANT: You are in PLAN mode. Do NOT make any code changes or create a pull request. Revise your previous plan based on the feedback above. Provide the complete updated plan, not just the changes.`;
+  } else {
+    promptContent = `Follow-up on ${issue.identifier}:\n\n${followUpContent}${sessionContext}`;
   }
 
   const promptRes = await env.CONTROL_PLANE.fetch(
@@ -166,7 +176,7 @@ async function handleFollowUp(
       method: "POST",
       headers,
       body: JSON.stringify({
-        content: `Follow-up on ${issue.identifier}:\n\n${followUpContent}${sessionContext}`,
+        content: promptContent,
         authorId: `linear:${webhook.appUserId}`,
         source: "linear",
       }),
@@ -176,12 +186,16 @@ async function handleFollowUp(
   if (promptRes.ok) {
     await emitAgentActivity(client, agentSessionId, {
       type: "response",
-      body: `Follow-up sent to existing session.\n\n[View session](${env.WEB_APP_URL}/session/${existingSession.sessionId})`,
+      body: isPlanMode
+        ? `Revising plan based on feedback.\n\n[View session](${env.WEB_APP_URL}/session/${existingSession.sessionId})`
+        : `Follow-up sent to existing session.\n\n[View session](${env.WEB_APP_URL}/session/${existingSession.sessionId})`,
     });
   } else {
     await emitAgentActivity(client, agentSessionId, {
       type: "error",
-      body: "Failed to send follow-up to the existing session.",
+      body: isPlanMode
+        ? "Failed to send plan revision to the existing session."
+        : "Failed to send follow-up to the existing session.",
     });
   }
 
@@ -451,6 +465,7 @@ async function handleNewSession(
     repoName: repoName!,
     model,
     agentSessionId,
+    mode,
     createdAt: Date.now(),
   });
 

@@ -44,7 +44,7 @@ browser:
 
 # -- ttyd for terminal streaming in browser
 ttyd:
-  image: tsl0922/ttyd:@sha256:6609dc1715ea39b331d1f5c8840abb84fcea2992f0b7e7cf55664fe318479752
+  image: tsl0922/ttyd@sha256:6609dc1715ea39b331d1f5c8840abb84fcea2992f0b7e7cf55664fe318479752
   port: 7681
   resources:
     requests:
@@ -223,6 +223,23 @@ git:
   cloneToken: ""
   vcsHost: "github.com"
   vcsCloneUsername: "x-access-token"
+
+# -- Ingress configuration for external access via numbered subdomains (env-NNNN.baseDomain)
+ingress:
+  enabled: false
+  # Ingress class name (e.g. nginx, traefik). Omit to use cluster default.
+  className: ""
+  # Base domain for environment subdomains.
+  # Example: baseDomain=sandbox.example.com → host env-0042.sandbox.example.com
+  baseDomain: ""
+  # 4-digit zero-padded environment number (0000–9999), assigned by helm-deployer.
+  envNumber: ""
+  # Extra annotations to add to the Ingress resource.
+  annotations: {}
+  tls:
+    enabled: false
+    # TLS secret name. Defaults to env-<envNumber>-tls when omitted.
+    secretName: ""
 
 # -- API keys (set via secrets)
 anthropicApiKey: ""

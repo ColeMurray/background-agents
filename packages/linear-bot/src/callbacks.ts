@@ -269,7 +269,7 @@ async function handleCompletionCallback(
     } else {
       activityType = "error";
       if (agentResponse.textContent) {
-        message = `The agent encountered an error.\n\n${agentResponse.textContent.slice(0, 500)}`;
+        message = `The agent encountered an error.\n\n${agentResponse.textContent}`;
       } else {
         message = `The agent was unable to complete this task.`;
       }

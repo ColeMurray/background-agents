@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: "public.ecr.aws/x5s6v8v4/helm-deployer/node"
-  tag: "22-alpine-v3"
+  tag: "22-alpine-4"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -59,6 +59,15 @@ helm:
   targetNamespace: open-inspect
   # Keep false for least privilege RBAC (no cluster-scoped namespace create permission).
   createNamespace: false
+
+ingress:
+  # Set to true to create an Ingress for each sandbox environment.
+  enabled: false
+  # Ingress class name (e.g. nginx, traefik). Omit to use the cluster default.
+  className: ""
+  # Base domain for environment subdomains.
+  # Example: baseDomain=sandbox.example.com → env-0042.sandbox.example.com
+  baseDomain: ""
 
 rbac:
   create: true

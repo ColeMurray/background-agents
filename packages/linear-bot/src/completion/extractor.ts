@@ -226,13 +226,9 @@ export function formatAgentResponse(agentResponse: AgentResponse): string {
     if (fileEdits.length > 10) parts.push(`- ... and ${fileEdits.length - 10} more`);
   }
 
-  // Summary text (truncated)
+  // Summary text
   if (agentResponse.textContent) {
-    const summary =
-      agentResponse.textContent.length > 500
-        ? agentResponse.textContent.slice(0, 500) + "..."
-        : agentResponse.textContent;
-    parts.push(`\n${summary}`);
+    parts.push(`\n${agentResponse.textContent}`);
   }
 
   return parts.join("\n");

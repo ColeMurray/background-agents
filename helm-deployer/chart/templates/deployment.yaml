@@ -50,6 +50,12 @@ spec:
               value: {{ .Values.helm.targetNamespace | quote }}
             - name: HELM_CREATE_NAMESPACE
               value: {{ .Values.helm.createNamespace | quote }}
+            - name: INGRESS_ENABLED
+              value: {{ .Values.ingress.enabled | quote }}
+            - name: INGRESS_CLASS_NAME
+              value: {{ .Values.ingress.className | quote }}
+            - name: INGRESS_BASE_DOMAIN
+              value: {{ .Values.ingress.baseDomain | quote }}
             - name: HELM_API_SECRET
               valueFrom:
                 secretKeyRef:

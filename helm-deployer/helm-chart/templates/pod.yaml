@@ -39,7 +39,7 @@ spec:
     # ========================================
     - name: opencode
       image: {{ .Values.opencode.image }}
-      command: ["/bin/bash", "-c"]
+      command: ["/bin/sh", "-c"]
       args:
         - |
           set -e
@@ -131,7 +131,7 @@ spec:
     # ========================================
     - name: reverse-proxy
       image: {{ .Values.reverseProxy.image }}
-      command: ["/bin/bash", "-c"]
+      command: ["/bin/sh", "-c"]
       args:
         - |
           set -e
@@ -259,12 +259,12 @@ spec:
     # ========================================
     - name: browser
       image: {{ .Values.browser.image }}
-      command: ["/bin/bash", "-c"]
+      command: ["/bin/sh", "-c"]
       args:
         - |
-          exec chromium --headless --no-sandbox --disable-gpu \
-            --remote-debugging-address=0.0.0.0 \
-            --remote-debugging-port={{ .Values.browser.port }}
+          exec npx playwright run-server \
+            --host 0.0.0.0 \
+            --port {{ .Values.browser.port }}
       ports:
         - name: browser
           containerPort: {{ .Values.browser.port }}
@@ -283,7 +283,7 @@ spec:
         - "--writable"
         - "--base-path"
         - "/terminal"
-        - "bash"
+        - "sh"
       ports:
         - name: ttyd
           containerPort: {{ .Values.ttyd.port }}
@@ -503,6 +503,8 @@ spec:
         - name: kafka-connect
           containerPort: {{ .Values.kafkaConnect.port }}
       env:
+        - name: KAFKA_HEAP_OPTS
+          value: "-Xms256M -Xmx512M"
         - name: CONNECT_BOOTSTRAP_SERVERS
           value: "localhost:{{ .Values.redpanda.ports.kafka }}"
         - name: CONNECT_REST_PORT
@@ -546,7 +548,7 @@ spec:
               static_configs:
                 - targets: ['localhost:{{ .Values.prometheus.port }}']
           EOF
-          exec /bin/prometheus \
+          exec /opt/bitnami/prometheus/bin/prometheus \
             --config.file=/tmp/prometheus.yml \
             --storage.tsdb.path=/tmp/prometheus-data \
             --web.listen-address=0.0.0.0:{{ .Values.prometheus.port }}

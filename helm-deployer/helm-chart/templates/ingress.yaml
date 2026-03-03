@@ -1,0 +1,44 @@
+{{/*
+Ingress for external access to the sandbox reverse proxy.
+
+Each sandbox environment is assigned a 4-digit zero-padded number (0000–9999)
+by the helm-deployer service. The ingress host is:
+  env-<envNumber>.<baseDomain>
+
+Disabled unless ingress.enabled=true, ingress.baseDomain, and ingress.envNumber
+are all provided.
+*/}}
+{{- if and .Values.ingress.enabled .Values.ingress.baseDomain .Values.ingress.envNumber }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "sandbox.fullname" . }}
+  labels:
+    {{- include "sandbox.labels" . | nindent 4 }}
+  annotations:
+    open-inspect/env-number: {{ .Values.ingress.envNumber | quote }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ printf "env-%s.%s" .Values.ingress.envNumber .Values.ingress.baseDomain }}
+      secretName: {{ .Values.ingress.tls.secretName | default (printf "env-%s-tls" .Values.ingress.envNumber) }}
+  {{- end }}
+  rules:
+    - host: {{ printf "env-%s.%s" .Values.ingress.envNumber .Values.ingress.baseDomain }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "sandbox.fullname" . }}
+                port:
+                  name: proxy
+{{- end }}

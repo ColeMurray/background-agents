@@ -105,6 +105,7 @@ export interface IssueSession {
   repoName: string;
   model: string;
   agentSessionId?: string;
+  mode?: "plan" | "apply";
   createdAt: number;
 }
 
