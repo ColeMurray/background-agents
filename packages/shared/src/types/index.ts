@@ -466,6 +466,7 @@ export interface LinearCallbackContext {
   agentSessionId?: string;
   organizationId?: string;
   emitToolProgressActivities?: boolean;
+  teamId?: string;
 }
 
 export interface TeamsCallbackContext {

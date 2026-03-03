@@ -1,6 +1,12 @@
 import type { Env } from "../types";
 import { generateInternalToken } from "./internal";
 
+export interface ResolvedStatusMapping {
+  inProgressStateName: string;
+  completedStateName: string;
+  cancelledStateName: string | null;
+}
+
 export interface ResolvedLinearConfig {
   model: string | null;
   reasoningEffort: string | null;
@@ -8,6 +14,8 @@ export interface ResolvedLinearConfig {
   allowLabelModelOverride: boolean;
   emitToolProgressActivities: boolean;
   enabledRepos: string[] | null;
+  updateIssueStatus: boolean;
+  statusMapping: ResolvedStatusMapping;
 }
 
 const DEFAULT_CONFIG: ResolvedLinearConfig = {
@@ -17,6 +25,12 @@ const DEFAULT_CONFIG: ResolvedLinearConfig = {
   allowLabelModelOverride: true,
   emitToolProgressActivities: true,
   enabledRepos: null,
+  updateIssueStatus: false,
+  statusMapping: {
+    inProgressStateName: "In Progress",
+    completedStateName: "In Review",
+    cancelledStateName: null,
+  },
 };
 
 export async function getLinearConfig(env: Env, repo: string): Promise<ResolvedLinearConfig> {

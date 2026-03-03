@@ -15,6 +15,8 @@ import { extractAgentResponse, formatAgentResponse } from "./completion/extracto
 import { timingSafeEqual } from "@open-inspect/shared";
 import { computeHmacHex } from "./utils/crypto";
 import { makePlan } from "./plan";
+import { getLinearConfig } from "./utils/integration-config";
+import { transitionIssueStatus } from "./issue-status";
 import { createLogger } from "./logger";
 
 const log = createLogger("callback");
@@ -297,6 +299,20 @@ async function handleCompletionCallback(
             { label: "Pull Request", url: prArtifact.url },
           ];
           await updateAgentSession(client, context.agentSessionId, { externalUrls: urls });
+        }
+
+        // Transition issue to completed state
+        if (payload.success && context.teamId) {
+          const integrationConfig = await getLinearConfig(env, context.repoFullName.toLowerCase());
+          await transitionIssueStatus(
+            env,
+            client,
+            context.issueId,
+            context.teamId,
+            "completed",
+            integrationConfig,
+            traceId
+          );
         }
 
         log.info("callback.complete", {

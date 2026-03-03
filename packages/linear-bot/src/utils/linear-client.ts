@@ -322,6 +322,78 @@ export async function getRepoSuggestions(
   }
 }
 
+// ─── Issue State Management ──────────────────────────────────────────────────
+
+export interface WorkflowState {
+  id: string;
+  name: string;
+  type: string; // "triage" | "backlog" | "unstarted" | "started" | "completed" | "canceled"
+}
+
+/**
+ * Fetch a team's workflow states from the Linear API.
+ */
+export async function fetchTeamWorkflowStates(
+  client: LinearApiClient,
+  teamId: string
+): Promise<WorkflowState[]> {
+  try {
+    const data = await linearGraphQL(
+      client,
+      `
+      query TeamWorkflowStates($teamId: String!) {
+        team(id: $teamId) {
+          states { nodes { id name type } }
+        }
+      }
+    `,
+      { teamId }
+    );
+
+    const team = (data as { data?: { team?: { states?: { nodes: WorkflowState[] } } } }).data?.team;
+    return team?.states?.nodes ?? [];
+  } catch (err) {
+    log.error("linear.fetch_workflow_states", {
+      team_id: teamId,
+      error: err instanceof Error ? err : new Error(String(err)),
+    });
+    return [];
+  }
+}
+
+/**
+ * Update a Linear issue's workflow state.
+ */
+export async function updateIssueState(
+  client: LinearApiClient,
+  issueId: string,
+  stateId: string
+): Promise<boolean> {
+  try {
+    const data = await linearGraphQL(
+      client,
+      `
+      mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) {
+        issueUpdate(id: $id, input: $input) {
+          success
+        }
+      }
+    `,
+      { id: issueId, input: { stateId } }
+    );
+
+    const result = (data as { data?: { issueUpdate?: { success: boolean } } }).data?.issueUpdate;
+    return result?.success ?? false;
+  } catch (err) {
+    log.error("linear.update_issue_state", {
+      issue_id: issueId,
+      state_id: stateId,
+      error: err instanceof Error ? err : new Error(String(err)),
+    });
+    return false;
+  }
+}
+
 // ─── Webhook Verification ────────────────────────────────────────────────────
 
 export async function verifyLinearWebhook(

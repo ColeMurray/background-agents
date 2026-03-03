@@ -273,6 +273,31 @@ export class IntegrationSettingsStore {
     ) {
       throw new IntegrationSettingsValidationError("emitToolProgressActivities must be a boolean");
     }
+
+    if (
+      settings.updateIssueStatus !== undefined &&
+      typeof settings.updateIssueStatus !== "boolean"
+    ) {
+      throw new IntegrationSettingsValidationError("updateIssueStatus must be a boolean");
+    }
+
+    if (settings.statusMapping !== undefined) {
+      if (typeof settings.statusMapping !== "object" || settings.statusMapping === null) {
+        throw new IntegrationSettingsValidationError("statusMapping must be an object");
+      }
+      for (const key of [
+        "inProgressStateName",
+        "completedStateName",
+        "cancelledStateName",
+      ] as const) {
+        const val = settings.statusMapping[key];
+        if (val !== undefined && val !== null && typeof val !== "string") {
+          throw new IntegrationSettingsValidationError(
+            `statusMapping.${key} must be a string or null`
+          );
+        }
+      }
+    }
   }
 }
 

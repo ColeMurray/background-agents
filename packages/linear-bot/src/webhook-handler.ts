@@ -35,6 +35,7 @@ import {
   lookupIssueSession,
   storeIssueSession,
 } from "./kv-store";
+import { transitionIssueStatus } from "./issue-status";
 
 const log = createLogger("handler");
 
@@ -86,6 +87,28 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
           error: e instanceof Error ? e : new Error(String(e)),
         });
       }
+
+      // Transition issue to cancelled state (if configured)
+      const teamId = webhook.agentSession.issue?.team?.id;
+      const orgId = webhook.organizationId;
+      if (teamId && orgId) {
+        const client = await getLinearClient(env, orgId);
+        if (client) {
+          const repoFullName =
+            `${existingSession.repoOwner}/${existingSession.repoName}`.toLowerCase();
+          const integrationConfig = await getLinearConfig(env, repoFullName);
+          await transitionIssueStatus(
+            env,
+            client,
+            issueId,
+            teamId,
+            "cancelled",
+            integrationConfig,
+            traceId
+          );
+        }
+      }
+
       await env.LINEAR_KV.delete(`issue:${issueId}`);
     }
   }
@@ -455,6 +478,17 @@ async function handleNewSession(
     plan: makePlan("session_created"),
   });
 
+  // Transition issue to "In Progress"
+  await transitionIssueStatus(
+    env,
+    client,
+    issue.id,
+    issue.team.id,
+    "inProgress",
+    integrationConfig,
+    traceId
+  );
+
   // ─── Build and send prompt ────────────────────────────────────────────
 
   // Prefer Linear's promptContext (includes issue, comments, guidance)
@@ -469,6 +503,7 @@ async function handleNewSession(
     agentSessionId,
     organizationId: orgId,
     emitToolProgressActivities: integrationConfig.emitToolProgressActivities,
+    teamId: issue.team.id,
   };
 
   const promptRes = await env.CONTROL_PLANE.fetch(

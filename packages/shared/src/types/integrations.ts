@@ -21,6 +21,13 @@ export interface GitHubBotSettings {
   commentActionInstructions?: string;
 }
 
+/** Configurable mapping from Open-Inspect lifecycle events to Linear workflow state names. */
+export interface LinearStatusMapping {
+  inProgressStateName?: string;
+  completedStateName?: string;
+  cancelledStateName?: string | null;
+}
+
 /** Overridable behavior settings for the Linear bot. Used at both global (defaults) and per-repo (overrides) levels. */
 export interface LinearBotSettings {
   model?: string;
@@ -28,6 +35,8 @@ export interface LinearBotSettings {
   allowUserPreferenceOverride?: boolean;
   allowLabelModelOverride?: boolean;
   emitToolProgressActivities?: boolean;
+  updateIssueStatus?: boolean;
+  statusMapping?: LinearStatusMapping;
 }
 
 /**
