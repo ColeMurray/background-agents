@@ -6,6 +6,7 @@ import { describeCron } from "@open-inspect/shared";
 import type { Automation } from "@open-inspect/shared";
 import { AutomationStatusBadge } from "@/components/automations/automation-status-badge";
 import { Button } from "@/components/ui/button";
+import { RepoIcon, ClockIcon, BoltIcon } from "@/components/ui/icons";
 import { formatRelativeTime } from "@/lib/time";
 
 interface AutomationsListProps {
@@ -37,37 +38,17 @@ export function AutomationsList({
   return (
     <div className="border border-border-muted rounded-md bg-background divide-y divide-border-muted">
       {automations.map((automation) => (
-        <div key={automation.id} className="px-4 py-3">
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <Link
-                  href={`/automations/${automation.id}`}
-                  className="font-medium text-foreground hover:text-accent transition truncate"
-                >
-                  {automation.name}
-                </Link>
-                <AutomationStatusBadge automation={automation} />
-              </div>
-              <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
-                <span>
-                  {automation.repoOwner}/{automation.repoName}
-                </span>
-                <span>·</span>
-                <span>
-                  {automation.scheduleCron
-                    ? describeCron(automation.scheduleCron, automation.scheduleTz)
-                    : "No schedule"}
-                </span>
-                {automation.nextRunAt && (
-                  <>
-                    <span>·</span>
-                    <span>Next: {formatRelativeTime(automation.nextRunAt)}</span>
-                  </>
-                )}
-                <span>·</span>
-                <span>{automation.createdBy}</span>
-              </div>
+        <div key={automation.id} className="px-4 py-4">
+          {/* Header: Name + badge | Actions */}
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-2 min-w-0">
+              <Link
+                href={`/automations/${automation.id}`}
+                className="font-medium text-foreground hover:text-accent transition truncate"
+              >
+                {automation.name}
+              </Link>
+              <AutomationStatusBadge automation={automation} />
             </div>
             <div className="flex items-center gap-1 flex-shrink-0">
               {automation.enabled ? (
@@ -80,7 +61,10 @@ export function AutomationsList({
                 </Button>
               )}
               <Button variant="ghost" size="xs" onClick={() => onTrigger(automation.id)}>
-                Trigger
+                <span className="flex items-center gap-1">
+                  <BoltIcon className="w-3 h-3" />
+                  Trigger
+                </span>
               </Button>
               {confirmDeleteId === automation.id ? (
                 <div className="flex items-center gap-1">
@@ -108,6 +92,25 @@ export function AutomationsList({
                 </Button>
               )}
             </div>
+          </div>
+
+          {/* Metadata: icon-paired items */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs text-muted-foreground">
+            <span className="inline-flex items-center gap-1">
+              <RepoIcon className="w-3 h-3 flex-shrink-0" />
+              {automation.repoOwner}/{automation.repoName}
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <ClockIcon className="w-3 h-3 flex-shrink-0" />
+              {automation.scheduleCron
+                ? describeCron(automation.scheduleCron, automation.scheduleTz)
+                : "No schedule"}
+            </span>
+            {automation.nextRunAt && (
+              <span className="inline-flex items-center gap-1">
+                Next: {formatRelativeTime(automation.nextRunAt)}
+              </span>
+            )}
           </div>
         </div>
       ))}
