@@ -91,9 +91,20 @@ describe("cronIntervalMinutes", () => {
     expect(cronIntervalMinutes("0 9 * * 1")).toBe(10080);
   });
 
-  it("returns null for variable-interval expressions", () => {
-    // Monthly (1st at midnight) — months have different lengths
-    expect(cronIntervalMinutes("0 0 1 * *")).toBeNull();
+  it("returns the minimum interval for multi-value expressions", () => {
+    // "0,1 * * * *" fires at :00 and :01 each hour — minimum gap is 1 minute
+    expect(cronIntervalMinutes("0,1 * * * *")).toBe(1);
+    // "0,30 * * * *" fires at :00 and :30 — minimum gap is 30 minutes
+    expect(cronIntervalMinutes("0,30 * * * *")).toBe(30);
+    // "0-2 * * * *" fires at :00, :01, :02 — minimum gap is 1 minute
+    expect(cronIntervalMinutes("0-2 * * * *")).toBe(1);
+  });
+
+  it("returns the minimum interval for monthly expressions", () => {
+    // Monthly (1st at midnight) — months have different lengths (28-31 days)
+    // Should return the minimum observed interval, not null
+    const result = cronIntervalMinutes("0 0 1 * *");
+    expect(result).toBeGreaterThan(0);
   });
 
   it("returns null for invalid expressions", () => {

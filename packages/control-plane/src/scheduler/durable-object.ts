@@ -101,9 +101,13 @@ export class SchedulerDO extends DurableObject<Env> {
 
     for (const automation of overdue) {
       try {
-        // Concurrency check
+        // Concurrency check — advance next_run_at to avoid repeat skip inserts
         const activeRun = await store.getActiveRunForAutomation(automation.id);
         if (activeRun) {
+          const nextRunAt = nextCronOccurrence(
+            automation.schedule_cron!,
+            automation.schedule_tz
+          ).getTime();
           const skipRunId = generateId();
           await store.insertRun({
             id: skipRunId,
@@ -117,6 +121,7 @@ export class SchedulerDO extends DurableObject<Env> {
             completed_at: now,
             created_at: now,
           });
+          await store.update(automation.id, { next_run_at: nextRunAt });
           skipped++;
           continue;
         }

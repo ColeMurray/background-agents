@@ -424,9 +424,11 @@ async function handleTriggerAutomation(
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
-    // Forward 409 (concurrent run) directly; wrap others as 500
-    const status = triggerResponse.status === 409 ? 409 : 500;
-    return error("Failed to trigger automation", status);
+    // Forward 409 (concurrent run) with descriptive message; wrap others as 500
+    if (triggerResponse.status === 409) {
+      return error("A run is already active for this automation", 409);
+    }
+    return error("Failed to trigger automation", 500);
   }
 
   const triggerResult = await triggerResponse.json();
@@ -457,8 +459,8 @@ async function handleListRuns(
   if (!automation) return error("Automation not found", 404);
 
   const url = new URL(request.url);
-  const limit = Math.min(parseInt(url.searchParams.get("limit") || "20") || 20, 100);
-  const offset = parseInt(url.searchParams.get("offset") || "0") || 0;
+  const limit = Math.max(1, Math.min(parseInt(url.searchParams.get("limit") || "20") || 20, 100));
+  const offset = Math.max(0, parseInt(url.searchParams.get("offset") || "0") || 0);
 
   const result = await store.listRunsForAutomation(automationId, { limit, offset });
 

@@ -65,13 +65,9 @@ export function cronIntervalMinutes(expression: string): number | null {
       intervals.add((times[i] - times[i - 1]) / 60_000);
     }
 
-    // If all intervals are the same, return that value
-    if (intervals.size === 1) {
-      return [...intervals][0];
-    }
-
-    // Variable intervals (e.g., "0 0 1 * *" = monthly) — return null
-    return null;
+    // Return the minimum observed interval (catches multi-value expressions
+    // like "0,1 * * * *" whose shortest gap is 1 minute).
+    return Math.min(...intervals);
   } catch {
     return null;
   }
