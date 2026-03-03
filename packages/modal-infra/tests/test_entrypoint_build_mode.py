@@ -286,8 +286,8 @@ class TestNormalMode:
         supervisor.run_start_script.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_clone_depth_1(self, base_env, tmp_path):
-        """Normal mode should clone with --depth 1."""
+    async def test_clone_depth_100_in_normal_mode(self, base_env, tmp_path):
+        """Normal mode should clone with --depth 100."""
         supervisor = _make_supervisor(base_env)
         supervisor.repo_path = tmp_path / "nonexistent"
 
@@ -321,8 +321,7 @@ class TestNormalMode:
         clone_calls = [args for args in all_calls if "clone" in args]
         assert len(clone_calls) >= 1, f"Expected a git clone call, got: {all_calls}"
         clone_args = clone_calls[0]
-        assert "1" in clone_args, f"Expected --depth 1 in clone args, got {clone_args}"
-        assert "100" not in clone_args, "Normal mode should not use --depth 100"
+        assert "100" in clone_args, f"Expected --depth 100 in clone args, got {clone_args}"
 
 
 class TestSnapshotRestoreMode:
