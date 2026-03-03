@@ -88,7 +88,7 @@ function createEnv(overrides?: Partial<Env>): Env {
   } as Env;
 }
 
-function createSchedulerDO(env?: Env): SchedulerDO {
+function createSchedulerDO(env?: Env): InstanceType<typeof SchedulerDO> {
   const ctx = { storage: {} } as unknown as DurableObjectState;
   return new SchedulerDO(ctx, env ?? createEnv());
 }

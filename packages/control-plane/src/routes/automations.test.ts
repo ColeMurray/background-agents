@@ -83,17 +83,10 @@ function createCtx(): RequestContext {
     trace_id: "trace-1",
     request_id: "req-1",
     metrics: {
-      queries: [] as Array<{
-        sql: string;
-        durationMs: number;
-        serverDurationMs: number;
-        rowsRead: number;
-        rowsWritten: number;
-      }>,
-      totalMs: 0,
-      serverTotalMs: 0,
-      totalRowsRead: 0,
-      totalRowsWritten: 0,
+      d1Queries: [],
+      spans: {},
+      time: async <T>(_name: string, fn: () => Promise<T>) => fn(),
+      summarize: () => ({}),
     },
   };
 }
@@ -434,7 +427,7 @@ describe("automation route handlers", () => {
 
       // Override the SCHEDULER stub to return 409 (concurrency check lives in the DO)
       const env = createEnv();
-      (env.SCHEDULER.get as ReturnType<typeof vi.fn>).mockReturnValue({
+      (env.SCHEDULER!.get as ReturnType<typeof vi.fn>).mockReturnValue({
         fetch: vi
           .fn()
           .mockResolvedValue(Response.json({ error: "concurrent_run_active" }, { status: 409 })),
