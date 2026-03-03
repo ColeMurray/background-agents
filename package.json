@@ -37,7 +37,7 @@
     "node": ">=20.0.0"
   },
   "overrides": {
-    "minimatch": ">=10.0.1"
+    "minimatch": "^10.2.4"
   },
   "lint-staged": {
     "*.{ts,tsx}": [
