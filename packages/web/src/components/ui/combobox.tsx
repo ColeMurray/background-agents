@@ -116,14 +116,14 @@ export function Combobox<T = string>({
 
   const hasResults = flatOptions.length > 0;
 
-  // Reset active index when filtered results change (e.g. typing in search)
+  // Reset active index when search query changes (not on every render)
   useEffect(() => {
-    if (open && flatOptions.length > 0) {
-      setActiveIndex(0);
-    } else {
+    if (!open) {
       setActiveIndex(-1);
+      return;
     }
-  }, [flatOptions, open]);
+    setActiveIndex(0);
+  }, [normalizedQuery, open]);
 
   // Set initial active index to the selected value when opening
   useEffect(() => {
