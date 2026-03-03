@@ -23,7 +23,7 @@ spec:
           containers:
             - name: cleanup
               image: bitnami/kubectl:latest
-              command: ["/bin/bash", "-c"]
+              command: ["/bin/sh", "-c"]
               args:
                 - |
                   set -e
