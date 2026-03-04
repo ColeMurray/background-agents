@@ -219,10 +219,11 @@ export function evaluateSpawnDecision(
 
   // Cooldown: don't spawn if last spawn was within cooldown period
   // Exception: failed or stopped status bypasses cooldown
+  const status = state.status as string;
   if (
     timeSinceLastSpawn < config.cooldownMs &&
-    state.status !== "failed" &&
-    state.status !== "stopped"
+    status !== "failed" &&
+    status !== "stopped"
   ) {
     return {
       action: "wait",

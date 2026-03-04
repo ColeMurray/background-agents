@@ -74,6 +74,10 @@ export interface SandboxStorage {
   updateSandboxSnapshotImageId(sandboxId: string, imageId: string): void;
   /** Update last activity timestamp */
   updateSandboxLastActivity(timestamp: number): void;
+  /** Stop the sandbox */
+  stopSandbox?(providerObjectId: string): Promise<void>;
+  /** Start the sandbox */
+  startSandbox?(providerObjectId: string): Promise<void>;
   /** Increment circuit breaker failure count */
   incrementCircuitBreakerFailure(timestamp: number): void;
   /** Reset circuit breaker failure count */
@@ -280,6 +284,24 @@ export class SandboxLifecycleManager {
         this.log.info("Spawn decision: restore", {
           snapshot_image_id: spawnDecision.snapshotImageId,
         });
+        // If the sandbox is stopped and we have a provider object ID (EC2 instance ID), try to resume it
+        // Only applicable for EC2 provider
+        const sandboxState = this.storage.getSandbox();
+        if (
+          this.provider.name === "ec2" &&
+          sandboxState?.status === "stopped" &&
+          sandboxState.modal_object_id &&
+          this.storage.startSandbox
+        ) {
+          try {
+            await this.storage.startSandbox(sandboxState.modal_object_id);
+            this.storage.updateSandboxStatus("connecting");
+            this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
+            return;
+          } catch (e) {
+            this.log.error("Failed to start EC2 instance, falling back to spawn", { error: e });
+          }
+        }
         await this.restoreFromSnapshot(spawnDecision.snapshotImageId);
         return;
 
@@ -707,6 +729,16 @@ export class SandboxLifecycleManager {
         // Send shutdown command and close WebSocket
         this.wsManager.sendToSandbox({ type: "shutdown" });
         this.wsManager.closeSandboxWebSocket(1000, "Inactivity timeout");
+
+        // Stop EC2 instance if applicable
+        // Only applicable for EC2 provider
+        if (this.provider.name === "ec2" && sandbox.modal_object_id && this.storage.stopSandbox) {
+          try {
+            await this.storage.stopSandbox(sandbox.modal_object_id);
+          } catch (e) {
+            this.log.error("Failed to stop EC2 instance", { error: e });
+          }
+        }
 
         this.broadcaster.broadcast({
           type: "sandbox_warning",
