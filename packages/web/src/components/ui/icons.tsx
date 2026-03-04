@@ -1,6 +1,5 @@
 interface IconProps {
   className?: string;
-  "aria-hidden"?: boolean | "true" | "false";
 }
 
 // --- Navigation & Layout ---
@@ -176,9 +175,9 @@ export function MoreIcon({ className }: IconProps) {
 
 // --- Status & Info ---
 
-export function ClockIcon({ className, ...props }: IconProps) {
+export function ClockIcon({ className }: IconProps) {
   return (
-    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" {...props}>
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <circle cx="12" cy="12" r="10" strokeWidth={2} />
       <path strokeLinecap="round" strokeWidth={2} d="M12 6v6l4 2" />
     </svg>
@@ -339,9 +338,9 @@ export function TerminalIcon({ className }: IconProps) {
   );
 }
 
-export function BoltIcon({ className, ...props }: IconProps) {
+export function BoltIcon({ className }: IconProps) {
   return (
-    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" {...props}>
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -365,9 +364,9 @@ export function GlobeIcon({ className }: IconProps) {
   );
 }
 
-export function FolderIcon({ className, ...props }: IconProps) {
+export function FolderIcon({ className }: IconProps) {
   return (
-    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" {...props}>
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -458,25 +457,6 @@ export function DataControlsIcon({ className }: IconProps) {
       <ellipse cx="12" cy="5" rx="9" ry="3" />
       <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
       <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
-    </svg>
-  );
-}
-
-export function AutomationsIcon({ className }: IconProps) {
-  return (
-    <svg
-      className={className}
-      fill="none"
-      stroke="currentColor"
-      viewBox="0 0 24 24"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M21.5 2v6h-6" />
-      <path d="M2.5 22v-6h6" />
-      <path d="M2.5 11.5a10 10 0 0 1 18.8-4.3" />
-      <path d="M21.5 12.5a10 10 0 0 1-18.8 4.2" />
     </svg>
   );
 }

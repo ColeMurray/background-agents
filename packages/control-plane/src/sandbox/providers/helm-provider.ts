@@ -32,6 +32,8 @@ export interface HelmApiConfig {
   apiSecret: string;
   /** Kubernetes namespace for sandbox pods */
   namespace: string;
+  /** Cloudflare tunnel token for sandbox connectivity */
+  tunnelToken: string;
   /** Source control provider, used to align VCS clone defaults with Modal behavior. */
   scmProvider?: "github" | "bitbucket";
 }
@@ -50,6 +52,7 @@ export interface HelmDeployRequest {
   agent?: string;
   userEnvVars?: Record<string, string>;
   timeoutSeconds?: number;
+  tunnelToken: string;
   namespace: string;
   scmProvider?: "github" | "bitbucket";
   anthropicApiKey?: string;
@@ -217,6 +220,7 @@ export class HelmSandboxProvider implements SandboxProvider {
         agent: config.agent,
         userEnvVars: config.userEnvVars,
         timeoutSeconds: config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+        tunnelToken: this.client["config"].tunnelToken,
         namespace: this.client["config"].namespace,
         scmProvider: this.client["config"].scmProvider ?? "github",
         anthropicApiKey: config.userEnvVars?.["ANTHROPIC_API_KEY"],

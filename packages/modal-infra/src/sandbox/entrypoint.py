@@ -47,7 +47,6 @@ class SandboxSupervisor:
     START_SCRIPT_PATH = ".openinspect/start.sh"
     DEFAULT_SETUP_TIMEOUT_SECONDS = 300
     DEFAULT_START_TIMEOUT_SECONDS = 120
-    CLONE_DEPTH_COMMITS = 100
 
     def __init__(self):
         self.opencode_process: asyncio.subprocess.Process | None = None
@@ -129,13 +128,15 @@ class SandboxSupervisor:
             )
 
             clone_url = self._build_repo_url()
+            image_build_mode = os.environ.get("IMAGE_BUILD_MODE") == "true"
+            clone_depth = "100" if image_build_mode else "1"
             base_branch = self.base_branch
 
             result = await asyncio.create_subprocess_exec(
                 "git",
                 "clone",
                 "--depth",
-                str(self.CLONE_DEPTH_COMMITS),
+                clone_depth,
                 "--branch",
                 base_branch,
                 clone_url,

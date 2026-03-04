@@ -81,24 +81,20 @@ module "control_plane_worker" {
       { name = "MODAL_TOKEN_SECRET", value = var.modal_token_secret },
       { name = "MODAL_API_SECRET", value = var.modal_api_secret },
       { name = "HELM_API_SECRET", value = var.helm_api_secret },
+      { name = "CLOUDFLARE_TUNNEL_TOKEN", value = var.cloudflare_tunnel_token },
       { name = "EC2_API_SECRET", value = var.ec2_api_secret },
     ]
   )
 
   durable_objects = [
-    { binding_name = "SESSION", class_name = "SessionDO" },
-    { binding_name = "SCHEDULER", class_name = "SchedulerDO" },
+    { binding_name = "SESSION", class_name = "SessionDO" }
   ]
 
   enable_durable_object_bindings = var.enable_durable_object_bindings
 
   compatibility_date  = "2024-09-23"
   compatibility_flags = ["nodejs_compat"]
-  migration_tag       = "v2"
-  migration_old_tag   = "v1"
-  new_sqlite_classes  = ["SchedulerDO"]
-
-  cron_triggers = ["* * * * *"]
+  migration_tag       = "v1"
 
   depends_on = [null_resource.control_plane_build, module.session_index_kv, null_resource.d1_migrations, module.linear_bot_worker]
 }

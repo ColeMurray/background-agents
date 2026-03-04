@@ -13,7 +13,6 @@ import {
   InspectIcon,
   PlusIcon,
   SettingsIcon,
-  AutomationsIcon,
   BranchIcon,
 } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
@@ -168,21 +167,6 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
             </button>
           )}
         </div>
-      </div>
-
-      {/* Nav links */}
-      <div className="px-3 pt-2 pb-1 flex flex-col gap-0.5">
-        <Link
-          href="/automations"
-          className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-md transition ${
-            pathname?.startsWith("/automations")
-              ? "text-foreground bg-muted"
-              : "text-muted-foreground hover:text-foreground hover:bg-muted"
-          }`}
-        >
-          <AutomationsIcon className="w-4 h-4" />
-          Automations
-        </Link>
       </div>
 
       {/* Search */}

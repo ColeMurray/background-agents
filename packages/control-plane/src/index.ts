@@ -10,9 +10,8 @@ import type { Env } from "./types";
 
 const logger = createLogger("worker");
 
-// Re-export Durable Objects for Cloudflare to discover
+// Re-export Durable Object for Cloudflare to discover
 export { SessionDO } from "./session/durable-object";
-export { SchedulerDO } from "./scheduler/durable-object";
 
 /**
  * Worker fetch handler.
@@ -29,23 +28,6 @@ export default {
 
     // Regular API request — logged by the router with requestId and timing
     return handleRequest(request, env, ctx);
-  },
-
-  /**
-   * Cron trigger handler — wakes the SchedulerDO to process overdue automations.
-   */
-  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
-    if (!env.SCHEDULER) {
-      logger.debug("SCHEDULER binding not configured, skipping scheduled tick");
-      return;
-    }
-
-    // Always wake the SchedulerDO — it runs both the recovery sweep
-    // (orphaned/timed-out runs) and processes overdue automations.
-    const doId = env.SCHEDULER.idFromName("global-scheduler");
-    const stub = env.SCHEDULER.get(doId);
-
-    await stub.fetch("http://internal/internal/tick", { method: "POST" });
   },
 };
 

@@ -12,7 +12,13 @@ Install the following on your base image (e.g., Ubuntu 22.04):
 - `node` (version 20+)
 - `git`
 - `docker` (optional, if your agent needs it)
-- OpenCode server (the bridge application)
+- `opencode` (The coding agent server)
+- Python 3.12+ (for the bridge and supervisor)
+
+### Open-Inspect Components
+The AMI must contain the sandbox supervisor and bridge code from `packages/modal-infra/src/sandbox/`.
+1.  Copy the `packages/modal-infra/src/sandbox/` directory to `/usr/local/lib/python3.12/dist-packages/sandbox/` (or equivalent).
+2.  Install Python dependencies: `httpx`, `structlog`, `websockets`.
 
 ### Directory Structure
 Create the following directories with appropriate permissions:
@@ -38,20 +44,24 @@ User=root
 WantedBy=multi-user.target
 ```
 
-#### OpenCode Server (`/etc/systemd/system/opencode-server.service`)
-Configure the server to load environment variables from `/etc/opencode/env`.
+#### Sandbox Supervisor (`/etc/systemd/system/sandbox-supervisor.service`)
+The supervisor manages the lifecycle of the OpenCode server and the agent bridge.
 
 ```ini
 [Unit]
-Description=OpenCode Server
+Description=Open-Inspect Sandbox Supervisor
 After=network.target cloudflared.service
 
 [Service]
 EnvironmentFile=/etc/opencode/env
-ExecStart=/usr/local/bin/opencode-server
+# Run the supervisor module
+ExecStart=/usr/bin/python3 -m sandbox.entrypoint
 Restart=always
 User=ubuntu
 WorkingDirectory=/home/ubuntu
+# Ensure workspace directory exists
+ExecStartPre=/usr/bin/mkdir -p /workspace
+ExecStartPre=/usr/bin/chown ubuntu:ubuntu /workspace
 
 [Install]
 WantedBy=multi-user.target
@@ -78,8 +88,9 @@ Set the following variables in your `terraform.tfvars` or environment:
 
 1.  **Deployment**: When a session starts with `sandboxProvider: "ec2"`, the control plane calls the EC2 Deployer Worker.
 2.  **Orchestration**: The worker creates a unique Cloudflare Tunnel and launches an EC2 instance using the provided AMI and dynamic `UserData`.
-3.  **Bootstrapping**: The `UserData` writes the tunnel token to `/etc/cloudflared/token` and session details to `/etc/opencode/env`, then restarts the services.
-4.  **Connectivity**: `cloudflared` connects to Cloudflare, and the OpenCode bridge connects back to the control plane via the tunnel.
+3.  **Bootstrapping**: The `UserData` writes the tunnel token to `/etc/cloudflared/token` and session details to `/etc/opencode/env`, then restarts the supervisor service.
+4.  **Supervisor**: The supervisor (`sandbox.entrypoint`) handles git cloning/syncing, starts the OpenCode server, and then starts the bridge (`sandbox.bridge`).
+5.  **Connectivity**: `cloudflared` connects to Cloudflare, and the bridge connects back to the control plane WebSocket through the tunnel.
 5.  **Lifecycle**:
     *   **Activity**: If the session goes inactive, the instance is stopped (power off) to save costs. It is started again when activity resumes.
     *   **Cleanup**: After 24 hours (or on session completion), the instance is terminated and the Cloudflare Tunnel is deleted.

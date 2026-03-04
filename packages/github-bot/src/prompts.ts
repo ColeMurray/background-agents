@@ -86,7 +86,6 @@ ${body ?? "_No description provided._"}
      -f commit_id="$(gh api repos/${owner}/${repo}/pulls/${number} --jq '.head.sha')" \\
      -f line=<line number> \\
      -f side="RIGHT"
-
 ${buildCustomInstructionsSection(codeReviewInstructions)}
 ${buildCommentGuidelines(isPublic)}`;
 }

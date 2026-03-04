@@ -241,11 +241,14 @@ CONTROL_PLANE_URL=${config.controlPlaneUrl}
 SANDBOX_AUTH_TOKEN=${config.sandboxAuthToken}
 LLM_PROVIDER=${config.provider}
 LLM_MODEL=${config.model}
+REPO_OWNER=${config.repoOwner}
+REPO_NAME=${config.repoName}
+VCS_CLONE_TOKEN=${config.userEnvVars?.["VCS_CLONE_TOKEN"] || config.userEnvVars?.["GITHUB_APP_TOKEN"] || config.userEnvVars?.["GITHUB_TOKEN"] || ""}
 EOF
 
 # Trigger start-up of baked services
 systemctl restart cloudflared
-systemctl restart opencode-server
+systemctl restart sandbox-supervisor
 `);
 
     const result = await this.awsRequest("RunInstances", {

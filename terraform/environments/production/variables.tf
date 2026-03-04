@@ -131,6 +131,12 @@ variable "helm_namespace" {
   default     = "open-inspect"
 }
 
+variable "cloudflare_tunnel_token" {
+  description = "Cloudflare tunnel token for sandbox connectivity"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
 
 # =============================================================================
 # GitHub OAuth App Credentials
