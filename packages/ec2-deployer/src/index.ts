@@ -7,7 +7,29 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { AwsClient } from "aws4fetch";
-import crypto from "node:crypto";
+
+interface DeployBody {
+  sandboxId: string;
+  sessionId: string;
+  controlPlaneUrl: string;
+  sandboxAuthToken: string;
+  provider: string;
+  model: string;
+}
+
+interface ProviderObjectBody {
+  providerObjectId: string;
+}
+
+interface CloudflareApiResponse<T> {
+  success: boolean;
+  result: T;
+  errors: { message: string }[];
+}
+
+interface AwsXmlResult {
+  instancesSet?: { item: { instanceId: string } };
+}
 
 export interface Env {
   EC2_INSTANCE: DurableObjectNamespace;
@@ -46,14 +68,17 @@ export default {
     }
 
     if (url.pathname === "/deploy" && request.method === "POST") {
-      const body = await request.json() as any;
+      const body = (await request.json()) as DeployBody;
       const id = env.EC2_INSTANCE.idFromName(body.sandboxId);
       const stub = env.EC2_INSTANCE.get(id);
       return stub.fetch(request);
     }
 
-    if ((url.pathname === "/stop" || url.pathname === "/start" || url.pathname === "/delete") && request.method === "POST") {
-      const body = await request.json() as any;
+    if (
+      (url.pathname === "/stop" || url.pathname === "/start" || url.pathname === "/delete") &&
+      request.method === "POST"
+    ) {
+      const body = (await request.json()) as ProviderObjectBody;
       const id = env.EC2_INSTANCE.idFromString(body.providerObjectId);
       const stub = env.EC2_INSTANCE.get(id);
       return stub.fetch(request);
@@ -78,7 +103,17 @@ async function verifyToken(token: string, secret: string): Promise<boolean> {
     return false;
   }
 
-  const expected = crypto.createHmac("sha256", secret).update(timestampPart).digest("hex");
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(timestampPart));
+  const expected = Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
   return signature === expected;
 }
 
@@ -104,11 +139,11 @@ export class EC2InstanceDO extends DurableObject<Env> {
       service: "ec2",
     });
     this.ctx.blockConcurrencyWhile(async () => {
-      this.instanceId = await this.ctx.storage.get<string>("instanceId") || null;
-      this.tunnelId = await this.ctx.storage.get<string>("tunnelId") || null;
-      this.tunnelToken = await this.ctx.storage.get<string>("tunnelToken") || null;
-      this.status = await this.ctx.storage.get<string>("status") || "pending";
-      this.createdAt = await this.ctx.storage.get<number>("createdAt") || 0;
+      this.instanceId = (await this.ctx.storage.get<string>("instanceId")) || null;
+      this.tunnelId = (await this.ctx.storage.get<string>("tunnelId")) || null;
+      this.tunnelToken = (await this.ctx.storage.get<string>("tunnelToken")) || null;
+      this.status = (await this.ctx.storage.get<string>("status")) || "pending";
+      this.createdAt = (await this.ctx.storage.get<number>("createdAt")) || 0;
     });
   }
 
@@ -135,14 +170,14 @@ export class EC2InstanceDO extends DurableObject<Env> {
     if (this.instanceId) {
       return Response.json({
         success: true,
-        sandboxId: (await request.json() as any).sandboxId,
+        sandboxId: ((await request.json()) as DeployBody).sandboxId,
         providerObjectId: this.ctx.id.toString(),
         status: this.status,
         createdAt: this.createdAt,
       });
     }
 
-    const body = await request.json() as any;
+    const body = (await request.json()) as DeployBody;
     this.createdAt = Date.now();
     await this.ctx.storage.put("createdAt", this.createdAt);
 
@@ -178,16 +213,20 @@ export class EC2InstanceDO extends DurableObject<Env> {
         status: this.status,
         createdAt: this.createdAt,
       });
-    } catch (error: any) {
-      return Response.json({
-        success: false,
-        error: error.message,
-      }, { status: 500 });
+    } catch (error: unknown) {
+      return Response.json(
+        {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        { status: 500 }
+      );
     }
   }
 
   private async handleStop(): Promise<Response> {
-    if (!this.instanceId) return Response.json({ success: false, error: "No instance" }, { status: 404 });
+    if (!this.instanceId)
+      return Response.json({ success: false, error: "No instance" }, { status: 404 });
     await this.awsRequest("StopInstances", { InstanceId: [this.instanceId] });
     this.status = "stopped";
     await this.ctx.storage.put("status", this.status);
@@ -195,7 +234,8 @@ export class EC2InstanceDO extends DurableObject<Env> {
   }
 
   private async handleStart(): Promise<Response> {
-    if (!this.instanceId) return Response.json({ success: false, error: "No instance" }, { status: 404 });
+    if (!this.instanceId)
+      return Response.json({ success: false, error: "No instance" }, { status: 404 });
     await this.awsRequest("StartInstances", { InstanceId: [this.instanceId] });
     this.status = "running";
     await this.ctx.storage.put("status", this.status);
@@ -227,7 +267,7 @@ export class EC2InstanceDO extends DurableObject<Env> {
     this.status = "deleted";
   }
 
-  private async launchEC2Instance(config: any, tunnelToken: string): Promise<string> {
+  private async launchEC2Instance(config: DeployBody, tunnelToken: string): Promise<string> {
     // Only includes dynamic configuration that cannot be baked into the AMI.
     const userData = btoa(`#!/bin/bash
 # Write dynamic Cloudflare Tunnel token
@@ -259,10 +299,10 @@ systemctl restart opencode-server
           ResourceType: "instance",
           Tag: [
             { Key: "Name", Value: `open-inspect-sandbox-${config.sandboxId}` },
-            { Key: "OpenInspectSandboxId", Value: config.sandboxId }
-          ]
-        }
-      ]
+            { Key: "OpenInspectSandboxId", Value: config.sandboxId },
+          ],
+        },
+      ],
     });
 
     const instanceId = result?.instancesSet?.item?.instanceId;
@@ -270,50 +310,62 @@ systemctl restart opencode-server
     return instanceId;
   }
 
-  private async createCloudflareTunnel(name: string): Promise<{ id: string, token: string }> {
-    const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${this.env.CLOUDFLARE_ACCOUNT_ID}/tunnels`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${this.env.CLOUDFLARE_API_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ name, tunnel_secret: this.env.CLOUDFLARE_TUNNEL_SECRET }),
-    });
-    const result = await response.json() as any;
-    if (!result.success) throw new Error(`CF Tunnel creation failed: ${JSON.stringify(result.errors)}`);
+  private async createCloudflareTunnel(name: string): Promise<{ id: string; token: string }> {
+    const response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${this.env.CLOUDFLARE_ACCOUNT_ID}/tunnels`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ name, tunnel_secret: this.env.CLOUDFLARE_TUNNEL_SECRET }),
+      }
+    );
+    const result = (await response.json()) as CloudflareApiResponse<{ id: string }>;
+    if (!result.success)
+      throw new Error(`CF Tunnel creation failed: ${JSON.stringify(result.errors)}`);
 
     const tunnelId = result.result.id;
-    const token = btoa(JSON.stringify({
-      a: this.env.CLOUDFLARE_ACCOUNT_ID,
-      t: tunnelId,
-      s: this.env.CLOUDFLARE_TUNNEL_SECRET,
-    }));
+    const token = btoa(
+      JSON.stringify({
+        a: this.env.CLOUDFLARE_ACCOUNT_ID,
+        t: tunnelId,
+        s: this.env.CLOUDFLARE_TUNNEL_SECRET,
+      })
+    );
 
     return { id: tunnelId, token };
   }
 
   private async deleteCloudflareTunnel(tunnelId: string) {
-    await fetch(`https://api.cloudflare.com/client/v4/accounts/${this.env.CLOUDFLARE_ACCOUNT_ID}/tunnels/${tunnelId}`, {
-      method: "DELETE",
-      headers: {
-        "Authorization": `Bearer ${this.env.CLOUDFLARE_API_TOKEN}`,
-      },
-    });
+    await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${this.env.CLOUDFLARE_ACCOUNT_ID}/tunnels/${tunnelId}`,
+      {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN}`,
+        },
+      }
+    );
   }
 
   private async waitForTunnelOnline(tunnelId: string) {
     for (let i = 0; i < 60; i++) {
-      const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${this.env.CLOUDFLARE_ACCOUNT_ID}/tunnels/${tunnelId}/connections`, {
-        headers: { "Authorization": `Bearer ${this.env.CLOUDFLARE_API_TOKEN}` },
-      });
-      const result = await response.json() as any;
+      const response = await fetch(
+        `https://api.cloudflare.com/client/v4/accounts/${this.env.CLOUDFLARE_ACCOUNT_ID}/tunnels/${tunnelId}/connections`,
+        {
+          headers: { Authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN}` },
+        }
+      );
+      const result = (await response.json()) as CloudflareApiResponse<unknown[]>;
       if (result.success && result.result && result.result.length > 0) return;
-      await new Promise(r => setTimeout(r, 5000));
+      await new Promise((r) => setTimeout(r, 5000));
     }
     throw new Error("Timeout waiting for tunnel to come online");
   }
 
-  private async awsRequest(action: string, params: Record<string, any>): Promise<any> {
+  private async awsRequest(action: string, params: Record<string, unknown>): Promise<AwsXmlResult> {
     const url = new URL(`https://ec2.${this.env.AWS_REGION}.amazonaws.com/`);
     url.searchParams.set("Action", action);
     url.searchParams.set("Version", "2016-11-15");
@@ -334,20 +386,22 @@ systemctl restart opencode-server
     return this.parseXml(text);
   }
 
-  private flattenParams(params: any, prefix = ""): [string, string][] {
+  private flattenParams(params: Record<string, unknown>, prefix = ""): [string, string][] {
     let result: [string, string][] = [];
     for (const [key, value] of Object.entries(params)) {
       const fullKey = prefix ? `${prefix}.${key}` : key;
       if (Array.isArray(value)) {
-        value.forEach((v, i) => {
-          if (typeof v === "object") {
-            result = result.concat(this.flattenParams(v, `${fullKey}.${i + 1}`));
+        value.forEach((v: unknown, i) => {
+          if (typeof v === "object" && v !== null) {
+            result = result.concat(
+              this.flattenParams(v as Record<string, unknown>, `${fullKey}.${i + 1}`)
+            );
           } else {
             result.push([`${fullKey}.${i + 1}`, String(v)]);
           }
         });
-      } else if (typeof value === "object") {
-        result = result.concat(this.flattenParams(value, fullKey));
+      } else if (typeof value === "object" && value !== null) {
+        result = result.concat(this.flattenParams(value as Record<string, unknown>, fullKey));
       } else {
         result.push([fullKey, String(value)]);
       }
@@ -355,8 +409,8 @@ systemctl restart opencode-server
     return result;
   }
 
-  private parseXml(xml: string): any {
-    const res: any = {};
+  private parseXml(xml: string): AwsXmlResult {
+    const res: AwsXmlResult = {};
     const matchInstanceId = xml.match(/<instanceId>(.*?)<\/instanceId>/);
     if (matchInstanceId) {
       res.instancesSet = { item: { instanceId: matchInstanceId[1] } };

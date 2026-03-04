@@ -280,7 +280,7 @@ export class SandboxLifecycleManager {
         });
         return;
 
-      case "restore":
+      case "restore": {
         this.log.info("Spawn decision: restore", {
           snapshot_image_id: spawnDecision.snapshotImageId,
         });
@@ -304,6 +304,7 @@ export class SandboxLifecycleManager {
         }
         await this.restoreFromSnapshot(spawnDecision.snapshotImageId);
         return;
+      }
 
       case "spawn":
         await this.doSpawn();

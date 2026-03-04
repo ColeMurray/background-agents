@@ -220,11 +220,7 @@ export function evaluateSpawnDecision(
   // Cooldown: don't spawn if last spawn was within cooldown period
   // Exception: failed or stopped status bypasses cooldown
   const status = state.status as string;
-  if (
-    timeSinceLastSpawn < config.cooldownMs &&
-    status !== "failed" &&
-    status !== "stopped"
-  ) {
+  if (timeSinceLastSpawn < config.cooldownMs && status !== "failed" && status !== "stopped") {
     return {
       action: "wait",
       reason: `last spawn was ${Math.round(timeSinceLastSpawn / 1000)}s ago, waiting`,
