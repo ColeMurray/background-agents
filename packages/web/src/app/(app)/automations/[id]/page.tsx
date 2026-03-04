@@ -129,7 +129,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 {automation.baseBranch && ` · ${automation.baseBranch}`}
               </p>
             </div>
-            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end sm:gap-2">
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-none sm:flex-row sm:flex-wrap sm:justify-end sm:gap-2">
               <Link href={`/automations/${id}/edit`} className="w-full sm:w-auto">
                 <Button variant="outline" size="sm" className="w-full sm:w-auto">
                   <span className="flex items-center gap-1.5">
