@@ -10,6 +10,7 @@ This module handles:
 Updated: 2026-01-15 to fix Sandbox.create API
 """
 
+import asyncio
 import json
 import os
 import secrets
@@ -100,12 +101,14 @@ class SandboxManager:
         return password
 
     @staticmethod
-    def _resolve_code_server_tunnel(
+    async def _resolve_code_server_tunnel(
         sandbox: modal.Sandbox, sandbox_id: str
     ) -> str | None:
         """Resolve the code-server tunnel URL from Modal, returning None on failure."""
         try:
-            tunnel = sandbox.tunnels()[CODE_SERVER_PORT]
+            loop = asyncio.get_event_loop()
+            tunnels = await loop.run_in_executor(None, sandbox.tunnels)
+            tunnel = tunnels[CODE_SERVER_PORT]
             log.info("code_server.tunnel", sandbox_id=sandbox_id, url=tunnel.url)
             return tunnel.url
         except Exception as e:
@@ -205,7 +208,7 @@ class SandboxManager:
 
         # Get Modal's internal object ID for API calls (snapshot, etc.)
         modal_object_id = sandbox.object_id
-        code_server_url = self._resolve_code_server_tunnel(sandbox, sandbox_id)
+        code_server_url = await self._resolve_code_server_tunnel(sandbox, sandbox_id)
 
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -505,7 +508,7 @@ class SandboxManager:
         )
 
         modal_object_id = sandbox.object_id
-        code_server_url = self._resolve_code_server_tunnel(sandbox, sandbox_id)
+        code_server_url = await self._resolve_code_server_tunnel(sandbox, sandbox_id)
 
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
