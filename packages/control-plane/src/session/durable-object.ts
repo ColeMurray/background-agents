@@ -69,6 +69,7 @@ import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { ParticipantService, getAvatarUrl } from "./participant-service";
 import { UserScmTokenStore } from "../db/user-scm-tokens";
 import { CallbackNotificationService } from "./callback-notification-service";
+import { DOFetcherAdapter } from "../scheduler/do-fetcher-adapter";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
@@ -252,9 +253,17 @@ export class SessionDO extends DurableObject<Env> {
    */
   private get callbackService(): CallbackNotificationService {
     if (!this._callbackService) {
+      // Wrap SchedulerDO namespace as a Fetcher for automation callbacks
+      const schedulerCallback = this.env.SCHEDULER
+        ? new DOFetcherAdapter(this.env.SCHEDULER, "global-scheduler")
+        : undefined;
+
       this._callbackService = new CallbackNotificationService({
         repository: this.repository,
-        env: this.env,
+        env: {
+          ...this.env,
+          SCHEDULER_CALLBACK: schedulerCallback,
+        },
         log: this.log,
         getSessionId: () => {
           const session = this.getSession();

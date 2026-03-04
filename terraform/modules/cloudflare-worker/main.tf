@@ -93,9 +93,12 @@ resource "cloudflare_worker_version" "this" {
   # Phase 1 (enable_durable_object_bindings=false): Apply migrations WITHOUT bindings
   # Phase 2 (enable_durable_object_bindings=true): Add bindings WITHOUT migrations
   # Note: Free plans require new_sqlite_classes instead of new_classes
+  # When new_sqlite_classes is set, only those classes are declared as new (incremental migration).
+  # When empty, all DO classes are declared as new (fresh deployment).
   migrations = length(var.durable_objects) > 0 && !var.enable_durable_object_bindings ? {
+    old_tag            = var.migration_old_tag
     new_tag            = var.migration_tag
-    new_sqlite_classes = [for do in var.durable_objects : do.class_name]
+    new_sqlite_classes = length(var.new_sqlite_classes) > 0 ? var.new_sqlite_classes : [for do in var.durable_objects : do.class_name]
   } : null
 }
 
@@ -135,4 +138,16 @@ resource "cloudflare_workers_route" "this" {
   zone_id = var.zone_id
   pattern = var.route_pattern
   script  = cloudflare_worker.this.name
+}
+
+# =============================================================================
+# Optional: Cron Triggers
+# =============================================================================
+
+resource "cloudflare_workers_cron_trigger" "this" {
+  count = length(var.cron_triggers) > 0 ? 1 : 0
+
+  account_id  = var.account_id
+  script_name = cloudflare_worker.this.name
+  schedules   = [for expr in var.cron_triggers : { cron = expr }]
 }

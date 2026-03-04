@@ -121,6 +121,8 @@ See **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** for deployment instru
 To understand the architecture and core concepts, read
 **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)**.
 
+To set up recurring scheduled tasks, see **[docs/AUTOMATIONS.md](docs/AUTOMATIONS.md)**.
+
 ## Key Features
 
 ### Fast Startup

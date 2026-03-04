@@ -116,16 +116,20 @@ export function Combobox<T = string>({
 
   const hasResults = flatOptions.length > 0;
 
-  // Reset active index when filtered results change (e.g. typing in search)
+  // Reset active index when search query changes (not on every render).
+  // Depends on normalizedQuery (a stable string), NOT flatOptions (unstable array ref).
   useEffect(() => {
-    if (open && flatOptions.length > 0) {
-      setActiveIndex(0);
-    } else {
+    if (!open) {
       setActiveIndex(-1);
+      return;
     }
-  }, [flatOptions, open]);
+    setActiveIndex(flatOptions.length > 0 ? 0 : -1);
+  }, [normalizedQuery, open, flatOptions.length]);
 
-  // Set initial active index to the selected value when opening
+  // Set initial active index to the selected value when opening.
+  // Note: flatOptions is an unstable dependency (new array each render), but the
+  // justOpened guard ensures we only mutate state on the open transition, so the
+  // instability is harmless — the effect runs but bails out immediately.
   useEffect(() => {
     const justOpened = open && !wasOpenRef.current;
     wasOpenRef.current = open;

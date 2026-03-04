@@ -4,9 +4,15 @@
   "main": "src/index.ts",
   "compatibility_date": "2024-12-30",
   "durable_objects": {
-    "bindings": [{ "name": "SESSION", "class_name": "SessionDO" }],
+    "bindings": [
+      { "name": "SESSION", "class_name": "SessionDO" },
+      { "name": "SCHEDULER", "class_name": "SchedulerDO" },
+    ],
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SessionDO"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SessionDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["SchedulerDO"] },
+  ],
   "d1_databases": [
     {
       "binding": "DB",
