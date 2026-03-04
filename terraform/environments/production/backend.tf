@@ -19,7 +19,7 @@
 
 terraform {
   backend "s3" {
-    bucket = "open-inspect-terraform-state"
+    bucket = "axiom-terraform-state"
     key    = "production/terraform.tfstate"
     region = "auto"
 

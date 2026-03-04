@@ -856,6 +856,8 @@ async function handleSlackEvent(
       thread_ts?: string;
       bot_id?: string;
       tab?: string;
+      subtype?: string;
+      channel_type?: string;
       files?: SlackFile[];
     };
   },
@@ -882,6 +884,21 @@ async function handleSlackEvent(
   // Handle app_mention events
   if (event.type === "app_mention" && event.text && event.channel && event.ts) {
     await handleAppMention(event as Required<typeof event>, env, traceId);
+    return;
+  }
+
+  // Handle direct messages in IM channels
+  const isDirectMessage =
+    event.type === "message" &&
+    event.channel_type === "im" &&
+    (!event.subtype || event.subtype === "file_share") &&
+    !!event.text &&
+    !!event.user &&
+    !!event.channel &&
+    !!event.ts;
+
+  if (isDirectMessage) {
+    await handleDirectMessage(event as Required<typeof event>, env, traceId);
   }
 }
 
@@ -901,13 +918,52 @@ async function handleAppMention(
   env: Env,
   traceId?: string
 ): Promise<void> {
+  await handleSlackMessage(event, env, traceId, true);
+}
+
+/**
+ * Handle direct messages in IM channels.
+ */
+async function handleDirectMessage(
+  event: {
+    type: string;
+    text: string;
+    user: string;
+    channel: string;
+    ts: string;
+    thread_ts?: string;
+    files?: SlackFile[];
+  },
+  env: Env,
+  traceId?: string
+): Promise<void> {
+  await handleSlackMessage(event, env, traceId, false);
+}
+
+/**
+ * Shared handler for mention-triggered and DM-triggered requests.
+ */
+async function handleSlackMessage(
+  event: {
+    type: string;
+    text: string;
+    user: string;
+    channel: string;
+    ts: string;
+    thread_ts?: string;
+    files?: SlackFile[];
+  },
+  env: Env,
+  traceId?: string,
+  stripMentions = true
+): Promise<void> {
   const { text, channel, ts, thread_ts, files } = event;
 
   // Upload any attached files to R2
   const attachments = files?.length ? await uploadSlackFiles(env, files, traceId) : undefined;
 
-  // Remove the bot mention from the text
-  const messageText = text.replace(/<@[A-Z0-9]+>/g, "").trim();
+  // Remove bot mention only for app_mention events. Keep DM text intact.
+  const messageText = stripMentions ? text.replace(/<@[A-Z0-9]+>/g, "").trim() : text.trim();
 
   if (!messageText) {
     await postMessage(

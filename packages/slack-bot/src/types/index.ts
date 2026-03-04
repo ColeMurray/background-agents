@@ -68,6 +68,8 @@ export interface SlackEvent {
     ts?: string;
     thread_ts?: string;
     bot_id?: string;
+    subtype?: string;
+    channel_type?: string;
   };
   event_id: string;
   event_time: number;
@@ -85,6 +87,8 @@ export interface SlackMessageEvent {
   ts: string;
   thread_ts?: string;
   bot_id?: string;
+  subtype?: string;
+  channel_type?: string;
 }
 
 /**
