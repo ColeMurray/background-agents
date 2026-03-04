@@ -1,38 +1,27 @@
 # Open-Inspect Sandbox Helm Chart Values
-
+nodeSelector:
+  kubernetes.io/arch: amd64
 # -- Sandbox environment TTL (cleanup after this duration)
 sandboxTtlSeconds: 86400 # 24 hours
 
 # -- Namespace for sandbox releases
 namespace: open-inspect
 
-# -- Schedule sandbox pod only on AMD64 nodes
-nodeSelector:
-  kubernetes.io/arch: amd64
-
-# -- OpenCode coding agent
-opencode:
-  image: public.ecr.aws/docker/library/node:22-bookworm
-  port: 4096
+# -- Sandbox (combined image with OpenCode, bridge, and reverse proxy)
+sandboxImage:
+  # The combined Debian-based image for the sandbox
+  repository: "public.ecr.aws/open-inspect/sandbox"
+  tag: "latest"
+  # Ports used by the sandbox services
+  opencodePort: 4096
+  proxyPort: 3000
   resources:
     requests:
-      cpu: "500m"
-      memory: "1Gi"
+      cpu: "800m"
+      memory: "1.5Gi"
     limits:
-      cpu: "2"
-      memory: "4Gi"
-
-# -- Reverse proxy (Node 22 backend/frontend app)
-reverseProxy:
-  image: public.ecr.aws/docker/library/node:22-alpine3.23
-  port: 3000
-  resources:
-    requests:
-      cpu: "200m"
-      memory: "256Mi"
-    limits:
-      cpu: "1"
-      memory: "1Gi"
+      cpu: "2.5"
+      memory: "6Gi"
 
 # -- Browser for MCP (Playwright/Chromium)
 browser:
@@ -58,16 +47,6 @@ ttyd:
       cpu: "500m"
       memory: "512Mi"
 
-# -- Python bridge process (streams OpenCode events to control plane)
-bridge:
-  image: public.ecr.aws/docker/library/python:3.13-slim
-  resources:
-    requests:
-      cpu: "100m"
-      memory: "256Mi"
-    limits:
-      cpu: "500m"
-      memory: "1Gi"
 
 # -- MongoDB (Atlas local — same image pinned in compose.local.yml)
 mongodb:
@@ -221,7 +200,7 @@ sandbox:
   model: "claude-sonnet-4-6"
   branch: "main"
   agent: ""
-  # Arbitrary user env vars injected into sandbox containers via Secret.
+  # User-defined environment variables
   userEnvVars: {}
 
 # -- Git configuration
