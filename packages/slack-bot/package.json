@@ -16,7 +16,7 @@
     "@anthropic-ai/sdk": "^0.39.0",
     "@cloudflare/workers-types": "^4.20241230.0",
     "@open-inspect/shared": "file:../shared",
-    "hono": "^4.11.10"
+    "hono": "^4.12.4"
   },
   "devDependencies": {
     "esbuild": "^0.25.1",
