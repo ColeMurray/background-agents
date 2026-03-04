@@ -380,9 +380,11 @@ export class SessionDO extends DurableObject<Env> {
    * Create the lifecycle manager with all required adapters.
    */
   private createLifecycleManager(): SandboxLifecycleManager {
-    // Select provider: per-session override takes precedence over environment configuration
+    // Session-level provider override takes precedence over environment defaults.
     const session = this.repository.getSession();
-    const sandboxProvider = session?.sandbox_provider || this.env.SANDBOX_PROVIDER || "modal";
+    const sandboxProvider =
+      session?.sandbox_provider ||
+      (this.env.HELM_API_URL && this.env.HELM_API_SECRET ? "helm" : "modal");
     let provider;
 
     if (sandboxProvider === "helm") {
@@ -395,6 +397,7 @@ export class SessionDO extends DurableObject<Env> {
         apiSecret: this.env.HELM_API_SECRET,
         namespace: this.env.HELM_NAMESPACE || "open-inspect",
         tunnelToken: this.env.CLOUDFLARE_TUNNEL_TOKEN || "",
+        scmProvider: resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
       });
     } else {
       // Modal provider (default)

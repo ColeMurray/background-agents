@@ -13,6 +13,10 @@ spec:
   activeDeadlineSeconds: {{ .Values.sandboxTtlSeconds }}
   restartPolicy: Never
   terminationGracePeriodSeconds: 30
+  {{- with .Values.nodeSelector }}
+  nodeSelector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
   volumes:
     - name: workspace

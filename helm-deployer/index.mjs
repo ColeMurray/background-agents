@@ -14,7 +14,10 @@
  */
 
 import http from "node:http";
-import { execSync } from "node:child_process";
+import { execSync, exec } from "node:child_process";
+import { promisify } from "node:util";
+
+const execAsync = promisify(exec);
 import crypto from "node:crypto";
 
 const { process, Buffer, console } = globalThis;
@@ -208,7 +211,7 @@ async function readBody(req) {
 /**
  * Deploy a sandbox via `helm install`.
  */
-function handleDeploy(body) {
+async function handleDeploy(body) {
   const {
     releaseName,
     sandboxId,
@@ -224,6 +227,7 @@ function handleDeploy(body) {
     timeoutSeconds,
     tunnelToken,
     namespace,
+    scmProvider,
     anthropicApiKey,
     gitCloneToken,
     userEnvVars,
@@ -246,12 +250,19 @@ function handleDeploy(body) {
   if (tunnelToken) setArgs.push(`cloudflareTunnel.tunnelToken=${tunnelToken}`);
   if (anthropicApiKey) setArgs.push(`anthropicApiKey=${anthropicApiKey}`);
   if (gitCloneToken) setArgs.push(`git.cloneToken=${gitCloneToken}`);
+  if (scmProvider === "bitbucket") {
+    setArgs.push(`git.vcsHost=bitbucket.org`);
+    setArgs.push(`git.vcsCloneUsername=x-token-auth`);
+  } else {
+    setArgs.push(`git.vcsHost=github.com`);
+    setArgs.push(`git.vcsCloneUsername=x-access-token`);
+  }
 
   // Pass user env vars as individual set values
   if (userEnvVars) {
     for (const [key, value] of Object.entries(userEnvVars)) {
       // Skip keys already handled above
-      if (!["ANTHROPIC_API_KEY", "VCS_CLONE_TOKEN"].includes(key)) {
+      if (!["ANTHROPIC_API_KEY", "VCS_CLONE_TOKEN", "GITHUB_APP_TOKEN", "GITHUB_TOKEN"].includes(key)) {
         setArgs.push(`sandbox.userEnvVars.${key}=${value}`);
       }
     }
@@ -300,7 +311,7 @@ function handleDeploy(body) {
 
   console.log(`[deployer] Installing release: ${releaseName}${envNumber ? ` (env-${envNumber})` : ""}`);
   try {
-    execSync(cmd, { stdio: "pipe", timeout: 360000 });
+    await execAsync(cmd, { timeout: 360000 });
   } catch (err) {
     const stderr = err.stderr ? err.stderr.toString() : err.message;
     console.error(`[deployer] Install failed: ${stderr}`);
@@ -330,7 +341,7 @@ function handleDeploy(body) {
 /**
  * Delete a sandbox via `helm uninstall`.
  */
-function handleDelete(body) {
+async function handleDelete(body) {
   const { releaseName, namespace } = body;
   const targetNamespace = HELM_NAMESPACE || namespace;
   if (!targetNamespace) {
@@ -340,7 +351,7 @@ function handleDelete(body) {
   const cmd = `helm uninstall ${releaseName} --namespace ${targetNamespace}`;
   console.log(`[deployer] Uninstalling release: ${releaseName}`);
   try {
-    execSync(cmd, { stdio: "pipe", timeout: 120000 });
+    await execAsync(cmd, { timeout: 120000 });
   } catch (err) {
     const stderr = err.stderr ? err.stderr.toString() : err.message;
     console.error(`[deployer] Uninstall failed: ${stderr}`);
@@ -354,7 +365,7 @@ function handleDelete(body) {
 const server = http.createServer(async (req, res) => {
   const url = new globalThis.URL(req.url, `http://localhost`);
 
-  if (url.pathname === "/health" && req.method === "GET") {
+  if (url.pathname === "/health") {
     return jsonResponse(res, 200, { status: "ok", service: "open-inspect-helm-deployer" });
   }
 
@@ -367,13 +378,13 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === "/deploy" && req.method === "POST") {
     const body = await readBody(req);
-    const result = handleDeploy(body);
+    const result = await handleDeploy(body);
     return jsonResponse(res, result.success ? 200 : 500, result);
   }
 
   if (url.pathname === "/delete" && req.method === "POST") {
     const body = await readBody(req);
-    const result = handleDelete(body);
+    const result = await handleDelete(body);
     if (result.success) releaseEnvNumber(body.releaseName);
     return jsonResponse(res, result.success ? 200 : 500, result);
   }

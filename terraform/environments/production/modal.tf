@@ -1,13 +1,11 @@
 # =============================================================================
-# Modal Sandbox Infrastructure (only when sandbox_provider = "modal")
+# Modal Sandbox Infrastructure
 # =============================================================================
 
 # Calculate hash of Modal source files for change detection
 # Uses sha256sum (Linux) or shasum (macOS) for cross-platform compatibility
 # Includes both .py and .js files (sandbox plugins are JavaScript)
 data "external" "modal_source_hash" {
-  count = var.sandbox_provider == "modal" ? 1 : 0
-
   program = ["bash", "-c", <<-EOF
     cd ${var.project_root}/packages/modal-infra
     if command -v sha256sum &> /dev/null; then
@@ -21,7 +19,6 @@ data "external" "modal_source_hash" {
 }
 
 module "modal_app" {
-  count  = var.sandbox_provider == "modal" ? 1 : 0
   source = "../../modules/modal-app"
 
   modal_token_id     = var.modal_token_id
@@ -31,7 +28,7 @@ module "modal_app" {
   workspace     = var.modal_workspace
   deploy_path   = "${var.project_root}/packages/modal-infra"
   deploy_module = "deploy"
-  source_hash   = data.external.modal_source_hash[0].result.hash
+  source_hash   = data.external.modal_source_hash.result.hash
 
   volume_name = "open-inspect-data"
 

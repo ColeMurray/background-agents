@@ -23,13 +23,14 @@ export type {
   MessageStatus,
   ParticipantRole,
   ParticipantPresence,
-  SpawnSource,
   SandboxEvent,
   SandboxStatus,
   ServerMessage,
   SessionState,
   SessionStatus,
 } from "@open-inspect/shared";
+
+export type SpawnSource = "user" | "agent";
 
 // Environment bindings
 export interface Env {
@@ -69,10 +70,7 @@ export interface Env {
   CF_ACCOUNT_ID?: string; // Cloudflare account ID
   MODAL_WORKSPACE?: string; // Modal workspace name (used in Modal endpoint URLs)
 
-  // Sandbox provider selection ("modal" or "helm", defaults to "modal")
-  SANDBOX_PROVIDER?: string;
-
-  // Helm provider configuration (required when SANDBOX_PROVIDER = "helm")
+  // Helm provider configuration
   HELM_API_URL?: string; // Base URL of the Helm deployer API
   HELM_API_SECRET?: string; // Shared secret for Helm deployer auth
   HELM_NAMESPACE?: string; // Kubernetes namespace for sandbox pods (default: "open-inspect")

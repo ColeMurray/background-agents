@@ -34,6 +34,8 @@ export interface HelmApiConfig {
   namespace: string;
   /** Cloudflare tunnel token for sandbox connectivity */
   tunnelToken: string;
+  /** Source control provider, used to align VCS clone defaults with Modal behavior. */
+  scmProvider?: "github" | "bitbucket";
 }
 
 export interface HelmDeployRequest {
@@ -52,6 +54,7 @@ export interface HelmDeployRequest {
   timeoutSeconds?: number;
   tunnelToken: string;
   namespace: string;
+  scmProvider?: "github" | "bitbucket";
   anthropicApiKey?: string;
   gitCloneToken?: string;
 }
@@ -219,8 +222,12 @@ export class HelmSandboxProvider implements SandboxProvider {
         timeoutSeconds: config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS,
         tunnelToken: this.client["config"].tunnelToken,
         namespace: this.client["config"].namespace,
+        scmProvider: this.client["config"].scmProvider ?? "github",
         anthropicApiKey: config.userEnvVars?.["ANTHROPIC_API_KEY"],
-        gitCloneToken: config.userEnvVars?.["VCS_CLONE_TOKEN"],
+        gitCloneToken:
+          config.userEnvVars?.["VCS_CLONE_TOKEN"] ??
+          config.userEnvVars?.["GITHUB_APP_TOKEN"] ??
+          config.userEnvVars?.["GITHUB_TOKEN"],
       });
 
       if (!result.success) {

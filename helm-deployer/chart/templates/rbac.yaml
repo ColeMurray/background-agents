@@ -1,23 +1,29 @@
 {{- if .Values.rbac.create }}
+{{- $roleName := printf "%s-release-manager" (include "helm-deployer.fullname" .) }}
+{{- $existingRole := lookup "rbac.authorization.k8s.io/v1" "Role" .Values.helm.targetNamespace $roleName }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "helm-deployer.fullname" . }}-release-manager
+  name: {{ $roleName }}
   namespace: {{ .Values.helm.targetNamespace | quote }}
   labels:
     {{- include "helm-deployer.labels" . | nindent 4 }}
 rules:
+{{- if and .Values.rbac.preserveExistingRoleRules $existingRole }}
+{{ toYaml $existingRole.rules | nindent 2 }}
+{{- else }}
   - apiGroups: [""]
     resources: ["pods", "services", "configmaps", "secrets"]
     verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "helm-deployer.fullname" . }}-release-manager
+  name: {{ $roleName }}
   namespace: {{ .Values.helm.targetNamespace | quote }}
   labels:
     {{- include "helm-deployer.labels" . | nindent 4 }}
@@ -28,5 +34,5 @@ subjects:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "helm-deployer.fullname" . }}-release-manager
+  name: {{ $roleName }}
 {{- end }}

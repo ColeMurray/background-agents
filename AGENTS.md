@@ -13,8 +13,12 @@ Three tiers connected by WebSockets:
 2. **Control Plane** (Cloudflare Workers + Durable Objects) — session lifecycle, WebSocket hub,
    GitHub/auth integration. Each session is a Durable Object with SQLite storage. Uses D1 for
    session index, repo metadata, and encrypted repo secrets.
-3. **Data Plane** (Modal, Python) — sandboxed environments running coding agents. Manages sandbox
-   creation, warm pools, snapshots.
+3. **Data Plane** — sandboxed environments running coding agents. Two implementations:
+   - **Modal** (Python) — serverless data plane; manages sandbox creation, warm pools, and
+     snapshots.
+   - **Kubernetes** (`helm-deployer`) — Node.js service running in-cluster; manages sandbox
+     lifecycle via `helm install/uninstall` of a specialized sandbox chart on EKS. Supports
+     multi-container sandboxes with databases (MongoDB, RedPanda, etc.).
 
 **Bot integrations** — all Cloudflare Workers using Hono:
 
@@ -22,8 +26,8 @@ Three tiers connected by WebSockets:
 - `github-bot` — PR review assignments and @mention commands
 - `linear-bot` — Linear agent webhooks → coding sessions
 
-**Data flow**: User prompt → web client → control plane DO (WebSocket) → Modal sandbox → streaming
-events back through the same WebSocket chain.
+**Data flow**: User prompt → web client → control plane DO (WebSocket) → data plane sandbox →
+streaming events back through the same WebSocket chain.
 
 ### Package Dependency Graph
 
@@ -45,6 +49,7 @@ it at build time.
 | `github-bot`    | TypeScript / CF Workers + Hono     | PR review and @mention webhook handler                      |
 | `linear-bot`    | TypeScript / CF Workers + Hono     | Linear agent webhook handler                                |
 | `modal-infra`   | Python 3.12 / Modal + FastAPI      | Sandbox lifecycle, WebSocket bridge to control plane        |
+| `helm-deployer` | Node.js / Helm / kubectl           | Kubernetes-based sandbox deployment service                 |
 
 ## Common Commands
 
@@ -131,6 +136,8 @@ under 72 characters. Use the PR body for details, not the commit message.
 - **Modal deployment**: never deploy `src/app.py` directly — use `modal deploy deploy.py` or
   `modal deploy -m src`. The `app.py` file doesn't import function modules.
 - **Modal image rebuild**: update `CACHE_BUSTER` in `src/images/base.py` to force a rebuild.
+- **Helm Deployer**: Manages an environment number pool (0000–9999) for sandboxes with ingress.
+  State is recovered from Ingress resources on startup to prevent re-assignment conflicts.
 - **Web platform choice**: set `web_platform = "cloudflare"` in Terraform variables to deploy the
   web app to Cloudflare Workers via OpenNext instead of Vercel. When using Cloudflare, Vercel
   credentials are not required (dummy defaults are used). `NEXT_PUBLIC_WS_URL` must be available at

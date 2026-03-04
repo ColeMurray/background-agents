@@ -76,25 +76,19 @@ output "web_app_project_id" {
   value       = var.web_platform == "vercel" ? module.web_app[0].project_id : null
 }
 
-# Sandbox Provider
-output "sandbox_provider" {
-  description = "Active sandbox provider"
-  value       = var.sandbox_provider
-}
-
 output "modal_app_name" {
-  description = "Modal app name (null when using Helm)"
-  value       = var.sandbox_provider == "modal" ? module.modal_app[0].app_name : null
+  description = "Modal app name"
+  value       = module.modal_app.app_name
 }
 
 output "modal_health_url" {
-  description = "Modal health check endpoint (null when using Helm)"
-  value       = var.sandbox_provider == "modal" ? module.modal_app[0].api_health_url : null
+  description = "Modal health check endpoint"
+  value       = module.modal_app.api_health_url
 }
 
 output "helm_deployer_url" {
-  description = "Helm deployer API URL (null when using Modal)"
-  value       = var.sandbox_provider == "helm" ? var.helm_api_url : null
+  description = "Helm deployer API URL"
+  value       = var.helm_api_url
 }
 
 # =============================================================================
@@ -108,12 +102,9 @@ output "verification_commands" {
     # 1. Health check control plane
     curl ${module.control_plane_worker.worker_url}/health
 
-    # 2. Health check sandbox provider
-    %{if var.sandbox_provider == "modal"}
-    curl ${module.modal_app[0].api_health_url}
-    %{else}
+    # 2. Health check sandbox services
+    curl ${module.modal_app.api_health_url}
     curl ${var.helm_api_url}/health
-    %{endif}
 
     # 3. Verify web app deployment
     curl ${local.web_app_url}

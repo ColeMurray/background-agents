@@ -1,5 +1,6 @@
 # Open-Inspect Sandbox Helm Chart Values
-
+nodeSelector:
+  kubernetes.io/arch: amd64
 # -- Sandbox environment TTL (cleanup after this duration)
 sandboxTtlSeconds: 86400 # 24 hours
 
