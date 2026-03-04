@@ -1,0 +1,23 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "lsp": {
+    "typescript": {
+      "initialization": {
+        "preferences": {
+          "importModuleSpecifierPreference": "relative"
+        }
+      }
+    },
+    "python": {
+      "initialization": {
+        "python": {
+          "pythonVersion": "3.12",
+          "analysis": {
+            "typeCheckingMode": "strict"
+          }
+        }
+      }
+    },
+    "terraform": {}
+  }
+}
