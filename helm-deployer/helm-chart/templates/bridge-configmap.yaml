@@ -13,3 +13,7 @@ data:
 {{ .Files.Get "files/sandbox/log_config.py" | nindent 4 }}
   types.py: |
 {{ .Files.Get "files/sandbox/types.py" | nindent 4 }}
+  proxy.mjs: |
+{{ .Files.Get "files/sandbox/proxy.mjs" | nindent 4 }}
+  entrypoint.py: |
+{{ .Files.Get "files/sandbox/entrypoint.py" | nindent 4 }}
