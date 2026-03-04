@@ -1,6 +1,6 @@
 # Plan: File/Image Support, Agent Self-Verification, Progress Updates + Branding
 
-**Status:** Implemented (tests deferred: Tasks 8, 14, 18, 27)
+**Status:** Implemented
 
 ## Context
 
@@ -711,7 +711,7 @@ Create SVG with blue ASCII art, embed in README header:
 - [x] Task 6: Create media routes (`POST /api/media/upload`, `GET /api/media/:key`) in control plane
 - [x] Task 7: Add R2 bucket lifecycle rule (auto-delete after 30 days) — noted in module; requires
       dashboard config
-- [ ] Task 8: Tests for R2 media service + upload/download routes
+- [x] Task 8: Tests for R2 media service + upload/download routes
 
 ### Phase 1: Inbound files — bridge + Slack (unblocks image input)
 
@@ -721,14 +721,14 @@ Create SVG with blue ASCII art, embed in README header:
 - [x] Task 11: Slack bot — add `files` to event type, download files, upload to R2, get URLs
 - [x] Task 12: Slack bot — pass attachments (with R2 URLs) in `sendPrompt()` call
 - [x] Task 13: Web WebSocket hook — forward attachments in prompt send
-- [ ] Task 14: Tests for bridge multimodal and Slack file→R2 handling
+- [x] Task 14: Tests for bridge multimodal and Slack file→R2 handling
 
 ### Phase 2: Web UI file upload
 
 - [x] Task 15: Create `FileUploadZone` component (drag-drop + paste)
 - [x] Task 16: Add attachment preview (thumbnails + chips) to prompt area
 - [x] Task 17: Upload files to R2 via media endpoint, wire R2 URLs into WebSocket send + POST send
-- [ ] Task 18: Web component tests
+- [x] Task 18: Web component tests
 
 ### Phase 3: Agent verification + progress tools
 
@@ -742,7 +742,7 @@ Create SVG with blue ASCII art, embed in README header:
 - [x] Task 24: Add `agent_update` to `EventType` in shared types
 - [x] Task 25: Control plane — store + broadcast `agent_update` events
 - [x] Task 26: Control plane — forward updates via callback notification service
-- [ ] Task 27: Tests for upload-media tool, send-update tool, bridge endpoints
+- [x] Task 27: Tests for upload-media tool, send-update tool, bridge endpoints
 
 ### Phase 4: Outbound rendering
 

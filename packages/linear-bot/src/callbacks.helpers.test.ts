@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { formatToolAction, isValidToolCallPayload } from "./callbacks";
+import {
+  formatToolAction,
+  isValidPayload,
+  isValidToolCallPayload,
+  verifyCallbackSignature,
+} from "./callbacks";
 
 // ─── formatToolAction ────────────────────────────────────────────────────────
 
@@ -120,5 +125,95 @@ describe("isValidToolCallPayload", () => {
 
   it("rejects sessionId of wrong type", () => {
     expect(isValidToolCallPayload({ ...valid, sessionId: 123 })).toBe(false);
+  });
+});
+
+// ─── verifyCallbackSignature ─────────────────────────────────────────────────
+
+describe("verifyCallbackSignature", () => {
+  const TEST_SECRET = "test-hmac-secret-for-unit-tests";
+
+  async function signPayload(data: Record<string, unknown>, secret: string): Promise<string> {
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(JSON.stringify(data)));
+    return Array.from(new Uint8Array(sig))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  it("returns true for a valid signature", async () => {
+    const data = { sessionId: "sess-1", message: "test" };
+    const signature = await signPayload(data, TEST_SECRET);
+
+    const result = await verifyCallbackSignature({ ...data, signature }, TEST_SECRET);
+    expect(result).toBe(true);
+  });
+
+  it("returns false for a tampered signature", async () => {
+    const data = { sessionId: "sess-1", message: "test" };
+    const result = await verifyCallbackSignature({ ...data, signature: "deadbeef" }, TEST_SECRET);
+    expect(result).toBe(false);
+  });
+
+  it("returns false when signed with wrong secret", async () => {
+    const data = { sessionId: "sess-1", message: "test" };
+    const signature = await signPayload(data, "wrong-secret");
+
+    const result = await verifyCallbackSignature({ ...data, signature }, TEST_SECRET);
+    expect(result).toBe(false);
+  });
+});
+
+// ─── isValidPayload (completion callback) ────────────────────────────────────
+
+describe("isValidPayload", () => {
+  const validCompletion = {
+    sessionId: "sess-1",
+    messageId: "msg-1",
+    success: true,
+    timestamp: Date.now(),
+    signature: "abc123",
+    context: {
+      source: "linear" as const,
+      issueId: "issue-1",
+      issueIdentifier: "ENG-1",
+      issueUrl: "https://linear.app/issue/ENG-1",
+      repoFullName: "org/repo",
+    },
+  };
+
+  it("accepts a valid completion payload", () => {
+    expect(isValidPayload(validCompletion)).toBe(true);
+  });
+
+  it("rejects null", () => {
+    expect(isValidPayload(null)).toBe(false);
+  });
+
+  it("rejects missing sessionId", () => {
+    const { sessionId: _, ...rest } = validCompletion;
+    expect(isValidPayload(rest)).toBe(false);
+  });
+
+  it("rejects missing messageId", () => {
+    const { messageId: _, ...rest } = validCompletion;
+    expect(isValidPayload(rest)).toBe(false);
+  });
+
+  it("rejects missing success field", () => {
+    const { success: _, ...rest } = validCompletion;
+    expect(isValidPayload(rest)).toBe(false);
+  });
+
+  it("rejects context without issueId", () => {
+    const { issueId: _, ...badContext } = validCompletion.context;
+    expect(isValidPayload({ ...validCompletion, context: badContext })).toBe(false);
   });
 });
