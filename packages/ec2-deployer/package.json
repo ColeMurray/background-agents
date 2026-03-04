@@ -1,0 +1,22 @@
+{
+  "name": "@open-inspect/ec2-deployer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/index.js --platform=browser --target=es2022 --external:cloudflare:*",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix"
+  },
+  "dependencies": {
+    "@cloudflare/workers-types": "^4.20241230.0",
+    "@open-inspect/shared": "file:../shared",
+    "aws4fetch": "^1.0.20"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.1",
+    "typescript": "^5.7.2",
+    "wrangler": "^3.101.0"
+  }
+}

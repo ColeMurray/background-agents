@@ -21,6 +21,7 @@ export type SandboxStatus =
   | "stale"
   | "snapshotting"
   | "stopped"
+  | "starting"
   | "failed";
 export type GitSyncStatus = "pending" | "in_progress" | "completed" | "failed";
 export type MessageStatus = "pending" | "processing" | "completed" | "failed";
@@ -480,8 +481,8 @@ export interface CreateSessionRequest {
   branch?: string;
   /** OpenCode primary agent id (e.g. from .opencode/agents/foo.md). Omit for default. */
   agent?: string;
-  /** Override the infrastructure provider for this session ("modal" or "helm"). */
-  sandboxProvider?: "modal" | "helm";
+  /** Override the infrastructure provider for this session ("modal", "helm", or "ec2"). */
+  sandboxProvider?: "modal" | "helm" | "ec2";
 }
 
 export interface CreateSessionResponse {

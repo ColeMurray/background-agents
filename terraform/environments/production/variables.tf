@@ -58,6 +58,57 @@ variable "modal_workspace" {
 }
 
 # =============================================================================
+# EC2 Provider Configuration
+# =============================================================================
+
+variable "aws_access_key_id" {
+  description = "AWS Access Key ID for EC2 instance management"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "aws_secret_access_key" {
+  description = "AWS Secret Access Key"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "aws_region" {
+  description = "AWS region for EC2 instances"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "ec2_ami_id" {
+  description = "Amazon Machine Image ID for sandboxes"
+  type        = string
+  default     = "ami-0c55b159cbfafe1f0" # Placeholder Ubuntu AMI
+}
+
+variable "ec2_api_secret" {
+  description = "Shared secret for authenticating control plane to EC2 deployer (generate with: openssl rand -hex 32)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "cloudflare_api_token_ec2" {
+  description = "Cloudflare API token for EC2 deployer (Tunnel management)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "cloudflare_tunnel_secret_ec2" {
+  description = "Secret used for creating Cloudflare Tunnels (generate with: openssl rand -base64 32)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+# =============================================================================
 # Helm Provider Configuration
 # =============================================================================
 

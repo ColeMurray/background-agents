@@ -76,6 +76,10 @@ export interface Env {
   HELM_NAMESPACE?: string; // Kubernetes namespace for sandbox pods (default: "open-inspect")
   CLOUDFLARE_TUNNEL_TOKEN?: string; // Cloudflare tunnel token for sandbox connectivity
 
+  // EC2 provider configuration
+  EC2_API_URL?: string; // Base URL of the EC2 deployer worker
+  EC2_API_SECRET?: string; // Shared secret for EC2 deployer auth
+
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)
   EXECUTION_TIMEOUT_MS?: string; // Max processing time before auto-fail (default: 5400000 = 90 min)

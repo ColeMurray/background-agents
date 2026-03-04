@@ -14,6 +14,7 @@ import { getGitHubAppConfig, getCachedInstallationToken } from "../auth/github-a
 import { createModalClient } from "../sandbox/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
 import { createHelmProvider } from "../sandbox/providers/helm-provider";
+import { createEC2Provider } from "../sandbox/providers/ec2-provider";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import {
@@ -399,6 +400,15 @@ export class SessionDO extends DurableObject<Env> {
         tunnelToken: this.env.CLOUDFLARE_TUNNEL_TOKEN || "",
         scmProvider: resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
       });
+    } else if (sandboxProvider === "ec2") {
+      // EC2 provider
+      if (!this.env.EC2_API_URL || !this.env.EC2_API_SECRET) {
+        throw new Error("EC2_API_URL and EC2_API_SECRET are required for EC2 provider");
+      }
+      provider = createEC2Provider({
+        apiUrl: this.env.EC2_API_URL,
+        apiSecret: this.env.EC2_API_SECRET,
+      });
     } else {
       // Modal provider (default)
       if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {
@@ -421,6 +431,16 @@ export class SessionDO extends DurableObject<Env> {
         this.repository.updateSandboxSnapshotImageId(sandboxId, imageId),
       updateSandboxLastActivity: (timestamp) =>
         this.repository.updateSandboxLastActivity(timestamp),
+      stopSandbox: async (providerObjectId) => {
+        if ("stopSandbox" in provider && typeof provider.stopSandbox === "function") {
+          await provider.stopSandbox(providerObjectId);
+        }
+      },
+      startSandbox: async (providerObjectId) => {
+        if ("startSandbox" in provider && typeof provider.startSandbox === "function") {
+          await provider.startSandbox(providerObjectId);
+        }
+      },
       incrementCircuitBreakerFailure: (timestamp) =>
         this.repository.incrementCircuitBreakerFailure(timestamp),
       resetCircuitBreaker: () => this.repository.resetCircuitBreaker(),
