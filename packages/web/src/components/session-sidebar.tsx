@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSession, signOut } from "next-auth/react";
-import useSWR from "swr";
+import useSWR, { mutate } from "swr";
 import { formatRelativeTime, isInactiveSession } from "@/lib/time";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useIsMobile } from "@/hooks/use-media-query";
 import {
+  MoreIcon,
   SidebarIcon,
   InspectIcon,
   PlusIcon,
@@ -20,6 +21,8 @@ import { Button } from "@/components/ui/button";
 import type { Session } from "@open-inspect/shared";
 
 export type SessionItem = Session;
+
+type SessionsResponse = { sessions: SessionItem[] };
 
 export function buildSessionHref(session: SessionItem) {
   return {
@@ -297,38 +300,173 @@ function SessionListItem({
   const repoInfo = `${session.repoOwner}/${session.repoName}`;
   // Orphan child (parent filtered out) — show a subtle badge
   const isOrphanChild = session.parentSessionId && session.spawnSource === "agent";
-  return (
-    <Link
-      href={buildSessionHref(session)}
-      onClick={() => {
-        if (isMobile) {
-          onSessionSelect?.();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [title, setTitle] = useState(displayTitle);
+
+  useEffect(() => {
+    if (!isRenaming) {
+      setTitle(displayTitle);
+    }
+  }, [displayTitle, isRenaming]);
+
+  const handleStartRename = () => {
+    setTitle(displayTitle);
+    setIsMenuOpen(false);
+    setIsRenaming(true);
+  };
+
+  const handleCancelRename = () => {
+    setTitle(displayTitle);
+    setIsRenaming(false);
+  };
+
+  const handleRenameSubmit = async () => {
+    const trimmed = title.trim();
+
+    if (!trimmed || trimmed === displayTitle) {
+      setIsRenaming(false);
+      return;
+    }
+
+    const previousTitle = displayTitle;
+    setIsRenaming(false);
+
+    const updateSessionsTitle = (data?: SessionsResponse): SessionsResponse => ({
+      sessions: (data?.sessions ?? []).map((currentSession) =>
+        currentSession.id === session.id
+          ? {
+              ...currentSession,
+              title: trimmed,
+              updatedAt: Date.now(),
+            }
+          : currentSession
+      ),
+    });
+
+    try {
+      await mutate<SessionsResponse>(
+        "/api/sessions",
+        async (currentData?: SessionsResponse) => {
+          const response = await fetch(`/api/sessions/${session.id}/title`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: trimmed }),
+          });
+          if (!response.ok) {
+            throw new Error("Failed to update session title");
+          }
+          return updateSessionsTitle(currentData);
+        },
+        {
+          optimisticData: updateSessionsTitle,
+          rollbackOnError: true,
+          populateCache: true,
+          revalidate: true,
         }
-      }}
-      className={`block px-4 py-2.5 border-l-2 transition ${
+      );
+    } catch {
+      setTitle(previousTitle);
+      setIsRenaming(true);
+    }
+  };
+
+  return (
+    <div
+      className={`group relative block px-4 py-2.5 border-l-2 transition ${
         isActive ? "border-l-accent bg-accent-muted" : "border-l-transparent hover:bg-muted"
       }`}
     >
-      <div className="truncate text-sm font-medium text-foreground">{displayTitle}</div>
-      <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
-        <span>{relativeTime}</span>
-        <span>·</span>
-        <span className="truncate">{repoInfo}</span>
-        {isOrphanChild && (
-          <>
+      {isRenaming ? (
+        <>
+          <input
+            autoFocus
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            onFocus={(e) => e.currentTarget.select()}
+            onBlur={handleRenameSubmit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                handleRenameSubmit();
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                handleCancelRename();
+              }
+            }}
+            className="w-full text-sm bg-transparent text-foreground outline-none focus:ring-inset focus:ring-ring font-medium pr-8"
+          />
+          <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
+            <span>{relativeTime}</span>
             <span>·</span>
-            <span className="text-accent">sub-task</span>
-          </>
-        )}
-        {session.baseBranch && session.baseBranch !== "main" && (
-          <>
+            <span className="truncate">{repoInfo}</span>
+          </div>
+        </>
+      ) : (
+        <Link
+          href={buildSessionHref(session)}
+          onClick={() => {
+            if (isMobile) {
+              onSessionSelect?.();
+            }
+          }}
+          className="block pr-8"
+        >
+          <div className="truncate text-sm font-medium text-foreground">{displayTitle}</div>
+          <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
+            <span>{relativeTime}</span>
             <span>·</span>
-            <BranchIcon className="w-3 h-3 flex-shrink-0" />
-            <span className="truncate">{session.baseBranch}</span>
+            <span className="truncate">{repoInfo}</span>
+            {isOrphanChild && (
+              <>
+                <span>·</span>
+                <span className="text-accent">sub-task</span>
+              </>
+            )}
+            {session.baseBranch && session.baseBranch !== "main" && (
+              <>
+                <span>·</span>
+                <BranchIcon className="w-3 h-3 flex-shrink-0" />
+                <span className="truncate">{session.baseBranch}</span>
+              </>
+            )}
+          </div>
+        </Link>
+      )}
+
+      <div className="absolute inset-y-0 right-2 flex items-start pt-2">
+        <button
+          type="button"
+          aria-label="Session actions"
+          aria-haspopup="menu"
+          aria-expanded={isMenuOpen}
+          onClick={() => setIsMenuOpen((prev) => !prev)}
+          className={`h-6 w-6 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition ${
+            isMenuOpen
+              ? "opacity-100"
+              : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+          }`}
+        >
+          <MoreIcon className="w-4 h-4" />
+        </button>
+
+        {isMenuOpen && (
+          <>
+            <div className="fixed inset-0 z-10" onClick={() => setIsMenuOpen(false)} />
+            <div className="absolute right-0 top-8 w-36 bg-background border border-border shadow-lg py-1 z-20">
+              <button
+                type="button"
+                onClick={handleStartRename}
+                className="w-full text-left px-3 py-2 text-sm text-foreground hover:bg-muted"
+              >
+                Rename
+              </button>
+            </div>
           </>
         )}
       </div>
-    </Link>
+    </div>
   );
 }
 

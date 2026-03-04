@@ -309,6 +309,12 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           });
           break;
 
+        case "session_title":
+          if (data.title) {
+            setSessionState((prev) => (prev ? { ...prev, title: data.title! } : null));
+          }
+          break;
+
         case "session_status":
           setSessionState((prev) => (prev ? { ...prev, status: data.status } : null));
           // Revalidate session list so status change is reflected in sidebar

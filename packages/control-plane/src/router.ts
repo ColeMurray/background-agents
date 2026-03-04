@@ -391,6 +391,11 @@ const routes: Route[] = [
     handler: handleSessionWsToken,
   },
   {
+    method: "PATCH",
+    pattern: parsePattern("/sessions/:id/title"),
+    handler: handleUpdateSessionTitle,
+  },
+  {
     method: "POST",
     pattern: parsePattern("/sessions/:id/archive"),
     handler: handleArchiveSession,
@@ -1108,6 +1113,55 @@ async function handleSessionWsToken(
       )
     )
   );
+
+  return response;
+}
+
+async function handleUpdateSessionTitle(
+  request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const sessionId = match.groups?.id;
+  if (!sessionId) return error("Session ID required");
+
+  let userId: string | undefined;
+  let title: string | undefined;
+
+  try {
+    const body = (await request.json()) as { userId?: string; title?: string };
+    userId = body.userId;
+    title = body.title;
+  } catch (_error) {
+    // Body parsing failed, continue without userId/title
+    userId = undefined;
+    title = undefined;
+  }
+
+  const doId = env.SESSION.idFromName(sessionId);
+  const stub = env.SESSION.get(doId);
+
+  const response = await stub.fetch(
+    internalRequest(
+      "http://internal/internal/update-title",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, title }),
+      },
+      ctx
+    )
+  );
+
+  if (response.ok) {
+    // Update D1 index
+    const sessionStore = new SessionIndexStore(env.DB);
+    const updated = await sessionStore.updateTitle(sessionId, title!);
+    if (!updated) {
+      logger.warn("Session not found in D1 index during title update", { session_id: sessionId });
+    }
+  }
 
   return response;
 }
