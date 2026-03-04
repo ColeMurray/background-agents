@@ -228,38 +228,12 @@ export class EC2InstanceDO extends DurableObject<Env> {
   }
 
   private async launchEC2Instance(config: any, tunnelToken: string): Promise<string> {
+    // Only includes dynamic configuration that cannot be baked into the AMI.
     const userData = btoa(`#!/bin/bash
-# Configure Cloudflare Tunnel
-mkdir -p /etc/cloudflared
-cat > /etc/cloudflared/config.yml <<EOF
-tunnel: ${this.tunnelId}
-credentials-file: /etc/cloudflared/credentials.json
-ingress:
-  - hostname: "*"
-    service: http://localhost:3000
-  - service: http_status:404
-EOF
-
-# Store the tunnel token for cloudflared
+# Write dynamic Cloudflare Tunnel token
 echo "${tunnelToken}" > /etc/cloudflared/token
 
-# Create a systemd service for cloudflared if it doesn't use the token file by default
-cat > /etc/systemd/system/cloudflared.service <<EOF
-[Unit]
-Description=Cloudflare Tunnel
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate run --token ${tunnelToken}
-Restart=always
-User=root
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Configure OpenCode server environment
-mkdir -p /etc/opencode
+# Write dynamic environment for OpenCode server
 cat > /etc/opencode/env <<EOF
 SANDBOX_ID=${config.sandboxId}
 SESSION_ID=${config.sessionId}
@@ -269,12 +243,9 @@ LLM_PROVIDER=${config.provider}
 LLM_MODEL=${config.model}
 EOF
 
-# Start services
-systemctl daemon-reload
-systemctl enable cloudflared
-systemctl start cloudflared
-systemctl enable opencode-server
-systemctl start opencode-server
+# Trigger start-up of baked services
+systemctl restart cloudflared
+systemctl restart opencode-server
 `);
 
     const result = await this.awsRequest("RunInstances", {
