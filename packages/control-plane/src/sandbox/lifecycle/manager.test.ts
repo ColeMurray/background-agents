@@ -32,7 +32,6 @@ import type { SandboxStatus } from "../../types";
 // ==================== Mock Factories ====================
 
 function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
-  const { sandbox_provider, ...restOverrides } = overrides;
   return {
     id: "session-123",
     session_name: "test-session",
@@ -52,10 +51,10 @@ function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
     spawn_source: "user" as const,
     spawn_depth: 0,
     default_agent: null,
-    sandbox_provider: sandbox_provider ?? null,
+    sandbox_provider: null,
     created_at: Date.now() - 60000,
     updated_at: Date.now(),
-    ...restOverrides,
+    ...overrides,
   };
 }
 

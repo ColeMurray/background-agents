@@ -6,9 +6,13 @@ sandboxTtlSeconds: 86400 # 24 hours
 # -- Namespace for sandbox releases
 namespace: open-inspect
 
+# -- Schedule sandbox pod only on AMD64 nodes
+nodeSelector:
+  kubernetes.io/arch: amd64
+
 # -- OpenCode coding agent
 opencode:
-  image: public.ecr.aws/docker/library/node:22-alpine3.23
+  image: public.ecr.aws/docker/library/node:22-bookworm
   port: 4096
   resources:
     requests:
@@ -217,6 +221,8 @@ sandbox:
   model: "claude-sonnet-4-6"
   branch: "main"
   agent: ""
+  # Arbitrary user env vars injected into sandbox containers via Secret.
+  userEnvVars: {}
 
 # -- Git configuration
 git:

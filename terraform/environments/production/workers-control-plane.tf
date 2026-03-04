@@ -60,17 +60,10 @@ module "control_plane_worker" {
       { name = "WEB_APP_URL", value = local.web_app_url },
       { name = "WORKER_URL", value = local.control_plane_url },
       { name = "DEPLOYMENT_NAME", value = var.deployment_name },
-      { name = "SANDBOX_PROVIDER", value = var.sandbox_provider },
-    ],
-    # Modal-specific bindings
-    var.sandbox_provider == "modal" ? [
       { name = "MODAL_WORKSPACE", value = var.modal_workspace },
-    ] : [],
-    # Helm-specific bindings
-    var.sandbox_provider == "helm" ? [
       { name = "HELM_API_URL", value = var.helm_api_url },
       { name = "HELM_NAMESPACE", value = var.helm_namespace },
-    ] : []
+    ]
   )
 
   secrets = concat(
@@ -83,18 +76,12 @@ module "control_plane_worker" {
       { name = "GITHUB_APP_ID", value = var.github_app_id },
       { name = "GITHUB_APP_PRIVATE_KEY", value = var.github_app_private_key },
       { name = "GITHUB_APP_INSTALLATION_ID", value = var.github_app_installation_id },
-    ],
-    # Modal-specific secrets
-    var.sandbox_provider == "modal" ? [
       { name = "MODAL_TOKEN_ID", value = var.modal_token_id },
       { name = "MODAL_TOKEN_SECRET", value = var.modal_token_secret },
       { name = "MODAL_API_SECRET", value = var.modal_api_secret },
-    ] : [],
-    # Helm-specific secrets
-    var.sandbox_provider == "helm" ? [
       { name = "HELM_API_SECRET", value = var.helm_api_secret },
       { name = "CLOUDFLARE_TUNNEL_TOKEN", value = var.cloudflare_tunnel_token },
-    ] : []
+    ]
   )
 
   durable_objects = [

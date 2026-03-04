@@ -38,42 +38,27 @@ variable "vercel_team_id" {
 }
 
 variable "modal_token_id" {
-  description = "Modal API token ID (required when sandbox_provider = 'modal')"
+  description = "Modal API token ID"
   type        = string
   sensitive   = true
   default     = "unused"
 }
 
 variable "modal_token_secret" {
-  description = "Modal API token secret (required when sandbox_provider = 'modal')"
+  description = "Modal API token secret"
   type        = string
   sensitive   = true
   default     = "unused"
 }
 
 variable "modal_workspace" {
-  description = "Modal workspace name (used in endpoint URLs, required when sandbox_provider = 'modal')"
+  description = "Modal workspace name (used in endpoint URLs)"
   type        = string
   default     = "unused"
 }
 
 # =============================================================================
-# Sandbox Provider Selection
-# =============================================================================
-
-variable "sandbox_provider" {
-  description = "Sandbox provider: 'modal' (default) or 'helm' (Kubernetes via Helm chart)"
-  type        = string
-  default     = "modal"
-
-  validation {
-    condition     = contains(["modal", "helm"], var.sandbox_provider)
-    error_message = "sandbox_provider must be 'modal' or 'helm'."
-  }
-}
-
-# =============================================================================
-# Helm Provider Configuration (required when sandbox_provider = "helm")
+# Helm Provider Configuration
 # =============================================================================
 
 variable "helm_api_url" {

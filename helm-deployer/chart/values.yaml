@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: "public.ecr.aws/x5s6v8v4/helm-deployer/node"
-  tag: "22-alpine-4"
+  tag: "22-alpine-v8"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -71,6 +71,9 @@ ingress:
 
 rbac:
   create: true
+  # Reuse existing Role rules when the Role already exists to avoid
+  # server-side apply field-manager conflicts on .rules.
+  preserveExistingRoleRules: true
 
 cloudflareTunnel:
   enabled: false

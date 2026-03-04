@@ -351,6 +351,16 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     description: "Add sandbox_provider to session",
     run: `ALTER TABLE session ADD COLUMN sandbox_provider TEXT`,
   },
+  {
+    id: 29,
+    description: "Ensure sandbox_provider exists on session",
+    run: (sql) => {
+      const columns = sql.exec("PRAGMA table_info(session)").toArray() as Array<{ name: string }>;
+      if (!columns.some((c) => c.name === "sandbox_provider")) {
+        sql.exec("ALTER TABLE session ADD COLUMN sandbox_provider TEXT");
+      }
+    },
+  },
 ];
 
 /**
