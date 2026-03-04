@@ -106,7 +106,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
         </header>
       )}
 
-      <div className="flex-1 overflow-y-auto p-8">
+      <div className="flex-1 overflow-y-auto px-4 py-6 sm:p-8">
         <div className="max-w-3xl mx-auto">
           {actionError && (
             <div
@@ -118,9 +118,9 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
           )}
 
           {/* Header */}
-          <div className="flex items-start justify-between gap-4 mb-6">
+          <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h1 className="text-2xl font-semibold text-foreground">{automation.name}</h1>
                 <AutomationStatusBadge automation={automation} />
               </div>
@@ -129,38 +129,68 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 {automation.baseBranch && ` · ${automation.baseBranch}`}
               </p>
             </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <Link href={`/automations/${id}/edit`}>
-                <Button variant="outline" size="sm">
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end sm:gap-2">
+              <Link href={`/automations/${id}/edit`} className="w-full sm:w-auto">
+                <Button variant="outline" size="sm" className="w-full sm:w-auto">
                   <span className="flex items-center gap-1.5">
                     <PencilIcon className="w-3.5 h-3.5" />
                     Edit
                   </span>
                 </Button>
               </Link>
-              <Button variant="outline" size="sm" onClick={() => handleAction("trigger")}>
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full sm:w-auto"
+                onClick={() => handleAction("trigger")}
+              >
                 Trigger Now
               </Button>
               {automation.enabled ? (
-                <Button variant="outline" size="sm" onClick={() => handleAction("pause")}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full sm:w-auto"
+                  onClick={() => handleAction("pause")}
+                >
                   Pause
                 </Button>
               ) : (
-                <Button variant="outline" size="sm" onClick={() => handleAction("resume")}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full sm:w-auto"
+                  onClick={() => handleAction("resume")}
+                >
                   Resume
                 </Button>
               )}
               {confirmDelete ? (
-                <div className="flex items-center gap-1">
-                  <Button variant="destructive" size="sm" onClick={handleDelete}>
+                <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:gap-1">
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="w-full sm:w-auto"
+                    onClick={handleDelete}
+                  >
                     Confirm Delete
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(false)}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full sm:w-auto"
+                    onClick={() => setConfirmDelete(false)}
+                  >
                     Cancel
                   </Button>
                 </div>
               ) : (
-                <Button variant="destructive" size="sm" onClick={() => setConfirmDelete(true)}>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  className="w-full sm:w-auto"
+                  onClick={() => setConfirmDelete(true)}
+                >
                   Delete
                 </Button>
               )}
@@ -170,7 +200,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
           {/* Config section */}
           <div className="border border-border-muted rounded-md bg-background p-4 mb-8">
             <h2 className="text-sm font-medium text-foreground mb-3">Configuration</h2>
-            <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+            <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
               <div>
                 <dt className="text-muted-foreground">Schedule</dt>
                 <dd className="text-foreground">
@@ -193,7 +223,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                   {automation.nextRunAt ? new Date(automation.nextRunAt).toLocaleString() : "—"}
                 </dd>
               </div>
-              <div className="col-span-2">
+              <div className="sm:col-span-2">
                 <dt className="text-muted-foreground">Instructions</dt>
                 <dd className="text-foreground whitespace-pre-wrap mt-1">
                   {automation.instructions}
