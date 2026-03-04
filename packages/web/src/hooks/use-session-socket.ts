@@ -45,7 +45,12 @@ interface UseSessionSocketReturn {
   isProcessing: boolean;
   hasMoreHistory: boolean;
   loadingHistory: boolean;
-  sendPrompt: (content: string, model?: string, reasoningEffort?: string) => void;
+  sendPrompt: (
+    content: string,
+    model?: string,
+    reasoningEffort?: string,
+    attachments?: Array<{ type: string; name: string; url: string; mimeType?: string }>
+  ) => void;
   stopExecution: () => void;
   sendTyping: () => void;
   reconnect: () => void;
@@ -493,42 +498,52 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
     };
   }, [sessionId, handleMessage, fetchWsToken]);
 
-  const sendPrompt = useCallback((content: string, model?: string, reasoningEffort?: string) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      console.error("WebSocket not connected");
-      return;
-    }
+  const sendPrompt = useCallback(
+    (
+      content: string,
+      model?: string,
+      reasoningEffort?: string,
+      attachments?: Array<{ type: string; name: string; url: string; mimeType?: string }>
+    ) => {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        console.error("WebSocket not connected");
+        return;
+      }
 
-    if (!subscribedRef.current) {
-      console.error("Not subscribed yet, waiting...");
-      // Retry after a short delay
-      setTimeout(() => sendPrompt(content, model, reasoningEffort), 500);
-      return;
-    }
+      if (!subscribedRef.current) {
+        console.error("Not subscribed yet, waiting...");
+        // Retry after a short delay
+        setTimeout(() => sendPrompt(content, model, reasoningEffort, attachments), 500);
+        return;
+      }
 
-    console.log("Sending prompt", {
-      contentLength: content.length,
-      model,
-      reasoningEffort,
-    });
-
-    // Optimistically set isProcessing for immediate feedback
-    // Server will confirm with processing_status message
-    setSessionState((prev) => (prev ? { ...prev, isProcessing: true } : null));
-
-    // Note: user_message event is NOT inserted optimistically here.
-    // The server writes a user_message event to the events table and broadcasts it
-    // to all clients (including the sender), which handles both display and multiplayer.
-
-    wsRef.current.send(
-      JSON.stringify({
-        type: "prompt",
-        content,
-        model, // Include model for per-message model switching
+      console.log("Sending prompt", {
+        contentLength: content.length,
+        model,
         reasoningEffort,
-      })
-    );
-  }, []);
+        attachmentCount: attachments?.length ?? 0,
+      });
+
+      // Optimistically set isProcessing for immediate feedback
+      // Server will confirm with processing_status message
+      setSessionState((prev) => (prev ? { ...prev, isProcessing: true } : null));
+
+      // Note: user_message event is NOT inserted optimistically here.
+      // The server writes a user_message event to the events table and broadcasts it
+      // to all clients (including the sender), which handles both display and multiplayer.
+
+      wsRef.current.send(
+        JSON.stringify({
+          type: "prompt",
+          content,
+          model, // Include model for per-message model switching
+          reasoningEffort,
+          ...(attachments?.length ? { attachments } : {}),
+        })
+      );
+    },
+    []
+  );
 
   const stopExecution = useCallback(() => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {

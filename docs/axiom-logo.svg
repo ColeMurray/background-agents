@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 120">
+  <style>
+    .logo { font-family: 'Courier New', monospace; font-size: 16px; fill: #2563eb; font-weight: bold; }
+  </style>
+  <text class="logo" x="50" y="30">    _    __  _____ ___  __  __</text>
+  <text class="logo" x="50" y="48">   / \   \ \/ /_ _/ _ \|  \/  |</text>
+  <text class="logo" x="50" y="66">  / _ \   \  / | | | | | |\/| |</text>
+  <text class="logo" x="50" y="84"> / ___ \  /  \ | | |_| | |  | |</text>
+  <text class="logo" x="50" y="102">/_/   \_\/_/\_\___\___/|_|  |_|</text>
+</svg>

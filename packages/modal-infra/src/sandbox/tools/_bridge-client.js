@@ -38,6 +38,17 @@ export async function bridgeFetch(path, options = {}) {
   return fetch(url, { ...options, headers })
 }
 
+/** Make an authenticated request to the control plane (non-session-scoped). */
+export async function controlPlaneFetch(path, options = {}) {
+  const url = `${BRIDGE_URL}${path}`
+  const headers = {
+    Authorization: `Bearer ${BRIDGE_TOKEN}`,
+    ...options.headers,
+  }
+
+  return fetch(url, { ...options, headers })
+}
+
 /** Extract a human-readable error message from a non-OK response. */
 export async function extractError(response) {
   const text = await response.text()

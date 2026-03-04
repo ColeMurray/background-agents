@@ -1155,6 +1155,24 @@ const EventItem = memo(function EventItem({
         </div>
       );
 
+    case "agent_update":
+      return (
+        <div className="border-l-2 border-accent pl-3 my-2">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-xs font-medium text-muted-foreground">Agent Update</span>
+            <span className="text-xs text-secondary-foreground">{time}</span>
+          </div>
+          <SafeMarkdown content={event.message} className="text-sm" />
+          {event.screenshotUrl && (
+            <img
+              src={event.screenshotUrl}
+              alt="Agent screenshot"
+              className="mt-2 max-w-lg rounded border border-border"
+            />
+          )}
+        </div>
+      );
+
     default:
       return null;
   }

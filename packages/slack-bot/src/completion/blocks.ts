@@ -57,6 +57,20 @@ export function buildCompletionBlocks(
     });
   }
 
+  // 2b. Screenshot artifacts (already shared inline via /callbacks/update)
+  const screenshotCount = response.artifacts.filter((a) => a.type === "screenshot").length;
+  if (screenshotCount > 0) {
+    blocks.push({
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: `${screenshotCount} screenshot${screenshotCount > 1 ? "s" : ""} shared above`,
+        },
+      ],
+    });
+  }
+
   // 3. Key tool actions
   const keyToolNames = ["Edit", "Write", "Bash"] as const;
   const keyTools = response.toolCalls

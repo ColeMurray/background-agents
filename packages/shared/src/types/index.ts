@@ -39,7 +39,8 @@ export type EventType =
   | "artifact"
   | "push_complete"
   | "push_error"
-  | "user_message";
+  | "user_message"
+  | "agent_update";
 export type ParticipantRole = "owner" | "member";
 export type SpawnSource = "user" | "agent";
 export type ConfidenceLevel = "high" | "medium" | "low";
@@ -237,6 +238,13 @@ export type SandboxEvent =
         name: string;
         avatar?: string;
       };
+    }
+  | {
+      type: "agent_update";
+      message: string;
+      screenshotUrl?: string;
+      sandboxId: string;
+      timestamp: number;
     };
 
 // WebSocket message types

@@ -65,6 +65,15 @@ variable "secrets" {
   sensitive = true
 }
 
+variable "r2_buckets" {
+  description = "List of R2 bucket bindings"
+  type = list(object({
+    binding_name = string
+    bucket_name  = string
+  }))
+  default = []
+}
+
 variable "durable_objects" {
   description = "List of Durable Object bindings"
   type = list(object({

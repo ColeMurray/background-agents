@@ -76,6 +76,13 @@ module "control_plane_worker" {
     { name = "GITHUB_APP_INSTALLATION_ID", value = var.github_app_installation_id },
   ]
 
+  r2_buckets = [
+    {
+      binding_name = "MEDIA_BUCKET"
+      bucket_name  = module.media_bucket.bucket_name
+    }
+  ]
+
   durable_objects = [
     { binding_name = "SESSION", class_name = "SessionDO" }
   ]
@@ -86,5 +93,5 @@ module "control_plane_worker" {
   compatibility_flags = ["nodejs_compat"]
   migration_tag       = "v1"
 
-  depends_on = [null_resource.control_plane_build, module.session_index_kv, null_resource.d1_migrations, module.linear_bot_worker]
+  depends_on = [null_resource.control_plane_build, module.session_index_kv, null_resource.d1_migrations, module.linear_bot_worker, module.media_bucket]
 }

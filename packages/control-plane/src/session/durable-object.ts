@@ -194,6 +194,11 @@ export class SessionDO extends DurableObject<Env> {
       path: "/internal/child-session-update",
       handler: (req) => this.handleChildSessionUpdate(req),
     },
+    {
+      method: "POST",
+      path: "/internal/agent-update",
+      handler: (req) => this.handleAgentUpdate(req),
+    },
   ];
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -1721,6 +1726,52 @@ export class SessionDO extends DurableObject<Env> {
   private async handleSandboxEvent(request: Request): Promise<Response> {
     const event = (await request.json()) as SandboxEvent;
     await this.processSandboxEvent(event);
+    return Response.json({ status: "ok" });
+  }
+
+  private async handleAgentUpdate(request: Request): Promise<Response> {
+    const body = (await request.json()) as { message: string; screenshotUrl?: string };
+    const now = Date.now();
+    const sandbox = this.repository.getSandbox();
+    const sandboxId = sandbox?.modal_sandbox_id ?? "unknown";
+
+    const event: SandboxEvent = {
+      type: "agent_update",
+      message: body.message,
+      screenshotUrl: body.screenshotUrl,
+      sandboxId,
+      timestamp: now,
+    };
+
+    // Store the event
+    const eventId = generateId();
+    const processingMessage = this.repository.getProcessingMessage();
+    const messageId = processingMessage?.id ?? null;
+    this.repository.createEvent({
+      id: eventId,
+      type: "agent_update",
+      data: JSON.stringify(event),
+      messageId,
+      createdAt: now,
+    });
+
+    // Broadcast to WebSocket clients
+    this.broadcast({ type: "sandbox_event", event });
+
+    // Forward to callback service (Slack/Linear)
+    if (messageId) {
+      this.ctx.waitUntil(
+        this.callbackService
+          .notifyAgentUpdate(messageId, body.message, body.screenshotUrl)
+          .catch((err) => {
+            this.log.error("callback.agent_update.error", {
+              message_id: messageId,
+              error: err instanceof Error ? err : String(err),
+            });
+          })
+      );
+    }
+
     return Response.json({ status: "ok" });
   }
 

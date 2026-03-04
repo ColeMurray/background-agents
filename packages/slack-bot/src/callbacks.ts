@@ -3,7 +3,7 @@
  */
 
 import { Hono } from "hono";
-import type { Env, CompletionCallback } from "./types";
+import type { Env, CompletionCallback, UpdateCallback } from "./types";
 import { extractAgentResponse } from "./completion/extractor";
 import { buildCompletionBlocks, getFallbackText } from "./completion/blocks";
 import { postMessage, removeReaction } from "./utils/slack-client";
@@ -145,6 +145,75 @@ callbacksRouter.post("/complete", async (c) => {
     message_id: payload.messageId,
     duration_ms: Date.now() - startTime,
   });
+
+  return c.json({ ok: true });
+});
+
+/**
+ * Callback endpoint for agent progress update notifications.
+ */
+callbacksRouter.post("/update", async (c) => {
+  const payload = (await c.req.json()) as UpdateCallback;
+
+  if (
+    !payload.context?.channel ||
+    !payload.context?.threadTs ||
+    !payload.message ||
+    !payload.signature
+  ) {
+    return c.json({ error: "invalid payload" }, 400);
+  }
+
+  if (!c.env.INTERNAL_CALLBACK_SECRET) {
+    return c.json({ error: "not configured" }, 500);
+  }
+
+  const { signature, ...data } = payload;
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(c.env.INTERNAL_CALLBACK_SECRET),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const expectedSig = await crypto.subtle.sign("HMAC", key, encoder.encode(JSON.stringify(data)));
+  const expectedHex = Array.from(new Uint8Array(expectedSig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+  if (signature !== expectedHex) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  const { context, message, screenshotUrl } = payload;
+
+  const blocks: unknown[] = [
+    {
+      type: "section",
+      text: { type: "mrkdwn", text: message },
+    },
+  ];
+
+  if (screenshotUrl) {
+    blocks.push({
+      type: "image",
+      image_url: screenshotUrl,
+      alt_text: "Agent screenshot",
+    });
+  }
+
+  c.executionCtx.waitUntil(
+    postMessage(c.env.SLACK_BOT_TOKEN, context.channel, message, {
+      thread_ts: context.threadTs,
+      blocks,
+    }).catch((err) => {
+      log.error("callback.update.post_failed", {
+        session_id: payload.sessionId,
+        error: err instanceof Error ? err : String(err),
+      });
+    })
+  );
 
   return c.json({ ok: true });
 });

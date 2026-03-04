@@ -6,7 +6,15 @@
  */
 
 import { Hono } from "hono";
-import type { Env, RepoConfig, CallbackContext, ThreadSession, UserPreferences } from "./types";
+import type {
+  Env,
+  RepoConfig,
+  CallbackContext,
+  ThreadSession,
+  UserPreferences,
+  Attachment,
+  SlackFile,
+} from "./types";
 import {
   verifySlackSignature,
   postMessage,
@@ -126,7 +134,8 @@ async function sendPrompt(
   content: string,
   authorId: string,
   callbackContext?: CallbackContext,
-  traceId?: string
+  traceId?: string,
+  attachments?: Attachment[]
 ): Promise<{ messageId: string } | null> {
   const startTime = Date.now();
   const base = { trace_id: traceId, session_id: sessionId, source: "slack" };
@@ -142,6 +151,7 @@ async function sendPrompt(
           authorId,
           source: "slack",
           callbackContext,
+          ...(attachments?.length ? { attachments } : {}),
         }),
       }
     );
@@ -543,7 +553,8 @@ async function startSessionAndSendPrompt(
   previousMessages?: string[],
   channelName?: string,
   channelDescription?: string,
-  traceId?: string
+  traceId?: string,
+  attachments?: Attachment[]
 ): Promise<{ sessionId: string } | null> {
   // Fetch user's preferred model and reasoning effort
   const userPrefs = await getUserPreferences(env, userId);
@@ -603,7 +614,8 @@ async function startSessionAndSendPrompt(
     promptContent,
     `slack:${userId}`,
     callbackContext,
-    traceId
+    traceId,
+    attachments
   );
 
   if (!promptResult) {
@@ -634,6 +646,64 @@ async function postSessionStartedMessage(
     `Session started! The agent is now working on your request.\n\nView progress: ${env.WEB_APP_URL}/session/${sessionId}`,
     { thread_ts: threadTs }
   );
+}
+
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+const MAX_FILES = 5;
+
+/**
+ * Download Slack files and upload them to R2 via the control plane.
+ * Returns Attachment objects with R2 URLs.
+ */
+async function uploadSlackFiles(
+  env: Env,
+  files: SlackFile[],
+  traceId?: string
+): Promise<Attachment[]> {
+  const attachments: Attachment[] = [];
+  const headers = await getAuthHeaders(env, traceId);
+
+  for (const file of files.slice(0, MAX_FILES)) {
+    if (file.size > MAX_FILE_SIZE) continue;
+
+    try {
+      // Download from Slack
+      const resp = await fetch(file.url_private_download, {
+        headers: { Authorization: `Bearer ${env.SLACK_BOT_TOKEN}` },
+      });
+      if (!resp.ok) continue;
+      const buf = await resp.arrayBuffer();
+
+      // Upload to R2 via control plane
+      const uploadResp = await env.CONTROL_PLANE.fetch("https://internal/api/media/upload", {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Type": file.mimetype,
+          "X-Filename": file.name,
+        },
+        body: buf,
+      });
+      if (!uploadResp.ok) continue;
+      const { url } = (await uploadResp.json()) as { url: string };
+
+      attachments.push({
+        type: file.mimetype.startsWith("image/") ? "image" : "file",
+        name: file.name,
+        mimeType: file.mimetype,
+        url,
+      });
+    } catch (e) {
+      log.warn("slack.file.upload", {
+        trace_id: traceId,
+        file_id: file.id,
+        file_name: file.name,
+        error: e instanceof Error ? e : new Error(String(e)),
+      });
+    }
+  }
+
+  return attachments;
 }
 
 const app = new Hono<{ Bindings: Env }>();
@@ -786,6 +856,7 @@ async function handleSlackEvent(
       thread_ts?: string;
       bot_id?: string;
       tab?: string;
+      files?: SlackFile[];
     };
   },
   env: Env,
@@ -825,11 +896,15 @@ async function handleAppMention(
     channel: string;
     ts: string;
     thread_ts?: string;
+    files?: SlackFile[];
   },
   env: Env,
   traceId?: string
 ): Promise<void> {
-  const { text, channel, ts, thread_ts } = event;
+  const { text, channel, ts, thread_ts, files } = event;
+
+  // Upload any attached files to R2
+  const attachments = files?.length ? await uploadSlackFiles(env, files, traceId) : undefined;
 
   // Remove the bot mention from the text
   const messageText = text.replace(/<@[A-Z0-9]+>/g, "").trim();
@@ -900,7 +975,8 @@ async function handleAppMention(
         promptContent,
         `slack:${event.user}`,
         callbackContext,
-        traceId
+        traceId,
+        attachments
       );
 
       if (promptResult) {
@@ -1055,7 +1131,8 @@ async function handleAppMention(
     previousMessages,
     channelName,
     channelDescription,
-    traceId
+    traceId,
+    attachments
   );
 
   if (!sessionResult) {

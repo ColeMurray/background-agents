@@ -138,6 +138,19 @@ export interface ToolCallCallback {
   signature: string;
 }
 
+/**
+ * Agent update callback payload from control-plane.
+ */
+export interface UpdateCallback {
+  sessionId: string;
+  messageId: string;
+  message: string;
+  screenshotUrl: string | null;
+  timestamp: number;
+  context: LinearCallbackContext;
+  signature: string;
+}
+
 // ─── Classification Types ────────────────────────────────────────────────────
 
 export type { ClassificationResult, ConfidenceLevel } from "@open-inspect/shared";

@@ -39,6 +39,9 @@ export interface Env {
   // KV Namespaces
   REPOS_CACHE: KVNamespace; // Short-lived cache for /repos listing
 
+  // R2 Buckets
+  MEDIA_BUCKET?: R2Bucket; // Media storage for screenshots, file uploads
+
   // Service bindings
   SLACK_BOT?: Fetcher; // Optional - only if slack-bot is deployed
   LINEAR_BOT?: Fetcher; // Optional - only if linear-bot is deployed

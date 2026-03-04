@@ -23,8 +23,8 @@ SANDBOX_DIR = Path(__file__).parent.parent / "sandbox"
 OPENCODE_VERSION = "latest"
 
 # Cache buster - change this to force Modal image rebuild
-# v39: Install gh CLI for agent-direct GitHub interaction
-CACHE_BUSTER = "v39-gh-cli"
+# v40: Install agent-browser for AI-driven browser verification
+CACHE_BUSTER = "v40-agent-browser"
 
 # Base image with all development tools
 base_image = (
@@ -108,6 +108,10 @@ base_image = (
     .run_commands(
         "playwright install chromium",
         "playwright install-deps chromium",
+    )
+    # Install agent-browser CLI for AI-driven browser verification
+    .run_commands(
+        "npm install -g agent-browser",
     )
     # Create working directories
     .run_commands(

@@ -4,7 +4,7 @@
  */
 
 import { Hono } from "hono";
-import type { Env, CompletionCallback, ToolCallCallback } from "./types";
+import type { Env, CompletionCallback, ToolCallCallback, UpdateCallback } from "./types";
 import {
   getLinearClient,
   emitAgentActivity,
@@ -238,6 +238,56 @@ callbacksRouter.post("/tool_call", async (c) => {
           outcome: "error",
           error: e instanceof Error ? e : new Error(String(e)),
           duration_ms: Date.now() - processStart,
+        });
+      }
+    })()
+  );
+
+  return c.json({ ok: true });
+});
+
+// ─── Agent Update Callback ───────────────────────────────────────────────────
+
+callbacksRouter.post("/update", async (c) => {
+  const payload = (await c.req.json()) as UpdateCallback;
+
+  if (!payload.context?.issueId || !payload.message || !payload.signature) {
+    return c.json({ error: "invalid payload" }, 400);
+  }
+
+  if (!c.env.INTERNAL_CALLBACK_SECRET) {
+    return c.json({ error: "not configured" }, 500);
+  }
+
+  const isValid = await verifyCallbackSignature(payload, c.env.INTERNAL_CALLBACK_SECRET);
+  if (!isValid) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  c.executionCtx.waitUntil(
+    (async () => {
+      const { context, message, screenshotUrl } = payload;
+
+      if (!context.agentSessionId || !context.organizationId) return;
+
+      const client = await getLinearClient(c.env, context.organizationId);
+      if (!client) return;
+
+      const body = screenshotUrl ? `${message}\n\n![Screenshot](${screenshotUrl})` : message;
+
+      try {
+        await emitAgentActivity(client, context.agentSessionId, { type: "action", body }, true);
+        log.info("callback.update", {
+          session_id: payload.sessionId,
+          agent_session_id: context.agentSessionId,
+          outcome: "success",
+        });
+      } catch (e) {
+        log.warn("callback.update", {
+          session_id: payload.sessionId,
+          agent_session_id: context.agentSessionId,
+          outcome: "error",
+          error: e instanceof Error ? e : new Error(String(e)),
         });
       }
     })()

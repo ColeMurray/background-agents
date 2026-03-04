@@ -179,6 +179,79 @@ export class CallbackNotificationService {
   }
 
   /**
+   * Notify the originating client of an agent progress update (best-effort, throttled).
+   * Max 1 callback per 10 seconds per session.
+   */
+  private _lastAgentUpdateCallbackTs = 0;
+
+  async notifyAgentUpdate(
+    messageId: string,
+    message: string,
+    screenshotUrl?: string
+  ): Promise<void> {
+    // Throttle: max 1 per 10 seconds
+    const now = Date.now();
+    if (now - this._lastAgentUpdateCallbackTs < 10000) return;
+    this._lastAgentUpdateCallbackTs = now;
+
+    const msgRow = this.repository.getMessageCallbackContext(messageId);
+    if (!msgRow?.callback_context) return;
+    if (!this.env.INTERNAL_CALLBACK_SECRET) return;
+
+    const source = msgRow.source ?? null;
+    const binding = this.getBinding(source);
+    if (!binding) return;
+
+    const sessionId = this.getSessionId();
+    const context = JSON.parse(msgRow.callback_context);
+
+    const payloadData = {
+      sessionId,
+      messageId,
+      message,
+      screenshotUrl: screenshotUrl ?? null,
+      timestamp: now,
+      context,
+    };
+
+    const signature = await this.signPayload(payloadData, this.env.INTERNAL_CALLBACK_SECRET);
+    const payload = { ...payloadData, signature };
+
+    try {
+      const response = await binding.fetch("https://internal/callbacks/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (response.ok) {
+        this.log.info("callback.agent_update", {
+          message_id: messageId,
+          session_id: sessionId,
+          source,
+          outcome: "success",
+        });
+      } else {
+        const responseText = await response.text().catch(() => "");
+        this.log.warn("callback.agent_update", {
+          message_id: messageId,
+          source,
+          outcome: "error",
+          http_status: response.status,
+          response_body: responseText.slice(0, 500),
+        });
+      }
+    } catch (e) {
+      this.log.warn("callback.agent_update", {
+        message_id: messageId,
+        source,
+        outcome: "error",
+        error: e instanceof Error ? e : new Error(String(e)),
+      });
+    }
+  }
+
+  /**
    * Notify the originating client of a tool_call event (best-effort, throttled).
    * Max 1 callback per 3 seconds per session.
    */
