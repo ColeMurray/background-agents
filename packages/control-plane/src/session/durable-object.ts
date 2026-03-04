@@ -10,7 +10,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { generateId, hashToken, timingSafeEqual } from "../auth/crypto";
-import { getGitHubAppConfig } from "../auth/github-app";
+import { getGitHubAppConfig, getCachedInstallationToken } from "../auth/github-app";
 import { createModalClient } from "../sandbox/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
 import { createHelmProvider } from "../sandbox/providers/helm-provider";
@@ -1391,57 +1391,87 @@ export class SessionDO extends DurableObject<Env> {
       return undefined;
     }
 
-    if (!this.env.DB || !this.env.REPO_SECRETS_ENCRYPTION_KEY) {
+    let merged: Record<string, string> = {};
+
+    if (this.env.DB && this.env.REPO_SECRETS_ENCRYPTION_KEY) {
+      // Fetch global secrets
+      let globalSecrets: Record<string, string> = {};
+      try {
+        const globalStore = new GlobalSecretsStore(
+          this.env.DB,
+          this.env.REPO_SECRETS_ENCRYPTION_KEY
+        );
+        globalSecrets = await globalStore.getDecryptedSecrets();
+      } catch (e) {
+        this.log.error("Failed to load global secrets, proceeding without", {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+
+      // Fetch repo secrets
+      let repoSecrets: Record<string, string> = {};
+      try {
+        const repoId = await this.ensureRepoId(session);
+        const repoStore = new RepoSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+        repoSecrets = await repoStore.getDecryptedSecrets(repoId);
+      } catch (e) {
+        this.log.warn("Failed to load repo secrets, proceeding without", {
+          repo_owner: session.repo_owner,
+          repo_name: session.repo_name,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+
+      // Merge: repo overrides global
+      const {
+        merged: mergedFromD1,
+        totalBytes,
+        exceedsLimit,
+      } = mergeSecrets(globalSecrets, repoSecrets);
+      merged = mergedFromD1;
+
+      const mergedCount = Object.keys(merged).length;
+      if (mergedCount > 0) {
+        const logLevel = exceedsLimit ? "warn" : "info";
+        this.log[logLevel]("Secrets merged for sandbox", {
+          global_count: Object.keys(globalSecrets).length,
+          repo_count: Object.keys(repoSecrets).length,
+          merged_count: mergedCount,
+          payload_bytes: totalBytes,
+          exceeds_limit: exceedsLimit,
+        });
+      }
+    } else {
       this.log.debug("Secrets not configured, skipping", {
         has_db: !!this.env.DB,
         has_encryption_key: !!this.env.REPO_SECRETS_ENCRYPTION_KEY,
       });
-      return undefined;
     }
 
-    // Fetch global secrets
-    let globalSecrets: Record<string, string> = {};
-    try {
-      const globalStore = new GlobalSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
-      globalSecrets = await globalStore.getDecryptedSecrets();
-    } catch (e) {
-      this.log.error("Failed to load global secrets, proceeding without", {
-        error: e instanceof Error ? e.message : String(e),
-      });
+    // Inject GitHub App installation token as clone token if not already provided.
+    // This is required for private repositories when no VCS_CLONE_TOKEN is stored as a secret.
+    const hasCloneToken =
+      merged["VCS_CLONE_TOKEN"] || merged["GITHUB_APP_TOKEN"] || merged["GITHUB_TOKEN"];
+    if (!hasCloneToken) {
+      const appConfig = getGitHubAppConfig(this.env);
+      if (appConfig) {
+        try {
+          const installationToken = await getCachedInstallationToken(appConfig, {
+            REPOS_CACHE: this.env.REPOS_CACHE,
+          });
+          merged["VCS_CLONE_TOKEN"] = installationToken;
+          merged["GITHUB_APP_TOKEN"] = installationToken;
+          merged["GITHUB_TOKEN"] = installationToken;
+          this.log.debug("GitHub App installation token injected as clone token");
+        } catch (e) {
+          this.log.warn("Failed to generate GitHub App installation token for clone", {
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
     }
 
-    // Fetch repo secrets
-    let repoSecrets: Record<string, string> = {};
-    try {
-      const repoId = await this.ensureRepoId(session);
-      const repoStore = new RepoSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
-      repoSecrets = await repoStore.getDecryptedSecrets(repoId);
-    } catch (e) {
-      this.log.warn("Failed to load repo secrets, proceeding without", {
-        repo_owner: session.repo_owner,
-        repo_name: session.repo_name,
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-
-    // Merge: repo overrides global
-    const { merged, totalBytes, exceedsLimit } = mergeSecrets(globalSecrets, repoSecrets);
-    const globalCount = Object.keys(globalSecrets).length;
-    const repoCount = Object.keys(repoSecrets).length;
-    const mergedCount = Object.keys(merged).length;
-
-    if (mergedCount > 0) {
-      const logLevel = exceedsLimit ? "warn" : "info";
-      this.log[logLevel]("Secrets merged for sandbox", {
-        global_count: globalCount,
-        repo_count: repoCount,
-        merged_count: mergedCount,
-        payload_bytes: totalBytes,
-        exceeds_limit: exceedsLimit,
-      });
-    }
-
-    return mergedCount === 0 ? undefined : merged;
+    return Object.keys(merged).length === 0 ? undefined : merged;
   }
 
   /**

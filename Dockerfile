@@ -12,6 +12,7 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
+    gh \
     build-essential \
     ca-certificates \
     gnupg \

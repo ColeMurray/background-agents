@@ -11,7 +11,7 @@ namespace: open-inspect
 sandboxImage:
   # The combined Debian-based image for the sandbox
   repository: "public.ecr.aws/x5s6v8v4/opencode-sandbox"
-  tag: "v1"
+  tag: "v2"
   # Ports used by the sandbox services
   opencodePort: 4096
   proxyPort: 3000
