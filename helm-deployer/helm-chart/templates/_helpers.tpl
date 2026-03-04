@@ -9,11 +9,12 @@ Generate the full name for resources.
 Common labels.
 */}}
 {{- define "sandbox.labels" -}}
+{{- $sandbox := (get .Values "sandbox") | default dict -}}
 app.kubernetes.io/name: {{ .Chart.Name }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
-open-inspect/sandbox-id: {{ .Values.sandbox.sandboxId | quote }}
-open-inspect/session-id: {{ .Values.sandbox.sessionId | quote }}
+open-inspect/sandbox-id: {{ get $sandbox "sandboxId" | default "" | quote }}
+open-inspect/session-id: {{ get $sandbox "sessionId" | default "" | quote }}
 {{- end -}}
 
 {{/*

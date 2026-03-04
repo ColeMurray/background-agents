@@ -14,6 +14,7 @@ sandboxImage:
   tag: "v2"
   # Ports used by the sandbox services
   opencodePort: 4096
+  proxyPort: 3000
   resources:
     requests:
       cpu: "800m"
@@ -23,3 +24,23 @@ sandboxImage:
       memory: "6Gi"
 # -- API keys (set via secrets)
 anthropicApiKey: ""
+
+# -- Sandbox metadata/config (typically overridden per release)
+sandbox:
+  sandboxId: ""
+  sessionId: ""
+  controlPlaneUrl: ""
+  repoOwner: ""
+  repoName: ""
+  provider: ""
+  model: ""
+  branch: ""
+  agent: ""
+  sandboxAuthToken: ""
+  userEnvVars: {}
+
+# -- Git/VCS config (typically overridden per release)
+git:
+  cloneToken: ""
+  vcsHost: ""
+  vcsCloneUsername: ""

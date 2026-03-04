@@ -3,14 +3,6 @@ import { URL } from "node:url";
 
 const ROUTES = {
   "/opencode":    { target: `http://localhost:${process.env.OPENCODE_PORT || 4096}`, strip: "/opencode" },
-  "/terminal":    { target: `http://localhost:7681`, strip: "/terminal" },
-  "/browser":     { target: `http://localhost:9222`, strip: "/browser" },
-  "/jaeger":      { target: `http://localhost:16686`, strip: "/jaeger" },
-  "/redpanda":    { target: `http://localhost:8080`, strip: "/redpanda" },
-  "/rabbitmq":    { target: `http://localhost:15672`, strip: "/rabbitmq" },
-  "/maildev":     { target: `http://localhost:1080`, strip: "/maildev" },
-  "/minio":       { target: `http://localhost:9001`, strip: "/minio" },
-  "/prometheus":  { target: `http://localhost:9090`, strip: "/prometheus" },
 };
 
 function findRoute(pathname) {

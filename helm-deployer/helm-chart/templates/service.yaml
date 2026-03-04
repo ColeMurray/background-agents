@@ -15,9 +15,3 @@ spec:
     - name: opencode
       port: {{ .Values.sandboxImage.opencodePort }}
       targetPort: opencode
-    - name: terminal
-      port: {{ .Values.ttyd.port }}
-      targetPort: ttyd
-    - name: browser
-      port: {{ .Values.browser.port }}
-      targetPort: browser

@@ -179,7 +179,6 @@ export class HelmApiClient {
  * - OpenCode coding agent
  * - Reverse proxy (Node 22)
  * - Browser for MCP
- * - MongoDB, Jaeger, RedPanda, RabbitMQ, Maildev, MinIO, Redis, Kafka Connect
  * - Cloudflare tunnel for connectivity
  * - ttyd for browser-based terminal access
  *

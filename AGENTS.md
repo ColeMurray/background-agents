@@ -17,8 +17,7 @@ Three tiers connected by WebSockets:
    - **Modal** (Python) — serverless data plane; manages sandbox creation, warm pools, and
      snapshots.
    - **Kubernetes** (`helm-deployer`) — Node.js service running in-cluster; manages sandbox
-     lifecycle via `helm install/uninstall` of a specialized sandbox chart on EKS. Supports
-     multi-container sandboxes with databases (MongoDB, RedPanda, etc.).
+     lifecycle via `helm install/uninstall` of a specialized sandbox chart on EKS.
 
 **Bot integrations** — all Cloudflare Workers using Hono:
 
