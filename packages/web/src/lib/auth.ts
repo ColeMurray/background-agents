@@ -72,16 +72,23 @@ export const authOptions: NextAuthOptions = {
     }),
   ],
   callbacks: {
-    async signIn({ profile, user }) {
+    async signIn({ profile, user, account }) {
       const config = {
         allowedDomains: parseAllowlist(process.env.ALLOWED_EMAIL_DOMAINS),
         allowedUsers: parseAllowlist(process.env.ALLOWED_USERS),
       };
 
       const githubProfile = profile as { login?: string };
+
+      // Resolve the real email even when the GitHub profile email is private.
+      let email = user.email ?? undefined;
+      if (!email && account?.access_token) {
+        email = (await fetchGitHubPrimaryEmail(account.access_token)) ?? undefined;
+      }
+
       const isAllowed = checkAccessAllowed(config, {
         githubUsername: githubProfile.login,
-        email: user.email ?? undefined,
+        email,
       });
 
       if (!isAllowed) {
