@@ -72,6 +72,7 @@ import { DOFetcherAdapter } from "../scheduler/do-fetcher-adapter";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
+import { createSessionInternalRoutes } from "./http/routes";
 
 /**
  * Valid event types for filtering.
@@ -115,15 +116,6 @@ const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 /** Statuses that indicate a session has reached a final state and cannot be cancelled. */
 const TERMINAL_STATUSES = new Set(["completed", "archived", "cancelled", "failed"]);
 
-/**
- * Route definition for internal API endpoints.
- */
-interface InternalRoute {
-  method: string;
-  path: string;
-  handler: (request: Request, url: URL) => Promise<Response> | Response;
-}
-
 export class SessionDO extends DurableObject<Env> {
   private sql: SqlStorage;
   private repository: SessionRepository;
@@ -146,93 +138,29 @@ export class SessionDO extends DurableObject<Env> {
   // Sandbox event processor (lazily initialized)
   private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
 
-  // Route table for internal API endpoints
-  private readonly routes: InternalRoute[] = [
-    { method: "POST", path: SessionInternalPaths.init, handler: (req) => this.handleInit(req) },
-    { method: "GET", path: SessionInternalPaths.state, handler: () => this.handleGetState() },
-    {
-      method: "POST",
-      path: SessionInternalPaths.prompt,
-      handler: (req) => this.handleEnqueuePrompt(req),
-    },
-    { method: "POST", path: SessionInternalPaths.stop, handler: () => this.handleStop() },
-    {
-      method: "POST",
-      path: SessionInternalPaths.sandboxEvent,
-      handler: (req) => this.handleSandboxEvent(req),
-    },
-    {
-      method: "GET",
-      path: SessionInternalPaths.participants,
-      handler: () => this.handleListParticipants(),
-    },
-    {
-      method: "POST",
-      path: SessionInternalPaths.participants,
-      handler: (req) => this.handleAddParticipant(req),
-    },
-    {
-      method: "GET",
-      path: SessionInternalPaths.events,
-      handler: (_, url) => this.handleListEvents(url),
-    },
-    {
-      method: "GET",
-      path: SessionInternalPaths.artifacts,
-      handler: () => this.handleListArtifacts(),
-    },
-    {
-      method: "GET",
-      path: SessionInternalPaths.messages,
-      handler: (_, url) => this.handleListMessages(url),
-    },
-    {
-      method: "POST",
-      path: SessionInternalPaths.createPr,
-      handler: (req) => this.handleCreatePR(req),
-    },
-    {
-      method: "POST",
-      path: SessionInternalPaths.wsToken,
-      handler: (req) => this.handleGenerateWsToken(req),
-    },
-    {
-      method: "POST",
-      path: SessionInternalPaths.archive,
-      handler: (req) => this.handleArchive(req),
-    },
-    {
-      method: "POST",
-      path: SessionInternalPaths.unarchive,
-      handler: (req) => this.handleUnarchive(req),
-    },
-    {
-      method: "POST",
-      path: SessionInternalPaths.verifySandboxToken,
-      handler: (req) => this.handleVerifySandboxToken(req),
-    },
-    {
-      method: "POST",
-      path: SessionInternalPaths.openaiTokenRefresh,
-      handler: () => this.handleOpenAITokenRefresh(),
-    },
-    {
-      method: "GET",
-      path: SessionInternalPaths.spawnContext,
-      handler: () => this.handleGetSpawnContext(),
-    },
-    {
-      method: "GET",
-      path: SessionInternalPaths.childSummary,
-      handler: () => this.handleGetChildSummary(),
-    },
-    { method: "POST", path: SessionInternalPaths.cancel, handler: () => this.handleCancel() },
-    {
-      method: "POST",
-      path: SessionInternalPaths.childSessionUpdate,
-      handler: (req) => this.handleChildSessionUpdate(req),
-    },
-  ];
+  // Internal HTTP route table (transport wiring only; handlers remain on SessionDO).
+  private readonly routes = createSessionInternalRoutes({
+    init: (request) => this.handleInit(request),
+    state: () => this.handleGetState(),
+    prompt: (request) => this.handleEnqueuePrompt(request),
+    stop: () => this.handleStop(),
+    sandboxEvent: (request) => this.handleSandboxEvent(request),
+    listParticipants: () => this.handleListParticipants(),
+    addParticipant: (request) => this.handleAddParticipant(request),
+    listEvents: (_request, url) => this.handleListEvents(url),
+    listArtifacts: () => this.handleListArtifacts(),
+    listMessages: (_request, url) => this.handleListMessages(url),
+    createPr: (request) => this.handleCreatePR(request),
+    wsToken: (request) => this.handleGenerateWsToken(request),
+    archive: (request) => this.handleArchive(request),
+    unarchive: (request) => this.handleUnarchive(request),
+    verifySandboxToken: (request) => this.handleVerifySandboxToken(request),
+    openaiTokenRefresh: () => this.handleOpenAITokenRefresh(),
+    spawnContext: () => this.handleGetSpawnContext(),
+    childSummary: () => this.handleGetChildSummary(),
+    cancel: () => this.handleCancel(),
+    childSessionUpdate: (request) => this.handleChildSessionUpdate(request),
+  });
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
