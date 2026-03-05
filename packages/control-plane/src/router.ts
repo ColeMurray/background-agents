@@ -713,6 +713,7 @@ async function handleCreateSession(
           scmEmail,
           scmTokenEncrypted,
           sandboxProvider: body.sandboxProvider ?? null,
+          mode: body.mode || "apply",
         }),
       },
       ctx
@@ -735,6 +736,7 @@ async function handleCreateSession(
     reasoningEffort,
     baseBranch: body.branch || defaultBranch || "main",
     status: "created",
+    mode: body.mode || "apply",
     createdAt: now,
     updatedAt: now,
   });
@@ -1285,6 +1287,8 @@ async function handleSpawnChild(
     body.reasoningEffort && isValidReasoningEffort(model, body.reasoningEffort)
       ? body.reasoningEffort
       : spawnContext.reasoningEffort;
+  const mode = body.mode || spawnContext.mode || "apply";
+  const sandboxProvider = body.sandboxProvider || spawnContext.sandboxProvider || null;
 
   const childDepth = parentDepth + 1;
 
@@ -1294,6 +1298,8 @@ async function handleSpawnChild(
     child_id: childId,
     child_depth: childDepth,
     model,
+    mode,
+    sandboxProvider,
   });
 
   // Initialize child DO
@@ -1319,6 +1325,8 @@ async function handleSpawnChild(
           parentSessionId: parentId,
           spawnSource: "agent",
           spawnDepth: childDepth,
+          mode,
+          sandboxProvider,
         }),
       },
       ctx
@@ -1343,6 +1351,7 @@ async function handleSpawnChild(
     parentSessionId: parentId,
     spawnSource: "agent",
     spawnDepth: childDepth,
+    mode,
     createdAt: now,
     updatedAt: now,
   });

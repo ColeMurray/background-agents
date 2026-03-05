@@ -18,4 +18,5 @@ locals {
   slack_bot_script_path     = "${var.project_root}/packages/slack-bot/dist/index.js"
   linear_bot_script_path    = "${var.project_root}/packages/linear-bot/dist/index.js"
   github_bot_script_path    = "${var.project_root}/packages/github-bot/dist/index.js"
+  ec2_deployer_url          = "https://open-inspect-ec2-deployer-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev"
 }

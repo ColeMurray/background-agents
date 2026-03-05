@@ -63,6 +63,7 @@ module "control_plane_worker" {
       { name = "MODAL_WORKSPACE", value = var.modal_workspace },
       { name = "HELM_API_URL", value = var.helm_api_url },
       { name = "HELM_NAMESPACE", value = var.helm_namespace },
+      { name = "EC2_API_URL", value = local.ec2_deployer_url },
     ]
   )
 
@@ -81,6 +82,7 @@ module "control_plane_worker" {
       { name = "MODAL_API_SECRET", value = var.modal_api_secret },
       { name = "HELM_API_SECRET", value = var.helm_api_secret },
       { name = "CLOUDFLARE_TUNNEL_TOKEN", value = var.cloudflare_tunnel_token },
+      { name = "EC2_API_SECRET", value = var.ec2_api_secret },
     ]
   )
 

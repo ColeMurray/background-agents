@@ -14,6 +14,9 @@ type SessionRow = {
   parent_session_id: string | null;
   spawn_source: "user" | "agent";
   spawn_depth: number;
+  automation_id: string | null;
+  automation_run_id: string | null;
+  mode: "plan" | "apply" | null;
   created_at: number;
   updated_at: number;
 };
@@ -122,6 +125,9 @@ class FakeD1Database {
         parentSessionId,
         spawnSource,
         spawnDepth,
+        automationId,
+        automationRunId,
+        mode,
         createdAt,
         updatedAt,
       ] = args as [
@@ -136,6 +142,9 @@ class FakeD1Database {
         string | null,
         "user" | "agent",
         number,
+        string | null,
+        string | null,
+        "plan" | "apply" | null,
         number,
         number,
       ];
@@ -153,6 +162,9 @@ class FakeD1Database {
           parent_session_id: parentSessionId,
           spawn_source: spawnSource,
           spawn_depth: spawnDepth,
+          automation_id: automationId,
+          automation_run_id: automationRunId,
+          mode,
           created_at: createdAt,
           updated_at: updatedAt,
         });
@@ -298,6 +310,9 @@ describe("SessionIndexStore", () => {
         parentSessionId: null,
         spawnSource: "user",
         spawnDepth: 0,
+        automationId: null,
+        automationRunId: null,
+        mode: null,
       });
     });
 

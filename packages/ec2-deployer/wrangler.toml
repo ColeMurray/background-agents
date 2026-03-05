@@ -1,0 +1,11 @@
+name = "open-inspect-ec2-deployer"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[durable_objects]
+bindings = [{ name = "EC2_INSTANCE", class_name = "EC2InstanceDO" }]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["EC2InstanceDO"]

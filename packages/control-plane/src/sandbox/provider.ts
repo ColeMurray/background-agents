@@ -297,4 +297,18 @@ export interface SandboxProvider {
    * @throws SandboxProviderError with errorType for error handling
    */
   takeSnapshot?(config: SnapshotConfig): Promise<SnapshotResult>;
+
+  /**
+   * Stop an existing sandbox.
+   *
+   * @param providerObjectId - Provider's internal object ID
+   */
+  stopSandbox?(providerObjectId: string): Promise<void>;
+
+  /**
+   * Start a stopped sandbox.
+   *
+   * @param providerObjectId - Provider's internal object ID
+   */
+  startSandbox?(providerObjectId: string): Promise<void>;
 }

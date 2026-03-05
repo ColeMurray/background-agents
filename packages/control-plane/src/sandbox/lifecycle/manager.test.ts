@@ -135,6 +135,12 @@ function createMockStorage(
       calls.push("updateSandboxLastActivity");
       if (sandbox) sandbox.last_activity = timestamp;
     }),
+    stopSandbox: vi.fn(async (id: string) => {
+      calls.push(`stopSandbox:${id}`);
+    }),
+    startSandbox: vi.fn(async (id: string) => {
+      calls.push(`startSandbox:${id}`);
+    }),
     incrementCircuitBreakerFailure: vi.fn((timestamp: number) => {
       calls.push("incrementCircuitBreakerFailure");
       if (sandbox) {

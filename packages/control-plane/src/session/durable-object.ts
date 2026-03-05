@@ -14,6 +14,7 @@ import { getGitHubAppConfig, getCachedInstallationToken } from "../auth/github-a
 import { createModalClient } from "../sandbox/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
 import { createHelmProvider } from "../sandbox/providers/helm-provider";
+import { createEC2Provider } from "../sandbox/providers/ec2-provider";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import {
@@ -380,11 +381,20 @@ export class SessionDO extends DurableObject<Env> {
    * Create the lifecycle manager with all required adapters.
    */
   private createLifecycleManager(): SandboxLifecycleManager {
-    // Session-level provider override takes precedence over environment defaults.
+    // Session-level provider override takes precedence over mode-based defaults.
     const session = this.repository.getSession();
-    const sandboxProvider =
-      session?.sandbox_provider ||
-      (this.env.HELM_API_URL && this.env.HELM_API_SECRET ? "helm" : "modal");
+    let sandboxProvider = session?.sandbox_provider;
+
+    if (!sandboxProvider) {
+      if (session?.mode === "plan") {
+        sandboxProvider = "helm";
+      } else if (session?.mode === "apply") {
+        sandboxProvider = "ec2";
+      } else {
+        sandboxProvider = this.env.HELM_API_URL && this.env.HELM_API_SECRET ? "helm" : "modal";
+      }
+    }
+
     let provider;
 
     if (sandboxProvider === "helm") {
@@ -398,6 +408,15 @@ export class SessionDO extends DurableObject<Env> {
         namespace: this.env.HELM_NAMESPACE || "open-inspect",
         tunnelToken: this.env.CLOUDFLARE_TUNNEL_TOKEN || "",
         scmProvider: resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
+      });
+    } else if (sandboxProvider === "ec2") {
+      // EC2 provider
+      if (!this.env.EC2_API_URL || !this.env.EC2_API_SECRET) {
+        throw new Error("EC2_API_URL and EC2_API_SECRET are required for EC2 provider");
+      }
+      provider = createEC2Provider({
+        apiUrl: this.env.EC2_API_URL,
+        apiSecret: this.env.EC2_API_SECRET,
       });
     } else {
       // Modal provider (default)
@@ -421,6 +440,16 @@ export class SessionDO extends DurableObject<Env> {
         this.repository.updateSandboxSnapshotImageId(sandboxId, imageId),
       updateSandboxLastActivity: (timestamp) =>
         this.repository.updateSandboxLastActivity(timestamp),
+      stopSandbox: async (providerObjectId) => {
+        if ("stopSandbox" in provider && typeof provider.stopSandbox === "function") {
+          await provider.stopSandbox(providerObjectId);
+        }
+      },
+      startSandbox: async (providerObjectId) => {
+        if ("startSandbox" in provider && typeof provider.startSandbox === "function") {
+          await provider.startSandbox(providerObjectId);
+        }
+      },
       incrementCircuitBreakerFailure: (timestamp) =>
         this.repository.incrementCircuitBreakerFailure(timestamp),
       resetCircuitBreaker: () => this.repository.resetCircuitBreaker(),
@@ -1615,6 +1644,7 @@ export class SessionDO extends DurableObject<Env> {
       reasoningEffort?: string; // Reasoning effort level
       agent?: string | null; // OpenCode primary agent id (e.g. from .opencode/agents/foo.md)
       sandboxProvider?: string | null; // Infrastructure provider override ("modal" or "helm")
+      mode?: "plan" | "apply" | null;
       userId: string;
       scmLogin?: string;
       scmName?: string;
@@ -1676,6 +1706,7 @@ export class SessionDO extends DurableObject<Env> {
       spawnDepth: body.spawnDepth ?? 0,
       defaultAgent: body.agent ?? null,
       sandboxProvider: body.sandboxProvider ?? null,
+      mode: body.mode ?? null,
       createdAt: now,
       updatedAt: now,
     });
@@ -1729,6 +1760,7 @@ export class SessionDO extends DurableObject<Env> {
       currentSha: session.current_sha,
       opencodeSessionId: session.opencode_session_id,
       status: session.status,
+      mode: session.mode,
       model: session.model,
       reasoningEffort: session.reasoning_effort ?? undefined,
       createdAt: session.created_at,
@@ -2159,7 +2191,9 @@ export class SessionDO extends DurableObject<Env> {
       repoName: session.repo_name,
       repoId: session.repo_id,
       model: session.model,
-      reasoningEffort: session.reasoning_effort ?? null,
+      reasoningEffort: session.reasoning_effort,
+      mode: session.mode,
+      sandboxProvider: session.sandbox_provider,
       owner: {
         userId: owner.user_id,
         scmLogin: owner.scm_login,

@@ -169,6 +169,7 @@ export interface LinearIssueDetails {
   url: string;
   priority: number;
   priorityLabel: string;
+  state: { name: string };
   labels: Array<{ id: string; name: string }>;
   project?: { id: string; name: string } | null;
   assignee?: { id: string; name: string } | null;
@@ -186,6 +187,7 @@ export interface AgentSessionWebhookIssue {
   url: string;
   priority: number;
   priorityLabel: string;
+  state?: { name: string };
   team: { id: string; key: string; name: string };
   teamId?: string;
   labels?: Array<{ id: string; name: string }>;

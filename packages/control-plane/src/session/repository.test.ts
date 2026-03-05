@@ -106,6 +106,7 @@ describe("SessionRepository", () => {
         0,
         null, // default_agent
         null, // sandbox_provider
+        null, // mode
         1000,
         2000,
       ]);

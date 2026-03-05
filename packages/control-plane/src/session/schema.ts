@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS session (
   spawn_depth INTEGER NOT NULL DEFAULT 0,           -- 0 for top-level, parent.depth + 1 for children
   default_agent TEXT,                               -- OpenCode primary agent id (e.g. from .opencode/agents/foo.md)
   sandbox_provider TEXT,                            -- Infrastructure provider override ("modal" or "helm")
+  mode TEXT,                                        -- 'plan' or 'apply'
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -360,6 +361,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
         sql.exec("ALTER TABLE session ADD COLUMN sandbox_provider TEXT");
       }
     },
+  },
+  {
+    id: 30,
+    description: "Add mode column to session",
+    run: `ALTER TABLE session ADD COLUMN mode TEXT`,
   },
 ];
 
