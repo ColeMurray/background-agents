@@ -9,6 +9,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
+import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
 import { generateId, hashToken, timingSafeEqual } from "../auth/crypto";
 import { getGitHubAppConfig } from "../auth/github-app";
 import { createModalClient } from "../sandbox/client";
@@ -147,52 +148,88 @@ export class SessionDO extends DurableObject<Env> {
 
   // Route table for internal API endpoints
   private readonly routes: InternalRoute[] = [
-    { method: "POST", path: "/internal/init", handler: (req) => this.handleInit(req) },
-    { method: "GET", path: "/internal/state", handler: () => this.handleGetState() },
-    { method: "POST", path: "/internal/prompt", handler: (req) => this.handleEnqueuePrompt(req) },
-    { method: "POST", path: "/internal/stop", handler: () => this.handleStop() },
+    { method: "POST", path: SessionInternalPaths.init, handler: (req) => this.handleInit(req) },
+    { method: "GET", path: SessionInternalPaths.state, handler: () => this.handleGetState() },
     {
       method: "POST",
-      path: "/internal/sandbox-event",
+      path: SessionInternalPaths.prompt,
+      handler: (req) => this.handleEnqueuePrompt(req),
+    },
+    { method: "POST", path: SessionInternalPaths.stop, handler: () => this.handleStop() },
+    {
+      method: "POST",
+      path: SessionInternalPaths.sandboxEvent,
       handler: (req) => this.handleSandboxEvent(req),
     },
-    { method: "GET", path: "/internal/participants", handler: () => this.handleListParticipants() },
-    {
-      method: "POST",
-      path: "/internal/participants",
-      handler: (req) => this.handleAddParticipant(req),
-    },
-    { method: "GET", path: "/internal/events", handler: (_, url) => this.handleListEvents(url) },
-    { method: "GET", path: "/internal/artifacts", handler: () => this.handleListArtifacts() },
     {
       method: "GET",
-      path: "/internal/messages",
+      path: SessionInternalPaths.participants,
+      handler: () => this.handleListParticipants(),
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.participants,
+      handler: (req) => this.handleAddParticipant(req),
+    },
+    {
+      method: "GET",
+      path: SessionInternalPaths.events,
+      handler: (_, url) => this.handleListEvents(url),
+    },
+    {
+      method: "GET",
+      path: SessionInternalPaths.artifacts,
+      handler: () => this.handleListArtifacts(),
+    },
+    {
+      method: "GET",
+      path: SessionInternalPaths.messages,
       handler: (_, url) => this.handleListMessages(url),
     },
-    { method: "POST", path: "/internal/create-pr", handler: (req) => this.handleCreatePR(req) },
     {
       method: "POST",
-      path: "/internal/ws-token",
+      path: SessionInternalPaths.createPr,
+      handler: (req) => this.handleCreatePR(req),
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.wsToken,
       handler: (req) => this.handleGenerateWsToken(req),
     },
-    { method: "POST", path: "/internal/archive", handler: (req) => this.handleArchive(req) },
-    { method: "POST", path: "/internal/unarchive", handler: (req) => this.handleUnarchive(req) },
     {
       method: "POST",
-      path: "/internal/verify-sandbox-token",
+      path: SessionInternalPaths.archive,
+      handler: (req) => this.handleArchive(req),
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.unarchive,
+      handler: (req) => this.handleUnarchive(req),
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.verifySandboxToken,
       handler: (req) => this.handleVerifySandboxToken(req),
     },
     {
       method: "POST",
-      path: "/internal/openai-token-refresh",
+      path: SessionInternalPaths.openaiTokenRefresh,
       handler: () => this.handleOpenAITokenRefresh(),
     },
-    { method: "GET", path: "/internal/spawn-context", handler: () => this.handleGetSpawnContext() },
-    { method: "GET", path: "/internal/child-summary", handler: () => this.handleGetChildSummary() },
-    { method: "POST", path: "/internal/cancel", handler: () => this.handleCancel() },
+    {
+      method: "GET",
+      path: SessionInternalPaths.spawnContext,
+      handler: () => this.handleGetSpawnContext(),
+    },
+    {
+      method: "GET",
+      path: SessionInternalPaths.childSummary,
+      handler: () => this.handleGetChildSummary(),
+    },
+    { method: "POST", path: SessionInternalPaths.cancel, handler: () => this.handleCancel() },
     {
       method: "POST",
-      path: "/internal/child-session-update",
+      path: SessionInternalPaths.childSessionUpdate,
       handler: (req) => this.handleChildSessionUpdate(req),
     },
   ];
@@ -1284,7 +1321,7 @@ export class SessionDO extends DurableObject<Env> {
     this.ctx.waitUntil(
       parentStub
         .fetch(
-          new Request("http://internal/internal/child-session-update", {
+          new Request(buildSessionInternalUrl(SessionInternalPaths.childSessionUpdate), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
