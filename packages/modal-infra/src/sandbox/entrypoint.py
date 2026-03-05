@@ -331,17 +331,6 @@ class SandboxSupervisor:
                     "*": "allow",
                 },
             },
-            "instructions": (
-                "You are running inside a background coding agent sandbox. "
-                "When asked to implement changes (apply mode), you MUST always:\n"
-                "1. Create a new git branch before making any changes "
-                "(e.g. `git checkout -b <short-descriptive-name>`).\n"
-                "2. Implement all required changes on that branch.\n"
-                "3. Commit the changes with a conventional commit message.\n"
-                "4. Call the `create-pull-request` tool to push the branch and open a pull "
-                "request. Do NOT use the `gh` CLI. You MUST call this tool — opening a pull "
-                "request is required at the end of every apply session."
-            ),
         }
 
         # Determine working directory - use repo path if cloned, otherwise /workspace
