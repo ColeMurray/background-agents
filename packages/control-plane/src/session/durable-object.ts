@@ -389,16 +389,14 @@ export class SessionDO extends DurableObject<Env> {
         tunnelToken: this.env.CLOUDFLARE_TUNNEL_TOKEN || "",
         scmProvider: resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
       });
-    } else if (sandboxProvider === "ec2") {
-      // EC2 provider
-      if (!this.env.EC2_API_URL || !this.env.EC2_API_SECRET) {
-        throw new Error("EC2_API_URL and EC2_API_SECRET are required for EC2 provider");
-      }
+    } else if (sandboxProvider === "ec2" && this.env.EC2_API_URL && this.env.EC2_API_SECRET) {
+      // EC2 provider (only when configured)
       provider = createEC2Provider({
         apiUrl: this.env.EC2_API_URL,
         apiSecret: this.env.EC2_API_SECRET,
       });
     } else {
+      // Modal provider (default), or fallback when EC2/Helm requested but not configured
       // Modal provider (default)
       if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {
         throw new Error("MODAL_API_SECRET and MODAL_WORKSPACE are required for lifecycle manager");
@@ -736,10 +734,32 @@ export class SessionDO extends DurableObject<Env> {
 
   /**
    * Handle WebSocket close.
+   * Code 1006 (abnormal closure) means no close frame was received — e.g. network
+   * drop, process exit, or client navigated away. The platform may log this as an
+   * "error"; our structured log below allows correlating and identifying which
+   * socket (client vs sandbox) closed.
    */
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
     this.ensureInitialized();
     const { kind } = this.wsManager.classify(ws);
+
+    const isNormalClose = code === 1000 || code === 1001;
+    const logData: Record<string, unknown> = {
+      event: "ws.close",
+      ws_kind: kind,
+      code,
+      reason: reason || "(none)",
+      durable_object_id: this.ctx.id.toString(),
+    };
+    if (code === 1006) {
+      logData.code_meaning = "abnormal_closure";
+      logData.hint = "no close frame (e.g. network drop, process exit, client navigated away)";
+    }
+    if (isNormalClose) {
+      this.log.info("WebSocket closed", logData);
+    } else {
+      this.log.warn("WebSocket closed (abnormal)", logData);
+    }
 
     try {
       if (kind === "sandbox") {
@@ -750,7 +770,6 @@ export class SessionDO extends DurableObject<Env> {
           return;
         }
 
-        const isNormalClose = code === 1000 || code === 1001;
         if (isNormalClose) {
           this.updateSandboxStatus("stopped");
         } else {
@@ -780,7 +799,13 @@ export class SessionDO extends DurableObject<Env> {
    */
   async webSocketError(ws: WebSocket, error: Error): Promise<void> {
     this.ensureInitialized();
-    this.log.error("WebSocket error", { error });
+    const { kind } = this.wsManager.classify(ws);
+    this.log.error("WebSocket error", {
+      event: "ws.error",
+      ws_kind: kind,
+      durable_object_id: this.ctx.id.toString(),
+      error,
+    });
     ws.close(1011, "Internal error");
   }
 

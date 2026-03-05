@@ -175,7 +175,11 @@ cd packages/linear-bot
 npm install
 npm run build
 wrangler dev  # Local development
+npm test      # Unit and integration tests
 ```
+
+If the bot is not responding to @mentions or assignments, see
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md) for an end-to-end checklist.
 
 ## Architecture
 

@@ -240,3 +240,4 @@ app.put("/config/user-prefs/:userId", async (c) => {
 app.route("/callbacks", callbacksRouter);
 
 export default app;
+export { app };

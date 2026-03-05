@@ -27,7 +27,7 @@ interface ProviderObjectBody {
 interface CloudflareApiResponse<T> {
   success: boolean;
   result: T;
-  errors: { message: string }[];
+  errors: { code?: number; message: string }[];
 }
 
 interface AwsXmlResult {
@@ -50,6 +50,10 @@ export interface Env {
  * Worker entry point.
  */
 export default {
+  // Reference so bundler does not tree-shake EC2InstanceDO (Cloudflare needs the named export)
+  get EC2InstanceDO() {
+    return EC2InstanceDO;
+  },
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
@@ -71,7 +75,8 @@ export default {
     }
 
     if (url.pathname === "/deploy" && request.method === "POST") {
-      const body = (await request.json()) as DeployBody;
+      // Parse from a clone so we can forward the original (single-use) body to the DO
+      const body = (await request.clone().json()) as DeployBody;
       const id = env.EC2_INSTANCE.idFromName(body.sandboxId);
       const stub = env.EC2_INSTANCE.get(id);
       return stub.fetch(request);
@@ -81,7 +86,8 @@ export default {
       (url.pathname === "/stop" || url.pathname === "/start" || url.pathname === "/delete") &&
       request.method === "POST"
     ) {
-      const body = (await request.json()) as ProviderObjectBody;
+      // Parse from a clone so we can forward the original (single-use) body to the DO
+      const body = (await request.clone().json()) as ProviderObjectBody;
       const id = env.EC2_INSTANCE.idFromString(body.providerObjectId);
       const stub = env.EC2_INSTANCE.get(id);
       return stub.fetch(request);
@@ -296,7 +302,7 @@ systemctl restart sandbox-supervisor
 
     const result = await this.awsRequest("RunInstances", {
       ImageId: this.env.EC2_AMI_ID,
-      InstanceType: "t3.medium",
+      InstanceType: "t4g.2xlarge",
       MinCount: "1",
       MaxCount: "1",
       UserData: userData,
@@ -329,8 +335,19 @@ systemctl restart sandbox-supervisor
       }
     );
     const result = (await response.json()) as CloudflareApiResponse<{ id: string }>;
-    if (!result.success)
+    if (!result.success) {
+      const authError = result.errors?.some(
+        (e) => e.code === 10000 || /authentication/i.test(e.message ?? "")
+      );
+      if (authError) {
+        throw new Error(
+          "CF Tunnel creation failed: Cloudflare API authentication error. " +
+            "Verify CLOUDFLARE_API_TOKEN (EC2 deployer token with Tunnel read/write) and CLOUDFLARE_ACCOUNT_ID. " +
+            `Details: ${JSON.stringify(result.errors)}`
+        );
+      }
       throw new Error(`CF Tunnel creation failed: ${JSON.stringify(result.errors)}`);
+    }
 
     const tunnelId = result.result.id;
     const token = btoa(

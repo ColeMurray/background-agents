@@ -144,7 +144,17 @@ async function linearGraphQL(
   });
 
   if (!res.ok) {
-    throw new Error(`Linear API error: ${res.status}`);
+    const body = await res.text();
+    let detail = body;
+    try {
+      const parsed = JSON.parse(body) as { errors?: Array<{ message?: string }> };
+      if (parsed.errors?.length) {
+        detail = parsed.errors.map((e) => e.message ?? JSON.stringify(e)).join("; ");
+      }
+    } catch {
+      /* use raw body */
+    }
+    throw new Error(`Linear API error: ${res.status}${detail ? ` — ${detail}` : ""}`);
   }
 
   return (await res.json()) as Record<string, unknown>;
@@ -291,7 +301,7 @@ export async function getRepoSuggestions(
     const data = await linearGraphQL(
       client,
       `
-      query RepoSuggestions($issueId: String!, $agentSessionId: String!, $candidateRepositories: [IssueRepositorySuggestionInput!]!) {
+      query RepoSuggestions($issueId: String!, $agentSessionId: String!, $candidateRepositories: [RepositorySuggestionInput!]!) {
         issueRepositorySuggestions(
           issueId: $issueId
           agentSessionId: $agentSessionId

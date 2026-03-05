@@ -10,13 +10,20 @@ import type { Env } from "./types";
 
 const logger = createLogger("worker");
 
-// Re-export Durable Object for Cloudflare to discover
+import { SessionDO as SessionDOClass } from "./session";
+import { SchedulerDO as SchedulerDOClass } from "./scheduler/durable-object";
+
+// Re-export Durable Objects for Cloudflare to discover
+export { SessionDO } from "./session";
 export { SchedulerDO } from "./scheduler/durable-object";
 
 /**
  * Worker fetch handler.
  */
 export default {
+  // Reference DO classes so bundler does not tree-shake them (Cloudflare needs named exports)
+  SessionDO: SessionDOClass,
+  SchedulerDO: SchedulerDOClass,
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
