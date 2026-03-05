@@ -22,9 +22,12 @@ SANDBOX_DIR = Path(__file__).parent.parent / "sandbox"
 # OpenCode version to install
 OPENCODE_VERSION = "latest"
 
+# code-server version to install (pinned for reproducible images)
+CODE_SERVER_VERSION = "4.109.5"
+
 # Cache buster - change this to force Modal image rebuild
-# v40: Install code-server for browser-based VS Code editing
-CACHE_BUSTER = "v40-code-server"
+# v41: Pin code-server version
+CACHE_BUSTER = "v41-code-server-pin"
 
 # Base image with all development tools
 base_image = (
@@ -106,7 +109,7 @@ base_image = (
     )
     # Install code-server for browser-based VS Code editing
     .run_commands(
-        "curl -fsSL https://code-server.dev/install.sh | sh",
+        f"curl -fsSL https://code-server.dev/install.sh | sh -s -- --version {CODE_SERVER_VERSION}",
         "code-server --version",
     )
     # Install Playwright browsers (Chromium only to save space)
