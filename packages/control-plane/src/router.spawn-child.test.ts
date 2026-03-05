@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleRequest } from "./router";
 import { generateInternalToken } from "./auth/internal";
 import { SessionIndexStore } from "./db/session-index";
+import { SessionInternalPaths } from "./session/contracts";
 
 vi.mock("./db/session-index", () => ({
   SessionIndexStore: vi.fn(),
@@ -66,8 +67,8 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const childStub: DurableObjectStub = {
       fetch: vi.fn(async (request: Request) => {
         const path = new URL(request.url).pathname;
-        if (path === "/internal/init") return Response.json({ status: "ok" });
-        if (path === "/internal/prompt")
+        if (path === SessionInternalPaths.init) return Response.json({ status: "ok" });
+        if (path === SessionInternalPaths.prompt)
           return Response.json({ messageId: "msg-1", status: "queued" });
         return Response.json({ error: "unexpected" }, { status: 404 });
       }),
@@ -105,8 +106,8 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const childStub: DurableObjectStub = {
       fetch: vi.fn(async (request: Request) => {
         const path = new URL(request.url).pathname;
-        if (path === "/internal/init") return Response.json({ status: "ok" });
-        if (path === "/internal/prompt") {
+        if (path === SessionInternalPaths.init) return Response.json({ status: "ok" });
+        if (path === SessionInternalPaths.prompt) {
           return Response.json({ error: "enqueue failed" }, { status: 503 });
         }
         return Response.json({ error: "unexpected" }, { status: 404 });
