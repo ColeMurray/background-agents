@@ -56,7 +56,6 @@ import type {
   ParticipantRole,
   SpawnSource,
 } from "../types";
-import type { SpawnContext } from "@open-inspect/shared";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
@@ -74,6 +73,10 @@ import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
 import { createSessionInternalRoutes } from "./http/routes";
 import { createMessagesHandler, type MessagesHandler } from "./http/handlers/messages.handler";
+import {
+  createChildSessionsHandler,
+  type ChildSessionsHandler,
+} from "./http/handlers/child-sessions.handler";
 import { MessageService } from "./services/message.service";
 
 /**
@@ -117,6 +120,8 @@ export class SessionDO extends DurableObject<Env> {
   private _messageService: MessageService | null = null;
   // Messages handler (lazily initialized)
   private _messagesHandler: MessagesHandler | null = null;
+  // Child sessions handler (lazily initialized)
+  private _childSessionsHandler: ChildSessionsHandler | null = null;
   // Sandbox event processor (lazily initialized)
   private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
 
@@ -138,10 +143,10 @@ export class SessionDO extends DurableObject<Env> {
     unarchive: (request) => this.handleUnarchive(request),
     verifySandboxToken: (request) => this.handleVerifySandboxToken(request),
     openaiTokenRefresh: () => this.handleOpenAITokenRefresh(),
-    spawnContext: () => this.handleGetSpawnContext(),
-    childSummary: () => this.handleGetChildSummary(),
+    spawnContext: () => this.childSessionsHandler.getSpawnContext(),
+    childSummary: () => this.childSessionsHandler.getChildSummary(),
     cancel: () => this.handleCancel(),
-    childSessionUpdate: (request) => this.handleChildSessionUpdate(request),
+    childSessionUpdate: (request) => this.childSessionsHandler.childSessionUpdate(request),
   });
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -314,6 +319,20 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     return this._messagesHandler;
+  }
+
+  private get childSessionsHandler(): ChildSessionsHandler {
+    if (!this._childSessionsHandler) {
+      this._childSessionsHandler = createChildSessionsHandler({
+        repository: this.repository,
+        getSession: () => this.getSession(),
+        getSandbox: () => this.getSandbox(),
+        getPublicSessionId: (session) => this.getPublicSessionId(session),
+        broadcast: (message) => this.broadcast(message),
+      });
+    }
+
+    return this._childSessionsHandler;
   }
 
   private get sandboxEventProcessor(): SessionSandboxEventProcessor {
@@ -1962,103 +1981,6 @@ export class SessionDO extends DurableObject<Env> {
     await this.transitionSessionStatus("active");
 
     return Response.json({ status: "active" });
-  }
-
-  // --- Sub-session (child) internal handlers ---
-
-  private handleGetSpawnContext(): Response {
-    const session = this.getSession();
-    if (!session) {
-      return Response.json({ error: "Session not found" }, { status: 404 });
-    }
-
-    const participants = this.repository.listParticipants();
-    const owner = participants.find((p) => p.role === "owner");
-    if (!owner) {
-      return Response.json({ error: "No owner participant found" }, { status: 404 });
-    }
-
-    const context: SpawnContext = {
-      repoOwner: session.repo_owner,
-      repoName: session.repo_name,
-      repoId: session.repo_id,
-      model: session.model,
-      reasoningEffort: session.reasoning_effort ?? null,
-      owner: {
-        userId: owner.user_id,
-        scmLogin: owner.scm_login,
-        scmName: owner.scm_name,
-        scmEmail: owner.scm_email,
-        scmAccessTokenEncrypted: owner.scm_access_token_encrypted,
-        scmRefreshTokenEncrypted: owner.scm_refresh_token_encrypted,
-        scmTokenExpiresAt: owner.scm_token_expires_at,
-      },
-    };
-
-    return Response.json(context);
-  }
-
-  private handleGetChildSummary(): Response {
-    const session = this.getSession();
-    if (!session) {
-      return Response.json({ error: "Session not found" }, { status: 404 });
-    }
-
-    const sandbox = this.getSandbox();
-    const artifacts = this.repository.listArtifacts();
-    const allEvents = this.repository.listEvents({ limit: 50 });
-
-    // Filter out noisy event types, take first 5
-    const filteredTypes = new Set(["token", "heartbeat", "step_start", "step_finish"]);
-    const recentEvents = allEvents.filter((e) => !filteredTypes.has(e.type)).slice(0, 5);
-
-    const detail = {
-      session: {
-        id: this.getPublicSessionId(session),
-        title: session.title ?? "",
-        status: session.status,
-        repoOwner: session.repo_owner,
-        repoName: session.repo_name,
-        branchName: session.branch_name,
-        model: session.model,
-        createdAt: session.created_at,
-        updatedAt: session.updated_at,
-      },
-      sandbox: sandbox ? { status: sandbox.status } : null,
-      artifacts: artifacts.map((a) => ({
-        type: a.type,
-        url: a.url ?? "",
-        metadata: a.metadata ? JSON.parse(a.metadata) : null,
-      })),
-      recentEvents: recentEvents.map((e) => ({
-        type: e.type,
-        data: JSON.parse(e.data),
-        createdAt: e.created_at,
-      })),
-    };
-
-    return Response.json(detail);
-  }
-
-  private async handleChildSessionUpdate(request: Request): Promise<Response> {
-    const body = (await request.json()) as {
-      childSessionId: string;
-      status: SessionStatus;
-      title: string | null;
-    };
-
-    if (!body.childSessionId || !body.status) {
-      return Response.json({ error: "childSessionId and status are required" }, { status: 400 });
-    }
-
-    this.broadcast({
-      type: "child_session_update",
-      childSessionId: body.childSessionId,
-      status: body.status,
-      title: body.title ?? null,
-    });
-
-    return Response.json({ ok: true });
   }
 
   private async handleCancel(): Promise<Response> {
