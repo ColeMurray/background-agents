@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { initNamedSession, openSandboxWs, seedSandboxAuth, queryDO } from "./helpers";
+import {
+  initNamedSession,
+  openSandboxWs,
+  seedSandboxAuth,
+  queryDO,
+  waitForSpawnToSettle,
+} from "./helpers";
 
 const SANDBOX_TOKEN = "test-sandbox-auth-token-abc123";
 const SANDBOX_ID = "sb-integration-test";
@@ -8,6 +14,12 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
   it("upgrade with valid auth returns 101", async () => {
     const name = `ws-sandbox-ok-${Date.now()}`;
     const { stub } = await initNamedSession(name);
+
+    // Wait for init's fire-and-forget warmSandbox to settle before seeding
+    // credentials. Without this, doSpawn's updateSandboxForSpawn may overwrite
+    // the seeded values, or an in-flight provider network call may block the
+    // WS upgrade response long enough to hit the 5 s vitest timeout.
+    await waitForSpawnToSettle(stub);
     await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: SANDBOX_ID });
 
     const { ws, response } = await openSandboxWs(name, {
@@ -74,14 +86,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     // Wait for init's fire-and-forget warmSandbox to fail (no Modal in test env).
     // The spawn failure sets status to "failed" which we need to happen before
     // the WS connect sets it to "ready", otherwise the two race.
-    const waitForSpawnToSettle = async () => {
-      for (let i = 0; i < 30; i++) {
-        const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox");
-        if (rows[0]?.status === "failed") return;
-        await new Promise((r) => setTimeout(r, 100));
-      }
-    };
-    await waitForSpawnToSettle();
+    await waitForSpawnToSettle(stub);
 
     const { ws } = await openSandboxWs(name, {
       authToken: SANDBOX_TOKEN,

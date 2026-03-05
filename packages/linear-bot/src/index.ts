@@ -43,6 +43,15 @@ function readStringField(record: Record<string, unknown>, key: string): string |
   return typeof value === "string" ? value : null;
 }
 
+/** Simple hash for dedupe keys (non-crypto). */
+function hashPromptBody(body: string): string {
+  let h = 0;
+  for (let i = 0; i < body.length; i++) {
+    h = ((h << 5) - h + body.charCodeAt(i)) | 0;
+  }
+  return (h >>> 0).toString(36);
+}
+
 function isAgentSessionWebhookPayload(payload: unknown): payload is AgentSessionWebhook {
   if (!isObjectRecord(payload)) return false;
 
@@ -129,7 +138,7 @@ app.post("/webhook", async (c) => {
   const action = readStringField(payload, "action") ?? "unknown";
 
   if (eventType === "AgentSessionEvent") {
-    // Deduplicate: use agentSession.id + action as key
+    // Deduplicate: agentSession.id + action; for "prompted" include body hash so multiple user follow-ups are allowed
     const agentSession = isObjectRecord(payload.agentSession) ? payload.agentSession : undefined;
     if (agentSession) {
       const agentSessionId = readStringField(agentSession, "id");
@@ -141,7 +150,19 @@ app.post("/webhook", async (c) => {
         return c.json({ error: "Invalid payload" }, 400);
       }
 
-      const eventKey = `${agentSessionId}:${action}`;
+      let eventKey = `${agentSessionId}:${action}`;
+      if (action === "prompted") {
+        const comment = isObjectRecord(agentSession.comment) ? agentSession.comment : undefined;
+        const agentActivity = isObjectRecord(payload.agentActivity)
+          ? payload.agentActivity
+          : undefined;
+        const body =
+          readStringField(comment ?? {}, "body") ??
+          (agentActivity && typeof agentActivity.body === "string" ? agentActivity.body : null) ??
+          "";
+        eventKey = `${eventKey}:${hashPromptBody(body)}`;
+      }
+
       const isDuplicate = await isDuplicateEvent(c.env, eventKey);
       if (isDuplicate) {
         log.info("webhook.deduplicated", { trace_id: traceId, event_key: eventKey });

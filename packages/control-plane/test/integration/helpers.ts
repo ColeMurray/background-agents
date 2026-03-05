@@ -258,6 +258,22 @@ export async function seedSandboxAuth(
 }
 
 /**
+ * Poll until the sandbox spawn background task has settled (status = "failed"
+ * or "ready"). Call this before seeding auth credentials or connecting a
+ * sandbox WebSocket to avoid a race where doSpawn's updateSandboxForSpawn
+ * overwrites the seeded credentials, or where an in-flight network call to
+ * the sandbox provider blocks the WS upgrade and causes a test timeout.
+ */
+export async function waitForSpawnToSettle(stub: DurableObjectStub): Promise<void> {
+  for (let i = 0; i < 50; i++) {
+    const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox");
+    const status = rows[0]?.status;
+    if (status === "failed" || status === "ready") return;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+/**
  * Seed auth_token_hash and modal_sandbox_id on the sandbox row.
  */
 export async function seedSandboxAuthHash(

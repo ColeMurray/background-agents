@@ -109,7 +109,7 @@ describe("Sandbox Selection Logic", () => {
 
   it("selects helm and plan mode for triage status", async () => {
     const webhook = {
-      action: "prompted",
+      action: "created",
       organizationId: "org-1",
       agentSession: {
         id: "as-1",
@@ -140,7 +140,7 @@ describe("Sandbox Selection Logic", () => {
 
   it("selects helm and plan mode for backlog status", async () => {
     const webhook = {
-      action: "prompted",
+      action: "created",
       organizationId: "org-1",
       agentSession: {
         id: "as-1",
@@ -171,7 +171,7 @@ describe("Sandbox Selection Logic", () => {
 
   it("selects ec2 and apply mode for other statuses (e.g., Todo)", async () => {
     const webhook = {
-      action: "prompted",
+      action: "created",
       organizationId: "org-1",
       agentSession: {
         id: "as-1",
@@ -198,5 +198,82 @@ describe("Sandbox Selection Logic", () => {
         body: expect.stringContaining('"sandboxProvider":"ec2"'),
       })
     );
+  });
+
+  it("skips new session when action is not created (e.g. prompted with no existing session)", async () => {
+    const webhook = {
+      action: "prompted",
+      organizationId: "org-1",
+      agentSession: {
+        id: "as-1",
+        issue: { id: "issue-1", identifier: "ENG-1", title: "Test issue", team: { id: "team-1" } },
+      },
+    } as any;
+
+    await handleAgentSessionEvent(webhook, env, "trace-1");
+
+    expect(env.CONTROL_PLANE.fetch).not.toHaveBeenCalledWith(
+      "https://internal/sessions",
+      expect.anything()
+    );
+  });
+
+  it("skips new session when initial content is bot-originated", async () => {
+    const webhook = {
+      action: "created",
+      organizationId: "org-1",
+      agentSession: {
+        id: "as-1",
+        issue: { id: "issue-1", identifier: "ENG-1", title: "Test issue", team: { id: "team-1" } },
+        comment: undefined,
+      },
+      agentActivity: { body: "Analyzing issue and resolving repository..." },
+    } as any;
+
+    await handleAgentSessionEvent(webhook, env, "trace-1");
+
+    expect(env.CONTROL_PLANE.fetch).not.toHaveBeenCalledWith(
+      "https://internal/sessions",
+      expect.anything()
+    );
+  });
+});
+
+describe("Follow-up bot content skip", () => {
+  const env = {
+    LINEAR_KV: { get: vi.fn(), put: vi.fn(), delete: vi.fn() },
+    CONTROL_PLANE: { fetch: vi.fn() },
+    LINEAR_CLIENT_ID: "client-id",
+    LINEAR_CLIENT_SECRET: "client-secret",
+    WORKER_URL: "https://worker.url",
+    WEB_APP_URL: "https://web.app",
+    DEFAULT_MODEL: "claude-sonnet-4-5",
+    LINEAR_WEBHOOK_SECRET: "webhook-secret",
+  } as any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (lookupIssueSession as any).mockResolvedValue({
+      sessionId: "sess-1",
+      issueId: "issue-1",
+      mode: "apply",
+    });
+  });
+
+  it("skips follow-up when agentActivity body is bot-originated", async () => {
+    const webhook = {
+      action: "prompted",
+      organizationId: "org-1",
+      appUserId: "user-1",
+      agentSession: {
+        id: "as-1",
+        issue: { id: "issue-1", identifier: "ENG-1", title: "Test", team: { id: "t1" } },
+      },
+      agentActivity: { body: "Processing follow-up message..." },
+    } as any;
+
+    await handleAgentSessionEvent(webhook, env, "trace-1");
+
+    expect(env.CONTROL_PLANE.fetch).not.toHaveBeenCalled();
   });
 });

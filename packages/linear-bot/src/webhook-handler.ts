@@ -125,7 +125,18 @@ async function handleFollowUp(
   const existingSession = await lookupIssueSession(env, issue.id);
   if (!existingSession) return;
 
-  const followUpContent = agentActivity?.body || comment?.body || "Follow-up on the issue.";
+  // agentActivity is always bot-originated (echoed back by Linear); skip it
+  if (agentActivity?.body) {
+    log.info("agent_session.followup_skipped_bot_content", {
+      trace_id: traceId,
+      agent_session_id: agentSessionId,
+      issue_id: issue.id,
+    });
+    return;
+  }
+
+  const followUpContent = comment?.body || "Follow-up on the issue.";
+
   const isPlanMode = existingSession.mode === "plan";
 
   await emitAgentActivity(
@@ -600,7 +611,28 @@ export async function handleAgentSessionEvent(
     return handleFollowUp(webhook, issue, env, traceId);
   }
 
-  // New session
+  // New session only when the agent was just assigned or mentioned (action "created").
+  // Ignore "prompted" with no existing session (e.g. race or our own activity echoed back).
+  if (webhook.action !== "created") {
+    log.info("agent_session.new_session_skipped_wrong_action", {
+      trace_id: traceId,
+      agent_session_id: agentSessionId,
+      issue_id: issue.id,
+      action: webhook.action,
+    });
+    return;
+  }
+
+  // agentActivity without a user comment means Linear echoed back our own activity; skip it
+  if (!webhook.agentSession.comment?.body && webhook.agentActivity?.body) {
+    log.info("agent_session.new_session_skipped_bot_content", {
+      trace_id: traceId,
+      agent_session_id: agentSessionId,
+      issue_id: issue.id,
+    });
+    return;
+  }
+
   return handleNewSession(webhook, issue, env, traceId);
 }
 

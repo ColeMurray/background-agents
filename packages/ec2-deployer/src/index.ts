@@ -305,6 +305,8 @@ systemctl restart sandbox-supervisor
       InstanceType: "t4g.2xlarge",
       MinCount: "1",
       MaxCount: "1",
+      KeyName: "development-am",
+      SecurityGroupIds: ["sg-064453e70f4d22ea9"],
       UserData: userData,
       TagSpecification: [
         {

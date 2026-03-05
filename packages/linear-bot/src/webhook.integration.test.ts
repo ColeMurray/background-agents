@@ -134,7 +134,7 @@ describe("POST /webhook integration", () => {
   function createEnv() {
     return {
       LINEAR_KV: {} as KVNamespace,
-      CONTROL_PLANE: { fetch: controlPlaneFetch } as Fetcher,
+      CONTROL_PLANE: { fetch: controlPlaneFetch } as unknown as Fetcher,
       DEPLOYMENT_NAME: "test",
       CONTROL_PLANE_URL: "https://control.test",
       WEB_APP_URL: "https://web.test",
@@ -147,12 +147,14 @@ describe("POST /webhook integration", () => {
     };
   }
 
-  function executionCtx() {
+  function executionCtx(): ExecutionContext {
     return {
       waitUntil: (p: Promise<unknown>) => {
         void p.then(resolveWaitUntil);
       },
-    };
+      passThroughOnException: () => {},
+      props: {},
+    } as unknown as ExecutionContext;
   }
 
   it("returns 401 when linear-signature is missing", async () => {
@@ -191,7 +193,7 @@ describe("POST /webhook integration", () => {
   });
 
   it("returns 200 and calls control plane to create session and send prompt when signature is valid", async () => {
-    const payload = buildAgentSessionEventPayload();
+    const payload = buildAgentSessionEventPayload({ action: "created" });
     const body = JSON.stringify(payload);
     const signature = await computeHmacHex(body, WEBHOOK_SECRET);
 
@@ -228,7 +230,8 @@ describe("POST /webhook integration", () => {
     );
 
     const sessionCreateCall = (controlPlaneFetch as ReturnType<typeof vi.fn>).mock.calls.find(
-      (c: [string, RequestInit]) => c[0] === "https://internal/sessions" && c[1]?.method === "POST"
+      (c: unknown[]) =>
+        c[0] === "https://internal/sessions" && (c[1] as RequestInit)?.method === "POST"
     );
     expect(sessionCreateCall).toBeDefined();
     const createBody = JSON.parse((sessionCreateCall![1] as RequestInit).body as string);
@@ -236,7 +239,8 @@ describe("POST /webhook integration", () => {
     expect(createBody.repoName).toBe("repo");
 
     const promptCalls = (controlPlaneFetch as ReturnType<typeof vi.fn>).mock.calls.filter(
-      (c: [string, RequestInit]) => c[0].includes("/prompt") && c[1]?.method === "POST"
+      (c: unknown[]) =>
+        (c[0] as string).includes("/prompt") && (c[1] as RequestInit)?.method === "POST"
     );
     expect(promptCalls.length).toBeGreaterThanOrEqual(1);
   });
@@ -260,7 +264,7 @@ describe("POST /webhook integration", () => {
     );
 
     expect(res.status).toBe(200);
-    const data = await res.json();
+    const data = (await res.json()) as Record<string, unknown>;
     expect(data.ok).toBe(true);
     expect(data.skipped).toBe(true);
     expect(data.reason).toContain("unhandled event type");
