@@ -1,4 +1,4 @@
-import { SessionInternalPaths } from "../contracts";
+import { SessionInternalPaths, type SessionInternalPath } from "../contracts";
 
 export type SessionInternalRouteHandler = (
   request: Request,
@@ -7,7 +7,7 @@ export type SessionInternalRouteHandler = (
 
 export interface SessionInternalRoute {
   method: "GET" | "POST";
-  path: string;
+  path: SessionInternalPath;
   handler: SessionInternalRouteHandler;
 }
 
