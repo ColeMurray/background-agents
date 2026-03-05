@@ -247,8 +247,17 @@ async function handleNewSession(
   const issueDetails = await fetchIssueDetails(client, issue.id);
   const labels = issueDetails?.labels || issue.labels || [];
   const labelNames = labels.map((l) => l.name);
-  const mode: SessionMode = extractModeFromLabels(labels) ?? earlyMode;
   const projectInfo = issueDetails?.project || issue.project;
+
+  // Resolve mode and sandbox provider based on ticket status
+  const stateName = (issueDetails?.state?.name || issue.state?.name || "").toLowerCase();
+  let mode: SessionMode = extractModeFromLabels(labels) ?? earlyMode;
+  let sandboxProvider: "helm" | "ec2" = "ec2";
+
+  if (stateName === "triage" || stateName === "backlog") {
+    mode = "plan";
+    sandboxProvider = "helm";
+  }
 
   // ─── Resolve repo ─────────────────────────────────────────────────────
 
@@ -429,7 +438,7 @@ async function handleNewSession(
       title: `${issue.identifier}: ${issue.title}`,
       model,
       reasoningEffort,
-      sandboxProvider: mode === "plan" ? "modal" : "helm",
+      sandboxProvider,
     }),
   });
 

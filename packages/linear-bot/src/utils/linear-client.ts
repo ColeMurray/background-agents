@@ -202,6 +202,7 @@ export async function fetchIssueDetails(
           url
           priority
           priorityLabel
+          state { name }
           labels { nodes { id name } }
           project { id name }
           assignee { id name }
@@ -229,6 +230,7 @@ export async function fetchIssueDetails(
       url: issue.url as string,
       priority: issue.priority as number,
       priorityLabel: issue.priorityLabel as string,
+      state: issue.state as { name: string },
       labels: (issue.labels as { nodes: Array<{ id: string; name: string }> })?.nodes || [],
       project: issue.project as { id: string; name: string } | null,
       assignee: issue.assignee as { id: string; name: string } | null,
