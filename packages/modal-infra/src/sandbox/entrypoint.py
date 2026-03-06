@@ -76,6 +76,7 @@ class SandboxSupervisor:
         # Parse session config if provided
         session_config_json = os.environ.get("SESSION_CONFIG", "{}")
         self.session_config = json.loads(session_config_json)
+        self.session_id = self._resolve_session_id()
 
         # Paths
         self.workspace_path = Path("/workspace")
@@ -83,13 +84,20 @@ class SandboxSupervisor:
         self.session_id_file = Path("/tmp/opencode-session-id")
 
         # Logger
-        session_id = self.session_config.get("session_id", "")
         self.log = get_logger(
             "supervisor",
             service="sandbox",
             sandbox_id=self.sandbox_id,
-            session_id=session_id,
+            session_id=self.session_id,
         )
+
+    def _resolve_session_id(self) -> str:
+        """Resolve session ID across known naming variants."""
+        # Prefer SESSION_CONFIG values, but fall back to top-level env for robustness.
+        session_id = self.session_config.get("session_id") or self.session_config.get("sessionId")
+        if session_id:
+            return str(session_id)
+        return os.environ.get("SESSION_ID", "")
 
     @property
     def base_branch(self) -> str:
@@ -515,8 +523,8 @@ class SandboxSupervisor:
         # Wait for OpenCode to be ready
         await self.opencode_ready.wait()
 
-        # Get session_id from config (required for WebSocket connection)
-        session_id = self.session_config.get("session_id", "")
+        # Get session_id (required for WebSocket connection)
+        session_id = self.session_id
         if not session_id:
             self.log.info(
                 "bridge.skip",

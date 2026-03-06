@@ -84,7 +84,6 @@ variable "aws_region" {
 variable "ec2_ami_id" {
   description = "Amazon Machine Image ID for sandboxes"
   type        = string
-  default     = "ami-0c14f6a8398ca60ca"
 }
 
 variable "ec2_api_secret" {
