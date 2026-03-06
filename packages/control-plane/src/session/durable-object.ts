@@ -50,6 +50,8 @@ import type {
   SessionState,
   SessionStatus,
   SandboxStatus,
+  ParticipantRole,
+  SpawnSource,
 } from "../types";
 import type { SpawnContext } from "@open-inspect/shared";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
