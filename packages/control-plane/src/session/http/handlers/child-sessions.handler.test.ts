@@ -153,6 +153,7 @@ describe("createChildSessionsHandler", () => {
       repoId: 123,
       model: "anthropic/claude-haiku-4-5",
       reasoningEffort: "high",
+      baseBranch: "main",
       owner: {
         userId: "user-1",
         scmLogin: "octocat",
@@ -163,6 +164,18 @@ describe("createChildSessionsHandler", () => {
         scmTokenExpiresAt: 1234,
       },
     });
+  });
+
+  it("propagates non-default branch in spawn context", async () => {
+    const { handler, getSession, repository } = createHandler();
+    getSession.mockReturnValue(createSession({ base_branch: "feature/branch-fix" }));
+    repository.listParticipants.mockReturnValue([createParticipant()]);
+
+    const response = handler.getSpawnContext();
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.baseBranch).toBe("feature/branch-fix");
   });
 
   it("returns 404 when session is missing for child summary", async () => {

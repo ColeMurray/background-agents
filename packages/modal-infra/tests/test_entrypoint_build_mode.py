@@ -369,8 +369,8 @@ class TestIncrementalGitSync:
     """Test _incremental_git_sync() method directly."""
 
     @pytest.mark.asyncio
-    async def test_fetches_and_resets(self, base_env, tmp_path):
-        """Should fetch from origin and hard reset to latest."""
+    async def test_fetches_and_checks_out(self, base_env, tmp_path):
+        """Should fetch from origin with explicit refspec and checkout the target branch."""
         supervisor = _make_supervisor({**base_env, "VCS_CLONE_TOKEN": "test-token"})
         # Point repo_path to an existing directory so the method proceeds
         supervisor.repo_path = tmp_path
@@ -393,19 +393,19 @@ class TestIncrementalGitSync:
         assert result is True
         assert supervisor.git_sync_complete.is_set()
 
-        # Verify the three git commands: set-url, fetch, reset
+        # Verify the three git commands: set-url, fetch, checkout
         assert len(call_log) == 3
 
         # 1. git remote set-url
         assert "set-url" in call_log[0]
 
-        # 2. git fetch origin
+        # 2. git fetch origin <branch>:refs/remotes/origin/<branch>
         assert "fetch" in call_log[1]
         assert "origin" in call_log[1]
 
-        # 3. git reset --hard origin/main
-        assert "reset" in call_log[2]
-        assert "--hard" in call_log[2]
+        # 3. git checkout -B <branch> origin/<branch>
+        assert "checkout" in call_log[2]
+        assert "-B" in call_log[2]
 
     @pytest.mark.asyncio
     async def test_skips_when_no_repo_path(self, base_env, tmp_path):
@@ -441,7 +441,268 @@ class TestIncrementalGitSync:
             result = await supervisor._incremental_git_sync()
 
         assert result is True
-        # Only fetch + reset, no set-url
+        # Only fetch + checkout, no set-url
         assert len(call_log) == 2
         assert "fetch" in call_log[0]
-        assert "reset" in call_log[1]
+        assert "checkout" in call_log[1]
+
+    @pytest.mark.asyncio
+    async def test_uses_explicit_refspec_for_fetch(self, base_env, tmp_path):
+        """Fetch must use an explicit refspec to create the remote tracking ref."""
+        env = {
+            **base_env,
+            "SESSION_CONFIG": '{"branch": "feature/xyz"}',
+        }
+        supervisor = _make_supervisor(env)
+        supervisor.repo_path = tmp_path
+
+        call_log = []
+
+        async def fake_subprocess(*args, **kwargs):
+            call_log.append(args)
+            mock_proc = MagicMock()
+            mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+            mock_proc.returncode = 0
+            return mock_proc
+
+        with patch(
+            "src.sandbox.entrypoint.asyncio.create_subprocess_exec",
+            side_effect=fake_subprocess,
+        ):
+            await supervisor._incremental_git_sync()
+
+        fetch_call = next(c for c in call_log if "fetch" in c)
+        assert "feature/xyz:refs/remotes/origin/feature/xyz" in fetch_call
+
+    @pytest.mark.asyncio
+    async def test_checks_out_correct_branch(self, base_env, tmp_path):
+        """Checkout must target the session's branch, not always 'main'."""
+        env = {
+            **base_env,
+            "SESSION_CONFIG": '{"branch": "develop"}',
+        }
+        supervisor = _make_supervisor(env)
+        supervisor.repo_path = tmp_path
+
+        call_log = []
+
+        async def fake_subprocess(*args, **kwargs):
+            call_log.append(args)
+            mock_proc = MagicMock()
+            mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+            mock_proc.returncode = 0
+            return mock_proc
+
+        with patch(
+            "src.sandbox.entrypoint.asyncio.create_subprocess_exec",
+            side_effect=fake_subprocess,
+        ):
+            await supervisor._incremental_git_sync()
+
+        checkout_call = next(c for c in call_log if "checkout" in c)
+        assert "develop" in checkout_call
+        assert "origin/develop" in checkout_call
+
+
+class TestPerformGitSync:
+    """Test perform_git_sync() branch handling."""
+
+    @pytest.mark.asyncio
+    async def test_clones_with_requested_branch(self, base_env, tmp_path):
+        """Fresh clone should use the session's branch, not always 'main'."""
+        env = {
+            **base_env,
+            "SESSION_CONFIG": '{"branch": "staging"}',
+        }
+        supervisor = _make_supervisor(env)
+        supervisor.repo_path = tmp_path / "nonexistent"
+
+        call_log = []
+
+        async def fake_subprocess(*args, **kwargs):
+            call_log.append(args)
+            mock_proc = MagicMock()
+            mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+            mock_proc.wait = AsyncMock(return_value=0)
+            mock_proc.returncode = 0
+            if args[0] == "git" and "rev-parse" in args:
+                mock_proc.communicate = AsyncMock(return_value=(b"abc123\n", b""))
+            return mock_proc
+
+        with patch(
+            "src.sandbox.entrypoint.asyncio.create_subprocess_exec",
+            side_effect=fake_subprocess,
+        ):
+            result = await supervisor.perform_git_sync()
+
+        assert result is True
+
+        clone_call = next(c for c in call_log if "clone" in c)
+        assert "staging" in clone_call
+
+    @pytest.mark.asyncio
+    async def test_fetch_uses_explicit_refspec(self, base_env, tmp_path):
+        """After clone exists, fetch must use explicit refspec."""
+        env = {
+            **base_env,
+            "SESSION_CONFIG": '{"branch": "feature/abc"}',
+            "VCS_CLONE_TOKEN": "tok",
+        }
+        supervisor = _make_supervisor(env)
+        supervisor.repo_path = tmp_path  # Exists, so clone is skipped
+
+        call_log = []
+
+        async def fake_subprocess(*args, **kwargs):
+            call_log.append(args)
+            mock_proc = MagicMock()
+            mock_proc.communicate = AsyncMock(return_value=(b"abc123\n", b""))
+            mock_proc.wait = AsyncMock(return_value=0)
+            mock_proc.returncode = 0
+            mock_proc.stderr = MagicMock()
+            mock_proc.stderr.read = AsyncMock(return_value=b"")
+            return mock_proc
+
+        with patch(
+            "src.sandbox.entrypoint.asyncio.create_subprocess_exec",
+            side_effect=fake_subprocess,
+        ):
+            result = await supervisor.perform_git_sync()
+
+        assert result is True
+
+        fetch_call = next(c for c in call_log if "fetch" in c)
+        assert "feature/abc:refs/remotes/origin/feature/abc" in fetch_call
+
+    @pytest.mark.asyncio
+    async def test_checkout_switches_to_target_branch(self, base_env, tmp_path):
+        """After fetch, should checkout -B to the target branch."""
+        env = {
+            **base_env,
+            "SESSION_CONFIG": '{"branch": "release/v2"}',
+        }
+        supervisor = _make_supervisor(env)
+        supervisor.repo_path = tmp_path  # Exists
+
+        call_log = []
+
+        async def fake_subprocess(*args, **kwargs):
+            call_log.append(args)
+            mock_proc = MagicMock()
+            mock_proc.communicate = AsyncMock(return_value=(b"abc123\n", b""))
+            mock_proc.wait = AsyncMock(return_value=0)
+            mock_proc.returncode = 0
+            mock_proc.stderr = MagicMock()
+            mock_proc.stderr.read = AsyncMock(return_value=b"")
+            return mock_proc
+
+        with patch(
+            "src.sandbox.entrypoint.asyncio.create_subprocess_exec",
+            side_effect=fake_subprocess,
+        ):
+            await supervisor.perform_git_sync()
+
+        checkout_calls = [c for c in call_log if "checkout" in c]
+        assert len(checkout_calls) == 1
+        assert "-B" in checkout_calls[0]
+        assert "release/v2" in checkout_calls[0]
+        assert "origin/release/v2" in checkout_calls[0]
+
+
+class TestQuickGitFetch:
+    """Test _quick_git_fetch() branch switching on snapshot restore."""
+
+    @pytest.mark.asyncio
+    async def test_switches_branch_when_mismatched(self, base_env, tmp_path):
+        """Should checkout the target branch when snapshot was on a different branch."""
+        env = {
+            **base_env,
+            "SESSION_CONFIG": '{"branch": "feature/xyz"}',
+        }
+        supervisor = _make_supervisor(env)
+        supervisor.repo_path = tmp_path
+
+        call_log = []
+
+        async def fake_subprocess(*args, **kwargs):
+            call_log.append(args)
+            mock_proc = MagicMock()
+            mock_proc.returncode = 0
+            # rev-parse --abbrev-ref HEAD returns the "current" branch
+            if "rev-parse" in args and "--abbrev-ref" in args:
+                mock_proc.communicate = AsyncMock(return_value=(b"main\n", b""))
+            else:
+                mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+            return mock_proc
+
+        with patch(
+            "src.sandbox.entrypoint.asyncio.create_subprocess_exec",
+            side_effect=fake_subprocess,
+        ):
+            await supervisor._quick_git_fetch()
+
+        checkout_calls = [c for c in call_log if "checkout" in c]
+        assert len(checkout_calls) == 1
+        assert "-B" in checkout_calls[0]
+        assert "feature/xyz" in checkout_calls[0]
+        assert "origin/feature/xyz" in checkout_calls[0]
+
+    @pytest.mark.asyncio
+    async def test_skips_checkout_when_branch_matches(self, base_env, tmp_path):
+        """Should not checkout when already on the correct branch."""
+        env = {
+            **base_env,
+            "SESSION_CONFIG": '{"branch": "main"}',
+        }
+        supervisor = _make_supervisor(env)
+        supervisor.repo_path = tmp_path
+
+        call_log = []
+
+        async def fake_subprocess(*args, **kwargs):
+            call_log.append(args)
+            mock_proc = MagicMock()
+            mock_proc.returncode = 0
+            if "rev-parse" in args and "--abbrev-ref" in args:
+                mock_proc.communicate = AsyncMock(return_value=(b"main\n", b""))
+            elif "rev-list" in args:
+                mock_proc.communicate = AsyncMock(return_value=(b"0\n", b""))
+            else:
+                mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+            return mock_proc
+
+        with patch(
+            "src.sandbox.entrypoint.asyncio.create_subprocess_exec",
+            side_effect=fake_subprocess,
+        ):
+            await supervisor._quick_git_fetch()
+
+        checkout_calls = [c for c in call_log if "checkout" in c]
+        assert len(checkout_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_skips_when_no_repo_path(self, base_env, tmp_path):
+        """Should return early when repo path doesn't exist."""
+        supervisor = _make_supervisor(base_env)
+        supervisor.repo_path = tmp_path / "nonexistent"
+
+        with patch(
+            "src.sandbox.entrypoint.asyncio.create_subprocess_exec",
+        ) as mock_exec:
+            await supervisor._quick_git_fetch()
+            mock_exec.assert_not_called()
+
+
+class TestBaseBranchProperty:
+    """Test base_branch property reads from SESSION_CONFIG correctly."""
+
+    def test_defaults_to_main(self, base_env):
+        """Should default to 'main' when no branch in SESSION_CONFIG."""
+        supervisor = _make_supervisor(base_env)
+        assert supervisor.base_branch == "main"
+
+    def test_reads_branch_from_session_config(self, base_env):
+        """Should read branch from SESSION_CONFIG."""
+        env = {**base_env, "SESSION_CONFIG": '{"branch": "develop"}'}
+        supervisor = _make_supervisor(env)
+        assert supervisor.base_branch == "develop"

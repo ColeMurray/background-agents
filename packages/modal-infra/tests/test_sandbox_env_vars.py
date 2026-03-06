@@ -1,6 +1,9 @@
+import json
+
 import pytest
 
 from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxConfig, SandboxManager
+from src.sandbox.types import SessionConfig
 
 
 @pytest.mark.asyncio
@@ -216,6 +219,87 @@ async def test_create_and_restore_timeout_consistency(monkeypatch):
 
     assert captured_create["timeout"] == captured_restore["timeout"]
     assert captured_create["timeout"] == 5400
+
+
+# ---------------------------------------------------------------------------
+# restore_from_snapshot branch propagation tests
+# ---------------------------------------------------------------------------
+
+
+def _fake_restore_setup(monkeypatch):
+    """Set up fakes for restore_from_snapshot tests, return captured dict."""
+    captured = {}
+
+    class FakeImage:
+        object_id = "img-123"
+
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_restore_includes_branch_in_session_config(monkeypatch):
+    """restore_from_snapshot must include branch in SESSION_CONFIG env var."""
+    captured = _fake_restore_setup(monkeypatch)
+
+    manager = SandboxManager()
+    await manager.restore_from_snapshot(
+        snapshot_image_id="img-abc",
+        session_config={
+            "repo_owner": "acme",
+            "repo_name": "repo",
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-6",
+            "session_id": "sess-1",
+            "branch": "feature/xyz",
+        },
+    )
+
+    session_config = json.loads(captured["env"]["SESSION_CONFIG"])
+    assert session_config["branch"] == "feature/xyz"
+
+
+@pytest.mark.asyncio
+async def test_restore_omits_branch_when_none(monkeypatch):
+    """restore_from_snapshot should omit branch from SESSION_CONFIG when not provided."""
+    captured = _fake_restore_setup(monkeypatch)
+
+    manager = SandboxManager()
+    await manager.restore_from_snapshot(
+        snapshot_image_id="img-abc",
+        session_config={
+            "repo_owner": "acme",
+            "repo_name": "repo",
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-6",
+            "session_id": "sess-1",
+        },
+    )
+
+    session_config = json.loads(captured["env"]["SESSION_CONFIG"])
+    assert "branch" not in session_config
+
+
+@pytest.mark.asyncio
+async def test_restore_with_session_config_object(monkeypatch):
+    """restore_from_snapshot extracts branch from a SessionConfig object."""
+    captured = _fake_restore_setup(monkeypatch)
+
+    manager = SandboxManager()
+    config = SessionConfig(
+        session_id="sess-1",
+        repo_owner="acme",
+        repo_name="repo",
+        branch="develop",
+    )
+    await manager.restore_from_snapshot(
+        snapshot_image_id="img-abc",
+        session_config=config,
+    )
+
+    session_config = json.loads(captured["env"]["SESSION_CONFIG"])
+    assert session_config["branch"] == "develop"
 
 
 # ---------------------------------------------------------------------------

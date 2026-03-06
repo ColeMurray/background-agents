@@ -466,7 +466,8 @@ export class SessionDO extends DurableObject<Env> {
     if (this.env.DB) {
       const repoImageStore = new RepoImageStore(this.env.DB);
       repoImageLookup = {
-        getLatestReady: (repoOwner, repoName) => repoImageStore.getLatestReady(repoOwner, repoName),
+        getLatestReady: (repoOwner, repoName, baseBranch) =>
+          repoImageStore.getLatestReady(repoOwner, repoName, baseBranch),
       };
     }
 
