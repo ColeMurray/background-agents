@@ -82,6 +82,10 @@ import {
   createSessionLifecycleHandler,
   type SessionLifecycleHandler,
 } from "./http/handlers/session-lifecycle.handler";
+import {
+  createPullRequestHandler,
+  type PullRequestHandler,
+} from "./http/handlers/pull-request.handler";
 import { MessageService } from "./services/message.service";
 
 /**
@@ -130,6 +134,8 @@ export class SessionDO extends DurableObject<Env> {
   private _wsTokenHandler: WsTokenHandler | null = null;
   // Session lifecycle handler (lazily initialized)
   private _sessionLifecycleHandler: SessionLifecycleHandler | null = null;
+  // Pull request handler (lazily initialized)
+  private _pullRequestHandler: PullRequestHandler | null = null;
   // Sandbox event processor (lazily initialized)
   private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
 
@@ -145,7 +151,7 @@ export class SessionDO extends DurableObject<Env> {
     listEvents: (_request, url) => this.messagesHandler.listEvents(url),
     listArtifacts: () => this.messagesHandler.listArtifacts(),
     listMessages: (_request, url) => this.messagesHandler.listMessages(url),
-    createPr: (request) => this.handleCreatePR(request),
+    createPr: (request) => this.pullRequestHandler.createPr(request),
     wsToken: (request) => this.wsTokenHandler.generateWsToken(request),
     archive: (request) => this.sessionLifecycleHandler.archive(request),
     unarchive: (request) => this.sessionLifecycleHandler.unarchive(request),
@@ -402,6 +408,41 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     return this._sessionLifecycleHandler;
+  }
+
+  private get pullRequestHandler(): PullRequestHandler {
+    if (!this._pullRequestHandler) {
+      this._pullRequestHandler = createPullRequestHandler({
+        getSession: () => this.getSession(),
+        getPromptingParticipantForPR: () => this.participantService.getPromptingParticipantForPR(),
+        resolveAuthForPR: (participant) => this.participantService.resolveAuthForPR(participant),
+        getSessionUrl: (session) => {
+          const sessionId = session.session_name || session.id;
+          const webAppUrl = this.env.WEB_APP_URL || this.env.WORKER_URL || "";
+          return webAppUrl + "/session/" + sessionId;
+        },
+        createPullRequest: async (input) => {
+          const pullRequestService = new SessionPullRequestService({
+            repository: this.repository,
+            sourceControlProvider: this.sourceControlProvider,
+            log: this.log,
+            generateId: () => generateId(),
+            pushBranchToRemote: (headBranch, pushSpec) =>
+              this.pushBranchToRemote(headBranch, pushSpec),
+            broadcastArtifactCreated: (artifact) => {
+              this.broadcast({
+                type: "artifact_created",
+                artifact,
+              });
+            },
+          });
+
+          return pullRequestService.createPullRequest(input);
+        },
+      });
+    }
+
+    return this._pullRequestHandler;
   }
 
   private get sandboxEventProcessor(): SessionSandboxEventProcessor {
@@ -1642,74 +1683,6 @@ export class SessionDO extends DurableObject<Env> {
         role: p.role,
         joinedAt: p.joined_at,
       })),
-    });
-  }
-
-  /**
-   * Handle PR creation request.
-   * Resolves prompting participant and auth in DO, then delegates PR orchestration.
-   */
-  private async handleCreatePR(request: Request): Promise<Response> {
-    const body = (await request.json()) as {
-      title: string;
-      body: string;
-      baseBranch?: string;
-      headBranch?: string;
-    };
-
-    const session = this.getSession();
-    if (!session) {
-      return Response.json({ error: "Session not found" }, { status: 404 });
-    }
-
-    const promptingParticipantResult = await this.participantService.getPromptingParticipantForPR();
-    if (!promptingParticipantResult.participant) {
-      return Response.json(
-        { error: promptingParticipantResult.error },
-        { status: promptingParticipantResult.status }
-      );
-    }
-
-    const promptingParticipant = promptingParticipantResult.participant;
-    const authResolution = await this.participantService.resolveAuthForPR(promptingParticipant);
-    if ("error" in authResolution) {
-      return Response.json({ error: authResolution.error }, { status: authResolution.status });
-    }
-
-    const sessionId = session.session_name || session.id;
-    const webAppUrl = this.env.WEB_APP_URL || this.env.WORKER_URL || "";
-    const sessionUrl = webAppUrl + "/session/" + sessionId;
-
-    const pullRequestService = new SessionPullRequestService({
-      repository: this.repository,
-      sourceControlProvider: this.sourceControlProvider,
-      log: this.log,
-      generateId: () => generateId(),
-      pushBranchToRemote: (headBranch, pushSpec) => this.pushBranchToRemote(headBranch, pushSpec),
-      broadcastArtifactCreated: (artifact) => {
-        this.broadcast({
-          type: "artifact_created",
-          artifact,
-        });
-      },
-    });
-
-    const result = await pullRequestService.createPullRequest({
-      ...body,
-      baseBranch: body.baseBranch || session.base_branch,
-      promptingUserId: promptingParticipant.user_id,
-      promptingAuth: authResolution.auth,
-      sessionUrl,
-    });
-
-    if (result.kind === "error") {
-      return Response.json({ error: result.error }, { status: result.status });
-    }
-
-    return Response.json({
-      prNumber: result.prNumber,
-      prUrl: result.prUrl,
-      state: result.state,
     });
   }
 
