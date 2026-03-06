@@ -28,10 +28,7 @@ import {
 } from "../sandbox/lifecycle/manager";
 import { RepoImageStore } from "../db/repo-images";
 import { SessionIndexStore } from "../db/session-index";
-import {
-  evaluateExecutionTimeout,
-  DEFAULT_EXECUTION_TIMEOUT_MS,
-} from "../sandbox/lifecycle/decisions";
+import { DEFAULT_EXECUTION_TIMEOUT_MS } from "../sandbox/lifecycle/decisions";
 import {
   createSourceControlProvider as createSourceControlProviderImpl,
   resolveScmProviderFromEnv,
@@ -85,6 +82,7 @@ import {
   type ParticipantsHandler,
 } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
+import { createAlarmHandler, type AlarmHandler } from "./alarm/handler";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -136,6 +134,8 @@ export class SessionDO extends DurableObject<Env> {
   private _pullRequestHandler: PullRequestHandler | null = null;
   // Participants handler (lazily initialized)
   private _participantsHandler: ParticipantsHandler | null = null;
+  // Alarm handler (lazily initialized)
+  private _alarmHandler: AlarmHandler | null = null;
   // Sandbox event processor (lazily initialized)
   private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
 
@@ -465,6 +465,21 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     return this._participantsHandler;
+  }
+
+  private get alarmHandler(): AlarmHandler {
+    if (!this._alarmHandler) {
+      this._alarmHandler = createAlarmHandler({
+        repository: this.repository,
+        messageQueue: this.messageQueue,
+        lifecycleManager: this.lifecycleManager,
+        executionTimeoutMs: this.executionTimeoutMs,
+        now: () => Date.now(),
+        getLog: () => this.log,
+      });
+    }
+
+    return this._alarmHandler;
   }
 
   private get sandboxEventProcessor(): SessionSandboxEventProcessor {
@@ -898,31 +913,7 @@ export class SessionDO extends DurableObject<Env> {
    */
   async alarm(): Promise<void> {
     this.ensureInitialized();
-
-    // Execution timeout check: if a message has been in 'processing' longer than
-    // the configured timeout, fail it. This is idempotent — if the message was
-    // already failed (by onSandboxTerminating or a prior alarm), getProcessingMessageWithStartedAt()
-    // returns null and we skip straight to handleAlarm().
-    const processing = this.repository.getProcessingMessageWithStartedAt();
-    if (processing?.started_at) {
-      const now = Date.now();
-      const result = evaluateExecutionTimeout(
-        processing.started_at,
-        { timeoutMs: this.executionTimeoutMs },
-        now
-      );
-      if (result.isTimedOut) {
-        this.log.warn("Execution timeout: message stuck in processing", {
-          event: "execution.timeout",
-          message_id: processing.id,
-          elapsed_ms: result.elapsedMs,
-          timeout_ms: this.executionTimeoutMs,
-        });
-        await this.messageQueue.failStuckProcessingMessage();
-      }
-    }
-
-    await this.lifecycleManager.handleAlarm();
+    await this.alarmHandler.handle();
   }
 
   /**
