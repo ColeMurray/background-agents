@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
 import { createSessionLifecycleHandler } from "./session-lifecycle.handler";
+import { getValidModelOrDefault } from "../../../utils/models";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
@@ -67,6 +68,24 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
 }
 
 function createHandler() {
+  const repository = {
+    upsertSession: vi.fn(),
+    createSandbox: vi.fn(),
+    createParticipant: vi.fn(),
+  };
+  const getDurableObjectId = vi.fn(() => "session-do-id");
+  const encryptToken = vi.fn();
+  const validateReasoningEffort = vi.fn();
+  const generateId = vi.fn();
+  const now = vi.fn(() => 1234);
+  const scheduleWarmSandbox = vi.fn();
+  const log = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: vi.fn(),
+  };
   const getSession = vi.fn<() => SessionRow | null>();
   const getSandbox = vi.fn<() => SandboxRow | null>();
   const getPublicSessionId = vi.fn<(session: SessionRow) => string>();
@@ -78,6 +97,15 @@ function createHandler() {
   const updateSandboxStatus = vi.fn();
 
   const handler = createSessionLifecycleHandler({
+    repository,
+    getDurableObjectId,
+    tokenEncryptionKey: "encryption-key",
+    encryptToken,
+    validateReasoningEffort,
+    generateId,
+    now,
+    scheduleWarmSandbox,
+    getLog: () => log,
     getSession,
     getSandbox,
     getPublicSessionId,
@@ -91,6 +119,14 @@ function createHandler() {
 
   return {
     handler,
+    repository,
+    getDurableObjectId,
+    encryptToken,
+    validateReasoningEffort,
+    generateId,
+    now,
+    scheduleWarmSandbox,
+    log,
     getSession,
     getSandbox,
     getPublicSessionId,
@@ -104,6 +140,152 @@ function createHandler() {
 }
 
 describe("createSessionLifecycleHandler", () => {
+  it("initializes session, sandbox, and owner participant", async () => {
+    const {
+      handler,
+      repository,
+      getDurableObjectId,
+      encryptToken,
+      validateReasoningEffort,
+      generateId,
+      scheduleWarmSandbox,
+      log,
+    } = createHandler();
+    getDurableObjectId.mockReturnValue("session-do-id");
+    encryptToken.mockResolvedValue("encrypted-scm-token");
+    validateReasoningEffort.mockReturnValue("high");
+    generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: "acme",
+          repoName: "repo",
+          repoId: 123,
+          defaultBranch: "main",
+          branch: "feature/work",
+          title: "Session title",
+          model: "anthropic/claude-haiku-4-5",
+          reasoningEffort: "high",
+          userId: "user-1",
+          scmLogin: "octocat",
+          scmName: "The Octocat",
+          scmEmail: "octocat@example.com",
+          scmToken: "plain-scm-token",
+          parentSessionId: "parent-1",
+          spawnSource: "agent",
+          spawnDepth: 1,
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ sessionId: "session-do-id", status: "created" });
+    expect(repository.upsertSession).toHaveBeenCalledWith({
+      id: "session-do-id",
+      sessionName: "session-public-id",
+      title: "Session title",
+      repoOwner: "acme",
+      repoName: "repo",
+      repoId: 123,
+      baseBranch: "feature/work",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: "high",
+      status: "created",
+      parentSessionId: "parent-1",
+      spawnSource: "agent",
+      spawnDepth: 1,
+      createdAt: 1234,
+      updatedAt: 1234,
+    });
+    expect(repository.createSandbox).toHaveBeenCalledWith({
+      id: "sandbox-1",
+      status: "pending",
+      gitSyncStatus: "pending",
+      createdAt: 0,
+    });
+    expect(repository.createParticipant).toHaveBeenCalledWith({
+      id: "participant-1",
+      userId: "user-1",
+      scmLogin: "octocat",
+      scmName: "The Octocat",
+      scmEmail: "octocat@example.com",
+      scmAccessTokenEncrypted: "encrypted-scm-token",
+      role: "owner",
+      joinedAt: 1234,
+    });
+    expect(scheduleWarmSandbox).toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith("Triggering sandbox spawn for new session");
+  });
+
+  it("falls back to pre-encrypted token when plain-token encryption fails", async () => {
+    const { handler, repository, encryptToken, validateReasoningEffort, generateId, log } =
+      createHandler();
+    encryptToken.mockRejectedValue(new Error("encrypt failed"));
+    validateReasoningEffort.mockReturnValue(null);
+    generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: "acme",
+          repoName: "repo",
+          userId: "user-1",
+          scmToken: "plain-scm-token",
+          scmTokenEncrypted: "existing-encrypted-token",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(repository.createParticipant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scmAccessTokenEncrypted: "existing-encrypted-token",
+      })
+    );
+    expect(log.error).toHaveBeenCalledWith(
+      "Failed to encrypt SCM token",
+      expect.objectContaining({ error: expect.any(Error) })
+    );
+  });
+
+  it("logs invalid model warning and stores normalized model", async () => {
+    const { handler, repository, validateReasoningEffort, generateId, log } = createHandler();
+    validateReasoningEffort.mockReturnValue(null);
+    generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: "acme",
+          repoName: "repo",
+          model: "invalid/model-name",
+          userId: "user-1",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(repository.upsertSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: getValidModelOrDefault("invalid/model-name"),
+      })
+    );
+    expect(log.warn).toHaveBeenCalledWith("Invalid model name, using default", {
+      requested_model: "invalid/model-name",
+      default_model: getValidModelOrDefault("invalid/model-name"),
+    });
+  });
+
   it("returns 404 state response when session is missing", async () => {
     const { handler, getSession } = createHandler();
     getSession.mockReturnValue(null);

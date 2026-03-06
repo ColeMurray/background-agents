@@ -1,9 +1,42 @@
+import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
-import type { SandboxStatus, SessionStatus } from "../../../types";
+import type { SandboxStatus, SessionStatus, SpawnSource } from "../../../types";
+import type { SessionRepository } from "../../repository";
+import { getValidModelOrDefault, isValidModel } from "../../../utils/models";
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "archived", "cancelled", "failed"]);
 
+interface InitRequest {
+  sessionName: string;
+  repoOwner: string;
+  repoName: string;
+  repoId?: number;
+  defaultBranch?: string;
+  branch?: string;
+  title?: string;
+  model?: string;
+  reasoningEffort?: string;
+  userId: string;
+  scmLogin?: string;
+  scmName?: string;
+  scmEmail?: string;
+  scmToken?: string | null;
+  scmTokenEncrypted?: string | null;
+  parentSessionId?: string | null;
+  spawnSource?: SpawnSource;
+  spawnDepth?: number;
+}
+
 export interface SessionLifecycleHandlerDeps {
+  repository: Pick<SessionRepository, "upsertSession" | "createSandbox" | "createParticipant">;
+  getDurableObjectId: () => string;
+  tokenEncryptionKey?: string;
+  encryptToken: (token: string, encryptionKey: string) => Promise<string>;
+  validateReasoningEffort: (model: string, effort: string | undefined) => string | null;
+  generateId: (bytes?: number) => string;
+  now: () => number;
+  scheduleWarmSandbox: () => void;
+  getLog: () => Logger;
   getSession: () => SessionRow | null;
   getSandbox: () => SandboxRow | null;
   getPublicSessionId: (session: SessionRow) => string;
@@ -16,6 +49,7 @@ export interface SessionLifecycleHandlerDeps {
 }
 
 export interface SessionLifecycleHandler {
+  init: (request: Request) => Promise<Response>;
   getState: () => Response;
   archive: (request: Request) => Promise<Response>;
   unarchive: (request: Request) => Promise<Response>;
@@ -30,6 +64,80 @@ export function createSessionLifecycleHandler(
   deps: SessionLifecycleHandlerDeps
 ): SessionLifecycleHandler {
   return {
+    async init(request: Request): Promise<Response> {
+      const body = (await request.json()) as InitRequest;
+
+      const sessionId = deps.getDurableObjectId();
+      const sessionName = body.sessionName;
+      const now = deps.now();
+
+      let encryptedToken = body.scmTokenEncrypted ?? null;
+      if (body.scmToken && deps.tokenEncryptionKey) {
+        try {
+          encryptedToken = await deps.encryptToken(body.scmToken, deps.tokenEncryptionKey);
+          deps.getLog().debug("Encrypted SCM token for storage");
+        } catch (error) {
+          deps.getLog().error("Failed to encrypt SCM token", {
+            error: error instanceof Error ? error : String(error),
+          });
+        }
+      }
+
+      const model = getValidModelOrDefault(body.model);
+      if (body.model && !isValidModel(body.model)) {
+        deps.getLog().warn("Invalid model name, using default", {
+          requested_model: body.model,
+          default_model: model,
+        });
+      }
+
+      const reasoningEffort = deps.validateReasoningEffort(model, body.reasoningEffort);
+      const baseBranch = body.branch || body.defaultBranch || "main";
+
+      deps.repository.upsertSession({
+        id: sessionId,
+        sessionName,
+        title: body.title ?? null,
+        repoOwner: body.repoOwner,
+        repoName: body.repoName,
+        repoId: body.repoId ?? null,
+        baseBranch,
+        model,
+        reasoningEffort,
+        status: "created",
+        parentSessionId: body.parentSessionId ?? null,
+        spawnSource: body.spawnSource ?? "user",
+        spawnDepth: body.spawnDepth ?? 0,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const sandboxId = deps.generateId();
+      deps.repository.createSandbox({
+        id: sandboxId,
+        status: "pending",
+        gitSyncStatus: "pending",
+        createdAt: 0,
+      });
+
+      const participantId = deps.generateId();
+      deps.repository.createParticipant({
+        id: participantId,
+        userId: body.userId,
+        scmLogin: body.scmLogin ?? null,
+        scmName: body.scmName ?? null,
+        scmEmail: body.scmEmail ?? null,
+        scmAccessTokenEncrypted: encryptedToken,
+        role: "owner",
+        joinedAt: now,
+      });
+
+      deps.getLog().info("Triggering sandbox spawn for new session");
+      deps.scheduleWarmSandbox();
+
+      return Response.json({ sessionId, status: "created" });
+    },
+
     getState(): Response {
       const session = deps.getSession();
       if (!session) {

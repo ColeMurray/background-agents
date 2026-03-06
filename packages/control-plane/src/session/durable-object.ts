@@ -38,12 +38,7 @@ import {
   type SourceControlProvider,
   type GitPushSpec,
 } from "../source-control";
-import {
-  DEFAULT_MODEL,
-  isValidModel,
-  isValidReasoningEffort,
-  getValidModelOrDefault,
-} from "../utils/models";
+import { DEFAULT_MODEL, isValidReasoningEffort } from "../utils/models";
 import type {
   Env,
   ClientInfo,
@@ -53,7 +48,6 @@ import type {
   SessionState,
   SessionStatus,
   SandboxStatus,
-  SpawnSource,
 } from "../types";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
@@ -141,7 +135,7 @@ export class SessionDO extends DurableObject<Env> {
 
   // Internal HTTP route table (transport wiring only; handlers remain on SessionDO).
   private readonly routes = createSessionInternalRoutes({
-    init: (request) => this.handleInit(request),
+    init: (request) => this.sessionLifecycleHandler.init(request),
     state: () => this.sessionLifecycleHandler.getState(),
     prompt: (request) => this.messagesHandler.enqueuePrompt(request),
     stop: () => this.messagesHandler.stop(),
@@ -395,6 +389,18 @@ export class SessionDO extends DurableObject<Env> {
   private get sessionLifecycleHandler(): SessionLifecycleHandler {
     if (!this._sessionLifecycleHandler) {
       this._sessionLifecycleHandler = createSessionLifecycleHandler({
+        repository: this.repository,
+        getDurableObjectId: () => this.ctx.id.toString(),
+        tokenEncryptionKey: this.env.TOKEN_ENCRYPTION_KEY,
+        encryptToken: async (token, encryptionKey) => {
+          const { encryptToken } = await import("../auth/crypto");
+          return encryptToken(token, encryptionKey);
+        },
+        validateReasoningEffort: (model, effort) => this.validateReasoningEffort(model, effort),
+        generateId: (bytes) => generateId(bytes),
+        now: () => Date.now(),
+        scheduleWarmSandbox: () => this.ctx.waitUntil(this.warmSandbox()),
+        getLog: () => this.log,
         getSession: () => this.getSession(),
         getSandbox: () => this.getSandbox(),
         getPublicSessionId: (session) => this.getPublicSessionId(session),
@@ -1566,110 +1572,6 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   // HTTP handlers
-
-  private async handleInit(request: Request): Promise<Response> {
-    const body = (await request.json()) as {
-      sessionName: string; // The name used for WebSocket routing
-      repoOwner: string;
-      repoName: string;
-      repoId?: number;
-      defaultBranch?: string; // Repo's default branch from GitHub
-      branch?: string; // User-selected branch to work on
-      title?: string;
-      model?: string; // LLM model to use
-      reasoningEffort?: string; // Reasoning effort level
-      userId: string;
-      scmLogin?: string;
-      scmName?: string;
-      scmEmail?: string;
-      scmToken?: string | null; // Plain SCM token (will be encrypted)
-      scmTokenEncrypted?: string | null; // Pre-encrypted SCM token
-      parentSessionId?: string | null;
-      spawnSource?: SpawnSource;
-      spawnDepth?: number;
-    };
-
-    const sessionId = this.ctx.id.toString();
-    const sessionName = body.sessionName; // Store the WebSocket routing name
-    const now = Date.now();
-
-    // Encrypt the SCM token if provided in plain text
-    let encryptedToken = body.scmTokenEncrypted ?? null;
-    if (body.scmToken && this.env.TOKEN_ENCRYPTION_KEY) {
-      try {
-        const { encryptToken } = await import("../auth/crypto");
-        encryptedToken = await encryptToken(body.scmToken, this.env.TOKEN_ENCRYPTION_KEY);
-        this.log.debug("Encrypted SCM token for storage");
-      } catch (err) {
-        this.log.error("Failed to encrypt SCM token", {
-          error: err instanceof Error ? err : String(err),
-        });
-      }
-    }
-
-    // Validate and normalize model name if provided
-    const model = getValidModelOrDefault(body.model);
-    if (body.model && !isValidModel(body.model)) {
-      this.log.warn("Invalid model name, using default", {
-        requested_model: body.model,
-        default_model: DEFAULT_MODEL,
-      });
-    }
-
-    // Validate reasoning effort if provided
-    const reasoningEffort = this.validateReasoningEffort(model, body.reasoningEffort);
-
-    // Resolve branch: user-selected branch takes priority, then repo default, then "main"
-    const baseBranch = body.branch || body.defaultBranch || "main";
-
-    // Create session (store both internal ID and external name)
-    this.repository.upsertSession({
-      id: sessionId,
-      sessionName, // Store the session name for WebSocket routing
-      title: body.title ?? null,
-      repoOwner: body.repoOwner,
-      repoName: body.repoName,
-      repoId: body.repoId ?? null,
-      baseBranch,
-      model,
-      reasoningEffort,
-      status: "created",
-      parentSessionId: body.parentSessionId ?? null,
-      spawnSource: body.spawnSource ?? "user",
-      spawnDepth: body.spawnDepth ?? 0,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    // Create sandbox record
-    // Note: created_at is set to 0 initially so the first spawn isn't blocked by cooldown
-    // It will be updated to the actual spawn time when spawnSandbox() is called
-    const sandboxId = generateId();
-    this.repository.createSandbox({
-      id: sandboxId,
-      status: "pending",
-      gitSyncStatus: "pending",
-      createdAt: 0,
-    });
-
-    // Create owner participant with encrypted SCM token
-    const participantId = generateId();
-    this.repository.createParticipant({
-      id: participantId,
-      userId: body.userId,
-      scmLogin: body.scmLogin ?? null,
-      scmName: body.scmName ?? null,
-      scmEmail: body.scmEmail ?? null,
-      scmAccessTokenEncrypted: encryptedToken,
-      role: "owner",
-      joinedAt: now,
-    });
-
-    this.log.info("Triggering sandbox spawn for new session");
-    this.ctx.waitUntil(this.warmSandbox());
-
-    return Response.json({ sessionId, status: "created" });
-  }
 
   private handleListParticipants(): Response {
     const participants = this.repository.listParticipants();
