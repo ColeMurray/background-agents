@@ -16,6 +16,7 @@ Usage:
 
 import json
 import logging
+import os
 import sys
 from typing import Any
 
@@ -84,6 +85,13 @@ def configure_logging() -> None:
     handler.setFormatter(JSONFormatter())
     logging.root.handlers = [handler]
     logging.root.setLevel(logging.DEBUG)
+
+    # Keep our components at DEBUG while reducing verbose transport retries from
+    # third-party clients (e.g. expected health-check connect failures).
+    third_party_level_name = os.environ.get("THIRD_PARTY_LOG_LEVEL", "INFO").upper()
+    third_party_level = getattr(logging, third_party_level_name, logging.INFO)
+    for noisy_logger in ("httpx", "httpcore"):
+        logging.getLogger(noisy_logger).setLevel(third_party_level)
 
 
 class StructuredLogger:

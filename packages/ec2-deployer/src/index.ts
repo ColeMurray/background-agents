@@ -280,10 +280,11 @@ export class EC2InstanceDO extends DurableObject<Env> {
     // Only includes dynamic configuration that cannot be baked into the AMI.
     const userData = btoa(`#!/bin/bash
 # Write dynamic Cloudflare Tunnel token
-sudo cloudflared service install "${tunnelToken}"
+# sudo cloudflared service install "${tunnelToken}"
 
 # Write dynamic environment for OpenCode server
 cat > /etc/opencode/env <<EOF
+PATH="/home/ubuntu/.nvm/versions/node/v22.19.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
 SANDBOX_ID=${config.sandboxId}
 SESSION_ID=${config.sessionId}
 CONTROL_PLANE_URL=${config.controlPlaneUrl}
@@ -296,7 +297,7 @@ VCS_CLONE_TOKEN=${config.userEnvVars?.["VCS_CLONE_TOKEN"] || config.userEnvVars?
 EOF
 
 # Trigger start-up of baked services
-systemctl restart cloudflared
+#systemctl restart cloudflared
 systemctl restart sandbox-supervisor
 `);
 
