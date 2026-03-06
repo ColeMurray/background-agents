@@ -77,6 +77,7 @@ import {
   type ChildSessionsHandler,
 } from "./http/handlers/child-sessions.handler";
 import { createSandboxHandler, type SandboxHandler } from "./http/handlers/sandbox.handler";
+import { createWsTokenHandler, type WsTokenHandler } from "./http/handlers/ws-token.handler";
 import { MessageService } from "./services/message.service";
 
 /**
@@ -124,6 +125,8 @@ export class SessionDO extends DurableObject<Env> {
   private _childSessionsHandler: ChildSessionsHandler | null = null;
   // Sandbox handler (lazily initialized)
   private _sandboxHandler: SandboxHandler | null = null;
+  // WebSocket token handler (lazily initialized)
+  private _wsTokenHandler: WsTokenHandler | null = null;
   // Sandbox event processor (lazily initialized)
   private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
 
@@ -140,7 +143,7 @@ export class SessionDO extends DurableObject<Env> {
     listArtifacts: () => this.messagesHandler.listArtifacts(),
     listMessages: (_request, url) => this.messagesHandler.listMessages(url),
     createPr: (request) => this.handleCreatePR(request),
-    wsToken: (request) => this.handleGenerateWsToken(request),
+    wsToken: (request) => this.wsTokenHandler.generateWsToken(request),
     archive: (request) => this.handleArchive(request),
     unarchive: (request) => this.handleUnarchive(request),
     verifySandboxToken: (request) => this.sandboxHandler.verifySandboxToken(request),
@@ -363,6 +366,21 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     return this._sandboxHandler;
+  }
+
+  private get wsTokenHandler(): WsTokenHandler {
+    if (!this._wsTokenHandler) {
+      this._wsTokenHandler = createWsTokenHandler({
+        repository: this.repository,
+        getParticipantByUserId: (userId) => this.participantService.getByUserId(userId),
+        generateId: (bytes) => generateId(bytes),
+        hashToken: (token) => hashToken(token),
+        now: () => Date.now(),
+        getLog: () => this.log,
+      });
+    }
+
+    return this._wsTokenHandler;
   }
 
   private get sandboxEventProcessor(): SessionSandboxEventProcessor {
@@ -1725,102 +1743,6 @@ export class SessionDO extends DurableObject<Env> {
       });
       return null;
     }
-  }
-
-  /**
-   * Generate a WebSocket authentication token for a participant.
-   *
-   * This endpoint:
-   * 1. Creates or updates a participant record
-   * 2. Generates a 256-bit random token
-   * 3. Stores the SHA-256 hash in the participant record
-   * 4. Optionally stores encrypted SCM token for PR creation
-   * 5. Returns the plain token to the caller
-   */
-  private async handleGenerateWsToken(request: Request): Promise<Response> {
-    const body = (await request.json()) as {
-      userId: string;
-      scmUserId?: string;
-      scmLogin?: string;
-      scmName?: string;
-      scmEmail?: string;
-      scmTokenEncrypted?: string | null; // Encrypted SCM OAuth token for PR creation
-      scmRefreshTokenEncrypted?: string | null; // Encrypted SCM OAuth refresh token
-      scmTokenExpiresAt?: number | null; // Token expiry timestamp in milliseconds
-    };
-
-    if (!body.userId) {
-      return Response.json({ error: "userId is required" }, { status: 400 });
-    }
-
-    const now = Date.now();
-
-    // Check if participant exists
-    let participant = this.participantService.getByUserId(body.userId);
-
-    if (participant) {
-      // Only accept client tokens if they're newer than what we have in the DB.
-      // The server-side refresh may have rotated tokens, and the client could
-      // be sending stale values from an old session cookie.
-      const clientExpiresAt = body.scmTokenExpiresAt ?? null;
-      const dbExpiresAt = participant.scm_token_expires_at;
-      const clientSentAnyToken =
-        body.scmTokenEncrypted != null || body.scmRefreshTokenEncrypted != null;
-
-      const shouldUpdateTokens =
-        clientSentAnyToken &&
-        (dbExpiresAt == null || (clientExpiresAt != null && clientExpiresAt > dbExpiresAt));
-
-      // If we already have a refresh token (server-side refresh may rotate it),
-      // only accept an incoming refresh token when we're also accepting the
-      // access token update, or when we don't have one yet.
-      const shouldUpdateRefreshToken =
-        body.scmRefreshTokenEncrypted != null &&
-        (participant.scm_refresh_token_encrypted == null || shouldUpdateTokens);
-
-      this.repository.updateParticipantCoalesce(participant.id, {
-        scmUserId: body.scmUserId ?? null,
-        scmLogin: body.scmLogin ?? null,
-        scmName: body.scmName ?? null,
-        scmEmail: body.scmEmail ?? null,
-        scmAccessTokenEncrypted: shouldUpdateTokens ? (body.scmTokenEncrypted ?? null) : null,
-        scmRefreshTokenEncrypted: shouldUpdateRefreshToken
-          ? (body.scmRefreshTokenEncrypted ?? null)
-          : null,
-        scmTokenExpiresAt: shouldUpdateTokens ? clientExpiresAt : null,
-      });
-    } else {
-      // Create new participant with optional SCM token
-      const id = generateId();
-      this.repository.createParticipant({
-        id,
-        userId: body.userId,
-        scmUserId: body.scmUserId ?? null,
-        scmLogin: body.scmLogin ?? null,
-        scmName: body.scmName ?? null,
-        scmEmail: body.scmEmail ?? null,
-        scmAccessTokenEncrypted: body.scmTokenEncrypted ?? null,
-        scmRefreshTokenEncrypted: body.scmRefreshTokenEncrypted ?? null,
-        scmTokenExpiresAt: body.scmTokenExpiresAt ?? null,
-        role: "member",
-        joinedAt: now,
-      });
-      participant = this.participantService.getByUserId(body.userId)!;
-    }
-
-    // Generate a new WebSocket token (32 bytes = 256 bits)
-    const plainToken = generateId(32);
-    const tokenHash = await hashToken(plainToken);
-
-    // Store the hash (invalidates any previous token)
-    this.repository.updateParticipantWsToken(participant.id, tokenHash, now);
-
-    this.log.info("Generated WS token", { participant_id: participant.id, user_id: body.userId });
-
-    return Response.json({
-      token: plainToken,
-      participantId: participant.id,
-    });
   }
 
   /**
