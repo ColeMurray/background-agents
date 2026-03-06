@@ -18,6 +18,10 @@ describe("extractModelFromLabels", () => {
     expect(extractModelFromLabels([{ name: "Model:Sonnet" }])).toBe("anthropic/claude-sonnet-4-5");
   });
 
+  it("returns GPT 5.4 for model:gpt-5.4 label", () => {
+    expect(extractModelFromLabels([{ name: "model:gpt-5.4" }])).toBe("openai/gpt-5.4");
+  });
+
   it("returns null for unknown model label", () => {
     expect(extractModelFromLabels([{ name: "model:unknown-model" }])).toBeNull();
   });

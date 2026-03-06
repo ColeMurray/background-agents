@@ -49,7 +49,7 @@ export default function Home() {
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const sessionCreationPromise = useRef<Promise<string | null> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const pendingConfigRef = useRef<{ repo: string; model: string } | null>(null);
+  const pendingConfigRef = useRef<{ repo: string; model: string; branch: string } | null>(null);
   const hasHydratedModelPreferences = useRef(false);
   const { enabledModels, enabledModelOptions } = useEnabledModels();
   const selectedRepoOwner = selectedRepo.split("/")[0] ?? "";
@@ -125,7 +125,7 @@ export default function Home() {
 
     setIsCreatingSession(true);
     const [owner, name] = selectedRepo.split("/");
-    const currentConfig = { repo: selectedRepo, model: selectedModel };
+    const currentConfig = { repo: selectedRepo, model: selectedModel, branch: selectedBranch };
     pendingConfigRef.current = currentConfig;
 
     const abortController = new AbortController();
@@ -150,7 +150,8 @@ export default function Home() {
           const data = await res.json();
           if (
             pendingConfigRef.current?.repo === currentConfig.repo &&
-            pendingConfigRef.current?.model === currentConfig.model
+            pendingConfigRef.current?.model === currentConfig.model &&
+            pendingConfigRef.current?.branch === currentConfig.branch
           ) {
             setPendingSessionId(data.sessionId);
             return data.sessionId as string;

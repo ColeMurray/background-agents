@@ -16,15 +16,17 @@ type RepoImageRow = {
 
 const QUERY_PATTERNS = {
   INSERT_BUILD: /^INSERT INTO repo_images/,
-  SELECT_BY_ID: /^SELECT repo_owner, repo_name FROM repo_images WHERE id = \?$/,
+  SELECT_BY_ID: /^SELECT repo_owner, repo_name, base_branch FROM repo_images WHERE id = \?$/,
   SELECT_READY_FOR_REPO:
-    /^SELECT id, provider_image_id FROM repo_images WHERE repo_owner = \? AND repo_name = \? AND status = 'ready'$/,
+    /^SELECT id, provider_image_id FROM repo_images WHERE repo_owner = \? AND repo_name = \? AND base_branch = \? AND status = 'ready'$/,
   UPDATE_READY:
     /^UPDATE repo_images SET status = 'ready', provider_image_id = \?, base_sha = \?, build_duration_seconds = \? WHERE id = \?$/,
   DELETE_BY_ID: /^DELETE FROM repo_images WHERE id = \?$/,
   UPDATE_FAILED: /^UPDATE repo_images SET status = 'failed', error_message = \? WHERE id = \?$/,
   SELECT_LATEST_READY:
     /^SELECT \* FROM repo_images WHERE repo_owner = \? AND repo_name = \? AND status = 'ready' ORDER BY created_at DESC LIMIT 1$/,
+  SELECT_LATEST_READY_WITH_BRANCH:
+    /^SELECT \* FROM repo_images WHERE repo_owner = \? AND repo_name = \? AND base_branch = \? AND status = 'ready' ORDER BY created_at DESC LIMIT 1$/,
   SELECT_STATUS:
     /^SELECT \* FROM repo_images WHERE repo_owner = \? AND repo_name = \? ORDER BY created_at DESC LIMIT 10$/,
   SELECT_ALL_STATUS: /^SELECT \* FROM repo_images ORDER BY created_at DESC LIMIT 100$/,
@@ -50,17 +52,42 @@ class FakeD1Database {
     if (QUERY_PATTERNS.SELECT_BY_ID.test(normalized)) {
       const [id] = args as [string];
       const row = this.rows.get(id);
-      return row ? { repo_owner: row.repo_owner, repo_name: row.repo_name } : null;
+      return row
+        ? { repo_owner: row.repo_owner, repo_name: row.repo_name, base_branch: row.base_branch }
+        : null;
     }
 
     if (QUERY_PATTERNS.SELECT_READY_FOR_REPO.test(normalized)) {
-      const [owner, name] = args as [string, string];
+      const [owner, name, branch] = args as [string, string, string];
       for (const row of this.rows.values()) {
-        if (row.repo_owner === owner && row.repo_name === name && row.status === "ready") {
+        if (
+          row.repo_owner === owner &&
+          row.repo_name === name &&
+          row.base_branch === branch &&
+          row.status === "ready"
+        ) {
           return { id: row.id, provider_image_id: row.provider_image_id };
         }
       }
       return null;
+    }
+
+    if (QUERY_PATTERNS.SELECT_LATEST_READY_WITH_BRANCH.test(normalized)) {
+      const [owner, name, branch] = args as [string, string, string];
+      let latest: RepoImageRow | null = null;
+      for (const row of this.rows.values()) {
+        if (
+          row.repo_owner === owner &&
+          row.repo_name === name &&
+          row.base_branch === branch &&
+          row.status === "ready"
+        ) {
+          if (!latest || row.created_at > latest.created_at) {
+            latest = row;
+          }
+        }
+      }
+      return latest ? { ...latest } : null;
     }
 
     if (QUERY_PATTERNS.SELECT_LATEST_READY.test(normalized)) {
@@ -399,6 +426,77 @@ describe("RepoImageStore", () => {
 
       const result = await store.getLatestReady("ACME", "REPO");
       expect(result).not.toBeNull();
+    });
+
+    it("filters by baseBranch when provided", async () => {
+      await store.registerBuild({
+        id: "img-main",
+        repoOwner: "acme",
+        repoName: "repo",
+        baseBranch: "main",
+      });
+      await store.markReady("img-main", "modal-img-main", "sha-main", 30);
+
+      vi.advanceTimersByTime(1000);
+
+      await store.registerBuild({
+        id: "img-dev",
+        repoOwner: "acme",
+        repoName: "repo",
+        baseBranch: "develop",
+      });
+      await store.markReady("img-dev", "modal-img-dev", "sha-dev", 25);
+
+      // Without branch filter: returns most recent (develop)
+      const anyBranch = await store.getLatestReady("acme", "repo");
+      expect(anyBranch).not.toBeNull();
+      expect(anyBranch!.id).toBe("img-dev");
+
+      // With branch filter: returns the matching branch only
+      const mainOnly = await store.getLatestReady("acme", "repo", "main");
+      expect(mainOnly).not.toBeNull();
+      expect(mainOnly!.id).toBe("img-main");
+      expect(mainOnly!.base_branch).toBe("main");
+
+      const devOnly = await store.getLatestReady("acme", "repo", "develop");
+      expect(devOnly).not.toBeNull();
+      expect(devOnly!.id).toBe("img-dev");
+
+      // No image for this branch
+      const staging = await store.getLatestReady("acme", "repo", "staging");
+      expect(staging).toBeNull();
+    });
+  });
+
+  describe("markReady branch isolation", () => {
+    it("only replaces the previous ready image on the same branch", async () => {
+      // Build and mark ready on main
+      await store.registerBuild({
+        id: "img-main",
+        repoOwner: "acme",
+        repoName: "repo",
+        baseBranch: "main",
+      });
+      await store.markReady("img-main", "modal-img-main", "sha-main", 30);
+
+      vi.advanceTimersByTime(1000);
+
+      // Build and mark ready on develop — should NOT replace main's image
+      await store.registerBuild({
+        id: "img-dev",
+        repoOwner: "acme",
+        repoName: "repo",
+        baseBranch: "develop",
+      });
+      const result = await store.markReady("img-dev", "modal-img-dev", "sha-dev", 25);
+
+      // No replacement since no previous ready image on "develop"
+      expect(result.replacedImageId).toBeNull();
+
+      // main image should still be intact
+      const mainImage = await store.getLatestReady("acme", "repo", "main");
+      expect(mainImage).not.toBeNull();
+      expect(mainImage!.id).toBe("img-main");
     });
   });
 

@@ -169,13 +169,15 @@ class SandboxSupervisor:
                     stderr=asyncio.subprocess.PIPE,
                 )
 
-            # Fetch latest changes for the target branch
+            # Fetch latest changes for the target branch (explicit refspec
+            # so that refs/remotes/origin/<branch> is created even in shallow
+            # clones that were originally set up for a different branch).
             base_branch = self.base_branch
             result = await asyncio.create_subprocess_exec(
                 "git",
                 "fetch",
                 "origin",
-                base_branch,
+                f"{base_branch}:refs/remotes/origin/{base_branch}",
                 cwd=self.repo_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -191,10 +193,13 @@ class SandboxSupervisor:
                 )
                 return False
 
-            # Rebase onto latest
+            # Switch to the target branch (may differ from the currently
+            # checked-out branch when using a repo-image built from another branch).
             result = await asyncio.create_subprocess_exec(
                 "git",
-                "rebase",
+                "checkout",
+                "-B",
+                base_branch,
                 f"origin/{base_branch}",
                 cwd=self.repo_path,
                 stdout=asyncio.subprocess.PIPE,
@@ -203,19 +208,12 @@ class SandboxSupervisor:
             await result.wait()
 
             if result.returncode != 0:
-                # Check if there's actually a rebase in progress before trying to abort
-                rebase_merge = self.repo_path / ".git" / "rebase-merge"
-                rebase_apply = self.repo_path / ".git" / "rebase-apply"
-                if rebase_merge.exists() or rebase_apply.exists():
-                    await asyncio.create_subprocess_exec(
-                        "git",
-                        "rebase",
-                        "--abort",
-                        cwd=self.repo_path,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                self.log.warn("git.rebase_error", base_branch=base_branch)
+                stderr = await result.stderr.read() if result.stderr else b""
+                self.log.warn(
+                    "git.checkout_error",
+                    stderr=stderr.decode(),
+                    base_branch=base_branch,
+                )
 
             # Get current SHA
             result = await asyncio.create_subprocess_exec(
@@ -770,7 +768,6 @@ class SandboxSupervisor:
                 )
                 return
 
-            # Check if we're behind the remote
             # Get the current branch
             result = await asyncio.create_subprocess_exec(
                 "git",
@@ -784,7 +781,47 @@ class SandboxSupervisor:
             stdout, _ = await result.communicate()
             current_branch = stdout.decode().strip()
 
-            # Check if we have an upstream set
+            # If the snapshot was taken from a different branch than the one
+            # requested for this session, switch to the correct branch.
+            base_branch = self.base_branch
+            if current_branch != base_branch:
+                self.log.info(
+                    "git.snapshot_branch_mismatch",
+                    current_branch=current_branch,
+                    target_branch=base_branch,
+                )
+                # Explicit refspec fetch — in single-branch shallow clones,
+                # a plain `git fetch origin` only updates the configured branch.
+                result = await asyncio.create_subprocess_exec(
+                    "git",
+                    "fetch",
+                    "origin",
+                    f"{base_branch}:refs/remotes/origin/{base_branch}",
+                    cwd=self.repo_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await result.communicate()
+                result = await asyncio.create_subprocess_exec(
+                    "git",
+                    "checkout",
+                    "-B",
+                    base_branch,
+                    f"origin/{base_branch}",
+                    cwd=self.repo_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _stdout, stderr = await result.communicate()
+                if result.returncode != 0:
+                    self.log.warn(
+                        "git.snapshot_checkout_error",
+                        stderr=stderr.decode(),
+                        target_branch=base_branch,
+                    )
+                return
+
+            # Check if we're behind the remote on the current branch
             result = await asyncio.create_subprocess_exec(
                 "git",
                 "rev-list",
@@ -836,13 +873,15 @@ class SandboxSupervisor:
                 if set_url.returncode != 0:
                     self.log.warn("git.set_url_failed", exit_code=set_url.returncode)
 
-            # Fetch latest for the target branch
+            # Fetch latest for the target branch (explicit refspec so
+            # origin/<branch> is created even when the repo image was built
+            # from a different branch).
             base_branch = self.base_branch
             result = await asyncio.create_subprocess_exec(
                 "git",
                 "fetch",
                 "origin",
-                base_branch,
+                f"{base_branch}:refs/remotes/origin/{base_branch}",
                 cwd=self.repo_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -857,10 +896,13 @@ class SandboxSupervisor:
                 )
                 self.git_sync_complete.set()
                 return False
+
+            # Switch to the target branch and reset to the remote tip.
             result = await asyncio.create_subprocess_exec(
                 "git",
-                "reset",
-                "--hard",
+                "checkout",
+                "-B",
+                base_branch,
                 f"origin/{base_branch}",
                 cwd=self.repo_path,
                 stdout=asyncio.subprocess.PIPE,
@@ -870,7 +912,7 @@ class SandboxSupervisor:
 
             if result.returncode != 0:
                 self.log.error(
-                    "git.incremental_reset_error",
+                    "git.incremental_checkout_error",
                     stderr=stderr.decode(),
                     exit_code=result.returncode,
                 )
