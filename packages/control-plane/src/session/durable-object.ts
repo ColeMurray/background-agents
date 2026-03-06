@@ -53,7 +53,6 @@ import type {
   SessionState,
   SessionStatus,
   SandboxStatus,
-  ParticipantRole,
   SpawnSource,
 } from "../types";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
@@ -77,6 +76,7 @@ import {
   createChildSessionsHandler,
   type ChildSessionsHandler,
 } from "./http/handlers/child-sessions.handler";
+import { createSandboxHandler, type SandboxHandler } from "./http/handlers/sandbox.handler";
 import { MessageService } from "./services/message.service";
 
 /**
@@ -122,6 +122,8 @@ export class SessionDO extends DurableObject<Env> {
   private _messagesHandler: MessagesHandler | null = null;
   // Child sessions handler (lazily initialized)
   private _childSessionsHandler: ChildSessionsHandler | null = null;
+  // Sandbox handler (lazily initialized)
+  private _sandboxHandler: SandboxHandler | null = null;
   // Sandbox event processor (lazily initialized)
   private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
 
@@ -131,9 +133,9 @@ export class SessionDO extends DurableObject<Env> {
     state: () => this.handleGetState(),
     prompt: (request) => this.messagesHandler.enqueuePrompt(request),
     stop: () => this.messagesHandler.stop(),
-    sandboxEvent: (request) => this.handleSandboxEvent(request),
+    sandboxEvent: (request) => this.sandboxHandler.sandboxEvent(request),
     listParticipants: () => this.handleListParticipants(),
-    addParticipant: (request) => this.handleAddParticipant(request),
+    addParticipant: (request) => this.sandboxHandler.addParticipant(request),
     listEvents: (_request, url) => this.messagesHandler.listEvents(url),
     listArtifacts: () => this.messagesHandler.listArtifacts(),
     listMessages: (_request, url) => this.messagesHandler.listMessages(url),
@@ -141,8 +143,8 @@ export class SessionDO extends DurableObject<Env> {
     wsToken: (request) => this.handleGenerateWsToken(request),
     archive: (request) => this.handleArchive(request),
     unarchive: (request) => this.handleUnarchive(request),
-    verifySandboxToken: (request) => this.handleVerifySandboxToken(request),
-    openaiTokenRefresh: () => this.handleOpenAITokenRefresh(),
+    verifySandboxToken: (request) => this.sandboxHandler.verifySandboxToken(request),
+    openaiTokenRefresh: () => this.sandboxHandler.openaiTokenRefresh(),
     spawnContext: () => this.childSessionsHandler.getSpawnContext(),
     childSummary: () => this.childSessionsHandler.getChildSummary(),
     cancel: () => this.handleCancel(),
@@ -333,6 +335,34 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     return this._childSessionsHandler;
+  }
+
+  private get sandboxHandler(): SandboxHandler {
+    if (!this._sandboxHandler) {
+      this._sandboxHandler = createSandboxHandler({
+        repository: this.repository,
+        processSandboxEvent: (event) => this.processSandboxEvent(event),
+        getSandbox: () => this.getSandbox(),
+        isValidSandboxToken: (token, sandbox) => this.isValidSandboxToken(token, sandbox),
+        getSession: () => this.getSession(),
+        refreshOpenAIToken: async (session) => {
+          const service = new OpenAITokenRefreshService(
+            this.env.DB!,
+            this.env.REPO_SECRETS_ENCRYPTION_KEY!,
+            (sessionRow) => this.ensureRepoId(sessionRow),
+            this.log
+          );
+          return service.refresh(session);
+        },
+        isOpenAISecretsConfigured: () =>
+          Boolean(this.env.DB && this.env.REPO_SECRETS_ENCRYPTION_KEY),
+        generateId: () => generateId(),
+        now: () => Date.now(),
+        getLog: () => this.log,
+      });
+    }
+
+    return this._sandboxHandler;
   }
 
   private get sandboxEventProcessor(): SessionSandboxEventProcessor {
@@ -1450,102 +1480,6 @@ export class SessionDO extends DurableObject<Env> {
     return false;
   }
 
-  /**
-   * Verify a sandbox authentication token.
-   * Called by the router to validate sandbox-originated requests.
-   */
-  private async handleVerifySandboxToken(request: Request): Promise<Response> {
-    const body = (await request.json()) as { token: string };
-
-    if (!body.token) {
-      return new Response(JSON.stringify({ valid: false, error: "Missing token" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    const sandbox = this.getSandbox();
-    if (!sandbox) {
-      this.log.warn("Sandbox token verification failed: no sandbox");
-      return new Response(JSON.stringify({ valid: false, error: "No sandbox" }), {
-        status: 404,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    // Check if sandbox is in an active state
-    if (sandbox.status === "stopped" || sandbox.status === "stale") {
-      this.log.warn("Sandbox token verification failed: sandbox is stopped/stale", {
-        status: sandbox.status,
-      });
-      return new Response(JSON.stringify({ valid: false, error: "Sandbox stopped" }), {
-        status: 410,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    // Validate the token
-    const isTokenValid = await this.isValidSandboxToken(body.token, sandbox);
-    if (!isTokenValid) {
-      this.log.warn("Sandbox token verification failed: token mismatch");
-      return new Response(JSON.stringify({ valid: false, error: "Invalid token" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    this.log.info("Sandbox token verified successfully");
-    return new Response(JSON.stringify({ valid: true }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-
-  /**
-   * Handle OpenAI token refresh.
-   * Reads the refresh token from D1 secrets, calls OpenAI, stores the rotated
-   * token back, and returns only the access token to the sandbox.
-   */
-  private async handleOpenAITokenRefresh(): Promise<Response> {
-    const session = this.getSession();
-    if (!session) {
-      return this.openAIRefreshJsonResponse({ error: "No session" }, 404);
-    }
-
-    const encryptionKey = this.env.REPO_SECRETS_ENCRYPTION_KEY;
-    if (!this.env.DB || !encryptionKey) {
-      return this.openAIRefreshJsonResponse({ error: "Secrets not configured" }, 500);
-    }
-
-    const service = new OpenAITokenRefreshService(
-      this.env.DB,
-      encryptionKey,
-      (sessionRow) => this.ensureRepoId(sessionRow),
-      this.log
-    );
-
-    const result = await service.refresh(session);
-    if (!result.ok) {
-      return this.openAIRefreshJsonResponse({ error: result.error }, result.status);
-    }
-
-    return this.openAIRefreshJsonResponse(
-      {
-        access_token: result.accessToken,
-        expires_in: result.expiresIn,
-        account_id: result.accountId,
-      },
-      200
-    );
-  }
-
-  private openAIRefreshJsonResponse(body: unknown, status: number): Response {
-    return new Response(JSON.stringify(body), {
-      status,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-
   private updateSandboxStatus(status: string): void {
     this.repository.updateSandboxStatus(status as SandboxStatus);
   }
@@ -1691,12 +1625,6 @@ export class SessionDO extends DurableObject<Env> {
     });
   }
 
-  private async handleSandboxEvent(request: Request): Promise<Response> {
-    const event = (await request.json()) as SandboxEvent;
-    await this.processSandboxEvent(event);
-    return Response.json({ status: "ok" });
-  }
-
   private handleListParticipants(): Response {
     const participants = this.repository.listParticipants();
 
@@ -1710,31 +1638,6 @@ export class SessionDO extends DurableObject<Env> {
         joinedAt: p.joined_at,
       })),
     });
-  }
-
-  private async handleAddParticipant(request: Request): Promise<Response> {
-    const body = (await request.json()) as {
-      userId: string;
-      scmLogin?: string;
-      scmName?: string;
-      scmEmail?: string;
-      role?: string;
-    };
-
-    const id = generateId();
-    const now = Date.now();
-
-    this.repository.createParticipant({
-      id,
-      userId: body.userId,
-      scmLogin: body.scmLogin ?? null,
-      scmName: body.scmName ?? null,
-      scmEmail: body.scmEmail ?? null,
-      role: (body.role ?? "member") as ParticipantRole,
-      joinedAt: now,
-    });
-
-    return Response.json({ id, status: "added" });
   }
 
   /**
