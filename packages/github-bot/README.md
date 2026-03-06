@@ -13,6 +13,12 @@ reaction, creates a session via the control plane, and sends a prompt. The agent
 handles all GitHub interaction (posting reviews, comments, pushing code) directly using the `gh`
 CLI.
 
+Webhook deliveries are deduplicated with Cloudflare KV using `X-GitHub-Delivery`, so GitHub retries
+and manual redeliveries do not create duplicate sessions.
+
+Because Cloudflare KV is eventually consistent, this is a best-effort dedupe guard rather than a
+strict cross-region lock.
+
 ## Architecture
 
 ```
@@ -40,8 +46,9 @@ Key design decisions:
 - **Unidirectional service binding**: The bot calls the control plane to create sessions and send
   prompts. There is no reverse binding — the agent posts results to GitHub directly from the
   sandbox.
-- **No session reuse**: Every webhook event creates a fresh session. Git provides continuity (the
-  agent clones the latest branch state). No KV state, no TTLs, no staleness.
+- **No session reuse**: Every non-duplicate webhook delivery creates a fresh session. Git provides
+  continuity (the agent clones the latest branch state). Delivery dedupe is handled separately in KV
+  using `X-GitHub-Delivery`.
 - **No PR context fetching**: The bot only uses metadata already in the webhook payload. The agent
   gathers additional context (diffs, prior comments, file contents) itself using `gh` CLI.
 
@@ -58,6 +65,7 @@ The bot is deployed via Terraform as a standalone Cloudflare Worker alongside th
 
 | Binding                      | Type                  | Description                                                                         |
 | ---------------------------- | --------------------- | ----------------------------------------------------------------------------------- |
+| `GITHUB_KV`                  | KV namespace          | Delivery dedupe store keyed by `X-GitHub-Delivery`                                  |
 | `CONTROL_PLANE`              | Service binding       | Fetcher to the control plane worker                                                 |
 | `DEPLOYMENT_NAME`            | Plain text            | Deployment identifier for logging                                                   |
 | `DEFAULT_MODEL`              | Plain text            | Model ID for new sessions (e.g., `anthropic/claude-haiku-4-5`)                      |
@@ -99,7 +107,7 @@ For the agent to interact with GitHub from the sandbox, two prerequisites must b
 | `pull_request_review_comment` | `created`          | @mention in a review thread | `handleReviewComment`     |
 
 All events are processed asynchronously via `executionCtx.waitUntil()`. The webhook endpoint returns
-200 immediately after signature verification.
+200 immediately after signature verification and delivery dedupe.
 
 ### Handler Flows
 
@@ -185,15 +193,18 @@ GitHub webhook → Bot (trace_id generated) → Control plane (trace_id in x-tra
 
 Key log events:
 
-| Event                       | Level | When                                       |
-| --------------------------- | ----- | ------------------------------------------ |
-| `webhook.received`          | info  | Webhook arrives (event type, repo, action) |
-| `webhook.signature_invalid` | warn  | Signature verification fails               |
-| `webhook.ignored`           | debug | Event doesn't match any handler            |
-| `session.created`           | info  | Session created via control plane          |
-| `prompt.sent`               | info  | Prompt delivered to session                |
-| `acknowledgment.posted`     | debug | Eyes reaction posted                       |
-| `acknowledgment.failed`     | warn  | Reaction failed (non-blocking)             |
+| Event                            | Level | When                                          |
+| -------------------------------- | ----- | --------------------------------------------- |
+| `webhook.received`               | info  | Webhook arrives (event type, repo, action)    |
+| `webhook.duplicate_delivery`     | info  | Redelivery or replay skipped by delivery ID   |
+| `webhook.dedupe_finalize_failed` | warn  | Success path could not extend dedupe TTL      |
+| `webhook.dedupe_clear_failed`    | warn  | Failure path could not clear in-flight marker |
+| `webhook.signature_invalid`      | warn  | Signature verification fails                  |
+| `webhook.ignored`                | debug | Event doesn't match any handler               |
+| `session.created`                | info  | Session created via control plane             |
+| `prompt.sent`                    | info  | Prompt delivered to session                   |
+| `acknowledgment.posted`          | debug | Eyes reaction posted                          |
+| `acknowledgment.failed`          | warn  | Reaction failed (non-blocking)                |
 
 ## Development
 

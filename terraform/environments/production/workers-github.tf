@@ -24,6 +24,13 @@ module "github_bot_worker" {
   worker_name = "open-inspect-github-bot-${local.name_suffix}"
   script_path = local.github_bot_script_path
 
+  kv_namespaces = [
+    {
+      binding_name = "GITHUB_KV"
+      namespace_id = module.github_kv[0].namespace_id
+    }
+  ]
+
   service_bindings = [
     {
       binding_name = "CONTROL_PLANE"
@@ -50,5 +57,5 @@ module "github_bot_worker" {
   compatibility_date  = "2024-09-23"
   compatibility_flags = ["nodejs_compat"]
 
-  depends_on = [null_resource.github_bot_build[0], module.control_plane_worker]
+  depends_on = [null_resource.github_bot_build[0], module.control_plane_worker, module.github_kv[0]]
 }

@@ -2,6 +2,9 @@
  * Environment bindings for the GitHub Bot Cloudflare Worker.
  */
 export interface Env {
+  /** KV namespace for deduplicating webhook deliveries. */
+  GITHUB_KV: KVNamespace;
+
   /** Service binding to the control plane worker. */
   CONTROL_PLANE: Fetcher;
 

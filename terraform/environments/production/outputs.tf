@@ -13,6 +13,11 @@ output "slack_kv_id" {
   value       = var.enable_slack_bot ? module.slack_kv[0].namespace_id : null
 }
 
+output "github_kv_id" {
+  description = "GitHub KV namespace ID"
+  value       = var.enable_github_bot ? module.github_kv[0].namespace_id : null
+}
+
 # Cloudflare D1 Database
 output "d1_database_id" {
   description = "The ID of the D1 database"
