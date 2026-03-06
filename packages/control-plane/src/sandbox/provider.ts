@@ -71,6 +71,10 @@ export interface CreateSandboxResult {
   status: string;
   /** Creation timestamp */
   createdAt: number;
+  /** Code-server tunnel URL (if available) */
+  codeServerUrl?: string;
+  /** Code-server password (if available) */
+  codeServerPassword?: string;
 }
 
 /**
@@ -117,6 +121,10 @@ export interface RestoreResult {
   providerObjectId?: string;
   /** Error message if failed */
   error?: string;
+  /** Code-server tunnel URL (if available) */
+  codeServerUrl?: string;
+  /** Code-server password (if available) */
+  codeServerPassword?: string;
 }
 
 /**

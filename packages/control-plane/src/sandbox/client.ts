@@ -45,6 +45,8 @@ export interface CreateSandboxResponse {
   modalObjectId?: string; // Modal's internal object ID for snapshot API
   status: string;
   createdAt: number;
+  codeServerUrl?: string;
+  codeServerPassword?: string;
 }
 
 export interface RestoreSandboxRequest {
@@ -67,6 +69,8 @@ export interface RestoreSandboxResponse {
   sandboxId?: string;
   modalObjectId?: string;
   error?: string;
+  codeServerUrl?: string;
+  codeServerPassword?: string;
 }
 
 export interface SnapshotSandboxRequest {
@@ -259,6 +263,8 @@ export class ModalClient {
         modal_object_id?: string;
         status: string;
         created_at: number;
+        code_server_url?: string;
+        code_server_password?: string;
       }>;
 
       if (!result.success || !result.data) {
@@ -271,6 +277,8 @@ export class ModalClient {
         modalObjectId: result.data.modal_object_id,
         status: result.data.status,
         createdAt: result.data.created_at,
+        codeServerUrl: result.data.code_server_url,
+        codeServerPassword: result.data.code_server_password,
       };
     } finally {
       log.info("modal.request", {
@@ -332,6 +340,8 @@ export class ModalClient {
       const result = (await response.json()) as ModalApiResponse<{
         sandbox_id: string;
         modal_object_id?: string;
+        code_server_url?: string;
+        code_server_password?: string;
       }>;
 
       if (!result.success) {
@@ -343,6 +353,8 @@ export class ModalClient {
         success: true,
         sandboxId: result.data?.sandbox_id,
         modalObjectId: result.data?.modal_object_id,
+        codeServerUrl: result.data?.code_server_url,
+        codeServerPassword: result.data?.code_server_password,
       };
     } finally {
       log.info("modal.request", {

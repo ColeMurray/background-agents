@@ -171,6 +171,8 @@ async def api_create_sandbox(
                 "modal_object_id": handle.modal_object_id,  # Modal's internal ID for snapshot API
                 "status": handle.status.value,
                 "created_at": handle.created_at,
+                "code_server_url": handle.code_server_url,
+                "code_server_password": handle.code_server_password,
             },
         }
     except Exception as e:
@@ -534,6 +536,8 @@ async def api_restore_sandbox(
                 "sandbox_id": handle.sandbox_id,
                 "modal_object_id": handle.modal_object_id,
                 "status": handle.status.value,
+                "code_server_url": handle.code_server_url,
+                "code_server_password": handle.code_server_password,
             },
         }
     except HTTPException as e:

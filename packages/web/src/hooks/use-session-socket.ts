@@ -294,6 +294,12 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           setSessionState((prev) => (prev ? { ...prev, sandboxStatus: data.status } : null));
           break;
 
+        case "code_server_info":
+          setSessionState((prev) =>
+            prev ? { ...prev, codeServerUrl: data.url, codeServerPassword: data.password } : null
+          );
+          break;
+
         case "sandbox_ready":
           setSessionState((prev) => (prev ? { ...prev, sandboxStatus: "ready" } : null));
           break;

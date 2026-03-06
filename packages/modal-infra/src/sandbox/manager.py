@@ -10,8 +10,10 @@ This module handles:
 Updated: 2026-01-15 to fix Sandbox.create API
 """
 
+import asyncio
 import json
 import os
+import secrets
 import time
 from dataclasses import dataclass
 
@@ -25,6 +27,7 @@ from .types import SandboxStatus, SessionConfig
 log = get_logger("manager")
 
 DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200  # 2 hours
+CODE_SERVER_PORT = 8080
 
 
 @dataclass
@@ -55,6 +58,8 @@ class SandboxHandle:
     created_at: float
     snapshot_id: str | None = None
     modal_object_id: str | None = None  # Modal's internal sandbox ID for API calls
+    code_server_url: str | None = None
+    code_server_password: str | None = None
 
     def get_logs(self) -> str:
         """Get sandbox logs."""
@@ -82,6 +87,31 @@ class SandboxManager:
     def _get_repo_key(self, repo_owner: str, repo_name: str) -> str:
         """Get unique key for a repository."""
         return f"{repo_owner}/{repo_name}"
+
+    @staticmethod
+    def _generate_code_server_credentials(
+        env_vars: dict[str, str],
+    ) -> str:
+        """Generate a code-server password and inject it into env_vars.
+
+        Returns the generated password.
+        """
+        password = secrets.token_urlsafe(16)
+        env_vars["CODE_SERVER_PASSWORD"] = password
+        return password
+
+    @staticmethod
+    async def _resolve_code_server_tunnel(sandbox: modal.Sandbox, sandbox_id: str) -> str | None:
+        """Resolve the code-server tunnel URL from Modal, returning None on failure."""
+        try:
+            loop = asyncio.get_event_loop()
+            tunnels = await loop.run_in_executor(None, sandbox.tunnels)
+            tunnel = tunnels[CODE_SERVER_PORT]
+            log.info("code_server.tunnel", sandbox_id=sandbox_id, url=tunnel.url)
+            return tunnel.url
+        except Exception as e:
+            log.warn("code_server.tunnel_error", sandbox_id=sandbox_id, exc=e)
+            return None
 
     @staticmethod
     def _inject_vcs_env_vars(env_vars: dict[str, str], clone_token: str | None) -> None:
@@ -144,6 +174,8 @@ class SandboxManager:
 
         self._inject_vcs_env_vars(env_vars, config.clone_token)
 
+        code_server_password = self._generate_code_server_credentials(env_vars)
+
         if config.session_config:
             env_vars["SESSION_CONFIG"] = config.session_config.model_dump_json()
 
@@ -169,11 +201,13 @@ class SandboxManager:
             timeout=config.timeout_seconds,
             workdir="/workspace",
             env=env_vars,
-            # Note: volumes parameter is not supported in Sandbox.create
+            encrypted_ports=[CODE_SERVER_PORT],
         )
 
         # Get Modal's internal object ID for API calls (snapshot, etc.)
         modal_object_id = sandbox.object_id
+        code_server_url = await self._resolve_code_server_tunnel(sandbox, sandbox_id)
+
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
             "sandbox.create",
@@ -192,6 +226,8 @@ class SandboxManager:
             created_at=time.time(),
             snapshot_id=config.snapshot_id,
             modal_object_id=modal_object_id,
+            code_server_url=code_server_url,
+            code_server_password=code_server_password,
         )
 
     async def create_build_sandbox(
@@ -453,6 +489,8 @@ class SandboxManager:
 
         self._inject_vcs_env_vars(env_vars, clone_token)
 
+        code_server_password = self._generate_code_server_credentials(env_vars)
+
         # Create the sandbox from the snapshot image
         sandbox = modal.Sandbox.create(
             "python",
@@ -464,9 +502,11 @@ class SandboxManager:
             timeout=timeout_seconds,
             workdir="/workspace",
             env=env_vars,
+            encrypted_ports=[CODE_SERVER_PORT],
         )
 
         modal_object_id = sandbox.object_id
+        code_server_url = await self._resolve_code_server_tunnel(sandbox, sandbox_id)
 
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -487,6 +527,8 @@ class SandboxManager:
             created_at=time.time(),
             snapshot_id=snapshot_image_id,
             modal_object_id=modal_object_id,
+            code_server_url=code_server_url,
+            code_server_password=code_server_password,
         )
 
     async def maintain_warm_pool(

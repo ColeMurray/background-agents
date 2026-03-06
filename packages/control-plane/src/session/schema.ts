@@ -101,6 +101,8 @@ CREATE TABLE IF NOT EXISTS sandbox (
   last_spawn_error_at INTEGER,                      -- Timestamp of last spawn error
   spawn_failure_count INTEGER DEFAULT 0,            -- Circuit breaker: consecutive spawn failures
   last_spawn_failure INTEGER,                       -- Timestamp of last spawn failure
+  code_server_url TEXT,                             -- Code-server tunnel URL (rotates on wake/restore)
+  code_server_password TEXT,                        -- Code-server password (rotates on each wake/restore)
   created_at INTEGER NOT NULL
 );
 
@@ -337,6 +339,14 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
       ALTER TABLE session ADD COLUMN parent_session_id TEXT;
       ALTER TABLE session ADD COLUMN spawn_source TEXT NOT NULL DEFAULT 'user';
       ALTER TABLE session ADD COLUMN spawn_depth INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
+  {
+    id: 26,
+    description: "Add code-server fields to sandbox",
+    run: `
+      ALTER TABLE sandbox ADD COLUMN code_server_url TEXT;
+      ALTER TABLE sandbox ADD COLUMN code_server_password TEXT;
     `,
   },
 ];

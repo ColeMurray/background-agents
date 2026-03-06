@@ -102,6 +102,8 @@ export interface SandboxRow {
   last_activity: number | null; // Last activity timestamp for inactivity-based snapshot
   last_spawn_error: string | null;
   last_spawn_error_at: number | null;
+  code_server_url: string | null;
+  code_server_password: string | null;
   created_at: number;
 }
 

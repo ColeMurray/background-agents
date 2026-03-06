@@ -80,6 +80,8 @@ export interface SandboxStorage {
   resetCircuitBreaker(): void;
   /** Persist last spawn error */
   setLastSpawnError(error: string | null, timestamp: number | null): void;
+  /** Update code-server URL and password on the sandbox row */
+  updateSandboxCodeServer(url: string, password: string): void;
 }
 
 /**
@@ -387,6 +389,11 @@ export class SandboxLifecycleManager {
         this.storage.updateSandboxModalObjectId(result.providerObjectId);
       }
 
+      // Store code-server details and push to connected clients
+      if (result.codeServerUrl) {
+        this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword ?? "");
+      }
+
       this.storage.updateSandboxStatus("connecting");
       this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
 
@@ -501,6 +508,11 @@ export class SandboxLifecycleManager {
         // Store provider's internal object ID for future snapshots
         if (result.providerObjectId) {
           this.storage.updateSandboxModalObjectId(result.providerObjectId);
+        }
+
+        // Store code-server details and push to connected clients
+        if (result.codeServerUrl) {
+          this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword ?? "");
         }
 
         this.storage.updateSandboxStatus("connecting");
@@ -799,6 +811,19 @@ export class SandboxLifecycleManager {
    */
   private getConnectedClientCount(): number {
     return this.wsManager.getConnectedClientCount();
+  }
+
+  /**
+   * Store code-server details in the database and push to connected clients.
+   * Shared by doSpawn() and restoreFromSnapshot().
+   */
+  private storeAndBroadcastCodeServer(url: string, password: string): void {
+    this.storage.updateSandboxCodeServer(url, password);
+    this.broadcaster.broadcast({
+      type: "code_server_info",
+      url,
+      password,
+    });
   }
 
   /**

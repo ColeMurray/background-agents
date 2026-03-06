@@ -81,6 +81,8 @@ export class ModalSandboxProvider implements SandboxProvider {
         providerObjectId: result.modalObjectId,
         status: result.status,
         createdAt: result.createdAt,
+        codeServerUrl: result.codeServerUrl,
+        codeServerPassword: result.codeServerPassword,
       };
     } catch (error) {
       throw this.classifyError("Failed to create sandbox", error);
@@ -115,6 +117,8 @@ export class ModalSandboxProvider implements SandboxProvider {
           success: true,
           sandboxId: result.sandboxId,
           providerObjectId: result.modalObjectId,
+          codeServerUrl: result.codeServerUrl,
+          codeServerPassword: result.codeServerPassword,
         };
       }
 

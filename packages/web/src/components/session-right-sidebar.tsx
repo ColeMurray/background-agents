@@ -7,6 +7,7 @@ import {
   MetadataSection,
   TasksSection,
   FilesChangedSection,
+  CodeServerSection,
 } from "./sidebar";
 import { ChildSessionsSection } from "./sidebar/child-sessions-section";
 import { extractLatestTasks } from "@/lib/tasks";
@@ -65,6 +66,17 @@ export function SessionRightSidebarContent({
           parentSessionId={sessionState.parentSessionId}
         />
       </div>
+
+      {/* Code Server */}
+      {sessionState.codeServerUrl && (
+        <div className="px-4 py-4 border-b border-border-muted">
+          <CodeServerSection
+            url={sessionState.codeServerUrl}
+            password={sessionState.codeServerPassword ?? ""}
+            sandboxStatus={sessionState.sandboxStatus}
+          />
+        </div>
+      )}
 
       {/* Tasks */}
       {tasks.length > 0 && (

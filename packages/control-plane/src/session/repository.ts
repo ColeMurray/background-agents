@@ -365,6 +365,14 @@ export class SessionRepository {
     );
   }
 
+  updateSandboxCodeServer(url: string, password: string): void {
+    this.sql.exec(
+      `UPDATE sandbox SET code_server_url = ?, code_server_password = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      url,
+      password
+    );
+  }
+
   resetCircuitBreaker(): void {
     this.sql.exec(
       `UPDATE sandbox SET spawn_failure_count = 0 WHERE id = (SELECT id FROM sandbox LIMIT 1)`
