@@ -80,6 +80,10 @@ import {
   createPullRequestHandler,
   type PullRequestHandler,
 } from "./http/handlers/pull-request.handler";
+import {
+  createParticipantsHandler,
+  type ParticipantsHandler,
+} from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
 
 /**
@@ -130,6 +134,8 @@ export class SessionDO extends DurableObject<Env> {
   private _sessionLifecycleHandler: SessionLifecycleHandler | null = null;
   // Pull request handler (lazily initialized)
   private _pullRequestHandler: PullRequestHandler | null = null;
+  // Participants handler (lazily initialized)
+  private _participantsHandler: ParticipantsHandler | null = null;
   // Sandbox event processor (lazily initialized)
   private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
 
@@ -140,7 +146,7 @@ export class SessionDO extends DurableObject<Env> {
     prompt: (request) => this.messagesHandler.enqueuePrompt(request),
     stop: () => this.messagesHandler.stop(),
     sandboxEvent: (request) => this.sandboxHandler.sandboxEvent(request),
-    listParticipants: () => this.handleListParticipants(),
+    listParticipants: () => this.participantsHandler.listParticipants(),
     addParticipant: (request) => this.sandboxHandler.addParticipant(request),
     listEvents: (_request, url) => this.messagesHandler.listEvents(url),
     listArtifacts: () => this.messagesHandler.listArtifacts(),
@@ -449,6 +455,16 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     return this._pullRequestHandler;
+  }
+
+  private get participantsHandler(): ParticipantsHandler {
+    if (!this._participantsHandler) {
+      this._participantsHandler = createParticipantsHandler({
+        repository: this.repository,
+      });
+    }
+
+    return this._participantsHandler;
   }
 
   private get sandboxEventProcessor(): SessionSandboxEventProcessor {
@@ -1572,21 +1588,6 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   // HTTP handlers
-
-  private handleListParticipants(): Response {
-    const participants = this.repository.listParticipants();
-
-    return Response.json({
-      participants: participants.map((p) => ({
-        id: p.id,
-        userId: p.user_id,
-        scmLogin: p.scm_login,
-        scmName: p.scm_name,
-        role: p.role,
-        joinedAt: p.joined_at,
-      })),
-    });
-  }
 
   private parseArtifactMetadata(
     artifact: Pick<ArtifactRow, "id" | "metadata">
