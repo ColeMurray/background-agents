@@ -174,7 +174,7 @@ describe("createChildSessionsHandler", () => {
     const response = handler.getSpawnContext();
 
     expect(response.status).toBe(200);
-    const body = await response.json();
+    const body = (await response.json()) as Record<string, unknown>;
     expect(body.baseBranch).toBe("feature/branch-fix");
   });
 

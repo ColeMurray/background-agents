@@ -520,7 +520,7 @@ export interface SpawnContext {
   repoId: number | null;
   model: string;
   reasoningEffort: string | null;
-  baseBranch: string;
+  baseBranch: string | null;
   owner: {
     userId: string;
     scmLogin: string | null;

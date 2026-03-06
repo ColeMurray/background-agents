@@ -790,6 +790,18 @@ class SandboxSupervisor:
                     current_branch=current_branch,
                     target_branch=base_branch,
                 )
+                # Explicit refspec fetch — in single-branch shallow clones,
+                # a plain `git fetch origin` only updates the configured branch.
+                result = await asyncio.create_subprocess_exec(
+                    "git",
+                    "fetch",
+                    "origin",
+                    f"{base_branch}:refs/remotes/origin/{base_branch}",
+                    cwd=self.repo_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await result.communicate()
                 result = await asyncio.create_subprocess_exec(
                     "git",
                     "checkout",

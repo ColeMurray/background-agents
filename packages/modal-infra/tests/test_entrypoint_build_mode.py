@@ -641,11 +641,21 @@ class TestQuickGitFetch:
         ):
             await supervisor._quick_git_fetch()
 
+        # Explicit refspec fetch must precede checkout for shallow clones
+        refspec_fetches = [c for c in call_log if "fetch" in c and "refs/remotes/origin/" in str(c)]
+        assert len(refspec_fetches) == 1
+        assert "feature/xyz:refs/remotes/origin/feature/xyz" in refspec_fetches[0]
+
         checkout_calls = [c for c in call_log if "checkout" in c]
         assert len(checkout_calls) == 1
         assert "-B" in checkout_calls[0]
         assert "feature/xyz" in checkout_calls[0]
         assert "origin/feature/xyz" in checkout_calls[0]
+
+        # Refspec fetch must happen before checkout
+        fetch_idx = call_log.index(refspec_fetches[0])
+        checkout_idx = call_log.index(checkout_calls[0])
+        assert fetch_idx < checkout_idx
 
     @pytest.mark.asyncio
     async def test_skips_checkout_when_branch_matches(self, base_env, tmp_path):
