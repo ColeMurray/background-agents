@@ -98,12 +98,137 @@ class SandboxSupervisor:
             return f"https://{self.vcs_clone_username}:{self.vcs_clone_token}@{self.vcs_host}/{self.repo_owner}/{self.repo_name}.git"
         return f"https://{self.vcs_host}/{self.repo_owner}/{self.repo_name}.git"
 
-    async def perform_git_sync(self) -> bool:
+    # ------------------------------------------------------------------
+    # Git primitives
+    # ------------------------------------------------------------------
+
+    async def _clone_repo(self) -> bool:
+        """Shallow-clone the repository."""
+        self.log.info(
+            "git.clone_start",
+            repo_owner=self.repo_owner,
+            repo_name=self.repo_name,
+            authenticated=bool(self.vcs_clone_token),
+        )
+
+        result = await asyncio.create_subprocess_exec(
+            "git",
+            "clone",
+            "--depth",
+            str(self.CLONE_DEPTH_COMMITS),
+            "--branch",
+            self.base_branch,
+            self._build_repo_url(),
+            str(self.repo_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _stdout, stderr = await result.communicate()
+
+        if result.returncode != 0:
+            self.log.error(
+                "git.clone_error",
+                stderr=stderr.decode(),
+                exit_code=result.returncode,
+            )
+            return False
+
+        self.log.info("git.clone_complete", repo_path=str(self.repo_path))
+        return True
+
+    async def _ensure_remote_auth(self) -> None:
+        """Set the remote URL with auth credentials if a clone token is available."""
+        if not self.vcs_clone_token:
+            return
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "remote",
+            "set-url",
+            "origin",
+            self._build_repo_url(),
+            cwd=self.repo_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+
+    async def _fetch_branch(self, branch: str) -> bool:
+        """Fetch a branch with an explicit refspec.
+
+        Uses an explicit refspec so that ``refs/remotes/origin/<branch>`` is
+        created even in shallow or single-branch clones.
         """
-        Clone repository if needed, then synchronize with latest changes.
+        result = await asyncio.create_subprocess_exec(
+            "git",
+            "fetch",
+            "origin",
+            f"{branch}:refs/remotes/origin/{branch}",
+            cwd=self.repo_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _stdout, stderr = await result.communicate()
+        if result.returncode != 0:
+            self.log.error(
+                "git.fetch_error",
+                stderr=stderr.decode(),
+                exit_code=result.returncode,
+            )
+            return False
+        return True
+
+    async def _checkout_branch(self, branch: str) -> bool:
+        """Create/reset a local branch to match the remote tip."""
+        result = await asyncio.create_subprocess_exec(
+            "git",
+            "checkout",
+            "-B",
+            branch,
+            f"origin/{branch}",
+            cwd=self.repo_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _stdout, stderr = await result.communicate()
+        if result.returncode != 0:
+            self.log.warn(
+                "git.checkout_error",
+                stderr=stderr.decode(),
+                target_branch=branch,
+            )
+            return False
+        return True
+
+    # ------------------------------------------------------------------
+    # Git sync methods (compose the primitives above)
+    # ------------------------------------------------------------------
+
+    async def _update_existing_repo(self) -> bool:
+        """Fetch the target branch and check it out in an existing repo.
+
+        Used by both snapshot-restore and repo-image boot paths where the
+        repository already exists on disk.
+        """
+        if not self.repo_path.exists():
+            self.log.info("git.update_skip", reason="no_repo_path")
+            return False
+
+        try:
+            await self._ensure_remote_auth()
+            branch = self.base_branch
+            if not await self._fetch_branch(branch):
+                return False
+            await self._checkout_branch(branch)
+            return True
+        except Exception as e:
+            self.log.error("git.update_error", exc=e)
+            return False
+
+    async def perform_git_sync(self) -> bool:
+        """Clone repository if needed, then sync to the target branch.
 
         Returns:
-            True if sync completed successfully, False otherwise
+            True if sync completed successfully, False otherwise.
         """
         self.log.debug(
             "git.sync_start",
@@ -113,127 +238,14 @@ class SandboxSupervisor:
             has_clone_token=bool(self.vcs_clone_token),
         )
 
-        # Clone the repository if it doesn't exist
         if not self.repo_path.exists():
             if not self.repo_owner or not self.repo_name:
                 self.log.info("git.skip_clone", reason="no_repo_configured")
-                self.git_sync_complete.set()
                 return True
-
-            self.log.info(
-                "git.clone_start",
-                repo_owner=self.repo_owner,
-                repo_name=self.repo_name,
-                authenticated=bool(self.vcs_clone_token),
-            )
-
-            clone_url = self._build_repo_url()
-            base_branch = self.base_branch
-
-            result = await asyncio.create_subprocess_exec(
-                "git",
-                "clone",
-                "--depth",
-                str(self.CLONE_DEPTH_COMMITS),
-                "--branch",
-                base_branch,
-                clone_url,
-                str(self.repo_path),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _stdout, stderr = await result.communicate()
-
-            if result.returncode != 0:
-                self.log.error(
-                    "git.clone_error",
-                    stderr=stderr.decode(),
-                    exit_code=result.returncode,
-                )
-                self.git_sync_complete.set()
+            if not await self._clone_repo():
                 return False
 
-            self.log.info("git.clone_complete", repo_path=str(self.repo_path))
-
-        try:
-            # Configure remote URL with auth token if available
-            if self.vcs_clone_token:
-                await asyncio.create_subprocess_exec(
-                    "git",
-                    "remote",
-                    "set-url",
-                    "origin",
-                    self._build_repo_url(),
-                    cwd=self.repo_path,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-
-            # Fetch latest changes for the target branch (explicit refspec
-            # so that refs/remotes/origin/<branch> is created even in shallow
-            # clones that were originally set up for a different branch).
-            base_branch = self.base_branch
-            result = await asyncio.create_subprocess_exec(
-                "git",
-                "fetch",
-                "origin",
-                f"{base_branch}:refs/remotes/origin/{base_branch}",
-                cwd=self.repo_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await result.wait()
-
-            if result.returncode != 0:
-                stderr = await result.stderr.read() if result.stderr else b""
-                self.log.error(
-                    "git.fetch_error",
-                    stderr=stderr.decode(),
-                    exit_code=result.returncode,
-                )
-                return False
-
-            # Switch to the target branch (may differ from the currently
-            # checked-out branch when using a repo-image built from another branch).
-            result = await asyncio.create_subprocess_exec(
-                "git",
-                "checkout",
-                "-B",
-                base_branch,
-                f"origin/{base_branch}",
-                cwd=self.repo_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await result.wait()
-
-            if result.returncode != 0:
-                stderr = await result.stderr.read() if result.stderr else b""
-                self.log.warn(
-                    "git.checkout_error",
-                    stderr=stderr.decode(),
-                    base_branch=base_branch,
-                )
-
-            # Get current SHA
-            result = await asyncio.create_subprocess_exec(
-                "git",
-                "rev-parse",
-                "HEAD",
-                cwd=self.repo_path,
-                stdout=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await result.communicate()
-            current_sha = stdout.decode().strip()
-            self.log.info("git.sync_complete", head_sha=current_sha)
-
-            self.git_sync_complete.set()
-            return True
-
-        except Exception as e:
-            self.log.error("git.sync_error", exc=e)
-            self.git_sync_complete.set()  # Allow agent to proceed anyway
-            return False
+        return await self._update_existing_repo()
 
     def _install_tools(self, workdir: Path) -> None:
         """Copy custom tools into the .opencode/tool directory for OpenCode to discover."""
@@ -723,209 +735,6 @@ class SandboxSupervisor:
             default_timeout_seconds=self.DEFAULT_START_TIMEOUT_SECONDS,
         )
 
-    async def _quick_git_fetch(self) -> None:
-        """
-        Quick fetch to check if we're behind after snapshot restore.
-
-        When restored from a snapshot, the workspace already has all changes.
-        This just checks if the remote has new commits since the snapshot.
-        """
-        if not self.repo_path.exists():
-            self.log.info("git.quick_fetch_skip", reason="no_repo_path")
-            return
-
-        try:
-            # Configure remote URL with auth token if available
-            if self.vcs_clone_token:
-                await asyncio.create_subprocess_exec(
-                    "git",
-                    "remote",
-                    "set-url",
-                    "origin",
-                    self._build_repo_url(),
-                    cwd=self.repo_path,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-
-            # Fetch from origin
-            result = await asyncio.create_subprocess_exec(
-                "git",
-                "fetch",
-                "--quiet",
-                "origin",
-                cwd=self.repo_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _stdout, stderr = await result.communicate()
-
-            if result.returncode != 0:
-                self.log.warn(
-                    "git.quick_fetch_error",
-                    stderr=stderr.decode(),
-                    exit_code=result.returncode,
-                )
-                return
-
-            # Get the current branch
-            result = await asyncio.create_subprocess_exec(
-                "git",
-                "rev-parse",
-                "--abbrev-ref",
-                "HEAD",
-                cwd=self.repo_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await result.communicate()
-            current_branch = stdout.decode().strip()
-
-            # If the snapshot was taken from a different branch than the one
-            # requested for this session, switch to the correct branch.
-            base_branch = self.base_branch
-            if current_branch != base_branch:
-                self.log.info(
-                    "git.snapshot_branch_mismatch",
-                    current_branch=current_branch,
-                    target_branch=base_branch,
-                )
-                # Explicit refspec fetch — in single-branch shallow clones,
-                # a plain `git fetch origin` only updates the configured branch.
-                result = await asyncio.create_subprocess_exec(
-                    "git",
-                    "fetch",
-                    "origin",
-                    f"{base_branch}:refs/remotes/origin/{base_branch}",
-                    cwd=self.repo_path,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await result.communicate()
-                result = await asyncio.create_subprocess_exec(
-                    "git",
-                    "checkout",
-                    "-B",
-                    base_branch,
-                    f"origin/{base_branch}",
-                    cwd=self.repo_path,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                _stdout, stderr = await result.communicate()
-                if result.returncode != 0:
-                    self.log.warn(
-                        "git.snapshot_checkout_error",
-                        stderr=stderr.decode(),
-                        target_branch=base_branch,
-                    )
-                return
-
-            # Check if we're behind the remote on the current branch
-            result = await asyncio.create_subprocess_exec(
-                "git",
-                "rev-list",
-                "--count",
-                f"HEAD..origin/{current_branch}",
-                cwd=self.repo_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await result.communicate()
-
-            if result.returncode == 0:
-                commits_behind = int(stdout.decode().strip() or "0")
-                self.log.info(
-                    "git.snapshot_status",
-                    commits_behind=commits_behind,
-                    current_branch=current_branch,
-                )
-            else:
-                self.log.debug("git.snapshot_status_unknown", reason="no_upstream")
-
-        except Exception as e:
-            self.log.error("git.quick_fetch_error", exc=e)
-
-    async def _incremental_git_sync(self) -> bool:
-        """
-        Fast git sync for repo-image starts. Repo already exists from the build,
-        just pull the latest commits (up to 30 minutes of drift).
-        """
-        if not self.repo_path.exists():
-            self.log.warn("git.incremental_sync_skip", reason="no_repo_path")
-            self.git_sync_complete.set()
-            return False
-
-        try:
-            # Update remote URL with fresh clone token
-            if self.vcs_clone_token:
-                set_url = await asyncio.create_subprocess_exec(
-                    "git",
-                    "remote",
-                    "set-url",
-                    "origin",
-                    self._build_repo_url(),
-                    cwd=self.repo_path,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await set_url.communicate()
-                if set_url.returncode != 0:
-                    self.log.warn("git.set_url_failed", exit_code=set_url.returncode)
-
-            # Fetch latest for the target branch (explicit refspec so
-            # origin/<branch> is created even when the repo image was built
-            # from a different branch).
-            base_branch = self.base_branch
-            result = await asyncio.create_subprocess_exec(
-                "git",
-                "fetch",
-                "origin",
-                f"{base_branch}:refs/remotes/origin/{base_branch}",
-                cwd=self.repo_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _stdout, stderr = await result.communicate()
-
-            if result.returncode != 0:
-                self.log.error(
-                    "git.incremental_fetch_error",
-                    stderr=stderr.decode(),
-                    exit_code=result.returncode,
-                )
-                self.git_sync_complete.set()
-                return False
-
-            # Switch to the target branch and reset to the remote tip.
-            result = await asyncio.create_subprocess_exec(
-                "git",
-                "checkout",
-                "-B",
-                base_branch,
-                f"origin/{base_branch}",
-                cwd=self.repo_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _stdout, stderr = await result.communicate()
-
-            if result.returncode != 0:
-                self.log.error(
-                    "git.incremental_checkout_error",
-                    stderr=stderr.decode(),
-                    exit_code=result.returncode,
-                )
-
-            self.log.info("git.incremental_sync_complete")
-            self.git_sync_complete.set()
-            return True
-
-        except Exception as e:
-            self.log.error("git.incremental_sync_error", exc=e)
-            self.git_sync_complete.set()
-            return False
-
     async def run(self) -> None:
         """Main supervisor loop."""
         startup_start = time.time()
@@ -971,13 +780,13 @@ class SandboxSupervisor:
         try:
             # Phase 1: Git sync
             if restored_from_snapshot:
-                await self._quick_git_fetch()
-                self.git_sync_complete.set()
+                await self._update_existing_repo()  # best-effort
                 git_sync_success = True
             elif from_repo_image:
-                git_sync_success = await self._incremental_git_sync()
+                git_sync_success = await self._update_existing_repo()
             else:
                 git_sync_success = await self.perform_git_sync()
+            self.git_sync_complete.set()
 
             # Phase 2: Run setup script only for fresh or build boots.
             setup_success: bool | None = None
