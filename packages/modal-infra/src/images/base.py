@@ -23,8 +23,8 @@ SANDBOX_DIR = Path(__file__).parent.parent / "sandbox"
 OPENCODE_VERSION = "latest"
 
 # Cache buster - change this to force Modal image rebuild
-# v39: Install gh CLI for agent-direct GitHub interaction
-CACHE_BUSTER = "v39-gh-cli"
+# v40: Pull latest OpenCode with GPT-5.4 codex allowlist support
+CACHE_BUSTER = "v40-gpt-5-4"
 
 # Base image with all development tools
 base_image = (
