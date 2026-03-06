@@ -30,6 +30,27 @@ interface CloudflareApiResponse<T> {
   errors: { code?: number; message: string }[];
 }
 
+interface ResultInfo {
+  page: number;
+  per_page: number;
+  count: number;
+  total_count: number;
+}
+
+interface TunnelInfo {
+  id: string;
+  name: string;
+  created_at: string;
+  deleted_at: string | null;
+}
+
+interface CloudflareListTunnelsResponse {
+  success: boolean;
+  result: TunnelInfo[];
+  result_info: ResultInfo;
+  errors: { code?: number; message: string }[];
+}
+
 interface AwsXmlResult {
   instancesSet?: { item: { instanceId: string } };
 }
@@ -44,6 +65,65 @@ export interface Env {
   CLOUDFLARE_ACCOUNT_ID: string;
   CLOUDFLARE_API_TOKEN: string;
   CLOUDFLARE_TUNNEL_SECRET: string;
+}
+
+/**
+ * Periodically cleans up orphaned Cloudflare tunnels and their associated EC2 instances.
+ */
+async function cleanupOldResources(env: Env): Promise<void> {
+  let page = 1;
+  const perPage = 50;
+  let hasMore = true;
+
+  while (hasMore) {
+    const response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/tunnels?page=${page}&per_page=${perPage}`,
+      {
+        headers: {
+          Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    if (!response.ok) {
+      console.error(`Failed to list tunnels: ${response.status} ${await response.text()}`);
+      break;
+    }
+
+    const data = (await response.json()) as CloudflareListTunnelsResponse;
+    if (!data.success) {
+      console.error(`Cloudflare API error listing tunnels: ${JSON.stringify(data.errors)}`);
+      break;
+    }
+
+    const now = Date.now();
+    for (const tunnel of data.result) {
+      if (tunnel.deleted_at || !tunnel.name.startsWith("sandbox-")) continue;
+
+      const createdAt = new Date(tunnel.created_at).getTime();
+      const ageMs = now - createdAt;
+
+      // If older than 24 hours
+      if (ageMs > 24 * 60 * 60 * 1000) {
+        const sandboxId = tunnel.name.slice("sandbox-".length);
+        const id = env.EC2_INSTANCE.idFromName(sandboxId);
+        const stub = env.EC2_INSTANCE.get(id);
+
+        try {
+          // Trigger the DO's teardown which terminates EC2 and deletes tunnel
+          await stub.fetch("https://worker.local/delete", { method: "POST" });
+          console.log(`Cleaned up orphaned tunnel/sandbox: ${tunnel.name}`);
+        } catch (err) {
+          console.error(`Failed to trigger cleanup for sandbox ${sandboxId}: ${err}`);
+        }
+      }
+    }
+
+    const { total_count, page: currentPage, per_page } = data.result_info;
+    hasMore = currentPage * per_page < total_count;
+    page++;
+  }
 }
 
 /**
@@ -94,6 +174,10 @@ export default {
     }
 
     return new Response("Not Found", { status: 404 });
+  },
+
+  async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
+    await cleanupOldResources(env);
   },
 };
 
@@ -223,6 +307,8 @@ export class EC2InstanceDO extends DurableObject<Env> {
         createdAt: this.createdAt,
       });
     } catch (error: unknown) {
+      // If deployment fails halfway, clean up any partially created resources
+      await this.teardown();
       return Response.json(
         {
           success: false,

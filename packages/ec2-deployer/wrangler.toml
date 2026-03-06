@@ -6,6 +6,9 @@ compatibility_flags = ["nodejs_compat"]
 [durable_objects]
 bindings = [{ name = "EC2_INSTANCE", class_name = "EC2InstanceDO" }]
 
+[triggers]
+crons = ["0 * * * *"]
+
 [[migrations]]
 tag = "v1"
 new_classes = ["EC2InstanceDO"]
