@@ -21,8 +21,20 @@ async function sign(secret: string, body: string): Promise<string> {
 
 const SECRET = "test-webhook-secret";
 
-function makeEnv() {
+function createMockKV() {
+  const store = new Map<string, string>();
   return {
+    get: vi.fn(async (key: string) => store.get(key) ?? null),
+    put: vi.fn(async (key: string, value: string) => {
+      store.set(key, value);
+    }),
+  };
+}
+
+function makeEnv() {
+  const githubKv = createMockKV();
+  return {
+    GITHUB_KV: githubKv,
     GITHUB_WEBHOOK_SECRET: SECRET,
     GITHUB_BOT_USERNAME: "test-bot[bot]",
     DEPLOYMENT_NAME: "test",
@@ -33,9 +45,10 @@ function makeEnv() {
 
 function makeCtx() {
   return {
+    props: {},
     waitUntil: vi.fn(),
     passThroughOnException: vi.fn(),
-  };
+  } as any;
 }
 
 describe("POST /webhooks/github", () => {
@@ -96,6 +109,43 @@ describe("POST /webhooks/github", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
     expect(ctx.waitUntil).toHaveBeenCalledOnce();
+  });
+
+  it("deduplicates repeated deliveries by X-GitHub-Delivery", async () => {
+    const body = JSON.stringify({
+      action: "review_requested",
+      repository: { owner: { login: "test" }, name: "repo" },
+    });
+    const signature = await sign(SECRET, body);
+    const ctx = makeCtx();
+    const env = makeEnv();
+
+    const request = () =>
+      new Request("http://localhost/webhooks/github", {
+        method: "POST",
+        body,
+        headers: {
+          "X-Hub-Signature-256": signature,
+          "X-GitHub-Event": "pull_request",
+          "X-GitHub-Delivery": "delivery-123",
+        },
+      });
+
+    const firstRes = await app.fetch(request(), env, ctx);
+    expect(firstRes.status).toBe(200);
+    expect(await firstRes.json()).toEqual({ ok: true });
+
+    const secondRes = await app.fetch(request(), env, ctx);
+    expect(secondRes.status).toBe(200);
+    expect(await secondRes.json()).toEqual({ ok: true, duplicate: true });
+
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+    const githubKv = env.GITHUB_KV as unknown as {
+      get: ReturnType<typeof vi.fn>;
+      put: ReturnType<typeof vi.fn>;
+    };
+    expect(githubKv.get).toHaveBeenCalledTimes(2);
+    expect(githubKv.put).toHaveBeenCalledTimes(1);
   });
 
   it("returns 200 for unhandled event type", async () => {

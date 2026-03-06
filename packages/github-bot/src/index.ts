@@ -25,6 +25,11 @@ import {
 } from "./handlers";
 
 const app = new Hono<{ Bindings: Env }>();
+const DELIVERY_DEDUPE_TTL_SECONDS = 60 * 60 * 24 * 7;
+
+function getDeliveryDedupeKey(deliveryId: string): string {
+  return `delivery:${deliveryId}`;
+}
 
 app.get("/health", (c) => c.json({ status: "healthy", service: "open-inspect-github-bot" }));
 
@@ -40,6 +45,24 @@ app.post("/webhooks/github", async (c) => {
   if (!valid) {
     log.warn("webhook.signature_invalid", { delivery_id: deliveryId });
     return c.json({ error: "invalid signature" }, 401);
+  }
+
+  if (deliveryId) {
+    const dedupeKey = getDeliveryDedupeKey(deliveryId);
+    const existing = await c.env.GITHUB_KV.get(dedupeKey);
+    if (existing) {
+      log.info("webhook.duplicate_delivery", {
+        delivery_id: deliveryId,
+        event_type: event,
+      });
+      return c.json({ ok: true, duplicate: true });
+    }
+
+    await c.env.GITHUB_KV.put(dedupeKey, "1", {
+      expirationTtl: DELIVERY_DEDUPE_TTL_SECONDS,
+    });
+  } else {
+    log.warn("webhook.delivery_id_missing", { event_type: event });
   }
 
   const payload = JSON.parse(rawBody);
