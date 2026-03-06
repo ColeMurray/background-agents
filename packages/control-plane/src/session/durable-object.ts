@@ -78,6 +78,10 @@ import {
 } from "./http/handlers/child-sessions.handler";
 import { createSandboxHandler, type SandboxHandler } from "./http/handlers/sandbox.handler";
 import { createWsTokenHandler, type WsTokenHandler } from "./http/handlers/ws-token.handler";
+import {
+  createSessionLifecycleHandler,
+  type SessionLifecycleHandler,
+} from "./http/handlers/session-lifecycle.handler";
 import { MessageService } from "./services/message.service";
 
 /**
@@ -94,9 +98,6 @@ const WS_AUTH_TIMEOUT_MS = 30000; // 30 seconds
  * the client to fetch a fresh token on reconnect.
  */
 const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-
-/** Statuses that indicate a session has reached a final state and cannot be cancelled. */
-const TERMINAL_STATUSES = new Set(["completed", "archived", "cancelled", "failed"]);
 
 export class SessionDO extends DurableObject<Env> {
   private sql: SqlStorage;
@@ -127,13 +128,15 @@ export class SessionDO extends DurableObject<Env> {
   private _sandboxHandler: SandboxHandler | null = null;
   // WebSocket token handler (lazily initialized)
   private _wsTokenHandler: WsTokenHandler | null = null;
+  // Session lifecycle handler (lazily initialized)
+  private _sessionLifecycleHandler: SessionLifecycleHandler | null = null;
   // Sandbox event processor (lazily initialized)
   private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
 
   // Internal HTTP route table (transport wiring only; handlers remain on SessionDO).
   private readonly routes = createSessionInternalRoutes({
     init: (request) => this.handleInit(request),
-    state: () => this.handleGetState(),
+    state: () => this.sessionLifecycleHandler.getState(),
     prompt: (request) => this.messagesHandler.enqueuePrompt(request),
     stop: () => this.messagesHandler.stop(),
     sandboxEvent: (request) => this.sandboxHandler.sandboxEvent(request),
@@ -144,13 +147,13 @@ export class SessionDO extends DurableObject<Env> {
     listMessages: (_request, url) => this.messagesHandler.listMessages(url),
     createPr: (request) => this.handleCreatePR(request),
     wsToken: (request) => this.wsTokenHandler.generateWsToken(request),
-    archive: (request) => this.handleArchive(request),
-    unarchive: (request) => this.handleUnarchive(request),
+    archive: (request) => this.sessionLifecycleHandler.archive(request),
+    unarchive: (request) => this.sessionLifecycleHandler.unarchive(request),
     verifySandboxToken: (request) => this.sandboxHandler.verifySandboxToken(request),
     openaiTokenRefresh: () => this.sandboxHandler.openaiTokenRefresh(),
     spawnContext: () => this.childSessionsHandler.getSpawnContext(),
     childSummary: () => this.childSessionsHandler.getChildSummary(),
-    cancel: () => this.handleCancel(),
+    cancel: () => this.sessionLifecycleHandler.cancel(),
     childSessionUpdate: (request) => this.childSessionsHandler.childSessionUpdate(request),
   });
 
@@ -381,6 +384,24 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     return this._wsTokenHandler;
+  }
+
+  private get sessionLifecycleHandler(): SessionLifecycleHandler {
+    if (!this._sessionLifecycleHandler) {
+      this._sessionLifecycleHandler = createSessionLifecycleHandler({
+        getSession: () => this.getSession(),
+        getSandbox: () => this.getSandbox(),
+        getPublicSessionId: (session) => this.getPublicSessionId(session),
+        getParticipantByUserId: (userId) => this.participantService.getByUserId(userId),
+        transitionSessionStatus: (status) => this.transitionSessionStatus(status),
+        stopExecution: (options) => this.stopExecution(options),
+        getSandboxSocket: () => this.wsManager.getSandboxSocket(),
+        sendToSandbox: (ws, message) => this.wsManager.send(ws, message),
+        updateSandboxStatus: (status) => this.updateSandboxStatus(status),
+      });
+    }
+
+    return this._sessionLifecycleHandler;
   }
 
   private get sandboxEventProcessor(): SessionSandboxEventProcessor {
@@ -1609,41 +1630,6 @@ export class SessionDO extends DurableObject<Env> {
     return Response.json({ sessionId, status: "created" });
   }
 
-  private handleGetState(): Response {
-    const session = this.getSession();
-    if (!session) {
-      return new Response("Session not found", { status: 404 });
-    }
-
-    const sandbox = this.getSandbox();
-
-    return Response.json({
-      id: this.getPublicSessionId(session),
-      title: session.title,
-      repoOwner: session.repo_owner,
-      repoName: session.repo_name,
-      baseBranch: session.base_branch,
-      branchName: session.branch_name,
-      baseSha: session.base_sha,
-      currentSha: session.current_sha,
-      opencodeSessionId: session.opencode_session_id,
-      status: session.status,
-      model: session.model,
-      reasoningEffort: session.reasoning_effort ?? undefined,
-      createdAt: session.created_at,
-      updatedAt: session.updated_at,
-      sandbox: sandbox
-        ? {
-            id: sandbox.id,
-            modalSandboxId: sandbox.modal_sandbox_id,
-            status: sandbox.status,
-            gitSyncStatus: sandbox.git_sync_status,
-            lastHeartbeat: sandbox.last_heartbeat,
-          }
-        : null,
-    });
-  }
-
   private handleListParticipants(): Response {
     const participants = this.repository.listParticipants();
 
@@ -1743,97 +1729,5 @@ export class SessionDO extends DurableObject<Env> {
       });
       return null;
     }
-  }
-
-  /**
-   * Handle archive session request.
-   * Only session participants are authorized to archive.
-   */
-  private async handleArchive(request: Request): Promise<Response> {
-    const session = this.getSession();
-    if (!session) {
-      return Response.json({ error: "Session not found" }, { status: 404 });
-    }
-
-    // Verify user is a participant (fail closed)
-    let body: { userId?: string };
-    try {
-      body = (await request.json()) as { userId?: string };
-    } catch {
-      return Response.json({ error: "Invalid request body" }, { status: 400 });
-    }
-
-    if (!body.userId) {
-      return Response.json({ error: "userId is required" }, { status: 400 });
-    }
-
-    const participant = this.participantService.getByUserId(body.userId);
-    if (!participant) {
-      return Response.json({ error: "Not authorized to archive this session" }, { status: 403 });
-    }
-
-    await this.transitionSessionStatus("archived");
-
-    return Response.json({ status: "archived" });
-  }
-
-  /**
-   * Handle unarchive session request.
-   * Only session participants are authorized to unarchive.
-   */
-  private async handleUnarchive(request: Request): Promise<Response> {
-    const session = this.getSession();
-    if (!session) {
-      return Response.json({ error: "Session not found" }, { status: 404 });
-    }
-
-    // Verify user is a participant (fail closed)
-    let body: { userId?: string };
-    try {
-      body = (await request.json()) as { userId?: string };
-    } catch {
-      return Response.json({ error: "Invalid request body" }, { status: 400 });
-    }
-
-    if (!body.userId) {
-      return Response.json({ error: "userId is required" }, { status: 400 });
-    }
-
-    const participant = this.participantService.getByUserId(body.userId);
-    if (!participant) {
-      return Response.json({ error: "Not authorized to unarchive this session" }, { status: 403 });
-    }
-
-    await this.transitionSessionStatus("active");
-
-    return Response.json({ status: "active" });
-  }
-
-  private async handleCancel(): Promise<Response> {
-    const session = this.getSession();
-    if (!session) {
-      return Response.json({ error: "Session not found" }, { status: 404 });
-    }
-
-    if (TERMINAL_STATUSES.has(session.status)) {
-      return Response.json({ error: `Session already ${session.status}` }, { status: 409 });
-    }
-
-    // Stop any in-flight message processing without emitting intermediate "failed".
-    await this.stopExecution({ suppressStatusReconcile: true });
-
-    await this.transitionSessionStatus("cancelled");
-
-    // Stop sandbox if running
-    const sandbox = this.getSandbox();
-    if (sandbox && sandbox.status !== "stopped" && sandbox.status !== "failed") {
-      const sandboxWs = this.wsManager.getSandboxSocket();
-      if (sandboxWs) {
-        this.wsManager.send(sandboxWs, { type: "shutdown" });
-      }
-      this.updateSandboxStatus("stopped");
-    }
-
-    return Response.json({ status: "cancelled" });
   }
 }
