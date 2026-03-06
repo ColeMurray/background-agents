@@ -152,6 +152,26 @@ describe("createSandboxHandler", () => {
     );
   });
 
+  it("returns 410 when sandbox is stale", async () => {
+    const { handler, getSandbox, log } = createHandler();
+    getSandbox.mockReturnValue({ status: "stale" } as SandboxRow);
+
+    const response = await handler.verifySandboxToken(
+      new Request("http://internal/internal/verify-sandbox-token", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: "abc" }),
+      })
+    );
+
+    expect(response.status).toBe(410);
+    expect(await response.json()).toEqual({ valid: false, error: "Sandbox stopped" });
+    expect(log.warn).toHaveBeenCalledWith(
+      "Sandbox token verification failed: sandbox is stopped/stale",
+      { status: "stale" }
+    );
+  });
+
   it("returns 401 when sandbox token is invalid", async () => {
     const { handler, getSandbox, isValidSandboxToken, log } = createHandler();
     getSandbox.mockReturnValue({ status: "running" } as SandboxRow);
