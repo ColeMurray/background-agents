@@ -508,6 +508,30 @@ class TestUpdateExistingRepo:
 
         assert result is False
 
+    @pytest.mark.asyncio
+    async def test_returns_false_on_checkout_failure(self, base_env, tmp_path):
+        """Should return False when checkout fails."""
+        supervisor = _make_supervisor(base_env)
+        supervisor.repo_path = tmp_path
+
+        async def fake_subprocess(*args, **kwargs):
+            mock_proc = MagicMock()
+            if "checkout" in args:
+                mock_proc.returncode = 1
+                mock_proc.communicate = AsyncMock(return_value=(b"", b"checkout error"))
+            else:
+                mock_proc.returncode = 0
+                mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+            return mock_proc
+
+        with patch(
+            "src.sandbox.entrypoint.asyncio.create_subprocess_exec",
+            side_effect=fake_subprocess,
+        ):
+            result = await supervisor._update_existing_repo()
+
+        assert result is False
+
 
 class TestPerformGitSync:
     """Test perform_git_sync() — clone + update flow."""

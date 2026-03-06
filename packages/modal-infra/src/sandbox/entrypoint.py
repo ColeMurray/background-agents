@@ -150,7 +150,9 @@ class SandboxSupervisor:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        await proc.communicate()
+        _stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            self.log.warn("git.set_url_failed", exit_code=proc.returncode, stderr=stderr.decode())
 
     async def _fetch_branch(self, branch: str) -> bool:
         """Fetch a branch with an explicit refspec.
@@ -194,6 +196,7 @@ class SandboxSupervisor:
             self.log.warn(
                 "git.checkout_error",
                 stderr=stderr.decode(),
+                exit_code=result.returncode,
                 target_branch=branch,
             )
             return False
@@ -218,8 +221,7 @@ class SandboxSupervisor:
             branch = self.base_branch
             if not await self._fetch_branch(branch):
                 return False
-            await self._checkout_branch(branch)
-            return True
+            return await self._checkout_branch(branch)
         except Exception as e:
             self.log.error("git.update_error", exc=e)
             return False
