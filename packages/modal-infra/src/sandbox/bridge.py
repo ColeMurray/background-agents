@@ -597,6 +597,7 @@ class AgentBridge:
         content = cmd.get("content", "")
         model = cmd.get("model")
         reasoning_effort = cmd.get("reasoningEffort")
+        attachments = cmd.get("attachments")
         author_data = cmd.get("author", {})
         start_time = time.time()
         outcome = "success"
@@ -606,6 +607,7 @@ class AgentBridge:
             message_id=message_id,
             model=model,
             reasoning_effort=reasoning_effort,
+            attachments_count=len(attachments) if attachments else 0,
         )
 
         scm_name = author_data.get("scmName")
@@ -624,7 +626,7 @@ class AgentBridge:
             had_error = False
             error_message = None
             async for event in self._stream_opencode_response_sse(
-                message_id, content, model, reasoning_effort
+                message_id, content, model, reasoning_effort, attachments
             ):
                 if event.get("type") == "error":
                     had_error = True
@@ -765,12 +767,45 @@ class AgentBridge:
     }
     ANTHROPIC_ADAPTIVE_EFFORTS: ClassVar[set[str]] = {"low", "medium", "high", "max"}
 
+    # application/* MIME types that are actually text-based code/data files.
+    _TEXT_APPLICATION_MIMES: ClassVar[set[str]] = {
+        "application/javascript",
+        "application/json",
+        "application/ld+json",
+        "application/typescript",
+        "application/x-httpd-php",
+        "application/x-javascript",
+        "application/x-python",
+        "application/x-ruby",
+        "application/x-sh",
+        "application/x-shellscript",
+        "application/x-yaml",
+        "application/xml",
+        "application/yaml",
+    }
+
+    @staticmethod
+    def _normalize_mime_type(mime_type: str) -> str:
+        """Normalize MIME type for OpenCode compatibility.
+
+        OpenCode only handles ``text/plain`` for text-based files — other text
+        MIME types (e.g. ``text/markdown``, ``text/csv``) fall through to the
+        AI SDK which may reject them.  Remap all text-like MIME types to
+        ``text/plain`` so OpenCode decodes the base64 content inline.
+        """
+        if mime_type.startswith("text/"):
+            return "text/plain"
+        if mime_type in AgentBridge._TEXT_APPLICATION_MIMES:
+            return "text/plain"
+        return mime_type
+
     def _build_prompt_request_body(
         self,
         content: str,
         model: str | None,
         opencode_message_id: str | None = None,
         reasoning_effort: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Build request body for OpenCode prompt requests.
 
@@ -781,8 +816,28 @@ class AgentBridge:
                                  When provided, OpenCode uses this as the user message ID,
                                  and assistant responses will have parentID pointing to it.
             reasoning_effort: Optional reasoning effort level (e.g., "high", "max")
+            attachments: Optional list of file attachments with data URL content
         """
-        request_body: dict[str, Any] = {"parts": [{"type": "text", "text": content}]}
+        parts: list[dict[str, Any]] = [{"type": "text", "text": content}]
+
+        if attachments:
+            for att in attachments:
+                mime_type = att.get("mimeType", "application/octet-stream")
+                data_url = att.get("content", "")
+                if data_url:
+                    mime_type = self._normalize_mime_type(mime_type)
+                    # Rewrite the data URL prefix to match the normalized MIME type
+                    if data_url.startswith("data:") and ";" in data_url:
+                        _, rest = data_url.split(";", 1)
+                        data_url = f"data:{mime_type};{rest}"
+                    parts.append({
+                        "type": "file",
+                        "mime": mime_type,
+                        "url": data_url,
+                        "filename": att.get("name", ""),
+                    })
+
+        request_body: dict[str, Any] = {"parts": parts}
 
         if opencode_message_id:
             request_body["messageID"] = opencode_message_id
@@ -873,6 +928,7 @@ class AgentBridge:
         content: str,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream response from OpenCode using Server-Sent Events.
 
@@ -893,7 +949,7 @@ class AgentBridge:
 
         opencode_message_id = OpenCodeIdentifier.ascending("message")
         request_body = self._build_prompt_request_body(
-            content, model, opencode_message_id, reasoning_effort
+            content, model, opencode_message_id, reasoning_effort, attachments
         )
 
         sse_url = f"{self.opencode_base_url}/event"

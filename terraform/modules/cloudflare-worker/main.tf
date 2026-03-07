@@ -34,6 +34,12 @@ locals {
       name = sec.name
       text = sec.value
     }],
+    # R2 bucket bindings
+    [for r2 in var.r2_buckets : {
+      type        = "r2_bucket"
+      name        = r2.binding_name
+      bucket_name = r2.bucket_name
+    }],
     # Durable Object bindings (only when enabled - disable for initial deployment)
     var.enable_durable_object_bindings ? [for do in var.durable_objects : {
       type       = "durable_object_namespace"

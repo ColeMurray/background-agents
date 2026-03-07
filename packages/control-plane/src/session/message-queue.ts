@@ -8,6 +8,8 @@ import {
   isValidModel,
 } from "../utils/models";
 import type {
+  Attachment,
+  AttachmentMeta,
   ClientInfo,
   Env,
   MessageSource,
@@ -16,7 +18,7 @@ import type {
   SessionStatus,
 } from "../types";
 import type { SourceControlProviderName } from "../source-control";
-import type { SessionRow, ParticipantRow, SandboxCommand } from "./types";
+import type { SessionRow, ParticipantRow, SandboxCommand, StoredAttachment } from "./types";
 import type { SessionRepository } from "./repository";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { ParticipantService } from "./participant-service";
@@ -27,7 +29,97 @@ interface PromptMessageData {
   content: string;
   model?: string;
   reasoningEffort?: string;
-  attachments?: Array<{ type: string; name: string; url?: string; content?: string }>;
+  attachments?: Array<{ type: string; name: string; url?: string; content?: string; mimeType?: string }>;
+}
+
+/** Strip file content from attachments, keeping only metadata for storage/events. */
+function toAttachmentMeta(
+  attachments: PromptMessageData["attachments"]
+): AttachmentMeta[] | undefined {
+  if (!attachments?.length) return undefined;
+  return attachments.map(({ type, name, mimeType }) => ({
+    type: type as AttachmentMeta["type"],
+    name,
+    mimeType,
+  }));
+}
+
+/**
+ * Decode a base64 data URL (e.g. "data:image/png;base64,iVBOR...") into raw bytes.
+ * Returns null if the string is not a valid data URL.
+ */
+function decodeDataUrl(dataUrl: string): Uint8Array | null {
+  const match = dataUrl.match(/^data:[^;]+;base64,(.+)$/s);
+  if (!match) return null;
+  const binaryString = atob(match[1]);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
+/**
+ * Upload attachments to R2 and return StoredAttachment metadata.
+ * Falls back to returning undefined (caller stores raw content in SQLite) when R2 is unavailable.
+ */
+async function uploadAttachmentsToR2(
+  r2: R2Bucket,
+  attachments: NonNullable<PromptMessageData["attachments"]>,
+  log: Logger
+): Promise<StoredAttachment[]> {
+  const stored: StoredAttachment[] = [];
+  for (const att of attachments) {
+    if (!att.content) continue;
+    const bytes = decodeDataUrl(att.content);
+    if (!bytes) {
+      log.warn("attachment.upload.invalid_data_url", { name: att.name });
+      continue;
+    }
+    const r2Key = `${crypto.randomUUID()}-${att.name}`;
+    await r2.put(r2Key, bytes, {
+      httpMetadata: att.mimeType ? { contentType: att.mimeType } : undefined,
+    });
+    stored.push({
+      type: att.type as StoredAttachment["type"],
+      name: att.name,
+      mimeType: att.mimeType,
+      r2Key,
+    });
+  }
+  return stored;
+}
+
+/**
+ * Fetch stored attachments from R2 and reconstruct full Attachment objects with data URL content.
+ */
+async function fetchAttachmentsFromR2(
+  r2: R2Bucket,
+  stored: StoredAttachment[],
+  log: Logger
+): Promise<Attachment[]> {
+  const attachments: Attachment[] = [];
+  for (const meta of stored) {
+    const obj = await r2.get(meta.r2Key);
+    if (!obj) {
+      log.warn("attachment.fetch.not_found", { r2Key: meta.r2Key, name: meta.name });
+      continue;
+    }
+    const bytes = new Uint8Array(await obj.arrayBuffer());
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    const b64 = btoa(binary);
+    const mime = meta.mimeType || "application/octet-stream";
+    attachments.push({
+      type: meta.type,
+      name: meta.name,
+      mimeType: meta.mimeType,
+      content: `data:${mime};base64,${b64}`,
+    });
+  }
+  return attachments;
 }
 
 interface MessageQueueDeps {
@@ -91,6 +183,19 @@ export class SessionMessageQueue {
       data.reasoningEffort
     );
 
+    const attachmentMeta = toAttachmentMeta(data.attachments);
+
+    // Upload file content to R2 (falls back to storing raw content in SQLite if R2 unavailable)
+    let storedAttachments: string | null = null;
+    const r2 = this.deps.env.ATTACHMENTS;
+    if (data.attachments?.length && r2) {
+      const stored = await uploadAttachmentsToR2(r2, data.attachments, this.deps.log);
+      storedAttachments = stored.length > 0 ? JSON.stringify(stored) : null;
+    } else if (attachmentMeta) {
+      // No R2 — store metadata-only (content lost after this point)
+      storedAttachments = JSON.stringify(attachmentMeta);
+    }
+
     this.deps.repository.createMessage({
       id: messageId,
       authorId: participant.id,
@@ -98,14 +203,14 @@ export class SessionMessageQueue {
       source: "web",
       model: messageModel,
       reasoningEffort: messageReasoningEffort,
-      attachments: data.attachments ? JSON.stringify(data.attachments) : null,
+      attachments: storedAttachments,
       status: "pending",
       createdAt: now,
     });
 
     await this.deps.setSessionStatus("active");
 
-    this.writeUserMessageEvent(participant, data.content, messageId, now);
+    this.writeUserMessageEvent(participant, data.content, messageId, now, attachmentMeta);
 
     const position = this.deps.repository.getPendingOrProcessingCount();
 
@@ -189,6 +294,18 @@ export class SessionMessageQueue {
       session?.reasoning_effort ??
       getDefaultReasoningEffort(resolvedModel);
 
+    // Reconstruct full attachments from R2 (StoredAttachment[]) or use as-is (legacy metadata)
+    let attachments: Attachment[] | undefined;
+    if (message.attachments) {
+      const parsed = JSON.parse(message.attachments);
+      const r2 = this.deps.env.ATTACHMENTS;
+      if (r2 && parsed.length > 0 && parsed[0].r2Key) {
+        attachments = await fetchAttachmentsFromR2(r2, parsed as StoredAttachment[], this.deps.log);
+      } else {
+        attachments = parsed;
+      }
+    }
+
     const command: SandboxCommand = {
       type: "prompt",
       messageId: message.id,
@@ -200,7 +317,7 @@ export class SessionMessageQueue {
         scmName: author?.scm_name ?? null,
         scmEmail: author?.scm_email ?? null,
       },
-      attachments: message.attachments ? JSON.parse(message.attachments) : undefined,
+      attachments,
     };
 
     this.deps.log.info("prompt.scm_author", {
@@ -307,7 +424,8 @@ export class SessionMessageQueue {
     participant: ParticipantRow,
     content: string,
     messageId: string,
-    now: number
+    now: number,
+    attachments?: AttachmentMeta[]
   ): void {
     const userMessageEvent: SandboxEvent = {
       type: "user_message",
@@ -319,6 +437,7 @@ export class SessionMessageQueue {
         name: participant.scm_name || participant.scm_login || participant.user_id,
         avatar: getAvatarUrl(participant.scm_login, this.deps.scmProvider),
       },
+      ...(attachments?.length ? { attachments } : {}),
     };
     this.deps.repository.createEvent({
       id: generateId(),
@@ -336,7 +455,7 @@ export class SessionMessageQueue {
     source: string;
     model?: string;
     reasoningEffort?: string;
-    attachments?: Array<{ type: string; name: string; url?: string }>;
+    attachments?: Array<{ type: string; name: string; url?: string; content?: string; mimeType?: string }>;
     callbackContext?: Record<string, unknown>;
   }): Promise<{ messageId: string; status: "queued" }> {
     let participant = this.deps.participantService.getByUserId(data.authorId);
@@ -362,6 +481,17 @@ export class SessionMessageQueue {
       data.reasoningEffort
     );
 
+    const attachmentMeta = toAttachmentMeta(data.attachments);
+
+    let storedAttachments: string | null = null;
+    const r2 = this.deps.env.ATTACHMENTS;
+    if (data.attachments?.length && r2) {
+      const stored = await uploadAttachmentsToR2(r2, data.attachments, this.deps.log);
+      storedAttachments = stored.length > 0 ? JSON.stringify(stored) : null;
+    } else if (attachmentMeta) {
+      storedAttachments = JSON.stringify(attachmentMeta);
+    }
+
     this.deps.repository.createMessage({
       id: messageId,
       authorId: participant.id,
@@ -369,7 +499,7 @@ export class SessionMessageQueue {
       source: data.source as MessageSource,
       model: messageModel,
       reasoningEffort: messageReasoningEffort,
-      attachments: data.attachments ? JSON.stringify(data.attachments) : null,
+      attachments: storedAttachments,
       callbackContext: data.callbackContext ? JSON.stringify(data.callbackContext) : null,
       status: "pending",
       createdAt: now,
@@ -377,7 +507,7 @@ export class SessionMessageQueue {
 
     await this.deps.setSessionStatus("active");
 
-    this.writeUserMessageEvent(participant, data.content, messageId, now);
+    this.writeUserMessageEvent(participant, data.content, messageId, now, attachmentMeta);
 
     const queuePosition = this.deps.repository.getPendingOrProcessingCount();
 
