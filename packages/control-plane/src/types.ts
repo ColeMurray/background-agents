@@ -14,6 +14,7 @@ import type {
 export type {
   ArtifactType,
   Attachment,
+  AttachmentMeta,
   ClientMessage,
   CreateSessionRequest,
   CreateSessionResponse,
@@ -45,6 +46,9 @@ export interface Env {
 
   // Durable Objects (optional)
   SCHEDULER?: DurableObjectNamespace; // SchedulerDO for automation engine
+
+  // R2 buckets
+  ATTACHMENTS?: R2Bucket; // Session file attachments
 
   // D1 database
   DB: D1Database;

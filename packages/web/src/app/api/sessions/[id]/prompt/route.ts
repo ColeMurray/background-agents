@@ -14,7 +14,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   try {
     const body = await request.json();
-    const { content, model, reasoningEffort } = body;
+    const { content, model, reasoningEffort, attachments } = body;
 
     if (!content) {
       return NextResponse.json({ error: "content is required" }, { status: 400 });
@@ -31,6 +31,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         source: "web",
         model,
         reasoningEffort,
+        ...(attachments?.length ? { attachments } : {}),
       }),
     });
 

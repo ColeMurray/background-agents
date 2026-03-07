@@ -76,6 +76,13 @@ module "control_plane_worker" {
     { name = "GITHUB_APP_INSTALLATION_ID", value = var.github_app_installation_id },
   ]
 
+  r2_buckets = [
+    {
+      binding_name = "ATTACHMENTS"
+      bucket_name  = cloudflare_r2_bucket.session_attachments.name
+    }
+  ]
+
   durable_objects = [
     { binding_name = "SESSION", class_name = "SessionDO" },
     { binding_name = "SCHEDULER", class_name = "SchedulerDO" },

@@ -26,8 +26,8 @@ OPENCODE_VERSION = "latest"
 CODE_SERVER_VERSION = "4.109.5"
 
 # Cache buster - change this to force Modal image rebuild
-# v43: sandbox_runtime package extraction (files moved from /app/sandbox to /app/sandbox_runtime)
-CACHE_BUSTER = "v43-sandbox-runtime-extraction"
+# v44: rebase onto upstream with sandbox_runtime extraction + attachments
+CACHE_BUSTER = "v44-rebase-upstream"
 
 # Base image with all development tools
 base_image = (

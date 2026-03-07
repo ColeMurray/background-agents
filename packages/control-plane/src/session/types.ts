@@ -154,6 +154,15 @@ export type SandboxCommand =
   | AckCommand
   | PushCommand;
 
+/** Attachment metadata persisted in the messages table (R2-backed). */
+export interface StoredAttachment {
+  type: "file" | "image" | "url";
+  name: string;
+  mimeType?: string;
+  /** R2 object key for the file content. */
+  r2Key: string;
+}
+
 // Internal session update types
 
 export interface SessionUpdate {
