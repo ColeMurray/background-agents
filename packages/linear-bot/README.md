@@ -107,6 +107,26 @@ curl -X PUT https://<your-linear-bot-worker>/config/project-repos \
 
 Project mappings take the highest priority during repo resolution.
 
+**User mapping (Linear → GitHub):**
+
+When an issue has an assignee, the agent can map them to a GitHub user so the session runs under
+their SCM identity (used for git authorship on commits and PRs). Add a KV entry directly in the
+Cloudflare dashboard under the `LINEAR_KV` namespace:
+
+- **Key:** `config:user-mapping`
+- **Value:**
+  ```json
+  {
+    "<linear-user-uuid>": { "githubLogin": "<github-username>", "email": "<email>" },
+    "<linear-user-uuid>": { "githubLogin": "<github-username>", "email": "<email>" }
+  }
+  ```
+
+To find a Linear user UUID, open Linear, press `Cmd+K` (or `Ctrl+K`), type "copy model uuid", and
+select the **User** UUID (not UserAccount). If an assignee
+is not in the mapping (or the issue has no assignee), the session is created without SCM identity
+fields.
+
 ### 5. Configure Integration Settings (Optional)
 
 In the Open-Inspect web UI, go to **Settings → Integrations → Linear** to configure:

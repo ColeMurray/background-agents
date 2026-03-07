@@ -63,6 +63,15 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         joinedAt: now,
       });
 
+      deps.getLog().info("participant.added", {
+        participant_id: id,
+        user_id: body.userId,
+        scm_login: body.scmLogin ?? null,
+        scm_name: body.scmName ?? null,
+        scm_email: body.scmEmail ?? null,
+        has_scm_identity: Boolean(body.scmLogin || body.scmEmail),
+      });
+
       return Response.json({ id, status: "added" });
     },
 

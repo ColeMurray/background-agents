@@ -7,6 +7,7 @@ import type {
   TriggerConfig,
   TeamRepoMapping,
   ProjectRepoMapping,
+  UserMapping,
   UserPreferences,
   IssueSession,
 } from "./types";
@@ -38,6 +39,18 @@ export async function getProjectRepoMapping(env: Env): Promise<ProjectRepoMappin
     if (data && typeof data === "object") return data as ProjectRepoMapping;
   } catch (e) {
     log.debug("kv.get_project_repo_mapping_failed", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+  return {};
+}
+
+export async function getUserMapping(env: Env): Promise<UserMapping> {
+  try {
+    const data = await env.LINEAR_KV.get("config:user-mapping", "json");
+    if (data && typeof data === "object") return data as UserMapping;
+  } catch (e) {
+    log.debug("kv.get_user_mapping_failed", {
       error: e instanceof Error ? e.message : String(e),
     });
   }

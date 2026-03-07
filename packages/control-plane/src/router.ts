@@ -4,6 +4,7 @@
 
 import type { Env, CreateSessionRequest, CreateSessionResponse } from "./types";
 import { generateId, encryptToken } from "./auth/crypto";
+import { refreshAccessToken } from "./auth/github";
 import { verifyInternalToken } from "./auth/internal";
 import {
   resolveScmProviderFromEnv,
@@ -683,18 +684,70 @@ async function handleCreateSession(
   }
 
   const userId = body.userId || "anonymous";
+  const scmUserId = body.scmUserId;
   const scmLogin = body.scmLogin;
   const scmName = body.scmName;
   const scmEmail = body.scmEmail;
-  const scmToken = body.scmToken;
+  let scmToken = body.scmToken;
   const scmRefreshToken = body.scmRefreshToken;
-  const scmTokenExpiresAt = body.scmTokenExpiresAt;
-  const scmUserId = body.scmUserId;
+  let scmTokenExpiresAt = body.scmTokenExpiresAt;
   let scmTokenEncrypted: string | null = null;
   let scmRefreshTokenEncrypted: string | null = null;
 
-  // If SCM token provided, encrypt it
-  if (scmToken && env.TOKEN_ENCRYPTION_KEY) {
+  // If no SCM token provided but we have a user ID, try to resolve from D1
+  if (!scmToken && scmUserId && env.TOKEN_ENCRYPTION_KEY) {
+    try {
+      const tokenStore = new UserScmTokenStore(env.DB, env.TOKEN_ENCRYPTION_KEY);
+      const d1Tokens = await tokenStore.getTokens(scmUserId);
+      if (d1Tokens && tokenStore.isTokenFresh(d1Tokens.expiresAt)) {
+        scmToken = d1Tokens.accessToken;
+        scmTokenEncrypted = await encryptToken(d1Tokens.accessToken, env.TOKEN_ENCRYPTION_KEY);
+        scmRefreshTokenEncrypted = await encryptToken(d1Tokens.refreshToken, env.TOKEN_ENCRYPTION_KEY);
+        scmTokenExpiresAt = d1Tokens.expiresAt;
+        logger.info("Resolved SCM token from D1 for user", { scm_user_id: scmUserId });
+      } else if (d1Tokens && env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET) {
+        // Token exists but is expired — refresh it using the refresh token
+        try {
+          const newTokens = await refreshAccessToken(d1Tokens.refreshToken, {
+            clientId: env.GITHUB_CLIENT_ID,
+            clientSecret: env.GITHUB_CLIENT_SECRET,
+            encryptionKey: env.TOKEN_ENCRYPTION_KEY,
+          });
+          const newRefreshToken = newTokens.refresh_token ?? d1Tokens.refreshToken;
+          const newExpiresAt = newTokens.expires_in
+            ? Date.now() + newTokens.expires_in * 1000
+            : Date.now() + DEFAULT_TOKEN_LIFETIME_MS;
+
+          scmToken = newTokens.access_token;
+          scmTokenEncrypted = await encryptToken(newTokens.access_token, env.TOKEN_ENCRYPTION_KEY);
+          scmRefreshTokenEncrypted = await encryptToken(newRefreshToken, env.TOKEN_ENCRYPTION_KEY);
+          scmTokenExpiresAt = newExpiresAt;
+
+          // Update D1 so other sessions benefit from the refreshed token
+          await tokenStore.upsertTokens(scmUserId, newTokens.access_token, newRefreshToken, newExpiresAt);
+          logger.info("Refreshed expired SCM token from D1 for user", { scm_user_id: scmUserId });
+        } catch (refreshErr) {
+          logger.warn("Failed to refresh expired SCM token from D1", {
+            scm_user_id: scmUserId,
+            error: refreshErr instanceof Error ? refreshErr.message : String(refreshErr),
+          });
+        }
+      } else {
+        logger.info("No SCM token in D1 for user", {
+          scm_user_id: scmUserId,
+          has_record: Boolean(d1Tokens),
+        });
+      }
+    } catch (e) {
+      logger.warn("Failed to resolve SCM token from D1", {
+        scm_user_id: scmUserId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  // If SCM token provided directly, encrypt it
+  if (!scmTokenEncrypted && scmToken && env.TOKEN_ENCRYPTION_KEY) {
     try {
       scmTokenEncrypted = await encryptToken(scmToken, env.TOKEN_ENCRYPTION_KEY);
     } catch (e) {
@@ -750,13 +803,13 @@ async function handleCreateSession(
           model,
           reasoningEffort,
           userId,
+          scmUserId,
           scmLogin,
           scmName,
           scmEmail,
           scmTokenEncrypted,
           scmRefreshTokenEncrypted,
           scmTokenExpiresAt,
-          scmUserId,
           codeServerEnabled,
         }),
       },

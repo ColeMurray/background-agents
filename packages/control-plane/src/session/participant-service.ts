@@ -22,6 +22,7 @@ export interface ParticipantRepository {
   getParticipantByUserId(userId: string): ParticipantRow | null;
   getParticipantByWsTokenHash(tokenHash: string): ParticipantRow | null;
   getParticipantById(participantId: string): ParticipantRow | null;
+  getOwnerParticipant(): ParticipantRow | null;
   getProcessingMessageAuthor(): { author_id: string } | null;
   createParticipant(data: CreateParticipantData): void;
   updateParticipantTokens(
@@ -408,10 +409,19 @@ export class ParticipantService {
     let resolvedParticipant = participant;
 
     if (!resolvedParticipant.scm_access_token_encrypted) {
-      this.log.info("PR creation: prompting user has no OAuth token, using manual fallback", {
-        user_id: resolvedParticipant.user_id,
-      });
-      return { auth: null };
+      const owner = this.repository.getOwnerParticipant();
+      if (owner?.scm_access_token_encrypted) {
+        this.log.info("PR creation: prompting user has no OAuth token, falling back to session owner", {
+          user_id: resolvedParticipant.user_id,
+          owner_user_id: owner.user_id,
+        });
+        resolvedParticipant = owner;
+      } else {
+        this.log.info("PR creation: no OAuth token available, using manual fallback", {
+          user_id: resolvedParticipant.user_id,
+        });
+        return { auth: null };
+      }
     }
 
     if (this.isScmTokenExpired(resolvedParticipant)) {

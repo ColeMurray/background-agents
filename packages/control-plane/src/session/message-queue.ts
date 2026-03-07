@@ -203,6 +203,14 @@ export class SessionMessageQueue {
       attachments: message.attachments ? JSON.parse(message.attachments) : undefined,
     };
 
+    this.deps.log.info("prompt.scm_author", {
+      message_id: message.id,
+      author_user_id: author?.user_id ?? "unknown",
+      scm_name: author?.scm_name ?? null,
+      scm_email: author?.scm_email ?? null,
+      has_scm_identity: Boolean(author?.scm_name || author?.scm_email),
+    });
+
     const sent = this.deps.wsManager.send(sandboxWs, command);
 
     this.deps.log.info("prompt.dispatch", {

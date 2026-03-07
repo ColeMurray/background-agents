@@ -426,6 +426,12 @@ export class SessionRepository {
     return rows[0] ?? null;
   }
 
+  getOwnerParticipant(): ParticipantRow | null {
+    const result = this.sql.exec(`SELECT * FROM participants WHERE role = 'owner' LIMIT 1`);
+    const rows = this.rows<ParticipantRow>(result);
+    return rows[0] ?? null;
+  }
+
   createParticipant(data: CreateParticipantData): void {
     this.sql.exec(
       `INSERT INTO participants (id, user_id, scm_user_id, scm_login, scm_name, scm_email, scm_access_token_encrypted, scm_refresh_token_encrypted, scm_token_expires_at, role, joined_at)

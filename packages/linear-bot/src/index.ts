@@ -119,6 +119,12 @@ app.post("/webhook", async (c) => {
   }
 
   const payload: unknown = JSON.parse(body);
+
+  log.info("webhook.raw_body", {
+    trace_id: traceId,
+    body: body.slice(0, 2000),
+  });
+
   if (!isObjectRecord(payload)) {
     log.warn("webhook.invalid_payload", { trace_id: traceId, reason: "payload_not_object" });
     return c.json({ error: "Invalid payload" }, 400);
