@@ -31,6 +31,7 @@ import {
 import {
   getTeamRepoMapping,
   getProjectRepoMapping,
+  getUserMapping,
   getUserPreferences,
   lookupIssueSession,
   storeIssueSession,
@@ -385,6 +386,55 @@ async function handleNewSession(
     labelModel,
   });
 
+  // ─── Resolve SCM identity ────────────────────────────────────────────
+
+  let scmLogin: string | undefined;
+  let scmName: string | undefined;
+  let scmEmail: string | undefined;
+  let scmUserId: string | undefined;
+  const assignee = issueDetails?.assignee;
+
+  log.info("scm_identity.resolve_start", {
+    trace_id: traceId,
+    has_issue_details: Boolean(issueDetails),
+    has_assignee: Boolean(assignee),
+    assignee_id: assignee?.id,
+    assignee_name: assignee?.name,
+  });
+
+  if (assignee) {
+    const userMapping = await getUserMapping(env);
+
+    log.info("scm_identity.user_mapping_fetched", {
+      trace_id: traceId,
+      mapping_keys: Object.keys(userMapping),
+      assignee_id: assignee.id,
+      has_match: Boolean(userMapping[assignee.id]),
+    });
+
+    const mapped = userMapping[assignee.id];
+    if (mapped) {
+      scmLogin = mapped.githubLogin;
+      scmName = assignee.name;
+      scmEmail = mapped.email;
+      scmUserId = mapped.githubUserId;
+
+      log.info("scm_identity.resolved", {
+        trace_id: traceId,
+        scm_login: scmLogin,
+        scm_name: scmName,
+        scm_email: scmEmail ?? null,
+        scm_user_id: scmUserId ?? null,
+      });
+    } else {
+      log.info("scm_identity.no_mapping_for_assignee", {
+        trace_id: traceId,
+        assignee_id: assignee.id,
+        assignee_name: assignee.name,
+      });
+    }
+  }
+
   // ─── Create session ───────────────────────────────────────────────────
 
   await updateAgentSession(client, agentSessionId, { plan: makePlan("repo_resolved") });
@@ -400,16 +450,25 @@ async function handleNewSession(
 
   const headers = await getAuthHeaders(env, traceId);
 
+  const sessionBody = {
+    repoOwner,
+    repoName,
+    title: `${issue.identifier}: ${issue.title}`,
+    model,
+    reasoningEffort,
+    ...(scmLogin && { scmLogin, scmName, scmEmail, scmUserId }),
+    ...(scmUserId && { userId: scmUserId }),
+  };
+
+  log.info("control_plane.create_session_request", {
+    trace_id: traceId,
+    session_body: sessionBody,
+  });
+
   const sessionRes = await env.CONTROL_PLANE.fetch("https://internal/sessions", {
     method: "POST",
     headers,
-    body: JSON.stringify({
-      repoOwner,
-      repoName,
-      title: `${issue.identifier}: ${issue.title}`,
-      model,
-      reasoningEffort,
-    }),
+    body: JSON.stringify(sessionBody),
   });
 
   if (!sessionRes.ok) {
@@ -478,7 +537,7 @@ async function handleNewSession(
       headers,
       body: JSON.stringify({
         content: prompt,
-        authorId: `linear:${webhook.appUserId}`,
+        authorId: scmUserId || `linear:${webhook.appUserId}`,
         source: "linear",
         callbackContext,
       }),

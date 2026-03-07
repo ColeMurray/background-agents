@@ -86,6 +86,13 @@ export interface ProjectRepoMapping {
 }
 
 /**
+ * Linear user→GitHub user mapping stored in KV under "config:user-mapping".
+ */
+export interface UserMapping {
+  [linearUserId: string]: { githubLogin: string; email?: string; githubUserId?: string };
+}
+
+/**
  * Trigger configuration stored in KV under "config:triggers".
  */
 export interface TriggerConfig {

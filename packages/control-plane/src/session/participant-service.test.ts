@@ -63,6 +63,7 @@ function createMockRepository(): ParticipantRepository {
     getParticipantByUserId: vi.fn(() => null),
     getParticipantByWsTokenHash: vi.fn(() => null),
     getParticipantById: vi.fn(() => null),
+    getOwnerParticipant: vi.fn(() => null),
     getProcessingMessageAuthor: vi.fn(() => null),
     createParticipant: vi.fn(),
     updateParticipantTokens: vi.fn(),
@@ -582,7 +583,7 @@ describe("ParticipantService", () => {
 
       expect(result).toEqual({ auth: null });
       expect(harness.log.info).toHaveBeenCalledWith(
-        "PR creation: prompting user has no OAuth token, using manual fallback",
+        "PR creation: no OAuth token available, using manual fallback",
         expect.any(Object)
       );
     });
