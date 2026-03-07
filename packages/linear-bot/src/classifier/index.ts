@@ -1,6 +1,6 @@
 /**
  * Repository classifier for the Linear bot.
- * Uses raw Anthropic API (no SDK) to classify which repo an issue belongs to.
+ * Uses Bedrock InvokeModel API with Anthropic Messages format to classify which repo an issue belongs to.
  */
 
 import type { Env, RepoConfig, ClassificationResult } from "../types";
@@ -19,7 +19,7 @@ interface ClassifyToolInput {
   alternatives: string[];
 }
 
-interface AnthropicContentBlock {
+interface BedrockContentBlock {
   type: string;
   id?: string;
   name?: string;
@@ -27,8 +27,8 @@ interface AnthropicContentBlock {
   text?: string;
 }
 
-interface AnthropicResponse {
-  content: AnthropicContentBlock[];
+interface BedrockResponse {
+  content: BedrockContentBlock[];
 }
 
 /**
@@ -72,66 +72,75 @@ Consider:
 Return your decision by calling the ${CLASSIFY_REPO_TOOL_NAME} tool.`;
 }
 
+const BEDROCK_CLASSIFICATION_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0";
+
 /**
- * Call Anthropic API directly (no SDK — Workers can't use CJS imports).
+ * Call Bedrock InvokeModel API with Anthropic Messages format.
  */
-async function callAnthropic(apiKey: string, prompt: string): Promise<ClassifyToolInput> {
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5",
-      max_tokens: 500,
-      temperature: 0,
-      tools: [
-        {
-          name: CLASSIFY_REPO_TOOL_NAME,
-          description: "Classify which repository an issue belongs to.",
-          input_schema: {
-            type: "object" as const,
-            properties: {
-              repoId: {
-                type: ["string", "null"],
-                description: "Repository ID (owner/name) if confident, otherwise null.",
+async function callBedrock(
+  bearerToken: string,
+  region: string,
+  prompt: string
+): Promise<ClassifyToolInput> {
+  const modelId = BEDROCK_CLASSIFICATION_MODEL;
+  const response = await fetch(
+    `https://bedrock-runtime.${region}.amazonaws.com/model/${modelId}/invoke`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${bearerToken}`,
+      },
+      body: JSON.stringify({
+        anthropic_version: "bedrock-2023-05-31",
+        max_tokens: 500,
+        temperature: 0,
+        tools: [
+          {
+            name: CLASSIFY_REPO_TOOL_NAME,
+            description: "Classify which repository an issue belongs to.",
+            input_schema: {
+              type: "object" as const,
+              properties: {
+                repoId: {
+                  type: ["string", "null"],
+                  description: "Repository ID (owner/name) if confident, otherwise null.",
+                },
+                confidence: {
+                  type: "string",
+                  enum: ["high", "medium", "low"],
+                },
+                reasoning: {
+                  type: "string",
+                  description: "Brief explanation.",
+                },
+                alternatives: {
+                  type: "array",
+                  items: { type: "string" },
+                  description: "Alternative repo IDs when not confident.",
+                },
               },
-              confidence: {
-                type: "string",
-                enum: ["high", "medium", "low"],
-              },
-              reasoning: {
-                type: "string",
-                description: "Brief explanation.",
-              },
-              alternatives: {
-                type: "array",
-                items: { type: "string" },
-                description: "Alternative repo IDs when not confident.",
-              },
+              required: ["repoId", "confidence", "reasoning", "alternatives"],
             },
-            required: ["repoId", "confidence", "reasoning", "alternatives"],
           },
-        },
-      ],
-      tool_choice: { type: "tool", name: CLASSIFY_REPO_TOOL_NAME },
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
+        ],
+        tool_choice: { type: "tool", name: CLASSIFY_REPO_TOOL_NAME },
+        messages: [{ role: "user", content: prompt }],
+      }),
+    }
+  );
 
   if (!response.ok) {
     const errText = await response.text();
-    throw new Error(`Anthropic API error ${response.status}: ${errText}`);
+    throw new Error(`Bedrock API error ${response.status}: ${errText}`);
   }
 
-  const data = (await response.json()) as AnthropicResponse;
+  const data = (await response.json()) as BedrockResponse;
   const toolBlock = data.content.find(
     (b) => b.type === "tool_use" && b.name === CLASSIFY_REPO_TOOL_NAME
   );
 
-  if (!toolBlock) throw new Error("No tool_use block in Anthropic response");
+  if (!toolBlock) throw new Error("No tool_use block in Bedrock response");
 
   const input = toolBlock.input as Record<string, unknown>;
   return {
@@ -185,7 +194,7 @@ export async function classifyRepo(
       traceId
     );
 
-    const result = await callAnthropic(env.ANTHROPIC_API_KEY, prompt);
+    const result = await callBedrock(env.AWS_BEARER_TOKEN_BEDROCK, env.AWS_REGION, prompt);
 
     let matchedRepo: RepoConfig | null = null;
     if (result.repoId) {

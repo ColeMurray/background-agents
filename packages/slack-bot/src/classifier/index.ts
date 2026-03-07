@@ -5,7 +5,6 @@
  * based on message content, thread context, and channel information.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
 import type { Env, RepoConfig, ThreadContext, ClassificationResult } from "../types";
 import type { ConfidenceLevel } from "@open-inspect/shared";
 import { getAvailableRepos, buildRepoDescriptions, getReposByChannel } from "./repos";
@@ -15,12 +14,26 @@ const log = createLogger("classifier");
 const CLASSIFY_REPO_TOOL_NAME = "classify_repository";
 const CONFIDENCE_LEVELS: ClassificationResult["confidence"][] = ["high", "medium", "low"];
 
-const CLASSIFY_REPO_TOOL: Anthropic.Messages.Tool = {
+const BEDROCK_CLASSIFICATION_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0";
+
+interface BedrockContentBlock {
+  type: string;
+  id?: string;
+  name?: string;
+  input?: unknown;
+  text?: string;
+}
+
+interface BedrockResponse {
+  content: BedrockContentBlock[];
+}
+
+const CLASSIFY_REPO_TOOL = {
   name: CLASSIFY_REPO_TOOL_NAME,
   description:
     "Classify which repository a Slack message refers to. Use repoId as null when uncertain.",
   input_schema: {
-    type: "object",
+    type: "object" as const,
     properties: {
       repoId: {
         type: ["string", "null"],
@@ -158,9 +171,9 @@ function normalizeModelResponse(raw: unknown): LLMResponse {
   };
 }
 
-function extractStructuredResponse(response: Anthropic.Messages.Message): LLMResponse {
+function extractStructuredResponse(response: BedrockResponse): LLMResponse {
   const toolUseBlock = response.content.find(
-    (block): block is Anthropic.Messages.ToolUseBlock =>
+    (block): block is BedrockContentBlock & { name: string; input: unknown } =>
       block.type === "tool_use" && block.name === CLASSIFY_REPO_TOOL_NAME
   );
 
@@ -172,17 +185,54 @@ function extractStructuredResponse(response: Anthropic.Messages.Message): LLMRes
 }
 
 /**
+ * Call Bedrock InvokeModel with Anthropic Messages API format.
+ */
+async function callBedrock(
+  bearerToken: string,
+  region: string,
+  prompt: string
+): Promise<LLMResponse> {
+  const modelId = BEDROCK_CLASSIFICATION_MODEL;
+  const response = await fetch(
+    `https://bedrock-runtime.${region}.amazonaws.com/model/${modelId}/invoke`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${bearerToken}`,
+      },
+      body: JSON.stringify({
+        anthropic_version: "bedrock-2023-05-31",
+        max_tokens: 500,
+        temperature: 0,
+        tools: [CLASSIFY_REPO_TOOL],
+        tool_choice: {
+          type: "tool",
+          name: CLASSIFY_REPO_TOOL_NAME,
+          disable_parallel_tool_use: true,
+        },
+        messages: [{ role: "user", content: prompt }],
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Bedrock API error ${response.status}: ${errText}`);
+  }
+
+  const data = (await response.json()) as BedrockResponse;
+  return extractStructuredResponse(data);
+}
+
+/**
  * Repository classifier class.
  */
 export class RepoClassifier {
-  private client: Anthropic;
   private env: Env;
 
   constructor(env: Env) {
     this.env = env;
-    this.client = new Anthropic({
-      apiKey: env.ANTHROPIC_API_KEY,
-    });
   }
 
   /**
@@ -233,25 +283,11 @@ export class RepoClassifier {
     try {
       const prompt = await buildClassificationPrompt(this.env, message, context, traceId);
 
-      const response = await this.client.messages.create({
-        model: this.env.CLASSIFICATION_MODEL || "claude-haiku-4-5",
-        max_tokens: 500,
-        temperature: 0,
-        tools: [CLASSIFY_REPO_TOOL],
-        tool_choice: {
-          type: "tool",
-          name: CLASSIFY_REPO_TOOL_NAME,
-          disable_parallel_tool_use: true,
-        },
-        messages: [
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
-      });
-
-      const llmResult = extractStructuredResponse(response);
+      const llmResult = await callBedrock(
+        this.env.AWS_BEARER_TOKEN_BEDROCK,
+        this.env.AWS_REGION,
+        prompt
+      );
 
       // Find the matched repo
       let matchedRepo: RepoConfig | null = null;

@@ -56,7 +56,8 @@ linear_webhook_secret = "your-webhook-signing-secret"
 
 The worker also requires these secrets (set via `wrangler secret put` or Terraform):
 
-- **`ANTHROPIC_API_KEY`** — used by the LLM classifier for repo resolution fallback
+- **`AWS_BEARER_TOKEN_BEDROCK`** — Bedrock bearer token, used by the LLM classifier for repo resolution fallback
+- **`AWS_REGION`** — AWS region for Bedrock API calls
 - **`INTERNAL_CALLBACK_SECRET`** — HMAC auth for config endpoints and callback verification
 
 Then `terraform apply`.

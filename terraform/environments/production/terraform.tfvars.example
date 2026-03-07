@@ -106,9 +106,12 @@ linear_webhook_secret = ""   # Webhook Signing Secret from the application confi
 # API Keys
 # =============================================================================
 
-# Anthropic API key for Claude
-# From: https://console.anthropic.com/
-anthropic_api_key = ""
+# AWS Bedrock bearer token (API key) for Claude via Bedrock
+# From: https://console.aws.amazon.com/bedrock/ → API keys
+bedrock_api_key = ""
+
+# AWS region for Bedrock API calls
+bedrock_region = "us-east-1"
 
 # =============================================================================
 # Security Secrets

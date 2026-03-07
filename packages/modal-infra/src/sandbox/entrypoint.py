@@ -25,6 +25,8 @@ from .log_config import configure_logging, get_logger
 
 configure_logging()
 
+from .types import ANTHROPIC_TO_BEDROCK_MODEL_MAP
+
 
 class SandboxSupervisor:
     """
@@ -334,14 +336,35 @@ class SandboxSupervisor:
         # Model format is "provider/model", e.g. "anthropic/claude-sonnet-4-6"
         provider = self.session_config.get("provider", "anthropic")
         model = self.session_config.get("model", "claude-sonnet-4-6")
-        opencode_config = {
-            "model": f"{provider}/{model}",
-            "permission": {
-                "*": {
-                    "*": "allow",
+
+        # Remap Anthropic models to Amazon Bedrock
+        if provider == "anthropic":
+            bedrock_model = ANTHROPIC_TO_BEDROCK_MODEL_MAP.get(model, model)
+            bedrock_region = os.environ.get("AWS_REGION", "us-east-1")
+            opencode_config = {
+                "model": f"amazon-bedrock/{bedrock_model}",
+                "provider": {
+                    "amazon-bedrock": {
+                        "options": {
+                            "region": bedrock_region,
+                        }
+                    }
                 },
-            },
-        }
+                "permission": {
+                    "*": {
+                        "*": "allow",
+                    },
+                },
+            }
+        else:
+            opencode_config = {
+                "model": f"{provider}/{model}",
+                "permission": {
+                    "*": {
+                        "*": "allow",
+                    },
+                },
+            }
 
         # Determine working directory - use repo path if cloned, otherwise /workspace
         workdir = self.workspace_path

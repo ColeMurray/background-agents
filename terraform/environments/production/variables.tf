@@ -196,10 +196,16 @@ variable "linear_api_key" {
 # API Keys
 # =============================================================================
 
-variable "anthropic_api_key" {
-  description = "Anthropic API key for Claude"
+variable "bedrock_api_key" {
+  description = "AWS Bedrock bearer token (API key) for Claude via Bedrock"
   type        = string
   sensitive   = true
+}
+
+variable "bedrock_region" {
+  description = "AWS region for Bedrock API calls (e.g., us-east-1)"
+  type        = string
+  default     = "us-east-1"
 }
 
 # =============================================================================

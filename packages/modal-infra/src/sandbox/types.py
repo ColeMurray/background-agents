@@ -5,6 +5,16 @@ from typing import Any
 
 from pydantic import BaseModel
 
+# Bedrock model IDs differ from Anthropic direct API IDs.
+# OpenCode expects exact Models.dev identifiers for amazon-bedrock.
+ANTHROPIC_TO_BEDROCK_MODEL_MAP: dict[str, str] = {
+    "claude-haiku-4-5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "claude-sonnet-4-5": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6",
+    "claude-opus-4-5": "us.anthropic.claude-opus-4-5-20251101-v1:0",
+    "claude-opus-4-6": "us.anthropic.claude-opus-4-6-v1",
+}
+
 
 class SandboxStatus(StrEnum):
     """Status of a sandbox instance."""

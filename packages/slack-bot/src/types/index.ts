@@ -23,7 +23,8 @@ export interface Env {
   SLACK_BOT_TOKEN: string;
   SLACK_SIGNING_SECRET: string;
   SLACK_APP_TOKEN?: string;
-  ANTHROPIC_API_KEY: string;
+  AWS_BEARER_TOKEN_BEDROCK: string;
+  AWS_REGION: string;
   CONTROL_PLANE_API_KEY?: string;
   INTERNAL_CALLBACK_SECRET?: string; // For verifying callbacks from control-plane
   LOG_LEVEL?: string;

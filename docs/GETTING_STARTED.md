@@ -42,7 +42,7 @@ Create accounts on these services before continuing:
 | [Vercel](https://vercel.com) _(optional)_        | Web application hosting (only if `web_platform = "vercel"`)    |
 | [Modal](https://modal.com)                       | Sandbox infrastructure                                         |
 | [GitHub](https://github.com/settings/developers) | OAuth + repository access                                      |
-| [Anthropic](https://console.anthropic.com)       | Claude API                                                     |
+| [AWS Bedrock](https://console.aws.amazon.com/bedrock/) | Claude API via Bedrock                                         |
 | [Slack](https://api.slack.com/apps) _(optional)_ | Slack bot integration                                          |
 | GitHub App Webhooks _(optional)_                 | GitHub bot (PR reviews)                                        |
 
@@ -138,11 +138,12 @@ Create an R2 API Token:
 3. Note the **Token ID** and **Token Secret**
 4. Note your **Workspace name** (visible in your Modal dashboard URL)
 
-### Anthropic
+### AWS Bedrock
 
-1. Go to [Anthropic Console](https://console.anthropic.com)
-2. Create an API key
-3. Note the **API Key** (starts with `sk-ant-`)
+1. Go to [Amazon Bedrock Console](https://console.aws.amazon.com/bedrock/)
+2. Request access to the Claude models you need in the Model catalog
+3. Generate an API key under **API keys** in the Bedrock console
+4. Note the **API Key** (bearer token) and your **AWS region** (e.g., `us-east-1`)
 
 > **Want to use your OpenAI ChatGPT subscription?** See [Using OpenAI Models](OPENAI_MODELS.md) for
 > setup instructions (can be configured after deployment).
@@ -337,7 +338,8 @@ github_webhook_secret  = ""          # From Step 5 (required if enabled)
 github_bot_username    = ""          # e.g., "my-app[bot]" (your GitHub App's bot login)
 
 # API Keys
-anthropic_api_key = "sk-ant-..."
+bedrock_api_key = "your-bedrock-bearer-token"
+bedrock_region  = "us-east-1"
 
 # Security Secrets (from Step 5)
 token_encryption_key          = "your-generated-value"
@@ -610,7 +612,8 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `ENABLE_SLACK_BOT`            | `true` to deploy Slack bot, `false` to skip (default: `true`)                 |
 | `SLACK_BOT_TOKEN`             | Slack bot token (required if enabled)                                         |
 | `SLACK_SIGNING_SECRET`        | Slack signing secret (required if enabled)                                    |
-| `ANTHROPIC_API_KEY`           | Anthropic API key                                                             |
+| `BEDROCK_API_KEY`             | AWS Bedrock bearer token (API key) for Claude                                 |
+| `BEDROCK_REGION`              | AWS region for Bedrock API calls (e.g., `us-east-1`)                          |
 | `TOKEN_ENCRYPTION_KEY`        | Generated encryption key (OAuth tokens)                                       |
 | `REPO_SECRETS_ENCRYPTION_KEY` | Generated encryption key (repo secrets)                                       |
 | `INTERNAL_CALLBACK_SECRET`    | Generated callback secret                                                     |
@@ -629,7 +632,8 @@ Instead of adding secrets one by one, create a `.secrets` file (don't commit thi
 ```
 CLOUDFLARE_API_TOKEN=your-token
 CLOUDFLARE_ACCOUNT_ID=your-account-id
-ANTHROPIC_API_KEY=sk-ant-...
+BEDROCK_API_KEY=your-bedrock-bearer-token
+BEDROCK_REGION=us-east-1
 # ... add all secrets
 ```
 

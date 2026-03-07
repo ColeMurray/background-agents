@@ -35,7 +35,7 @@ function_image = (
 # These are injected into sandboxes but never stored in snapshots
 llm_secrets = modal.Secret.from_name(
     "llm-api-keys",
-    required_keys=["ANTHROPIC_API_KEY"],
+    required_keys=["AWS_BEARER_TOKEN_BEDROCK"],
 )
 
 # Secrets for GitHub App - used for git operations (clone, push)

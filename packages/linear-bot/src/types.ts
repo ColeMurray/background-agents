@@ -28,7 +28,8 @@ export interface Env {
   // Secrets
   LINEAR_WEBHOOK_SECRET: string;
   LINEAR_API_KEY?: string; // kept for backward compat / fallback
-  ANTHROPIC_API_KEY: string;
+  AWS_BEARER_TOKEN_BEDROCK: string;
+  AWS_REGION: string;
   INTERNAL_CALLBACK_SECRET?: string;
   LOG_LEVEL?: string;
 }

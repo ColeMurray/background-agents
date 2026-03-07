@@ -48,12 +48,13 @@ module "slack_bot_worker" {
     { name = "DEPLOYMENT_NAME", value = var.deployment_name },
     { name = "DEFAULT_MODEL", value = "claude-haiku-4-5" },
     { name = "CLASSIFICATION_MODEL", value = "claude-haiku-4-5" },
+    { name = "AWS_REGION", value = var.bedrock_region },
   ]
 
   secrets = [
     { name = "SLACK_BOT_TOKEN", value = var.slack_bot_token },
     { name = "SLACK_SIGNING_SECRET", value = var.slack_signing_secret },
-    { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+    { name = "AWS_BEARER_TOKEN_BEDROCK", value = var.bedrock_api_key },
     { name = "INTERNAL_CALLBACK_SECRET", value = var.internal_callback_secret },
   ]
 

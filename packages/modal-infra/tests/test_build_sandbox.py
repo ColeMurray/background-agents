@@ -94,7 +94,7 @@ async def test_no_control_plane_or_auth_vars(monkeypatch):
     env = captured["env"]
     assert "CONTROL_PLANE_URL" not in env
     assert "SANDBOX_AUTH_TOKEN" not in env
-    assert "ANTHROPIC_API_KEY" not in env
+    assert "AWS_BEARER_TOKEN_BEDROCK" not in env
 
 
 @pytest.mark.asyncio

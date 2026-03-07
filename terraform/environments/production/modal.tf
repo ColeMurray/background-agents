@@ -36,7 +36,8 @@ module "modal_app" {
     {
       name = "llm-api-keys"
       values = {
-        ANTHROPIC_API_KEY = var.anthropic_api_key
+        AWS_BEARER_TOKEN_BEDROCK = var.bedrock_api_key
+        AWS_REGION               = var.bedrock_region
       }
     },
     {

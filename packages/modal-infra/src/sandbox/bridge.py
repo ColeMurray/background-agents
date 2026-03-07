@@ -28,7 +28,7 @@ from websockets import ClientConnection, State
 from websockets.exceptions import InvalidStatus
 
 from .log_config import configure_logging, get_logger
-from .types import GitUser
+from .types import GitUser, ANTHROPIC_TO_BEDROCK_MODEL_MAP
 
 configure_logging()
 
@@ -782,13 +782,26 @@ class AgentBridge:
                 provider_id, model_id = model.split("/", 1)
             else:
                 provider_id, model_id = "anthropic", model
+
+            # Remap Anthropic models to Amazon Bedrock.
+            # Reasoning config is resolved using original provider/model IDs
+            # before remapping, since the config keys use Anthropic model names.
+            is_anthropic = provider_id == "anthropic"
+            if is_anthropic:
+                bedrock_model_id = ANTHROPIC_TO_BEDROCK_MODEL_MAP.get(model_id, model_id)
+                oc_provider_id = "amazon-bedrock"
+                oc_model_id = bedrock_model_id
+            else:
+                oc_provider_id = provider_id
+                oc_model_id = model_id
+
             model_spec: dict[str, Any] = {
-                "providerID": provider_id,
-                "modelID": model_id,
+                "providerID": oc_provider_id,
+                "modelID": oc_model_id,
             }
 
             if reasoning_effort:
-                if provider_id == "anthropic":
+                if is_anthropic:
                     if model_id in self.ANTHROPIC_ADAPTIVE_THINKING_MODELS:
                         anthropic_options: dict[str, Any] = {
                             "thinking": {"type": "adaptive"},

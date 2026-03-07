@@ -47,13 +47,14 @@ module "linear_bot_worker" {
     { name = "DEFAULT_MODEL", value = "claude-sonnet-4-6" },
     { name = "LINEAR_CLIENT_ID", value = var.linear_client_id },
     { name = "WORKER_URL", value = "https://open-inspect-linear-bot-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev" },
+    { name = "AWS_REGION", value = var.bedrock_region },
   ]
 
   secrets = [
     { name = "LINEAR_WEBHOOK_SECRET", value = var.linear_webhook_secret },
     { name = "LINEAR_CLIENT_SECRET", value = var.linear_client_secret },
     { name = "INTERNAL_CALLBACK_SECRET", value = var.internal_callback_secret },
-    { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+    { name = "AWS_BEARER_TOKEN_BEDROCK", value = var.bedrock_api_key },
     { name = "LINEAR_API_KEY", value = var.linear_api_key },
   ]
 
