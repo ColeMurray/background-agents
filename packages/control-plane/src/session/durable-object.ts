@@ -512,14 +512,15 @@ export class SessionDO extends DurableObject<Env> {
    * Create the lifecycle manager with all required adapters.
    */
   private createLifecycleManager(): SandboxLifecycleManager {
-    // Session-level provider override takes precedence over mode-based defaults.
     const session = this.repository.getSession();
     let sandboxProvider = session?.sandbox_provider;
 
-    if (!sandboxProvider) {
-      if (session?.mode === "plan") {
-        sandboxProvider = "helm";
-      } else if (session?.mode === "apply") {
+    // Plan mode always uses Helm/Kubernetes, regardless of any sandbox_provider override.
+    // EC2 is only used for apply mode; session-level overrides apply for all other cases.
+    if (session?.mode === "plan") {
+      sandboxProvider = "helm";
+    } else if (!sandboxProvider) {
+      if (session?.mode === "apply") {
         sandboxProvider = "ec2";
       } else {
         sandboxProvider = this.env.HELM_API_URL && this.env.HELM_API_SECRET ? "helm" : "modal";
