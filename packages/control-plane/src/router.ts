@@ -742,6 +742,7 @@ async function handleCreateSession(
     baseBranch: body.branch || defaultBranch || "main",
     status: "created",
     mode: body.mode || "apply",
+    sandboxProvider: body.sandboxProvider ?? null,
     createdAt: now,
     updatedAt: now,
   });
@@ -1376,6 +1377,7 @@ async function handleSpawnChild(
     spawnSource: "agent",
     spawnDepth: childDepth,
     mode,
+    sandboxProvider,
     createdAt: now,
     updatedAt: now,
   });

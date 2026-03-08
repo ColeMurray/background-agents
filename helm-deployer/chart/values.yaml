@@ -2,7 +2,7 @@ replicaCount: 2
 
 image:
   repository: "public.ecr.aws/x5s6v8v4/helm-deployer/node"
-  tag: "22-alpine-v18"
+  tag: "22-alpine-v19"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []

@@ -1508,6 +1508,7 @@ export class SessionDO extends DurableObject<Env> {
       reasoningEffort: session?.reasoning_effort ?? undefined,
       isProcessing,
       parentSessionId: session?.parent_session_id ?? null,
+      sandboxProvider: (session?.sandbox_provider as "modal" | "helm" | "ec2" | null) ?? null,
     };
   }
 

@@ -71,6 +71,7 @@ export interface Session {
   spawn_source: SpawnSource;
   spawn_depth: number;
   mode?: "plan" | "apply";
+  sandboxProvider?: "modal" | "helm" | "ec2" | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -321,6 +322,7 @@ export interface SessionState {
   reasoningEffort?: string;
   isProcessing?: boolean;
   parentSessionId?: string | null;
+  sandboxProvider?: "modal" | "helm" | "ec2" | null;
 }
 
 // Participant presence info

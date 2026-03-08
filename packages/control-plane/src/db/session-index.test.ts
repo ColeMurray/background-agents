@@ -17,6 +17,7 @@ type SessionRow = {
   automation_id: string | null;
   automation_run_id: string | null;
   mode: "plan" | "apply" | null;
+  sandbox_provider: "modal" | "helm" | "ec2" | null;
   created_at: number;
   updated_at: number;
 };
@@ -128,6 +129,7 @@ class FakeD1Database {
         automationId,
         automationRunId,
         mode,
+        sandboxProvider,
         createdAt,
         updatedAt,
       ] = args as [
@@ -145,6 +147,7 @@ class FakeD1Database {
         string | null,
         string | null,
         "plan" | "apply" | null,
+        "modal" | "helm" | "ec2" | null,
         number,
         number,
       ];
@@ -165,6 +168,7 @@ class FakeD1Database {
           automation_id: automationId,
           automation_run_id: automationRunId,
           mode,
+          sandbox_provider: sandboxProvider,
           created_at: createdAt,
           updated_at: updatedAt,
         });
@@ -313,6 +317,7 @@ describe("SessionIndexStore", () => {
         automationId: null,
         automationRunId: null,
         mode: null,
+        sandboxProvider: null,
       });
     });
 

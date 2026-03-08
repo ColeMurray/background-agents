@@ -320,6 +320,12 @@ function SessionListItem({
             <span className="text-accent">sub-task</span>
           </>
         )}
+        {session.sandboxProvider && (
+          <>
+            <span>·</span>
+            <span>{session.sandboxProvider === "helm" ? "k8s" : session.sandboxProvider}</span>
+          </>
+        )}
         {session.baseBranch && session.baseBranch !== "main" && (
           <>
             <span>·</span>

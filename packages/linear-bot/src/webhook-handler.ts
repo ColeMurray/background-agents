@@ -644,6 +644,19 @@ function buildPrompt(
   comment?: { body: string } | null,
   mode: SessionMode = "apply"
 ): string {
+  const SESSION_THREAD_MARKER = "This thread is for an agent session with fountaincodingagent.";
+
+  const isSessionThreadMarkerComment = (body: string): boolean => {
+    const normalized = body.trim();
+    return (
+      normalized === SESSION_THREAD_MARKER ||
+      normalized === `**Unknown:** ${SESSION_THREAD_MARKER}` ||
+      normalized === `**Agent instruction:** ${SESSION_THREAD_MARKER}` ||
+      normalized ===
+        `**Unknown:** ${SESSION_THREAD_MARKER}\n\n---\n**Agent instruction:** ${SESSION_THREAD_MARKER}`
+    );
+  };
+
   const parts: string[] = [
     `Linear Issue: ${issue.identifier} — ${issue.title}`,
     `URL: ${issue.url}`,
@@ -672,16 +685,20 @@ function buildPrompt(
     }
 
     // Include recent comments for context
-    if (issueDetails.comments.length > 0) {
+    const recentComments = issueDetails.comments
+      .filter((c) => !isSessionThreadMarkerComment(c.body))
+      .slice(-5);
+
+    if (recentComments.length > 0) {
       parts.push("", "---", "**Recent comments:**");
-      for (const c of issueDetails.comments.slice(-5)) {
+      for (const c of recentComments) {
         const author = c.user?.name || "Unknown";
         parts.push(`- **${author}:** ${c.body.slice(0, 200)}`);
       }
     }
   }
 
-  if (comment?.body) {
+  if (comment?.body && !isSessionThreadMarkerComment(comment.body)) {
     parts.push("", "---", `**Agent instruction:** ${comment.body}`);
   }
 
