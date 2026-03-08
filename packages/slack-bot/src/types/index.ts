@@ -109,6 +109,13 @@ import type { SlackCallbackContext } from "@open-inspect/shared";
 export type SlackBotCallbackContext = SlackCallbackContext;
 
 /**
+ * Slack user→GitHub user mapping stored in KV under "config:user-mapping".
+ */
+export interface UserMapping {
+  [slackUserId: string]: { githubLogin: string; email?: string; githubUserId?: string };
+}
+
+/**
  * Thread-to-session mapping stored in KV for conversation continuity.
  */
 export interface ThreadSession {
