@@ -59,6 +59,8 @@ export interface SandboxStorage {
   getSession(): SessionRow | null;
   /** Get user env vars for sandbox injection */
   getUserEnvVars(): Promise<Record<string, string> | undefined>;
+  /** Get VCS token for sandbox clone */
+  getVcsToken(): Promise<string | null>;
   /** Update sandbox status */
   updateSandboxStatus(status: SandboxStatus): void;
   /** Update sandbox for spawn (status, auth token, sandbox ID, created_at) */
@@ -350,7 +352,14 @@ export class SandboxLifecycleManager {
         repo_name: session.repo_name,
       });
 
-      const userEnvVars = await this.storage.getUserEnvVars();
+      const userEnvVars = (await this.storage.getUserEnvVars()) || {};
+
+      // Inject VCS clone token if available
+      const vcsToken = await this.storage.getVcsToken();
+      if (vcsToken && !userEnvVars["VCS_CLONE_TOKEN"]) {
+        userEnvVars["VCS_CLONE_TOKEN"] = vcsToken;
+      }
+
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
 
       // Look up pre-built repo image (graceful fallback on failure)
@@ -495,7 +504,14 @@ export class SandboxLifecycleManager {
         snapshot_image_id: snapshotImageId,
       });
 
-      const userEnvVars = await this.storage.getUserEnvVars();
+      const userEnvVars = (await this.storage.getUserEnvVars()) || {};
+
+      // Inject VCS clone token if available
+      const vcsToken = await this.storage.getVcsToken();
+      if (vcsToken && !userEnvVars["VCS_CLONE_TOKEN"]) {
+        userEnvVars["VCS_CLONE_TOKEN"] = vcsToken;
+      }
+
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
 
       // Child sessions get a shorter timeout (same logic as doSpawn)

@@ -110,6 +110,10 @@ function createMockStorage(
       calls.push("getUserEnvVars");
       return userEnvVars;
     }),
+    getVcsToken: vi.fn(async () => {
+      calls.push("getVcsToken");
+      return "test-vcs-token";
+    }),
     updateSandboxStatus: vi.fn((status: SandboxStatus) => {
       calls.push(`updateSandboxStatus:${status}`);
       if (sandbox) sandbox.status = status;
