@@ -565,6 +565,15 @@ export class SessionDO extends DurableObject<Env> {
       getSandboxWithCircuitBreaker: () => this.repository.getSandboxWithCircuitBreaker(),
       getSession: () => this.repository.getSession(),
       getUserEnvVars: () => this.getUserEnvVars(),
+      getVcsToken: async () => {
+        try {
+          const auth = await this.sourceControlProvider.generatePushAuth();
+          return auth.token;
+        } catch (e) {
+          this.log.error("Failed to generate VCS token for sandbox", { error: e });
+          return null;
+        }
+      },
       updateSandboxStatus: (status) => this.updateSandboxStatus(status),
       updateSandboxForSpawn: (data) => this.repository.updateSandboxForSpawn(data),
       updateSandboxModalObjectId: (id) => this.repository.updateSandboxModalObjectId(id),
