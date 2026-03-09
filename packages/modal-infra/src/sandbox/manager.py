@@ -159,7 +159,7 @@ class SandboxManager:
 
         # Create the sandbox
         # The entrypoint command is passed as positional args
-        sandbox = modal.Sandbox.create(
+        sandbox = await modal.Sandbox.create.aio(
             "python",
             "-m",
             "sandbox.entrypoint",  # Run the supervisor entrypoint
@@ -235,7 +235,7 @@ class SandboxManager:
 
         self._inject_vcs_env_vars(env_vars, clone_token or None)
 
-        sandbox = modal.Sandbox.create(
+        sandbox = await modal.Sandbox.create.aio(
             "python",
             "-m",
             "sandbox.entrypoint",
@@ -457,7 +457,7 @@ class SandboxManager:
         self._inject_vcs_env_vars(env_vars, clone_token)
 
         # Create the sandbox from the snapshot image
-        sandbox = modal.Sandbox.create(
+        sandbox = await modal.Sandbox.create.aio(
             "python",
             "-m",
             "sandbox.entrypoint",
