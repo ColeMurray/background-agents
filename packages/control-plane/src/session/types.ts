@@ -105,6 +105,7 @@ export interface SandboxRow {
   last_spawn_error_at: number | null;
   code_server_url: string | null;
   code_server_password: string | null;
+  dev_server_url: string | null;
   created_at: number;
 }
 

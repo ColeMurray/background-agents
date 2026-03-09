@@ -561,6 +561,7 @@ export class SessionDO extends DurableObject<Env> {
         this.repository.updateSandboxCodeServer(url, encrypted);
       },
       clearSandboxCodeServer: () => this.repository.clearSandboxCodeServer(),
+      updateSandboxDevServer: (url) => this.repository.updateSandboxDevServer(url),
     };
 
     // Broadcaster adapter
@@ -1476,6 +1477,7 @@ export class SessionDO extends DurableObject<Env> {
       parentSessionId: session?.parent_session_id ?? null,
       codeServerUrl: sandbox?.code_server_url ?? null,
       codeServerPassword,
+      devServerUrl: sandbox?.dev_server_url ?? null,
     };
   }
 

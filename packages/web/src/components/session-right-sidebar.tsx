@@ -8,6 +8,7 @@ import {
   TasksSection,
   FilesChangedSection,
   CodeServerSection,
+  DevServerSection,
 } from "./sidebar";
 import { ChildSessionsSection } from "./sidebar/child-sessions-section";
 import { extractLatestTasks } from "@/lib/tasks";
@@ -73,6 +74,16 @@ export function SessionRightSidebarContent({
           <CodeServerSection
             url={sessionState.codeServerUrl}
             password={sessionState.codeServerPassword ?? null}
+            sandboxStatus={sessionState.sandboxStatus}
+          />
+        </div>
+      )}
+
+      {/* Dev Server Preview */}
+      {sessionState.devServerUrl && (
+        <div className="px-4 py-4 border-b border-border-muted">
+          <DevServerSection
+            url={sessionState.devServerUrl}
             sandboxStatus={sessionState.sandboxStatus}
           />
         </div>

@@ -390,6 +390,13 @@ export class SessionRepository {
     );
   }
 
+  updateSandboxDevServer(url: string): void {
+    this.sql.exec(
+      `UPDATE sandbox SET dev_server_url = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      url
+    );
+  }
+
   resetCircuitBreaker(): void {
     this.sql.exec(
       `UPDATE sandbox SET spawn_failure_count = 0 WHERE id = (SELECT id FROM sandbox LIMIT 1)`

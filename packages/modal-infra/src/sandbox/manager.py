@@ -61,6 +61,7 @@ class SandboxHandle:
     modal_object_id: str | None = None  # Modal's internal sandbox ID for API calls
     code_server_url: str | None = None
     code_server_password: str | None = None
+    dev_server_url: str | None = None
 
     def get_logs(self) -> str:
         """Get sandbox logs."""
@@ -118,6 +119,21 @@ class SandboxManager:
                 if attempt < retries - 1:
                     await asyncio.sleep(backoff * (attempt + 1))
         return None
+
+    @staticmethod
+    async def _resolve_dev_server_tunnel(
+        sandbox: modal.Sandbox, port: int, sandbox_id: str
+    ) -> str | None:
+        """Resolve the dev server tunnel URL from Modal, returning None on failure."""
+        try:
+            loop = asyncio.get_event_loop()
+            tunnels = await loop.run_in_executor(None, sandbox.tunnels)
+            tunnel = tunnels[port]
+            log.info("dev_server.tunnel", sandbox_id=sandbox_id, port=port, url=tunnel.url)
+            return tunnel.url
+        except Exception as e:
+            log.warn("dev_server.tunnel_error", sandbox_id=sandbox_id, port=port, exc=e)
+            return None
 
     @staticmethod
     def _inject_vcs_env_vars(env_vars: dict[str, str], clone_token: str | None) -> None:
@@ -185,6 +201,13 @@ class SandboxManager:
             code_server_password = self._generate_code_server_password()
             env_vars["CODE_SERVER_PASSWORD"] = code_server_password
 
+        # Check for dev server port configuration
+        dev_server_port: int | None = None
+        if config.user_env_vars:
+            port_str = config.user_env_vars.get("DEV_SERVER_PORT")
+            if port_str:
+                dev_server_port = int(port_str)
+
         if config.session_config:
             env_vars["SESSION_CONFIG"] = config.session_config.model_dump_json()
 
@@ -198,6 +221,10 @@ class SandboxManager:
         else:
             image = base_image
 
+        encrypted_ports = [CODE_SERVER_PORT]
+        if dev_server_port:
+            encrypted_ports.append(dev_server_port)
+
         # Create the sandbox
         # The entrypoint command is passed as positional args
         create_kwargs: dict = {
@@ -208,8 +235,8 @@ class SandboxManager:
             "workdir": "/workspace",
             "env": env_vars,
         }
-        if config.code_server_enabled:
-            create_kwargs["encrypted_ports"] = [CODE_SERVER_PORT]
+        if encrypted_ports:
+            create_kwargs["encrypted_ports"] = encrypted_ports
 
         sandbox = await modal.Sandbox.create.aio(
             "python",
@@ -223,6 +250,12 @@ class SandboxManager:
         code_server_url: str | None = None
         if config.code_server_enabled:
             code_server_url = await self._resolve_code_server_tunnel(sandbox, sandbox_id)
+
+        dev_server_url: str | None = None
+        if dev_server_port:
+            dev_server_url = await self._resolve_dev_server_tunnel(
+                sandbox, dev_server_port, sandbox_id
+            )
 
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -244,6 +277,7 @@ class SandboxManager:
             modal_object_id=modal_object_id,
             code_server_url=code_server_url,
             code_server_password=code_server_password,
+            dev_server_url=dev_server_url,
         )
 
     async def create_build_sandbox(
@@ -514,6 +548,17 @@ class SandboxManager:
             code_server_password = self._generate_code_server_password()
             env_vars["CODE_SERVER_PASSWORD"] = code_server_password
 
+        # Check for dev server port configuration
+        dev_server_port: int | None = None
+        if user_env_vars:
+            port_str = user_env_vars.get("DEV_SERVER_PORT")
+            if port_str:
+                dev_server_port = int(port_str)
+
+        encrypted_ports = [CODE_SERVER_PORT]
+        if dev_server_port:
+            encrypted_ports.append(dev_server_port)
+
         # Create the sandbox from the snapshot image
         create_kwargs: dict = {
             "image": image,  # Use the snapshot image directly
@@ -523,8 +568,8 @@ class SandboxManager:
             "workdir": "/workspace",
             "env": env_vars,
         }
-        if code_server_enabled:
-            create_kwargs["encrypted_ports"] = [CODE_SERVER_PORT]
+        if encrypted_ports:
+            create_kwargs["encrypted_ports"] = encrypted_ports
 
         sandbox = await modal.Sandbox.create.aio(
             "python",
@@ -537,6 +582,12 @@ class SandboxManager:
         code_server_url: str | None = None
         if code_server_enabled:
             code_server_url = await self._resolve_code_server_tunnel(sandbox, sandbox_id)
+
+        dev_server_url: str | None = None
+        if dev_server_port:
+            dev_server_url = await self._resolve_dev_server_tunnel(
+                sandbox, dev_server_port, sandbox_id
+            )
 
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -559,6 +610,7 @@ class SandboxManager:
             modal_object_id=modal_object_id,
             code_server_url=code_server_url,
             code_server_password=code_server_password,
+            dev_server_url=dev_server_url,
         )
 
     async def maintain_warm_pool(
