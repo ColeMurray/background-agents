@@ -110,6 +110,7 @@ async def create_sandbox(
         "created_at": handle.created_at,
         "code_server_url": handle.code_server_url,
         "code_server_password": handle.code_server_password,
+        "dev_server_url": handle.dev_server_url,
     }
 
 

@@ -76,6 +76,7 @@ function createMockSandbox(
     last_spawn_error_at: null,
     code_server_url: null,
     code_server_password: null,
+    dev_server_url: null,
     created_at: Date.now() - 60000,
     spawn_failure_count: 0,
     last_spawn_failure: 0,
@@ -169,6 +170,12 @@ function createMockStorage(
       if (sandbox) {
         sandbox.code_server_url = null;
         sandbox.code_server_password = null;
+      }
+    }),
+    updateSandboxDevServer: vi.fn((url: string) => {
+      calls.push(`updateSandboxDevServer:${url}`);
+      if (sandbox) {
+        sandbox.dev_server_url = url;
       }
     }),
   };

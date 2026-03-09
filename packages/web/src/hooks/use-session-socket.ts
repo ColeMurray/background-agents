@@ -322,6 +322,12 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           );
           break;
 
+        case "dev_server_info":
+          setSessionState((prev) =>
+            prev ? { ...prev, devServerUrl: data.url } : null
+          );
+          break;
+
         case "sandbox_ready":
           setSessionState((prev) => (prev ? { ...prev, sandboxStatus: "ready" } : null));
           break;
