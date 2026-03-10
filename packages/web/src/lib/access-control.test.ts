@@ -37,7 +37,7 @@ describe("checkAccessAllowed", () => {
       const config = { allowedDomains: [], allowedUsers: [] };
 
       expect(checkAccessAllowed(config, {})).toBe(true);
-      expect(checkAccessAllowed(config, { githubUsername: "anyuser" })).toBe(true);
+      expect(checkAccessAllowed(config, { scmUsername: "anyuser" })).toBe(true);
       expect(checkAccessAllowed(config, { email: "anyone@example.com" })).toBe(true);
     });
   });
@@ -46,16 +46,16 @@ describe("checkAccessAllowed", () => {
     const config = { allowedDomains: [], allowedUsers: ["alloweduser"] };
 
     it("allows users in the list", () => {
-      expect(checkAccessAllowed(config, { githubUsername: "alloweduser" })).toBe(true);
+      expect(checkAccessAllowed(config, { scmUsername: "alloweduser" })).toBe(true);
     });
 
     it("allows users with different case", () => {
-      expect(checkAccessAllowed(config, { githubUsername: "AllowedUser" })).toBe(true);
-      expect(checkAccessAllowed(config, { githubUsername: "ALLOWEDUSER" })).toBe(true);
+      expect(checkAccessAllowed(config, { scmUsername: "AllowedUser" })).toBe(true);
+      expect(checkAccessAllowed(config, { scmUsername: "ALLOWEDUSER" })).toBe(true);
     });
 
     it("denies users not in the list", () => {
-      expect(checkAccessAllowed(config, { githubUsername: "otheruser" })).toBe(false);
+      expect(checkAccessAllowed(config, { scmUsername: "otheruser" })).toBe(false);
     });
 
     it("denies when no username provided", () => {
@@ -81,7 +81,7 @@ describe("checkAccessAllowed", () => {
 
     it("denies when no email provided", () => {
       expect(checkAccessAllowed(config, {})).toBe(false);
-      expect(checkAccessAllowed(config, { githubUsername: "someuser" })).toBe(false);
+      expect(checkAccessAllowed(config, { scmUsername: "someuser" })).toBe(false);
     });
   });
 
@@ -92,7 +92,7 @@ describe("checkAccessAllowed", () => {
     };
 
     it("allows users matching username", () => {
-      expect(checkAccessAllowed(config, { githubUsername: "specialuser" })).toBe(true);
+      expect(checkAccessAllowed(config, { scmUsername: "specialuser" })).toBe(true);
     });
 
     it("allows users matching email domain", () => {
@@ -102,14 +102,14 @@ describe("checkAccessAllowed", () => {
     it("allows users matching either condition", () => {
       expect(
         checkAccessAllowed(config, {
-          githubUsername: "specialuser",
+          scmUsername: "specialuser",
           email: "user@other.com",
         })
       ).toBe(true);
 
       expect(
         checkAccessAllowed(config, {
-          githubUsername: "otheruser",
+          scmUsername: "otheruser",
           email: "user@company.com",
         })
       ).toBe(true);
@@ -118,7 +118,7 @@ describe("checkAccessAllowed", () => {
     it("denies users matching neither condition", () => {
       expect(
         checkAccessAllowed(config, {
-          githubUsername: "randomuser",
+          scmUsername: "randomuser",
           email: "user@other.com",
         })
       ).toBe(false);
@@ -132,8 +132,8 @@ describe("checkAccessAllowed", () => {
     };
 
     it("allows any user from the list", () => {
-      expect(checkAccessAllowed(config, { githubUsername: "admin" })).toBe(true);
-      expect(checkAccessAllowed(config, { githubUsername: "developer" })).toBe(true);
+      expect(checkAccessAllowed(config, { scmUsername: "admin" })).toBe(true);
+      expect(checkAccessAllowed(config, { scmUsername: "developer" })).toBe(true);
     });
 
     it("allows any domain from the list", () => {

@@ -241,6 +241,14 @@ export function GitHubIcon({ className }: IconProps) {
   );
 }
 
+export function BitbucketIcon({ className }: IconProps) {
+  return (
+    <svg className={className} fill="currentColor" viewBox="0 0 24 24">
+      <path d="M3 5a1 1 0 011-1h16a1 1 0 01.99 1.141l-2.1 13A2 2 0 0116.92 20H7.08a2 2 0 01-1.97-1.859l-2.1-13A1 1 0 013 5zm5.24 7.5h7.52l.56-3.5H7.68l.56 3.5zm1.2 2l.5 3.05a.5.5 0 00.5.45h3.12a.5.5 0 00.5-.45l.5-3.05H9.44z" />
+    </svg>
+  );
+}
+
 export function GitPrIcon({ className }: IconProps) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">

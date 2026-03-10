@@ -1,8 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { getToken } from "next-auth/jwt";
-import { authOptions } from "@/lib/auth";
+import { authOptions, getRequestScmTokenState } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
 
 /**
@@ -32,7 +31,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const userId = user.id || user.email || "anonymous";
 
     const jwtStart = Date.now();
-    const jwt = await getToken({ req: request });
+    const tokenState = await getRequestScmTokenState(request);
     const jwtMs = Date.now() - jwtStart;
 
     const fetchStart = Date.now();
@@ -44,9 +43,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         scmLogin: user.login,
         scmName: user.name,
         scmEmail: user.email,
-        scmToken: jwt?.accessToken as string | undefined,
-        scmTokenExpiresAt: jwt?.accessTokenExpiresAt as number | undefined,
-        scmRefreshToken: jwt?.refreshToken as string | undefined,
+        scmToken: tokenState.accessToken,
+        scmTokenExpiresAt: tokenState.accessTokenExpiresAt,
+        scmRefreshToken: tokenState.refreshToken,
       }),
     });
     const fetchMs = Date.now() - fetchStart;
