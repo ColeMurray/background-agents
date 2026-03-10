@@ -1520,11 +1520,18 @@ class AgentBridge:
                 return
 
             if result.returncode != 0:
-                self.log.warn("git.push_failed", branch_name=branch_name)
+                stderr_text = _stderr.decode("utf-8", errors="replace").strip() if _stderr else ""
+                self.log.warn(
+                    "git.push_failed",
+                    branch_name=branch_name,
+                    stderr=stderr_text,
+                )
                 await self._send_event(
                     {
                         "type": "push_error",
-                        "error": "Push failed - authentication may be required",
+                        "error": f"Push failed: {stderr_text}"
+                        if stderr_text
+                        else "Push failed - unknown error",
                         "branchName": branch_name,
                         "timestamp": time.time(),
                     }
@@ -1585,6 +1592,8 @@ class AgentBridge:
                 ) from e
 
             if process.returncode != 0:
+                if process.returncode is None:
+                    raise RuntimeError("git config exited without a return code")
                 raise subprocess.CalledProcessError(
                     returncode=process.returncode,
                     cmd=cmd,
