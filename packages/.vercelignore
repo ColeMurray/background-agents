@@ -1,6 +1,0 @@
-# Ignore everything (folders and files) on root only
-/*
-# Don't ignore these two directories
-!web
-!shared
-
