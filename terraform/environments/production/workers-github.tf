@@ -42,7 +42,7 @@ module "github_bot_worker" {
 
   plain_text_bindings = [
     { name = "DEPLOYMENT_NAME", value = var.deployment_name },
-    { name = "DEFAULT_MODEL", value = "anthropic/claude-haiku-4-5" },
+    { name = "DEFAULT_MODEL", value = "anthropic/claude-sonnet-4-6" },
     { name = "GITHUB_BOT_USERNAME", value = var.github_bot_username },
   ]
 
