@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import secrets
 import subprocess
 import tempfile
@@ -208,6 +209,15 @@ class AgentBridge:
         """WebSocket URL for control plane connection."""
         url = self.control_plane_url.replace("https://", "wss://").replace("http://", "ws://")
         return f"{url}/sessions/{self.session_id}/ws?type=sandbox"
+
+    @staticmethod
+    def _redact_git_stderr(stderr_text: str, push_url: str, redacted_push_url: str) -> str:
+        """Redact credential-bearing URLs from git stderr."""
+        redacted_stderr = stderr_text
+        if push_url and redacted_push_url:
+            redacted_stderr = redacted_stderr.replace(push_url, redacted_push_url)
+
+        return re.sub(r"(https?://)([^/\s@]+)@", r"\1***@", redacted_stderr)
 
     async def run(self) -> None:
         """Main bridge loop with reconnection handling.
@@ -1521,16 +1531,21 @@ class AgentBridge:
 
             if result.returncode != 0:
                 stderr_text = _stderr.decode("utf-8", errors="replace").strip() if _stderr else ""
+                redacted_stderr_text = self._redact_git_stderr(
+                    stderr_text,
+                    push_url,
+                    redacted_push_url,
+                )
                 self.log.warn(
                     "git.push_failed",
                     branch_name=branch_name,
-                    stderr=stderr_text,
+                    stderr=redacted_stderr_text,
                 )
                 await self._send_event(
                     {
                         "type": "push_error",
-                        "error": f"Push failed: {stderr_text}"
-                        if stderr_text
+                        "error": f"Push failed: {redacted_stderr_text}"
+                        if redacted_stderr_text
                         else "Push failed - unknown error",
                         "branchName": branch_name,
                         "timestamp": time.time(),

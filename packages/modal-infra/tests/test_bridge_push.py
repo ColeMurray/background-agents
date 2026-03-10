@@ -68,7 +68,39 @@ async def test_handle_push_sends_push_complete_on_success(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_handle_push_sends_auth_error_on_nonzero_exit(tmp_path: Path):
+async def test_handle_push_sends_redacted_stderr_on_nonzero_exit(tmp_path: Path):
+    bridge = _create_bridge(tmp_path)
+    bridge._send_event = AsyncMock()
+    process = _fake_process(
+        returncode=1,
+        communicate_result=(
+            b"",
+            b"fatal: Authentication failed for 'https://token@github.com/open-inspect/repo.git'",
+        ),
+    )
+
+    with patch(
+        "src.sandbox.bridge.asyncio.create_subprocess_exec", AsyncMock(return_value=process)
+    ):
+        await bridge._handle_push(_push_command())
+
+    bridge._send_event.assert_awaited_once()
+    await_args = bridge._send_event.await_args
+    assert await_args is not None
+    event = await_args.args[0]
+    assert event["type"] == "push_error"
+    assert (
+        event["error"]
+        == "Push failed: fatal: Authentication failed for 'https://***@github.com/open-inspect/repo.git'"
+    )
+    assert event["branchName"] == "feature/test"
+    assert isinstance(event["timestamp"], float)
+    process.terminate.assert_not_called()
+    process.kill.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_push_sends_unknown_error_when_stderr_is_empty(tmp_path: Path):
     bridge = _create_bridge(tmp_path)
     bridge._send_event = AsyncMock()
     process = _fake_process(returncode=1)
@@ -83,11 +115,9 @@ async def test_handle_push_sends_auth_error_on_nonzero_exit(tmp_path: Path):
     assert await_args is not None
     event = await_args.args[0]
     assert event["type"] == "push_error"
-    assert event["error"] == "Push failed - authentication may be required"
+    assert event["error"] == "Push failed - unknown error"
     assert event["branchName"] == "feature/test"
     assert isinstance(event["timestamp"], float)
-    process.terminate.assert_not_called()
-    process.kill.assert_not_called()
 
 
 @pytest.mark.asyncio
