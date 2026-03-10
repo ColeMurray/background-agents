@@ -16,6 +16,7 @@ import { mergeSecrets } from "../db/secrets-validation";
 import { createModalClient } from "../sandbox/client";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
+import type { ProviderRepoId } from "@open-inspect/shared";
 import {
   type Route,
   type RequestContext,
@@ -25,8 +26,155 @@ import {
   createRouteSourceControlProvider,
   resolveInstalledRepo,
 } from "./shared";
+import type { SourceControlProvider } from "../source-control";
 
 const logger = createLogger("router:repo-images");
+
+interface RepoImageBuildContext {
+  provider: SourceControlProvider;
+  repoId: ProviderRepoId;
+  defaultBranch: string;
+}
+
+async function resolveRepoImageBuildContext(
+  env: Env,
+  owner: string,
+  name: string
+): Promise<RepoImageBuildContext | null> {
+  const provider = createRouteSourceControlProvider(env);
+  const resolved = await resolveInstalledRepo(provider, owner, name);
+  if (!resolved) {
+    return null;
+  }
+
+  return {
+    provider,
+    repoId: resolved.repoId,
+    defaultBranch: resolved.defaultBranch,
+  };
+}
+
+async function loadRepoImageSecrets(
+  env: Env,
+  repoId: ProviderRepoId,
+  owner: string,
+  name: string
+): Promise<Record<string, string> | undefined> {
+  if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
+    return undefined;
+  }
+
+  let globalSecrets: Record<string, string> = {};
+  try {
+    const globalStore = new GlobalSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+    globalSecrets = await globalStore.getDecryptedSecrets();
+  } catch (e) {
+    logger.warn("repo_image.global_secrets_failed", {
+      error: e instanceof Error ? e.message : String(e),
+      repo_owner: owner,
+      repo_name: name,
+    });
+  }
+
+  let repoSecrets: Record<string, string> = {};
+  try {
+    const repoStore = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+    repoSecrets = await repoStore.getDecryptedSecrets(repoId);
+  } catch (e) {
+    logger.warn("repo_image.repo_secrets_failed", {
+      error: e instanceof Error ? e.message : String(e),
+      repo_owner: owner,
+      repo_name: name,
+    });
+  }
+
+  const { merged, totalBytes, exceedsLimit } = mergeSecrets(globalSecrets, repoSecrets);
+  if (Object.keys(merged).length === 0) {
+    return undefined;
+  }
+
+  const logLevel = exceedsLimit ? "warn" : "info";
+  logger[logLevel]("repo_image.secrets_loaded", {
+    global_count: Object.keys(globalSecrets).length,
+    repo_count: Object.keys(repoSecrets).length,
+    merged_count: Object.keys(merged).length,
+    payload_bytes: totalBytes,
+    exceeds_limit: exceedsLimit,
+    repo_owner: owner,
+    repo_name: name,
+  });
+
+  return merged;
+}
+
+async function dispatchRepoImageBuild(
+  env: Env,
+  context: RepoImageBuildContext,
+  owner: string,
+  name: string,
+  buildId: string,
+  callbackUrl: string,
+  userEnvVars: Record<string, string> | undefined,
+  ctx: RequestContext
+): Promise<void> {
+  const client = createModalClient(env.MODAL_API_SECRET!, env.MODAL_WORKSPACE!);
+  const pushAuth = await context.provider.generatePushAuth();
+
+  await client.buildRepoImage(
+    {
+      repoOwner: owner,
+      repoName: name,
+      defaultBranch: context.defaultBranch,
+      buildId,
+      callbackUrl,
+      userEnvVars,
+      cloneToken: pushAuth.token,
+    },
+    { trace_id: ctx.trace_id, request_id: ctx.request_id }
+  );
+}
+
+async function enrichEnabledRepo(
+  provider: SourceControlProvider,
+  repo: { repoOwner: string; repoName: string }
+): Promise<{ repoOwner: string; repoName: string; defaultBranch: string; headSha: string | null } | null> {
+  const resolved = await resolveInstalledRepo(provider, repo.repoOwner, repo.repoName);
+  if (!resolved) {
+    return null;
+  }
+
+  const headSha = await provider.getBranchHeadSha({
+    owner: repo.repoOwner,
+    name: repo.repoName,
+    branch: resolved.defaultBranch,
+  });
+
+  return {
+    repoOwner: repo.repoOwner,
+    repoName: repo.repoName,
+    defaultBranch: resolved.defaultBranch,
+    headSha,
+  };
+}
+
+async function enrichEnabledRepoSafely(
+  provider: SourceControlProvider,
+  repo: { repoOwner: string; repoName: string },
+  ctx: RequestContext
+): Promise<{ repoOwner: string; repoName: string; defaultBranch: string; headSha: string | null } | null> {
+  try {
+    return await enrichEnabledRepo(provider, repo);
+  } catch (e) {
+    logger.warn("repo_image.enabled_repo_skipped", {
+      error: e instanceof Error ? e.message : String(e),
+      repo_owner: repo.repoOwner,
+      repo_name: repo.repoName,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return null;
+  }
+}
 
 /**
  * POST /repo-images/build-complete
@@ -192,77 +340,21 @@ async function handleTriggerBuild(
   const buildId = `img-${owner}-${name}-${now}`;
 
   try {
-    // Register the build in D1
+    const context = await resolveRepoImageBuildContext(env, owner, name);
+    if (!context) {
+      return error("Repository is not installed for this SCM provider", 404);
+    }
+
     await store.registerBuild({
       id: buildId,
       repoOwner: owner,
       repoName: name,
-      baseBranch: "main",
+      baseBranch: context.defaultBranch,
     });
 
-    // Construct callback URL
     const callbackUrl = `${env.WORKER_URL}/repo-images/build-complete`;
-
-    // Best-effort: fetch user secrets for the build sandbox
-    let userEnvVars: Record<string, string> | undefined;
-    if (env.REPO_SECRETS_ENCRYPTION_KEY) {
-      let globalSecrets: Record<string, string> = {};
-      try {
-        const globalStore = new GlobalSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
-        globalSecrets = await globalStore.getDecryptedSecrets();
-      } catch (e) {
-        logger.warn("repo_image.global_secrets_failed", {
-          error: e instanceof Error ? e.message : String(e),
-          repo_owner: owner,
-          repo_name: name,
-        });
-      }
-
-      let repoSecrets: Record<string, string> = {};
-      try {
-        const provider = createRouteSourceControlProvider(env);
-        const resolved = await resolveInstalledRepo(provider, owner, name);
-        if (resolved) {
-          const repoStore = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
-          repoSecrets = await repoStore.getDecryptedSecrets(resolved.repoId);
-        }
-      } catch (e) {
-        logger.warn("repo_image.repo_secrets_failed", {
-          error: e instanceof Error ? e.message : String(e),
-          repo_owner: owner,
-          repo_name: name,
-        });
-      }
-
-      const { merged, totalBytes, exceedsLimit } = mergeSecrets(globalSecrets, repoSecrets);
-      if (Object.keys(merged).length > 0) {
-        userEnvVars = merged;
-        const logLevel = exceedsLimit ? "warn" : "info";
-        logger[logLevel]("repo_image.secrets_loaded", {
-          global_count: Object.keys(globalSecrets).length,
-          repo_count: Object.keys(repoSecrets).length,
-          merged_count: Object.keys(merged).length,
-          payload_bytes: totalBytes,
-          exceeds_limit: exceedsLimit,
-          repo_owner: owner,
-          repo_name: name,
-        });
-      }
-    }
-
-    // Trigger build on Modal
-    const client = createModalClient(env.MODAL_API_SECRET, env.MODAL_WORKSPACE);
-    await client.buildRepoImage(
-      {
-        repoOwner: owner,
-        repoName: name,
-        defaultBranch: "main",
-        buildId,
-        callbackUrl,
-        userEnvVars,
-      },
-      { trace_id: ctx.trace_id, request_id: ctx.request_id }
-    );
+    const userEnvVars = await loadRepoImageSecrets(env, context.repoId, owner, name);
+    await dispatchRepoImageBuild(env, context, owner, name, buildId, callbackUrl, userEnvVars, ctx);
 
     logger.info("repo_image.build_triggered", {
       build_id: buildId,
@@ -493,7 +585,11 @@ async function handleGetEnabledRepos(
 
   try {
     const repos = await metadataStore.getImageBuildEnabledRepos();
-    return json({ repos });
+    const provider = createRouteSourceControlProvider(env);
+    const enrichedRepos = await Promise.all(
+      repos.map((repo) => enrichEnabledRepoSafely(provider, repo, ctx))
+    );
+    return json({ repos: enrichedRepos.filter((repo) => repo !== null) });
   } catch (e) {
     logger.error("repo_image.enabled_repos_error", {
       error: e instanceof Error ? e.message : String(e),

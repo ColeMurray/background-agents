@@ -11,7 +11,6 @@ SECURITY: All sensitive endpoints require authentication via HMAC-signed tokens.
 The control plane must include an Authorization header with a valid token.
 """
 
-import os
 import time
 
 from fastapi import Header, HTTPException
@@ -20,7 +19,6 @@ from modal import fastapi_endpoint
 from .app import (
     app,
     function_image,
-    github_app_secrets,
     inspect_volume,
     internal_api_secret,
     validate_control_plane_url,
@@ -73,10 +71,48 @@ def require_valid_control_plane_url(url: str | None) -> None:
         )
 
 
+def begin_authenticated_request(
+    authorization: str | None,
+    control_plane_url: str | None = None,
+) -> float:
+    require_auth(authorization)
+    if control_plane_url is not None:
+        require_valid_control_plane_url(control_plane_url)
+    return time.time()
+
+
+def log_http_request(
+    start_time: float,
+    http_method: str,
+    http_path: str,
+    http_status: int,
+    outcome: str,
+    endpoint_name: str,
+    trace_id: str | None = None,
+    request_id: str | None = None,
+    session_id: str | None = None,
+    sandbox_id: str | None = None,
+) -> None:
+    duration_ms = int((time.time() - start_time) * 1000)
+    log.info(
+        "modal.http_request",
+        http_method=http_method,
+        http_path=http_path,
+        http_status=http_status,
+        duration_ms=duration_ms,
+        outcome=outcome,
+        endpoint_name=endpoint_name,
+        trace_id=trace_id,
+        request_id=request_id,
+        session_id=session_id,
+        sandbox_id=sandbox_id,
+    )
+
+
 @app.function(
     image=function_image,
     volumes={"/data": inspect_volume},
-    secrets=[github_app_secrets, internal_api_secret],
+    secrets=[internal_api_secret],
 )
 @fastapi_endpoint(method="POST")
 async def api_create_sandbox(
@@ -105,38 +141,17 @@ async def api_create_sandbox(
         "model": "claude-sonnet-4-6"
     }
     """
-    start_time = time.time()
+    control_plane_url = request.get("control_plane_url")
+    start_time = begin_authenticated_request(authorization, control_plane_url)
     http_status = 200
     outcome = "success"
 
-    require_auth(authorization)
-
-    control_plane_url = request.get("control_plane_url")
-    require_valid_control_plane_url(control_plane_url)
-
     try:
         # Import types and manager directly
-        from .auth.github_app import generate_installation_token
         from .sandbox.manager import SandboxConfig, SandboxManager
         from .sandbox.types import SessionConfig
 
         manager = SandboxManager()
-
-        # Generate GitHub App token for git operations
-        github_app_token = None
-        try:
-            app_id = os.environ.get("GITHUB_APP_ID")
-            private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
-            installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID")
-
-            if app_id and private_key and installation_id:
-                github_app_token = generate_installation_token(
-                    app_id=app_id,
-                    private_key=private_key,
-                    installation_id=installation_id,
-                )
-        except Exception as e:
-            log.warn("github.token_error", exc=e)
 
         session_config = SessionConfig(
             session_id=request.get("session_id"),
@@ -156,7 +171,7 @@ async def api_create_sandbox(
             session_config=session_config,
             control_plane_url=control_plane_url,
             sandbox_auth_token=request.get("sandbox_auth_token"),
-            clone_token=github_app_token,
+            clone_token=request.get("clone_token"),
             user_env_vars=request.get("user_env_vars") or None,
             repo_image_id=request.get("repo_image_id") or None,
             repo_image_sha=request.get("repo_image_sha") or None,
@@ -179,13 +194,11 @@ async def api_create_sandbox(
         log.error("api.error", exc=e, endpoint_name="api_create_sandbox")
         return {"success": False, "error": str(e)}
     finally:
-        duration_ms = int((time.time() - start_time) * 1000)
-        log.info(
-            "modal.http_request",
+        log_http_request(
+            start_time=start_time,
             http_method="POST",
             http_path="/api_create_sandbox",
             http_status=http_status,
-            duration_ms=duration_ms,
             outcome=outcome,
             endpoint_name="api_create_sandbox",
             trace_id=x_trace_id,
@@ -221,14 +234,10 @@ async def api_warm_sandbox(
         "control_plane_url": "..."
     }
     """
-    start_time = time.time()
+    control_plane_url = request.get("control_plane_url", "")
+    start_time = begin_authenticated_request(authorization, control_plane_url)
     http_status = 200
     outcome = "success"
-
-    require_auth(authorization)
-
-    control_plane_url = request.get("control_plane_url", "")
-    require_valid_control_plane_url(control_plane_url)
 
     try:
         from .sandbox.manager import SandboxManager
@@ -253,13 +262,11 @@ async def api_warm_sandbox(
         log.error("api.error", exc=e, endpoint_name="api_warm_sandbox")
         return {"success": False, "error": str(e)}
     finally:
-        duration_ms = int((time.time() - start_time) * 1000)
-        log.info(
-            "modal.http_request",
+        log_http_request(
+            start_time=start_time,
             http_method="POST",
             http_path="/api_warm_sandbox",
             http_status=http_status,
-            duration_ms=duration_ms,
             outcome=outcome,
             endpoint_name="api_warm_sandbox",
             trace_id=x_trace_id,
@@ -298,11 +305,9 @@ def api_snapshot(
 
     Query params: ?repo_owner=...&repo_name=...
     """
-    start_time = time.time()
+    start_time = begin_authenticated_request(authorization)
     http_status = 200
     outcome = "success"
-
-    require_auth(authorization)
 
     try:
         from .registry.store import SnapshotStore
@@ -319,13 +324,11 @@ def api_snapshot(
         log.error("api.error", exc=e, endpoint_name="api_snapshot")
         return {"success": False, "error": str(e)}
     finally:
-        duration_ms = int((time.time() - start_time) * 1000)
-        log.info(
-            "modal.http_request",
+        log_http_request(
+            start_time=start_time,
             http_method="GET",
             http_path="/api_snapshot",
             http_status=http_status,
-            duration_ms=duration_ms,
             outcome=outcome,
             endpoint_name="api_snapshot",
             trace_id=x_trace_id,
@@ -372,11 +375,9 @@ async def api_snapshot_sandbox(
         }
     }
     """
-    start_time = time.time()
+    start_time = begin_authenticated_request(authorization)
     http_status = 200
     outcome = "success"
-
-    require_auth(authorization)
 
     sandbox_id = request.get("sandbox_id")
     if not sandbox_id:
@@ -417,13 +418,11 @@ async def api_snapshot_sandbox(
         log.error("api.error", exc=e, endpoint_name="api_snapshot_sandbox")
         return {"success": False, "error": str(e)}
     finally:
-        duration_ms = int((time.time() - start_time) * 1000)
-        log.info(
-            "modal.http_request",
+        log_http_request(
+            start_time=start_time,
             http_method="POST",
             http_path="/api_snapshot_sandbox",
             http_status=http_status,
-            duration_ms=duration_ms,
             outcome=outcome,
             endpoint_name="api_snapshot_sandbox",
             trace_id=x_trace_id,
@@ -433,7 +432,7 @@ async def api_snapshot_sandbox(
         )
 
 
-@app.function(image=function_image, secrets=[github_app_secrets, internal_api_secret])
+@app.function(image=function_image, secrets=[internal_api_secret])
 @fastapi_endpoint(method="POST")
 async def api_restore_sandbox(
     request: dict,
@@ -476,21 +475,16 @@ async def api_restore_sandbox(
         }
     }
     """
-    start_time = time.time()
+    control_plane_url = request.get("control_plane_url", "")
+    start_time = begin_authenticated_request(authorization, control_plane_url)
     http_status = 200
     outcome = "success"
-
-    require_auth(authorization)
-
-    control_plane_url = request.get("control_plane_url", "")
-    require_valid_control_plane_url(control_plane_url)
 
     snapshot_image_id = request.get("snapshot_image_id")
     if not snapshot_image_id:
         raise HTTPException(status_code=400, detail="snapshot_image_id is required")
 
     try:
-        from .auth.github_app import generate_installation_token
         from .sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxManager
 
         session_config = request.get("session_config", {})
@@ -501,21 +495,6 @@ async def api_restore_sandbox(
 
         manager = SandboxManager()
 
-        github_app_token = None
-        try:
-            app_id = os.environ.get("GITHUB_APP_ID")
-            private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
-            installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID")
-
-            if app_id and private_key and installation_id:
-                github_app_token = generate_installation_token(
-                    app_id=app_id,
-                    private_key=private_key,
-                    installation_id=installation_id,
-                )
-        except Exception as e:
-            log.warn("github.token_error", exc=e)
-
         # Restore sandbox from snapshot
         handle = await manager.restore_from_snapshot(
             snapshot_image_id=snapshot_image_id,
@@ -523,7 +502,7 @@ async def api_restore_sandbox(
             sandbox_id=sandbox_id,
             control_plane_url=control_plane_url,
             sandbox_auth_token=sandbox_auth_token,
-            clone_token=github_app_token,
+            clone_token=request.get("clone_token"),
             user_env_vars=user_env_vars,
             timeout_seconds=timeout_seconds,
         )
@@ -546,13 +525,11 @@ async def api_restore_sandbox(
         log.error("api.error", exc=e, endpoint_name="api_restore_sandbox")
         return {"success": False, "error": str(e)}
     finally:
-        duration_ms = int((time.time() - start_time) * 1000)
-        log.info(
-            "modal.http_request",
+        log_http_request(
+            start_time=start_time,
             http_method="POST",
             http_path="/api_restore_sandbox",
             http_status=http_status,
-            duration_ms=duration_ms,
             outcome=outcome,
             endpoint_name="api_restore_sandbox",
             trace_id=x_trace_id,
@@ -564,7 +541,7 @@ async def api_restore_sandbox(
 
 @app.function(
     image=function_image,
-    secrets=[internal_api_secret, github_app_secrets],
+    secrets=[internal_api_secret],
 )
 @fastapi_endpoint(method="POST")
 async def api_build_repo_image(
@@ -591,11 +568,9 @@ async def api_build_repo_image(
         "callback_url": "..."
     }
     """
-    start_time = time.time()
+    start_time = begin_authenticated_request(authorization)
     http_status = 200
     outcome = "success"
-
-    require_auth(authorization)
 
     try:
         from .scheduler.image_builder import build_repo_image
@@ -606,6 +581,7 @@ async def api_build_repo_image(
         build_id = request.get("build_id", "")
         callback_url = request.get("callback_url", "")
         user_env_vars = request.get("user_env_vars") or None
+        clone_token = request.get("clone_token") or ""
 
         if not repo_owner or not repo_name:
             raise HTTPException(status_code=400, detail="repo_owner and repo_name are required")
@@ -621,6 +597,7 @@ async def api_build_repo_image(
             callback_url=callback_url,
             build_id=build_id,
             user_env_vars=user_env_vars,
+            clone_token=clone_token,
         )
 
         return {
@@ -640,13 +617,11 @@ async def api_build_repo_image(
         log.error("api.error", exc=e, endpoint_name="api_build_repo_image")
         return {"success": False, "error": str(e)}
     finally:
-        duration_ms = int((time.time() - start_time) * 1000)
-        log.info(
-            "modal.http_request",
+        log_http_request(
+            start_time=start_time,
             http_method="POST",
             http_path="/api_build_repo_image",
             http_status=http_status,
-            duration_ms=duration_ms,
             outcome=outcome,
             endpoint_name="api_build_repo_image",
             trace_id=x_trace_id,
@@ -675,11 +650,9 @@ async def api_delete_provider_image(
         "provider_image_id": "..."
     }
     """
-    start_time = time.time()
+    start_time = begin_authenticated_request(authorization)
     http_status = 200
     outcome = "success"
-
-    require_auth(authorization)
 
     provider_image_id = request.get("provider_image_id")
     if not provider_image_id:
@@ -711,13 +684,11 @@ async def api_delete_provider_image(
         log.error("api.error", exc=e, endpoint_name="api_delete_provider_image")
         return {"success": False, "error": str(e)}
     finally:
-        duration_ms = int((time.time() - start_time) * 1000)
-        log.info(
-            "modal.http_request",
+        log_http_request(
+            start_time=start_time,
             http_method="POST",
             http_path="/api_delete_provider_image",
             http_status=http_status,
-            duration_ms=duration_ms,
             outcome=outcome,
             endpoint_name="api_delete_provider_image",
             trace_id=x_trace_id,

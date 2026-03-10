@@ -55,18 +55,63 @@ variable "modal_workspace" {
 }
 
 # =============================================================================
-# GitHub OAuth App Credentials
+# SCM Provider Credentials
 # =============================================================================
+
+variable "scm_provider" {
+  description = "SCM provider for this deployment: github or bitbucket"
+  type        = string
+  default     = "github"
+
+  validation {
+    condition     = contains(["github", "bitbucket"], var.scm_provider)
+    error_message = "scm_provider must be 'github' or 'bitbucket'."
+  }
+}
 
 variable "github_client_id" {
   description = "GitHub OAuth App client ID"
   type        = string
+  default     = ""
 }
 
 variable "github_client_secret" {
   description = "GitHub OAuth App client secret"
   type        = string
   sensitive   = true
+  default     = ""
+}
+
+variable "bitbucket_client_id" {
+  description = "Bitbucket OAuth consumer client ID"
+  type        = string
+  default     = ""
+}
+
+variable "bitbucket_client_secret" {
+  description = "Bitbucket OAuth consumer client secret"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "bitbucket_workspace" {
+  description = "Bitbucket workspace slug used for app-level repository listing"
+  type        = string
+  default     = ""
+}
+
+variable "bitbucket_bot_username" {
+  description = "Optional Bitbucket bot username for API/app-password fallback auth"
+  type        = string
+  default     = ""
+}
+
+variable "bitbucket_bot_app_password" {
+  description = "Optional Bitbucket bot app password for API/app-password fallback auth"
+  type        = string
+  sensitive   = true
+  default     = ""
 }
 
 # =============================================================================
@@ -76,17 +121,20 @@ variable "github_client_secret" {
 variable "github_app_id" {
   description = "GitHub App ID"
   type        = string
+  default     = ""
 }
 
 variable "github_app_private_key" {
   description = "GitHub App private key (PKCS#8 format)"
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "github_app_installation_id" {
   description = "GitHub App installation ID"
   type        = string
+  default     = ""
 }
 
 # =============================================================================

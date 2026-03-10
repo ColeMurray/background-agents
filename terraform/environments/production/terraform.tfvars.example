@@ -44,6 +44,12 @@ modal_token_secret = ""
 modal_workspace = ""
 
 # =============================================================================
+# SCM Provider
+# =============================================================================
+# One provider per deployment: github or bitbucket
+scm_provider = "github"
+
+# =============================================================================
 # GitHub App Credentials
 # =============================================================================
 # Create GitHub App at: https://github.com/settings/apps
@@ -73,6 +79,18 @@ github_app_private_key = <<-EOF
 EOF
 
 github_app_installation_id = ""
+
+# =============================================================================
+# Bitbucket OAuth Consumer Credentials
+# =============================================================================
+# Create a Bitbucket OAuth consumer in Workspace settings when scm_provider = "bitbucket"
+bitbucket_client_id = ""
+bitbucket_client_secret = ""
+bitbucket_workspace = ""
+
+# Optional compatibility fallback for API/app-password auth inside the provider only
+bitbucket_bot_username = ""
+bitbucket_bot_app_password = ""
 
 # =============================================================================
 # Slack App Credentials (Optional)
@@ -158,8 +176,8 @@ enable_service_bindings = false
 # =============================================================================
 # Access Control
 # =============================================================================
-# Comma-separated list of GitHub usernames allowed to sign in
-# Leave empty to allow all GitHub users
+# Comma-separated list of SCM usernames allowed to sign in
+# Leave empty to allow all users from the active SCM provider
 allowed_users = ""
 
 # Comma-separated list of email domains allowed to sign in

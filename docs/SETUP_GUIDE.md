@@ -8,13 +8,13 @@ It is organized by goal so you can pick the fastest path:
 | ------ | -------------------------------------------------------- | ---------- |
 | Path A | Run the web app locally against an existing backend      | ~10-20 min |
 | Path B | Contribute code locally (lint/typecheck/tests)           | ~15-30 min |
-| Path C | Deploy your own full stack (Cloudflare + Modal + Vercel) | ~1-3 hours |
+| Path C | Deploy your own full stack (Cloudflare + Modal + web app) | ~1-3 hours |
 
 ## Important Context
 
 Open-Inspect is designed for **single-tenant** use. Everyone in your deployment shares the same
-GitHub App installation scope. Read the security model in [README.md](../README.md) before
-production use.
+deployment-level SCM integration scope for the active provider. Read the security model in
+[README.md](../README.md) before production use.
 
 ## Prerequisites
 
@@ -74,9 +74,17 @@ cp packages/web/.env.example packages/web/.env.local
 Edit `packages/web/.env.local`:
 
 ```bash
-# GitHub App OAuth
+# SCM provider
+SCM_PROVIDER=github
+NEXT_PUBLIC_SCM_PROVIDER=github
+
+# GitHub OAuth
 GITHUB_CLIENT_ID=your_github_app_client_id
 GITHUB_CLIENT_SECRET=your_github_app_client_secret
+
+# Bitbucket OAuth consumer (only when SCM_PROVIDER=bitbucket)
+BITBUCKET_CLIENT_ID=your_bitbucket_client_id
+BITBUCKET_CLIENT_SECRET=your_bitbucket_client_secret
 
 # NextAuth
 NEXTAUTH_URL=http://localhost:3000
@@ -105,13 +113,17 @@ openssl rand -base64 32
 If you are using someone else's deployed backend, do not generate your own
 `INTERNAL_CALLBACK_SECRET`. Use the value configured in that backend deployment.
 
-### 3. Configure GitHub callback URL
+### 3. Configure the provider callback URL
 
-In GitHub App settings, include:
+If `SCM_PROVIDER=github`, configure:
 
 `http://localhost:3000/api/auth/callback/github`
 
-If this does not match exactly, sign-in will fail.
+If `SCM_PROVIDER=bitbucket`, configure:
+
+`http://localhost:3000/api/auth/callback/bitbucket`
+
+If the callback URL does not match exactly, sign-in will fail.
 
 ### 4. Run the app
 
@@ -123,7 +135,7 @@ Open `http://localhost:3000`.
 
 ### 5. Verify it works
 
-1. Sign in with GitHub.
+1. Sign in with the configured SCM provider.
 2. Open or create a session.
 3. Send a prompt.
 4. Confirm live events stream in the session page.

@@ -45,6 +45,8 @@ export interface CreateSandboxConfig {
   model: string;
   /** User-provided environment variables (repo secrets) */
   userEnvVars?: Record<string, string>;
+  /** SCM clone token used by the sandbox for clone/fetch operations */
+  cloneToken?: string | null;
   /** OpenCode session ID for resumption */
   opencodeSessionId?: string;
   /** Correlation context for downstream tracing */
@@ -97,6 +99,8 @@ export interface RestoreConfig {
   model: string;
   /** User-provided environment variables (repo secrets) */
   userEnvVars?: Record<string, string>;
+  /** SCM clone token used by the sandbox for fetch operations after restore */
+  cloneToken?: string | null;
   /** Sandbox lifetime in seconds. Defaults to DEFAULT_SANDBOX_TIMEOUT_SECONDS. */
   timeoutSeconds?: number;
   /** Git branch to work on (defaults to repo's default branch) */

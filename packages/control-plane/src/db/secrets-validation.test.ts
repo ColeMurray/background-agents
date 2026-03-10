@@ -45,6 +45,8 @@ describe("validateKey", () => {
   it("rejects reserved keys", () => {
     expect(() => validateKey("PATH")).toThrow(SecretsValidationError);
     expect(() => validateKey("SANDBOX_ID")).toThrow(SecretsValidationError);
+    expect(() => validateKey("VCS_CLONE_TOKEN")).toThrow(SecretsValidationError);
+    expect(() => validateKey("SCM_PROVIDER")).toThrow(SecretsValidationError);
   });
 
   it("rejects reserved keys case-insensitively", () => {

@@ -5,6 +5,8 @@
  * to enable unit testing via mock injection and reduce coupling.
  */
 
+import type { ProviderRepoId } from "@open-inspect/shared";
+
 import type {
   SessionRow,
   ParticipantRow,
@@ -61,7 +63,7 @@ export interface UpsertSessionData {
   title: string | null;
   repoOwner: string;
   repoName: string;
-  repoId?: number | null;
+  repoId?: ProviderRepoId | null;
   baseBranch?: string;
   model: string;
   reasoningEffort?: string | null;
@@ -245,7 +247,7 @@ export class SessionRepository {
     );
   }
 
-  updateSessionRepoId(repoId: number): void {
+  updateSessionRepoId(repoId: ProviderRepoId): void {
     this.sql.exec(
       `UPDATE session SET repo_id = ? WHERE id = (SELECT id FROM session LIMIT 1)`,
       repoId

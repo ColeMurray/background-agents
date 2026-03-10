@@ -21,13 +21,14 @@ Open-Inspect provides a hosted background coding agent that can:
 
 ### How It Works
 
-The system uses a shared GitHub App installation for all git operations (clone, push). This means:
+The system uses a shared deployment-level SCM integration for clone and push operations. This means:
 
-- **All users share the same GitHub App credentials** - The GitHub App must be installed on your
-  organization's repositories, and any user of the system can access any repo the App has access to
+- **All users share the deployment's SCM app credentials** - the active provider is selected with
+  `SCM_PROVIDER`, and any user of the system can access any repo the deployment-level app can
+  access
 - **No per-user repository access validation** - The system does not verify that a user has
   permission to access a specific repository before creating a session
-- **User OAuth tokens are used for PR creation** - PRs are created using the user's GitHub OAuth
+- **User OAuth tokens are used for PR creation** - PRs are created using the user's SCM OAuth
   token, ensuring proper attribution and that users can only create PRs on repos they have write
   access to
 
@@ -35,7 +36,7 @@ The system uses a shared GitHub App installation for all git operations (clone, 
 
 | Token Type       | Purpose                | Scope                            |
 | ---------------- | ---------------------- | -------------------------------- |
-| GitHub App Token | Clone repos, push code | All repos where App is installed |
+| App Token        | Clone repos, push code | All repos where the app can access |
 | User OAuth Token | Create PRs, user info  | Repos user has access to         |
 | WebSocket Token  | Real-time session auth | Single session                   |
 
@@ -47,7 +48,7 @@ built for internal use where all employees are trusted and have access to compan
 
 **For multi-tenant deployment**, you would need:
 
-- Per-tenant GitHub App installations
+- Per-tenant SCM app installations
 - Access validation at session creation
 - Tenant isolation in the data model
 
@@ -55,10 +56,10 @@ built for internal use where all employees are trusted and have access to compan
 
 1. **Deploy behind your organization's SSO/VPN** - Ensure only authorized employees can access the
    web interface
-2. **Install GitHub App only on intended repositories** - The App's installation scope defines what
+2. **Install the SCM app only on intended repositories** - The app's installation scope defines what
    the system can access
-3. **Use GitHub's repository selection** - When installing the App, select specific repositories
-   rather than "All repositories"
+3. **Use provider-side repository selection** - limit the installation to the repositories you want
+   the system to access
 
 ## Architecture
 
@@ -78,7 +79,7 @@ built for internal use where all employees are trusted and have access to compan
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │                   Durable Objects (per session)               │  │
 │  │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌───────────────┐   │  │
-│  │  │ SQLite  │  │WebSocket│  │  Event  │  │   GitHub      │   │  │
+│  │  │ SQLite  │  │WebSocket│  │  Event  │  │     SCM       │   │  │
 │  │  │   DB    │  │   Hub   │  │ Stream  │  │ Integration   │   │  │
 │  │  └─────────┘  └─────────┘  └─────────┘  └───────────────┘   │  │
 │  └──────────────────────────────────────────────────────────────┘  │

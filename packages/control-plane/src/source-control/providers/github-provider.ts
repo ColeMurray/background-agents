@@ -16,6 +16,7 @@ import type {
   CreatePullRequestResult,
   BuildManualPullRequestUrlConfig,
   BuildGitPushSpecConfig,
+  GetBranchHeadShaConfig,
   GitPushSpec,
   GitPushAuthContext,
 } from "../types";
@@ -29,6 +30,7 @@ import {
 } from "../../auth/github-app";
 import type { GitHubProviderConfig } from "./types";
 import { USER_AGENT, GITHUB_API_BASE } from "./constants";
+import { buildTokenGitPushSpec, toSourceControlProviderError } from "./helpers";
 
 /** Extract HTTP status from upstream errors (GitHubHttpError has a .status property). */
 function extractHttpStatus(error: unknown): number | undefined {
@@ -203,7 +205,10 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
   /**
    * Check whether a repository is accessible to the GitHub App installation.
    */
-  async checkRepositoryAccess(config: GetRepositoryConfig): Promise<RepositoryAccessResult | null> {
+  async checkRepositoryAccess(
+    config: GetRepositoryConfig,
+    _auth?: SourceControlAuthContext
+  ): Promise<RepositoryAccessResult | null> {
     if (!this.appConfig) {
       throw new SourceControlProviderError(
         "GitHub App not configured - cannot check repository access",
@@ -228,8 +233,8 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         defaultBranch: repo.defaultBranch,
       };
     } catch (error) {
-      throw SourceControlProviderError.fromFetchError(
-        `Failed to check repository access: ${error instanceof Error ? error.message : String(error)}`,
+      throw toSourceControlProviderError(
+        "Failed to check repository access",
         error,
         extractHttpStatus(error)
       );
@@ -239,7 +244,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
   /**
    * List all repositories accessible to the GitHub App installation.
    */
-  async listRepositories(): Promise<InstallationRepository[]> {
+  async listRepositories(_auth?: SourceControlAuthContext): Promise<InstallationRepository[]> {
     if (!this.appConfig) {
       throw new SourceControlProviderError(
         "GitHub App not configured - cannot list repositories",
@@ -254,8 +259,8 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       );
       return result.repos;
     } catch (error) {
-      throw SourceControlProviderError.fromFetchError(
-        `Failed to list repositories: ${error instanceof Error ? error.message : String(error)}`,
+      throw toSourceControlProviderError(
+        "Failed to list repositories",
         error,
         extractHttpStatus(error)
       );
@@ -265,7 +270,10 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
   /**
    * List branches for a repository.
    */
-  async listBranches(config: GetRepositoryConfig): Promise<{ name: string }[]> {
+  async listBranches(
+    config: GetRepositoryConfig,
+    _auth?: SourceControlAuthContext
+  ): Promise<{ name: string }[]> {
     if (!this.appConfig) {
       throw new SourceControlProviderError(
         "GitHub App not configured - cannot list branches",
@@ -281,8 +289,45 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         this.kvCache ? { REPOS_CACHE: this.kvCache } : undefined
       );
     } catch (error) {
-      throw SourceControlProviderError.fromFetchError(
-        `Failed to list branches: ${error instanceof Error ? error.message : String(error)}`,
+      throw toSourceControlProviderError("Failed to list branches", error, extractHttpStatus(error));
+    }
+  }
+
+  async getBranchHeadSha(config: GetBranchHeadShaConfig): Promise<string | null> {
+    if (!this.appConfig) {
+      throw new SourceControlProviderError(
+        "GitHub App not configured - cannot resolve branch head SHA",
+        "permanent"
+      );
+    }
+
+    try {
+      const token = await getCachedInstallationToken(this.appConfig);
+      const response = await fetchWithTimeout(
+        `${GITHUB_API_BASE}/repos/${config.owner}/${config.name}/git/ref/heads/${encodeURIComponent(config.branch)}`,
+        {
+          headers: {
+            Accept: "application/vnd.github.v3+json",
+            Authorization: `Bearer ${token}`,
+            "User-Agent": USER_AGENT,
+          },
+        }
+      );
+
+      if (response.status === 404) {
+        return null;
+      }
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(error);
+      }
+
+      const data = (await response.json()) as { object?: { sha?: string } };
+      return data.object?.sha ?? null;
+    } catch (error) {
+      throw toSourceControlProviderError(
+        "Failed to resolve GitHub branch head",
         error,
         extractHttpStatus(error)
       );
@@ -307,10 +352,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         token,
       };
     } catch (error) {
-      throw SourceControlProviderError.fromFetchError(
-        `Failed to generate GitHub App token: ${error instanceof Error ? error.message : String(error)}`,
-        error
-      );
+      throw toSourceControlProviderError("Failed to generate GitHub App token", error);
     }
   }
 
@@ -323,17 +365,16 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
   }
 
   buildGitPushSpec(config: BuildGitPushSpecConfig): GitPushSpec {
-    const force = config.force ?? false;
-    const remoteUrl = `https://x-access-token:${config.auth.token}@github.com/${config.owner}/${config.name}.git`;
-    const redactedRemoteUrl = `https://x-access-token:<redacted>@github.com/${config.owner}/${config.name}.git`;
-
-    return {
-      remoteUrl,
-      redactedRemoteUrl,
-      refspec: `${config.sourceRef}:refs/heads/${config.targetBranch}`,
+    return buildTokenGitPushSpec({
+      host: "github.com",
+      username: "x-access-token",
+      token: config.auth.token,
+      owner: config.owner,
+      name: config.name,
+      sourceRef: config.sourceRef,
       targetBranch: config.targetBranch,
-      force,
-    };
+      force: config.force,
+    });
   }
 
   /**

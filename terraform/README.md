@@ -80,18 +80,30 @@ brew install node@22
 1. **Sign up** at [Modal](https://modal.com)
 2. **Create API Token** at Modal Settings
 
-### 5. GitHub Apps
+### 5. SCM Provider Setup
 
-1. **OAuth App** - For user authentication
-   - Create at: https://github.com/settings/developers
-   - Callback URL: `https://<your-vercel-app>.vercel.app/api/auth/callback/github`
+Choose one provider per deployment via `scm_provider` in `terraform.tfvars`.
 
-2. **GitHub App** - For repository access in sandboxes
-   - Create at: https://github.com/settings/apps
-   - Convert private key to PKCS#8 format:
-     ```bash
-     openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in key.pem -out key-pkcs8.pem
-     ```
+#### GitHub
+
+Use a single GitHub App for both user authentication and repository access:
+
+- Create at: https://github.com/settings/apps
+- Callback URL: `https://<your-web-app>/api/auth/callback/github`
+- Convert the private key to PKCS#8 format:
+  ```bash
+  openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in key.pem -out key-pkcs8.pem
+  ```
+
+#### Bitbucket
+
+Use a Bitbucket OAuth consumer for both user authentication and app-level repository access:
+
+- Create in Bitbucket workspace settings → OAuth consumers
+- Callback URL: `https://<your-web-app>/api/auth/callback/bitbucket`
+- Permissions: Account (Read), Email (Read), Repositories (Read/Write), Pull requests (Read/Write)
+- Optional: add `bitbucket_bot_username` / `bitbucket_bot_app_password` only if you intentionally
+  want the legacy app-password fallback for app-level REST calls
 
 ### 6. Slack App
 
@@ -151,6 +163,10 @@ The GitHub Actions workflow (`.github/workflows/terraform.yml`) automates:
 | Merge to main | `terraform apply` (auto-approve) |
 
 ### Required GitHub Secrets
+
+> **Note:** The checked-in GitHub Actions workflow is still wired for GitHub-provider deployments.
+> Bitbucket deployments need workflow changes to pass `SCM_PROVIDER=bitbucket` and the
+> `BITBUCKET_*` secrets instead of the `GH_*` set below.
 
 Add these secrets to your repository settings:
 

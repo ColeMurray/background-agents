@@ -4,16 +4,18 @@
 
 import { SourceControlProviderError } from "../errors";
 import type { SourceControlProvider, SourceControlProviderName } from "../types";
+import { createBitbucketProvider } from "./bitbucket-provider";
 import { createGitHubProvider } from "./github-provider";
-import type { GitHubProviderConfig } from "./types";
+import type { BitbucketProviderConfig, GitHubProviderConfig } from "./types";
 
 // Types
-export type { GitHubProviderConfig } from "./types";
+export type { BitbucketProviderConfig, GitHubProviderConfig } from "./types";
 
 // Constants
 export { USER_AGENT, GITHUB_API_BASE } from "./constants";
 
 // Providers
+export { BitbucketSourceControlProvider, createBitbucketProvider } from "./bitbucket-provider";
 export { GitHubSourceControlProvider, createGitHubProvider } from "./github-provider";
 
 /**
@@ -22,6 +24,7 @@ export { GitHubSourceControlProvider, createGitHubProvider } from "./github-prov
 export interface SourceControlProviderFactoryConfig {
   provider: SourceControlProviderName;
   github?: GitHubProviderConfig;
+  bitbucket?: BitbucketProviderConfig;
 }
 
 /**
@@ -34,10 +37,7 @@ export function createSourceControlProvider(
     case "github":
       return createGitHubProvider(config.github ?? {});
     case "bitbucket":
-      throw new SourceControlProviderError(
-        "SCM provider 'bitbucket' is configured but not implemented.",
-        "permanent"
-      );
+      return createBitbucketProvider(config.bitbucket ?? {});
     default: {
       const runtimeProvider = String(config.provider);
       const _exhaustive: never = config.provider;

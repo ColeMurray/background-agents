@@ -18,7 +18,7 @@ Navigate to **Automations** in the sidebar, then click **Create Automation**.
 | Field            | Description                                                                                                                                                                         |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Name**         | A short label for the automation (max 200 characters). Appears in the automations list and in session titles prefixed with `[Auto]`.                                                |
-| **Repository**   | The GitHub repository to run against. Only repositories installed on the GitHub App are available. Cannot be changed after creation.                                                |
+| **Repository**   | The repository from the active SCM provider to run against. Only repositories accessible to the deployment-level provider integration are available. Cannot be changed after creation. |
 | **Schedule**     | When and how often to run. See [Schedule Options](#schedule-options) below.                                                                                                         |
 | **Timezone**     | The IANA timezone for interpreting the schedule. Defaults to your browser's local timezone.                                                                                         |
 | **Instructions** | The prompt sent to the coding agent each time the automation fires (max 10,000 characters). Write this as you would a normal session prompt — be specific about what you want done. |

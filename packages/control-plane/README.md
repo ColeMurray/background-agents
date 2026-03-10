@@ -9,8 +9,8 @@ The control plane provides:
 - **Session Management**: SQLite-backed Durable Objects for each session
 - **Real-time Streaming**: WebSocket connections with hibernation support
 - **Multi-client Sync**: Web, Slack, extension clients all see the same state
-- **GitHub Integration**: GitHub App for repository access
-- **Token Encryption**: AES-256-GCM encryption for GitHub tokens at rest
+- **SCM Integration**: GitHub App or Bitbucket OAuth credentials for repository access, with optional Bitbucket deployment-level fallback credentials
+- **Token Encryption**: AES-256-GCM encryption for SCM tokens at rest
 - **Repo Secrets**: Encrypted repo-scoped secrets stored in D1, injected into sandboxes as env vars
 
 ## Architecture
@@ -190,41 +190,45 @@ const token = await decryptToken(encrypted, env.TOKEN_ENCRYPTION_KEY);
 > **Single-Tenant Only**: This control plane is designed for single-tenant deployment where all
 > users are trusted members of the same organization.
 
-### GitHub App Token Flow
+### SCM Token Flow
 
-The system uses two types of GitHub tokens:
+The system uses two broad token classes:
 
-| Token            | Used For    | Sent to Sandbox? | Access Scope                     |
-| ---------------- | ----------- | ---------------- | -------------------------------- |
-| GitHub App Token | Clone, push | Yes (ephemeral)  | All repos where App is installed |
-| User OAuth Token | Create PRs  | No (server-only) | User's accessible repos          |
+| Token            | Used For    | Sent to Sandbox? | Access Scope                             |
+| ---------------- | ----------- | ---------------- | ---------------------------------------- |
+| App Token        | Clone, push | Yes (ephemeral)  | All repos the deployment app can access  |
+| User OAuth Token | Create PRs, Bitbucket repo discovery/session validation | No (server-only) | User's accessible repos                  |
 
 If a `create-pr` request is triggered by a participant without a user OAuth token (for example,
-Slack-created sessions), the control-plane still pushes the branch with the GitHub App token and
-returns a manual GitHub `pull/new` URL instead of failing the request.
+Slack-created sessions), the control-plane still pushes the branch with the deployment-level app
+token and returns a provider-specific manual PR URL instead of failing the request.
 
 ### Why This Matters
 
-- **No per-user repo access validation**: When a session is created, the system does not verify that
-  the user has access to the requested repository
-- **Shared GitHub App installation**: A single `GITHUB_APP_INSTALLATION_ID` is used for all users
+- **GitHub keeps deployment-level repo scope**: GitHub deployments rely on the shared GitHub App installation for repository discovery and repo access checks
+- **Bitbucket web flows use the signed-in user token when available**: Bitbucket `/repos`, branch listing, and session creation validation can use the signed-in user's OAuth token, while background refresh and sandbox push auth still rely on deployment-level credentials when configured
 - **Trust boundary is the organization**: All users with access to the web app can work with any
-  repository the GitHub App is installed on
+  repository made available by the configured provider flow for that deployment
 
 ### Configuration
 
 All secrets are configured via Terraform. Required secrets include:
 
+- `SCM_PROVIDER` - Source control provider for this deployment (`github` or `bitbucket`)
+- `REPO_SECRETS_ENCRYPTION_KEY` - AES-GCM key for encrypting repo secrets in D1
+
+GitHub deployments also require:
+
 - `GITHUB_APP_ID` - GitHub App ID
 - `GITHUB_APP_PRIVATE_KEY` - GitHub App private key (PKCS#8 format)
 - `GITHUB_APP_INSTALLATION_ID` - Single installation for all users
-- `REPO_SECRETS_ENCRYPTION_KEY` - AES-GCM key for encrypting repo secrets in D1
 
-Optional variables:
+Bitbucket deployments also require:
 
-- `SCM_PROVIDER` - Source control provider for this deployment (`github` or `bitbucket`, default:
-  `github`). Current implementation supports `github` only; `bitbucket` returns explicit
-  `501 Not Implemented` responses until implemented.
+- `BITBUCKET_CLIENT_ID` - Bitbucket OAuth consumer client ID
+- `BITBUCKET_CLIENT_SECRET` - Bitbucket OAuth consumer client secret
+- `BITBUCKET_WORKSPACE` - Bitbucket workspace slug used for repository discovery and provider routing
+- `BITBUCKET_BOT_USERNAME` / `BITBUCKET_BOT_APP_PASSWORD` - optional deployment-level fallback for background REST calls and compatibility flows
 
 See
 [terraform/environments/production/terraform.tfvars.example](../../terraform/environments/production/terraform.tfvars.example)
@@ -233,8 +237,8 @@ for the complete list.
 ### Deployment Recommendations
 
 1. Deploy behind SSO/VPN to restrict access to authorized employees
-2. Install the GitHub App only on repositories you want the system to access
-3. Use GitHub's "Only select repositories" option when installing the App
+2. Install the provider app only on repositories you want the system to access
+3. Use provider-side repository scoping to limit installation access
 
 ## Verification Criteria
 
@@ -243,7 +247,7 @@ for the complete list.
 | Durable Object creates with SQLite | Create session, verify tables exist   |
 | WebSocket hibernation works        | Connect, idle 60s, send message       |
 | Multiple clients sync state        | Connect 2 clients, verify sync        |
-| GitHub OAuth flow completes        | Complete OAuth, verify token stored   |
+| SCM OAuth flow completes           | Complete provider OAuth, verify token stored |
 | Token encryption works             | Store/retrieve token, verify matches  |
 | Prompt queue ordering              | Enqueue 3 prompts, verify FIFO        |
 | Session survives DO eviction       | Create, wait, reconnect, verify state |

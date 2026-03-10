@@ -8,6 +8,7 @@ import {
   cronIntervalMinutes,
   isValidModel,
   getValidModelOrDefault,
+  type ProviderRepoId,
   type CreateAutomationRequest,
   type UpdateAutomationRequest,
 } from "@open-inspect/shared";
@@ -132,13 +133,13 @@ async function handleCreateAutomation(
   const repoOwner = body.repoOwner.toLowerCase();
   const repoName = body.repoName.toLowerCase();
 
-  let repoId: number;
+  let repoId: ProviderRepoId;
   let defaultBranch: string;
   try {
     const provider = createRouteSourceControlProvider(env);
     const resolved = await resolveInstalledRepo(provider, repoOwner, repoName);
     if (!resolved) {
-      return error("Repository is not installed for the GitHub App", 404);
+      return error("Repository is not installed for this SCM provider", 404);
     }
     repoId = resolved.repoId;
     defaultBranch = resolved.defaultBranch;

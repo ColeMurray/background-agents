@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createSourceControlProvider } from "./index";
+import { BitbucketSourceControlProvider } from "./bitbucket-provider";
 import { GitHubSourceControlProvider } from "./github-provider";
 import { SourceControlProviderError } from "../errors";
 
@@ -9,16 +10,9 @@ describe("createSourceControlProvider", () => {
     expect(provider).toBeInstanceOf(GitHubSourceControlProvider);
   });
 
-  it("throws explicit not-implemented error for bitbucket", () => {
-    const createBitbucketProvider = () =>
-      createSourceControlProvider({
-        provider: "bitbucket",
-      });
-
-    expect(createBitbucketProvider).toThrow(SourceControlProviderError);
-    expect(createBitbucketProvider).toThrow(
-      "SCM provider 'bitbucket' is configured but not implemented."
-    );
+  it("creates bitbucket provider", () => {
+    const provider = createSourceControlProvider({ provider: "bitbucket" });
+    expect(provider).toBeInstanceOf(BitbucketSourceControlProvider);
   });
 
   it("throws for unknown provider values at runtime", () => {

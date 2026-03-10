@@ -40,20 +40,13 @@ module "modal_app" {
       }
     },
     {
-      name = "github-app"
-      values = {
-        GITHUB_APP_ID              = var.github_app_id
-        GITHUB_APP_PRIVATE_KEY     = var.github_app_private_key
-        GITHUB_APP_INSTALLATION_ID = var.github_app_installation_id
-      }
-    },
-    {
       name = "internal-api"
       values = {
         MODAL_API_SECRET            = var.modal_api_secret
         INTERNAL_CALLBACK_SECRET    = var.internal_callback_secret
         ALLOWED_CONTROL_PLANE_HOSTS = local.control_plane_host
         CONTROL_PLANE_URL           = local.control_plane_url
+        SCM_PROVIDER                = var.scm_provider
       }
     }
   ]

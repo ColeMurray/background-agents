@@ -8,8 +8,13 @@
  */
 
 import { decryptToken, encryptToken } from "../auth/crypto";
+import { refreshAccessToken as refreshBitbucketAccessToken } from "../auth/bitbucket";
 import { refreshAccessToken } from "../auth/github";
-import type { SourceControlAuthContext, SourceControlProviderName } from "../source-control";
+import {
+  resolveScmProvider,
+  type SourceControlAuthContext,
+  type SourceControlProviderName,
+} from "../source-control";
 import type { Logger } from "../logger";
 import type { ParticipantRow } from "./types";
 import type { CreateParticipantData } from "./repository";
@@ -40,6 +45,9 @@ export interface ParticipantRepository {
 export interface ParticipantServiceEnv {
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
+  BITBUCKET_CLIENT_ID?: string;
+  BITBUCKET_CLIENT_SECRET?: string;
+  SCM_PROVIDER?: string;
   TOKEN_ENCRYPTION_KEY: string;
 }
 
@@ -64,6 +72,25 @@ export function getAvatarUrl(
   if (!login) return undefined;
   if (provider === "github") return `https://github.com/${login}.png`;
   return undefined;
+}
+
+interface RefreshedScmTokens {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+}
+
+function normalizeRefreshedScmTokens(
+  tokens: { access_token: string; refresh_token?: string; expires_in?: number },
+  currentRefreshToken: string
+): RefreshedScmTokens {
+  return {
+    accessToken: tokens.access_token,
+    refreshToken: tokens.refresh_token ?? currentRefreshToken,
+    expiresAt: tokens.expires_in
+      ? Date.now() + tokens.expires_in * 1000
+      : Date.now() + DEFAULT_TOKEN_LIFETIME_MS,
+  };
 }
 
 export class ParticipantService {
@@ -179,6 +206,55 @@ export class ParticipantService {
     return this.refreshTokenLocal(participant);
   }
 
+  private getScmProvider(): SourceControlProviderName {
+    return resolveScmProvider(this.env);
+  }
+
+  private async refreshScmAccessToken(refreshToken: string): Promise<RefreshedScmTokens> {
+    const provider = this.getScmProvider();
+
+    if (provider === "bitbucket") {
+      if (!this.env.BITBUCKET_CLIENT_ID || !this.env.BITBUCKET_CLIENT_SECRET) {
+        throw new Error("Bitbucket OAuth credentials not configured");
+      }
+
+      const tokens = await refreshBitbucketAccessToken(refreshToken, {
+        clientId: this.env.BITBUCKET_CLIENT_ID,
+        clientSecret: this.env.BITBUCKET_CLIENT_SECRET,
+      });
+
+      return normalizeRefreshedScmTokens(tokens, refreshToken);
+    }
+
+    if (!this.env.GITHUB_CLIENT_ID || !this.env.GITHUB_CLIENT_SECRET) {
+      throw new Error("GitHub OAuth credentials not configured");
+    }
+
+    const tokens = await refreshAccessToken(refreshToken, {
+      clientId: this.env.GITHUB_CLIENT_ID,
+      clientSecret: this.env.GITHUB_CLIENT_SECRET,
+      encryptionKey: this.env.TOKEN_ENCRYPTION_KEY,
+    });
+
+    return normalizeRefreshedScmTokens(tokens, refreshToken);
+  }
+
+  private async storeParticipantTokens(
+    participantId: string,
+    refreshed: RefreshedScmTokens
+  ): Promise<void> {
+    const [scmAccessTokenEncrypted, scmRefreshTokenEncrypted] = await Promise.all([
+      encryptToken(refreshed.accessToken, this.env.TOKEN_ENCRYPTION_KEY),
+      encryptToken(refreshed.refreshToken, this.env.TOKEN_ENCRYPTION_KEY),
+    ]);
+
+    this.repository.updateParticipantTokens(participantId, {
+      scmAccessTokenEncrypted,
+      scmRefreshTokenEncrypted,
+      scmTokenExpiresAt: refreshed.expiresAt,
+    });
+  }
+
   /**
    * Centralized refresh via D1.
    *
@@ -214,23 +290,10 @@ export class ParticipantService {
         return this.repository.getParticipantById(participant.id);
       }
 
-      // D1 token expired — refresh via OAuth API
-      if (!this.env.GITHUB_CLIENT_ID || !this.env.GITHUB_CLIENT_SECRET) {
-        this.log.warn("Cannot refresh: OAuth credentials not configured");
-        return null;
-      }
-
-      const newTokens = await refreshAccessToken(d1Tokens.refreshToken, {
-        clientId: this.env.GITHUB_CLIENT_ID,
-        clientSecret: this.env.GITHUB_CLIENT_SECRET,
-        encryptionKey: this.env.TOKEN_ENCRYPTION_KEY,
-      });
-
-      const newAccessToken = newTokens.access_token;
-      const newRefreshToken = newTokens.refresh_token ?? d1Tokens.refreshToken;
-      const newExpiresAt = newTokens.expires_in
-        ? Date.now() + newTokens.expires_in * 1000
-        : Date.now() + DEFAULT_TOKEN_LIFETIME_MS;
+      const refreshed = await this.refreshScmAccessToken(d1Tokens.refreshToken);
+      const newAccessToken = refreshed.accessToken;
+      const newRefreshToken = refreshed.refreshToken;
+      const newExpiresAt = refreshed.expiresAt;
 
       const casResult = await store.casUpdateTokens(
         scmUserId,
@@ -242,19 +305,7 @@ export class ParticipantService {
 
       if (casResult.ok) {
         this.log.info("CAS update succeeded", { user_id: participant.user_id });
-        const newAccessTokenEncrypted = await encryptToken(
-          newAccessToken,
-          this.env.TOKEN_ENCRYPTION_KEY
-        );
-        const newRefreshTokenEncrypted = await encryptToken(
-          newRefreshToken,
-          this.env.TOKEN_ENCRYPTION_KEY
-        );
-        this.repository.updateParticipantTokens(participant.id, {
-          scmAccessTokenEncrypted: newAccessTokenEncrypted,
-          scmRefreshTokenEncrypted: newRefreshTokenEncrypted,
-          scmTokenExpiresAt: newExpiresAt,
-        });
+        await this.storeParticipantTokens(participant.id, refreshed);
         return this.repository.getParticipantById(participant.id);
       }
 
@@ -343,46 +394,29 @@ export class ParticipantService {
       return null;
     }
 
-    if (!this.env.GITHUB_CLIENT_ID || !this.env.GITHUB_CLIENT_SECRET) {
-      this.log.warn("Cannot refresh: OAuth credentials not configured");
-      return null;
-    }
-
     try {
       const refreshToken = await decryptToken(
         participant.scm_refresh_token_encrypted,
         this.env.TOKEN_ENCRYPTION_KEY
       );
 
-      const newTokens = await refreshAccessToken(refreshToken, {
-        clientId: this.env.GITHUB_CLIENT_ID,
-        clientSecret: this.env.GITHUB_CLIENT_SECRET,
-        encryptionKey: this.env.TOKEN_ENCRYPTION_KEY,
-      });
+      const refreshed = await this.refreshScmAccessToken(refreshToken);
 
-      const newAccessTokenEncrypted = await encryptToken(
-        newTokens.access_token,
-        this.env.TOKEN_ENCRYPTION_KEY
-      );
-
-      const newRefreshTokenEncrypted = newTokens.refresh_token
-        ? await encryptToken(newTokens.refresh_token, this.env.TOKEN_ENCRYPTION_KEY)
-        : null;
-
-      const newExpiresAt = newTokens.expires_in
-        ? Date.now() + newTokens.expires_in * 1000
-        : Date.now() + DEFAULT_TOKEN_LIFETIME_MS; // fallback: 8 hours
-
-      this.repository.updateParticipantTokens(participant.id, {
-        scmAccessTokenEncrypted: newAccessTokenEncrypted,
-        scmRefreshTokenEncrypted: newRefreshTokenEncrypted,
-        scmTokenExpiresAt: newExpiresAt,
-      });
+      await this.storeParticipantTokens(participant.id, refreshed);
 
       this.log.info("Server-side token refresh succeeded", { user_id: participant.user_id });
 
       return this.repository.getParticipantById(participant.id);
     } catch (error) {
+      if (
+        error instanceof Error &&
+        (error.message === "GitHub OAuth credentials not configured" ||
+          error.message === "Bitbucket OAuth credentials not configured")
+      ) {
+        this.log.warn("Cannot refresh: OAuth credentials not configured");
+        return null;
+      }
+
       this.log.error("Server-side token refresh failed", {
         user_id: participant.user_id,
         error: error instanceof Error ? error : String(error),

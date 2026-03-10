@@ -6,7 +6,7 @@ import type { Env, CreateSessionRequest, CreateSessionResponse } from "./types";
 import { generateId, encryptToken } from "./auth/crypto";
 import { verifyInternalToken } from "./auth/internal";
 import {
-  resolveScmProviderFromEnv,
+  resolveScmProvider,
   SourceControlProviderError,
   type SourceControlProviderName,
 } from "./source-control";
@@ -17,6 +17,7 @@ import { buildSessionInternalUrl, SessionInternalPaths } from "./session/contrac
 import {
   getValidModelOrDefault,
   isValidReasoningEffort,
+  type ProviderRepoId,
   type SessionStatus,
   type CallbackContext,
   type SpawnChildSessionRequest,
@@ -116,29 +117,43 @@ const SANDBOX_AUTH_ROUTES: RegExp[] = [
 
 type CachedScmProvider =
   | {
-      envValue: string | undefined;
+      cacheKey: string;
       provider: SourceControlProviderName;
       error?: never;
     }
   | {
-      envValue: string | undefined;
+      cacheKey: string;
       provider?: never;
       error: SourceControlProviderError;
     };
 
 let cachedScmProvider: CachedScmProvider | null = null;
 
+function getScmProviderCacheKey(env: Env): string {
+  return [
+    env.SCM_PROVIDER ?? "",
+    env.GITHUB_APP_ID ?? "",
+    env.GITHUB_APP_PRIVATE_KEY ?? "",
+    env.GITHUB_APP_INSTALLATION_ID ?? "",
+    env.BITBUCKET_WORKSPACE ?? "",
+    env.BITBUCKET_CLIENT_ID ?? "",
+    env.BITBUCKET_CLIENT_SECRET ?? "",
+    env.BITBUCKET_BOT_USERNAME ?? "",
+    env.BITBUCKET_BOT_APP_PASSWORD ?? "",
+  ].join("\u0000");
+}
+
 function resolveDeploymentScmProvider(env: Env): SourceControlProviderName {
-  const envValue = env.SCM_PROVIDER;
-  if (!cachedScmProvider || cachedScmProvider.envValue !== envValue) {
+  const cacheKey = getScmProviderCacheKey(env);
+  if (!cachedScmProvider || cachedScmProvider.cacheKey !== cacheKey) {
     try {
       cachedScmProvider = {
-        envValue,
-        provider: resolveScmProviderFromEnv(envValue),
+        cacheKey,
+        provider: resolveScmProvider(env),
       };
     } catch (errorValue) {
       cachedScmProvider = {
-        envValue,
+        cacheKey,
         error:
           errorValue instanceof SourceControlProviderError
             ? errorValue
@@ -168,28 +183,9 @@ function isSandboxAuthRoute(path: string): boolean {
   return SANDBOX_AUTH_ROUTES.some((pattern) => pattern.test(path));
 }
 
-function enforceImplementedScmProvider(
-  path: string,
-  env: Env,
-  ctx: RequestContext
-): Response | null {
+function validateDeploymentScmProvider(env: Env, ctx: RequestContext): Response | null {
   try {
-    const provider = resolveDeploymentScmProvider(env);
-    if (provider !== "github" && !isPublicRoute(path)) {
-      logger.warn("SCM provider not implemented", {
-        event: "scm.provider_not_implemented",
-        scm_provider: provider,
-        http_path: path,
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-      const response = error(
-        `SCM provider '${provider}' is not implemented in this deployment.`,
-        501
-      );
-      return withCorsAndTraceHeaders(response, ctx);
-    }
-
+    resolveDeploymentScmProvider(env);
     return null;
   } catch (errorValue) {
     const errorMessage =
@@ -509,7 +505,7 @@ export async function handleRequest(
     }
   }
 
-  const providerCheck = enforceImplementedScmProvider(path, env, ctx);
+  const providerCheck = validateDeploymentScmProvider(env, ctx);
   if (providerCheck) {
     return providerCheck;
   }
@@ -623,13 +619,19 @@ async function handleCreateSession(
   const repoOwner = body.repoOwner.toLowerCase();
   const repoName = body.repoName.toLowerCase();
 
-  let repoId: number;
+  let repoId: ProviderRepoId;
   let defaultBranch: string;
   try {
     const provider = createRouteSourceControlProvider(env);
-    const resolved = await resolveInstalledRepo(provider, repoOwner, repoName);
+    const scmAuth = body.scmToken
+      ? {
+          authType: "oauth" as const,
+          token: body.scmToken,
+        }
+      : undefined;
+    const resolved = await resolveInstalledRepo(provider, repoOwner, repoName, scmAuth);
     if (!resolved) {
-      return error("Repository is not installed for the GitHub App", 404);
+      return error("Repository is not installed for this SCM provider", 404);
     }
     repoId = resolved.repoId;
     defaultBranch = resolved.defaultBranch;

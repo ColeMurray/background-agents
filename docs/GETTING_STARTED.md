@@ -6,7 +6,8 @@ This guide walks you through deploying your own instance of Open-Inspect using T
 > [SETUP_GUIDE.md](./SETUP_GUIDE.md).
 
 > **Important**: This system is designed for **single-tenant deployment only**. All users share the
-> same GitHub App credentials and can access any repository the App is installed on. See the
+> same deployment-level SCM credentials for the active provider and can access any repository that
+> provider integration can access. See the
 > [Security Model](../README.md#security-model-single-tenant-only) for details.
 
 ---
@@ -41,7 +42,8 @@ Create accounts on these services before continuing:
 | [Cloudflare](https://dash.cloudflare.com)        | Control plane hosting (+ web app if using Cloudflare platform) |
 | [Vercel](https://vercel.com) _(optional)_        | Web application hosting (only if `web_platform = "vercel"`)    |
 | [Modal](https://modal.com)                       | Sandbox infrastructure                                         |
-| [GitHub](https://github.com/settings/developers) | OAuth + repository access                                      |
+| [GitHub](https://github.com)                     | Repository fork + optional GitHub SCM provider setup           |
+| [Bitbucket](https://bitbucket.org) _(optional)_ | Bitbucket SCM provider setup (only if `scm_provider = "bitbucket"`) |
 | [Anthropic](https://console.anthropic.com)       | Claude API                                                     |
 | [Slack](https://api.slack.com/apps) _(optional)_ | Slack bot integration                                          |
 | GitHub App Webhooks _(optional)_                 | GitHub bot (PR reviews)                                        |
@@ -149,18 +151,23 @@ Create an R2 API Token:
 
 ---
 
-## Step 3: Create GitHub App
+## Step 3: Create Your SCM Provider Integration
 
-You only need **one GitHub App** - it handles both user authentication (OAuth) and repository
-access.
+Set `scm_provider` in `terraform.tfvars` to either `github` or `bitbucket`, then complete the
+matching setup below.
+
+### Option A: GitHub
+
+You only need **one GitHub App**. In the current code, it handles both user authentication and
+repository access.
 
 1. Go to [GitHub Apps](https://github.com/settings/apps)
 2. Click **"New GitHub App"**
 3. Fill in the basics:
    - **Name**: `Open-Inspect-YourName` (must be globally unique)
    - **Homepage URL**: Your web app URL (see below)
-   - **Webhook**: Uncheck "Active" (not needed)
-4. Configure **Identifying and authorizing users** (OAuth):
+   - **Webhook**: Uncheck "Active" (not needed unless enabling the GitHub bot later)
+4. Configure **Identifying and authorizing users**:
    - **Callback URL**: `{your-web-app-url}/api/auth/callback/github`
 
    Your web app URL depends on `web_platform`:
@@ -168,40 +175,99 @@ access.
    - **Cloudflare**: `https://open-inspect-web-{deployment_name}.{your-subdomain}.workers.dev`
 
    > **Important**: The callback URL must match your deployed web app URL exactly. The
-   > `{deployment_name}` is the unique value you set in `terraform.tfvars` (e.g., your GitHub
-   > username or company name).
+   > `{deployment_name}` is the unique value you set in `terraform.tfvars`.
 
 5. Set **Repository permissions**:
    - Contents: **Read & Write**
-   - Issues: **Read & Write** _(required if enabling GitHub bot)_
+   - Issues: **Read & Write** _(required only if enabling GitHub bot)_
    - Pull requests: **Read & Write**
    - Metadata: **Read-only**
 6. Click **"Create GitHub App"**
-7. Note the **App ID** and **Client ID** (top of page)
+7. Note the **App ID** and **Client ID**
 8. Under **"Client secrets"**, click **"Generate a new client secret"** and note the **Client
    Secret**
-9. Scroll down to **"Private keys"** and click **"Generate a private key"** (downloads a .pem file)
-10. **Convert the key to PKCS#8 format** (required for Cloudflare Workers):
+9. Under **"Private keys"**, click **"Generate a private key"**
+10. Convert the key to PKCS#8 format:
     ```bash
     openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt \
       -in ~/Downloads/your-app-name.*.private-key.pem \
       -out private-key-pkcs8.pem
     ```
-11. **Install the app** on your account/organization:
-    - Click "Install App" in the sidebar
-    - Select the repositories you want Open-Inspect to access
-12. Note the **Installation ID** from the URL after installing:
-    ```
-    https://github.com/settings/installations/INSTALLATION_ID
-    ```
+11. Install the app on your account/organization and select the repositories Open-Inspect should
+    access
+12. Note the **Installation ID** from the installation URL
 
 You should now have:
 
-- **App ID** (e.g., `123456`)
-- **Client ID** (e.g., `Iv1.abc123...`)
-- **Client Secret** (e.g., `abc123...`)
-- **Private Key** (PKCS#8 format, starts with `-----BEGIN PRIVATE KEY-----`)
-- **Installation ID** (e.g., `12345678`)
+- **App ID**
+- **Client ID**
+- **Client Secret**
+- **Private Key** (PKCS#8)
+- **Installation ID**
+
+### Option B: Bitbucket Cloud
+
+For Bitbucket deployments, create a **Bitbucket OAuth consumer**. The current code uses that
+consumer for both user sign-in and app-level repository access. An app-password-based bot fallback
+is optional and should be left empty unless you intentionally want to use it.
+
+1. Go to your Bitbucket workspace → **Settings** → **OAuth consumers**
+2. Click **"Add consumer"**
+3. Fill in the basics:
+   - **Name**: `Open-Inspect-YourName`
+   - **Callback URL**: `{your-web-app-url}/api/auth/callback/bitbucket`
+   - **This is a private consumer**: enable it
+4. Set the consumer permissions to cover the scopes the web/control-plane code requests:
+   - **Account**: Read
+   - **Email**: Read
+   - **Repositories**: Read and Write
+   - **Pull requests**: Read and Write
+5. Save the consumer
+6. Note the **Key** and **Secret**
+7. Note your workspace slug for `bitbucket_workspace`
+
+You should now have:
+
+- **Consumer Key** (`bitbucket_client_id`)
+- **Consumer Secret** (`bitbucket_client_secret`)
+- **Workspace slug** (`bitbucket_workspace`)
+
+#### Optional Bitbucket bot fallback
+
+The provider also supports a REST fallback using a Bitbucket **human or service user account** plus
+that account's **Atlassian API token**.
+
+Unlike GitHub Apps, Bitbucket does **not** give Open-Inspect a separate app-owned bot identity for
+this path. The Terraform variable names are historical:
+
+- `bitbucket_bot_username` should contain the Bitbucket username for the service or human account
+- `bitbucket_bot_app_password` should contain the Atlassian API token for that same account
+
+Important Atlassian status:
+
+- Atlassian Support documents that app passwords have been replaced by API tokens.
+- As of September 9, 2025, new app passwords can no longer be created.
+- Existing app passwords are scheduled to stop working on June 9, 2026.
+
+To create the API token:
+
+1. Open your Atlassian account → **Security** → **API tokens**
+2. Create a token with the Bitbucket scopes needed for your usage
+3. Store the Bitbucket username in `bitbucket_bot_username`
+4. Store the generated API token in `bitbucket_bot_app_password`
+
+Important:
+
+- If you use it, prefer a dedicated service account owned by your organization rather than a
+  personal everyday user.
+- When both are set, the provider prefers them for deployment-level REST calls. Invalid values can
+  still break background repository refresh or compatibility flows even if the OAuth consumer is
+  correct.
+- The variable name `bitbucket_bot_app_password` is historical. In current Bitbucket setups, put
+  the API token there.
+- Web repo listing, branch lookup, and session-create validation also use the signed-in user's
+  Bitbucket OAuth token when available, so make sure the user account itself can access the target
+  repositories.
 
 ---
 
@@ -304,6 +370,9 @@ cloudflare_api_token        = "your-cloudflare-api-token"
 cloudflare_account_id       = "your-account-id"
 cloudflare_worker_subdomain = "your-subdomain"  # e.g., "twilight-unit-b2cf" (without .workers.dev)
 
+# Active SCM provider for this deployment
+scm_provider                = "github"
+
 # Web platform: "vercel" (default) or "cloudflare" (OpenNext)
 web_platform                = "vercel"
 
@@ -314,10 +383,9 @@ modal_token_id              = "your-modal-token-id"
 modal_token_secret          = "your-modal-token-secret"
 modal_workspace             = "your-modal-workspace"
 
-# GitHub App (used for both OAuth and repository access)
-github_client_id     = "Iv1.abc123..."           # From GitHub App settings
-github_client_secret = "your-client-secret"      # Generated in GitHub App settings
-
+# GitHub (only when scm_provider = "github")
+github_client_id     = "Iv1.abc123..."
+github_client_secret = "your-client-secret"
 github_app_id              = "123456"
 github_app_installation_id = "12345678"
 github_app_private_key     = <<-EOF
@@ -325,6 +393,18 @@ github_app_private_key     = <<-EOF
 ... paste your PKCS#8 key here ...
 -----END PRIVATE KEY-----
 EOF
+
+# Bitbucket (only when scm_provider = "bitbucket")
+bitbucket_client_id     = ""
+bitbucket_client_secret = ""
+bitbucket_workspace     = ""
+
+# Optional Bitbucket REST fallback using a real Atlassian account
+# Not a GitHub-App-style bot identity
+# Put the Bitbucket username in bitbucket_bot_username
+# Put the Atlassian API token in bitbucket_bot_app_password
+bitbucket_bot_username     = "service-account-username"
+bitbucket_bot_app_password = "your-atlassian-api-token"
 
 # Slack (set enable_slack_bot = false to disable Slack integration)
 enable_slack_bot     = false
@@ -357,12 +437,12 @@ enable_durable_object_bindings = false
 enable_service_bindings        = false
 
 # Access Control (at least one recommended for security)
-allowed_users         = "your-github-username"  # Comma-separated GitHub usernames, or empty
+allowed_users         = "your-scm-username"     # Comma-separated SCM usernames, or empty
 allowed_email_domains = ""                      # Comma-separated domains (e.g., "example.com,corp.io")
 ```
 
 > **Note**: Review `allowed_users` and `allowed_email_domains` carefully - these control who can
-> sign in. If both are empty, any GitHub user can access your deployment.
+> sign in. If both are empty, any user from the configured SCM provider can access your deployment.
 
 ---
 
@@ -575,7 +655,7 @@ curl -I https://open-inspect-web-{deployment_name}.YOUR-SUBDOMAIN.workers.dev
 ### Test the Full Flow
 
 1. Visit your web app URL
-2. Sign in with GitHub
+2. Sign in with the configured SCM provider
 3. Create a new session with a repository
 4. Send a prompt and verify the sandbox starts
 
@@ -584,6 +664,11 @@ curl -I https://open-inspect-web-{deployment_name}.YOUR-SUBDOMAIN.workers.dev
 ## Step 10: Set Up CI/CD (Optional)
 
 Enable automatic deployments when you push to main by adding GitHub Secrets.
+
+> **Current limitation**: the checked-in GitHub Actions Terraform workflow is still wired for
+> GitHub-provider deployments. If you are deploying with `scm_provider = "bitbucket"`, use local
+> Terraform apply or extend `.github/workflows/terraform.yml` to pass `SCM_PROVIDER=bitbucket` and
+> the `BITBUCKET_*` secrets.
 
 Go to your fork's Settings → Secrets and variables → Actions, and add:
 
@@ -616,7 +701,7 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `INTERNAL_CALLBACK_SECRET`    | Generated callback secret                                                     |
 | `MODAL_API_SECRET`            | Generated Modal API secret                                                    |
 | `NEXTAUTH_SECRET`             | Generated NextAuth secret                                                     |
-| `ALLOWED_USERS`               | Comma-separated GitHub usernames (or empty for all users)                     |
+| `ALLOWED_USERS`               | Comma-separated SCM usernames (or empty for all users)                        |
 | `ALLOWED_EMAIL_DOMAINS`       | Comma-separated email domains (or empty for all domains)                      |
 | `ENABLE_GITHUB_BOT`           | `true` to deploy GitHub bot worker (or empty to skip)                         |
 | `GH_WEBHOOK_SECRET`           | GitHub webhook secret (required if GitHub bot enabled)                        |
@@ -690,6 +775,21 @@ URL to match your web app URL:
 - **Vercel**: `https://open-inspect-{deployment_name}.vercel.app/api/auth/callback/github`
 - **Cloudflare**:
   `https://open-inspect-web-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/api/auth/callback/github`
+
+### Bitbucket OAuth callback or token exchange fails
+
+1. Verify `scm_provider = "bitbucket"` in `terraform.tfvars`
+2. Check the OAuth consumer callback URL matches your deployed URL exactly:
+   - **Vercel**: `https://open-inspect-{deployment_name}.vercel.app/api/auth/callback/bitbucket`
+   - **Cloudflare**:
+     `https://open-inspect-web-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/api/auth/callback/bitbucket`
+3. Ensure the consumer has the required permissions: Account (Read), Email (Read), Repositories
+   (Read/Write), Pull requests (Read/Write)
+4. Ensure `bitbucket_workspace` matches the workspace slug used by your repositories
+5. Verify the signed-in Bitbucket user can access the repositories you expect to see in the repo
+   picker
+6. If you set `bitbucket_bot_username` and `bitbucket_bot_app_password`, verify they work or clear
+   them to fall back to the OAuth consumer/client-credential path for deployment-level operations
 
 ### Modal deployment fails
 
