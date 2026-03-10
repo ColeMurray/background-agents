@@ -268,6 +268,15 @@ export class BitbucketSourceControlProvider implements SourceControlProvider {
     auth?: SourceControlAuthContext
   ): Promise<{ name: string }[]> {
     try {
+      const access = await this.checkRepositoryAccess(config, auth);
+      if (!access) {
+        throw new SourceControlProviderError(
+          `Repository '${config.owner}/${config.name}' is not accessible`,
+          "permanent",
+          404
+        );
+      }
+
       const branches: Array<{ name: string }> = [];
       let nextUrl: string | null = `${BITBUCKET_API_BASE}/repositories/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.name)}/refs/branches?pagelen=100`;
 
@@ -278,10 +287,6 @@ export class BitbucketSourceControlProvider implements SourceControlProvider {
         }>(nextUrl, { headers: await this.buildApiHeaders(auth) });
         branches.push(...(page.values ?? []));
         nextUrl = page.next ?? null;
-      }
-
-      if (auth) {
-        await this.checkRepositoryAccess(config, auth);
       }
 
       return branches;

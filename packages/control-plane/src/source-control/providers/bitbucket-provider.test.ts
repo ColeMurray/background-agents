@@ -167,6 +167,19 @@ describe("BitbucketSourceControlProvider", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
+            uuid: "{repo-456}",
+            name: "web",
+            full_name: "acme/web",
+            is_private: false,
+            workspace: { slug: "acme" },
+            mainbranch: { name: "main" },
+          }),
+          { status: 200 }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
             values: [{ name: "main" }],
             next: "https://api.bitbucket.org/2.0/repositories/acme/web/refs/branches?page=2",
           }),
@@ -177,19 +190,6 @@ describe("BitbucketSourceControlProvider", () => {
         new Response(
           JSON.stringify({
             values: [{ name: "release/1.0" }],
-          }),
-          { status: 200 }
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            uuid: "{repo-456}",
-            name: "web",
-            full_name: "acme/web",
-            is_private: false,
-            workspace: { slug: "acme" },
-            mainbranch: { name: "main" },
           }),
           { status: 200 }
         )
@@ -211,7 +211,7 @@ describe("BitbucketSourceControlProvider", () => {
 
     expect(global.fetch).toHaveBeenNthCalledWith(
       1,
-      "https://api.bitbucket.org/2.0/repositories/acme/web/refs/branches?pagelen=100",
+      "https://api.bitbucket.org/2.0/repositories/acme/web",
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: "Bearer user-token-123",
@@ -220,7 +220,7 @@ describe("BitbucketSourceControlProvider", () => {
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
       2,
-      "https://api.bitbucket.org/2.0/repositories/acme/web/refs/branches?page=2",
+      "https://api.bitbucket.org/2.0/repositories/acme/web/refs/branches?pagelen=100",
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: "Bearer user-token-123",
@@ -229,7 +229,7 @@ describe("BitbucketSourceControlProvider", () => {
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
       3,
-      "https://api.bitbucket.org/2.0/repositories/acme/web",
+      "https://api.bitbucket.org/2.0/repositories/acme/web/refs/branches?page=2",
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: "Bearer user-token-123",
@@ -238,17 +238,9 @@ describe("BitbucketSourceControlProvider", () => {
     );
   });
 
-  it("rejects branch enumeration outside the configured workspace", async () => {
+  it("rejects branch enumeration outside the configured workspace before pagination", async () => {
     global.fetch = vi
       .fn()
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            values: [{ name: "main" }],
-          }),
-          { status: 200 }
-        )
-      )
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
@@ -279,5 +271,46 @@ describe("BitbucketSourceControlProvider", () => {
       errorType: "permanent",
       httpStatus: 403,
     });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledWith(
+      "https://api.bitbucket.org/2.0/repositories/other-workspace/secret-repo",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer user-token-123",
+        }),
+      })
+    );
+  });
+
+  it("enforces the configured workspace when branch listing uses app credentials", async () => {
+    global.fetch = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          uuid: "{repo-999}",
+          name: "secret-repo",
+          full_name: "other-workspace/secret-repo",
+          is_private: true,
+          workspace: { slug: "other-workspace" },
+          mainbranch: { name: "main" },
+        }),
+        { status: 200 }
+      )
+    ) as typeof fetch;
+
+    const provider = new BitbucketSourceControlProvider({
+      workspace: "acme",
+      botUsername: "bot-user",
+      botAppPassword: "app-password",
+    });
+
+    await expect(
+      provider.listBranches({ owner: "other-workspace", name: "secret-repo" })
+    ).rejects.toMatchObject({
+      errorType: "permanent",
+      httpStatus: 403,
+    });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 });
