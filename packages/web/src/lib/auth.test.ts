@@ -235,4 +235,25 @@ describe("createBitbucketProvider", () => {
     );
     expect(tokenState.accessTokenExpiresAt).toBeGreaterThan(Date.now());
   });
+
+  it("backs off after a failed Bitbucket token refresh", async () => {
+    getTokenMock.mockResolvedValue({
+      accessToken: "expired-access-token",
+      refreshToken: "refresh-token-123",
+      accessTokenExpiresAt: Date.now() - 1_000,
+    });
+
+    const fetchMock = vi.fn().mockRejectedValue(new Error("fetch failed"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { getRequestScmTokenState } = await import("./auth");
+    const tokenState = await getRequestScmTokenState(
+      new NextRequest("https://example.com/api/repos")
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(tokenState.accessToken).toBeUndefined();
+    expect(tokenState.refreshToken).toBe("refresh-token-123");
+    expect(tokenState.accessTokenExpiresAt).toBeGreaterThan(Date.now());
+  });
 });

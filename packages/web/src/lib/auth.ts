@@ -195,8 +195,8 @@ async function getRefreshableScmJwtToken(token: JWT): Promise<JWT> {
     return {
       ...token,
       accessToken: undefined,
-      accessTokenExpiresAt:
-        token.accessTokenExpiresAt ?? Date.now() + DEFAULT_BITBUCKET_TOKEN_LIFETIME_MS,
+      // Back off before retrying a failed refresh instead of immediately re-hitting Bitbucket.
+      accessTokenExpiresAt: Date.now() + DEFAULT_BITBUCKET_TOKEN_LIFETIME_MS,
     };
   }
 }
