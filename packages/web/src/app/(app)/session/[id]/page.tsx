@@ -898,6 +898,7 @@ function SessionContent({
           participants={participants}
           events={events}
           artifacts={artifacts}
+
         />
       </main>
 
@@ -949,6 +950,7 @@ function SessionContent({
                   participants={participants}
                   events={events}
                   artifacts={artifacts}
+        
                 />
               </div>
             </div>
@@ -977,6 +979,7 @@ function SessionContent({
                   participants={participants}
                   events={events}
                   artifacts={artifacts}
+        
                 />
               </div>
             </div>

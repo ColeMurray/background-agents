@@ -562,6 +562,8 @@ export class SessionDO extends DurableObject<Env> {
       },
       clearSandboxCodeServer: () => this.repository.clearSandboxCodeServer(),
       updateSandboxDevServer: (url) => this.repository.updateSandboxDevServer(url),
+      updateSandboxVnc: (url, password) => this.repository.updateSandboxVnc(url, password),
+      clearSandboxVnc: () => this.repository.clearSandboxVnc(),
     };
 
     // Broadcaster adapter
@@ -955,8 +957,35 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async handleSandboxMessage(ws: WebSocket, message: string): Promise<void> {
     try {
-      const event = JSON.parse(message) as SandboxEvent;
-      await this.processSandboxEvent(event);
+      const parsed = JSON.parse(message) as { type: string; [key: string]: unknown };
+
+      // VNC lifecycle messages (not SandboxEvents — handled before delegation)
+      if (parsed.type === "vnc_info") {
+        const { password } = parsed as unknown as { password: string };
+        // Tunnel URL is already stored from spawn time; update password
+        const sandbox = this.getSandbox();
+        const vncUrl = sandbox?.vnc_url;
+        if (vncUrl) {
+          this.repository.updateSandboxVnc(vncUrl, password);
+          this.broadcast({ type: "vnc_info", url: vncUrl, password });
+          this.log.info("VNC enabled", { url: vncUrl });
+        } else {
+          this.log.warn("VNC info received but no tunnel URL stored");
+        }
+        return;
+      }
+      if (parsed.type === "vnc_stopped") {
+        // Keep tunnel URL but clear password (VNC can be re-enabled)
+        const sandbox = this.getSandbox();
+        if (sandbox?.vnc_url) {
+          this.repository.updateSandboxVnc(sandbox.vnc_url, "");
+        }
+        this.broadcast({ type: "vnc_stopped" });
+        this.log.info("VNC disabled");
+        return;
+      }
+
+      await this.processSandboxEvent(parsed as SandboxEvent);
     } catch (e) {
       this.log.error("Error processing sandbox message", {
         error: e instanceof Error ? e : String(e),
@@ -999,6 +1028,7 @@ export class SessionDO extends DurableObject<Env> {
         case "presence":
           this.presenceService.updatePresence(ws, data);
           break;
+
       }
     } catch (e) {
       this.log.error("Error processing client message", {
@@ -1478,6 +1508,8 @@ export class SessionDO extends DurableObject<Env> {
       codeServerUrl: sandbox?.code_server_url ?? null,
       codeServerPassword,
       devServerUrl: sandbox?.dev_server_url ?? null,
+      vncUrl: sandbox?.vnc_url ?? null,
+      vncPassword: sandbox?.vnc_password ?? null,
     };
   }
 

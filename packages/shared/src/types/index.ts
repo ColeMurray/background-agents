@@ -308,6 +308,8 @@ export type ServerMessage =
     }
   | { type: "code_server_info"; url: string; password: string }
   | { type: "dev_server_info"; url: string }
+  | { type: "vnc_info"; url: string; password: string }
+  | { type: "vnc_stopped" }
   | { type: "error"; code: string; message: string };
 
 // Session state sent to clients
@@ -329,6 +331,8 @@ export interface SessionState {
   codeServerUrl?: string | null;
   codeServerPassword?: string | null;
   devServerUrl?: string | null;
+  vncUrl?: string | null;
+  vncPassword?: string | null;
 }
 
 // Participant presence info

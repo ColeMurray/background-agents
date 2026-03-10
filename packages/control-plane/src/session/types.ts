@@ -106,6 +106,8 @@ export interface SandboxRow {
   code_server_url: string | null;
   code_server_password: string | null;
   dev_server_url: string | null;
+  vnc_url: string | null;
+  vnc_password: string | null;
   created_at: number;
 }
 

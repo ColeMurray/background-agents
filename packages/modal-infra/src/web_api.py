@@ -175,6 +175,7 @@ async def api_create_sandbox(
                 "code_server_url": handle.code_server_url,
                 "code_server_password": handle.code_server_password,
                 "dev_server_url": handle.dev_server_url,
+                "vnc_url": handle.vnc_url,
             },
         }
     except Exception as e:
@@ -544,6 +545,7 @@ async def api_restore_sandbox(
                 "code_server_url": handle.code_server_url,
                 "code_server_password": handle.code_server_password,
                 "dev_server_url": handle.dev_server_url,
+                "vnc_url": handle.vnc_url,
             },
         }
     except HTTPException as e:

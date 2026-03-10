@@ -927,13 +927,25 @@ class SandboxSupervisor:
         """Graceful shutdown of all processes."""
         self.log.info("supervisor.shutdown_start")
 
-        # Terminate bridge first
+        # Terminate bridge first (bridge cleanup kills its VNC child processes)
         if self.bridge_process and self.bridge_process.returncode is None:
             self.bridge_process.terminate()
             try:
                 await asyncio.wait_for(self.bridge_process.wait(), timeout=5.0)
             except TimeoutError:
                 self.bridge_process.kill()
+
+        # Kill any VNC processes that survived bridge shutdown
+        for pattern in ["websockify.*6080", "x11vnc", "Xvfb.*:1", "fluxbox"]:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "pkill", "-f", pattern,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await proc.wait()
+            except Exception:
+                pass
 
         # Terminate code-server
         if self.code_server_process and self.code_server_process.returncode is None:

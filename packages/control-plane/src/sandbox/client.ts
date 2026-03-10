@@ -49,6 +49,7 @@ export interface CreateSandboxResponse {
   codeServerUrl?: string;
   codeServerPassword?: string;
   devServerUrl?: string;
+  vncUrl?: string;
 }
 
 export interface RestoreSandboxRequest {
@@ -75,6 +76,7 @@ export interface RestoreSandboxResponse {
   codeServerUrl?: string;
   codeServerPassword?: string;
   devServerUrl?: string;
+  vncUrl?: string;
 }
 
 export interface SnapshotSandboxRequest {
@@ -271,6 +273,7 @@ export class ModalClient {
         code_server_url?: string;
         code_server_password?: string;
         dev_server_url?: string;
+        vnc_url?: string;
       }>;
 
       if (!result.success || !result.data) {
@@ -286,6 +289,7 @@ export class ModalClient {
         codeServerUrl: result.data.code_server_url,
         codeServerPassword: result.data.code_server_password,
         devServerUrl: result.data.dev_server_url,
+        vncUrl: result.data.vnc_url,
       };
     } finally {
       log.info("modal.request", {
@@ -351,6 +355,7 @@ export class ModalClient {
         code_server_url?: string;
         code_server_password?: string;
         dev_server_url?: string;
+        vnc_url?: string;
       }>;
 
       if (!result.success) {
@@ -365,6 +370,7 @@ export class ModalClient {
         codeServerUrl: result.data?.code_server_url,
         codeServerPassword: result.data?.code_server_password,
         devServerUrl: result.data?.dev_server_url,
+        vncUrl: result.data?.vnc_url,
       };
     } finally {
       log.info("modal.request", {

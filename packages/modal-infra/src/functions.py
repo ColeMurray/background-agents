@@ -111,6 +111,7 @@ async def create_sandbox(
         "code_server_url": handle.code_server_url,
         "code_server_password": handle.code_server_password,
         "dev_server_url": handle.dev_server_url,
+        "vnc_url": handle.vnc_url,
     }
 
 
