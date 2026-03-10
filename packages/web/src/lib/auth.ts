@@ -291,7 +291,9 @@ export const authOptions: NextAuthOptions = {
         token.providerLogin = resolveProfileLogin(providerProfile);
       }
 
-      return getRefreshableScmJwtToken(token);
+      // Route handlers resolve SCM tokens separately; refreshing here can trigger
+      // duplicate Bitbucket refreshes in the same request.
+      return token;
     },
     async session({ session, token }) {
       if (session.user) {

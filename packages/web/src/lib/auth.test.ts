@@ -132,18 +132,8 @@ describe("createBitbucketProvider", () => {
     );
   });
 
-  it("refreshes expired Bitbucket JWT access tokens before reuse", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          access_token: "refreshed-access-token",
-          refresh_token: "rotated-refresh-token",
-          expires_in: 7200,
-        }),
-        { status: 200 }
-      )
-    );
-
+  it("does not refresh Bitbucket tokens inside the generic jwt callback", async () => {
+    const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
     const { authOptions } = await import("./auth");
@@ -170,33 +160,16 @@ describe("createBitbucketProvider", () => {
       } as never
     );
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://bitbucket.org/site/oauth2/access_token",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({
-          Authorization: `Basic ${Buffer.from("bitbucket-client-id:bitbucket-client-secret").toString("base64")}`,
-          "Content-Type": "application/x-www-form-urlencoded",
-        }),
-        body: expect.any(URLSearchParams),
-      })
-    );
-    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).body).toEqual(
-      new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: "refresh-token-123",
-      })
-    );
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(refreshed).toEqual(
       expect.objectContaining({
-        accessToken: "refreshed-access-token",
-        refreshToken: "rotated-refresh-token",
+        accessToken: "expired-access-token",
+        refreshToken: "refresh-token-123",
+        accessTokenExpiresAt: expect.any(Number),
         providerUserId: "bb-user-1",
         providerLogin: "octo-bb",
       })
     );
-    expect(typeof refreshed.accessTokenExpiresAt).toBe("number");
-    expect(refreshed.accessTokenExpiresAt).toBeGreaterThan(Date.now());
   });
 
   it("refreshes Bitbucket tokens when repo routes read SCM auth from the request", async () => {
