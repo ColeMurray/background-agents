@@ -209,6 +209,58 @@ describe("createBitbucketProvider", () => {
     expect(tokenState.accessTokenExpiresAt).toBeGreaterThan(Date.now());
   });
 
+  it("coalesces concurrent Bitbucket refreshes and reuses the refreshed token", async () => {
+    getTokenMock.mockResolvedValue({
+      accessToken: "expired-access-token",
+      refreshToken: "refresh-token-123",
+      accessTokenExpiresAt: Date.now() - 1_000,
+      providerUserId: "bb-user-1",
+      providerLogin: "octo-bb",
+    });
+
+    let resolveResponse: ((value: Response) => void) | undefined;
+    const fetchMock = vi.fn().mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveResponse = resolve;
+        })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { getRequestScmTokenState } = await import("./auth");
+    const request = new NextRequest("https://example.com/api/repos");
+
+    const first = getRequestScmTokenState(request);
+    const second = getRequestScmTokenState(request);
+    await Promise.resolve();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    resolveResponse?.(
+      new Response(
+        JSON.stringify({
+          access_token: "refreshed-access-token",
+          refresh_token: "rotated-refresh-token",
+          expires_in: 7200,
+        }),
+        { status: 200 }
+      )
+    );
+
+    const [firstState, secondState] = await Promise.all([first, second]);
+    const thirdState = await getRequestScmTokenState(request);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(firstState).toEqual(
+      expect.objectContaining({
+        accessToken: "refreshed-access-token",
+        refreshToken: "rotated-refresh-token",
+      })
+    );
+    expect(secondState).toEqual(firstState);
+    expect(thirdState).toEqual(firstState);
+  });
+
   it("backs off after a failed Bitbucket token refresh", async () => {
     getTokenMock.mockResolvedValue({
       accessToken: "expired-access-token",

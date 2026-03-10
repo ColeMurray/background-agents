@@ -69,6 +69,13 @@ const BITBUCKET_TOKEN_URL = "https://bitbucket.org/site/oauth2/access_token";
 const BITBUCKET_REFRESH_BUFFER_MS = 60_000;
 const DEFAULT_BITBUCKET_TOKEN_LIFETIME_MS = 2 * 60 * 60 * 1000;
 
+interface CachedBitbucketJwtState {
+  token: JWT;
+  inFlightRefresh?: Promise<JWT>;
+}
+
+const cachedBitbucketJwtStates = new Map<string, CachedBitbucketJwtState>();
+
 function resolveProfileUserId(profile: ScmProfile): string | undefined {
   const candidate = profile.account_id ?? profile.uuid ?? profile.id;
   if (candidate == null) return undefined;
@@ -183,22 +190,76 @@ function shouldRefreshBitbucketToken(token: JWT): boolean {
   );
 }
 
+function getBitbucketJwtCacheKeys(token: JWT): string[] {
+  return typeof token.refreshToken === "string" && token.refreshToken
+    ? [token.refreshToken]
+    : [];
+}
+
+function getCachedBitbucketJwtState(token: JWT): CachedBitbucketJwtState | undefined {
+  for (const key of getBitbucketJwtCacheKeys(token)) {
+    const cachedState = cachedBitbucketJwtStates.get(key);
+    if (cachedState) {
+      return cachedState;
+    }
+  }
+  return undefined;
+}
+
+function cacheBitbucketJwtState(keys: string[], state: CachedBitbucketJwtState): void {
+  for (const key of keys) {
+    cachedBitbucketJwtStates.set(key, state);
+  }
+}
+
+function backOffBitbucketJwtToken(token: JWT, error: unknown): JWT {
+  console.error("Failed to refresh Bitbucket access token", error);
+  return {
+    ...token,
+    accessToken: undefined,
+    // Back off before retrying a failed refresh instead of immediately re-hitting Bitbucket.
+    accessTokenExpiresAt: Date.now() + DEFAULT_BITBUCKET_TOKEN_LIFETIME_MS,
+  };
+}
+
 async function getRefreshableScmJwtToken(token: JWT): Promise<JWT> {
-  if (getServerScmProvider() !== "bitbucket" || !shouldRefreshBitbucketToken(token)) {
+  if (getServerScmProvider() !== "bitbucket") {
     return token;
   }
 
-  try {
-    return await refreshBitbucketJwtToken(token);
-  } catch (error) {
-    console.error("Failed to refresh Bitbucket access token", error);
-    return {
-      ...token,
-      accessToken: undefined,
-      // Back off before retrying a failed refresh instead of immediately re-hitting Bitbucket.
-      accessTokenExpiresAt: Date.now() + DEFAULT_BITBUCKET_TOKEN_LIFETIME_MS,
-    };
+  const cachedState = getCachedBitbucketJwtState(token);
+  const effectiveToken = cachedState?.token ?? token;
+  if (!shouldRefreshBitbucketToken(effectiveToken)) {
+    return effectiveToken;
   }
+
+  if (cachedState?.inFlightRefresh) {
+    return cachedState.inFlightRefresh;
+  }
+
+  const state = cachedState ?? { token: effectiveToken };
+  const initialCacheKeys = [
+    ...new Set([...getBitbucketJwtCacheKeys(token), ...getBitbucketJwtCacheKeys(effectiveToken)]),
+  ];
+
+  const refreshPromise = refreshBitbucketJwtToken(effectiveToken)
+    .catch((error) => backOffBitbucketJwtToken(effectiveToken, error))
+    .then((resolvedToken) => {
+      state.token = resolvedToken;
+      cacheBitbucketJwtState(
+        [...new Set([...initialCacheKeys, ...getBitbucketJwtCacheKeys(resolvedToken)])],
+        state
+      );
+      return resolvedToken;
+    })
+    .finally(() => {
+      delete state.inFlightRefresh;
+    });
+
+  state.inFlightRefresh = refreshPromise;
+  cacheBitbucketJwtState(initialCacheKeys, state);
+
+  return refreshPromise;
 }
 
 async function refreshBitbucketJwtToken(token: JWT): Promise<JWT> {
