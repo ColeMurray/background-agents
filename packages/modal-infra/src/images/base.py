@@ -6,7 +6,8 @@ This image provides a complete development environment with:
 - Node.js 22 LTS, pnpm, Bun runtime
 - Python 3.12 with uv
 - OpenCode CLI pre-installed
-- Playwright with headless Chrome for visual verification
+- Playwright with headless Chromium for screenshot tool / LLM browser use
+- System Chromium for VNC desktop
 - Sandbox entrypoint and bridge code
 """
 
@@ -42,7 +43,7 @@ base_image = (
         "openssh-client",
         "jq",
         "unzip",  # Required for Bun installation
-        # For Playwright
+        # For Playwright headless Chromium
         "libnss3",
         "libnspr4",
         "libatk1.0-0",
@@ -116,7 +117,20 @@ base_image = (
         "rm /tmp/code-server.deb",
         "code-server --version",
     )
-    # Install Playwright browsers (Chromium only to save space)
+    # VNC dependencies for on-demand live browser view
+    .apt_install(
+        "xvfb",        # Virtual framebuffer
+        "x11vnc",      # VNC server
+        "websockify",  # VNC-to-WebSocket bridge for noVNC
+        "novnc",       # Browser-based VNC client (served by websockify)
+        "fluxbox",     # Minimal window manager
+        "chromium",    # System browser for VNC desktop
+    )
+    .run_commands(
+        "mkdir -p /root/.fluxbox",
+        "echo 'session.screen0.toolbar.visible: true' > /root/.fluxbox/init",
+    )
+    # Install Playwright browsers (Chromium only — used by screenshot tool and LLM browser)
     .run_commands(
         "playwright install chromium",
         "playwright install-deps chromium",

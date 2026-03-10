@@ -397,6 +397,20 @@ export class SessionRepository {
     );
   }
 
+  updateSandboxVnc(url: string, password: string): void {
+    this.sql.exec(
+      `UPDATE sandbox SET vnc_url = ?, vnc_password = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      url,
+      password
+    );
+  }
+
+  clearSandboxVnc(): void {
+    this.sql.exec(
+      `UPDATE sandbox SET vnc_url = NULL, vnc_password = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
+    );
+  }
+
   resetCircuitBreaker(): void {
     this.sql.exec(
       `UPDATE sandbox SET spawn_failure_count = 0 WHERE id = (SELECT id FROM sandbox LIMIT 1)`

@@ -86,6 +86,10 @@ export interface SandboxStorage {
   clearSandboxCodeServer(): void;
   /** Update dev server URL on the sandbox row */
   updateSandboxDevServer(url: string): void;
+  /** Update VNC URL and password on the sandbox row */
+  updateSandboxVnc(url: string, password: string): void;
+  /** Clear VNC URL and password from the sandbox row */
+  clearSandboxVnc(): void;
 }
 
 /**
@@ -407,6 +411,12 @@ export class SandboxLifecycleManager {
         this.storeAndBroadcastDevServer(result.devServerUrl);
       }
 
+      // Store and broadcast VNC tunnel URL (password comes later from bridge via vnc_info)
+      if (result.vncUrl) {
+        this.storage.updateSandboxVnc(result.vncUrl, "");
+        this.broadcaster.broadcast({ type: "vnc_info", url: result.vncUrl, password: "" });
+      }
+
       this.storage.updateSandboxStatus("connecting");
       this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
 
@@ -533,6 +543,12 @@ export class SandboxLifecycleManager {
         // Store dev server details and push to connected clients
         if (result.devServerUrl) {
           this.storeAndBroadcastDevServer(result.devServerUrl);
+        }
+
+        // Store and broadcast VNC tunnel URL (password comes later from bridge via vnc_info)
+        if (result.vncUrl) {
+          this.storage.updateSandboxVnc(result.vncUrl, "");
+          this.broadcaster.broadcast({ type: "vnc_info", url: result.vncUrl, password: "" });
         }
 
         this.storage.updateSandboxStatus("connecting");

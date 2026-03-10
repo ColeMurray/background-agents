@@ -105,6 +105,8 @@ CREATE TABLE IF NOT EXISTS sandbox (
   code_server_url TEXT,                             -- Code-server tunnel URL (rotates on wake/restore)
   code_server_password TEXT,                        -- Code-server password (rotates on each wake/restore)
   dev_server_url TEXT,                              -- Dev server tunnel URL (rotates on wake/restore)
+  vnc_url TEXT,                                     -- VNC tunnel URL (always tunneled, on-demand start)
+  vnc_password TEXT,                                -- VNC password (generated on-demand when user enables VNC)
   created_at INTEGER NOT NULL
 );
 
@@ -362,6 +364,14 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 28,
     description: "Add dev server URL to sandbox",
     run: `ALTER TABLE sandbox ADD COLUMN dev_server_url TEXT`,
+  },
+  {
+    id: 28,
+    description: "Add VNC fields to sandbox",
+    run: `
+      ALTER TABLE sandbox ADD COLUMN vnc_url TEXT;
+      ALTER TABLE sandbox ADD COLUMN vnc_password TEXT;
+    `,
   },
 ];
 
