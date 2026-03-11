@@ -52,6 +52,8 @@ export interface Env {
   // Secrets
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
+  BITBUCKET_CLIENT_ID?: string;
+  BITBUCKET_CLIENT_SECRET?: string;
   TOKEN_ENCRYPTION_KEY: string;
   REPO_SECRETS_ENCRYPTION_KEY?: string;
   MODAL_TOKEN_ID?: string;
@@ -63,6 +65,9 @@ export interface Env {
   GITHUB_APP_ID?: string;
   GITHUB_APP_PRIVATE_KEY?: string;
   GITHUB_APP_INSTALLATION_ID?: string;
+  BITBUCKET_WORKSPACE?: string;
+  BITBUCKET_BOT_USERNAME?: string;
+  BITBUCKET_BOT_APP_PASSWORD?: string;
 
   // Variables
   DEPLOYMENT_NAME: string;
@@ -169,6 +174,27 @@ export interface GitHubTokenResponse {
   access_token: string;
   token_type: string;
   scope: string;
+  refresh_token?: string;
+  expires_in?: number;
+}
+
+export interface BitbucketUser {
+  account_id?: string;
+  uuid?: string;
+  nickname?: string;
+  display_name?: string;
+  username?: string;
+  links?: {
+    avatar?: {
+      href?: string;
+    };
+  };
+}
+
+export interface BitbucketTokenResponse {
+  access_token: string;
+  token_type: string;
+  scopes?: string;
   refresh_token?: string;
   expires_in?: number;
 }

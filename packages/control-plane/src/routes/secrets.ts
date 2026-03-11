@@ -47,7 +47,7 @@ async function handleSetRepoSecrets(
     const provider = createRouteSourceControlProvider(env);
     resolved = await resolveInstalledRepo(provider, owner, name);
     if (!resolved) {
-      return error("Repository is not installed for the GitHub App", 404);
+      return error("Repository is not installed for this SCM provider", 404);
     }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
@@ -146,7 +146,7 @@ async function handleListRepoSecrets(
     const provider = createRouteSourceControlProvider(env);
     resolved = await resolveInstalledRepo(provider, owner, name);
     if (!resolved) {
-      return error("Repository is not installed for the GitHub App", 404);
+      return error("Repository is not installed for this SCM provider", 404);
     }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
@@ -233,7 +233,7 @@ async function handleDeleteRepoSecret(
     const provider = createRouteSourceControlProvider(env);
     resolved = await resolveInstalledRepo(provider, owner, name);
     if (!resolved) {
-      return error("Repository is not installed for the GitHub App", 404);
+      return error("Repository is not installed for this SCM provider", 404);
     }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);

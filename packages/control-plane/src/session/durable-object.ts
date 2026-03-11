@@ -8,10 +8,10 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
+import type { ProviderRepoId } from "@open-inspect/shared";
 import { initSchema } from "./schema";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
 import { generateId, hashToken, timingSafeEqual } from "../auth/crypto";
-import { getGitHubAppConfig } from "../auth/github-app";
 import { createModalClient } from "../sandbox/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
 import { createLogger, parseLogLevel } from "../logger";
@@ -31,7 +31,8 @@ import { SessionIndexStore } from "../db/session-index";
 import { DEFAULT_EXECUTION_TIMEOUT_MS } from "../sandbox/lifecycle/decisions";
 import {
   createSourceControlProvider as createSourceControlProviderImpl,
-  resolveScmProviderFromEnv,
+  getSourceControlProviderFactoryConfig,
+  resolveScmProvider,
   type SourceControlProvider,
   type GitPushSpec,
 } from "../source-control";
@@ -285,7 +286,7 @@ export class SessionDO extends DurableObject<Env> {
         wsManager: this.wsManager,
         participantService: this.participantService,
         callbackService: this.callbackService,
-        scmProvider: resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
+        scmProvider: resolveScmProvider(this.env),
         getClientInfo: (ws) => this.getClientInfo(ws),
         validateReasoningEffort: (model, effort) => this.validateReasoningEffort(model, effort),
         getSession: () => this.getSession(),
@@ -509,16 +510,7 @@ export class SessionDO extends DurableObject<Env> {
    * Create the source control provider.
    */
   private createSourceControlProvider(): SourceControlProvider {
-    const appConfig = getGitHubAppConfig(this.env);
-    const provider = resolveScmProviderFromEnv(this.env.SCM_PROVIDER);
-
-    return createSourceControlProviderImpl({
-      provider,
-      github: {
-        appConfig: appConfig ?? undefined,
-        kvCache: this.env.REPOS_CACHE,
-      },
-    });
+    return createSourceControlProviderImpl(getSourceControlProviderFactoryConfig(this.env));
   }
 
   /**
@@ -629,7 +621,11 @@ export class SessionDO extends DurableObject<Env> {
       {
         onSandboxTerminating: () => this.messageQueue.failStuckProcessingMessage(),
       },
-      repoImageLookup
+      repoImageLookup,
+      async () => {
+        const auth = await this.sourceControlProvider.generatePushAuth();
+        return auth.token;
+      }
     );
   }
 
@@ -1067,7 +1063,7 @@ export class SessionDO extends DurableObject<Env> {
       participantId: participant.id,
       userId: participant.user_id,
       name: participant.scm_name || participant.scm_login || participant.user_id,
-      avatar: getAvatarUrl(participant.scm_login, resolveScmProviderFromEnv(this.env.SCM_PROVIDER)),
+      avatar: getAvatarUrl(participant.scm_login, resolveScmProvider(this.env)),
       status: "active",
       lastSeen: Date.now(),
       clientId: data.clientId,
@@ -1101,7 +1097,7 @@ export class SessionDO extends DurableObject<Env> {
         name: participant.scm_name || participant.scm_login || participant.user_id,
         avatar: getAvatarUrl(
           participant.scm_login,
-          resolveScmProviderFromEnv(this.env.SCM_PROVIDER)
+          resolveScmProvider(this.env)
         ),
       },
       replay,
@@ -1164,7 +1160,7 @@ export class SessionDO extends DurableObject<Env> {
       participantId: mapping.participant_id,
       userId: mapping.user_id,
       name: mapping.scm_name || mapping.scm_login || mapping.user_id,
-      avatar: getAvatarUrl(mapping.scm_login, resolveScmProviderFromEnv(this.env.SCM_PROVIDER)),
+      avatar: getAvatarUrl(mapping.scm_login, resolveScmProvider(this.env)),
       status: "active",
       lastSeen: Date.now(),
       clientId: mapping.client_id || `client-${Date.now()}`,
@@ -1471,7 +1467,7 @@ export class SessionDO extends DurableObject<Env> {
     return this.repository.getSandbox();
   }
 
-  private async ensureRepoId(session: SessionRow): Promise<number> {
+  private async ensureRepoId(session: SessionRow): Promise<ProviderRepoId> {
     if (session.repo_id) {
       return session.repo_id;
     }

@@ -5,12 +5,12 @@
 import type { CorrelationContext } from "../logger";
 import type { RequestMetrics } from "../db/instrumented-d1";
 import type { Env } from "../types";
-import { getGitHubAppConfig } from "../auth/github-app";
 import {
   createSourceControlProvider,
-  resolveScmProviderFromEnv,
+  getSourceControlProviderFactoryConfig,
   type SourceControlProvider,
   type RepositoryAccessResult,
+  type SourceControlAuthContext,
 } from "../source-control";
 
 /**
@@ -66,21 +66,26 @@ export function error(message: string, status = 400): Response {
  * Cheap to construct (no I/O), so creating per-request is fine.
  */
 export function createRouteSourceControlProvider(env: Env): SourceControlProvider {
-  const appConfig = getGitHubAppConfig(env);
-  const provider = resolveScmProviderFromEnv(env.SCM_PROVIDER);
-  return createSourceControlProvider({
-    provider,
-    github: {
-      appConfig: appConfig ?? undefined,
-      kvCache: env.REPOS_CACHE,
-    },
-  });
+  return createSourceControlProvider(getSourceControlProviderFactoryConfig(env));
+}
+
+export function getOptionalRequestScmAuth(request: Request): SourceControlAuthContext | undefined {
+  const token = request.headers.get("x-scm-token")?.trim();
+  if (!token) {
+    return undefined;
+  }
+
+  return {
+    authType: "oauth",
+    token,
+  };
 }
 
 export async function resolveInstalledRepo(
   provider: SourceControlProvider,
   repoOwner: string,
-  repoName: string
+  repoName: string,
+  auth?: SourceControlAuthContext
 ): Promise<RepositoryAccessResult | null> {
-  return provider.checkRepositoryAccess({ owner: repoOwner, name: repoName });
+  return provider.checkRepositoryAccess({ owner: repoOwner, name: repoName }, auth);
 }

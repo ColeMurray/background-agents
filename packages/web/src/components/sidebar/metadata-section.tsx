@@ -2,13 +2,16 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useScmProvider } from "@/components/scm-provider-context";
 import { formatModelName, truncateBranch, copyToClipboard } from "@/lib/format";
+import { buildBranchUrl, buildRepoUrl } from "@/lib/scm-provider";
 import { formatRelativeTime } from "@/lib/time";
 import type { Artifact } from "@/types/session";
 import {
   ClockIcon,
   SparkleIcon,
   GitHubIcon,
+  BitbucketIcon,
   GitPrIcon,
   BranchIcon,
   CopyIcon,
@@ -41,6 +44,8 @@ export function MetadataSection({
   parentSessionId,
 }: MetadataSectionProps) {
   const [copied, setCopied] = useState(false);
+  const scmProvider = useScmProvider();
+  const ProviderIcon = scmProvider === "bitbucket" ? BitbucketIcon : GitHubIcon;
 
   const prArtifact = artifacts.find((a) => a.type === "pr");
   const manualPrArtifact = artifacts.find(
@@ -51,8 +56,11 @@ export function MetadataSection({
   const prUrl = prArtifact?.url || manualPrArtifact?.metadata?.createPrUrl || manualPrArtifact?.url;
   const branchUrl =
     branchName && repoOwner && repoName
-      ? `https://github.com/${repoOwner}/${repoName}/tree/${encodeURIComponent(branchName)}`
+      ? buildBranchUrl(scmProvider, repoOwner, repoName, branchName)
       : null;
+  const baseBranchUrl =
+    repoOwner && repoName ? buildBranchUrl(scmProvider, repoOwner, repoName, baseBranch) : null;
+  const repoUrl = repoOwner && repoName ? buildRepoUrl(scmProvider, repoOwner, repoName) : null;
 
   const handleCopyBranch = async () => {
     if (branchName) {
@@ -96,7 +104,7 @@ export function MetadataSection({
       {/* PR Badge */}
       {(prNumber || prUrl) && (
         <div className="flex items-center gap-2 text-sm">
-          <GitHubIcon className="w-4 h-4 text-muted-foreground" />
+          <ProviderIcon className="w-4 h-4 text-muted-foreground" />
           {prUrl ? (
             <a
               href={prUrl}
@@ -121,9 +129,9 @@ export function MetadataSection({
       {baseBranch && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <BranchIcon className="w-4 h-4" />
-          {repoOwner && repoName ? (
+          {baseBranchUrl ? (
             <a
-              href={`https://github.com/${repoOwner}/${repoName}/tree/${encodeURIComponent(baseBranch)}`}
+              href={baseBranchUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="text-accent truncate max-w-[180px] hover:underline"
@@ -175,15 +183,21 @@ export function MetadataSection({
       {/* Repository tag */}
       {repoOwner && repoName && (
         <div className="flex items-center gap-2 text-sm">
-          <GitHubIcon className="w-4 h-4 text-muted-foreground" />
-          <a
-            href={`https://github.com/${repoOwner}/${repoName}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-accent hover:underline"
-          >
-            {repoOwner}/{repoName}
-          </a>
+          <ProviderIcon className="w-4 h-4 text-muted-foreground" />
+          {repoUrl ? (
+            <a
+              href={repoUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-accent hover:underline"
+            >
+              {repoOwner}/{repoName}
+            </a>
+          ) : (
+            <span className="text-foreground">
+              {repoOwner}/{repoName}
+            </span>
+          )}
         </div>
       )}
     </div>

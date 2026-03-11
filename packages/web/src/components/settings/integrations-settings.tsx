@@ -2,9 +2,16 @@
 
 import Link from "next/link";
 import { INTEGRATION_DEFINITIONS } from "@open-inspect/shared";
+import { useScmProvider } from "@/components/scm-provider-context";
 import { ChevronRightIcon } from "@/components/ui/icons";
+import { isIntegrationAvailable } from "@/lib/scm-provider";
 
 export function IntegrationsSettings() {
+  const scmProvider = useScmProvider();
+  const integrations = INTEGRATION_DEFINITIONS.filter((integration) =>
+    isIntegrationAvailable(integration.id, scmProvider)
+  );
+
   return (
     <div>
       <h2 className="text-xl font-semibold text-foreground mb-1">Integrations</h2>
@@ -14,7 +21,7 @@ export function IntegrationsSettings() {
 
       <div className="border border-border-muted rounded-md bg-background">
         <ul className="divide-y divide-border-muted">
-          {INTEGRATION_DEFINITIONS.map((integration) => (
+          {integrations.map((integration) => (
             <li key={integration.id}>
               <Link
                 href={`/settings/integrations/${integration.id}`}

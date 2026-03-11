@@ -34,6 +34,7 @@ export interface CreateSandboxRequest {
   provider?: string;
   model?: string;
   userEnvVars?: Record<string, string>;
+  cloneToken?: string | null;
   repoImageId?: string | null;
   repoImageSha?: string | null;
   timeoutSeconds?: number;
@@ -58,6 +59,7 @@ export interface RestoreSandboxRequest {
   provider: string;
   model: string;
   userEnvVars?: Record<string, string>;
+  cloneToken?: string | null;
   timeoutSeconds?: number;
   branch?: string;
 }
@@ -99,6 +101,7 @@ export interface BuildRepoImageRequest {
   buildId: string;
   callbackUrl: string;
   userEnvVars?: Record<string, string>;
+  cloneToken?: string | null;
 }
 
 export interface BuildRepoImageResponse {
@@ -240,6 +243,7 @@ export class ModalClient {
           provider: request.provider || "anthropic",
           model: request.model || "claude-sonnet-4-6",
           user_env_vars: request.userEnvVars || null,
+          clone_token: request.cloneToken || null,
           repo_image_id: request.repoImageId || null,
           repo_image_sha: request.repoImageSha || null,
           timeout_seconds: request.timeoutSeconds || null,
@@ -318,6 +322,7 @@ export class ModalClient {
           control_plane_url: request.controlPlaneUrl,
           sandbox_auth_token: request.sandboxAuthToken,
           user_env_vars: request.userEnvVars || null,
+          clone_token: request.cloneToken || null,
           timeout_seconds: request.timeoutSeconds || null,
         }),
       });
@@ -549,6 +554,7 @@ export class ModalClient {
           build_id: request.buildId,
           callback_url: request.callbackUrl,
           user_env_vars: request.userEnvVars,
+          clone_token: request.cloneToken || null,
         }),
       });
 

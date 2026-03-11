@@ -13,3 +13,11 @@ export interface GitHubProviderConfig {
   /** KV namespace for caching installation tokens */
   kvCache?: KVNamespace;
 }
+
+export interface BitbucketProviderConfig {
+  workspace?: string;
+  clientId?: string;
+  clientSecret?: string;
+  botUsername?: string;
+  botAppPassword?: string;
+}

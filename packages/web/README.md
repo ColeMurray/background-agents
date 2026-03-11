@@ -4,7 +4,7 @@ Next.js web application for interacting with Open-Inspect coding sessions.
 
 ## Features
 
-- GitHub OAuth authentication
+- GitHub or Bitbucket OAuth authentication
 - Session dashboard with list view
 - Real-time streaming via WebSocket
 - Message timeline with tool calls
@@ -25,7 +25,7 @@ Next.js web application for interacting with Open-Inspect coding sessions.
 │  └──────────────────────────────────────────────────────────┘   │
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │                      API Routes                           │   │
-│  │  /api/auth/[...nextauth] - GitHub OAuth                  │   │
+│  │  /api/auth/[...nextauth] - SCM OAuth                     │   │
 │  │  /api/sessions           - Session CRUD                  │   │
 │  │  /api/repos              - Repository list               │   │
 │  │  /api/repos/:owner/:name/secrets - Secrets CRUD          │   │
@@ -45,12 +45,16 @@ Next.js web application for interacting with Open-Inspect coding sessions.
 ### Prerequisites
 
 - Node.js 22+
-- GitHub App configured for OAuth (see below)
+- SCM provider configured for OAuth (see below)
 
-### GitHub App Setup
+### SCM Provider Setup
 
-The web client uses a **GitHub App** (not OAuth App) for user authentication. When creating the
-GitHub App:
+The web client selects exactly one provider from `SCM_PROVIDER` and exposes that sign-in flow in
+the UI.
+
+#### GitHub
+
+For GitHub deployments, the web client uses a **GitHub App** for user authentication:
 
 1. Go to GitHub → Settings → Developer settings → GitHub Apps → New GitHub App
 2. Set the **Callback URL** to: `https://your-domain.com/api/auth/callback/github`
@@ -68,21 +72,47 @@ Required permissions for the GitHub App:
 - **Account permissions**: Email addresses (read-only)
 - **Repository permissions**: Contents (read & write) - for repo operations
 
+#### Bitbucket
+
+For Bitbucket deployments, create a Bitbucket OAuth consumer with callback URL:
+
+`https://your-domain.com/api/auth/callback/bitbucket`
+
+Required permissions should cover the scopes requested by `src/lib/auth.ts`:
+
+- **Account**: Read
+- **Email**: Read
+- **Repositories**: Read and Write
+- **Pull requests**: Read and Write
+
+The signed-in user's Bitbucket OAuth token is also forwarded to the control plane for repository
+listing, branch lookup, and session-create validation. If the user can sign in but the repo picker
+is empty or session creation fails, verify the consumer scopes above and the user's repository
+access in that workspace.
+
 ### Environment Variables
 
 Create `.env.local`:
 
 ```bash
-# GitHub App (for user authentication)
+# SCM provider
+SCM_PROVIDER=github
+NEXT_PUBLIC_SCM_PROVIDER=github
+
+# GitHub App / OAuth (for user authentication when SCM_PROVIDER=github)
 GITHUB_CLIENT_ID=your_github_app_client_id
 GITHUB_CLIENT_SECRET=your_github_app_client_secret
+
+# Bitbucket OAuth consumer (when SCM_PROVIDER=bitbucket)
+BITBUCKET_CLIENT_ID=your_bitbucket_client_id
+BITBUCKET_CLIENT_SECRET=your_bitbucket_client_secret
 
 # NextAuth
 NEXTAUTH_URL=http://localhost:3000
 NEXTAUTH_SECRET=your_random_secret  # Generate: openssl rand -base64 32
 
 # Access Control (optional - leave empty to allow all authenticated users)
-ALLOWED_USERS=username1,username2          # Comma-separated GitHub usernames
+ALLOWED_USERS=username1,username2          # Comma-separated SCM usernames
 ALLOWED_EMAIL_DOMAINS=example.com,corp.io  # Comma-separated email domains
 
 # Control Plane
@@ -91,7 +121,7 @@ NEXT_PUBLIC_WS_URL=ws://localhost:8787
 ```
 
 > **Access Control**: If both `ALLOWED_USERS` and `ALLOWED_EMAIL_DOMAINS` are empty, any
-> authenticated GitHub user can access the application. If either is set, users must match at least
+> authenticated user from the configured SCM provider can access the application. If either is set, users must match at least
 > one condition (username in allowed list OR email domain in allowed list).
 
 ### Development
@@ -120,7 +150,7 @@ npm run build
 
 ### New Session (`/session/new`)
 
-- Repository selector (populated from GitHub)
+- Repository selector (populated from the active SCM provider)
 - Optional title field
 - Creates session and redirects to session view
 

@@ -13,6 +13,7 @@ import {
   IntegrationSettingsValidationError,
   isValidIntegrationId,
 } from "../db/integration-settings";
+import { resolveScmProvider } from "../source-control";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import { type Route, type RequestContext, parsePattern, json, error } from "./shared";
@@ -25,6 +26,13 @@ function extractIntegrationId(match: RegExpMatchArray): IntegrationId | null {
   return id;
 }
 
+function isIntegrationAvailable(env: Env, id: IntegrationId): boolean {
+  if (id === "github") {
+    return resolveScmProvider(env) === "github";
+  }
+  return true;
+}
+
 async function handleGetIntegrationSettings(
   _request: Request,
   env: Env,
@@ -33,6 +41,7 @@ async function handleGetIntegrationSettings(
 ): Promise<Response> {
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
+  if (!isIntegrationAvailable(env, id)) return error(`Unknown integration: ${id}`, 404);
 
   if (!env.DB) {
     return json({ integrationId: id, settings: null });
@@ -51,6 +60,7 @@ async function handleSetIntegrationSettings(
 ): Promise<Response> {
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
+  if (!isIntegrationAvailable(env, id)) return error(`Unknown integration: ${id}`, 404);
 
   if (!env.DB) {
     return error("Integration settings storage is not configured", 503);
@@ -101,6 +111,7 @@ async function handleDeleteIntegrationSettings(
 ): Promise<Response> {
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
+  if (!isIntegrationAvailable(env, id)) return error(`Unknown integration: ${id}`, 404);
 
   if (!env.DB) {
     return error("Integration settings storage is not configured", 503);
@@ -137,6 +148,7 @@ async function handleListRepoSettings(
 ): Promise<Response> {
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
+  if (!isIntegrationAvailable(env, id)) return error(`Unknown integration: ${id}`, 404);
 
   if (!env.DB) {
     return json({ integrationId: id, repos: [] });
@@ -155,6 +167,7 @@ async function handleGetRepoSettings(
 ): Promise<Response> {
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
+  if (!isIntegrationAvailable(env, id)) return error(`Unknown integration: ${id}`, 404);
 
   const owner = match.groups?.owner;
   const name = match.groups?.name;
@@ -179,6 +192,7 @@ async function handleSetRepoSettings(
 ): Promise<Response> {
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
+  if (!isIntegrationAvailable(env, id)) return error(`Unknown integration: ${id}`, 404);
 
   const owner = match.groups?.owner;
   const name = match.groups?.name;
@@ -235,6 +249,7 @@ async function handleDeleteRepoSettings(
 ): Promise<Response> {
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
+  if (!isIntegrationAvailable(env, id)) return error(`Unknown integration: ${id}`, 404);
 
   const owner = match.groups?.owner;
   const name = match.groups?.name;

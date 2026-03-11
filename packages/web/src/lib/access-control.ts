@@ -4,7 +4,7 @@ export interface AccessControlConfig {
 }
 
 export interface AccessCheckParams {
-  githubUsername?: string;
+  scmUsername?: string;
   email?: string;
 }
 
@@ -24,7 +24,7 @@ export function parseAllowlist(value: string | undefined): string[] {
  *
  * Returns true if:
  * - Both allowlists are empty (no restrictions)
- * - User's GitHub username is in allowedUsers
+ * - User's SCM username is in allowedUsers
  * - User's email domain is in allowedDomains
  *
  * Logic is OR-based: matching either list grants access.
@@ -34,15 +34,14 @@ export function checkAccessAllowed(
   params: AccessCheckParams
 ): boolean {
   const { allowedDomains, allowedUsers } = config;
-  const { githubUsername, email } = params;
+  const { scmUsername, email } = params;
 
   // No restrictions if both lists are empty
   if (allowedDomains.length === 0 && allowedUsers.length === 0) {
     return true;
   }
 
-  // Check explicit user allowlist (GitHub username)
-  if (githubUsername && allowedUsers.includes(githubUsername.toLowerCase())) {
+  if (scmUsername && allowedUsers.includes(scmUsername.toLowerCase())) {
     return true;
   }
 

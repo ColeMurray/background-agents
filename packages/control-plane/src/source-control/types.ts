@@ -4,7 +4,7 @@
  * Core interfaces and type definitions for source control platform abstraction.
  */
 
-import type { InstallationRepository } from "@open-inspect/shared";
+import type { InstallationRepository, ProviderRepoId } from "@open-inspect/shared";
 
 /**
  * Repository information.
@@ -113,12 +113,17 @@ export interface GetRepositoryConfig {
   name: string;
 }
 
+export interface GetBranchHeadShaConfig extends GetRepositoryConfig {
+  /** Branch name to resolve */
+  branch: string;
+}
+
 /**
  * Result of checking repository access via app-level credentials.
  */
 export interface RepositoryAccessResult {
-  /** Provider-specific numeric repository ID */
-  repoId: number;
+  /** Provider-specific repository ID */
+  repoId: ProviderRepoId;
   /** Normalized (lowercase) repository owner */
   repoOwner: string;
   /** Normalized (lowercase) repository name */
@@ -245,31 +250,42 @@ export interface SourceControlProvider {
   //
 
   /**
-   * Check whether a specific repository is accessible to this deployment's
-   * app-level credentials (e.g. GitHub App installation).
+   * Check whether a specific repository is accessible to this deployment.
+   * Providers may use app-level credentials or a forwarded user OAuth token.
    *
    * @param config - Repository identifier (owner/name)
    * @returns Access result with normalized identifiers, or null if not accessible
    * @throws SourceControlProviderError on configuration errors
    */
-  checkRepositoryAccess(config: GetRepositoryConfig): Promise<RepositoryAccessResult | null>;
+  checkRepositoryAccess(
+    config: GetRepositoryConfig,
+    auth?: SourceControlAuthContext
+  ): Promise<RepositoryAccessResult | null>;
 
   /**
-   * List all repositories accessible to this deployment's app-level credentials.
+   * List repositories accessible to this deployment or forwarded user auth.
    *
    * @returns Array of installation repositories
    * @throws SourceControlProviderError on configuration or API errors
    */
-  listRepositories(): Promise<InstallationRepository[]>;
+  listRepositories(auth?: SourceControlAuthContext): Promise<InstallationRepository[]>;
 
   /**
-   * List branches for a repository.
+   * List branches for a repository using deployment or forwarded user auth.
    *
    * @param config - Repository identifier (owner/name)
    * @returns Array of branch names
    * @throws SourceControlProviderError on configuration or API errors
    */
-  listBranches(config: GetRepositoryConfig): Promise<{ name: string }[]>;
+  listBranches(
+    config: GetRepositoryConfig,
+    auth?: SourceControlAuthContext
+  ): Promise<{ name: string }[]>;
+
+  /**
+   * Get the current HEAD SHA for a branch using app-level credentials.
+   */
+  getBranchHeadSha(config: GetBranchHeadShaConfig): Promise<string | null>;
 
   /**
    * Generate authentication for git push operations.

@@ -1,8 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { getToken } from "next-auth/jwt";
-import { authOptions } from "@/lib/auth";
+import { authOptions, getRequestScmTokenState } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
 
 export async function GET(request: NextRequest) {
@@ -46,8 +45,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    const jwt = await getToken({ req: request });
-    const accessToken = jwt?.accessToken as string | undefined;
+    const { accessToken } = await getRequestScmTokenState(request);
 
     // Explicitly pick allowed fields from client body and derive identity
     // from the server-side NextAuth session (not client-supplied data)

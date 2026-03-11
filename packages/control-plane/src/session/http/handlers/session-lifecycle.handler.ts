@@ -1,3 +1,4 @@
+import type { ProviderRepoId } from "@open-inspect/shared";
 import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
 import type { SandboxStatus, SessionStatus, SpawnSource } from "../../../types";
@@ -10,7 +11,7 @@ interface InitRequest {
   sessionName: string;
   repoOwner: string;
   repoName: string;
-  repoId?: number;
+  repoId?: ProviderRepoId;
   defaultBranch?: string;
   branch?: string;
   title?: string;

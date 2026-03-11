@@ -53,7 +53,7 @@ Base image definition with:
 
 ### Auth (`src/auth/`)
 
-- **github_app.py**: GitHub App token generation for repo access
+- **github_app.py**: Legacy GitHub App token helper module retained for older compatibility paths
 - **internal.py**: HMAC authentication for control plane requests
 
 ### API (`src/`)
@@ -80,17 +80,20 @@ Base image definition with:
 # LLM API keys
 modal secret create llm-api-keys ANTHROPIC_API_KEY="sk-ant-..."
 
-# GitHub App credentials (for repo access)
-modal secret create github-app \
-  GITHUB_APP_ID="123456" \
-  GITHUB_APP_PRIVATE_KEY="$(cat private-key-pkcs8.pem)" \
-  GITHUB_APP_INSTALLATION_ID="12345678"
-
 # Internal API secret (for control plane authentication)
 modal secret create internal-api \
   MODAL_API_SECRET="$(openssl rand -hex 32)" \
-  ALLOWED_CONTROL_PLANE_HOSTS="your-control-plane.workers.dev"
+  INTERNAL_CALLBACK_SECRET="$(openssl rand -base64 32)" \
+  ALLOWED_CONTROL_PLANE_HOSTS="your-control-plane.workers.dev" \
+  CONTROL_PLANE_URL="https://your-control-plane.workers.dev" \
+  SCM_PROVIDER="github"
 ```
+
+In the current architecture, the control plane generates repository clone credentials and passes a
+request-scoped `clone_token` into Modal create/restore/build calls. Modal then injects provider-
+neutral git env vars into the sandbox (`VCS_HOST`, `VCS_CLONE_USERNAME`, `VCS_CLONE_TOKEN`).
+GitHub-specific app credentials are no longer required for the normal Terraform-backed deployment
+path.
 
 See `.env.example` for a full list of environment variables.
 
@@ -139,7 +142,8 @@ curl -X POST "https://${WORKSPACE}--open-inspect-api-create-sandbox.modal.run" \
     "repo_owner": "your-org",
     "repo_name": "your-repo",
     "control_plane_url": "https://your-control-plane.workers.dev",
-    "sandbox_auth_token": "your-token"
+    "sandbox_auth_token": "your-token",
+    "clone_token": "provider-generated-clone-token"
   }'
 ```
 
@@ -157,11 +161,19 @@ Set via Modal secrets:
 | Variable | Secret | Description |
 |----------|--------|-------------|
 | `ANTHROPIC_API_KEY` | `llm-api-keys` | Anthropic API key for Claude |
-| `GITHUB_APP_ID` | `github-app` | GitHub App ID for repo access |
-| `GITHUB_APP_PRIVATE_KEY` | `github-app` | GitHub App private key (PKCS#8) |
-| `GITHUB_APP_INSTALLATION_ID` | `github-app` | GitHub App installation ID |
 | `MODAL_API_SECRET` | `internal-api` | Shared secret for control plane auth |
+| `INTERNAL_CALLBACK_SECRET` | `internal-api` | Shared secret used by web/control-plane callbacks |
 | `ALLOWED_CONTROL_PLANE_HOSTS` | `internal-api` | Comma-separated allowed hostnames for URL validation |
+| `CONTROL_PLANE_URL` | `internal-api` | Default control-plane URL for Modal-side calls |
+| `SCM_PROVIDER` | `internal-api` | Active SCM provider (`github` or `bitbucket`) for sandbox git env injection |
+
+Optional local/compatibility env vars:
+
+| Variable | Description |
+|----------|-------------|
+| `GITHUB_APP_ID` | Legacy GitHub fallback auth only |
+| `GITHUB_APP_PRIVATE_KEY` | Legacy GitHub fallback auth only |
+| `GITHUB_APP_INSTALLATION_ID` | Legacy GitHub fallback auth only |
 
 ## Verification Criteria
 

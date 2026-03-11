@@ -5,7 +5,12 @@
  * snake_case rows in the database, camelCase types at the API boundary.
  */
 
-import type { Automation, AutomationRun, AutomationRunStatus } from "@open-inspect/shared";
+import type {
+  Automation,
+  AutomationRun,
+  AutomationRunStatus,
+  ProviderRepoId,
+} from "@open-inspect/shared";
 
 // ─── Internal row types ──────────────────────────────────────────────────────
 
@@ -15,7 +20,7 @@ export interface AutomationRow {
   repo_owner: string;
   repo_name: string;
   base_branch: string;
-  repo_id: number | null;
+  repo_id: ProviderRepoId | null;
   instructions: string;
   trigger_type: string;
   schedule_cron: string | null;

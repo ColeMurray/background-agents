@@ -6,9 +6,9 @@ Accepted
 
 ## Context
 
-Open-Inspect currently runs with GitHub as the only production SCM integration, while external
-contributors have requested Bitbucket support. The codebase already has a `SourceControlProvider`
-abstraction, but GitHub-specific details can still leak into non-provider layers if not guarded.
+Open-Inspect supports deployment-level SCM selection through `SCM_PROVIDER`, with GitHub and
+Bitbucket Cloud implemented behind the shared `SourceControlProvider` abstraction. GitHub-specific
+details can still leak into non-provider layers if not guarded.
 
 The team decision is to keep deployments single-provider. We need a safe foundation that preserves
 existing GitHub behavior and prevents unsafe coupling during future provider contributions.
@@ -19,9 +19,8 @@ existing GitHub behavior and prevents unsafe coupling during future provider con
    - Deployment config (`SCM_PROVIDER`) selects the provider.
    - No per-session provider state is persisted.
 
-2. **Fail fast for unimplemented providers**
-   - If `SCM_PROVIDER` resolves to a provider without implementation (currently `bitbucket`),
-     control-plane returns explicit `501 Not Implemented` responses for non-public routes.
+2. **Fail fast for invalid providers**
+   - If `SCM_PROVIDER` resolves to an unknown provider, control-plane rejects startup/configuration.
 
 3. **Provider/auth boundary rules**
    - Provider-specific PR URL and push-transport construction must live in provider implementations.

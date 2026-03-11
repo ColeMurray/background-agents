@@ -1,6 +1,7 @@
+import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { authOptions, getRequestScmTokenState } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
 import type { EnrichedRepository } from "@open-inspect/shared";
 
@@ -10,16 +11,23 @@ interface ControlPlaneReposResponse {
   cachedAt: string;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
-    // Fetch repositories from control plane using GitHub App installation token.
-    // This ensures we only show repos the App has access to, not all repos the user can see.
-    const response = await controlPlaneFetch("/repos");
+    const { accessToken } = await getRequestScmTokenState(request);
+    // Forward the user's SCM token when available so provider-specific discovery
+    // can fall back to user auth (required for Bitbucket deployments).
+    const response = await controlPlaneFetch("/repos", {
+      headers: accessToken
+        ? {
+            "x-scm-token": accessToken,
+          }
+        : undefined,
+    });
 
     if (!response.ok) {
       const error = await response.text();

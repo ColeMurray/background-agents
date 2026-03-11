@@ -1,9 +1,20 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 
 from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxConfig, SandboxManager
 from src.sandbox.types import SessionConfig
+
+
+def _set_sandbox_create(monkeypatch, func):
+    async def fake_create_aio(*args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "src.sandbox.manager.modal.Sandbox.create",
+        SimpleNamespace(aio=fake_create_aio),
+    )
 
 
 @pytest.mark.asyncio
@@ -19,7 +30,7 @@ async def test_user_env_vars_override_order(monkeypatch):
 
         return FakeSandbox()
 
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+    _set_sandbox_create(monkeypatch, fake_create)
 
     manager = SandboxManager()
     config = SandboxConfig(
@@ -60,7 +71,7 @@ async def test_restore_user_env_vars_override_order(monkeypatch):
         return FakeSandbox()
 
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", fake_from_id)
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+    _set_sandbox_create(monkeypatch, fake_create)
 
     manager = SandboxManager()
     await manager.restore_from_snapshot(
@@ -110,7 +121,7 @@ async def test_restore_uses_default_timeout(monkeypatch):
         return FakeSandbox()
 
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", fake_from_id)
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+    _set_sandbox_create(monkeypatch, fake_create)
 
     manager = SandboxManager()
     await manager.restore_from_snapshot(
@@ -148,7 +159,7 @@ async def test_restore_uses_custom_timeout(monkeypatch):
         return FakeSandbox()
 
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", fake_from_id)
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+    _set_sandbox_create(monkeypatch, fake_create)
 
     manager = SandboxManager()
     await manager.restore_from_snapshot(
@@ -192,7 +203,7 @@ async def test_create_and_restore_timeout_consistency(monkeypatch):
         return FakeSandbox()
 
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", fake_from_id)
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+    _set_sandbox_create(monkeypatch, fake_create)
 
     manager = SandboxManager()
 
@@ -234,7 +245,7 @@ def _fake_restore_setup(monkeypatch):
         object_id = "img-123"
 
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+    _set_sandbox_create(monkeypatch, _fake_sandbox_create(captured))
     return captured
 
 
@@ -326,7 +337,7 @@ def _fake_sandbox_create(captured):
 async def test_vcs_env_vars_default_github(monkeypatch):
     """SCM_PROVIDER unset → github.com defaults."""
     captured = {}
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+    _set_sandbox_create(monkeypatch, _fake_sandbox_create(captured))
     monkeypatch.delenv("SCM_PROVIDER", raising=False)
 
     manager = SandboxManager()
@@ -349,7 +360,7 @@ async def test_vcs_env_vars_default_github(monkeypatch):
 async def test_vcs_env_vars_explicit_github(monkeypatch):
     """SCM_PROVIDER=github → same as default."""
     captured = {}
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+    _set_sandbox_create(monkeypatch, _fake_sandbox_create(captured))
     monkeypatch.setenv("SCM_PROVIDER", "github")
 
     manager = SandboxManager()
@@ -370,7 +381,7 @@ async def test_vcs_env_vars_explicit_github(monkeypatch):
 async def test_vcs_env_vars_bitbucket(monkeypatch):
     """SCM_PROVIDER=bitbucket → bitbucket.org + x-token-auth."""
     captured = {}
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+    _set_sandbox_create(monkeypatch, _fake_sandbox_create(captured))
     monkeypatch.setenv("SCM_PROVIDER", "bitbucket")
 
     manager = SandboxManager()
@@ -394,7 +405,7 @@ async def test_vcs_env_vars_bitbucket(monkeypatch):
 async def test_vcs_env_vars_no_token(monkeypatch):
     """No clone token → token vars absent, host/username still set."""
     captured = {}
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+    _set_sandbox_create(monkeypatch, _fake_sandbox_create(captured))
     monkeypatch.delenv("SCM_PROVIDER", raising=False)
 
     manager = SandboxManager()
@@ -421,7 +432,7 @@ async def test_restore_vcs_env_vars(monkeypatch):
         object_id = "img-123"
 
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+    _set_sandbox_create(monkeypatch, _fake_sandbox_create(captured))
     monkeypatch.setenv("SCM_PROVIDER", "bitbucket")
 
     manager = SandboxManager()

@@ -4,11 +4,13 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { INTEGRATION_DEFINITIONS, type IntegrationId } from "@open-inspect/shared";
 import { useSidebarContext } from "@/components/sidebar-layout";
+import { useScmProvider } from "@/components/scm-provider-context";
 import { SidebarIcon, BackIcon } from "@/components/ui/icons";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { GitHubIntegrationSettings } from "@/components/settings/integrations/github-integration-settings";
 import { LinearIntegrationSettings } from "@/components/settings/integrations/linear-integration-settings";
+import { isIntegrationAvailable } from "@/lib/scm-provider";
 
 function getIntegration(id: string) {
   return INTEGRATION_DEFINITIONS.find((d) => d.id === id);
@@ -24,10 +26,11 @@ export default function IntegrationDetailPage() {
   const params = useParams<{ id: string }>();
   const { isOpen, toggle } = useSidebarContext();
   const isMobile = useIsMobile();
+  const scmProvider = useScmProvider();
 
   const integration = getIntegration(params.id);
 
-  if (!integration) {
+  if (!integration || !isIntegrationAvailable(integration.id, scmProvider)) {
     return (
       <div className="h-full flex items-center justify-center text-muted-foreground">
         Integration not found.

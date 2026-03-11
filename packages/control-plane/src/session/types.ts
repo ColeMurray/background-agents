@@ -2,6 +2,7 @@
  * Session-specific type definitions.
  */
 
+import type { ProviderRepoId } from "@open-inspect/shared";
 import type {
   Attachment,
   SessionStatus,
@@ -24,7 +25,7 @@ export interface SessionRow {
   title: string | null;
   repo_owner: string;
   repo_name: string;
-  repo_id: number | null;
+  repo_id: ProviderRepoId | null;
   base_branch: string;
   branch_name: string | null;
   base_sha: string | null;

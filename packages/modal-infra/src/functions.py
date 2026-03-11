@@ -7,9 +7,7 @@ Modal functions that can be called from the control plane.
 Note: Uses lazy imports to avoid pydantic dependency at module load time.
 """
 
-import os
-
-from .app import app, function_image, github_app_secrets, inspect_volume
+from .app import app, function_image, inspect_volume
 
 # Global sandbox manager (lazy loaded)
 _manager = None
@@ -25,7 +23,7 @@ def get_manager():
     return _manager
 
 
-@app.function(image=function_image, volumes={"/data": inspect_volume}, secrets=[github_app_secrets])
+@app.function(image=function_image, volumes={"/data": inspect_volume})
 async def create_sandbox(
     session_id: str,
     repo_owner: str,
@@ -38,6 +36,7 @@ async def create_sandbox(
     provider: str = "anthropic",
     model: str = "claude-sonnet-4-6",
     branch: str | None = None,
+    clone_token: str | None = None,
 ) -> dict:
     """
     Create a new sandbox for a session.
@@ -57,29 +56,10 @@ async def create_sandbox(
     Returns:
         dict with sandbox_id and status
     """
-    # Lazy imports to avoid pydantic at module load time
-    from .auth.github_app import generate_installation_token
     from .sandbox.manager import SandboxConfig
     from .sandbox.types import SessionConfig
 
     manager = get_manager()
-
-    # Generate GitHub App token for git operations (sync, push)
-    github_app_token = None
-    try:
-        app_id = os.environ.get("GITHUB_APP_ID")
-        private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
-        installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID")
-
-        if app_id and private_key and installation_id:
-            github_app_token = generate_installation_token(
-                app_id=app_id,
-                private_key=private_key,
-                installation_id=installation_id,
-            )
-    except Exception as e:
-        # Log but don't fail - public repos can work without token
-        print(f"Warning: Failed to generate GitHub App token: {e}")
 
     session_config = SessionConfig(
         session_id=session_id,
@@ -99,7 +79,7 @@ async def create_sandbox(
         session_config=session_config,
         control_plane_url=control_plane_url,
         sandbox_auth_token=sandbox_auth_token,
-        github_app_token=github_app_token,
+        clone_token=clone_token,
     )
 
     handle = await manager.create_sandbox(config)

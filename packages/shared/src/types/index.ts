@@ -332,8 +332,10 @@ export interface ParticipantPresence {
 }
 
 // Repository types for GitHub App installation
+export type ProviderRepoId = string | number;
+
 export interface InstallationRepository {
-  id: number;
+  id: ProviderRepoId;
   owner: string;
   name: string;
   fullName: string;
@@ -517,7 +519,7 @@ export interface SpawnChildSessionRequest {
 export interface SpawnContext {
   repoOwner: string;
   repoName: string;
-  repoId: number | null;
+  repoId: ProviderRepoId | null;
   model: string;
   reasoningEffort: string | null;
   baseBranch: string | null;
@@ -562,7 +564,7 @@ export interface Automation {
   repoOwner: string;
   repoName: string;
   baseBranch: string;
-  repoId: number | null;
+  repoId: ProviderRepoId | null;
   instructions: string;
   triggerType: AutomationTriggerType;
   scheduleCron: string | null;

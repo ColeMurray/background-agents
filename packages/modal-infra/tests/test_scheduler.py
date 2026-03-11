@@ -1,76 +1,10 @@
 """Tests for the image build scheduler (cron)."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.scheduler.image_builder import (
-    _git_ls_remote_sha,
-    _should_rebuild,
-)
-
-
-class TestGitLsRemoteSha:
-    """Test the _git_ls_remote_sha function."""
-
-    def test_returns_sha_on_success(self):
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "abc123def456789\trefs/heads/main\n"
-
-        with patch(
-            "src.scheduler.image_builder.subprocess.run", return_value=mock_result
-        ) as mock_run:
-            sha = _git_ls_remote_sha("acme", "repo", "main", "token123")
-
-        assert sha == "abc123def456789"
-        args = mock_run.call_args[0][0]
-        assert args[0] == "git"
-        assert args[1] == "ls-remote"
-        assert "x-access-token:token123@github.com/acme/repo.git" in args[2]
-        assert args[3] == "refs/heads/main"
-
-    def test_returns_none_on_failure(self):
-        mock_result = MagicMock()
-        mock_result.returncode = 128
-        mock_result.stderr = "fatal: repository not found"
-
-        with patch("src.scheduler.image_builder.subprocess.run", return_value=mock_result):
-            sha = _git_ls_remote_sha("acme", "repo", "main", "token")
-
-        assert sha is None
-
-    def test_returns_none_on_empty_output(self):
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = ""
-
-        with patch("src.scheduler.image_builder.subprocess.run", return_value=mock_result):
-            sha = _git_ls_remote_sha("acme", "repo", "main", "token")
-
-        assert sha is None
-
-    def test_returns_none_on_exception(self):
-        with patch(
-            "src.scheduler.image_builder.subprocess.run",
-            side_effect=Exception("timeout"),
-        ):
-            sha = _git_ls_remote_sha("acme", "repo", "main", "token")
-
-        assert sha is None
-
-    def test_uses_unauthenticated_url_without_token(self):
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "abc123\trefs/heads/main\n"
-
-        with patch(
-            "src.scheduler.image_builder.subprocess.run", return_value=mock_result
-        ) as mock_run:
-            _git_ls_remote_sha("acme", "repo", "main", "")
-
-        args = mock_run.call_args[0][0]
-        assert args[2] == "https://github.com/acme/repo.git"
+from src.scheduler.image_builder import _should_rebuild
 
 
 class TestShouldRebuild:
@@ -206,7 +140,9 @@ class TestRebuildRepoImages:
             "MODAL_API_SECRET": "test-secret",
         }
 
-        mock_enabled = {"repos": [{"repoOwner": "acme", "repoName": "repo"}]}
+        mock_enabled = {
+            "repos": [{"repoOwner": "acme", "repoName": "repo", "headSha": "new-sha"}]
+        }
         mock_status = {
             "images": [
                 {
@@ -248,14 +184,6 @@ class TestRebuildRepoImages:
                 new_callable=AsyncMock,
                 side_effect=mock_post_side_effect,
             ) as mock_post,
-            patch(
-                "src.scheduler.image_builder._git_ls_remote_sha",
-                return_value="new-sha",
-            ),
-            patch(
-                "src.auth.github_app.generate_installation_token",
-                return_value="gh-token",
-            ),
         ):
             from src.scheduler.image_builder import rebuild_repo_images
 
@@ -274,7 +202,9 @@ class TestRebuildRepoImages:
             "MODAL_API_SECRET": "test-secret",
         }
 
-        mock_enabled = {"repos": [{"repoOwner": "acme", "repoName": "repo"}]}
+        mock_enabled = {
+            "repos": [{"repoOwner": "acme", "repoName": "repo", "headSha": "same-sha"}]
+        }
         mock_status = {
             "images": [
                 {
@@ -308,14 +238,6 @@ class TestRebuildRepoImages:
                 new_callable=AsyncMock,
                 side_effect=mock_post_side_effect,
             ) as mock_post,
-            patch(
-                "src.scheduler.image_builder._git_ls_remote_sha",
-                return_value="same-sha",
-            ),
-            patch(
-                "src.auth.github_app.generate_installation_token",
-                return_value="gh-token",
-            ),
         ):
             from src.scheduler.image_builder import rebuild_repo_images
 
@@ -335,7 +257,9 @@ class TestRebuildRepoImages:
 
         async def mock_get_side_effect(url, **kwargs):
             if "enabled-repos" in url:
-                return {"repos": [{"repoOwner": "acme", "repoName": "repo"}]}
+                return {
+                    "repos": [{"repoOwner": "acme", "repoName": "repo", "headSha": "abc123"}]
+                }
             if "status" in url:
                 return {"images": []}
             return {}
@@ -361,14 +285,6 @@ class TestRebuildRepoImages:
                 new_callable=AsyncMock,
                 side_effect=mock_post_side_effect,
             ) as mock_post,
-            patch(
-                "src.scheduler.image_builder._git_ls_remote_sha",
-                return_value="abc123",
-            ),
-            patch(
-                "src.auth.github_app.generate_installation_token",
-                return_value="gh-token",
-            ),
         ):
             from src.scheduler.image_builder import rebuild_repo_images
 

@@ -1,3 +1,4 @@
+import type { ProviderRepoId } from "@open-inspect/shared";
 import {
   refreshOpenAIToken,
   extractOpenAIAccountId,
@@ -13,7 +14,7 @@ const OPENAI_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
 type OpenAITokenState =
   | { type: "cached"; accessToken: string; expiresIn: number; accountId?: string }
-  | { type: "refresh"; refreshToken: string; source: "repo" | "global"; repoId: number };
+  | { type: "refresh"; refreshToken: string; source: "repo" | "global"; repoId: ProviderRepoId };
 
 export type OpenAITokenRefreshResult =
   | { ok: true; accessToken: string; expiresIn?: number; accountId?: string }
@@ -23,7 +24,7 @@ export class OpenAITokenRefreshService {
   constructor(
     private readonly db: Env["DB"],
     private readonly encryptionKey: string,
-    private readonly ensureRepoId: (session: SessionRow) => Promise<number>,
+    private readonly ensureRepoId: (session: SessionRow) => Promise<ProviderRepoId>,
     private readonly log: Logger
   ) {}
 
@@ -70,7 +71,7 @@ export class OpenAITokenRefreshService {
   private getTokenStateFromSecrets(
     secrets: Record<string, string>,
     source: "repo" | "global",
-    repoId: number
+    repoId: ProviderRepoId
   ): OpenAITokenState | null {
     if (!secrets.OPENAI_OAUTH_REFRESH_TOKEN) {
       return null;

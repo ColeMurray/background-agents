@@ -1,3 +1,4 @@
+import type { ProviderRepoId } from "@open-inspect/shared";
 import { encryptToken, decryptToken } from "../auth/crypto";
 import { createLogger } from "../logger";
 import {
@@ -21,7 +22,7 @@ export class RepoSecretsStore {
   ) {}
 
   async setSecrets(
-    repoId: number,
+    repoId: ProviderRepoId,
     repoOwner: string,
     repoName: string,
     secrets: Record<string, string>
@@ -92,7 +93,7 @@ export class RepoSecretsStore {
     return { created, updated, keys: incomingKeys };
   }
 
-  async listSecretKeys(repoId: number): Promise<SecretMetadata[]> {
+  async listSecretKeys(repoId: ProviderRepoId): Promise<SecretMetadata[]> {
     const result = await this.db
       .prepare(
         "SELECT key, created_at, updated_at FROM repo_secrets WHERE repo_id = ? ORDER BY key"
@@ -107,7 +108,7 @@ export class RepoSecretsStore {
     }));
   }
 
-  async getDecryptedSecrets(repoId: number): Promise<Record<string, string>> {
+  async getDecryptedSecrets(repoId: ProviderRepoId): Promise<Record<string, string>> {
     const result = await this.db
       .prepare("SELECT key, encrypted_value FROM repo_secrets WHERE repo_id = ?")
       .bind(repoId)
@@ -133,7 +134,7 @@ export class RepoSecretsStore {
     return Object.fromEntries(decryptedEntries);
   }
 
-  async deleteSecret(repoId: number, key: string): Promise<boolean> {
+  async deleteSecret(repoId: ProviderRepoId, key: string): Promise<boolean> {
     const result = await this.db
       .prepare("DELETE FROM repo_secrets WHERE repo_id = ? AND key = ?")
       .bind(repoId, normalizeKey(key))

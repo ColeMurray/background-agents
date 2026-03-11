@@ -5,7 +5,7 @@ This module handles:
 - Building repository images asynchronously (triggered by control plane)
 - Creating build sandboxes, awaiting exit, snapshotting filesystem
 - Reporting results back to control plane via authenticated callbacks
-- Scheduled rebuilds every 30 minutes (cron) with git ls-remote comparison
+- Scheduled rebuilds every 30 minutes (cron) with control-plane-provided branch head SHA comparison
 
 The build flow:
 1. Control plane POSTs to api_build_repo_image with repo info + callback URL
@@ -15,7 +15,7 @@ The build flow:
 
 The scheduler flow:
 1. Every 30 min, fetch enabled repos and current image status from control plane
-2. For each enabled repo, git ls-remote to get HEAD SHA
+2. For each enabled repo, use the control-plane-provided HEAD SHA
 3. If SHA differs from latest ready image, trigger a build
 4. Mark stale builds as failed, clean up old failed rows
 """
@@ -23,7 +23,6 @@ The scheduler flow:
 import asyncio
 import json
 import os
-import subprocess
 import time
 
 import httpx
@@ -32,7 +31,6 @@ import modal
 from ..app import (
     app,
     function_image,
-    github_app_secrets,
     internal_api_secret,
     validate_control_plane_url,
 )
@@ -119,26 +117,6 @@ async def _callback_with_retry(
     return False
 
 
-def _generate_clone_token() -> str:
-    """Generate a GitHub App install token for git operations. Returns empty string on failure."""
-    from ..auth.github_app import generate_installation_token
-
-    try:
-        app_id = os.environ.get("GITHUB_APP_ID")
-        private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
-        installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID")
-
-        if app_id and private_key and installation_id:
-            return generate_installation_token(
-                app_id=app_id,
-                private_key=private_key,
-                installation_id=installation_id,
-            )
-    except Exception as e:
-        log.warn("github.token_error", error=str(e))
-    return ""
-
-
 async def _stream_build_logs(sandbox) -> tuple[str, bool]:
     """
     Stream sandbox stdout and extract build results.
@@ -174,7 +152,7 @@ async def _stream_build_logs(sandbox) -> tuple[str, bool]:
 
 @app.function(
     image=function_image,
-    secrets=[internal_api_secret, github_app_secrets],
+    secrets=[internal_api_secret],
     timeout=1800,  # 30 minutes
 )
 async def build_repo_image(
@@ -184,6 +162,7 @@ async def build_repo_image(
     callback_url: str = "",
     build_id: str = "",
     user_env_vars: dict[str, str] | None = None,
+    clone_token: str = "",
 ) -> None:
     """
     Async worker: create build sandbox, await exit, snapshot, callback.
@@ -192,8 +171,8 @@ async def build_repo_image(
     Results are reported back to the control plane via callback URLs.
 
     Args:
-        repo_owner: GitHub repository owner
-        repo_name: GitHub repository name
+        repo_owner: Repository owner or workspace slug
+        repo_name: Repository slug
         default_branch: Branch to clone and build
         callback_url: URL to POST success result to
         build_id: Build identifier from the control plane
@@ -210,8 +189,6 @@ async def build_repo_image(
     manager = SandboxManager()
 
     try:
-        clone_token = _generate_clone_token()
-
         # Create build sandbox
         log.info(
             "build.start",
@@ -336,57 +313,6 @@ async def _api_post(
         return response.json()
 
 
-def _git_ls_remote_sha(
-    repo_owner: str,
-    repo_name: str,
-    branch: str,
-    clone_token: str,
-) -> str | None:
-    """
-    Run git ls-remote to get the HEAD SHA for a branch.
-
-    Returns the SHA string, or None on failure.
-    """
-    if clone_token:
-        url = f"https://x-access-token:{clone_token}@github.com/{repo_owner}/{repo_name}.git"
-    else:
-        url = f"https://github.com/{repo_owner}/{repo_name}.git"
-
-    try:
-        result = subprocess.run(
-            ["git", "ls-remote", url, f"refs/heads/{branch}"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode != 0:
-            stderr = result.stderr[:200]
-            if clone_token:
-                stderr = stderr.replace(clone_token, "***")
-            log.warn(
-                "scheduler.ls_remote_failed",
-                repo_owner=repo_owner,
-                repo_name=repo_name,
-                branch=branch,
-                stderr=stderr,
-            )
-            return None
-
-        # Output format: "sha\trefs/heads/branch"
-        output = result.stdout.strip()
-        if not output:
-            return None
-        return output.split("\t")[0]
-    except Exception as e:
-        log.warn(
-            "scheduler.ls_remote_error",
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            error=str(e),
-        )
-        return None
-
-
 def _should_rebuild(
     repo_owner: str,
     repo_name: str,
@@ -449,7 +375,7 @@ def _should_rebuild(
 @app.function(
     image=function_image,
     schedule=modal.Cron("*/30 * * * *"),
-    secrets=[internal_api_secret, github_app_secrets],
+    secrets=[internal_api_secret],
     timeout=300,  # 5 min — scheduler itself is fast, builds run async
 )
 async def rebuild_repo_images():
@@ -457,7 +383,7 @@ async def rebuild_repo_images():
     Every 30 minutes:
     1. Fetch list of repos with image building enabled from control plane
     2. Fetch current image status for all repos
-    3. For each enabled repo, check remote HEAD SHA via git ls-remote
+    3. For each enabled repo, compare the provider HEAD SHA from control plane
     4. If SHA differs from latest ready image, trigger a build
     5. Mark stale builds as failed
     6. Clean up old failed D1 rows
@@ -484,18 +410,15 @@ async def rebuild_repo_images():
         status_data = await _api_get(f"{control_plane_url}/repo-images/status")
         all_images: list[dict] = status_data.get("images", [])
 
-        # 3. Generate GitHub App token for ls-remote
-        clone_token = _generate_clone_token()
-
-        # 4. Check each enabled repo
+        # 3. Check each enabled repo
         for repo in enabled_repos:
             repo_owner = repo.get("repoOwner", "")
             repo_name = repo.get("repoName", "")
+            remote_sha = repo.get("headSha")
 
             if not repo_owner or not repo_name:
                 continue
 
-            remote_sha = _git_ls_remote_sha(repo_owner, repo_name, "main", clone_token)
             if not remote_sha:
                 continue
 

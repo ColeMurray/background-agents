@@ -38,13 +38,6 @@ llm_secrets = modal.Secret.from_name(
     required_keys=["ANTHROPIC_API_KEY"],
 )
 
-# Secrets for GitHub App - used for git operations (clone, push)
-# These are used to generate installation tokens, NOT injected into sandboxes
-github_app_secrets = modal.Secret.from_name(
-    "github-app",
-    required_keys=["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_APP_INSTALLATION_ID"],
-)
-
 # Secret for internal API authentication (bidirectional)
 # MODAL_API_SECRET: verify requests from control plane to Modal endpoints
 # INTERNAL_CALLBACK_SECRET: sign requests from Modal to control plane

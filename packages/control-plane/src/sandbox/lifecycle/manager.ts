@@ -203,7 +203,8 @@ export class SandboxLifecycleManager {
     private readonly idGenerator: IdGenerator,
     private readonly config: SandboxLifecycleConfig,
     private readonly callbacks: LifecycleCallbacks = {},
-    private readonly repoImageLookup?: RepoImageLookup
+    private readonly repoImageLookup?: RepoImageLookup,
+    private readonly cloneTokenProvider?: () => Promise<string | null>
   ) {
     this.log = config.sessionId ? log.child({ session_id: config.sessionId }) : log;
   }
@@ -328,6 +329,7 @@ export class SandboxLifecycleManager {
       });
 
       const userEnvVars = await this.storage.getUserEnvVars();
+      const cloneToken = this.cloneTokenProvider ? await this.cloneTokenProvider() : null;
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
 
       // Look up pre-built repo image (graceful fallback on failure)
@@ -370,6 +372,7 @@ export class SandboxLifecycleManager {
         provider,
         model: modelId,
         userEnvVars,
+        cloneToken,
         repoImageId,
         repoImageSha,
         timeoutSeconds,
@@ -472,6 +475,7 @@ export class SandboxLifecycleManager {
       });
 
       const userEnvVars = await this.storage.getUserEnvVars();
+      const cloneToken = this.cloneTokenProvider ? await this.cloneTokenProvider() : null;
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
 
       // Child sessions get a shorter timeout (same logic as doSpawn)
@@ -489,6 +493,7 @@ export class SandboxLifecycleManager {
         provider,
         model: modelId,
         userEnvVars,
+        cloneToken,
         timeoutSeconds,
         branch: session.base_branch,
       });
