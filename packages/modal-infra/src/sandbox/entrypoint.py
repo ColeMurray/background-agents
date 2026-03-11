@@ -290,6 +290,17 @@ class SandboxSupervisor:
         if not package_json.exists():
             package_json.write_text('{"name": "opencode-tools", "type": "module"}')
 
+        # Exclude .opencode/ from git tracking via local exclude (avoids modifying .gitignore)
+        # A better solution would be to copy the tools into the user level open code dir, probably ~/.opencode
+        git_dir = workdir / ".git"
+        if git_dir.is_dir():
+            exclude_file = git_dir / "info" / "exclude"
+            exclude_file.parent.mkdir(parents=True, exist_ok=True)
+            existing = exclude_file.read_text() if exclude_file.exists() else ""
+            if ".opencode/" not in existing:
+                with exclude_file.open("a") as f:
+                    f.write("\n.opencode/\n")
+
     def _setup_openai_oauth(self) -> None:
         """Write OpenCode auth.json for ChatGPT OAuth if refresh token is configured."""
         refresh_token = os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN")
