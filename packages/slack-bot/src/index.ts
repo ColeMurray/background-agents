@@ -37,8 +37,11 @@ import {
 const log = createLogger("handler");
 
 const BRANCH_MODAL_CALLBACK_ID = "branch_preference_modal";
+const REPO_BRANCH_MODAL_CALLBACK_ID = "repo_branch_preference_modal";
 const BRANCH_INPUT_BLOCK_ID = "branch_input";
 const BRANCH_INPUT_ACTION_ID = "branch_value";
+const REPO_BRANCH_SELECTOR_ACTION_ID = "select_repo_branch_override";
+const MAX_REPO_OPTIONS_IN_APP_HOME = 100;
 const BRANCH_NAME_SPECIAL_CHARS_REGEX = /[\s~^:?*[\\]/;
 const INVALID_BRANCH_ERROR = "Enter a valid Git branch name.";
 
@@ -55,6 +58,7 @@ type SlackInteractionPayload = {
   user?: { id: string };
   view?: {
     callback_id?: string;
+    private_metadata?: string;
     state?: {
       values?: Record<string, Record<string, { type?: string; value?: string }>>;
     };
@@ -329,6 +333,90 @@ function getUserPreferencesKey(userId: string): string {
 }
 
 /**
+ * Generate a consistent KV key for per-user repo branch preferences.
+ */
+function getUserRepoBranchKey(userId: string, repoId: string): string {
+  return `user_repo_branch:${userId}:${repoId}`;
+}
+
+/**
+ * Read a per-user, per-repo branch preference.
+ */
+async function getUserRepoBranchPreference(
+  env: Env,
+  userId: string,
+  repoId: string
+): Promise<string | undefined> {
+  try {
+    const key = getUserRepoBranchKey(userId, repoId);
+    const value = normalizeBranchPreference((await env.SLACK_KV.get(key)) ?? undefined);
+    if (!value) {
+      return undefined;
+    }
+
+    if (!isValidBranchName(value)) {
+      log.warn("kv.get", {
+        key_prefix: "user_repo_branch",
+        user_id: userId,
+        repo_id: repoId,
+        outcome: "invalid_branch_value",
+      });
+      return undefined;
+    }
+
+    return value;
+  } catch (e) {
+    log.error("kv.get", {
+      key_prefix: "user_repo_branch",
+      user_id: userId,
+      repo_id: repoId,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
+    return undefined;
+  }
+}
+
+/**
+ * Save or clear a per-user, per-repo branch preference.
+ */
+async function saveUserRepoBranchPreference(
+  env: Env,
+  userId: string,
+  repoId: string,
+  branch?: string
+): Promise<boolean> {
+  try {
+    const key = getUserRepoBranchKey(userId, repoId);
+    const normalizedBranch = normalizeBranchPreference(branch);
+
+    if (!normalizedBranch) {
+      await env.SLACK_KV.delete(key);
+      return true;
+    }
+
+    if (!isValidBranchName(normalizedBranch)) {
+      log.warn("slack.repo_branch_pref.invalid", {
+        user_id: userId,
+        repo_id: repoId,
+        branch: normalizedBranch,
+      });
+      return false;
+    }
+
+    await env.SLACK_KV.put(key, normalizedBranch);
+    return true;
+  } catch (e) {
+    log.error("kv.put", {
+      key_prefix: "user_repo_branch",
+      user_id: userId,
+      repo_id: repoId,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
+    return false;
+  }
+}
+
+/**
  * Normalize a branch preference. Empty strings become undefined.
  */
 function normalizeBranchPreference(branch: string | undefined): string | undefined {
@@ -378,16 +466,17 @@ function isValidBranchName(branch: string): boolean {
   return getBranchValidationError(branch) === undefined;
 }
 
+function isBranchModalCallbackId(callbackId: string | undefined): boolean {
+  return callbackId === BRANCH_MODAL_CALLBACK_ID || callbackId === REPO_BRANCH_MODAL_CALLBACK_ID;
+}
+
 function getBranchSubmissionValidationError(payload: SlackInteractionPayload): string | undefined {
-  if (
-    payload.type !== "view_submission" ||
-    payload.view?.callback_id !== BRANCH_MODAL_CALLBACK_ID
-  ) {
+  if (payload.type !== "view_submission" || !isBranchModalCallbackId(payload.view?.callback_id)) {
     return undefined;
   }
 
   const branchRaw =
-    payload.view.state?.values?.[BRANCH_INPUT_BLOCK_ID]?.[BRANCH_INPUT_ACTION_ID]?.value;
+    payload.view?.state?.values?.[BRANCH_INPUT_BLOCK_ID]?.[BRANCH_INPUT_ACTION_ID]?.value;
   const branch = normalizeBranchPreference(branchRaw);
   if (!branch) {
     return undefined;
@@ -497,6 +586,23 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
     prefs?.branch && isValidBranchName(prefs.branch)
       ? normalizeBranchPreference(prefs.branch)
       : undefined;
+
+  const repos = await getAvailableRepos(env);
+  const repoOptions = repos.slice(0, MAX_REPO_OPTIONS_IN_APP_HOME).map((repo) => ({
+    text: {
+      type: "plain_text" as const,
+      text: repo.fullName.slice(0, 75),
+    },
+    value: repo.id,
+  }));
+
+  if (repos.length > MAX_REPO_OPTIONS_IN_APP_HOME) {
+    log.warn("slack.app_home.repo_options_truncated", {
+      user_id: userId,
+      repo_count: repos.length,
+      included_count: MAX_REPO_OPTIONS_IN_APP_HOME,
+    });
+  }
 
   const reasoningOptions = reasoningConfig
     ? reasoningConfig.efforts.map((effort) => ({
@@ -614,6 +720,42 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
     });
   }
 
+  if (repoOptions.length > 0) {
+    blocks.push(
+      {
+        type: "divider",
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "*Branch by repository*\nChoose a repository to set a repo-specific branch override.",
+        },
+      },
+      {
+        type: "actions",
+        block_id: "repo_branch_selection",
+        elements: [
+          {
+            type: "static_select",
+            action_id: REPO_BRANCH_SELECTOR_ACTION_ID,
+            placeholder: { type: "plain_text", text: "Select repository" },
+            options: repoOptions,
+          },
+        ],
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: "Priority: repo-specific override → global override → repository default branch.",
+          },
+        ],
+      }
+    );
+  }
+
   blocks.push(
     { type: "divider" },
     {
@@ -700,6 +842,76 @@ async function openBranchPreferenceModal(
 }
 
 /**
+ * Open a modal to set or clear a user's branch preference for a specific repository.
+ */
+async function openRepoBranchPreferenceModal(
+  env: Env,
+  userId: string,
+  triggerId: string,
+  repo: RepoConfig,
+  currentBranch?: string
+): Promise<void> {
+  const view = {
+    type: "modal",
+    callback_id: REPO_BRANCH_MODAL_CALLBACK_ID,
+    title: {
+      type: "plain_text",
+      text: "Repo Branch",
+    },
+    submit: {
+      type: "plain_text",
+      text: "Save",
+    },
+    close: {
+      type: "plain_text",
+      text: "Cancel",
+    },
+    private_metadata: JSON.stringify({ userId, repoId: repo.id }),
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `Repository: *${repo.fullName}*`,
+        },
+      },
+      {
+        type: "input",
+        block_id: BRANCH_INPUT_BLOCK_ID,
+        optional: true,
+        label: {
+          type: "plain_text",
+          text: "Branch override",
+        },
+        element: {
+          type: "plain_text_input",
+          action_id: BRANCH_INPUT_ACTION_ID,
+          initial_value: currentBranch || "",
+          placeholder: {
+            type: "plain_text",
+            text: "e.g. main, staging, release/2026-03",
+          },
+        },
+        hint: {
+          type: "plain_text",
+          text: "Leave empty to clear this repository override.",
+        },
+      },
+    ],
+  };
+
+  const result = await openView(env.SLACK_BOT_TOKEN, triggerId, view);
+  if (!result.ok) {
+    log.error("slack.open_repo_branch_modal", {
+      user_id: userId,
+      repo_id: repo.id,
+      outcome: "error",
+      slack_error: result.error,
+    });
+  }
+}
+
+/**
  * Build a ThreadSession object for storage.
  */
 function buildThreadSession(
@@ -770,10 +982,12 @@ async function startSessionAndSendPrompt(
     userPrefs?.reasoningEffort && isValidReasoningEffort(model, userPrefs.reasoningEffort)
       ? userPrefs.reasoningEffort
       : getDefaultReasoningEffort(model);
-  const branch =
+  const globalBranch =
     userPrefs?.branch && isValidBranchName(userPrefs.branch)
       ? normalizeBranchPreference(userPrefs.branch)
       : undefined;
+  const repoBranch = await getUserRepoBranchPreference(env, userId, repo.id);
+  const branch = repoBranch ?? globalBranch;
 
   // Create session via control plane with user's preferred model, reasoning effort, and branch
   const session = await createSession(
@@ -1005,7 +1219,9 @@ app.post("/interactions", async (c) => {
   }
 
   const actionId = payload.actions?.[0]?.action_id;
-  const shouldOpenModalInline = actionId === "open_branch_modal";
+  const isViewSubmission = payload.type === "view_submission";
+  const shouldOpenModalInline =
+    actionId === "open_branch_modal" || actionId === REPO_BRANCH_SELECTOR_ACTION_ID;
 
   if (shouldOpenModalInline) {
     await handleSlackInteraction(payload, c.env, traceId);
@@ -1023,6 +1239,10 @@ app.post("/interactions", async (c) => {
     callback_id: payload.view?.callback_id,
     duration_ms: Date.now() - startTime,
   });
+
+  if (isViewSubmission) {
+    return c.json({ response_action: "clear" });
+  }
 
   return c.json({ ok: true });
 });
@@ -1457,12 +1677,12 @@ async function handleSlackInteraction(
   const userId = payload.user?.id;
 
   if (payload.type === "view_submission") {
-    if (payload.view?.callback_id !== BRANCH_MODAL_CALLBACK_ID || !userId) {
+    if (!isBranchModalCallbackId(payload.view?.callback_id) || !userId) {
       return;
     }
 
     const branchRaw =
-      payload.view.state?.values?.[BRANCH_INPUT_BLOCK_ID]?.[BRANCH_INPUT_ACTION_ID]?.value;
+      payload.view?.state?.values?.[BRANCH_INPUT_BLOCK_ID]?.[BRANCH_INPUT_ACTION_ID]?.value;
     const branch = normalizeBranchPreference(branchRaw);
 
     if (branch && !isValidBranchName(branch)) {
@@ -1474,14 +1694,51 @@ async function handleSlackInteraction(
       return;
     }
 
-    const currentPrefs = await getUserPreferences(env, userId);
-    const model = getValidModelOrDefault(currentPrefs?.model ?? env.DEFAULT_MODEL ?? DEFAULT_MODEL);
-    const reasoningEffort =
-      currentPrefs?.reasoningEffort && isValidReasoningEffort(model, currentPrefs.reasoningEffort)
-        ? currentPrefs.reasoningEffort
-        : getDefaultReasoningEffort(model);
+    if (payload.view?.callback_id === BRANCH_MODAL_CALLBACK_ID) {
+      const currentPrefs = await getUserPreferences(env, userId);
+      const model = getValidModelOrDefault(
+        currentPrefs?.model ?? env.DEFAULT_MODEL ?? DEFAULT_MODEL
+      );
+      const reasoningEffort =
+        currentPrefs?.reasoningEffort && isValidReasoningEffort(model, currentPrefs.reasoningEffort)
+          ? currentPrefs.reasoningEffort
+          : getDefaultReasoningEffort(model);
 
-    await saveUserPreferences(env, userId, model, reasoningEffort, branch);
+      await saveUserPreferences(env, userId, model, reasoningEffort, branch);
+      await publishAppHome(env, userId);
+      return;
+    }
+
+    const metadataRaw = payload.view?.private_metadata;
+    let repoId: string | undefined;
+
+    if (metadataRaw) {
+      try {
+        const metadata = JSON.parse(metadataRaw) as { repoId?: string; userId?: string };
+        if (metadata.userId && metadata.userId !== userId) {
+          log.warn("slack.repo_branch_pref.user_mismatch", {
+            trace_id: traceId,
+            user_id: userId,
+            metadata_user_id: metadata.userId,
+          });
+        }
+        repoId = metadata.repoId;
+      } catch (error) {
+        log.warn("slack.repo_branch_pref.bad_metadata", {
+          trace_id: traceId,
+          user_id: userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    if (!repoId) {
+      log.warn("slack.repo_branch_pref.missing_repo", { trace_id: traceId, user_id: userId });
+      await publishAppHome(env, userId);
+      return;
+    }
+
+    await saveUserRepoBranchPreference(env, userId, repoId, branch);
     await publishAppHome(env, userId);
     return;
   }
@@ -1542,6 +1799,28 @@ async function handleSlackInteraction(
           ? normalizeBranchPreference(currentPrefs.branch)
           : undefined;
       await openBranchPreferenceModal(env, userId, payload.trigger_id, currentBranch);
+      break;
+    }
+
+    case REPO_BRANCH_SELECTOR_ACTION_ID: {
+      if (!userId || !payload.trigger_id) return;
+      const repoId = action.selected_option?.value;
+      if (!repoId) return;
+
+      const repos = await getAvailableRepos(env, traceId);
+      const repo = repos.find((item) => item.id === repoId);
+      if (!repo) {
+        log.warn("slack.repo_branch_pref.repo_not_found", {
+          trace_id: traceId,
+          user_id: userId,
+          repo_id: repoId,
+        });
+        await publishAppHome(env, userId);
+        return;
+      }
+
+      const currentRepoBranch = await getUserRepoBranchPreference(env, userId, repo.id);
+      await openRepoBranchPreferenceModal(env, userId, payload.trigger_id, repo, currentRepoBranch);
       break;
     }
 
