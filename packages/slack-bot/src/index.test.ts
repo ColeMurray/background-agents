@@ -91,6 +91,56 @@ describe("POST /interactions", () => {
     mockOpenView.mockResolvedValue({ ok: true });
   });
 
+  it.each(["foo..bar", "release/", "-bad", "foo/.bar", "foo.lock"])(
+    "rejects invalid branch submission %s",
+    async (branch) => {
+      const payload = {
+        type: "view_submission",
+        user: { id: "U123" },
+        view: {
+          callback_id: "branch_preference_modal",
+          state: {
+            values: {
+              branch_input: {
+                branch_value: {
+                  type: "plain_text_input",
+                  value: branch,
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const request = new Request("http://localhost/interactions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "x-slack-signature": "v0=test",
+          "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
+        },
+        body: new URLSearchParams({ payload: JSON.stringify(payload) }),
+      });
+
+      const env = makeEnv();
+      const ctx = makeCtx();
+      const response = await app.fetch(request, env, ctx);
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        response_action: "errors",
+        errors: {
+          branch_input: "Enter a valid Git branch name.",
+        },
+      });
+      expect(ctx.waitUntil).not.toHaveBeenCalled();
+      expect(
+        (env.SLACK_KV as unknown as { put: ReturnType<typeof vi.fn> }).put
+      ).not.toHaveBeenCalled();
+      expect(mockPublishView).not.toHaveBeenCalled();
+    }
+  );
+
   it("acknowledges branch preference submissions before App Home publish completes", async () => {
     const publishDeferred = createDeferred<{ ok: boolean }>();
     mockPublishView.mockReturnValue(publishDeferred.promise);

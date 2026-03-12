@@ -39,7 +39,27 @@ const log = createLogger("handler");
 const BRANCH_MODAL_CALLBACK_ID = "branch_preference_modal";
 const BRANCH_INPUT_BLOCK_ID = "branch_input";
 const BRANCH_INPUT_ACTION_ID = "branch_value";
-const BRANCH_NAME_REGEX = /^[\w.\-/]+$/;
+const BRANCH_NAME_SPECIAL_CHARS_REGEX = /[\s~^:?*[\\]/;
+const INVALID_BRANCH_ERROR = "Enter a valid Git branch name.";
+
+type SlackInteractionPayload = {
+  type: string;
+  trigger_id?: string;
+  actions?: Array<{
+    action_id: string;
+    selected_option?: { value: string };
+    value?: string;
+  }>;
+  channel?: { id: string };
+  message?: { ts: string; thread_ts?: string };
+  user?: { id: string };
+  view?: {
+    callback_id?: string;
+    state?: {
+      values?: Record<string, Record<string, { type?: string; value?: string }>>;
+    };
+  };
+};
 
 /**
  * Build authenticated headers for control plane requests.
@@ -319,8 +339,61 @@ function normalizeBranchPreference(branch: string | undefined): string | undefin
 /**
  * Check whether a branch name is syntactically valid.
  */
+function hasControlCharacters(value: string): boolean {
+  return Array.from(value).some((char) => {
+    const code = char.charCodeAt(0);
+    return code < 32 || code === 127;
+  });
+}
+
+function getBranchValidationError(branch: string): string | undefined {
+  if (branch.startsWith("-")) {
+    return INVALID_BRANCH_ERROR;
+  }
+
+  if (
+    branch.startsWith("/") ||
+    branch.endsWith("/") ||
+    branch.endsWith(".") ||
+    branch.includes("..") ||
+    branch.includes("//") ||
+    branch.includes("@{") ||
+    hasControlCharacters(branch) ||
+    BRANCH_NAME_SPECIAL_CHARS_REGEX.test(branch)
+  ) {
+    return INVALID_BRANCH_ERROR;
+  }
+
+  const segments = branch.split("/");
+  if (
+    segments.some((segment) => !segment || segment.startsWith(".") || segment.endsWith(".lock"))
+  ) {
+    return INVALID_BRANCH_ERROR;
+  }
+
+  return undefined;
+}
+
 function isValidBranchName(branch: string): boolean {
-  return BRANCH_NAME_REGEX.test(branch);
+  return getBranchValidationError(branch) === undefined;
+}
+
+function getBranchSubmissionValidationError(payload: SlackInteractionPayload): string | undefined {
+  if (
+    payload.type !== "view_submission" ||
+    payload.view?.callback_id !== BRANCH_MODAL_CALLBACK_ID
+  ) {
+    return undefined;
+  }
+
+  const branchRaw =
+    payload.view.state?.values?.[BRANCH_INPUT_BLOCK_ID]?.[BRANCH_INPUT_ACTION_ID]?.value;
+  const branch = normalizeBranchPreference(branchRaw);
+  if (!branch) {
+    return undefined;
+  }
+
+  return getBranchValidationError(branch);
 }
 
 /**
@@ -331,8 +404,7 @@ function isValidUserPreferences(data: unknown): data is UserPreferences {
     return false;
   }
   const obj = data as Record<string, unknown>;
-  const branchValid =
-    obj.branch === undefined || (typeof obj.branch === "string" && isValidBranchName(obj.branch));
+  const branchValid = obj.branch === undefined || typeof obj.branch === "string";
   return (
     typeof obj.userId === "string" &&
     typeof obj.model === "string" &&
@@ -376,6 +448,13 @@ async function saveUserPreferences(
   try {
     const key = getUserPreferencesKey(userId);
     const normalizedBranch = normalizeBranchPreference(branch);
+    if (normalizedBranch && !isValidBranchName(normalizedBranch)) {
+      log.warn("slack.branch_pref.invalid", {
+        user_id: userId,
+        branch: normalizedBranch,
+      });
+      return false;
+    }
     const prefs: UserPreferences = {
       userId,
       model,
@@ -895,7 +974,35 @@ app.post("/interactions", async (c) => {
   }
 
   const payloadStr = new URLSearchParams(body).get("payload") || "{}";
-  const payload = JSON.parse(payloadStr) as Parameters<typeof handleSlackInteraction>[0];
+  const payload = JSON.parse(payloadStr) as SlackInteractionPayload;
+  const branchValidationError = getBranchSubmissionValidationError(payload);
+
+  if (branchValidationError) {
+    log.warn("slack.branch_pref.invalid", {
+      trace_id: traceId,
+      user_id: payload.user?.id,
+      branch:
+        normalizeBranchPreference(
+          payload.view?.state?.values?.[BRANCH_INPUT_BLOCK_ID]?.[BRANCH_INPUT_ACTION_ID]?.value
+        ) ?? "",
+    });
+    log.info("http.request", {
+      trace_id: traceId,
+      http_method: "POST",
+      http_path: "/interactions",
+      http_status: 200,
+      interaction_type: payload.type,
+      callback_id: payload.view?.callback_id,
+      outcome: "validation_error",
+      duration_ms: Date.now() - startTime,
+    });
+    return c.json({
+      response_action: "errors",
+      errors: {
+        [BRANCH_INPUT_BLOCK_ID]: branchValidationError,
+      },
+    });
+  }
 
   const actionId = payload.actions?.[0]?.action_id;
   const shouldOpenModalInline = actionId === "open_branch_modal";
@@ -1343,24 +1450,7 @@ async function handleRepoSelection(
  * Handle Slack interactions (buttons, select menus, etc.)
  */
 async function handleSlackInteraction(
-  payload: {
-    type: string;
-    trigger_id?: string;
-    actions?: Array<{
-      action_id: string;
-      selected_option?: { value: string };
-      value?: string;
-    }>;
-    channel?: { id: string };
-    message?: { ts: string; thread_ts?: string };
-    user?: { id: string };
-    view?: {
-      callback_id?: string;
-      state?: {
-        values?: Record<string, Record<string, { type?: string; value?: string }>>;
-      };
-    };
-  },
+  payload: SlackInteractionPayload,
   env: Env,
   traceId?: string
 ): Promise<void> {
@@ -1381,7 +1471,6 @@ async function handleSlackInteraction(
         user_id: userId,
         branch,
       });
-      await publishAppHome(env, userId);
       return;
     }
 
