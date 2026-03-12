@@ -339,6 +339,13 @@ function getUserRepoBranchKey(userId: string, repoId: string): string {
 }
 
 /**
+ * Prefix used for all per-user repo branch preferences.
+ */
+function getUserRepoBranchPrefix(userId: string): string {
+  return `user_repo_branch:${userId}:`;
+}
+
+/**
  * Read a per-user, per-repo branch preference.
  */
 async function getUserRepoBranchPreference(
@@ -373,6 +380,43 @@ async function getUserRepoBranchPreference(
     });
     return undefined;
   }
+}
+
+/**
+ * List all per-repo branch preferences for a user.
+ */
+async function getUserRepoBranchPreferences(
+  env: Env,
+  userId: string
+): Promise<Map<string, string>> {
+  const preferences = new Map<string, string>();
+  const prefix = getUserRepoBranchPrefix(userId);
+
+  try {
+    const listed = await env.SLACK_KV.list({ prefix });
+
+    for (const key of listed.keys) {
+      const repoId = key.name.slice(prefix.length);
+      if (!repoId) {
+        continue;
+      }
+
+      const branch = await getUserRepoBranchPreference(env, userId, repoId);
+      if (!branch) {
+        continue;
+      }
+
+      preferences.set(repoId, branch);
+    }
+  } catch (e) {
+    log.error("kv.list", {
+      key_prefix: "user_repo_branch",
+      user_id: userId,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
+  }
+
+  return preferences;
 }
 
 /**
@@ -587,13 +631,18 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
       : undefined;
 
   const repos = await getAvailableRepos(env);
-  const repoOptions = repos.slice(0, MAX_REPO_OPTIONS_IN_APP_HOME).map((repo) => ({
-    text: {
-      type: "plain_text" as const,
-      text: repo.fullName.slice(0, 75),
-    },
-    value: repo.id,
-  }));
+  const repoBranchPreferences = await getUserRepoBranchPreferences(env, userId);
+  const repoOptions = repos.slice(0, MAX_REPO_OPTIONS_IN_APP_HOME).map((repo) => {
+    const repoBranch = repoBranchPreferences.get(repo.id);
+    const label = repoBranch ? `${repo.fullName} → ${repoBranch}` : repo.fullName;
+    return {
+      text: {
+        type: "plain_text" as const,
+        text: label.slice(0, 75),
+      },
+      value: repo.id,
+    };
+  });
 
   if (repos.length > MAX_REPO_OPTIONS_IN_APP_HOME) {
     log.warn("slack.app_home.repo_options_truncated", {
@@ -720,6 +769,10 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
   }
 
   if (repoOptions.length > 0) {
+    const configuredRepoOverrides = repos
+      .map((repo) => ({ repo, branch: repoBranchPreferences.get(repo.id) }))
+      .filter((entry): entry is { repo: RepoConfig; branch: string } => Boolean(entry.branch));
+
     blocks.push(
       {
         type: "divider",
@@ -753,6 +806,24 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
         ],
       }
     );
+
+    if (configuredRepoOverrides.length > 0) {
+      const visibleOverrides = configuredRepoOverrides.slice(0, 8);
+      const lines = visibleOverrides.map(
+        ({ repo, branch }) => `• \`${repo.fullName}\` → *${branch}*`
+      );
+      const remainingCount = configuredRepoOverrides.length - visibleOverrides.length;
+
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text:
+            `*Configured repo overrides*\n${lines.join("\n")}` +
+            (remainingCount > 0 ? `\n• …and ${remainingCount} more` : ""),
+        },
+      });
+    }
   }
 
   blocks.push(

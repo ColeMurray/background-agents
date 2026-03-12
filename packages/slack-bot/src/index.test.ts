@@ -37,6 +37,17 @@ function createMockKV() {
     delete: vi.fn(async (key: string) => {
       store.delete(key);
     }),
+    list: vi.fn(async (options?: { prefix?: string }) => {
+      const prefix = options?.prefix ?? "";
+      const keys = Array.from(store.keys())
+        .filter((name) => name.startsWith(prefix))
+        .map((name) => ({ name }));
+      return {
+        keys,
+        list_complete: true,
+        cursor: "",
+      };
+    }),
   };
 }
 
@@ -311,5 +322,10 @@ describe("POST /interactions", () => {
 
     const kvPut = (env.SLACK_KV as unknown as { put: ReturnType<typeof vi.fn> }).put;
     expect(kvPut).toHaveBeenCalledWith("user_repo_branch:U123:acme/app", "release/2026-03");
+
+    const publishCall = mockPublishView.mock.calls.at(-1);
+    expect(publishCall?.[1]).toBe("U123");
+    expect(JSON.stringify(publishCall?.[2])).toContain("acme/app");
+    expect(JSON.stringify(publishCall?.[2])).toContain("release/2026-03");
   });
 });
