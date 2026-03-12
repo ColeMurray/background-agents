@@ -8,6 +8,7 @@ import Link from "next/link";
 import { useSidebarContext } from "@/components/sidebar-layout";
 import { formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
@@ -248,7 +249,7 @@ export default function Home() {
       });
 
       if (res.ok) {
-        mutate("/api/sessions");
+        mutate(SIDEBAR_SESSIONS_KEY);
         router.push(`/session/${sessionId}`);
       } else {
         const data = await res.json();

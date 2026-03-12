@@ -4,6 +4,7 @@ import { useState, useCallback } from "react";
 import Link from "next/link";
 import useSWR, { mutate } from "swr";
 import { buildSessionHref, type SessionItem } from "@/components/session-sidebar";
+import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
 import { formatRelativeTime } from "@/lib/time";
 
 const PAGE_SIZE = 20;
@@ -53,7 +54,7 @@ export function DataControlsSettings() {
     try {
       const res = await fetch(`/api/sessions/${sessionId}/unarchive`, { method: "POST" });
       if (res.ok) {
-        mutate("/api/sessions");
+        mutate(SIDEBAR_SESSIONS_KEY);
         mutate(ARCHIVED_SESSIONS_KEY);
       } else {
         mutate(ARCHIVED_SESSIONS_KEY);

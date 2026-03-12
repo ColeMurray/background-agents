@@ -2,10 +2,16 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useSession, signOut } from "next-auth/react";
 import useSWR from "swr";
 import { formatRelativeTime, isInactiveSession } from "@/lib/time";
+import {
+  buildSessionsPageKey,
+  mergeUniqueSessions,
+  SIDEBAR_SESSIONS_KEY,
+  type SessionListResponse,
+} from "@/lib/session-list";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useIsMobile } from "@/hooks/use-media-query";
 import {
@@ -42,12 +48,91 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const { data: authSession } = useSession();
   const pathname = usePathname();
   const [searchQuery, setSearchQuery] = useState("");
+  const [extraSessions, setExtraSessions] = useState<SessionItem[]>([]);
+  const [hasMorePages, setHasMorePages] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const offsetRef = useRef(0);
+  const hasMoreRef = useRef(false);
+  const loadingMoreRef = useRef(false);
   const isMobile = useIsMobile();
 
-  const { data, isLoading: loading } = useSWR<{ sessions: SessionItem[] }>(
-    authSession ? "/api/sessions" : null
+  const { data, isLoading: loading } = useSWR<SessionListResponse>(
+    authSession ? SIDEBAR_SESSIONS_KEY : null
   );
-  const sessions = useMemo(() => data?.sessions ?? [], [data]);
+  const firstPageSessions = useMemo(() => data?.sessions ?? [], [data?.sessions]);
+
+  useEffect(() => {
+    if (!data) return;
+
+    setExtraSessions([]);
+    setHasMorePages(data.hasMore);
+    setLoadingMore(false);
+    offsetRef.current = firstPageSessions.length;
+    hasMoreRef.current = data.hasMore;
+    loadingMoreRef.current = false;
+  }, [data, firstPageSessions.length]);
+
+  const loadMoreSessions = useCallback(async () => {
+    if (!authSession || loadingMoreRef.current || !hasMoreRef.current) return;
+
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+
+    try {
+      const response = await fetch(
+        buildSessionsPageKey({ excludeStatus: "archived", offset: offsetRef.current })
+      );
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch additional sessions: ${response.status}`);
+      }
+
+      const page: SessionListResponse = await response.json();
+      const fetched = page.sessions ?? [];
+
+      setExtraSessions((prev) => mergeUniqueSessions(prev, fetched));
+      setHasMorePages(page.hasMore);
+      offsetRef.current += fetched.length;
+      hasMoreRef.current = page.hasMore;
+    } catch (error) {
+      console.error("Failed to fetch additional sessions:", error);
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+    }
+  }, [authSession]);
+
+  const maybeLoadMoreSessions = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 96;
+    if (nearBottom) {
+      void loadMoreSessions();
+    }
+  }, [loadMoreSessions]);
+
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || loading || loadingMore || !hasMorePages) return;
+
+    if (container.clientHeight > 0 && container.scrollHeight <= container.clientHeight) {
+      void loadMoreSessions();
+    }
+  }, [
+    hasMorePages,
+    loading,
+    loadingMore,
+    loadMoreSessions,
+    firstPageSessions.length,
+    extraSessions.length,
+  ]);
+
+  const sessions = useMemo(
+    () => mergeUniqueSessions(firstPageSessions, extraSessions),
+    [firstPageSessions, extraSessions]
+  );
 
   // Sort sessions by updatedAt (most recent first), filter by search query,
   // and group children under their parent sessions
@@ -197,7 +282,11 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
       </div>
 
       {/* Session List */}
-      <div className="flex-1 overflow-y-auto">
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto"
+        onScroll={maybeLoadMoreSessions}
+      >
         {loading ? (
           <div className="flex justify-center py-8">
             <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-muted-foreground" />
@@ -237,6 +326,12 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
                   />
                 ))}
               </>
+            )}
+
+            {loadingMore && (
+              <div className="flex justify-center py-3">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-muted-foreground" />
+              </div>
             )}
           </>
         )}

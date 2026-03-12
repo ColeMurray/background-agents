@@ -24,6 +24,7 @@ import {
 import { ActionBar } from "@/components/action-bar";
 import { copyToClipboard, formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { DEFAULT_MODEL, getDefaultReasoningEffort, type ModelCategory } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
@@ -206,7 +207,7 @@ function SessionPageContent() {
     (url: string) =>
       fetch(url, { method: "POST" }).then((r) => {
         if (r.ok) {
-          mutate("/api/sessions");
+          mutate(SIDEBAR_SESSIONS_KEY);
           return true;
         }
 
@@ -227,7 +228,7 @@ function SessionPageContent() {
     `/api/sessions/${sessionId}/unarchive`,
     (url: string) =>
       fetch(url, { method: "POST" }).then((r) => {
-        if (r.ok) mutate("/api/sessions");
+        if (r.ok) mutate(SIDEBAR_SESSIONS_KEY);
         else console.error("Failed to unarchive session");
       }),
     { throwOnError: false }
@@ -275,7 +276,7 @@ function SessionPageContent() {
     sendPrompt(prompt, selectedModel, reasoningEffort);
     setPrompt("");
     // Revalidate sidebar so this session bubbles to the top
-    mutate("/api/sessions");
+    mutate(SIDEBAR_SESSIONS_KEY);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
