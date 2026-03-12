@@ -19,6 +19,7 @@ vi.mock("./utils/slack-client", async () => {
 });
 
 import app from "./index";
+import { clearLocalCache } from "./classifier/repos";
 
 function createMockKV() {
   const store = new Map<string, string>();
@@ -119,6 +120,7 @@ async function flushWaitUntil(ctx: ReturnType<typeof makeCtx>, callIndex = 0): P
 describe("POST /interactions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearLocalCache();
     mockVerifySlackSignature.mockResolvedValue(true);
     mockOpenView.mockResolvedValue({ ok: true });
   });
@@ -371,5 +373,70 @@ describe("POST /interactions", () => {
     const kvDelete = (env.SLACK_KV as unknown as { delete: ReturnType<typeof vi.fn> }).delete;
     expect(kvDelete).toHaveBeenCalledWith("user_repo_branch:U123:acme/app");
     expect(mockPublishView).toHaveBeenCalled();
+  });
+
+  it("returns repo suggestions beyond 100 repos via search", async () => {
+    const payload = {
+      type: "block_suggestion",
+      action_id: "select_repo_branch_override",
+      user: { id: "U123" },
+      value: "repo-150",
+    };
+
+    const request = new Request("http://localhost/interactions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "x-slack-signature": "v0=test",
+        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
+      },
+      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
+    });
+
+    const env = makeEnv();
+    const repos = Array.from({ length: 150 }, (_, idx) => {
+      const number = String(idx + 1).padStart(3, "0");
+      return {
+        id: idx + 1,
+        owner: "acme",
+        name: `repo-${number}`,
+        fullName: `acme/repo-${number}`,
+        defaultBranch: "main",
+        private: true,
+      };
+    });
+
+    (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/repos")) {
+          return new Response(JSON.stringify({ repos }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+
+        return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    );
+
+    const ctx = makeCtx();
+    const response = await app.fetch(request, env, ctx);
+
+    expect(response.status).toBe(200);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+
+    const body = (await response.json()) as {
+      options: Array<{ text: { type: string; text: string }; value: string }>;
+    };
+    expect(body.options).toEqual([
+      {
+        text: { type: "plain_text", text: "acme/repo-150" },
+        value: "acme/repo-150",
+      },
+    ]);
   });
 });

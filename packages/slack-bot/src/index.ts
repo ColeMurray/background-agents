@@ -41,12 +41,14 @@ const BRANCH_INPUT_BLOCK_ID = "branch_input";
 const BRANCH_INPUT_ACTION_ID = "branch_value";
 const REPO_BRANCH_SELECTOR_ACTION_ID = "select_repo_branch_override";
 const CLEAR_REPO_BRANCH_ACTION_ID = "clear_repo_branch_override";
-const MAX_REPO_OPTIONS_IN_APP_HOME = 100;
+const MAX_REPO_SUGGESTION_OPTIONS = 100;
 const BRANCH_NAME_SPECIAL_CHARS_REGEX = /[\s~^:?*[\\]/;
 const INVALID_BRANCH_ERROR = "Enter a valid Git branch name.";
 
 type SlackInteractionPayload = {
   type: string;
+  action_id?: string;
+  value?: string;
   trigger_id?: string;
   actions?: Array<{
     action_id: string;
@@ -609,6 +611,49 @@ async function saveUserPreferences(
 }
 
 /**
+ * Build Slack select options for repositories with optional branch labels.
+ */
+function buildRepoBranchSelectOptions(
+  repos: RepoConfig[],
+  repoBranchPreferences: Map<string, string>
+): Array<{ text: { type: "plain_text"; text: string }; value: string }> {
+  return repos.map((repo) => {
+    const repoBranch = repoBranchPreferences.get(repo.id);
+    const label = repoBranch ? `${repo.fullName} → ${repoBranch}` : repo.fullName;
+    return {
+      text: {
+        type: "plain_text" as const,
+        text: label.slice(0, 75),
+      },
+      value: repo.id,
+    };
+  });
+}
+
+/**
+ * Build searchable repository options for Slack external_select.
+ */
+async function getRepoBranchSuggestionOptions(
+  env: Env,
+  userId: string,
+  query: string | undefined,
+  traceId?: string
+): Promise<Array<{ text: { type: "plain_text"; text: string }; value: string }>> {
+  const repos = await getAvailableRepos(env, traceId);
+  const repoBranchPreferences = await getUserRepoBranchPreferences(env, userId);
+  const normalizedQuery = query?.trim().toLowerCase();
+
+  const filteredRepos = normalizedQuery
+    ? repos.filter((repo) => repo.fullName.toLowerCase().includes(normalizedQuery))
+    : repos;
+
+  return buildRepoBranchSelectOptions(filteredRepos, repoBranchPreferences).slice(
+    0,
+    MAX_REPO_SUGGESTION_OPTIONS
+  );
+}
+
+/**
  * Publish the App Home view for a user.
  */
 async function publishAppHome(env: Env, userId: string): Promise<void> {
@@ -633,25 +678,6 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
 
   const repos = await getAvailableRepos(env);
   const repoBranchPreferences = await getUserRepoBranchPreferences(env, userId);
-  const repoOptions = repos.slice(0, MAX_REPO_OPTIONS_IN_APP_HOME).map((repo) => {
-    const repoBranch = repoBranchPreferences.get(repo.id);
-    const label = repoBranch ? `${repo.fullName} → ${repoBranch}` : repo.fullName;
-    return {
-      text: {
-        type: "plain_text" as const,
-        text: label.slice(0, 75),
-      },
-      value: repo.id,
-    };
-  });
-
-  if (repos.length > MAX_REPO_OPTIONS_IN_APP_HOME) {
-    log.warn("slack.app_home.repo_options_truncated", {
-      user_id: userId,
-      repo_count: repos.length,
-      included_count: MAX_REPO_OPTIONS_IN_APP_HOME,
-    });
-  }
 
   const reasoningOptions = reasoningConfig
     ? reasoningConfig.efforts.map((effort) => ({
@@ -772,7 +798,7 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
     });
   }
 
-  if (repoOptions.length > 0) {
+  if (repos.length > 0) {
     const configuredRepoOverrides = repos
       .map((repo) => ({ repo, branch: repoBranchPreferences.get(repo.id) }))
       .filter((entry): entry is { repo: RepoConfig; branch: string } => Boolean(entry.branch));
@@ -790,10 +816,10 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
         block_id: "repo_branch_selection",
         elements: [
           {
-            type: "static_select",
+            type: "external_select",
             action_id: REPO_BRANCH_SELECTOR_ACTION_ID,
-            placeholder: { type: "plain_text", text: "Select repository" },
-            options: repoOptions,
+            placeholder: { type: "plain_text", text: "Search repository" },
+            min_query_length: 0,
           },
         ],
       },
@@ -1275,6 +1301,36 @@ app.post("/interactions", async (c) => {
 
   const payloadStr = new URLSearchParams(body).get("payload") || "{}";
   const payload = JSON.parse(payloadStr) as SlackInteractionPayload;
+
+  if (payload.type === "block_suggestion") {
+    const suggestionActionId = payload.action_id;
+    const suggestionUserId = payload.user?.id;
+
+    if (suggestionActionId === REPO_BRANCH_SELECTOR_ACTION_ID && suggestionUserId) {
+      const options = await getRepoBranchSuggestionOptions(
+        c.env,
+        suggestionUserId,
+        payload.value,
+        traceId
+      );
+
+      log.info("http.request", {
+        trace_id: traceId,
+        http_method: "POST",
+        http_path: "/interactions",
+        http_status: 200,
+        interaction_type: payload.type,
+        action_id: suggestionActionId,
+        option_count: options.length,
+        duration_ms: Date.now() - startTime,
+      });
+
+      return c.json({ options });
+    }
+
+    return c.json({ options: [] });
+  }
+
   const branchValidationError = getBranchSubmissionValidationError(payload);
 
   if (branchValidationError) {
@@ -1304,7 +1360,7 @@ app.post("/interactions", async (c) => {
     });
   }
 
-  const actionId = payload.actions?.[0]?.action_id;
+  const actionId = payload.actions?.[0]?.action_id ?? payload.action_id;
   const isViewSubmission = payload.type === "view_submission";
   const shouldOpenModalInline =
     actionId === "open_branch_modal" || actionId === REPO_BRANCH_SELECTOR_ACTION_ID;
