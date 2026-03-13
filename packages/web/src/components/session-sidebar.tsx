@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { useSession, signOut } from "next-auth/react";
 import useSWR from "swr";
 import { formatRelativeTime, isInactiveSession } from "@/lib/time";
@@ -146,27 +146,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           >
             <SettingsIcon className="w-4 h-4" />
           </Link>
-          {authSession?.user?.image ? (
-            <button
-              onClick={() => signOut()}
-              className="w-7 h-7 rounded-full overflow-hidden"
-              title={`Signed in as ${authSession.user.name}\nClick to sign out`}
-            >
-              <img
-                src={authSession.user.image}
-                alt={authSession.user.name || "User"}
-                className="w-full h-full object-cover"
-              />
-            </button>
-          ) : (
-            <button
-              onClick={() => signOut()}
-              className="w-7 h-7 rounded-full bg-card flex items-center justify-center text-xs font-medium text-foreground"
-              title="Sign out"
-            >
-              {authSession?.user?.name?.charAt(0).toUpperCase() || "?"}
-            </button>
-          )}
+          <UserMenu user={authSession?.user} />
         </div>
       </div>
 
@@ -242,6 +222,79 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
         )}
       </div>
     </aside>
+  );
+}
+
+function UserMenu({ user }: { user?: { name?: string | null; image?: string | null } | null }) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node) &&
+          buttonRef.current && !buttonRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  function toggle() {
+    if (!open && buttonRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect();
+      setMenuPos({
+        top: rect.bottom + 4,
+        left: rect.left,
+      });
+    }
+    setOpen((v) => !v);
+  }
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        onClick={toggle}
+        className="w-7 h-7 rounded-full overflow-hidden focus:outline-none focus:ring-2 focus:ring-primary"
+        title={`Signed in as ${user?.name || "User"}`}
+      >
+        {user?.image ? (
+          <img
+            src={user.image}
+            alt={user.name || "User"}
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <span className="w-full h-full rounded-full bg-card flex items-center justify-center text-xs font-medium text-foreground">
+            {user?.name?.charAt(0).toUpperCase() || "?"}
+          </span>
+        )}
+      </button>
+      {open && menuPos && (
+        <div
+          ref={menuRef}
+          className="fixed w-48 rounded-md border border-border bg-background shadow-lg py-1 z-[100]"
+          style={{ top: menuPos.top, left: menuPos.left }}
+        >
+          <div className="px-3 py-2 border-b border-border">
+            <p className="text-sm font-medium text-foreground truncate">{user?.name || "User"}</p>
+          </div>
+          <button
+            onClick={() => signOut()}
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted transition"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3-3l3-3m0 0l-3-3m3 3H9" />
+            </svg>
+            Sign out
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 
