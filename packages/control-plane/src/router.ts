@@ -1174,9 +1174,10 @@ async function handleUpdateSessionTitle(
   );
 
   if (response.ok) {
-    // Update D1 index
+    // read the validated title from the DO response
+    const doResult = (await response.clone().json()) as { title: string };
     const sessionStore = new SessionIndexStore(env.DB);
-    const updated = await sessionStore.updateTitle(sessionId, title!);
+    const updated = await sessionStore.updateTitle(sessionId, doResult.title);
     if (!updated) {
       logger.warn("Session not found in D1 index during title update", { session_id: sessionId });
     }
