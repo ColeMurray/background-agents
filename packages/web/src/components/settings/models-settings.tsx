@@ -114,9 +114,10 @@ export function ModelsSettings() {
                 {group.models.map((model) => {
                   const isEnabled = enabledModels.has(model.id);
                   return (
-                    <div
+                    <label
                       key={model.id}
-                      className="flex items-center justify-between px-4 py-3 border border-border hover:bg-muted/50 transition"
+                      htmlFor={`model-toggle-${model.id}`}
+                      className="flex items-center justify-between px-4 py-3 border border-border hover:bg-muted/50 transition cursor-pointer"
                     >
                       <div>
                         <span className="text-sm font-medium text-foreground">{model.name}</span>
@@ -124,8 +125,12 @@ export function ModelsSettings() {
                           {model.description}
                         </span>
                       </div>
-                      <Switch checked={isEnabled} onCheckedChange={() => toggleModel(model.id)} />
-                    </div>
+                      <Switch
+                        id={`model-toggle-${model.id}`}
+                        checked={isEnabled}
+                        onCheckedChange={() => toggleModel(model.id)}
+                      />
+                    </label>
                   );
                 })}
               </div>

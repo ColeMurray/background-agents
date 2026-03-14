@@ -140,8 +140,9 @@ export function ImagesSettings() {
               <div className="flex items-center gap-3 min-w-0">
                 <Switch
                   checked={isEnabled}
-                  onCheckedChange={() => handleToggle(repo.owner, repo.name, !isEnabled)}
+                  onCheckedChange={(checked) => handleToggle(repo.owner, repo.name, checked)}
                   disabled={isToggling}
+                  aria-label={`Toggle pre-built images for ${repo.owner}/${repo.name}`}
                 />
                 <span className="text-sm font-medium text-foreground truncate">
                   {repo.owner}/{repo.name}

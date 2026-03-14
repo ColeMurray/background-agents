@@ -259,7 +259,10 @@ function GlobalSettingsSection({
     <Section title="Defaults & Scope" description="Global behavior and repository targeting.">
       {error && <Message tone="error" text={error} />}
 
-      <div className="flex items-center justify-between px-4 py-3 border border-border hover:bg-muted/50 transition mb-4 rounded-sm">
+      <label
+        htmlFor="auto-review-toggle"
+        className="flex items-center justify-between px-4 py-3 border border-border hover:bg-muted/50 transition cursor-pointer mb-4 rounded-sm"
+      >
         <div>
           <span className="text-sm font-medium text-foreground">Auto-review new PRs</span>
           <span className="text-sm text-muted-foreground ml-2">
@@ -267,14 +270,15 @@ function GlobalSettingsSection({
           </span>
         </div>
         <Switch
+          id="auto-review-toggle"
           checked={autoReviewOnOpen}
-          onCheckedChange={() => {
-            setAutoReviewOnOpen(!autoReviewOnOpen);
+          onCheckedChange={(checked) => {
+            setAutoReviewOnOpen(checked);
             setDirty(true);
             setError("");
           }}
         />
-      </div>
+      </label>
 
       <div className="mb-4">
         <p className="text-sm font-medium text-foreground mb-2">Repository Scope</p>
