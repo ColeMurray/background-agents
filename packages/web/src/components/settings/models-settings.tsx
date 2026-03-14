@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { MODEL_OPTIONS, DEFAULT_ENABLED_MODELS } from "@open-inspect/shared";
 import { MODEL_PREFERENCES_KEY } from "@/hooks/use-enabled-models";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 
 export function ModelsSettings() {
   const { data, isLoading: loading } = useSWR<{ enabledModels: string[] }>(MODEL_PREFERENCES_KEY);
@@ -113,9 +114,9 @@ export function ModelsSettings() {
                 {group.models.map((model) => {
                   const isEnabled = enabledModels.has(model.id);
                   return (
-                    <label
+                    <div
                       key={model.id}
-                      className="flex items-center justify-between px-4 py-3 border border-border hover:bg-muted/50 transition cursor-pointer"
+                      className="flex items-center justify-between px-4 py-3 border border-border hover:bg-muted/50 transition"
                     >
                       <div>
                         <span className="text-sm font-medium text-foreground">{model.name}</span>
@@ -123,17 +124,8 @@ export function ModelsSettings() {
                           {model.description}
                         </span>
                       </div>
-                      <div className="relative">
-                        <input
-                          type="checkbox"
-                          checked={isEnabled}
-                          onChange={() => toggleModel(model.id)}
-                          className="sr-only peer"
-                        />
-                        <div className="w-9 h-5 bg-muted rounded-full peer-checked:bg-accent transition-colors" />
-                        <div className="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform peer-checked:translate-x-4" />
-                      </div>
-                    </label>
+                      <Switch checked={isEnabled} onCheckedChange={() => toggleModel(model.id)} />
+                    </div>
                   );
                 })}
               </div>

@@ -4,6 +4,7 @@ import { useState } from "react";
 import useSWR, { mutate } from "swr";
 import { useRepos } from "@/hooks/use-repos";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { RefreshIcon } from "@/components/ui/icons";
 import { formatRelativeTime } from "@/lib/time";
 
@@ -137,17 +138,11 @@ export function ImagesSettings() {
               className="flex items-center justify-between px-4 py-3 border border-border hover:bg-muted/50 transition"
             >
               <div className="flex items-center gap-3 min-w-0">
-                <label className="relative flex-shrink-0">
-                  <input
-                    type="checkbox"
-                    checked={isEnabled}
-                    onChange={() => handleToggle(repo.owner, repo.name, !isEnabled)}
-                    disabled={isToggling}
-                    className="sr-only peer"
-                  />
-                  <div className="w-9 h-5 bg-muted rounded-full peer-checked:bg-accent transition-colors" />
-                  <div className="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform peer-checked:translate-x-4" />
-                </label>
+                <Switch
+                  checked={isEnabled}
+                  onCheckedChange={() => handleToggle(repo.owner, repo.name, !isEnabled)}
+                  disabled={isToggling}
+                />
                 <span className="text-sm font-medium text-foreground truncate">
                   {repo.owner}/{repo.name}
                 </span>
