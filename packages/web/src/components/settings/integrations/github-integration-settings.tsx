@@ -562,7 +562,7 @@ function RepoOverridesSection({
       )}
 
       <div className="flex items-center gap-2">
-        <Select value={addingRepo || undefined} onValueChange={setAddingRepo}>
+        <Select value={addingRepo} onValueChange={setAddingRepo}>
           <SelectTrigger className="flex-1">
             <SelectValue placeholder="Select a repository..." />
           </SelectTrigger>
@@ -694,7 +694,7 @@ function RepoOverrideRow({
           {entry.repo}
         </span>
 
-        <Select value={model || undefined} onValueChange={handleModelChange}>
+        <Select value={model} onValueChange={handleModelChange}>
           <SelectTrigger density="compact" className="flex-1 min-w-[180px]">
             <SelectValue placeholder="Default model" />
           </SelectTrigger>
@@ -714,7 +714,7 @@ function RepoOverrideRow({
 
         {reasoningConfig && (
           <Select
-            value={effort || undefined}
+            value={effort}
             onValueChange={(v) => {
               setEffort(v);
               setDirty(true);

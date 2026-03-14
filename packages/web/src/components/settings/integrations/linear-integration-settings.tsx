@@ -257,7 +257,7 @@ function GlobalSettingsSection({
         <label className="text-sm">
           <span className="block text-foreground font-medium mb-1">Default model</span>
           <Select
-            value={model || undefined}
+            value={model}
             onValueChange={(nextModel) => {
               setModel(nextModel);
               if (effort && nextModel && !isValidReasoningEffort(nextModel, effort)) {
@@ -288,7 +288,7 @@ function GlobalSettingsSection({
         <label className="text-sm">
           <span className="block text-foreground font-medium mb-1">Default reasoning effort</span>
           <Select
-            value={effort || undefined}
+            value={effort}
             onValueChange={(v) => {
               setEffort(v);
               setDirty(true);
@@ -508,7 +508,7 @@ function RepoOverridesSection({
       )}
 
       <div className="flex items-center gap-2">
-        <Select value={addingRepo || undefined} onValueChange={setAddingRepo}>
+        <Select value={addingRepo} onValueChange={setAddingRepo}>
           <SelectTrigger className="flex-1">
             <SelectValue placeholder="Select a repository..." />
           </SelectTrigger>
@@ -619,7 +619,7 @@ function RepoOverrideRow({
       <div className="text-sm font-medium text-foreground">{entry.repo}</div>
 
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
-        <Select value={model || undefined} onValueChange={handleModelChange}>
+        <Select value={model} onValueChange={handleModelChange}>
           <SelectTrigger density="compact">
             <SelectValue placeholder="Default model" />
           </SelectTrigger>
@@ -638,7 +638,7 @@ function RepoOverrideRow({
         </Select>
 
         <Select
-          value={effort || undefined}
+          value={effort}
           onValueChange={(v) => {
             setEffort(v);
             setDirty(true);
