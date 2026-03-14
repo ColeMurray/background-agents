@@ -2,13 +2,20 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useSession, signOut } from "next-auth/react";
-import useSWR from "swr";
+import useSWR, { mutate } from "swr";
 import { formatRelativeTime, isInactiveSession } from "@/lib/time";
+import {
+  buildSessionsPageKey,
+  mergeUniqueSessions,
+  SIDEBAR_SESSIONS_KEY,
+  type SessionListResponse,
+} from "@/lib/session-list";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useIsMobile } from "@/hooks/use-media-query";
 import {
+  MoreIcon,
   SidebarIcon,
   InspectIcon,
   PlusIcon,
@@ -17,9 +24,20 @@ import {
   BranchIcon,
 } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { Session } from "@open-inspect/shared";
 
 export type SessionItem = Session;
+
+type SessionsResponse = { sessions: SessionItem[] };
 
 export function buildSessionHref(session: SessionItem) {
   return {
@@ -42,12 +60,100 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const { data: authSession } = useSession();
   const pathname = usePathname();
   const [searchQuery, setSearchQuery] = useState("");
+  const [extraSessions, setExtraSessions] = useState<SessionItem[]>([]);
+  const [hasMorePages, setHasMorePages] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const offsetRef = useRef(0);
+  const hasMoreRef = useRef(false);
+  const loadingMoreRef = useRef(false);
   const isMobile = useIsMobile();
 
-  const { data, isLoading: loading } = useSWR<{ sessions: SessionItem[] }>(
-    authSession ? "/api/sessions" : null
+  const { data, isLoading: loading } = useSWR<SessionListResponse>(
+    authSession ? SIDEBAR_SESSIONS_KEY : null
   );
-  const sessions = useMemo(() => data?.sessions ?? [], [data]);
+  const firstPageSessions = useMemo(() => data?.sessions ?? [], [data?.sessions]);
+
+  // Track data reference to clear extraSessions synchronously during render,
+  // preventing one frame of stale extra sessions after SWR revalidation.
+  const prevDataRef = useRef(data);
+  let effectiveExtraSessions = extraSessions;
+  if (prevDataRef.current !== data) {
+    prevDataRef.current = data;
+    effectiveExtraSessions = [];
+  }
+
+  useEffect(() => {
+    if (!data) return;
+
+    setExtraSessions([]);
+    setHasMorePages(data.hasMore);
+    setLoadingMore(false);
+    offsetRef.current = firstPageSessions.length;
+    hasMoreRef.current = data.hasMore;
+    loadingMoreRef.current = false;
+  }, [data, firstPageSessions.length]);
+
+  const loadMoreSessions = useCallback(async () => {
+    if (!authSession || loadingMoreRef.current || !hasMoreRef.current) return;
+
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+
+    try {
+      const response = await fetch(
+        buildSessionsPageKey({ excludeStatus: "archived", offset: offsetRef.current })
+      );
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch additional sessions: ${response.status}`);
+      }
+
+      const page: SessionListResponse = await response.json();
+      const fetched = page.sessions ?? [];
+
+      setExtraSessions((prev) => mergeUniqueSessions(prev, fetched));
+      setHasMorePages(page.hasMore);
+      offsetRef.current += fetched.length;
+      hasMoreRef.current = page.hasMore;
+    } catch (error) {
+      console.error("Failed to fetch additional sessions:", error);
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+    }
+  }, [authSession]);
+
+  const maybeLoadMoreSessions = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 96;
+    if (nearBottom) {
+      void loadMoreSessions();
+    }
+  }, [loadMoreSessions]);
+
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || loading || loadingMore || !hasMorePages) return;
+
+    if (container.clientHeight > 0 && container.scrollHeight <= container.clientHeight) {
+      void loadMoreSessions();
+    }
+  }, [
+    hasMorePages,
+    loading,
+    loadingMore,
+    loadMoreSessions,
+    firstPageSessions.length,
+    extraSessions.length,
+  ]);
+
+  const sessions = useMemo(
+    () => mergeUniqueSessions(firstPageSessions, effectiveExtraSessions),
+    [firstPageSessions, effectiveExtraSessions]
+  );
 
   // Sort sessions by updatedAt (most recent first), filter by search query,
   // and group children under their parent sessions
@@ -146,27 +252,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           >
             <SettingsIcon className="w-4 h-4" />
           </Link>
-          {authSession?.user?.image ? (
-            <button
-              onClick={() => signOut()}
-              className="w-7 h-7 rounded-full overflow-hidden"
-              title={`Signed in as ${authSession.user.name}\nClick to sign out`}
-            >
-              <img
-                src={authSession.user.image}
-                alt={authSession.user.name || "User"}
-                className="w-full h-full object-cover"
-              />
-            </button>
-          ) : (
-            <button
-              onClick={() => signOut()}
-              className="w-7 h-7 rounded-full bg-card flex items-center justify-center text-xs font-medium text-foreground"
-              title="Sign out"
-            >
-              {authSession?.user?.name?.charAt(0).toUpperCase() || "?"}
-            </button>
-          )}
+          <UserMenu user={authSession?.user} />
         </div>
       </div>
 
@@ -187,17 +273,20 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
 
       {/* Search */}
       <div className="px-3 py-2">
-        <input
+        <Input
           type="text"
           placeholder="Search sessions..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full px-3 py-2 text-sm bg-input border border-border focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent placeholder:text-secondary-foreground text-foreground"
         />
       </div>
 
       {/* Session List */}
-      <div className="flex-1 overflow-y-auto">
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto"
+        onScroll={maybeLoadMoreSessions}
+      >
         {loading ? (
           <div className="flex justify-center py-8">
             <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-muted-foreground" />
@@ -238,10 +327,63 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
                 ))}
               </>
             )}
+
+            {loadingMore && (
+              <div className="flex justify-center py-3">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-muted-foreground" />
+              </div>
+            )}
           </>
         )}
       </div>
     </aside>
+  );
+}
+
+function UserMenu({ user }: { user?: { name?: string | null; image?: string | null } | null }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          className="w-7 h-7 rounded-full overflow-hidden focus:outline-none focus:ring-2 focus:ring-primary"
+          title={`Signed in as ${user?.name || "User"}`}
+        >
+          {user?.image ? (
+            <img
+              src={user.image}
+              alt={user.name || "User"}
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <span className="w-full h-full rounded-full bg-card flex items-center justify-center text-xs font-medium text-foreground">
+              {user?.name?.charAt(0).toUpperCase() || "?"}
+            </span>
+          )}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" sideOffset={4}>
+        <DropdownMenuLabel className="font-medium truncate">
+          {user?.name || "User"}
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => signOut()}>
+          <svg
+            className="w-4 h-4"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={1.5}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3-3l3-3m0 0l-3-3m3 3H9"
+            />
+          </svg>
+          Sign out
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -297,38 +439,156 @@ function SessionListItem({
   const repoInfo = `${session.repoOwner}/${session.repoName}`;
   // Orphan child (parent filtered out) — show a subtle badge
   const isOrphanChild = session.parentSessionId && session.spawnSource === "agent";
-  return (
-    <Link
-      href={buildSessionHref(session)}
-      onClick={() => {
-        if (isMobile) {
-          onSessionSelect?.();
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [title, setTitle] = useState(displayTitle);
+
+  useEffect(() => {
+    if (!isRenaming) {
+      setTitle(displayTitle);
+    }
+  }, [displayTitle, isRenaming]);
+
+  const handleStartRename = () => {
+    setTitle(displayTitle);
+    setIsRenaming(true);
+  };
+
+  const handleCancelRename = () => {
+    setTitle(displayTitle);
+    setIsRenaming(false);
+  };
+
+  const handleRenameSubmit = async () => {
+    const trimmed = title.trim();
+
+    if (!trimmed || trimmed === displayTitle) {
+      setIsRenaming(false);
+      return;
+    }
+
+    const previousTitle = displayTitle;
+    setIsRenaming(false);
+
+    const updateSessionsTitle = (data?: SessionsResponse): SessionsResponse => ({
+      sessions: (data?.sessions ?? []).map((currentSession) =>
+        currentSession.id === session.id
+          ? {
+              ...currentSession,
+              title: trimmed,
+              updatedAt: Date.now(),
+            }
+          : currentSession
+      ),
+    });
+
+    try {
+      await mutate<SessionsResponse>(
+        "/api/sessions",
+        async (currentData?: SessionsResponse) => {
+          const response = await fetch(`/api/sessions/${session.id}/title`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: trimmed }),
+          });
+          if (!response.ok) {
+            throw new Error("Failed to update session title");
+          }
+          return updateSessionsTitle(currentData);
+        },
+        {
+          optimisticData: updateSessionsTitle,
+          rollbackOnError: true,
+          populateCache: true,
+          revalidate: true,
         }
-      }}
-      className={`block px-4 py-2.5 border-l-2 transition ${
+      );
+    } catch {
+      setTitle(previousTitle);
+      setIsRenaming(true);
+    }
+  };
+
+  return (
+    <div
+      className={`group relative block px-4 py-2.5 border-l-2 transition ${
         isActive ? "border-l-accent bg-accent-muted" : "border-l-transparent hover:bg-muted"
       }`}
     >
-      <div className="truncate text-sm font-medium text-foreground">{displayTitle}</div>
-      <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
-        <span>{relativeTime}</span>
-        <span>·</span>
-        <span className="truncate">{repoInfo}</span>
-        {isOrphanChild && (
-          <>
+      {isRenaming ? (
+        <>
+          <input
+            autoFocus
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            onFocus={(e) => e.currentTarget.select()}
+            onBlur={handleRenameSubmit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                e.currentTarget.blur();
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                handleCancelRename();
+              }
+            }}
+            className="w-full text-sm bg-transparent text-foreground outline-none focus:ring-inset focus:ring-ring font-medium pr-8"
+          />
+          <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
+            <span>{relativeTime}</span>
             <span>·</span>
-            <span className="text-accent">sub-task</span>
-          </>
-        )}
-        {session.baseBranch && session.baseBranch !== "main" && (
-          <>
+            <span className="truncate">{repoInfo}</span>
+          </div>
+        </>
+      ) : (
+        <Link
+          href={buildSessionHref(session)}
+          onClick={() => {
+            if (isMobile) {
+              onSessionSelect?.();
+            }
+          }}
+          className="block pr-8"
+        >
+          <div className="truncate text-sm font-medium text-foreground">{displayTitle}</div>
+          <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
+            <span>{relativeTime}</span>
             <span>·</span>
-            <BranchIcon className="w-3 h-3 flex-shrink-0" />
-            <span className="truncate">{session.baseBranch}</span>
-          </>
-        )}
+            <span className="truncate">{repoInfo}</span>
+            {isOrphanChild && (
+              <>
+                <span>·</span>
+                <span className="text-accent">sub-task</span>
+              </>
+            )}
+            {session.baseBranch && session.baseBranch !== "main" && (
+              <>
+                <span>·</span>
+                <BranchIcon className="w-3 h-3 flex-shrink-0" />
+                <span className="truncate">{session.baseBranch}</span>
+              </>
+            )}
+          </div>
+        </Link>
+      )}
+
+      <div className="absolute inset-y-0 right-2 flex items-start pt-2">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label="Session actions"
+              className="h-6 w-6 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 data-[state=open]:opacity-100"
+            >
+              <MoreIcon className="w-4 h-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={handleStartRename}>Rename</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
-    </Link>
+    </div>
   );
 }
 

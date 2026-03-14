@@ -161,7 +161,8 @@ const CHILD_SANDBOX_TIMEOUT_SECONDS = 3600; // 1 hour (vs default 2 hours)
 export interface RepoImageLookup {
   getLatestReady(
     repoOwner: string,
-    repoName: string
+    repoName: string,
+    baseBranch?: string
   ): Promise<{ provider_image_id: string; base_sha: string } | null>;
 }
 
@@ -338,7 +339,8 @@ export class SandboxLifecycleManager {
         try {
           const repoImage = await this.repoImageLookup.getLatestReady(
             session.repo_owner,
-            session.repo_name
+            session.repo_name,
+            session.base_branch
           );
           if (repoImage) {
             repoImageId = repoImage.provider_image_id;

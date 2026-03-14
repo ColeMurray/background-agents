@@ -21,9 +21,16 @@
   --card: #f8f8f6;
   --card-foreground: #1a1a1a;
 
+  /* Popover/dropdown backgrounds */
+  --popover: #ffffff;
+  --popover-foreground: #1a1a1a;
+
   /* Primary (inverted button style) */
   --primary: #1a1a1a;
   --primary-foreground: #ffffff;
+
+  /* Secondary */
+  --secondary: rgba(0, 0, 0, 0.05);
 
   /* Accent color (warm brown) */
   --accent: #8b7355;
@@ -34,6 +41,10 @@
   --muted: rgba(0, 0, 0, 0.05);
   --muted-foreground: #666666;
   --secondary-foreground: #999999;
+
+  /* Destructive */
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
 
   /* Borders */
   --border: rgba(0, 0, 0, 0.1);
@@ -48,9 +59,12 @@
   /* Success (green) */
   --success: #28c840;
   --success-muted: rgba(40, 200, 64, 0.1);
+
+  /* Border radius */
+  --radius: 0.25rem;
 }
 
-/* Dark mode via system preference */
+/* Dark mode via system preference (no-JS fallback) */
 @media (prefers-color-scheme: dark) {
   :root {
     --background: #1a1a1a;
@@ -59,8 +73,13 @@
     --card: rgba(255, 255, 255, 0.05);
     --card-foreground: #f8f8f6;
 
+    --popover: #252525;
+    --popover-foreground: #f8f8f6;
+
     --primary: #f8f8f6;
     --primary-foreground: #1a1a1a;
+
+    --secondary: rgba(255, 255, 255, 0.05);
 
     --accent: #a68b6a;
     --accent-foreground: #ffffff;
@@ -69,6 +88,9 @@
     --muted: rgba(255, 255, 255, 0.05);
     --muted-foreground: #999999;
     --secondary-foreground: #666666;
+
+    --destructive: #ef4444;
+    --destructive-foreground: #ffffff;
 
     --border: rgba(255, 255, 255, 0.1);
     --border-muted: rgba(255, 255, 255, 0.05);
@@ -82,7 +104,7 @@
   }
 }
 
-/* Dark mode via class (for manual toggle support) */
+/* Dark mode via class (authoritative when next-themes is loaded) */
 .dark {
   --background: #1a1a1a;
   --foreground: #f8f8f6;
@@ -90,8 +112,13 @@
   --card: rgba(255, 255, 255, 0.05);
   --card-foreground: #f8f8f6;
 
+  --popover: #252525;
+  --popover-foreground: #f8f8f6;
+
   --primary: #f8f8f6;
   --primary-foreground: #1a1a1a;
+
+  --secondary: rgba(255, 255, 255, 0.05);
 
   --accent: #a68b6a;
   --accent-foreground: #ffffff;
@@ -100,6 +127,9 @@
   --muted: rgba(255, 255, 255, 0.05);
   --muted-foreground: #999999;
   --secondary-foreground: #666666;
+
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
 
   --border: rgba(255, 255, 255, 0.1);
   --border-muted: rgba(255, 255, 255, 0.05);

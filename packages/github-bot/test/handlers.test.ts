@@ -76,7 +76,8 @@ function createMockEnv(): Env {
   });
 
   return {
-    CONTROL_PLANE: { fetch: controlPlaneFetch } as unknown as Fetcher,
+    GITHUB_KV: { get: vi.fn(), put: vi.fn() },
+    CONTROL_PLANE: { fetch: controlPlaneFetch },
     DEPLOYMENT_NAME: "test",
     DEFAULT_MODEL: "anthropic/claude-haiku-4-5",
     GITHUB_BOT_USERNAME: "test-bot[bot]",
@@ -104,7 +105,7 @@ const pullRequestOpenedPayload: PullRequestOpenedPayload = {
     base: { ref: "main" },
     draft: false,
   },
-  repository: { owner: { login: "acme" }, name: "widgets" },
+  repository: { owner: { login: "acme" }, name: "widgets", private: false },
   sender: { login: "alice" },
 };
 
@@ -119,7 +120,7 @@ const reviewRequestedPayload: ReviewRequestedPayload = {
     base: { ref: "main" },
   },
   requested_reviewer: { login: "test-bot[bot]" },
-  repository: { owner: { login: "acme" }, name: "widgets" },
+  repository: { owner: { login: "acme" }, name: "widgets", private: false },
   sender: { login: "alice" },
 };
 
@@ -135,7 +136,7 @@ const issueCommentPayload: IssueCommentPayload = {
     body: "@test-bot[bot] please fix the error handling",
     user: { login: "bob" },
   },
-  repository: { owner: { login: "acme" }, name: "widgets" },
+  repository: { owner: { login: "acme" }, name: "widgets", private: false },
   sender: { login: "bob" },
 };
 
@@ -155,7 +156,7 @@ const reviewCommentPayload: ReviewCommentPayload = {
     position: 5,
     user: { login: "carol" },
   },
-  repository: { owner: { login: "acme" }, name: "widgets" },
+  repository: { owner: { login: "acme" }, name: "widgets", private: false },
   sender: { login: "carol" },
 };
 
@@ -649,6 +650,8 @@ describe("integration config", () => {
       autoReviewOnOpen: false,
       enabledRepos: [],
       allowedTriggerUsers: [],
+      codeReviewInstructions: null,
+      commentActionInstructions: null,
     });
     const env = createMockEnv();
     const log = createMockLogger();

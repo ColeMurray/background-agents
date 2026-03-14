@@ -37,6 +37,7 @@ async def create_sandbox(
     opencode_session_id: str | None = None,
     provider: str = "anthropic",
     model: str = "claude-sonnet-4-6",
+    branch: str | None = None,
 ) -> dict:
     """
     Create a new sandbox for a session.
@@ -84,6 +85,7 @@ async def create_sandbox(
         session_id=session_id,
         repo_owner=repo_owner,
         repo_name=repo_name,
+        branch=branch,
         opencode_session_id=opencode_session_id,
         provider=provider,
         model=model,

@@ -41,7 +41,12 @@ export default function SettingsPage() {
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
   const initialCategory = isValidCategory(tabParam) ? tabParam : "secrets";
-  const [activeCategory, setActiveCategory] = useState<SettingsCategory>(initialCategory);
+  const [activeCategory, setActiveCategoryRaw] = useState<SettingsCategory>(initialCategory);
+
+  function setActiveCategory(category: SettingsCategory) {
+    setActiveCategoryRaw(category);
+    window.history.replaceState(null, "", `/settings?tab=${category}`);
+  }
   const isMobile = useIsMobile();
   const [mobileView, setMobileView] = useState<"list" | "detail">(
     isValidCategory(tabParam) ? "detail" : "list"
@@ -50,7 +55,7 @@ export default function SettingsPage() {
   // Sync state when searchParams change via client-side navigation
   useEffect(() => {
     if (isValidCategory(tabParam)) {
-      setActiveCategory(tabParam);
+      setActiveCategoryRaw(tabParam);
       setMobileView("detail");
     }
   }, [tabParam]);

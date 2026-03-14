@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { mutate } from "swr";
+import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type {
   ParticipantPresence,
@@ -315,16 +316,22 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           });
           break;
 
+        case "session_title":
+          if (data.title) {
+            setSessionState((prev) => (prev ? { ...prev, title: data.title! } : null));
+          }
+          break;
+
         case "session_status":
           setSessionState((prev) => (prev ? { ...prev, status: data.status } : null));
           // Revalidate session list so status change is reflected in sidebar
-          mutate("/api/sessions");
+          mutate(SIDEBAR_SESSIONS_KEY);
           break;
 
         case "child_session_update":
           // Child session spawned or changed status — revalidate child list and sidebar
           mutate(`/api/sessions/${sessionId}/children`);
-          mutate("/api/sessions");
+          mutate(SIDEBAR_SESSIONS_KEY);
           break;
 
         case "processing_status":

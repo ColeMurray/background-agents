@@ -25,6 +25,18 @@ import {
 } from "./handlers";
 
 const app = new Hono<{ Bindings: Env }>();
+const DELIVERY_DEDUPE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
+const DELIVERY_PROCESSING_TTL_MS = 5 * 60 * 1_000;
+const DELIVERY_STATUS_PROCESSING = "processing";
+const DELIVERY_STATUS_PROCESSED = "processed";
+
+function getDeliveryDedupeKey(deliveryId: string): string {
+  return `delivery:${deliveryId}`;
+}
+
+function ttlSecondsFromMs(ttlMs: number): number {
+  return Math.ceil(ttlMs / 1_000);
+}
 
 app.get("/health", (c) => c.json({ status: "healthy", service: "open-inspect-github-bot" }));
 
@@ -42,6 +54,26 @@ app.post("/webhooks/github", async (c) => {
     return c.json({ error: "invalid signature" }, 401);
   }
 
+  let dedupeKey: string | null = null;
+  if (deliveryId) {
+    dedupeKey = getDeliveryDedupeKey(deliveryId);
+    const existing = await c.env.GITHUB_KV.get(dedupeKey);
+    if (existing) {
+      log.info("webhook.duplicate_delivery", {
+        delivery_id: deliveryId,
+        event_type: event,
+        dedupe_status: existing,
+      });
+      return c.json({ ok: true, duplicate: true });
+    }
+
+    await c.env.GITHUB_KV.put(dedupeKey, DELIVERY_STATUS_PROCESSING, {
+      expirationTtl: ttlSecondsFromMs(DELIVERY_PROCESSING_TTL_MS),
+    });
+  } else {
+    log.warn("webhook.delivery_id_missing", { event_type: event });
+  }
+
   const payload = JSON.parse(rawBody);
   const traceId = crypto.randomUUID();
 
@@ -56,13 +88,41 @@ app.post("/webhooks/github", async (c) => {
   });
 
   c.executionCtx.waitUntil(
-    handleWebhook(c.env, log, event, payload, traceId, deliveryId).catch((err) => {
-      log.error("webhook.processing_error", {
-        trace_id: traceId,
-        delivery_id: deliveryId,
-        error: err instanceof Error ? err : new Error(String(err)),
-      });
-    })
+    handleWebhook(c.env, log, event, payload, traceId, deliveryId)
+      .then(async () => {
+        if (!dedupeKey) return;
+
+        try {
+          await c.env.GITHUB_KV.put(dedupeKey, DELIVERY_STATUS_PROCESSED, {
+            expirationTtl: ttlSecondsFromMs(DELIVERY_DEDUPE_TTL_MS),
+          });
+        } catch (err) {
+          log.warn("webhook.dedupe_finalize_failed", {
+            trace_id: traceId,
+            delivery_id: deliveryId,
+            error: err instanceof Error ? err : new Error(String(err)),
+          });
+        }
+      })
+      .catch(async (err) => {
+        if (dedupeKey) {
+          try {
+            await c.env.GITHUB_KV.delete(dedupeKey);
+          } catch (deleteErr) {
+            log.warn("webhook.dedupe_clear_failed", {
+              trace_id: traceId,
+              delivery_id: deliveryId,
+              error: deleteErr instanceof Error ? deleteErr : new Error(String(deleteErr)),
+            });
+          }
+        }
+
+        log.error("webhook.processing_error", {
+          trace_id: traceId,
+          delivery_id: deliveryId,
+          error: err instanceof Error ? err : new Error(String(err)),
+        });
+      })
   );
 
   return c.json({ ok: true });

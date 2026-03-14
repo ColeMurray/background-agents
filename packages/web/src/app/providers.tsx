@@ -1,7 +1,9 @@
 "use client";
 
 import { SessionProvider } from "next-auth/react";
+import { ThemeProvider } from "next-themes";
 import { SWRConfig } from "swr";
+import { Toaster } from "@/components/ui/sonner";
 
 async function swrFetcher<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -11,8 +13,13 @@ async function swrFetcher<T>(url: string): Promise<T> {
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
-    <SWRConfig value={{ fetcher: swrFetcher, revalidateOnFocus: true, dedupingInterval: 2000 }}>
-      <SessionProvider>{children}</SessionProvider>
-    </SWRConfig>
+    <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+      <SWRConfig value={{ fetcher: swrFetcher, revalidateOnFocus: true, dedupingInterval: 2000 }}>
+        <SessionProvider>
+          {children}
+          <Toaster />
+        </SessionProvider>
+      </SWRConfig>
+    </ThemeProvider>
   );
 }

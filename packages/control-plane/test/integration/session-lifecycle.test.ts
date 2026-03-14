@@ -123,6 +123,46 @@ describe("POST /internal/prompt", () => {
   );
 });
 
+describe("POST /internal/update-title", () => {
+  it("updates the session title", async () => {
+    const { stub } = await initSession({ userId: "user-1" });
+
+    const res = await stub.fetch("http://internal/internal/update-title", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: "user-1", title: "new title" }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { title: string };
+    expect(body.title).toBe("new title");
+
+    const stateRes = await stub.fetch("http://internal/internal/state");
+    const state = (await stateRes.json()) as { title: string };
+    expect(state.title).toBe("new title");
+  });
+
+  it("rejects empty title", async () => {
+    const { stub } = await initSession({ userId: "user-1" });
+    const res = await stub.fetch("http://internal/internal/update-title", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: "user-1", title: "" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects title over 200 characters", async () => {
+    const { stub } = await initSession({ userId: "user-1" });
+    const res = await stub.fetch("http://internal/internal/update-title", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: "user-1", title: "a".repeat(201) }),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("POST /internal/verify-sandbox-token", () => {
   it("validates token using hashed sandbox auth token", async () => {
     const { stub } = await initSession();

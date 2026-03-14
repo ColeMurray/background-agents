@@ -295,6 +295,7 @@ export type ServerMessage =
       cursor: { timestamp: number; id: string } | null;
     }
   | { type: "session_status"; status: SessionStatus }
+  | { type: "session_title"; title: string }
   | {
       type: "child_session_update";
       childSessionId: string;
@@ -523,6 +524,7 @@ export interface SpawnContext {
   repoId: number | null;
   model: string;
   reasoningEffort: string | null;
+  baseBranch: string | null;
   owner: {
     userId: string;
     scmLogin: string | null;

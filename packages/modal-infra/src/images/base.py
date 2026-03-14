@@ -26,8 +26,8 @@ OPENCODE_VERSION = "latest"
 CODE_SERVER_VERSION = "4.109.5"
 
 # Cache buster - change this to force Modal image rebuild
-# v41: Pin code-server version
-CACHE_BUSTER = "v41-code-server-pin"
+# v42: code-server pin + GPT-5.4 codex allowlist
+CACHE_BUSTER = "v42-code-server-gpt54"
 
 # Base image with all development tools
 base_image = (

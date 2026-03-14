@@ -1,8 +1,9 @@
 import type { Config } from "tailwindcss";
 import typography from "@tailwindcss/typography";
+import animate from "tailwindcss-animate";
 
 const config: Config = {
-  darkMode: "media",
+  darkMode: "class",
   content: [
     "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
@@ -23,17 +24,27 @@ const config: Config = {
         "accent-muted": "var(--accent-muted)",
         muted: "var(--muted)",
         "muted-foreground": "var(--muted-foreground)",
+        secondary: "var(--secondary)",
         "secondary-foreground": "var(--secondary-foreground)",
         border: "var(--border)",
         "border-muted": "var(--border-muted)",
         input: "var(--input)",
         ring: "var(--ring)",
+        popover: "var(--popover)",
+        "popover-foreground": "var(--popover-foreground)",
+        destructive: "var(--destructive)",
+        "destructive-foreground": "var(--destructive-foreground)",
         success: "var(--success)",
         "success-muted": "var(--success-muted)",
       },
+      borderRadius: {
+        lg: "calc(var(--radius) * 2)",
+        md: "var(--radius)",
+        sm: "calc(var(--radius) / 2)",
+      },
     },
   },
-  plugins: [typography],
+  plugins: [typography, animate],
 };
 
 export default config;

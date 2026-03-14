@@ -2,17 +2,17 @@
 
 import { useState } from "react";
 import useSWR, { mutate } from "swr";
+import { toast } from "sonner";
 import { MODEL_OPTIONS, DEFAULT_ENABLED_MODELS } from "@open-inspect/shared";
 import { MODEL_PREFERENCES_KEY } from "@/hooks/use-enabled-models";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 
 export function ModelsSettings() {
   const { data, isLoading: loading } = useSWR<{ enabledModels: string[] }>(MODEL_PREFERENCES_KEY);
   const [enabledModels, setEnabledModels] = useState<Set<string>>(new Set(DEFAULT_ENABLED_MODELS));
   const [initialized, setInitialized] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
   const [dirty, setDirty] = useState(false);
 
   // Sync SWR data into local state once on initial load
@@ -33,8 +33,6 @@ export function ModelsSettings() {
       return next;
     });
     setDirty(true);
-    setError("");
-    setSuccess("");
   };
 
   const toggleCategory = (category: (typeof MODEL_OPTIONS)[number], enable: boolean) => {
@@ -51,14 +49,10 @@ export function ModelsSettings() {
       return next;
     });
     setDirty(true);
-    setError("");
-    setSuccess("");
   };
 
   const handleSave = async () => {
     setSaving(true);
-    setError("");
-    setSuccess("");
 
     try {
       const res = await fetch("/api/model-preferences", {
@@ -69,14 +63,14 @@ export function ModelsSettings() {
 
       if (res.ok) {
         mutate(MODEL_PREFERENCES_KEY);
-        setSuccess("Model preferences saved.");
+        toast.success("Model preferences saved.");
         setDirty(false);
       } else {
         const data = await res.json();
-        setError(data.error || "Failed to save preferences");
+        toast.error(data.error || "Failed to save preferences");
       }
     } catch {
-      setError("Failed to save preferences");
+      toast.error("Failed to save preferences");
     } finally {
       setSaving(false);
     }
@@ -97,18 +91,6 @@ export function ModelsSettings() {
       <p className="text-sm text-muted-foreground mb-6">
         Choose which models appear in the model selector across the web UI and Slack bot.
       </p>
-
-      {error && (
-        <div className="mb-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 px-4 py-3 border border-red-200 dark:border-red-800 text-sm">
-          {error}
-        </div>
-      )}
-
-      {success && (
-        <div className="mb-4 bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 px-4 py-3 border border-green-200 dark:border-green-800 text-sm">
-          {success}
-        </div>
-      )}
 
       <div className="space-y-6">
         {MODEL_OPTIONS.map((group) => {
@@ -134,6 +116,7 @@ export function ModelsSettings() {
                   return (
                     <label
                       key={model.id}
+                      htmlFor={`model-toggle-${model.id}`}
                       className="flex items-center justify-between px-4 py-3 border border-border hover:bg-muted/50 transition cursor-pointer"
                     >
                       <div>
@@ -142,16 +125,11 @@ export function ModelsSettings() {
                           {model.description}
                         </span>
                       </div>
-                      <div className="relative">
-                        <input
-                          type="checkbox"
-                          checked={isEnabled}
-                          onChange={() => toggleModel(model.id)}
-                          className="sr-only peer"
-                        />
-                        <div className="w-9 h-5 bg-muted rounded-full peer-checked:bg-accent transition-colors" />
-                        <div className="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform peer-checked:translate-x-4" />
-                      </div>
+                      <Switch
+                        id={`model-toggle-${model.id}`}
+                        checked={isEnabled}
+                        onCheckedChange={() => toggleModel(model.id)}
+                      />
                     </label>
                   );
                 })}

@@ -34,6 +34,7 @@ const MODEL_LABEL_MAP: Record<string, string> = {
   opus: "anthropic/claude-opus-4-5",
   "opus-4-6": "anthropic/claude-opus-4-6",
   "gpt-5.2": "openai/gpt-5.2",
+  "gpt-5.4": "openai/gpt-5.4",
   "gpt-5.2-codex": "openai/gpt-5.2-codex",
   "gpt-5.3-codex": "openai/gpt-5.3-codex",
 };

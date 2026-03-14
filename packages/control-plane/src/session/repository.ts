@@ -264,6 +264,15 @@ export class SessionRepository {
     );
   }
 
+  updateSessionTitle(sessionId: string, title: string, updatedAt: number): void {
+    this.sql.exec(
+      `UPDATE session SET title = ?, updated_at = ? WHERE id = ?`,
+      title,
+      updatedAt,
+      sessionId
+    );
+  }
+
   updateSessionStatus(sessionId: string, status: SessionStatus, updatedAt: number): void {
     this.sql.exec(
       `UPDATE session SET status = ?, updated_at = ? WHERE id = ?`,

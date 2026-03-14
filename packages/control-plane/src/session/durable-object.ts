@@ -28,22 +28,14 @@ import {
 } from "../sandbox/lifecycle/manager";
 import { RepoImageStore } from "../db/repo-images";
 import { SessionIndexStore } from "../db/session-index";
-import {
-  evaluateExecutionTimeout,
-  DEFAULT_EXECUTION_TIMEOUT_MS,
-} from "../sandbox/lifecycle/decisions";
+import { DEFAULT_EXECUTION_TIMEOUT_MS } from "../sandbox/lifecycle/decisions";
 import {
   createSourceControlProvider as createSourceControlProviderImpl,
   resolveScmProviderFromEnv,
   type SourceControlProvider,
   type GitPushSpec,
 } from "../source-control";
-import {
-  DEFAULT_MODEL,
-  isValidModel,
-  isValidReasoningEffort,
-  getValidModelOrDefault,
-} from "../utils/models";
+import { DEFAULT_MODEL, isValidReasoningEffort } from "../utils/models";
 import type {
   Env,
   ClientInfo,
@@ -53,10 +45,7 @@ import type {
   SessionState,
   SessionStatus,
   SandboxStatus,
-  ParticipantRole,
-  SpawnSource,
 } from "../types";
-import type { SpawnContext } from "@open-inspect/shared";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
@@ -73,30 +62,27 @@ import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
 import { createSessionInternalRoutes } from "./http/routes";
-
-/**
- * Valid event types for filtering.
- * Includes both external types (from types.ts) and internal types used by the sandbox.
- */
-const VALID_EVENT_TYPES = [
-  "tool_call",
-  "tool_result",
-  "token",
-  "error",
-  "git_sync",
-  "step_start",
-  "step_finish",
-  "execution_complete",
-  "heartbeat",
-  "push_complete",
-  "push_error",
-  "user_message",
-] as const;
-
-/**
- * Valid message statuses for filtering.
- */
-const VALID_MESSAGE_STATUSES = ["pending", "processing", "completed", "failed"] as const;
+import { createMessagesHandler, type MessagesHandler } from "./http/handlers/messages.handler";
+import {
+  createChildSessionsHandler,
+  type ChildSessionsHandler,
+} from "./http/handlers/child-sessions.handler";
+import { createSandboxHandler, type SandboxHandler } from "./http/handlers/sandbox.handler";
+import { createWsTokenHandler, type WsTokenHandler } from "./http/handlers/ws-token.handler";
+import {
+  createSessionLifecycleHandler,
+  type SessionLifecycleHandler,
+} from "./http/handlers/session-lifecycle.handler";
+import {
+  createPullRequestHandler,
+  type PullRequestHandler,
+} from "./http/handlers/pull-request.handler";
+import {
+  createParticipantsHandler,
+  type ParticipantsHandler,
+} from "./http/handlers/participants.handler";
+import { MessageService } from "./services/message.service";
+import { createAlarmHandler, type AlarmHandler } from "./alarm/handler";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -112,9 +98,6 @@ const WS_AUTH_TIMEOUT_MS = 30000; // 30 seconds
  * the client to fetch a fresh token on reconnect.
  */
 const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-
-/** Statuses that indicate a session has reached a final state and cannot be cancelled. */
-const TERMINAL_STATUSES = new Set(["completed", "archived", "cancelled", "failed"]);
 
 export class SessionDO extends DurableObject<Env> {
   private sql: SqlStorage;
@@ -135,31 +118,50 @@ export class SessionDO extends DurableObject<Env> {
   private _presenceService: PresenceService | null = null;
   // Message queue service (lazily initialized)
   private _messageQueue: SessionMessageQueue | null = null;
+  // Message service (lazily initialized)
+  private _messageService: MessageService | null = null;
+  // Messages handler (lazily initialized)
+  private _messagesHandler: MessagesHandler | null = null;
+  // Child sessions handler (lazily initialized)
+  private _childSessionsHandler: ChildSessionsHandler | null = null;
+  // Sandbox handler (lazily initialized)
+  private _sandboxHandler: SandboxHandler | null = null;
+  // WebSocket token handler (lazily initialized)
+  private _wsTokenHandler: WsTokenHandler | null = null;
+  // Session lifecycle handler (lazily initialized)
+  private _sessionLifecycleHandler: SessionLifecycleHandler | null = null;
+  // Pull request handler (lazily initialized)
+  private _pullRequestHandler: PullRequestHandler | null = null;
+  // Participants handler (lazily initialized)
+  private _participantsHandler: ParticipantsHandler | null = null;
+  // Alarm handler (lazily initialized)
+  private _alarmHandler: AlarmHandler | null = null;
   // Sandbox event processor (lazily initialized)
   private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
 
   // Internal HTTP route table (transport wiring only; handlers remain on SessionDO).
   private readonly routes = createSessionInternalRoutes({
-    init: (request) => this.handleInit(request),
-    state: () => this.handleGetState(),
-    prompt: (request) => this.handleEnqueuePrompt(request),
-    stop: () => this.handleStop(),
-    sandboxEvent: (request) => this.handleSandboxEvent(request),
-    listParticipants: () => this.handleListParticipants(),
-    addParticipant: (request) => this.handleAddParticipant(request),
-    listEvents: (_request, url) => this.handleListEvents(url),
-    listArtifacts: () => this.handleListArtifacts(),
-    listMessages: (_request, url) => this.handleListMessages(url),
-    createPr: (request) => this.handleCreatePR(request),
-    wsToken: (request) => this.handleGenerateWsToken(request),
-    archive: (request) => this.handleArchive(request),
-    unarchive: (request) => this.handleUnarchive(request),
-    verifySandboxToken: (request) => this.handleVerifySandboxToken(request),
-    openaiTokenRefresh: () => this.handleOpenAITokenRefresh(),
-    spawnContext: () => this.handleGetSpawnContext(),
-    childSummary: () => this.handleGetChildSummary(),
-    cancel: () => this.handleCancel(),
-    childSessionUpdate: (request) => this.handleChildSessionUpdate(request),
+    init: (request) => this.sessionLifecycleHandler.init(request),
+    state: () => this.sessionLifecycleHandler.getState(),
+    prompt: (request) => this.messagesHandler.enqueuePrompt(request),
+    stop: () => this.messagesHandler.stop(),
+    sandboxEvent: (request) => this.sandboxHandler.sandboxEvent(request),
+    listParticipants: () => this.participantsHandler.listParticipants(),
+    addParticipant: (request) => this.sandboxHandler.addParticipant(request),
+    listEvents: (_request, url) => this.messagesHandler.listEvents(url),
+    listArtifacts: () => this.messagesHandler.listArtifacts(),
+    listMessages: (_request, url) => this.messagesHandler.listMessages(url),
+    createPr: (request) => this.pullRequestHandler.createPr(request),
+    wsToken: (request) => this.wsTokenHandler.generateWsToken(request),
+    updateTitle: (request) => this.sessionLifecycleHandler.updateTitle(request),
+    archive: (request) => this.sessionLifecycleHandler.archive(request),
+    unarchive: (request) => this.sessionLifecycleHandler.unarchive(request),
+    verifySandboxToken: (request) => this.sandboxHandler.verifySandboxToken(request),
+    openaiTokenRefresh: () => this.sandboxHandler.openaiTokenRefresh(),
+    spawnContext: () => this.childSessionsHandler.getSpawnContext(),
+    childSummary: () => this.childSessionsHandler.getChildSummary(),
+    cancel: () => this.sessionLifecycleHandler.cancel(),
+    childSessionUpdate: (request) => this.childSessionsHandler.childSessionUpdate(request),
   });
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -310,6 +312,178 @@ export class SessionDO extends DurableObject<Env> {
     return this._messageQueue;
   }
 
+  private get messageService(): MessageService {
+    if (!this._messageService) {
+      this._messageService = new MessageService({
+        repository: this.repository,
+        messageQueue: this.messageQueue,
+        stopExecution: () => this.stopExecution(),
+        parseArtifactMetadata: (artifact) => this.parseArtifactMetadata(artifact),
+      });
+    }
+
+    return this._messageService;
+  }
+
+  private get messagesHandler(): MessagesHandler {
+    if (!this._messagesHandler) {
+      this._messagesHandler = createMessagesHandler({
+        messageService: this.messageService,
+        getLog: () => this.log,
+      });
+    }
+
+    return this._messagesHandler;
+  }
+
+  private get childSessionsHandler(): ChildSessionsHandler {
+    if (!this._childSessionsHandler) {
+      this._childSessionsHandler = createChildSessionsHandler({
+        repository: this.repository,
+        getSession: () => this.getSession(),
+        getSandbox: () => this.getSandbox(),
+        getPublicSessionId: (session) => this.getPublicSessionId(session),
+        broadcast: (message) => this.broadcast(message),
+      });
+    }
+
+    return this._childSessionsHandler;
+  }
+
+  private get sandboxHandler(): SandboxHandler {
+    if (!this._sandboxHandler) {
+      this._sandboxHandler = createSandboxHandler({
+        repository: this.repository,
+        processSandboxEvent: (event) => this.processSandboxEvent(event),
+        getSandbox: () => this.getSandbox(),
+        isValidSandboxToken: (token, sandbox) => this.isValidSandboxToken(token, sandbox),
+        getSession: () => this.getSession(),
+        refreshOpenAIToken: async (session) => {
+          const service = new OpenAITokenRefreshService(
+            this.env.DB!,
+            this.env.REPO_SECRETS_ENCRYPTION_KEY!,
+            (sessionRow) => this.ensureRepoId(sessionRow),
+            this.log
+          );
+          return service.refresh(session);
+        },
+        isOpenAISecretsConfigured: () =>
+          Boolean(this.env.DB && this.env.REPO_SECRETS_ENCRYPTION_KEY),
+        generateId: () => generateId(),
+        now: () => Date.now(),
+        getLog: () => this.log,
+      });
+    }
+
+    return this._sandboxHandler;
+  }
+
+  private get wsTokenHandler(): WsTokenHandler {
+    if (!this._wsTokenHandler) {
+      this._wsTokenHandler = createWsTokenHandler({
+        repository: this.repository,
+        getParticipantByUserId: (userId) => this.participantService.getByUserId(userId),
+        generateId: (bytes) => generateId(bytes),
+        hashToken: (token) => hashToken(token),
+        now: () => Date.now(),
+        getLog: () => this.log,
+      });
+    }
+
+    return this._wsTokenHandler;
+  }
+
+  private get sessionLifecycleHandler(): SessionLifecycleHandler {
+    if (!this._sessionLifecycleHandler) {
+      this._sessionLifecycleHandler = createSessionLifecycleHandler({
+        repository: this.repository,
+        getDurableObjectId: () => this.ctx.id.toString(),
+        tokenEncryptionKey: this.env.TOKEN_ENCRYPTION_KEY,
+        encryptToken: async (token, encryptionKey) => {
+          const { encryptToken } = await import("../auth/crypto");
+          return encryptToken(token, encryptionKey);
+        },
+        validateReasoningEffort: (model, effort) => this.validateReasoningEffort(model, effort),
+        generateId: (bytes) => generateId(bytes),
+        now: () => Date.now(),
+        scheduleWarmSandbox: () => this.ctx.waitUntil(this.warmSandbox()),
+        getLog: () => this.log,
+        getSession: () => this.getSession(),
+        getSandbox: () => this.getSandbox(),
+        getPublicSessionId: (session) => this.getPublicSessionId(session),
+        getParticipantByUserId: (userId) => this.participantService.getByUserId(userId),
+        transitionSessionStatus: (status) => this.transitionSessionStatus(status),
+        stopExecution: (options) => this.stopExecution(options),
+        getSandboxSocket: () => this.wsManager.getSandboxSocket(),
+        sendToSandbox: (ws, message) => this.wsManager.send(ws, message),
+        updateSandboxStatus: (status) => this.updateSandboxStatus(status),
+        broadcast: (message) => this.broadcast(message),
+      });
+    }
+
+    return this._sessionLifecycleHandler;
+  }
+
+  private get pullRequestHandler(): PullRequestHandler {
+    if (!this._pullRequestHandler) {
+      this._pullRequestHandler = createPullRequestHandler({
+        getSession: () => this.getSession(),
+        getPromptingParticipantForPR: () => this.participantService.getPromptingParticipantForPR(),
+        resolveAuthForPR: (participant) => this.participantService.resolveAuthForPR(participant),
+        getSessionUrl: (session) => {
+          const sessionId = session.session_name || session.id;
+          const webAppUrl = this.env.WEB_APP_URL || this.env.WORKER_URL || "";
+          return webAppUrl + "/session/" + sessionId;
+        },
+        createPullRequest: async (input) => {
+          const pullRequestService = new SessionPullRequestService({
+            repository: this.repository,
+            sourceControlProvider: this.sourceControlProvider,
+            log: this.log,
+            generateId: () => generateId(),
+            pushBranchToRemote: (headBranch, pushSpec) =>
+              this.pushBranchToRemote(headBranch, pushSpec),
+            broadcastArtifactCreated: (artifact) => {
+              this.broadcast({
+                type: "artifact_created",
+                artifact,
+              });
+            },
+          });
+
+          return pullRequestService.createPullRequest(input);
+        },
+      });
+    }
+
+    return this._pullRequestHandler;
+  }
+
+  private get participantsHandler(): ParticipantsHandler {
+    if (!this._participantsHandler) {
+      this._participantsHandler = createParticipantsHandler({
+        repository: this.repository,
+      });
+    }
+
+    return this._participantsHandler;
+  }
+
+  private get alarmHandler(): AlarmHandler {
+    if (!this._alarmHandler) {
+      this._alarmHandler = createAlarmHandler({
+        repository: this.repository,
+        messageQueue: this.messageQueue,
+        lifecycleManager: this.lifecycleManager,
+        executionTimeoutMs: this.executionTimeoutMs,
+        now: () => Date.now(),
+        getLog: () => this.log,
+      });
+    }
+
+    return this._alarmHandler;
+  }
+
   private get sandboxEventProcessor(): SessionSandboxEventProcessor {
     if (!this._sandboxEventProcessor) {
       this._sandboxEventProcessor = new SessionSandboxEventProcessor({
@@ -447,7 +621,8 @@ export class SessionDO extends DurableObject<Env> {
     if (this.env.DB) {
       const repoImageStore = new RepoImageStore(this.env.DB);
       repoImageLookup = {
-        getLatestReady: (repoOwner, repoName) => repoImageStore.getLatestReady(repoOwner, repoName),
+        getLatestReady: (repoOwner, repoName, baseBranch) =>
+          repoImageStore.getLatestReady(repoOwner, repoName, baseBranch),
       };
     }
 
@@ -746,31 +921,7 @@ export class SessionDO extends DurableObject<Env> {
    */
   async alarm(): Promise<void> {
     this.ensureInitialized();
-
-    // Execution timeout check: if a message has been in 'processing' longer than
-    // the configured timeout, fail it. This is idempotent — if the message was
-    // already failed (by onSandboxTerminating or a prior alarm), getProcessingMessageWithStartedAt()
-    // returns null and we skip straight to handleAlarm().
-    const processing = this.repository.getProcessingMessageWithStartedAt();
-    if (processing?.started_at) {
-      const now = Date.now();
-      const result = evaluateExecutionTimeout(
-        processing.started_at,
-        { timeoutMs: this.executionTimeoutMs },
-        now
-      );
-      if (result.isTimedOut) {
-        this.log.warn("Execution timeout: message stuck in processing", {
-          event: "execution.timeout",
-          message_id: processing.id,
-          elapsed_ms: result.elapsedMs,
-          timeout_ms: this.executionTimeoutMs,
-        });
-        await this.messageQueue.failStuckProcessingMessage();
-      }
-    }
-
-    await this.lifecycleManager.handleAlarm();
+    await this.alarmHandler.handle();
   }
 
   /**
@@ -1446,463 +1597,11 @@ export class SessionDO extends DurableObject<Env> {
     return false;
   }
 
-  /**
-   * Verify a sandbox authentication token.
-   * Called by the router to validate sandbox-originated requests.
-   */
-  private async handleVerifySandboxToken(request: Request): Promise<Response> {
-    const body = (await request.json()) as { token: string };
-
-    if (!body.token) {
-      return new Response(JSON.stringify({ valid: false, error: "Missing token" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    const sandbox = this.getSandbox();
-    if (!sandbox) {
-      this.log.warn("Sandbox token verification failed: no sandbox");
-      return new Response(JSON.stringify({ valid: false, error: "No sandbox" }), {
-        status: 404,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    // Check if sandbox is in an active state
-    if (sandbox.status === "stopped" || sandbox.status === "stale") {
-      this.log.warn("Sandbox token verification failed: sandbox is stopped/stale", {
-        status: sandbox.status,
-      });
-      return new Response(JSON.stringify({ valid: false, error: "Sandbox stopped" }), {
-        status: 410,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    // Validate the token
-    const isTokenValid = await this.isValidSandboxToken(body.token, sandbox);
-    if (!isTokenValid) {
-      this.log.warn("Sandbox token verification failed: token mismatch");
-      return new Response(JSON.stringify({ valid: false, error: "Invalid token" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    this.log.info("Sandbox token verified successfully");
-    return new Response(JSON.stringify({ valid: true }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-
-  /**
-   * Handle OpenAI token refresh.
-   * Reads the refresh token from D1 secrets, calls OpenAI, stores the rotated
-   * token back, and returns only the access token to the sandbox.
-   */
-  private async handleOpenAITokenRefresh(): Promise<Response> {
-    const session = this.getSession();
-    if (!session) {
-      return this.openAIRefreshJsonResponse({ error: "No session" }, 404);
-    }
-
-    const encryptionKey = this.env.REPO_SECRETS_ENCRYPTION_KEY;
-    if (!this.env.DB || !encryptionKey) {
-      return this.openAIRefreshJsonResponse({ error: "Secrets not configured" }, 500);
-    }
-
-    const service = new OpenAITokenRefreshService(
-      this.env.DB,
-      encryptionKey,
-      (sessionRow) => this.ensureRepoId(sessionRow),
-      this.log
-    );
-
-    const result = await service.refresh(session);
-    if (!result.ok) {
-      return this.openAIRefreshJsonResponse({ error: result.error }, result.status);
-    }
-
-    return this.openAIRefreshJsonResponse(
-      {
-        access_token: result.accessToken,
-        expires_in: result.expiresIn,
-        account_id: result.accountId,
-      },
-      200
-    );
-  }
-
-  private openAIRefreshJsonResponse(body: unknown, status: number): Response {
-    return new Response(JSON.stringify(body), {
-      status,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-
   private updateSandboxStatus(status: string): void {
     this.repository.updateSandboxStatus(status as SandboxStatus);
   }
 
   // HTTP handlers
-
-  private async handleInit(request: Request): Promise<Response> {
-    const body = (await request.json()) as {
-      sessionName: string; // The name used for WebSocket routing
-      repoOwner: string;
-      repoName: string;
-      repoId?: number;
-      defaultBranch?: string; // Repo's default branch from GitHub
-      branch?: string; // User-selected branch to work on
-      title?: string;
-      model?: string; // LLM model to use
-      reasoningEffort?: string; // Reasoning effort level
-      userId: string;
-      scmLogin?: string;
-      scmName?: string;
-      scmEmail?: string;
-      scmToken?: string | null; // Plain SCM token (will be encrypted)
-      scmTokenEncrypted?: string | null; // Pre-encrypted SCM token
-      parentSessionId?: string | null;
-      spawnSource?: SpawnSource;
-      spawnDepth?: number;
-    };
-
-    const sessionId = this.ctx.id.toString();
-    const sessionName = body.sessionName; // Store the WebSocket routing name
-    const now = Date.now();
-
-    // Encrypt the SCM token if provided in plain text
-    let encryptedToken = body.scmTokenEncrypted ?? null;
-    if (body.scmToken && this.env.TOKEN_ENCRYPTION_KEY) {
-      try {
-        const { encryptToken } = await import("../auth/crypto");
-        encryptedToken = await encryptToken(body.scmToken, this.env.TOKEN_ENCRYPTION_KEY);
-        this.log.debug("Encrypted SCM token for storage");
-      } catch (err) {
-        this.log.error("Failed to encrypt SCM token", {
-          error: err instanceof Error ? err : String(err),
-        });
-      }
-    }
-
-    // Validate and normalize model name if provided
-    const model = getValidModelOrDefault(body.model);
-    if (body.model && !isValidModel(body.model)) {
-      this.log.warn("Invalid model name, using default", {
-        requested_model: body.model,
-        default_model: DEFAULT_MODEL,
-      });
-    }
-
-    // Validate reasoning effort if provided
-    const reasoningEffort = this.validateReasoningEffort(model, body.reasoningEffort);
-
-    // Resolve branch: user-selected branch takes priority, then repo default, then "main"
-    const baseBranch = body.branch || body.defaultBranch || "main";
-
-    // Create session (store both internal ID and external name)
-    this.repository.upsertSession({
-      id: sessionId,
-      sessionName, // Store the session name for WebSocket routing
-      title: body.title ?? null,
-      repoOwner: body.repoOwner,
-      repoName: body.repoName,
-      repoId: body.repoId ?? null,
-      baseBranch,
-      model,
-      reasoningEffort,
-      status: "created",
-      parentSessionId: body.parentSessionId ?? null,
-      spawnSource: body.spawnSource ?? "user",
-      spawnDepth: body.spawnDepth ?? 0,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    // Create sandbox record
-    // Note: created_at is set to 0 initially so the first spawn isn't blocked by cooldown
-    // It will be updated to the actual spawn time when spawnSandbox() is called
-    const sandboxId = generateId();
-    this.repository.createSandbox({
-      id: sandboxId,
-      status: "pending",
-      gitSyncStatus: "pending",
-      createdAt: 0,
-    });
-
-    // Create owner participant with encrypted SCM token
-    const participantId = generateId();
-    this.repository.createParticipant({
-      id: participantId,
-      userId: body.userId,
-      scmLogin: body.scmLogin ?? null,
-      scmName: body.scmName ?? null,
-      scmEmail: body.scmEmail ?? null,
-      scmAccessTokenEncrypted: encryptedToken,
-      role: "owner",
-      joinedAt: now,
-    });
-
-    this.log.info("Triggering sandbox spawn for new session");
-    this.ctx.waitUntil(this.warmSandbox());
-
-    return Response.json({ sessionId, status: "created" });
-  }
-
-  private handleGetState(): Response {
-    const session = this.getSession();
-    if (!session) {
-      return new Response("Session not found", { status: 404 });
-    }
-
-    const sandbox = this.getSandbox();
-
-    return Response.json({
-      id: this.getPublicSessionId(session),
-      title: session.title,
-      repoOwner: session.repo_owner,
-      repoName: session.repo_name,
-      baseBranch: session.base_branch,
-      branchName: session.branch_name,
-      baseSha: session.base_sha,
-      currentSha: session.current_sha,
-      opencodeSessionId: session.opencode_session_id,
-      status: session.status,
-      model: session.model,
-      reasoningEffort: session.reasoning_effort ?? undefined,
-      createdAt: session.created_at,
-      updatedAt: session.updated_at,
-      sandbox: sandbox
-        ? {
-            id: sandbox.id,
-            modalSandboxId: sandbox.modal_sandbox_id,
-            status: sandbox.status,
-            gitSyncStatus: sandbox.git_sync_status,
-            lastHeartbeat: sandbox.last_heartbeat,
-          }
-        : null,
-    });
-  }
-
-  private async handleEnqueuePrompt(request: Request): Promise<Response> {
-    try {
-      const body = (await request.json()) as {
-        content: string;
-        authorId: string;
-        source: string;
-        model?: string;
-        reasoningEffort?: string;
-        attachments?: Array<{ type: string; name: string; url?: string }>;
-        callbackContext?: Record<string, unknown>;
-      };
-
-      return Response.json(await this.messageQueue.enqueuePromptFromApi(body));
-    } catch (error) {
-      this.log.error("handleEnqueuePrompt error", {
-        error: error instanceof Error ? error : String(error),
-      });
-      throw error;
-    }
-  }
-
-  private async handleStop(): Promise<Response> {
-    await this.stopExecution();
-    return Response.json({ status: "stopping" });
-  }
-
-  private async handleSandboxEvent(request: Request): Promise<Response> {
-    const event = (await request.json()) as SandboxEvent;
-    await this.processSandboxEvent(event);
-    return Response.json({ status: "ok" });
-  }
-
-  private handleListParticipants(): Response {
-    const participants = this.repository.listParticipants();
-
-    return Response.json({
-      participants: participants.map((p) => ({
-        id: p.id,
-        userId: p.user_id,
-        scmLogin: p.scm_login,
-        scmName: p.scm_name,
-        role: p.role,
-        joinedAt: p.joined_at,
-      })),
-    });
-  }
-
-  private async handleAddParticipant(request: Request): Promise<Response> {
-    const body = (await request.json()) as {
-      userId: string;
-      scmLogin?: string;
-      scmName?: string;
-      scmEmail?: string;
-      role?: string;
-    };
-
-    const id = generateId();
-    const now = Date.now();
-
-    this.repository.createParticipant({
-      id,
-      userId: body.userId,
-      scmLogin: body.scmLogin ?? null,
-      scmName: body.scmName ?? null,
-      scmEmail: body.scmEmail ?? null,
-      role: (body.role ?? "member") as ParticipantRole,
-      joinedAt: now,
-    });
-
-    return Response.json({ id, status: "added" });
-  }
-
-  private handleListEvents(url: URL): Response {
-    const cursor = url.searchParams.get("cursor");
-    const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50"), 200);
-    const type = url.searchParams.get("type");
-    const messageId = url.searchParams.get("message_id");
-
-    // Validate type parameter if provided
-    if (type && !VALID_EVENT_TYPES.includes(type as (typeof VALID_EVENT_TYPES)[number])) {
-      return Response.json({ error: `Invalid event type: ${type}` }, { status: 400 });
-    }
-
-    const events = this.repository.listEvents({ cursor, limit, type, messageId });
-    const hasMore = events.length > limit;
-
-    if (hasMore) events.pop();
-
-    return Response.json({
-      events: events.map((e) => ({
-        id: e.id,
-        type: e.type,
-        data: JSON.parse(e.data),
-        messageId: e.message_id,
-        createdAt: e.created_at,
-      })),
-      cursor: events.length > 0 ? events[events.length - 1].created_at.toString() : undefined,
-      hasMore,
-    });
-  }
-
-  private handleListArtifacts(): Response {
-    const artifacts = this.repository.listArtifacts();
-
-    return Response.json({
-      artifacts: artifacts.map((a) => ({
-        id: a.id,
-        type: a.type,
-        url: a.url,
-        metadata: this.parseArtifactMetadata(a),
-        createdAt: a.created_at,
-      })),
-    });
-  }
-
-  private handleListMessages(url: URL): Response {
-    const cursor = url.searchParams.get("cursor");
-    const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50"), 100);
-    const status = url.searchParams.get("status");
-
-    // Validate status parameter if provided
-    if (
-      status &&
-      !VALID_MESSAGE_STATUSES.includes(status as (typeof VALID_MESSAGE_STATUSES)[number])
-    ) {
-      return Response.json({ error: `Invalid message status: ${status}` }, { status: 400 });
-    }
-
-    const messages = this.repository.listMessages({ cursor, limit, status });
-    const hasMore = messages.length > limit;
-
-    if (hasMore) messages.pop();
-
-    return Response.json({
-      messages: messages.map((m) => ({
-        id: m.id,
-        authorId: m.author_id,
-        content: m.content,
-        source: m.source,
-        status: m.status,
-        createdAt: m.created_at,
-        startedAt: m.started_at,
-        completedAt: m.completed_at,
-      })),
-      cursor: messages.length > 0 ? messages[messages.length - 1].created_at.toString() : undefined,
-      hasMore,
-    });
-  }
-
-  /**
-   * Handle PR creation request.
-   * Resolves prompting participant and auth in DO, then delegates PR orchestration.
-   */
-  private async handleCreatePR(request: Request): Promise<Response> {
-    const body = (await request.json()) as {
-      title: string;
-      body: string;
-      baseBranch?: string;
-      headBranch?: string;
-    };
-
-    const session = this.getSession();
-    if (!session) {
-      return Response.json({ error: "Session not found" }, { status: 404 });
-    }
-
-    const promptingParticipantResult = await this.participantService.getPromptingParticipantForPR();
-    if (!promptingParticipantResult.participant) {
-      return Response.json(
-        { error: promptingParticipantResult.error },
-        { status: promptingParticipantResult.status }
-      );
-    }
-
-    const promptingParticipant = promptingParticipantResult.participant;
-    const authResolution = await this.participantService.resolveAuthForPR(promptingParticipant);
-    if ("error" in authResolution) {
-      return Response.json({ error: authResolution.error }, { status: authResolution.status });
-    }
-
-    const sessionId = session.session_name || session.id;
-    const webAppUrl = this.env.WEB_APP_URL || this.env.WORKER_URL || "";
-    const sessionUrl = webAppUrl + "/session/" + sessionId;
-
-    const pullRequestService = new SessionPullRequestService({
-      repository: this.repository,
-      sourceControlProvider: this.sourceControlProvider,
-      log: this.log,
-      generateId: () => generateId(),
-      pushBranchToRemote: (headBranch, pushSpec) => this.pushBranchToRemote(headBranch, pushSpec),
-      broadcastArtifactCreated: (artifact) => {
-        this.broadcast({
-          type: "artifact_created",
-          artifact,
-        });
-      },
-    });
-
-    const result = await pullRequestService.createPullRequest({
-      ...body,
-      baseBranch: body.baseBranch || session.base_branch,
-      promptingUserId: promptingParticipant.user_id,
-      promptingAuth: authResolution.auth,
-      sessionUrl,
-    });
-
-    if (result.kind === "error") {
-      return Response.json({ error: result.error }, { status: result.status });
-    }
-
-    return Response.json({
-      prNumber: result.prNumber,
-      prUrl: result.prUrl,
-      state: result.state,
-    });
-  }
 
   private parseArtifactMetadata(
     artifact: Pick<ArtifactRow, "id" | "metadata">
@@ -1920,290 +1619,5 @@ export class SessionDO extends DurableObject<Env> {
       });
       return null;
     }
-  }
-
-  /**
-   * Generate a WebSocket authentication token for a participant.
-   *
-   * This endpoint:
-   * 1. Creates or updates a participant record
-   * 2. Generates a 256-bit random token
-   * 3. Stores the SHA-256 hash in the participant record
-   * 4. Optionally stores encrypted SCM token for PR creation
-   * 5. Returns the plain token to the caller
-   */
-  private async handleGenerateWsToken(request: Request): Promise<Response> {
-    const body = (await request.json()) as {
-      userId: string;
-      scmUserId?: string;
-      scmLogin?: string;
-      scmName?: string;
-      scmEmail?: string;
-      scmTokenEncrypted?: string | null; // Encrypted SCM OAuth token for PR creation
-      scmRefreshTokenEncrypted?: string | null; // Encrypted SCM OAuth refresh token
-      scmTokenExpiresAt?: number | null; // Token expiry timestamp in milliseconds
-    };
-
-    if (!body.userId) {
-      return Response.json({ error: "userId is required" }, { status: 400 });
-    }
-
-    const now = Date.now();
-
-    // Check if participant exists
-    let participant = this.participantService.getByUserId(body.userId);
-
-    if (participant) {
-      // Only accept client tokens if they're newer than what we have in the DB.
-      // The server-side refresh may have rotated tokens, and the client could
-      // be sending stale values from an old session cookie.
-      const clientExpiresAt = body.scmTokenExpiresAt ?? null;
-      const dbExpiresAt = participant.scm_token_expires_at;
-      const clientSentAnyToken =
-        body.scmTokenEncrypted != null || body.scmRefreshTokenEncrypted != null;
-
-      const shouldUpdateTokens =
-        clientSentAnyToken &&
-        (dbExpiresAt == null || (clientExpiresAt != null && clientExpiresAt > dbExpiresAt));
-
-      // If we already have a refresh token (server-side refresh may rotate it),
-      // only accept an incoming refresh token when we're also accepting the
-      // access token update, or when we don't have one yet.
-      const shouldUpdateRefreshToken =
-        body.scmRefreshTokenEncrypted != null &&
-        (participant.scm_refresh_token_encrypted == null || shouldUpdateTokens);
-
-      this.repository.updateParticipantCoalesce(participant.id, {
-        scmUserId: body.scmUserId ?? null,
-        scmLogin: body.scmLogin ?? null,
-        scmName: body.scmName ?? null,
-        scmEmail: body.scmEmail ?? null,
-        scmAccessTokenEncrypted: shouldUpdateTokens ? (body.scmTokenEncrypted ?? null) : null,
-        scmRefreshTokenEncrypted: shouldUpdateRefreshToken
-          ? (body.scmRefreshTokenEncrypted ?? null)
-          : null,
-        scmTokenExpiresAt: shouldUpdateTokens ? clientExpiresAt : null,
-      });
-    } else {
-      // Create new participant with optional SCM token
-      const id = generateId();
-      this.repository.createParticipant({
-        id,
-        userId: body.userId,
-        scmUserId: body.scmUserId ?? null,
-        scmLogin: body.scmLogin ?? null,
-        scmName: body.scmName ?? null,
-        scmEmail: body.scmEmail ?? null,
-        scmAccessTokenEncrypted: body.scmTokenEncrypted ?? null,
-        scmRefreshTokenEncrypted: body.scmRefreshTokenEncrypted ?? null,
-        scmTokenExpiresAt: body.scmTokenExpiresAt ?? null,
-        role: "member",
-        joinedAt: now,
-      });
-      participant = this.participantService.getByUserId(body.userId)!;
-    }
-
-    // Generate a new WebSocket token (32 bytes = 256 bits)
-    const plainToken = generateId(32);
-    const tokenHash = await hashToken(plainToken);
-
-    // Store the hash (invalidates any previous token)
-    this.repository.updateParticipantWsToken(participant.id, tokenHash, now);
-
-    this.log.info("Generated WS token", { participant_id: participant.id, user_id: body.userId });
-
-    return Response.json({
-      token: plainToken,
-      participantId: participant.id,
-    });
-  }
-
-  /**
-   * Handle archive session request.
-   * Only session participants are authorized to archive.
-   */
-  private async handleArchive(request: Request): Promise<Response> {
-    const session = this.getSession();
-    if (!session) {
-      return Response.json({ error: "Session not found" }, { status: 404 });
-    }
-
-    // Verify user is a participant (fail closed)
-    let body: { userId?: string };
-    try {
-      body = (await request.json()) as { userId?: string };
-    } catch {
-      return Response.json({ error: "Invalid request body" }, { status: 400 });
-    }
-
-    if (!body.userId) {
-      return Response.json({ error: "userId is required" }, { status: 400 });
-    }
-
-    const participant = this.participantService.getByUserId(body.userId);
-    if (!participant) {
-      return Response.json({ error: "Not authorized to archive this session" }, { status: 403 });
-    }
-
-    await this.transitionSessionStatus("archived");
-
-    return Response.json({ status: "archived" });
-  }
-
-  /**
-   * Handle unarchive session request.
-   * Only session participants are authorized to unarchive.
-   */
-  private async handleUnarchive(request: Request): Promise<Response> {
-    const session = this.getSession();
-    if (!session) {
-      return Response.json({ error: "Session not found" }, { status: 404 });
-    }
-
-    // Verify user is a participant (fail closed)
-    let body: { userId?: string };
-    try {
-      body = (await request.json()) as { userId?: string };
-    } catch {
-      return Response.json({ error: "Invalid request body" }, { status: 400 });
-    }
-
-    if (!body.userId) {
-      return Response.json({ error: "userId is required" }, { status: 400 });
-    }
-
-    const participant = this.participantService.getByUserId(body.userId);
-    if (!participant) {
-      return Response.json({ error: "Not authorized to unarchive this session" }, { status: 403 });
-    }
-
-    await this.transitionSessionStatus("active");
-
-    return Response.json({ status: "active" });
-  }
-
-  // --- Sub-session (child) internal handlers ---
-
-  private handleGetSpawnContext(): Response {
-    const session = this.getSession();
-    if (!session) {
-      return Response.json({ error: "Session not found" }, { status: 404 });
-    }
-
-    const participants = this.repository.listParticipants();
-    const owner = participants.find((p) => p.role === "owner");
-    if (!owner) {
-      return Response.json({ error: "No owner participant found" }, { status: 404 });
-    }
-
-    const context: SpawnContext = {
-      repoOwner: session.repo_owner,
-      repoName: session.repo_name,
-      repoId: session.repo_id,
-      model: session.model,
-      reasoningEffort: session.reasoning_effort ?? null,
-      owner: {
-        userId: owner.user_id,
-        scmLogin: owner.scm_login,
-        scmName: owner.scm_name,
-        scmEmail: owner.scm_email,
-        scmAccessTokenEncrypted: owner.scm_access_token_encrypted,
-        scmRefreshTokenEncrypted: owner.scm_refresh_token_encrypted,
-        scmTokenExpiresAt: owner.scm_token_expires_at,
-      },
-    };
-
-    return Response.json(context);
-  }
-
-  private handleGetChildSummary(): Response {
-    const session = this.getSession();
-    if (!session) {
-      return Response.json({ error: "Session not found" }, { status: 404 });
-    }
-
-    const sandbox = this.getSandbox();
-    const artifacts = this.repository.listArtifacts();
-    const allEvents = this.repository.listEvents({ limit: 50 });
-
-    // Filter out noisy event types, take first 5
-    const filteredTypes = new Set(["token", "heartbeat", "step_start", "step_finish"]);
-    const recentEvents = allEvents.filter((e) => !filteredTypes.has(e.type)).slice(0, 5);
-
-    const detail = {
-      session: {
-        id: this.getPublicSessionId(session),
-        title: session.title ?? "",
-        status: session.status,
-        repoOwner: session.repo_owner,
-        repoName: session.repo_name,
-        branchName: session.branch_name,
-        model: session.model,
-        createdAt: session.created_at,
-        updatedAt: session.updated_at,
-      },
-      sandbox: sandbox ? { status: sandbox.status } : null,
-      artifacts: artifacts.map((a) => ({
-        type: a.type,
-        url: a.url ?? "",
-        metadata: a.metadata ? JSON.parse(a.metadata) : null,
-      })),
-      recentEvents: recentEvents.map((e) => ({
-        type: e.type,
-        data: JSON.parse(e.data),
-        createdAt: e.created_at,
-      })),
-    };
-
-    return Response.json(detail);
-  }
-
-  private async handleChildSessionUpdate(request: Request): Promise<Response> {
-    const body = (await request.json()) as {
-      childSessionId: string;
-      status: SessionStatus;
-      title: string | null;
-    };
-
-    if (!body.childSessionId || !body.status) {
-      return Response.json({ error: "childSessionId and status are required" }, { status: 400 });
-    }
-
-    this.broadcast({
-      type: "child_session_update",
-      childSessionId: body.childSessionId,
-      status: body.status,
-      title: body.title ?? null,
-    });
-
-    return Response.json({ ok: true });
-  }
-
-  private async handleCancel(): Promise<Response> {
-    const session = this.getSession();
-    if (!session) {
-      return Response.json({ error: "Session not found" }, { status: 404 });
-    }
-
-    if (TERMINAL_STATUSES.has(session.status)) {
-      return Response.json({ error: `Session already ${session.status}` }, { status: 409 });
-    }
-
-    // Stop any in-flight message processing without emitting intermediate "failed".
-    await this.stopExecution({ suppressStatusReconcile: true });
-
-    await this.transitionSessionStatus("cancelled");
-
-    // Stop sandbox if running
-    const sandbox = this.getSandbox();
-    if (sandbox && sandbox.status !== "stopped" && sandbox.status !== "failed") {
-      const sandboxWs = this.wsManager.getSandboxSocket();
-      if (sandboxWs) {
-        this.wsManager.send(sandboxWs, { type: "shutdown" });
-      }
-      this.updateSandboxStatus("stopped");
-    }
-
-    return Response.json({ status: "cancelled" });
   }
 }
