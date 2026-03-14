@@ -262,3 +262,23 @@ export async function publishView(
 
   return response.json() as Promise<{ ok: boolean; error?: string }>;
 }
+
+/**
+ * Open a modal view in Slack.
+ */
+export async function openView(
+  token: string,
+  triggerId: string,
+  view: Record<string, unknown>
+): Promise<{ ok: boolean; error?: string }> {
+  const response = await fetch("https://slack.com/api/views.open", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ trigger_id: triggerId, view }),
+  });
+
+  return response.json() as Promise<{ ok: boolean; error?: string }>;
+}
