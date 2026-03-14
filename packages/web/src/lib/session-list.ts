@@ -9,7 +9,6 @@ export const SIDEBAR_SESSIONS_KEY = buildSessionsPageKey({
 
 export interface SessionListResponse {
   sessions: Session[];
-  total: number;
   hasMore: boolean;
 }
 

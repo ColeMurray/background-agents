@@ -62,6 +62,15 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   );
   const firstPageSessions = useMemo(() => data?.sessions ?? [], [data?.sessions]);
 
+  // Track data reference to clear extraSessions synchronously during render,
+  // preventing one frame of stale extra sessions after SWR revalidation.
+  const prevDataRef = useRef(data);
+  let effectiveExtraSessions = extraSessions;
+  if (prevDataRef.current !== data) {
+    prevDataRef.current = data;
+    effectiveExtraSessions = [];
+  }
+
   useEffect(() => {
     if (!data) return;
 
@@ -130,8 +139,8 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   ]);
 
   const sessions = useMemo(
-    () => mergeUniqueSessions(firstPageSessions, extraSessions),
-    [firstPageSessions, extraSessions]
+    () => mergeUniqueSessions(firstPageSessions, effectiveExtraSessions),
+    [firstPageSessions, effectiveExtraSessions]
   );
 
   // Sort sessions by updatedAt (most recent first), filter by search query,

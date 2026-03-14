@@ -71,11 +71,11 @@ describe("SessionSidebar", () => {
       const url = String(input);
 
       if (url === SIDEBAR_SESSIONS_KEY) {
-        return jsonResponse({ sessions: firstPage, total: 55, hasMore: true });
+        return jsonResponse({ sessions: firstPage, hasMore: true });
       }
 
       if (url === buildSessionsPageKey({ excludeStatus: "archived", offset: 50 })) {
-        return jsonResponse({ sessions: secondPage, total: 55, hasMore: false });
+        return jsonResponse({ sessions: secondPage, hasMore: false });
       }
 
       throw new Error(`Unexpected fetch for ${url}`);
