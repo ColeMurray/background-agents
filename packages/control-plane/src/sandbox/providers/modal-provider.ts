@@ -72,6 +72,7 @@ export class ModalSandboxProvider implements SandboxProvider {
           repoImageSha: config.repoImageSha,
           timeoutSeconds: config.timeoutSeconds,
           branch: config.branch,
+          codeServerEnabled: config.codeServerEnabled,
         },
         config.correlation
       );
@@ -108,6 +109,7 @@ export class ModalSandboxProvider implements SandboxProvider {
           userEnvVars: config.userEnvVars,
           timeoutSeconds: config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS,
           branch: config.branch,
+          codeServerEnabled: config.codeServerEnabled,
         },
         config.correlation
       );

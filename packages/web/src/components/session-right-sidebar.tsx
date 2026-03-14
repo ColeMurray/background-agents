@@ -72,7 +72,7 @@ export function SessionRightSidebarContent({
         <div className="px-4 py-4 border-b border-border-muted">
           <CodeServerSection
             url={sessionState.codeServerUrl}
-            password={sessionState.codeServerPassword ?? ""}
+            password={sessionState.codeServerPassword ?? null}
             sandboxStatus={sessionState.sandboxStatus}
           />
         </div>

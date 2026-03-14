@@ -160,6 +160,7 @@ async def api_create_sandbox(
             user_env_vars=request.get("user_env_vars") or None,
             repo_image_id=request.get("repo_image_id") or None,
             repo_image_sha=request.get("repo_image_sha") or None,
+            code_server_enabled=bool(request.get("code_server_enabled", False)),
         )
 
         handle = await manager.create_sandbox(config)
@@ -518,6 +519,8 @@ async def api_restore_sandbox(
         except Exception as e:
             log.warn("github.token_error", exc=e)
 
+        code_server_enabled = bool(request.get("code_server_enabled", False))
+
         # Restore sandbox from snapshot
         handle = await manager.restore_from_snapshot(
             snapshot_image_id=snapshot_image_id,
@@ -528,6 +531,7 @@ async def api_restore_sandbox(
             clone_token=github_app_token,
             user_env_vars=user_env_vars,
             timeout_seconds=timeout_seconds,
+            code_server_enabled=code_server_enabled,
         )
 
         return {

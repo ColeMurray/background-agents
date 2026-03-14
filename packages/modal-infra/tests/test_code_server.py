@@ -110,6 +110,7 @@ class TestCreateSandboxCodeServer:
             repo_name="repo",
             control_plane_url="https://cp.example.com",
             sandbox_auth_token="token-123",
+            code_server_enabled=True,
         )
 
         handle = await manager.create_sandbox(config)
@@ -121,6 +122,45 @@ class TestCreateSandboxCodeServer:
         assert captured["env"]["CODE_SERVER_PASSWORD"] == handle.code_server_password
         # Code-server port should be in encrypted_ports
         assert captured["encrypted_ports"] == [CODE_SERVER_PORT]
+
+    @pytest.mark.asyncio
+    async def test_code_server_skipped_when_disabled(self, monkeypatch):
+        """When code_server_enabled=False, no password, ports, or tunnel."""
+        captured = {}
+
+        async def fake_create_aio(*args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            captured["encrypted_ports"] = kwargs.get("encrypted_ports")
+
+            class FakeSandbox:
+                object_id = "obj-123"
+                stdout = None
+
+            return FakeSandbox()
+
+        fake_create = MagicMock()
+        fake_create.aio = fake_create_aio
+        monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+
+        tunnel_mock = AsyncMock(return_value="https://cs.example.com")
+        monkeypatch.setattr(SandboxManager, "_resolve_code_server_tunnel", tunnel_mock)
+
+        manager = SandboxManager()
+        config = SandboxConfig(
+            repo_owner="acme",
+            repo_name="repo",
+            control_plane_url="https://cp.example.com",
+            sandbox_auth_token="token-123",
+            code_server_enabled=False,
+        )
+
+        handle = await manager.create_sandbox(config)
+
+        assert handle.code_server_url is None
+        assert handle.code_server_password is None
+        assert "CODE_SERVER_PASSWORD" not in captured["env"]
+        assert captured["encrypted_ports"] is None
+        tunnel_mock.assert_not_called()
 
 
 class TestRestoreSandboxCodeServer:
@@ -168,12 +208,62 @@ class TestRestoreSandboxCodeServer:
             },
             control_plane_url="https://cp.example.com",
             sandbox_auth_token="token-456",
+            code_server_enabled=True,
         )
 
         assert handle.code_server_url == "https://cs-restored.example.com"
         assert handle.code_server_password is not None
         assert captured["env"]["CODE_SERVER_PASSWORD"] == handle.code_server_password
         assert captured["encrypted_ports"] == [CODE_SERVER_PORT]
+
+    @pytest.mark.asyncio
+    async def test_code_server_skipped_when_disabled(self, monkeypatch):
+        """When code_server_enabled=False, restore skips code-server setup."""
+        captured = {}
+
+        class FakeImage:
+            object_id = "img-123"
+
+        def fake_from_id(*args, **kwargs):
+            return FakeImage()
+
+        async def fake_create_aio(*args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            captured["encrypted_ports"] = kwargs.get("encrypted_ports")
+
+            class FakeSandbox:
+                object_id = "obj-456"
+                stdout = None
+
+            return FakeSandbox()
+
+        fake_create = MagicMock()
+        fake_create.aio = fake_create_aio
+        monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", fake_from_id)
+        monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+        tunnel_mock = AsyncMock(return_value="https://cs.example.com")
+        monkeypatch.setattr(SandboxManager, "_resolve_code_server_tunnel", tunnel_mock)
+
+        manager = SandboxManager()
+        handle = await manager.restore_from_snapshot(
+            snapshot_image_id="img-abc",
+            session_config={
+                "repo_owner": "acme",
+                "repo_name": "repo",
+                "provider": "anthropic",
+                "model": "claude-sonnet-4-6",
+                "session_id": "sess-1",
+            },
+            control_plane_url="https://cp.example.com",
+            sandbox_auth_token="token-456",
+            code_server_enabled=False,
+        )
+
+        assert handle.code_server_url is None
+        assert handle.code_server_password is None
+        assert "CODE_SERVER_PASSWORD" not in captured["env"]
+        assert captured["encrypted_ports"] is None
+        tunnel_mock.assert_not_called()
 
 
 class TestCodeServerMonitorRestart:
@@ -199,6 +289,7 @@ class TestCodeServerMonitorRestart:
         proc.returncode = returncode
         return proc
 
+    @pytest.mark.asyncio
     async def test_code_server_crash_does_not_set_shutdown(self):
         """code-server crash should NOT trigger supervisor shutdown."""
         sup = self._make_supervisor()
@@ -224,6 +315,7 @@ class TestCodeServerMonitorRestart:
         # confirming code-server crash does not call _report_fatal_error
         assert not hasattr(sup, "_report_fatal_error_called")
 
+    @pytest.mark.asyncio
     async def test_code_server_restart_exception_is_caught(self):
         """If start_code_server() raises, the supervisor continues running."""
         sup = self._make_supervisor()
@@ -256,6 +348,7 @@ class TestCodeServerMonitorRestart:
         assert call_count == 1
         assert sup.code_server_process is None
 
+    @pytest.mark.asyncio
     async def test_code_server_max_restarts_gives_up(self):
         """After MAX_RESTARTS, code-server is abandoned (process set to None)."""
         sup = self._make_supervisor()

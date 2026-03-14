@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS session (
   parent_session_id TEXT,                           -- Parent session ID (NULL for top-level)
   spawn_source TEXT NOT NULL DEFAULT 'user',        -- 'user' or 'agent'
   spawn_depth INTEGER NOT NULL DEFAULT 0,           -- 0 for top-level, parent.depth + 1 for children
+  code_server_enabled INTEGER NOT NULL DEFAULT 0,   -- 0 = disabled, 1 = enabled (opt-in)
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -350,6 +351,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
       ALTER TABLE sandbox ADD COLUMN code_server_url TEXT;
       ALTER TABLE sandbox ADD COLUMN code_server_password TEXT;
     `,
+  },
+  {
+    id: 27,
+    description: "Add code_server_enabled to session",
+    run: `ALTER TABLE session ADD COLUMN code_server_enabled INTEGER NOT NULL DEFAULT 0`,
   },
 ];
 

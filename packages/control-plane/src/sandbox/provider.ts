@@ -57,6 +57,8 @@ export interface CreateSandboxConfig {
   timeoutSeconds?: number;
   /** Git branch to work on (defaults to repo's default branch) */
   branch?: string;
+  /** Whether to enable code-server (browser-based editor) in the sandbox */
+  codeServerEnabled?: boolean;
 }
 
 /**
@@ -107,6 +109,8 @@ export interface RestoreConfig {
   branch?: string;
   /** Correlation context for downstream tracing */
   correlation?: CorrelationContext;
+  /** Whether to enable code-server (browser-based editor) in the sandbox */
+  codeServerEnabled?: boolean;
 }
 
 /**

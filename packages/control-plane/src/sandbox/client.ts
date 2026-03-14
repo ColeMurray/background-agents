@@ -38,6 +38,7 @@ export interface CreateSandboxRequest {
   repoImageSha?: string | null;
   timeoutSeconds?: number;
   branch?: string;
+  codeServerEnabled?: boolean;
 }
 
 export interface CreateSandboxResponse {
@@ -62,6 +63,7 @@ export interface RestoreSandboxRequest {
   userEnvVars?: Record<string, string>;
   timeoutSeconds?: number;
   branch?: string;
+  codeServerEnabled?: boolean;
 }
 
 export interface RestoreSandboxResponse {
@@ -248,6 +250,7 @@ export class ModalClient {
           repo_image_sha: request.repoImageSha || null,
           timeout_seconds: request.timeoutSeconds || null,
           branch: request.branch || null,
+          code_server_enabled: request.codeServerEnabled ?? false,
         }),
       });
 
@@ -327,6 +330,7 @@ export class ModalClient {
           sandbox_auth_token: request.sandboxAuthToken,
           user_env_vars: request.userEnvVars || null,
           timeout_seconds: request.timeoutSeconds || null,
+          code_server_enabled: request.codeServerEnabled ?? false,
         }),
       });
 

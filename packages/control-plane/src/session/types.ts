@@ -36,6 +36,7 @@ export interface SessionRow {
   parent_session_id: string | null;
   spawn_source: SpawnSource;
   spawn_depth: number;
+  code_server_enabled: number; // 0 = disabled (default), 1 = enabled
   created_at: number;
   updated_at: number;
 }

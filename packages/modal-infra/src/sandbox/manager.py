@@ -46,6 +46,7 @@ class SandboxConfig:
     user_env_vars: dict[str, str] | None = None  # User-provided env vars (repo secrets)
     repo_image_id: str | None = None  # Pre-built repo image ID from provider
     repo_image_sha: str | None = None  # Git SHA the repo image was built from
+    code_server_enabled: bool = False  # Whether to start code-server in the sandbox
 
 
 @dataclass
@@ -179,8 +180,10 @@ class SandboxManager:
 
         self._inject_vcs_env_vars(env_vars, config.clone_token)
 
-        code_server_password = self._generate_code_server_password()
-        env_vars["CODE_SERVER_PASSWORD"] = code_server_password
+        code_server_password: str | None = None
+        if config.code_server_enabled:
+            code_server_password = self._generate_code_server_password()
+            env_vars["CODE_SERVER_PASSWORD"] = code_server_password
 
         if config.session_config:
             env_vars["SESSION_CONFIG"] = config.session_config.model_dump_json()
@@ -197,22 +200,29 @@ class SandboxManager:
 
         # Create the sandbox
         # The entrypoint command is passed as positional args
+        create_kwargs: dict = {
+            "image": image,
+            "app": app,
+            "secrets": [llm_secrets],
+            "timeout": config.timeout_seconds,
+            "workdir": "/workspace",
+            "env": env_vars,
+        }
+        if config.code_server_enabled:
+            create_kwargs["encrypted_ports"] = [CODE_SERVER_PORT]
+
         sandbox = await modal.Sandbox.create.aio(
             "python",
             "-m",
             "sandbox.entrypoint",  # Run the supervisor entrypoint
-            image=image,
-            app=app,
-            secrets=[llm_secrets],
-            timeout=config.timeout_seconds,
-            workdir="/workspace",
-            env=env_vars,
-            encrypted_ports=[CODE_SERVER_PORT],
+            **create_kwargs,
         )
 
         # Get Modal's internal object ID for API calls (snapshot, etc.)
         modal_object_id = sandbox.object_id
-        code_server_url = await self._resolve_code_server_tunnel(sandbox, sandbox_id)
+        code_server_url: str | None = None
+        if config.code_server_enabled:
+            code_server_url = await self._resolve_code_server_tunnel(sandbox, sandbox_id)
 
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -425,6 +435,7 @@ class SandboxManager:
         clone_token: str | None = None,
         user_env_vars: dict[str, str] | None = None,
         timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+        code_server_enabled: bool = False,
     ) -> SandboxHandle:
         """
         Create a new sandbox from a filesystem snapshot Image.
@@ -498,25 +509,34 @@ class SandboxManager:
 
         self._inject_vcs_env_vars(env_vars, clone_token)
 
-        code_server_password = self._generate_code_server_password()
-        env_vars["CODE_SERVER_PASSWORD"] = code_server_password
+        code_server_password: str | None = None
+        if code_server_enabled:
+            code_server_password = self._generate_code_server_password()
+            env_vars["CODE_SERVER_PASSWORD"] = code_server_password
 
         # Create the sandbox from the snapshot image
+        create_kwargs: dict = {
+            "image": image,  # Use the snapshot image directly
+            "app": app,
+            "secrets": [llm_secrets],
+            "timeout": timeout_seconds,
+            "workdir": "/workspace",
+            "env": env_vars,
+        }
+        if code_server_enabled:
+            create_kwargs["encrypted_ports"] = [CODE_SERVER_PORT]
+
         sandbox = await modal.Sandbox.create.aio(
             "python",
             "-m",
             "sandbox.entrypoint",
-            image=image,  # Use the snapshot image directly
-            app=app,
-            secrets=[llm_secrets],
-            timeout=timeout_seconds,
-            workdir="/workspace",
-            env=env_vars,
-            encrypted_ports=[CODE_SERVER_PORT],
+            **create_kwargs,
         )
 
         modal_object_id = sandbox.object_id
-        code_server_url = await self._resolve_code_server_tunnel(sandbox, sandbox_id)
+        code_server_url: str | None = None
+        if code_server_enabled:
+            code_server_url = await self._resolve_code_server_tunnel(sandbox, sandbox_id)
 
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(

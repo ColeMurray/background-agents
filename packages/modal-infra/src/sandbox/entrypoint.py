@@ -40,7 +40,6 @@ class SandboxSupervisor:
 
     # Configuration
     OPENCODE_PORT = 4096
-    CODE_SERVER_PORT = CODE_SERVER_PORT
     HEALTH_CHECK_TIMEOUT = 30.0
     MAX_RESTARTS = 5
     BACKOFF_BASE = 2.0
@@ -343,7 +342,7 @@ class SandboxSupervisor:
         self.code_server_process = await asyncio.create_subprocess_exec(
             "code-server",
             "--bind-addr",
-            f"0.0.0.0:{self.CODE_SERVER_PORT}",
+            f"0.0.0.0:{CODE_SERVER_PORT}",
             "--auth",
             "password",
             "--disable-telemetry",
@@ -355,7 +354,7 @@ class SandboxSupervisor:
         )
 
         asyncio.create_task(self._forward_code_server_logs())
-        self.log.info("code_server.started", port=self.CODE_SERVER_PORT)
+        self.log.info("code_server.started", port=CODE_SERVER_PORT)
 
     async def _forward_code_server_logs(self) -> None:
         """Forward code-server stdout to supervisor stdout."""

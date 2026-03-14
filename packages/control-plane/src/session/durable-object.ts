@@ -560,6 +560,7 @@ export class SessionDO extends DurableObject<Env> {
           : password;
         this.repository.updateSandboxCodeServer(url, encrypted);
       },
+      clearSandboxCodeServer: () => this.repository.clearSandboxCodeServer(),
     };
 
     // Broadcaster adapter
@@ -1453,7 +1454,8 @@ export class SessionDO extends DurableObject<Env> {
           this.env.REPO_SECRETS_ENCRYPTION_KEY
         );
       } catch {
-        // Stored before encryption was enabled — return as-is
+        // Key mismatch or corruption — don't leak ciphertext to clients
+        codeServerPassword = null;
       }
     }
 

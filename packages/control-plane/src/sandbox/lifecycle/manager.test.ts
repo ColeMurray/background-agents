@@ -50,6 +50,7 @@ function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
     parent_session_id: null,
     spawn_source: "user" as const,
     spawn_depth: 0,
+    code_server_enabled: 0,
     created_at: Date.now() - 60000,
     updated_at: Date.now(),
     ...overrides,
@@ -161,6 +162,13 @@ function createMockStorage(
       if (sandbox) {
         sandbox.code_server_url = url;
         sandbox.code_server_password = password;
+      }
+    }),
+    clearSandboxCodeServer: vi.fn(() => {
+      calls.push("clearSandboxCodeServer");
+      if (sandbox) {
+        sandbox.code_server_url = null;
+        sandbox.code_server_password = null;
       }
     }),
   };

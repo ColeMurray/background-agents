@@ -7,7 +7,7 @@ import type { SandboxStatus } from "@open-inspect/shared";
 
 interface CodeServerSectionProps {
   url: string;
-  password: string;
+  password: string | null;
   sandboxStatus: SandboxStatus;
 }
 
@@ -27,6 +27,7 @@ export function CodeServerSection({ url, password, sandboxStatus }: CodeServerSe
   const isStarting = STARTING_STATUSES.has(sandboxStatus);
 
   const handleCopyPassword = async () => {
+    if (!password) return;
     const success = await copyToClipboard(password);
     if (success) {
       setCopiedPassword(true);
@@ -53,7 +54,7 @@ export function CodeServerSection({ url, password, sandboxStatus }: CodeServerSe
           {isStarting ? "Editor starting\u2026" : "Editor unavailable"}
         </span>
       )}
-      {isActive && (
+      {isActive && password && (
         <button
           onClick={handleCopyPassword}
           className="p-1 hover:bg-muted transition-colors shrink-0"
