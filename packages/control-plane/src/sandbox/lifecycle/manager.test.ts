@@ -156,7 +156,7 @@ function createMockStorage(
         sandbox.last_spawn_error_at = timestamp;
       }
     }),
-    updateSandboxCodeServer: vi.fn((url: string, password: string) => {
+    updateSandboxCodeServer: vi.fn(async (url: string, password: string) => {
       calls.push(`updateSandboxCodeServer:${url}`);
       if (sandbox) {
         sandbox.code_server_url = url;

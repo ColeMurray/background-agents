@@ -80,8 +80,8 @@ export interface SandboxStorage {
   resetCircuitBreaker(): void;
   /** Persist last spawn error */
   setLastSpawnError(error: string | null, timestamp: number | null): void;
-  /** Update code-server URL and password on the sandbox row */
-  updateSandboxCodeServer(url: string, password: string): void;
+  /** Update code-server URL and (encrypted) password on the sandbox row */
+  updateSandboxCodeServer(url: string, password: string): void | Promise<void>;
 }
 
 /**
@@ -391,7 +391,10 @@ export class SandboxLifecycleManager {
 
       // Store code-server details and push to connected clients
       if (result.codeServerUrl) {
-        this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword ?? "");
+        await this.storeAndBroadcastCodeServer(
+          result.codeServerUrl,
+          result.codeServerPassword ?? ""
+        );
       }
 
       this.storage.updateSandboxStatus("connecting");
@@ -512,7 +515,10 @@ export class SandboxLifecycleManager {
 
         // Store code-server details and push to connected clients
         if (result.codeServerUrl) {
-          this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword ?? "");
+          await this.storeAndBroadcastCodeServer(
+            result.codeServerUrl,
+            result.codeServerPassword ?? ""
+          );
         }
 
         this.storage.updateSandboxStatus("connecting");
@@ -816,9 +822,12 @@ export class SandboxLifecycleManager {
   /**
    * Store code-server details in the database and push to connected clients.
    * Shared by doSpawn() and restoreFromSnapshot().
+   *
+   * The storage adapter may encrypt the password before persisting;
+   * the plaintext is broadcast over the already-authenticated WebSocket.
    */
-  private storeAndBroadcastCodeServer(url: string, password: string): void {
-    this.storage.updateSandboxCodeServer(url, password);
+  private async storeAndBroadcastCodeServer(url: string, password: string): Promise<void> {
+    await this.storage.updateSandboxCodeServer(url, password);
     this.broadcaster.broadcast({
       type: "code_server_info",
       url,

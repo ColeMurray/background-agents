@@ -10,7 +10,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
-import { generateId, hashToken, timingSafeEqual } from "../auth/crypto";
+import { generateId, hashToken, timingSafeEqual, encryptToken, decryptToken } from "../auth/crypto";
 import { getGitHubAppConfig } from "../auth/github-app";
 import { createModalClient } from "../sandbox/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
@@ -380,8 +380,12 @@ export class SessionDO extends DurableObject<Env> {
       resetCircuitBreaker: () => this.repository.resetCircuitBreaker(),
       setLastSpawnError: (error, timestamp) =>
         this.repository.updateSandboxSpawnError(error, timestamp),
-      updateSandboxCodeServer: (url, password) =>
-        this.repository.updateSandboxCodeServer(url, password),
+      updateSandboxCodeServer: async (url, password) => {
+        const encrypted = this.env.REPO_SECRETS_ENCRYPTION_KEY
+          ? await encryptToken(password, this.env.REPO_SECRETS_ENCRYPTION_KEY)
+          : password;
+        this.repository.updateSandboxCodeServer(url, encrypted);
+      },
     };
 
     // Broadcaster adapter
@@ -941,7 +945,7 @@ export class SessionDO extends DurableObject<Env> {
     // Gather session state and replay events, then send as a single message.
     // Fetch sandbox once and thread it through to avoid a redundant SQLite read.
     const sandbox = this.getSandbox();
-    const state = this.getSessionState(sandbox);
+    const state = await this.getSessionState(sandbox);
     const replay = this.getReplayData();
 
     this.safeSend(ws, {
@@ -1283,11 +1287,24 @@ export class SessionDO extends DurableObject<Env> {
    * Get current session state.
    * Accepts an optional pre-fetched sandbox row to avoid a redundant SQLite read.
    */
-  private getSessionState(sandbox?: SandboxRow | null): SessionState {
+  private async getSessionState(sandbox?: SandboxRow | null): Promise<SessionState> {
     const session = this.getSession();
     sandbox ??= this.getSandbox();
     const messageCount = this.repository.getMessageCount();
     const isProcessing = this.getIsProcessing();
+
+    // Decrypt code-server password if stored encrypted
+    let codeServerPassword: string | null = sandbox?.code_server_password ?? null;
+    if (codeServerPassword && this.env.REPO_SECRETS_ENCRYPTION_KEY) {
+      try {
+        codeServerPassword = await decryptToken(
+          codeServerPassword,
+          this.env.REPO_SECRETS_ENCRYPTION_KEY
+        );
+      } catch {
+        // Stored before encryption was enabled — return as-is
+      }
+    }
 
     return {
       id: this.getPublicSessionId(session),
@@ -1305,7 +1322,7 @@ export class SessionDO extends DurableObject<Env> {
       isProcessing,
       parentSessionId: session?.parent_session_id ?? null,
       codeServerUrl: sandbox?.code_server_url ?? null,
-      codeServerPassword: sandbox?.code_server_password ?? null,
+      codeServerPassword,
     };
   }
 
