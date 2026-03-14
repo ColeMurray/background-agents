@@ -10,7 +10,7 @@ import {
   LinkIcon,
   GitHubIcon,
 } from "@/components/ui/icons";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 
 interface ActionBarProps {
   sessionId: string;
@@ -61,41 +61,29 @@ export function ActionBar({
     setIsMenuOpen(false);
   };
 
-  const pillButtonClass = buttonVariants({
-    variant: "outline",
-    size: "sm",
-    className: "flex shrink-0 items-center gap-1.5 whitespace-nowrap",
-  });
-
   return (
     <div className="flex flex-wrap items-stretch gap-2">
       {/* View Preview */}
       {previewArtifact?.url && (
-        <a
-          href={previewArtifact.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={pillButtonClass}
-        >
-          <GlobeIcon className="w-4 h-4" />
-          <span>View preview</span>
-          {previewArtifact.metadata?.previewStatus === "outdated" && (
-            <span className="text-xs text-yellow-600 dark:text-yellow-400">(outdated)</span>
-          )}
-        </a>
+        <Button variant="outline" size="sm" className="gap-1.5" asChild>
+          <a href={previewArtifact.url} target="_blank" rel="noopener noreferrer">
+            <GlobeIcon className="w-4 h-4" />
+            <span>View preview</span>
+            {previewArtifact.metadata?.previewStatus === "outdated" && (
+              <span className="text-xs text-yellow-600 dark:text-yellow-400">(outdated)</span>
+            )}
+          </a>
+        </Button>
       )}
 
       {/* View PR */}
       {prArtifact?.url && (
-        <a
-          href={prArtifact.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={pillButtonClass}
-        >
-          <GitPrIcon className="w-4 h-4" />
-          <span>View PR</span>
-        </a>
+        <Button variant="outline" size="sm" className="gap-1.5" asChild>
+          <a href={prArtifact.url} target="_blank" rel="noopener noreferrer">
+            <GitPrIcon className="w-4 h-4" />
+            <span>View PR</span>
+          </a>
+        </Button>
       )}
 
       {/* Archive/Unarchive */}

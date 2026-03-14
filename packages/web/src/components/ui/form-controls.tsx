@@ -1,5 +1,6 @@
 import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from "react";
 import { ChevronDownIcon } from "@/components/ui/icons";
+import { cn } from "@/lib/utils";
 
 type SelectDensity = "default" | "compact";
 
@@ -14,9 +15,12 @@ interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
 
 export function Select({ className = "", density = "default", children, ...props }: SelectProps) {
   return (
-    <div className={`relative ${className}`.trim()}>
+    <div className={cn("relative", className)}>
       <select
-        className={`w-full appearance-none rounded-sm border border-border bg-input pr-8 text-foreground transition hover:border-foreground/20 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50 ${selectDensityClasses[density]}`.trim()}
+        className={cn(
+          "w-full appearance-none rounded-sm border border-border bg-input pr-8 text-foreground transition hover:border-foreground/20 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50",
+          selectDensityClasses[density]
+        )}
         {...props}
       >
         {children}
@@ -40,19 +44,25 @@ export function RadioCard({
 }: RadioCardProps) {
   return (
     <label
-      className={`flex cursor-pointer items-start gap-2 rounded-sm border px-3 py-2 text-sm transition ${
-        checked ? "border-accent bg-accent-muted/70" : "border-border hover:bg-muted/50"
-      } ${className}`.trim()}
+      className={cn(
+        "flex cursor-pointer items-start gap-2 rounded-sm border px-3 py-2 text-sm transition",
+        checked ? "border-accent bg-accent-muted/70" : "border-border hover:bg-muted/50",
+        className
+      )}
     >
       <input type="radio" checked={checked} className="sr-only" {...props} />
       <span
-        className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition ${
+        className={cn(
+          "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition",
           checked ? "border-accent" : "border-border"
-        }`}
+        )}
         aria-hidden="true"
       >
         <span
-          className={`h-2 w-2 rounded-full bg-accent transition ${checked ? "opacity-100" : "opacity-0"}`}
+          className={cn(
+            "h-2 w-2 rounded-full bg-accent transition",
+            checked ? "opacity-100" : "opacity-0"
+          )}
         />
       </span>
       <span className="leading-5">
