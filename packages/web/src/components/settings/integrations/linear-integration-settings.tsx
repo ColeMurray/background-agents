@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import useSWR, { mutate } from "swr";
+import { toast } from "sonner";
 import {
   MODEL_REASONING_CONFIG,
   isValidReasoningEffort,
@@ -14,6 +15,16 @@ import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { Button } from "@/components/ui/button";
 import { RadioCard, Select } from "@/components/ui/form-controls";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const GLOBAL_SETTINGS_KEY = "/api/integration-settings/linear";
 const REPO_SETTINGS_KEY = "/api/integration-settings/linear/repos";
@@ -119,9 +130,9 @@ function GlobalSettingsSection({
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
   const [dirty, setDirty] = useState(false);
   const [initialized, setInitialized] = useState(false);
+  const [showResetDialog, setShowResetDialog] = useState(false);
 
   useEffect(() => {
     if (settings !== undefined && !initialized) {
@@ -144,14 +155,13 @@ function GlobalSettingsSection({
   const resetNotice =
     "Reset all Linear settings to defaults? This enables both label/user model overrides.";
 
-  const handleReset = async () => {
-    if (!window.confirm(resetNotice)) {
-      return;
-    }
+  const handleReset = () => {
+    setShowResetDialog(true);
+  };
 
+  const handleConfirmReset = async () => {
     setSaving(true);
     setError("");
-    setSuccess("");
 
     try {
       const res = await fetch(GLOBAL_SETTINGS_KEY, { method: "DELETE" });
@@ -166,13 +176,13 @@ function GlobalSettingsSection({
         setAllowLabelModelOverride(true);
         setEmitToolProgressActivities(true);
         setDirty(false);
-        setSuccess("Settings reset to defaults.");
+        toast.success("Settings reset to defaults.");
       } else {
         const data = await res.json();
-        setError(data.error || "Failed to reset settings");
+        toast.error(data.error || "Failed to reset settings");
       }
     } catch {
-      setError("Failed to reset settings");
+      toast.error("Failed to reset settings");
     } finally {
       setSaving(false);
     }
@@ -181,7 +191,6 @@ function GlobalSettingsSection({
   const handleSave = async () => {
     setSaving(true);
     setError("");
-    setSuccess("");
 
     const defaults: LinearBotSettings = {
       allowUserPreferenceOverride,
@@ -206,14 +215,14 @@ function GlobalSettingsSection({
 
       if (res.ok) {
         mutate(GLOBAL_SETTINGS_KEY);
-        setSuccess("Settings saved.");
+        toast.success("Settings saved.");
         setDirty(false);
       } else {
         const data = await res.json();
-        setError(data.error || "Failed to save settings");
+        toast.error(data.error || "Failed to save settings");
       }
     } catch {
-      setError("Failed to save settings");
+      toast.error("Failed to save settings");
     } finally {
       setSaving(false);
     }
@@ -226,7 +235,6 @@ function GlobalSettingsSection({
     );
     setDirty(true);
     setError("");
-    setSuccess("");
   };
 
   return (
@@ -235,7 +243,6 @@ function GlobalSettingsSection({
       description="Global model, fallback behavior, and repository targeting."
     >
       {error && <Message tone="error" text={error} />}
-      {success && <Message tone="success" text={success} />}
 
       <div className="grid sm:grid-cols-2 gap-3 mb-4">
         <label className="text-sm">
@@ -250,7 +257,6 @@ function GlobalSettingsSection({
               }
               setDirty(true);
               setError("");
-              setSuccess("");
             }}
             className="w-full"
           >
@@ -275,7 +281,6 @@ function GlobalSettingsSection({
               setEffort(e.target.value);
               setDirty(true);
               setError("");
-              setSuccess("");
             }}
             disabled={!reasoningConfig}
             className="w-full"
@@ -300,7 +305,6 @@ function GlobalSettingsSection({
               setAllowUserPreferenceOverride(!allowUserPreferenceOverride);
               setDirty(true);
               setError("");
-              setSuccess("");
             }}
             className="rounded border-border"
           />
@@ -314,7 +318,6 @@ function GlobalSettingsSection({
               setAllowLabelModelOverride(!allowLabelModelOverride);
               setDirty(true);
               setError("");
-              setSuccess("");
             }}
             className="rounded border-border"
           />
@@ -331,7 +334,6 @@ function GlobalSettingsSection({
               setEmitToolProgressActivities(!emitToolProgressActivities);
               setDirty(true);
               setError("");
-              setSuccess("");
             }}
             className="rounded border-border"
           />
@@ -348,7 +350,6 @@ function GlobalSettingsSection({
               setRepoScopeMode("all");
               setDirty(true);
               setError("");
-              setSuccess("");
             }}
             label="All repositories"
             description="Linear events can run against every accessible repository."
@@ -360,7 +361,6 @@ function GlobalSettingsSection({
               setRepoScopeMode("selected");
               setDirty(true);
               setError("");
-              setSuccess("");
             }}
             label="Selected repositories"
             description="Linear events run only for repositories in the allowlist."
@@ -417,6 +417,19 @@ function GlobalSettingsSection({
           </Button>
         )}
       </div>
+
+      <AlertDialog open={showResetDialog} onOpenChange={setShowResetDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reset to defaults</AlertDialogTitle>
+            <AlertDialogDescription>{resetNotice}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleConfirmReset}>Reset</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Section>
   );
 }
@@ -431,8 +444,6 @@ function RepoOverridesSection({
   enabledModelOptions: { category: string; models: { id: string; name: string }[] }[];
 }) {
   const [addingRepo, setAddingRepo] = useState("");
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
 
   const overriddenRepos = new Set(overrides.map((o) => o.repo));
   const availableForOverride = availableRepos.filter(
@@ -442,8 +453,6 @@ function RepoOverridesSection({
   const handleAdd = async () => {
     if (!addingRepo) return;
     const [owner, name] = addingRepo.split("/");
-    setError("");
-    setSuccess("");
 
     try {
       const res = await fetch(`/api/integration-settings/linear/repos/${owner}/${name}`, {
@@ -455,21 +464,18 @@ function RepoOverridesSection({
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);
         setAddingRepo("");
-        setSuccess("Override added.");
+        toast.success("Override added.");
       } else {
         const data = await res.json();
-        setError(data.error || "Failed to add override");
+        toast.error(data.error || "Failed to add override");
       }
     } catch {
-      setError("Failed to add override");
+      toast.error("Failed to add override");
     }
   };
 
   return (
     <div>
-      {error && <Message tone="error" text={error} />}
-      {success && <Message tone="success" text={success} />}
-
       {overrides.length > 0 ? (
         <div className="space-y-2 mb-4">
           {overrides.map((entry) => (
@@ -477,8 +483,6 @@ function RepoOverridesSection({
               key={entry.repo}
               entry={entry}
               enabledModelOptions={enabledModelOptions}
-              onError={setError}
-              onSuccess={setSuccess}
             />
           ))}
         </div>
@@ -512,13 +516,9 @@ function RepoOverridesSection({
 function RepoOverrideRow({
   entry,
   enabledModelOptions,
-  onError,
-  onSuccess,
 }: {
   entry: RepoSettingsEntry;
   enabledModelOptions: { category: string; models: { id: string; name: string }[] }[];
-  onError: (msg: string) => void;
-  onSuccess: (msg: string) => void;
 }) {
   const [model, setModel] = useState(entry.settings.model ?? "");
   const [effort, setEffort] = useState(entry.settings.reasoningEffort ?? "");
@@ -547,8 +547,6 @@ function RepoOverrideRow({
 
   const handleSave = async () => {
     setSaving(true);
-    onError("");
-    onSuccess("");
 
     const [owner, name] = entry.repo.split("/");
     const settings: LinearBotSettings = {
@@ -569,13 +567,13 @@ function RepoOverrideRow({
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);
         setDirty(false);
-        onSuccess(`Override for ${entry.repo} saved.`);
+        toast.success(`Override for ${entry.repo} saved.`);
       } else {
         const data = await res.json();
-        onError(data.error || "Failed to save override");
+        toast.error(data.error || "Failed to save override");
       }
     } catch {
-      onError("Failed to save override");
+      toast.error("Failed to save override");
     } finally {
       setSaving(false);
     }
@@ -583,8 +581,6 @@ function RepoOverrideRow({
 
   const handleDelete = async () => {
     const [owner, name] = entry.repo.split("/");
-    onError("");
-    onSuccess("");
 
     try {
       const res = await fetch(`/api/integration-settings/linear/repos/${owner}/${name}`, {
@@ -593,13 +589,13 @@ function RepoOverrideRow({
 
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);
-        onSuccess(`Override for ${entry.repo} removed.`);
+        toast.success(`Override for ${entry.repo} removed.`);
       } else {
         const data = await res.json();
-        onError(data.error || "Failed to delete override");
+        toast.error(data.error || "Failed to delete override");
       }
     } catch {
-      onError("Failed to delete override");
+      toast.error("Failed to delete override");
     }
   };
 

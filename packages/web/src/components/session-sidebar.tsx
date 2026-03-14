@@ -24,6 +24,15 @@ import {
   BranchIcon,
 } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { Session } from "@open-inspect/shared";
 
 export type SessionItem = Session;
@@ -264,12 +273,11 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
 
       {/* Search */}
       <div className="px-3 py-2">
-        <input
+        <Input
           type="text"
           placeholder="Search sessions..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full px-3 py-2 text-sm bg-input border border-border focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent placeholder:text-secondary-foreground text-foreground"
         />
       </div>
 
@@ -333,96 +341,49 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
 }
 
 function UserMenu({ user }: { user?: { name?: string | null; image?: string | null } | null }) {
-  const [open, setOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function handleClick(e: MouseEvent) {
-      if (
-        menuRef.current &&
-        !menuRef.current.contains(e.target as Node) &&
-        buttonRef.current &&
-        !buttonRef.current.contains(e.target as Node)
-      ) {
-        setOpen(false);
-      }
-    }
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("mousedown", handleClick);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", handleClick);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [open]);
-
-  function toggle() {
-    if (!open && buttonRef.current) {
-      const rect = buttonRef.current.getBoundingClientRect();
-      setMenuPos({
-        top: rect.bottom + 4,
-        left: rect.left,
-      });
-    }
-    setOpen((v) => !v);
-  }
-
   return (
-    <>
-      <button
-        ref={buttonRef}
-        onClick={toggle}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        className="w-7 h-7 rounded-full overflow-hidden focus:outline-none focus:ring-2 focus:ring-primary"
-        title={`Signed in as ${user?.name || "User"}`}
-      >
-        {user?.image ? (
-          <img src={user.image} alt={user.name || "User"} className="w-full h-full object-cover" />
-        ) : (
-          <span className="w-full h-full rounded-full bg-card flex items-center justify-center text-xs font-medium text-foreground">
-            {user?.name?.charAt(0).toUpperCase() || "?"}
-          </span>
-        )}
-      </button>
-      {open && menuPos && (
-        <div
-          ref={menuRef}
-          role="menu"
-          className="fixed w-48 rounded-md border border-border bg-background shadow-lg py-1 z-[100]"
-          style={{ top: menuPos.top, left: Math.min(menuPos.left, window.innerWidth - 200) }}
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          className="w-7 h-7 rounded-full overflow-hidden focus:outline-none focus:ring-2 focus:ring-primary"
+          title={`Signed in as ${user?.name || "User"}`}
         >
-          <div className="px-3 py-2 border-b border-border">
-            <p className="text-sm font-medium text-foreground truncate">{user?.name || "User"}</p>
-          </div>
-          <button
-            role="menuitem"
-            onClick={() => signOut()}
-            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted transition"
+          {user?.image ? (
+            <img
+              src={user.image}
+              alt={user.name || "User"}
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <span className="w-full h-full rounded-full bg-card flex items-center justify-center text-xs font-medium text-foreground">
+              {user?.name?.charAt(0).toUpperCase() || "?"}
+            </span>
+          )}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" sideOffset={4}>
+        <DropdownMenuLabel className="font-medium truncate">
+          {user?.name || "User"}
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => signOut()}>
+          <svg
+            className="w-4 h-4"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={1.5}
           >
-            <svg
-              className="w-4 h-4"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={1.5}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3-3l3-3m0 0l-3-3m3 3H9"
-              />
-            </svg>
-            Sign out
-          </button>
-        </div>
-      )}
-    </>
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3-3l3-3m0 0l-3-3m3 3H9"
+            />
+          </svg>
+          Sign out
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -478,7 +439,6 @@ function SessionListItem({
   const repoInfo = `${session.repoOwner}/${session.repoName}`;
   // Orphan child (parent filtered out) — show a subtle badge
   const isOrphanChild = session.parentSessionId && session.spawnSource === "agent";
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [title, setTitle] = useState(displayTitle);
 
@@ -490,7 +450,6 @@ function SessionListItem({
 
   const handleStartRename = () => {
     setTitle(displayTitle);
-    setIsMenuOpen(false);
     setIsRenaming(true);
   };
 
@@ -614,35 +573,20 @@ function SessionListItem({
       )}
 
       <div className="absolute inset-y-0 right-2 flex items-start pt-2">
-        <button
-          type="button"
-          aria-label="Session actions"
-          aria-haspopup="menu"
-          aria-expanded={isMenuOpen}
-          onClick={() => setIsMenuOpen((prev) => !prev)}
-          className={`h-6 w-6 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition ${
-            isMenuOpen
-              ? "opacity-100"
-              : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-          }`}
-        >
-          <MoreIcon className="w-4 h-4" />
-        </button>
-
-        {isMenuOpen && (
-          <>
-            <div className="fixed inset-0 z-10" onClick={() => setIsMenuOpen(false)} />
-            <div className="absolute right-0 top-8 w-36 bg-background border border-border shadow-lg py-1 z-20">
-              <button
-                type="button"
-                onClick={handleStartRename}
-                className="w-full text-left px-3 py-2 text-sm text-foreground hover:bg-muted"
-              >
-                Rename
-              </button>
-            </div>
-          </>
-        )}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label="Session actions"
+              className="h-6 w-6 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 data-[state=open]:opacity-100"
+            >
+              <MoreIcon className="w-4 h-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={handleStartRename}>Rename</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </div>
   );

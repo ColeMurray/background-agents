@@ -8,6 +8,8 @@ import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { formatModelNameLower } from "@/lib/format";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { RepoIcon, BranchIcon, ModelIcon, ChevronDownIcon } from "@/components/ui/icons";
 import { CronPicker } from "./cron-picker";
 
@@ -103,14 +105,13 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Name */}
       <div>
         <label className="block text-sm font-medium text-foreground mb-1">Name</label>
-        <input
+        <Input
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="Daily code review"
           maxLength={200}
           required
-          className="w-full px-3 py-2 text-sm bg-input border border-border focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent placeholder:text-secondary-foreground text-foreground"
         />
       </div>
 
@@ -227,14 +228,14 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Instructions */}
       <div>
         <label className="block text-sm font-medium text-foreground mb-1">Instructions</label>
-        <textarea
+        <Textarea
           value={instructions}
           onChange={(e) => setInstructions(e.target.value)}
           placeholder="Run the test suite and fix any failing tests. If all tests pass, look for TODO comments and address the most impactful one."
           maxLength={10000}
           required
           rows={6}
-          className="w-full px-3 py-2 text-sm bg-input border border-border focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent placeholder:text-secondary-foreground text-foreground resize-y"
+          className="resize-y"
         />
       </div>
 

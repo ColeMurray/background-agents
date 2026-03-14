@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState, type ClipboardEvent } from "react";
 import useSWR, { mutate } from "swr";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 
 import { normalizeKey, parseMaybeEnvContent, type ParsedEnvEntry } from "@/lib/env-paste";
 
@@ -90,7 +92,6 @@ export function SecretsEditor({
   const [rows, setRows] = useState<SecretRow[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
 
   const isGlobal = scope === "global";
@@ -203,7 +204,7 @@ export function SecretsEditor({
 
       const imported = `Imported ${valid.length} secret${valid.length === 1 ? "" : "s"} from paste`;
       const skippedMsg = skipped > 0 ? ` (skipped ${skipped} reserved)` : "";
-      setSuccess(imported + skippedMsg);
+      toast.success(imported + skippedMsg);
     },
     [applyEnvEntries]
   );
@@ -223,7 +224,6 @@ export function SecretsEditor({
     const normalizedKey = normalizeKey(row.key);
     setDeletingKey(normalizedKey);
     setError("");
-    setSuccess("");
 
     try {
       const response = await fetch(`${apiBase}/${normalizedKey}`, {
@@ -231,13 +231,13 @@ export function SecretsEditor({
       });
       const data = await response.json();
       if (!response.ok) {
-        setError(data?.error || "Failed to delete secret");
+        toast.error(data?.error || "Failed to delete secret");
         return;
       }
-      setSuccess(`Deleted ${normalizedKey}`);
+      toast.success(`Deleted ${normalizedKey}`);
       mutate(apiBase);
     } catch {
-      setError("Failed to delete secret");
+      toast.error("Failed to delete secret");
     } finally {
       setDeletingKey(null);
     }
@@ -247,7 +247,6 @@ export function SecretsEditor({
     if (!ready) return;
 
     setError("");
-    setSuccess("");
 
     const entries = rows
       .filter((row) => row.value.trim().length > 0)
@@ -258,7 +257,7 @@ export function SecretsEditor({
       }));
 
     if (entries.length === 0) {
-      setSuccess("No changes to save");
+      toast("No changes to save");
       return;
     }
 
@@ -320,14 +319,14 @@ export function SecretsEditor({
       const data = await response.json();
 
       if (!response.ok) {
-        setError(data?.error || "Failed to update secrets");
+        toast.error(data?.error || "Failed to update secrets");
         return;
       }
 
-      setSuccess("Secrets updated");
+      toast.success("Secrets updated");
       mutate(apiBase);
     } catch {
-      setError("Failed to update secrets");
+      toast.error("Failed to update secrets");
     } finally {
       setSaving(false);
     }
@@ -372,7 +371,7 @@ export function SecretsEditor({
             {rows.map((row) => (
               <div key={row.id} className="flex flex-col gap-2 border border-border-muted p-2">
                 <div className="flex flex-wrap gap-2">
-                  <input
+                  <Input
                     type="text"
                     value={row.key}
                     onChange={(e) => {
@@ -394,9 +393,9 @@ export function SecretsEditor({
                     placeholder="KEY_NAME"
                     disabled={disabled || row.existing}
                     onPaste={handlePasteIntoRow}
-                    className="flex-1 min-w-[160px] bg-input border border-border px-2 py-1 text-xs text-foreground disabled:opacity-60"
+                    className="flex-1 min-w-[160px] h-auto px-2 py-1 text-xs"
                   />
-                  <input
+                  <Input
                     type="password"
                     value={row.value}
                     onChange={(e) => {
@@ -408,7 +407,7 @@ export function SecretsEditor({
                     placeholder={row.existing ? "••••••••" : "value"}
                     disabled={disabled}
                     onPaste={handlePasteIntoRow}
-                    className="flex-1 min-w-[200px] bg-input border border-border px-2 py-1 text-xs text-foreground disabled:opacity-60"
+                    className="flex-1 min-w-[200px] h-auto px-2 py-1 text-xs"
                   />
                   <button
                     type="button"
@@ -446,12 +445,12 @@ export function SecretsEditor({
                         Global
                       </Badge>
                       <span className="text-xs text-foreground font-mono">{g.key}</span>
-                      <input
+                      <Input
                         type="password"
                         value=""
                         placeholder="••••••••"
                         disabled
-                        className="flex-1 min-w-[200px] bg-input border border-border px-2 py-1 text-xs text-foreground disabled:opacity-60"
+                        className="flex-1 min-w-[200px] h-auto px-2 py-1 text-xs"
                       />
                       {overridden && (
                         <span className="text-[10px] text-muted-foreground">
@@ -466,7 +465,6 @@ export function SecretsEditor({
           )}
 
           {error && <p className="mt-3 text-xs text-red-500">{error}</p>}
-          {success && <p className="mt-3 text-xs text-green-600">{success}</p>}
 
           <div className="mt-3 flex items-center gap-2">
             <button
