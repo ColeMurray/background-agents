@@ -107,9 +107,13 @@ base_image = (
         # This ensures tools can import the plugin without needing to run bun add
         "npm install -g @opencode-ai/plugin@latest zod",
     )
-    # Install code-server for browser-based VS Code editing
+    # Install code-server for browser-based VS Code editing (direct .deb from GitHub releases)
     .run_commands(
-        f"curl -fsSL https://code-server.dev/install.sh | sh -s -- --version {CODE_SERVER_VERSION}",
+        f"curl -fsSL -o /tmp/code-server.deb"
+        f" https://github.com/coder/code-server/releases/download/v{CODE_SERVER_VERSION}"
+        f"/code-server_{CODE_SERVER_VERSION}_amd64.deb",
+        "dpkg -i /tmp/code-server.deb",
+        "rm /tmp/code-server.deb",
         "code-server --version",
     )
     # Install Playwright browsers (Chromium only to save space)

@@ -21,13 +21,13 @@ import modal
 
 from ..app import app, llm_secrets
 from ..images.base import base_image
+from .constants import CODE_SERVER_PORT
 from .log_config import get_logger
 from .types import SandboxStatus, SessionConfig
 
 log = get_logger("manager")
 
 DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200  # 2 hours
-CODE_SERVER_PORT = 8080
 
 
 @dataclass
@@ -89,29 +89,34 @@ class SandboxManager:
         return f"{repo_owner}/{repo_name}"
 
     @staticmethod
-    def _generate_code_server_credentials(
-        env_vars: dict[str, str],
-    ) -> str:
-        """Generate a code-server password and inject it into env_vars.
-
-        Returns the generated password.
-        """
-        password = secrets.token_urlsafe(16)
-        env_vars["CODE_SERVER_PASSWORD"] = password
-        return password
+    def _generate_code_server_password() -> str:
+        """Generate a random code-server password."""
+        return secrets.token_urlsafe(16)
 
     @staticmethod
-    async def _resolve_code_server_tunnel(sandbox: modal.Sandbox, sandbox_id: str) -> str | None:
-        """Resolve the code-server tunnel URL from Modal, returning None on failure."""
-        try:
-            loop = asyncio.get_event_loop()
-            tunnels = await loop.run_in_executor(None, sandbox.tunnels)
-            tunnel = tunnels[CODE_SERVER_PORT]
-            log.info("code_server.tunnel", sandbox_id=sandbox_id, url=tunnel.url)
-            return tunnel.url
-        except Exception as e:
-            log.warn("code_server.tunnel_error", sandbox_id=sandbox_id, exc=e)
-            return None
+    async def _resolve_code_server_tunnel(
+        sandbox: modal.Sandbox, sandbox_id: str, retries: int = 3, backoff: float = 1.0
+    ) -> str | None:
+        """Resolve the code-server tunnel URL from Modal, retrying on failure."""
+        for attempt in range(retries):
+            try:
+                loop = asyncio.get_running_loop()
+                tunnels = await loop.run_in_executor(None, sandbox.tunnels)
+                tunnel = tunnels[CODE_SERVER_PORT]
+                log.info("code_server.tunnel", sandbox_id=sandbox_id, url=tunnel.url)
+                return tunnel.url
+            except Exception as e:
+                log.warn(
+                    "code_server.tunnel_error",
+                    sandbox_id=sandbox_id,
+                    attempt=attempt + 1,
+                    retries=retries,
+                    error=type(e).__name__,
+                    exc=e,
+                )
+                if attempt < retries - 1:
+                    await asyncio.sleep(backoff * (attempt + 1))
+        return None
 
     @staticmethod
     def _inject_vcs_env_vars(env_vars: dict[str, str], clone_token: str | None) -> None:
@@ -174,7 +179,8 @@ class SandboxManager:
 
         self._inject_vcs_env_vars(env_vars, config.clone_token)
 
-        code_server_password = self._generate_code_server_credentials(env_vars)
+        code_server_password = self._generate_code_server_password()
+        env_vars["CODE_SERVER_PASSWORD"] = code_server_password
 
         if config.session_config:
             env_vars["SESSION_CONFIG"] = config.session_config.model_dump_json()
@@ -492,7 +498,8 @@ class SandboxManager:
 
         self._inject_vcs_env_vars(env_vars, clone_token)
 
-        code_server_password = self._generate_code_server_credentials(env_vars)
+        code_server_password = self._generate_code_server_password()
+        env_vars["CODE_SERVER_PASSWORD"] = code_server_password
 
         # Create the sandbox from the snapshot image
         sandbox = await modal.Sandbox.create.aio(

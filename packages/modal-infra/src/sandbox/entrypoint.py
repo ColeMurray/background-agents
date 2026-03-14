@@ -21,6 +21,7 @@ from pathlib import Path
 
 import httpx
 
+from .constants import CODE_SERVER_PORT
 from .log_config import configure_logging, get_logger
 
 configure_logging()
@@ -39,7 +40,7 @@ class SandboxSupervisor:
 
     # Configuration
     OPENCODE_PORT = 4096
-    CODE_SERVER_PORT = 8080
+    CODE_SERVER_PORT = CODE_SERVER_PORT
     HEALTH_CHECK_TIMEOUT = 30.0
     MAX_RESTARTS = 5
     BACKOFF_BASE = 2.0
@@ -363,9 +364,9 @@ class SandboxSupervisor:
 
         try:
             async for line in self.code_server_process.stdout:
-                print(f"[code-server] {line.decode().rstrip()}")
+                self.log.info("code_server.stdout", line=line.decode().rstrip())
         except Exception as e:
-            print(f"[supervisor] code-server log forwarding error: {e}")
+            self.log.warn("code_server.log_forward_error", exc=e)
 
     async def start_opencode(self) -> None:
         """Start OpenCode server with configuration."""

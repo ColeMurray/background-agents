@@ -344,6 +344,8 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
   {
     id: 26,
     description: "Add code-server fields to sandbox",
+    // Two ALTER TABLE statements — partial failure is safe because runMigration()
+    // handles "column already exists" errors, so re-running is idempotent.
     run: `
       ALTER TABLE sandbox ADD COLUMN code_server_url TEXT;
       ALTER TABLE sandbox ADD COLUMN code_server_password TEXT;

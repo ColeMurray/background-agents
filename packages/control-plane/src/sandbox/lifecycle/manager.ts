@@ -829,6 +829,7 @@ export class SandboxLifecycleManager {
    * the plaintext is broadcast over the already-authenticated WebSocket.
    */
   private async storeAndBroadcastCodeServer(url: string, password: string): Promise<void> {
+    this.log.info("Storing and broadcasting code-server info", { url });
     await this.storage.updateSandboxCodeServer(url, password);
     this.broadcaster.broadcast({
       type: "code_server_info",
