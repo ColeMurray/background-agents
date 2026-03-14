@@ -14,7 +14,16 @@ import {
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { Button } from "@/components/ui/button";
-import { RadioCard, Select } from "@/components/ui/form-controls";
+import { RadioCard } from "@/components/ui/form-controls";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -553,17 +562,17 @@ function RepoOverridesSection({
       )}
 
       <div className="flex items-center gap-2">
-        <Select
-          value={addingRepo}
-          onChange={(e) => setAddingRepo(e.target.value)}
-          className="flex-1"
-        >
-          <option value="">Select a repository...</option>
-          {availableForOverride.map((repo) => (
-            <option key={repo.fullName} value={repo.fullName.toLowerCase()}>
-              {repo.fullName}
-            </option>
-          ))}
+        <Select value={addingRepo || undefined} onValueChange={setAddingRepo}>
+          <SelectTrigger className="flex-1">
+            <SelectValue placeholder="Select a repository..." />
+          </SelectTrigger>
+          <SelectContent>
+            {availableForOverride.map((repo) => (
+              <SelectItem key={repo.fullName} value={repo.fullName.toLowerCase()}>
+                {repo.fullName}
+              </SelectItem>
+            ))}
+          </SelectContent>
         </Select>
         <Button onClick={handleAdd} disabled={!addingRepo}>
           Add Override
@@ -685,40 +694,42 @@ function RepoOverrideRow({
           {entry.repo}
         </span>
 
-        <Select
-          value={model}
-          onChange={(e) => handleModelChange(e.target.value)}
-          className="flex-1 min-w-[180px]"
-          density="compact"
-        >
-          <option value="">Default model</option>
-          {enabledModelOptions.map((group) => (
-            <optgroup key={group.category} label={group.category}>
-              {group.models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
-                </option>
-              ))}
-            </optgroup>
-          ))}
+        <Select value={model || undefined} onValueChange={handleModelChange}>
+          <SelectTrigger density="compact" className="flex-1 min-w-[180px]">
+            <SelectValue placeholder="Default model" />
+          </SelectTrigger>
+          <SelectContent>
+            {enabledModelOptions.map((group) => (
+              <SelectGroup key={group.category}>
+                <SelectLabel>{group.category}</SelectLabel>
+                {group.models.map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.name}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            ))}
+          </SelectContent>
         </Select>
 
         {reasoningConfig && (
           <Select
-            value={effort}
-            onChange={(e) => {
-              setEffort(e.target.value);
+            value={effort || undefined}
+            onValueChange={(v) => {
+              setEffort(v);
               setDirty(true);
             }}
-            className="w-36"
-            density="compact"
           >
-            <option value="">Default effort</option>
-            {reasoningConfig.efforts.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
+            <SelectTrigger density="compact" className="w-36">
+              <SelectValue placeholder="Default effort" />
+            </SelectTrigger>
+            <SelectContent>
+              {reasoningConfig.efforts.map((value) => (
+                <SelectItem key={value} value={value}>
+                  {value}
+                </SelectItem>
+              ))}
+            </SelectContent>
           </Select>
         )}
 
@@ -736,15 +747,18 @@ function RepoOverrideRow({
         <div className="flex items-center gap-2 mb-1">
           <Select
             value={triggerUserMode}
-            onChange={(e) => {
-              setTriggerUserMode(e.target.value as "global" | "override");
+            onValueChange={(v: "global" | "override") => {
+              setTriggerUserMode(v);
               setDirty(true);
             }}
-            className="w-48"
-            density="compact"
           >
-            <option value="global">Use global default</option>
-            <option value="override">Override for this repo</option>
+            <SelectTrigger density="compact" className="w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="global">Use global default</SelectItem>
+              <SelectItem value="override">Override for this repo</SelectItem>
+            </SelectContent>
           </Select>
         </div>
 
@@ -807,15 +821,18 @@ function RepoOverrideRow({
         <div className="flex items-center gap-2 mb-1">
           <Select
             value={codeReviewMode}
-            onChange={(e) => {
-              setCodeReviewMode(e.target.value as "global" | "override");
+            onValueChange={(v: "global" | "override") => {
+              setCodeReviewMode(v);
               setDirty(true);
             }}
-            className="w-48"
-            density="compact"
           >
-            <option value="global">Use global default</option>
-            <option value="override">Override for this repo</option>
+            <SelectTrigger density="compact" className="w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="global">Use global default</SelectItem>
+              <SelectItem value="override">Override for this repo</SelectItem>
+            </SelectContent>
           </Select>
         </div>
         {codeReviewMode === "override" && (
@@ -839,15 +856,18 @@ function RepoOverrideRow({
         <div className="flex items-center gap-2 mb-1">
           <Select
             value={commentActionMode}
-            onChange={(e) => {
-              setCommentActionMode(e.target.value as "global" | "override");
+            onValueChange={(v: "global" | "override") => {
+              setCommentActionMode(v);
               setDirty(true);
             }}
-            className="w-48"
-            density="compact"
           >
-            <option value="global">Use global default</option>
-            <option value="override">Override for this repo</option>
+            <SelectTrigger density="compact" className="w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="global">Use global default</SelectItem>
+              <SelectItem value="override">Override for this repo</SelectItem>
+            </SelectContent>
           </Select>
         </div>
         {commentActionMode === "override" && (

@@ -14,7 +14,16 @@ import {
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { Button } from "@/components/ui/button";
-import { RadioCard, Select } from "@/components/ui/form-controls";
+import { RadioCard } from "@/components/ui/form-controls";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -248,9 +257,8 @@ function GlobalSettingsSection({
         <label className="text-sm">
           <span className="block text-foreground font-medium mb-1">Default model</span>
           <Select
-            value={model}
-            onChange={(e) => {
-              const nextModel = e.target.value;
+            value={model || undefined}
+            onValueChange={(nextModel) => {
               setModel(nextModel);
               if (effort && nextModel && !isValidReasoningEffort(nextModel, effort)) {
                 setEffort("");
@@ -258,39 +266,46 @@ function GlobalSettingsSection({
               setDirty(true);
               setError("");
             }}
-            className="w-full"
           >
-            <option value="">Use system default</option>
-            {enabledModelOptions.map((group) => (
-              <optgroup key={group.category} label={group.category}>
-                {group.models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Use system default" />
+            </SelectTrigger>
+            <SelectContent>
+              {enabledModelOptions.map((group) => (
+                <SelectGroup key={group.category}>
+                  <SelectLabel>{group.category}</SelectLabel>
+                  {group.models.map((m) => (
+                    <SelectItem key={m.id} value={m.id}>
+                      {m.name}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ))}
+            </SelectContent>
           </Select>
         </label>
 
         <label className="text-sm">
           <span className="block text-foreground font-medium mb-1">Default reasoning effort</span>
           <Select
-            value={effort}
-            onChange={(e) => {
-              setEffort(e.target.value);
+            value={effort || undefined}
+            onValueChange={(v) => {
+              setEffort(v);
               setDirty(true);
               setError("");
             }}
             disabled={!reasoningConfig}
-            className="w-full"
           >
-            <option value="">Use model default</option>
-            {(reasoningConfig?.efforts ?? []).map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Use model default" />
+            </SelectTrigger>
+            <SelectContent>
+              {(reasoningConfig?.efforts ?? []).map((value) => (
+                <SelectItem key={value} value={value}>
+                  {value}
+                </SelectItem>
+              ))}
+            </SelectContent>
           </Select>
         </label>
       </div>
@@ -493,17 +508,17 @@ function RepoOverridesSection({
       )}
 
       <div className="flex items-center gap-2">
-        <Select
-          value={addingRepo}
-          onChange={(e) => setAddingRepo(e.target.value)}
-          className="flex-1"
-        >
-          <option value="">Select a repository...</option>
-          {availableForOverride.map((repo) => (
-            <option key={repo.fullName} value={repo.fullName.toLowerCase()}>
-              {repo.fullName}
-            </option>
-          ))}
+        <Select value={addingRepo || undefined} onValueChange={setAddingRepo}>
+          <SelectTrigger className="flex-1">
+            <SelectValue placeholder="Select a repository..." />
+          </SelectTrigger>
+          <SelectContent>
+            {availableForOverride.map((repo) => (
+              <SelectItem key={repo.fullName} value={repo.fullName.toLowerCase()}>
+                {repo.fullName}
+              </SelectItem>
+            ))}
+          </SelectContent>
         </Select>
         <Button onClick={handleAdd} disabled={!addingRepo}>
           Add Override
@@ -604,34 +619,42 @@ function RepoOverrideRow({
       <div className="text-sm font-medium text-foreground">{entry.repo}</div>
 
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
-        <Select value={model} onChange={(e) => handleModelChange(e.target.value)} density="compact">
-          <option value="">Default model</option>
-          {enabledModelOptions.map((group) => (
-            <optgroup key={group.category} label={group.category}>
-              {group.models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
-                </option>
-              ))}
-            </optgroup>
-          ))}
+        <Select value={model || undefined} onValueChange={handleModelChange}>
+          <SelectTrigger density="compact">
+            <SelectValue placeholder="Default model" />
+          </SelectTrigger>
+          <SelectContent>
+            {enabledModelOptions.map((group) => (
+              <SelectGroup key={group.category}>
+                <SelectLabel>{group.category}</SelectLabel>
+                {group.models.map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.name}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            ))}
+          </SelectContent>
         </Select>
 
         <Select
-          value={effort}
-          onChange={(e) => {
-            setEffort(e.target.value);
+          value={effort || undefined}
+          onValueChange={(v) => {
+            setEffort(v);
             setDirty(true);
           }}
           disabled={!reasoningConfig}
-          density="compact"
         >
-          <option value="">Default effort</option>
-          {(reasoningConfig?.efforts ?? []).map((value) => (
-            <option key={value} value={value}>
-              {value}
-            </option>
-          ))}
+          <SelectTrigger density="compact">
+            <SelectValue placeholder="Default effort" />
+          </SelectTrigger>
+          <SelectContent>
+            {(reasoningConfig?.efforts ?? []).map((value) => (
+              <SelectItem key={value} value={value}>
+                {value}
+              </SelectItem>
+            ))}
+          </SelectContent>
         </Select>
 
         <label className="flex items-center justify-between px-2 py-1 text-sm border border-border rounded-sm">
