@@ -2,7 +2,14 @@
 
 import { useState, useMemo } from "react";
 import { isValidCron, nextCronOccurrence, describeCron } from "@open-inspect/shared";
-import { Select, RadioCard } from "@/components/ui/form-controls";
+import { RadioCard } from "@/components/ui/form-controls";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { detectPreset, buildCron, type PresetType } from "@/lib/cron-presets";
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
@@ -131,45 +138,48 @@ export function CronPicker({ value, onChange, timezone }: CronPickerProps) {
       {showTimeSelector && (
         <div className="flex items-center gap-3">
           {presetType === "weekly" && (
-            <Select
-              value={dayOfWeek}
-              onChange={(e) => handleDayOfWeekChange(e.target.value)}
-              density="compact"
-              className="w-36"
-            >
-              {DAYS_OF_WEEK.map((d) => (
-                <option key={d.value} value={d.value}>
-                  {d.label}
-                </option>
-              ))}
+            <Select value={dayOfWeek} onValueChange={handleDayOfWeekChange}>
+              <SelectTrigger density="compact" className="w-36">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {DAYS_OF_WEEK.map((d) => (
+                  <SelectItem key={d.value} value={d.value}>
+                    {d.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
             </Select>
           )}
           {presetType === "monthly" && (
             <Select
               value={String(dayOfMonth)}
-              onChange={(e) => handleDayOfMonthChange(parseInt(e.target.value))}
-              density="compact"
-              className="w-24"
+              onValueChange={(v) => handleDayOfMonthChange(parseInt(v))}
             >
-              {DAYS_OF_MONTH.map((d) => (
-                <option key={d} value={d}>
-                  {ordinal(d)}
-                </option>
-              ))}
+              <SelectTrigger density="compact" className="w-24">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {DAYS_OF_MONTH.map((d) => (
+                  <SelectItem key={d} value={String(d)}>
+                    {ordinal(d)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
             </Select>
           )}
           <span className="text-sm text-muted-foreground">at</span>
-          <Select
-            value={String(hour)}
-            onChange={(e) => handleHourChange(parseInt(e.target.value))}
-            density="compact"
-            className="w-28"
-          >
-            {HOURS.map((h) => (
-              <option key={h} value={h}>
-                {formatHour(h)}
-              </option>
-            ))}
+          <Select value={String(hour)} onValueChange={(v) => handleHourChange(parseInt(v))}>
+            <SelectTrigger density="compact" className="w-28">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {HOURS.map((h) => (
+                <SelectItem key={h} value={String(h)}>
+                  {formatHour(h)}
+                </SelectItem>
+              ))}
+            </SelectContent>
           </Select>
         </div>
       )}

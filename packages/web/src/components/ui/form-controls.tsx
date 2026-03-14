@@ -1,34 +1,5 @@
-import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from "react";
-import { ChevronDownIcon } from "@/components/ui/icons";
+import type { InputHTMLAttributes, ReactNode } from "react";
 import { cn } from "@/lib/utils";
-
-type SelectDensity = "default" | "compact";
-
-const selectDensityClasses: Record<SelectDensity, string> = {
-  default: "px-3 py-2 text-sm",
-  compact: "px-2 py-1 text-sm",
-};
-
-interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
-  density?: SelectDensity;
-}
-
-export function Select({ className = "", density = "default", children, ...props }: SelectProps) {
-  return (
-    <div className={cn("relative", className)}>
-      <select
-        className={cn(
-          "w-full appearance-none rounded-sm border border-border bg-input pr-8 text-foreground transition hover:border-foreground/20 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50",
-          selectDensityClasses[density]
-        )}
-        {...props}
-      >
-        {children}
-      </select>
-      <ChevronDownIcon className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-    </div>
-  );
-}
 
 interface RadioCardProps extends Omit<InputHTMLAttributes<HTMLInputElement>, "type"> {
   label: ReactNode;
