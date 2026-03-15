@@ -283,8 +283,8 @@ function GlobalSettingsSection({
           <AlertDialogHeader>
             <AlertDialogTitle>Reset to defaults</AlertDialogTitle>
             <AlertDialogDescription>
-              Reset all code-server settings to defaults? This will disable code-server for all
-              repositories.
+              Reset global code-server defaults and repository scope? Per-repository overrides will
+              not be affected.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
