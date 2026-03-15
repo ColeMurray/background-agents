@@ -288,12 +288,32 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           break;
 
         case "sandbox_spawning":
-          setSessionState((prev) => (prev ? { ...prev, sandboxStatus: "spawning" } : null));
+          setSessionState((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  sandboxStatus: "spawning",
+                  codeServerUrl: undefined,
+                  codeServerPassword: undefined,
+                }
+              : null
+          );
           break;
 
-        case "sandbox_status":
-          setSessionState((prev) => (prev ? { ...prev, sandboxStatus: data.status } : null));
+        case "sandbox_status": {
+          const isTerminal =
+            data.status === "stale" || data.status === "stopped" || data.status === "failed";
+          setSessionState((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  sandboxStatus: data.status,
+                  ...(isTerminal && { codeServerUrl: undefined, codeServerPassword: undefined }),
+                }
+              : null
+          );
           break;
+        }
 
         case "code_server_info":
           setSessionState((prev) =>
