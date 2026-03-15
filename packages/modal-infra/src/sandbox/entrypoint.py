@@ -366,6 +366,124 @@ class SandboxSupervisor:
                 self.log.info("code_server.stdout", line=line.decode().rstrip())
         except Exception as e:
             self.log.warn("code_server.log_forward_error", exc=e)
+    @staticmethod
+    def _generate_internal_token(secret: str) -> str:
+        """Generate an HMAC-signed internal API token (mirrors auth/internal.py)."""
+        import hashlib
+        import hmac
+
+        timestamp = str(int(time.time() * 1000))
+        signature = hmac.new(secret.encode(), timestamp.encode(), hashlib.sha256).hexdigest()
+        return f"{timestamp}.{signature}"
+
+    def _resolve_mcp_servers(self) -> list[dict]:
+        """Resolve MCP servers from session config, falling back to control plane API."""
+        servers = self.session_config.get("mcp_servers")
+        if servers:
+            return servers
+
+        # Fallback: fetch from control plane API if not passed in session config
+        cp_url = self.control_plane_url
+        secret = os.environ.get("INTERNAL_CALLBACK_SECRET", "")
+        if not cp_url or not secret:
+            return []
+
+        try:
+            token = self._generate_internal_token(secret)
+            resp = httpx.get(
+                f"{cp_url}/mcp-servers",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=5.0,
+            )
+            if resp.status_code != 200:
+                return []
+
+            all_servers = resp.json()
+            if not isinstance(all_servers, list):
+                return []
+            repo_full = f"{self.repo_owner}/{self.repo_name}".lower()
+            servers = [
+                s
+                for s in all_servers
+                if s.get("enabled")
+                and (
+                    not s.get("repoScopes")
+                    or repo_full in [r.lower() for r in (s.get("repoScopes") or [])]
+                )
+            ]
+            self.log.info("mcp.fetched_from_api", count=len(servers))
+            return servers
+        except Exception as e:
+            self.log.warn("mcp.fetch_failed", exc=str(e))
+            return []
+
+    def _install_mcp_packages(self, servers: list[dict]) -> None:
+        """Install npm packages required by STDIO MCP servers.
+
+        For each non-remote server whose command starts with 'npx', installs
+        the package globally so npx doesn't download it at runtime (which can
+        fail or be slow inside sandboxes).
+        """
+        packages: list[str] = []
+        for server in servers:
+            if server.get("type") == "remote":
+                continue
+            cmd = server.get("command", [])
+            if not cmd:
+                continue
+            # npx @scope/package  →  install @scope/package
+            # npx -y @scope/package  →  install @scope/package
+            parts = [c for c in cmd if isinstance(c, str)]
+            if not parts or parts[0] != "npx":
+                continue
+            # Skip flags like -y, --yes, -p, --package
+            pkg_parts = [p for p in parts[1:] if not p.startswith("-")]
+            if pkg_parts:
+                packages.append(pkg_parts[0])
+
+        packages = list(dict.fromkeys(packages))  # deduplicate, preserve order
+        if not packages:
+            return
+
+        self.log.info("mcp.install_packages", packages=packages)
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                ["npm", "install", "-g", *packages],
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            if result.returncode == 0:
+                self.log.info("mcp.packages_installed", packages=packages)
+            else:
+                self.log.warn(
+                    "mcp.packages_install_failed",
+                    packages=packages,
+                    stderr=result.stderr[:500],
+                )
+        except Exception as e:
+            self.log.warn("mcp.packages_install_error", packages=packages, exc=str(e))
+
+    def _build_mcp_config(self, servers: list[dict]) -> dict[str, dict]:
+        """Convert MCP server list to OpenCode mcp config format."""
+        config: dict[str, dict] = {}
+        for server in servers:
+            name = server.get("name", "")
+            if not name:
+                continue
+            if server.get("type") == "remote":
+                config[name] = {"type": "remote", "url": server.get("url", "")}
+            else:
+                entry: dict = {
+                    "type": "local",
+                    "command": server.get("command", []),
+                }
+                if server.get("env"):
+                    entry["environment"] = server["env"]
+                config[name] = entry
+        return config
 
     async def start_opencode(self) -> None:
         """Start OpenCode server with configuration."""
@@ -373,17 +491,21 @@ class SandboxSupervisor:
         self.log.info("opencode.start")
 
         # Build OpenCode config from session settings
-        # Model format is "provider/model", e.g. "anthropic/claude-sonnet-4-6"
         provider = self.session_config.get("provider", "anthropic")
         model = self.session_config.get("model", "claude-sonnet-4-6")
-        opencode_config = {
+        opencode_config: dict = {
             "model": f"{provider}/{model}",
-            "permission": {
-                "*": {
-                    "*": "allow",
-                },
-            },
+            "permission": {"*": {"*": "allow"}},
         }
+
+        # Inject MCP servers
+        mcp_servers = self._resolve_mcp_servers()
+        if mcp_servers:
+            self._install_mcp_packages(mcp_servers)
+            mcp_config = self._build_mcp_config(mcp_servers)
+            if mcp_config:
+                opencode_config["mcp"] = mcp_config
+                self.log.info("mcp.configured", count=len(mcp_config))
 
         # Determine working directory - use repo path if cloned, otherwise /workspace
         workdir = self.workspace_path
@@ -400,6 +522,12 @@ class SandboxSupervisor:
             plugin_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy(plugin_source, plugin_dir / "codex-auth-plugin.ts")
             self.log.info("openai_oauth.plugin_deployed")
+
+        # Write config to .opencode directory
+        opencode_dir.mkdir(parents=True, exist_ok=True)
+        config_file = opencode_dir / "opencode.json"
+        config_file.write_text(json.dumps(opencode_config, indent=2))
+        self.log.info("opencode.config_written", path=str(config_file))
 
         env = {
             **os.environ,
@@ -872,10 +1000,14 @@ class SandboxSupervisor:
             else:
                 start_success = None
 
-            # Image build mode: signal completion, then keep sandbox alive for
-            # snapshot_filesystem(). The builder streams stdout, detects this
-            # event, snapshots the running sandbox, then terminates us.
+            # Image build mode: install MCP packages, signal completion, then
+            # keep sandbox alive for snapshot_filesystem().
             if image_build_mode:
+                # Pre-install MCP server packages so they're baked into the image
+                mcp_servers = self._resolve_mcp_servers()
+                if mcp_servers:
+                    self._install_mcp_packages(mcp_servers)
+
                 duration_ms = int((time.time() - startup_start) * 1000)
                 self.log.info("image_build.complete", duration_ms=duration_ms)
                 await self.shutdown_event.wait()

@@ -6,7 +6,7 @@
  */
 
 import { Hono } from "hono";
-import type { Env, UserPreferences, AgentSessionWebhook } from "./types";
+import type { Env, UserPreferences, AgentWebhook } from "./types";
 import {
   buildOAuthAuthorizeUrl,
   exchangeCodeForToken,
@@ -42,7 +42,7 @@ function readStringField(record: Record<string, unknown>, key: string): string |
   return typeof value === "string" ? value : null;
 }
 
-function isAgentSessionWebhookPayload(payload: unknown): payload is AgentSessionWebhook {
+function isAgentWebhookPayload(payload: unknown): payload is AgentWebhook {
   if (!isObjectRecord(payload)) return false;
 
   const type = readStringField(payload, "type");
@@ -148,7 +148,7 @@ app.post("/webhook", async (c) => {
       }
     }
 
-    if (!isAgentSessionWebhookPayload(payload)) {
+    if (!isAgentWebhookPayload(payload)) {
       log.warn("webhook.invalid_payload", {
         trace_id: traceId,
         reason: "invalid_agent_session_event_shape",

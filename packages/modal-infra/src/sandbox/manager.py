@@ -259,7 +259,8 @@ class SandboxManager:
 
         Like create_sandbox() but:
         - Sets IMAGE_BUILD_MODE=true (exits after setup, no OpenCode/bridge)
-        - No CONTROL_PLANE_URL, SANDBOX_AUTH_TOKEN, or LLM secrets
+        - Includes CONTROL_PLANE_URL + INTERNAL_CALLBACK_SECRET (for MCP package pre-install)
+        - No SANDBOX_AUTH_TOKEN or LLM secrets
         - Shorter timeout (30 min vs 2 hours)
         - Always uses base_image (builds start from the universal base)
         """
@@ -274,6 +275,11 @@ class SandboxManager:
         if user_env_vars:
             env_vars.update(user_env_vars)
 
+        # Pass CONTROL_PLANE_URL and INTERNAL_CALLBACK_SECRET so the build
+        # sandbox can fetch MCP servers and pre-install their packages.
+        control_plane_url = os.environ.get("CONTROL_PLANE_URL", "")
+        internal_secret = os.environ.get("INTERNAL_CALLBACK_SECRET", "")
+
         env_vars.update(
             {
                 "PYTHONUNBUFFERED": "1",
@@ -284,6 +290,11 @@ class SandboxManager:
                 "SESSION_CONFIG": json.dumps({"branch": default_branch}),
             }
         )
+
+        if control_plane_url:
+            env_vars["CONTROL_PLANE_URL"] = control_plane_url
+        if internal_secret:
+            env_vars["INTERNAL_CALLBACK_SECRET"] = internal_secret
 
         self._inject_vcs_env_vars(env_vars, clone_token or None)
 

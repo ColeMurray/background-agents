@@ -177,11 +177,11 @@ export interface LinearIssueDetails {
 
 // ─── Webhook Payload Types ──────────────────────────────────────────────────
 
-export interface AgentSessionWebhookIssue {
+export interface WebhookIssue {
   id: string;
   identifier: string;
   title: string;
-  description?: string;
+  description?: string | null;
   url: string;
   priority: number;
   priorityLabel: string;
@@ -192,16 +192,25 @@ export interface AgentSessionWebhookIssue {
   project?: { id: string; name: string };
 }
 
-export interface AgentSessionWebhook {
+export interface AgentWebhook {
   type: string;
   action: string;
   organizationId: string;
   appUserId?: string;
+  webhookId?: string;
+  webhookTimestamp?: number;
+  promptContext?: string | null;
   agentSession: {
     id: string;
-    issue?: AgentSessionWebhookIssue;
-    comment?: { body: string };
-    promptContext?: string;
+    issueId?: string | null;
+    status?: string | null;
+    issue?: WebhookIssue | null;
+    comment?: { id: string; body?: string | null } | null;
   };
-  agentActivity?: { body?: string };
+  agentActivity?: {
+    id?: string;
+    content?: Record<string, unknown> | null;
+    signal?: string | null;
+    signalMetadata?: Record<string, unknown> | null;
+  } | null;
 }

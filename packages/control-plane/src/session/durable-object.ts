@@ -611,6 +611,7 @@ export class SessionDO extends DurableObject<Env> {
       controlPlaneUrl,
       model: DEFAULT_MODEL,
       sessionId,
+      db: this.env.DB,
       inactivity: {
         ...DEFAULT_LIFECYCLE_CONFIG.inactivity,
         timeoutMs: parseInt(this.env.SANDBOX_INACTIVITY_TIMEOUT_MS || "600000", 10),
