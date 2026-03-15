@@ -288,11 +288,29 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           break;
 
         case "sandbox_spawning":
-          setSessionState((prev) => (prev ? { ...prev, sandboxStatus: "spawning" } : null));
+          setSessionState((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  sandboxStatus: "spawning",
+                  codeServerUrl: undefined,
+                  codeServerPassword: undefined,
+                }
+              : null
+          );
           break;
 
         case "sandbox_status":
-          setSessionState((prev) => (prev ? { ...prev, sandboxStatus: data.status } : null));
+          setSessionState((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  sandboxStatus: data.status,
+                  codeServerUrl: undefined,
+                  codeServerPassword: undefined,
+                }
+              : null
+          );
           break;
 
         case "code_server_info":
@@ -302,7 +320,16 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           break;
 
         case "sandbox_ready":
-          setSessionState((prev) => (prev ? { ...prev, sandboxStatus: "ready" } : null));
+          setSessionState((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  sandboxStatus: "ready",
+                  codeServerUrl: undefined,
+                  codeServerPassword: undefined,
+                }
+              : null
+          );
           break;
 
         case "artifact_created":
