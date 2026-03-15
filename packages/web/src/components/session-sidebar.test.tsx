@@ -2,10 +2,10 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { SWRConfig } from "swr";
-import { SessionSidebar } from "./session-sidebar";
+import { MOBILE_LONG_PRESS_MS, SessionSidebar } from "./session-sidebar";
 import { buildSessionsPageKey, SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
 
 expect.extend(matchers);
@@ -45,6 +45,7 @@ vi.mock("@/hooks/use-media-query", () => ({
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.useRealTimers();
   mockUseIsMobile.mockReturnValue(false);
 });
 
@@ -173,10 +174,12 @@ describe("SessionSidebar", () => {
     );
 
     const link = await screen.findByRole("link", { name: /session 1/i });
+    vi.useFakeTimers();
     fireEvent.touchStart(link, { touches: [{ clientX: 20, clientY: 20 }] });
-
-    await waitFor(() => {
-      expect(screen.getByText("Rename")).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(MOBILE_LONG_PRESS_MS);
     });
-  }, 7000);
+
+    expect(screen.getByText("Rename")).toBeInTheDocument();
+  });
 });

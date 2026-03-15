@@ -39,7 +39,7 @@ export type SessionItem = Session;
 
 type SessionsResponse = { sessions: SessionItem[] };
 
-const MOBILE_LONG_PRESS_MS = 450;
+export const MOBILE_LONG_PRESS_MS = 450;
 const MOBILE_LONG_PRESS_MOVE_THRESHOLD_PX = 10;
 
 export function buildSessionHref(session: SessionItem) {
