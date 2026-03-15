@@ -8,6 +8,7 @@ import {
   KeyboardIcon,
   DataControlsIcon,
   IntegrationsIcon,
+  TerminalIcon,
   ChevronRightIcon,
 } from "@/components/ui/icons";
 
@@ -41,6 +42,11 @@ const NAV_ITEMS = [
     id: "integrations",
     label: "Integrations",
     icon: IntegrationsIcon,
+  },
+  {
+    id: "mcp-servers",
+    label: "MCP Servers",
+    icon: TerminalIcon,
   },
 ] as const;
 

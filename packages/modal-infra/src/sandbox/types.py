@@ -117,3 +117,4 @@ class SessionConfig(BaseModel):
     opencode_session_id: str | None = None
     provider: str = "anthropic"
     model: str = "claude-sonnet-4-6"
+    mcp_servers: list[dict] | None = None

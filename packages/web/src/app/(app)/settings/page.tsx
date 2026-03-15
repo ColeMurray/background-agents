@@ -10,6 +10,7 @@ import { DataControlsSettings } from "@/components/settings/data-controls-settin
 import { KeyboardShortcutsSettings } from "@/components/settings/keyboard-shortcuts-settings";
 import { IntegrationsSettings } from "@/components/settings/integrations-settings";
 import { ImagesSettings } from "@/components/settings/images-settings";
+import { McpServersSettings } from "@/components/settings/mcp-servers-settings";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { SidebarIcon, BackIcon } from "@/components/ui/icons";
 import { useIsMobile } from "@/hooks/use-media-query";
@@ -21,6 +22,7 @@ const CATEGORY_LABELS: Record<SettingsCategory, string> = {
   "keyboard-shortcuts": "Keyboard",
   "data-controls": "Data Controls",
   integrations: "Integrations",
+  "mcp-servers": "MCP Servers",
 };
 
 const VALID_CATEGORIES = new Set<string>([
@@ -30,6 +32,7 @@ const VALID_CATEGORIES = new Set<string>([
   "keyboard-shortcuts",
   "data-controls",
   "integrations",
+  "mcp-servers",
 ]);
 
 function isValidCategory(tab: string | null): tab is SettingsCategory {
@@ -68,6 +71,7 @@ export default function SettingsPage() {
       {activeCategory === "keyboard-shortcuts" && <KeyboardShortcutsSettings />}
       {activeCategory === "data-controls" && <DataControlsSettings />}
       {activeCategory === "integrations" && <IntegrationsSettings />}
+      {activeCategory === "mcp-servers" && <McpServersSettings />}
     </>
   );
 

@@ -7,8 +7,8 @@ import type {
   Env,
   CallbackContext,
   LinearIssueDetails,
-  AgentSessionWebhook,
-  AgentSessionWebhookIssue,
+  AgentWebhook,
+  WebhookIssue,
 } from "./types";
 import {
   getLinearClient,
@@ -58,7 +58,7 @@ async function getAuthHeaders(env: Env, traceId?: string): Promise<Record<string
 
 // ─── Sub-handlers ────────────────────────────────────────────────────────────
 
-async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: string): Promise<void> {
+async function handleStop(webhook: AgentWebhook, env: Env, traceId: string): Promise<void> {
   const startTime = Date.now();
   const agentSessionId = webhook.agentSession.id;
   const issueId = webhook.agentSession.issue?.id;
@@ -99,8 +99,8 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
 }
 
 async function handleFollowUp(
-  webhook: AgentSessionWebhook,
-  issue: AgentSessionWebhookIssue,
+  webhook: AgentWebhook,
+  issue: WebhookIssue,
   env: Env,
   traceId: string
 ): Promise<void> {
@@ -123,7 +123,8 @@ async function handleFollowUp(
   const existingSession = await lookupIssueSession(env, issue.id);
   if (!existingSession) return;
 
-  const followUpContent = agentActivity?.body || comment?.body || "Follow-up on the issue.";
+  const activityBody = typeof agentActivity?.content?.body === "string" ? agentActivity.content.body : null;
+  const followUpContent = activityBody || comment?.body || "Follow-up on the issue.";
 
   await emitAgentActivity(
     client,
@@ -193,8 +194,8 @@ async function handleFollowUp(
 }
 
 async function handleNewSession(
-  webhook: AgentSessionWebhook,
-  issue: AgentSessionWebhookIssue,
+  webhook: AgentWebhook,
+  issue: WebhookIssue,
   env: Env,
   traceId: string
 ): Promise<void> {
@@ -458,7 +459,7 @@ async function handleNewSession(
   // ─── Build and send prompt ────────────────────────────────────────────
 
   // Prefer Linear's promptContext (includes issue, comments, guidance)
-  const prompt = webhook.agentSession.promptContext || buildPrompt(issue, issueDetails, comment);
+  const prompt = webhook.promptContext || buildPrompt(issue, issueDetails, comment);
   const callbackContext: CallbackContext = {
     source: "linear",
     issueId: issue.id,
@@ -527,7 +528,7 @@ async function handleNewSession(
 // ─── Dispatcher ──────────────────────────────────────────────────────────────
 
 export async function handleAgentSessionEvent(
-  webhook: AgentSessionWebhook,
+  webhook: AgentWebhook,
   env: Env,
   traceId: string
 ): Promise<void> {
@@ -569,7 +570,7 @@ export async function handleAgentSessionEvent(
 function buildPrompt(
   issue: { identifier: string; title: string; description?: string | null; url: string },
   issueDetails: LinearIssueDetails | null,
-  comment?: { body: string } | null
+  comment?: { body?: string | null } | null
 ): string {
   const parts: string[] = [
     `Linear Issue: ${issue.identifier} — ${issue.title}`,
