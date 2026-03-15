@@ -6,6 +6,7 @@ import {
   type IntegrationSettingsMap,
   type GitHubBotSettings,
   type LinearBotSettings,
+  type CodeServerSettings,
 } from "@open-inspect/shared";
 
 export class IntegrationSettingsValidationError extends Error {
@@ -179,6 +180,10 @@ export class IntegrationSettingsStore {
       this.validateLinearSettings(settings as LinearBotSettings);
     }
 
+    if (integrationId === "code-server") {
+      this.validateCodeServerSettings(settings as CodeServerSettings);
+    }
+
     return settings;
   }
 
@@ -255,6 +260,12 @@ export class IntegrationSettingsStore {
       typeof settings.emitToolProgressActivities !== "boolean"
     ) {
       throw new IntegrationSettingsValidationError("emitToolProgressActivities must be a boolean");
+    }
+  }
+
+  private validateCodeServerSettings(settings: CodeServerSettings): void {
+    if (settings.enabled !== undefined && typeof settings.enabled !== "boolean") {
+      throw new IntegrationSettingsValidationError("enabled must be a boolean");
     }
   }
 }

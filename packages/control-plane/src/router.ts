@@ -10,6 +10,7 @@ import {
   SourceControlProviderError,
   type SourceControlProviderName,
 } from "./source-control";
+import { IntegrationSettingsStore } from "./db/integration-settings";
 import { SessionIndexStore } from "./db/session-index";
 import { UserScmTokenStore, DEFAULT_TOKEN_LIFETIME_MS } from "./db/user-scm-tokens";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./session/contracts";
@@ -17,6 +18,7 @@ import { buildSessionInternalUrl, SessionInternalPaths } from "./session/contrac
 import {
   getValidModelOrDefault,
   isValidReasoningEffort,
+  type CodeServerSettings,
   type SessionStatus,
   type CallbackContext,
   type SpawnChildSessionRequest,
@@ -46,6 +48,33 @@ const logger = createLogger("router");
 const MAX_SPAWN_DEPTH = 2;
 const MAX_CONCURRENT_CHILDREN = 5;
 const MAX_TOTAL_CHILDREN = 15;
+
+/**
+ * Resolve whether code-server should be enabled for a given repo,
+ * checking both the `enabled` setting and the `enabledRepos` allowlist.
+ */
+async function resolveCodeServerEnabled(
+  db: D1Database | undefined,
+  repoOwner: string,
+  repoName: string
+): Promise<boolean> {
+  if (!db) return false;
+  const repo = `${repoOwner}/${repoName}`;
+  try {
+    const store = new IntegrationSettingsStore(db);
+    const { enabledRepos, settings } = await store.getResolvedConfig("code-server", repo);
+    const csSettings = settings as CodeServerSettings;
+    if (csSettings.enabled !== true) return false;
+    // enabledRepos: null → all repos, [] → none, [...] → allowlist
+    if (enabledRepos !== null && !enabledRepos.includes(repo)) return false;
+    return true;
+  } catch (e) {
+    logger.warn("Failed to resolve code-server integration settings, defaulting to disabled", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return false;
+  }
+}
 
 const SESSION_STATUSES: SessionStatus[] = [
   "created",
@@ -683,6 +712,9 @@ async function handleCreateSession(
       ? body.reasoningEffort
       : null;
 
+  // Resolve code-server integration setting for this repo
+  const codeServerEnabled = await resolveCodeServerEnabled(env.DB, repoOwner, repoName);
+
   // Initialize session with user info and optional encrypted token
   const initResponse = await stub.fetch(
     internalRequest(
@@ -705,6 +737,7 @@ async function handleCreateSession(
           scmName,
           scmEmail,
           scmTokenEncrypted,
+          codeServerEnabled,
         }),
       },
       ctx
@@ -1356,6 +1389,13 @@ async function handleSpawnChild(
     model,
   });
 
+  // Resolve code-server integration setting for child (same repo as parent)
+  const childCodeServerEnabled = await resolveCodeServerEnabled(
+    env.DB,
+    spawnContext.repoOwner,
+    spawnContext.repoName
+  );
+
   // Initialize child DO
   const initResponse = await childStub.fetch(
     internalRequest(
@@ -1380,6 +1420,7 @@ async function handleSpawnChild(
           parentSessionId: parentId,
           spawnSource: "agent",
           spawnDepth: childDepth,
+          codeServerEnabled: childCodeServerEnabled,
         }),
       },
       ctx

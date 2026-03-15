@@ -457,5 +457,121 @@ describe("Integration settings API", () => {
       expect(body.config.emitToolProgressActivities).toBe(true);
       expect(body.config.enabledRepos).toBeNull();
     });
+
+    it("returns code-server resolved config with defaults when unconfigured", async () => {
+      const headers = await authHeaders();
+      const res = await SELF.fetch(
+        "https://test.local/integration-settings/code-server/resolved/acme/widgets",
+        { headers }
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json<{
+        config: {
+          enabled: boolean;
+          enabledRepos: string[] | null;
+        };
+      }>();
+
+      expect(body.config.enabled).toBe(false);
+      expect(body.config.enabledRepos).toBeNull();
+    });
+
+    it("returns code-server resolved config with merged settings", async () => {
+      const headers = await authHeaders();
+
+      // Set global: enabled with repo scope
+      await SELF.fetch("https://test.local/integration-settings/code-server", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          settings: {
+            enabledRepos: ["acme/widgets"],
+            defaults: { enabled: true },
+          },
+        }),
+      });
+
+      // Repo override disables for this specific repo
+      await SELF.fetch("https://test.local/integration-settings/code-server/repos/acme/widgets", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          settings: { enabled: false },
+        }),
+      });
+
+      const res = await SELF.fetch(
+        "https://test.local/integration-settings/code-server/resolved/acme/widgets",
+        { headers }
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json<{
+        config: {
+          enabled: boolean;
+          enabledRepos: string[];
+        };
+      }>();
+
+      // Repo override wins
+      expect(body.config.enabled).toBe(false);
+      expect(body.config.enabledRepos).toEqual(["acme/widgets"]);
+    });
+  });
+
+  describe("code-server CRUD", () => {
+    it("GET returns null settings when unconfigured", async () => {
+      const headers = await authHeaders();
+      const response = await SELF.fetch("https://test.local/integration-settings/code-server", {
+        headers,
+      });
+      expect(response.status).toBe(200);
+      const body = await response.json<{ integrationId: string; settings: unknown }>();
+      expect(body.integrationId).toBe("code-server");
+      expect(body.settings).toBeNull();
+    });
+
+    it("PUT + GET round-trip for global settings", async () => {
+      const headers = await authHeaders();
+
+      const putRes = await SELF.fetch("https://test.local/integration-settings/code-server", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          settings: {
+            enabledRepos: ["acme/widgets"],
+            defaults: { enabled: true },
+          },
+        }),
+      });
+      expect(putRes.status).toBe(200);
+
+      const getRes = await SELF.fetch("https://test.local/integration-settings/code-server", {
+        headers,
+      });
+      expect(getRes.status).toBe(200);
+      const body = await getRes.json<{
+        settings: {
+          enabledRepos: string[];
+          defaults: { enabled: boolean };
+        };
+      }>();
+      expect(body.settings.defaults.enabled).toBe(true);
+      expect(body.settings.enabledRepos).toEqual(["acme/widgets"]);
+    });
+
+    it("rejects non-boolean enabled with 400", async () => {
+      const headers = await authHeaders();
+      const response = await SELF.fetch(
+        "https://test.local/integration-settings/code-server/repos/acme/widgets",
+        {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({ settings: { enabled: "yes" } }),
+        }
+      );
+      expect(response.status).toBe(400);
+      const body = await response.json<{ error: string }>();
+      expect(body.error).toContain("enabled must be a boolean");
+    });
   });
 });

@@ -7,6 +7,7 @@ import { useSidebarContext } from "@/components/sidebar-layout";
 import { SidebarIcon, BackIcon } from "@/components/ui/icons";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useIsMobile } from "@/hooks/use-media-query";
+import { CodeServerIntegrationSettings } from "@/components/settings/integrations/code-server-integration-settings";
 import { GitHubIntegrationSettings } from "@/components/settings/integrations/github-integration-settings";
 import { LinearIntegrationSettings } from "@/components/settings/integrations/linear-integration-settings";
 
@@ -17,6 +18,7 @@ function getIntegration(id: string) {
 function IntegrationDetail({ integrationId }: { integrationId: IntegrationId }) {
   if (integrationId === "github") return <GitHubIntegrationSettings />;
   if (integrationId === "linear") return <LinearIntegrationSettings />;
+  if (integrationId === "code-server") return <CodeServerIntegrationSettings />;
   return null;
 }
 

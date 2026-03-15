@@ -205,6 +205,7 @@ describe("createSessionLifecycleHandler", () => {
       parentSessionId: "parent-1",
       spawnSource: "agent",
       spawnDepth: 1,
+      codeServerEnabled: false,
       createdAt: 1234,
       updatedAt: 1234,
     });
