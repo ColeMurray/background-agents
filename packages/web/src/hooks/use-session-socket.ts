@@ -300,18 +300,20 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           );
           break;
 
-        case "sandbox_status":
+        case "sandbox_status": {
+          const isTerminal =
+            data.status === "stale" || data.status === "stopped" || data.status === "failed";
           setSessionState((prev) =>
             prev
               ? {
                   ...prev,
                   sandboxStatus: data.status,
-                  codeServerUrl: undefined,
-                  codeServerPassword: undefined,
+                  ...(isTerminal && { codeServerUrl: undefined, codeServerPassword: undefined }),
                 }
               : null
           );
           break;
+        }
 
         case "code_server_info":
           setSessionState((prev) =>
@@ -320,16 +322,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           break;
 
         case "sandbox_ready":
-          setSessionState((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  sandboxStatus: "ready",
-                  codeServerUrl: undefined,
-                  codeServerPassword: undefined,
-                }
-              : null
-          );
+          setSessionState((prev) => (prev ? { ...prev, sandboxStatus: "ready" } : null));
           break;
 
         case "artifact_created":
