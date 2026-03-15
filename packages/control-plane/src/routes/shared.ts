@@ -5,7 +5,7 @@
 import type { CorrelationContext } from "../logger";
 import type { RequestMetrics } from "../db/instrumented-d1";
 import type { Env } from "../types";
-import { getGitHubAppConfig } from "../auth/github-app";
+import { getGitHubAppConfig, getAllGitHubAppConfigs } from "../auth/github-app";
 import {
   createSourceControlProvider,
   resolveScmProviderFromEnv,
@@ -67,11 +67,13 @@ export function error(message: string, status = 400): Response {
  */
 export function createRouteSourceControlProvider(env: Env): SourceControlProvider {
   const appConfig = getGitHubAppConfig(env);
+  const allAppConfigs = getAllGitHubAppConfigs(env);
   const provider = resolveScmProviderFromEnv(env.SCM_PROVIDER);
   return createSourceControlProvider({
     provider,
     github: {
       appConfig: appConfig ?? undefined,
+      allAppConfigs,
       kvCache: env.REPOS_CACHE,
     },
   });

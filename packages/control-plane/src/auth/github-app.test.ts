@@ -2,6 +2,7 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   isGitHubAppConfigured,
   getGitHubAppConfig,
+  getAllGitHubAppConfigs,
   getCachedInstallationToken,
   INSTALLATION_TOKEN_CACHE_MAX_AGE_MS,
   INSTALLATION_TOKEN_MIN_REMAINING_MS,
@@ -114,6 +115,102 @@ describe("github-app utilities", () => {
           GITHUB_APP_PRIVATE_KEY: "key",
         })
       ).toBeNull();
+    });
+  });
+
+  describe("getGitHubAppConfig with comma-separated IDs", () => {
+    const baseEnv = {
+      GITHUB_APP_ID: "123",
+      GITHUB_APP_PRIVATE_KEY: "key",
+    };
+
+    it("returns the first installation ID when comma-separated", () => {
+      const config = getGitHubAppConfig({
+        ...baseEnv,
+        GITHUB_APP_INSTALLATION_ID: "111,222",
+      });
+      expect(config?.installationId).toBe("111");
+    });
+
+    it("trims whitespace from the first ID", () => {
+      const config = getGitHubAppConfig({
+        ...baseEnv,
+        GITHUB_APP_INSTALLATION_ID: " 111 , 222 ",
+      });
+      expect(config?.installationId).toBe("111");
+    });
+
+    it("returns null when first ID is empty (trailing comma)", () => {
+      const config = getGitHubAppConfig({
+        ...baseEnv,
+        GITHUB_APP_INSTALLATION_ID: ",222",
+      });
+      expect(config).toBeNull();
+    });
+
+    it("returns null when all IDs are whitespace", () => {
+      const config = getGitHubAppConfig({
+        ...baseEnv,
+        GITHUB_APP_INSTALLATION_ID: " , , ",
+      });
+      expect(config).toBeNull();
+    });
+  });
+
+  describe("getAllGitHubAppConfigs", () => {
+    const baseEnv = {
+      GITHUB_APP_ID: "123",
+      GITHUB_APP_PRIVATE_KEY: "key",
+    };
+
+    it("returns one config per installation ID", () => {
+      const configs = getAllGitHubAppConfigs({
+        ...baseEnv,
+        GITHUB_APP_INSTALLATION_ID: "111,222",
+      });
+      expect(configs).toHaveLength(2);
+      expect(configs[0].installationId).toBe("111");
+      expect(configs[1].installationId).toBe("222");
+    });
+
+    it("trims whitespace from IDs", () => {
+      const configs = getAllGitHubAppConfigs({
+        ...baseEnv,
+        GITHUB_APP_INSTALLATION_ID: " 111 , 222 ",
+      });
+      expect(configs[0].installationId).toBe("111");
+      expect(configs[1].installationId).toBe("222");
+    });
+
+    it("filters out empty IDs from trailing commas", () => {
+      const configs = getAllGitHubAppConfigs({
+        ...baseEnv,
+        GITHUB_APP_INSTALLATION_ID: "111,,222,",
+      });
+      expect(configs).toHaveLength(2);
+      expect(configs[0].installationId).toBe("111");
+      expect(configs[1].installationId).toBe("222");
+    });
+
+    it("returns empty array for whitespace-only IDs", () => {
+      const configs = getAllGitHubAppConfigs({
+        ...baseEnv,
+        GITHUB_APP_INSTALLATION_ID: " , , ",
+      });
+      expect(configs).toHaveLength(0);
+    });
+
+    it("returns empty array when not configured", () => {
+      expect(getAllGitHubAppConfigs({})).toEqual([]);
+    });
+
+    it("handles single ID without commas", () => {
+      const configs = getAllGitHubAppConfigs({
+        ...baseEnv,
+        GITHUB_APP_INSTALLATION_ID: "111",
+      });
+      expect(configs).toHaveLength(1);
+      expect(configs[0].installationId).toBe("111");
     });
   });
 

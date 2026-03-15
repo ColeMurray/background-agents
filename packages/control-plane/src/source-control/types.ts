@@ -281,7 +281,7 @@ export interface SourceControlProvider {
    * @returns Git push authentication context with app token
    * @throws SourceControlProviderError
    */
-  generatePushAuth(): Promise<GitPushAuthContext>;
+  generatePushAuth(repoOwner?: string, repoName?: string): Promise<GitPushAuthContext>;
 
   /**
    * Build provider-specific URL for manual pull request creation.
