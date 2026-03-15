@@ -68,16 +68,70 @@ class TestOpenaiOauthSetup:
         data = json.loads(_auth_file(tmp_path).read_text())
         assert data["openai"]["accountId"] == "acct_xyz"
 
-    def test_skips_when_no_refresh_token(self, tmp_path, monkeypatch):
+    def test_skips_when_no_providers_configured(self, tmp_path, monkeypatch):
         sup = _make_supervisor()
 
-        # Explicitly remove the key so it is absent regardless of test ordering
+        # Explicitly remove all provider keys so none are present
         monkeypatch.delenv("OPENAI_OAUTH_REFRESH_TOKEN", raising=False)
+        monkeypatch.delenv("OPENCODE_ZEN_API_KEY", raising=False)
+        monkeypatch.delenv("OPENCODE_GO_API_KEY", raising=False)
 
         with patch("pathlib.Path.home", return_value=tmp_path):
             sup._setup_openai_oauth()
 
         assert not _auth_file(tmp_path).exists()
+
+    def test_writes_zen_only(self, tmp_path, monkeypatch):
+        sup = _make_supervisor()
+
+        monkeypatch.delenv("OPENAI_OAUTH_REFRESH_TOKEN", raising=False)
+        monkeypatch.delenv("OPENCODE_GO_API_KEY", raising=False)
+
+        with (
+            patch.dict("os.environ", {"OPENCODE_ZEN_API_KEY": "zen_key_123"}, clear=False),
+            patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            sup._setup_openai_oauth()
+
+        data = json.loads(_auth_file(tmp_path).read_text())
+        assert data == {"opencode": {"type": "api", "key": "zen_key_123"}}
+
+    def test_writes_go_only(self, tmp_path, monkeypatch):
+        sup = _make_supervisor()
+
+        monkeypatch.delenv("OPENAI_OAUTH_REFRESH_TOKEN", raising=False)
+        monkeypatch.delenv("OPENCODE_ZEN_API_KEY", raising=False)
+
+        with (
+            patch.dict("os.environ", {"OPENCODE_GO_API_KEY": "go_key_456"}, clear=False),
+            patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            sup._setup_openai_oauth()
+
+        data = json.loads(_auth_file(tmp_path).read_text())
+        assert data == {"opencode-go": {"type": "api", "key": "go_key_456"}}
+
+    def test_writes_all_providers_combined(self, tmp_path, monkeypatch):
+        sup = _make_supervisor()
+
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "OPENAI_OAUTH_REFRESH_TOKEN": "rt_abc",
+                    "OPENCODE_ZEN_API_KEY": "zen_key",
+                    "OPENCODE_GO_API_KEY": "go_key",
+                },
+                clear=False,
+            ),
+            patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            sup._setup_openai_oauth()
+
+        data = json.loads(_auth_file(tmp_path).read_text())
+        assert "openai" in data
+        assert data["opencode"] == {"type": "api", "key": "zen_key"}
+        assert data["opencode-go"] == {"type": "api", "key": "go_key"}
 
     def test_sets_secure_permissions(self, tmp_path):
         sup = _make_supervisor()

@@ -23,6 +23,9 @@ export const VALID_MODELS = [
   "opencode/kimi-k2.5",
   "opencode/minimax-m2.5",
   "opencode/glm-5",
+  "opencode-go/kimi-k2.5",
+  "opencode-go/minimax-m2.5",
+  "opencode-go/glm-5",
 ] as const;
 
 export type ValidModel = (typeof VALID_MODELS)[number];
@@ -130,11 +133,19 @@ export const MODEL_OPTIONS: ModelCategory[] = [
       { id: "opencode/glm-5", name: "GLM 5", description: "Z.ai 744B MoE" },
     ],
   },
+  {
+    category: "OpenCode Go",
+    models: [
+      { id: "opencode-go/kimi-k2.5", name: "Kimi K2.5", description: "Moonshot AI (Go)" },
+      { id: "opencode-go/minimax-m2.5", name: "MiniMax M2.5", description: "MiniMax (Go)" },
+      { id: "opencode-go/glm-5", name: "GLM 5", description: "Z.ai 744B MoE (Go)" },
+    ],
+  },
 ];
 
 /**
  * Models enabled by default when no preferences are stored.
- * Excludes zen models which must be opted into via settings.
+ * Excludes Zen and Go models which must be opted into via settings.
  */
 export const DEFAULT_ENABLED_MODELS: ValidModel[] = [
   "anthropic/claude-haiku-4-5",
