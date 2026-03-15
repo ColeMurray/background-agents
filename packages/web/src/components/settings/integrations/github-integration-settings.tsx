@@ -14,8 +14,11 @@ import {
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { RadioCard } from "@/components/ui/form-controls";
+import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -324,11 +327,9 @@ function GlobalSettingsSection({
                       key={repo.fullName}
                       className="flex items-center gap-2 px-4 py-2 hover:bg-muted/50 transition cursor-pointer text-sm"
                     >
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         checked={isChecked}
-                        onChange={() => toggleRepo(repo.fullName)}
-                        className="rounded border-border"
+                        onCheckedChange={() => toggleRepo(repo.fullName)}
                       />
                       <span className="text-foreground">{repo.fullName}</span>
                     </label>
@@ -376,8 +377,7 @@ function GlobalSettingsSection({
         {triggerUserMode === "specific" && (
           <>
             <div className="flex items-center gap-2 mb-2">
-              <input
-                type="text"
+              <Input
                 value={newUsername}
                 onChange={(e) => setNewUsername(e.target.value)}
                 onKeyDown={(e) => {
@@ -387,7 +387,7 @@ function GlobalSettingsSection({
                   }
                 }}
                 placeholder="GitHub username"
-                className="flex-1 px-3 py-1.5 text-sm border border-border rounded-sm bg-background text-foreground placeholder:text-muted-foreground"
+                className="flex-1 h-8"
               />
               <Button size="sm" onClick={addUsername} disabled={!newUsername.trim()}>
                 Add
@@ -437,7 +437,7 @@ function GlobalSettingsSection({
           Custom instructions appended to code review prompts. Use this to focus reviews on specific
           areas or coding standards.
         </p>
-        <textarea
+        <Textarea
           value={codeReviewInstructions}
           onChange={(e) => {
             setCodeReviewInstructions(e.target.value);
@@ -446,7 +446,7 @@ function GlobalSettingsSection({
           }}
           rows={3}
           placeholder="e.g., Focus on security best practices and ensure all API endpoints validate input."
-          className="w-full px-3 py-2 text-sm border border-border rounded-sm bg-background text-foreground placeholder:text-muted-foreground resize-y"
+          className="resize-y"
         />
       </div>
 
@@ -458,7 +458,7 @@ function GlobalSettingsSection({
           Custom instructions appended to comment action prompts (@mention responses). Use this to
           guide how the bot responds to comments.
         </p>
-        <textarea
+        <Textarea
           value={commentActionInstructions}
           onChange={(e) => {
             setCommentActionInstructions(e.target.value);
@@ -467,7 +467,7 @@ function GlobalSettingsSection({
           }}
           rows={3}
           placeholder="e.g., Always run tests before pushing changes. Prefer minimal diffs."
-          className="w-full px-3 py-2 text-sm border border-border rounded-sm bg-background text-foreground placeholder:text-muted-foreground resize-y"
+          className="resize-y"
         />
       </div>
 
@@ -764,8 +764,7 @@ function RepoOverrideRow({
         {triggerUserMode === "override" && (
           <>
             <div className="flex items-center gap-2 mb-1">
-              <input
-                type="text"
+              <Input
                 value={newUsername}
                 onChange={(e) => setNewUsername(e.target.value)}
                 onKeyDown={(e) => {
@@ -775,7 +774,7 @@ function RepoOverrideRow({
                   }
                 }}
                 placeholder="GitHub username"
-                className="flex-1 px-2 py-1 text-xs border border-border rounded-sm bg-background text-foreground placeholder:text-muted-foreground"
+                className="flex-1 h-auto px-2 py-1 text-xs"
               />
               <Button size="sm" onClick={addRepoUsername} disabled={!newUsername.trim()}>
                 Add
@@ -835,7 +834,7 @@ function RepoOverrideRow({
           </Select>
         </div>
         {codeReviewMode === "override" && (
-          <textarea
+          <Textarea
             value={codeReviewInstructions}
             onChange={(e) => {
               setCodeReviewInstructions(e.target.value);
@@ -843,7 +842,7 @@ function RepoOverrideRow({
             }}
             rows={2}
             placeholder="Custom review instructions for this repo..."
-            className="w-full px-2 py-1 text-xs border border-border rounded-sm bg-background text-foreground placeholder:text-muted-foreground resize-y"
+            className="px-2 py-1 text-xs resize-y"
           />
         )}
       </div>
@@ -870,7 +869,7 @@ function RepoOverrideRow({
           </Select>
         </div>
         {commentActionMode === "override" && (
-          <textarea
+          <Textarea
             value={commentActionInstructions}
             onChange={(e) => {
               setCommentActionInstructions(e.target.value);
@@ -878,7 +877,7 @@ function RepoOverrideRow({
             }}
             rows={2}
             placeholder="Custom comment action instructions for this repo..."
-            className="w-full px-2 py-1 text-xs border border-border rounded-sm bg-background text-foreground placeholder:text-muted-foreground resize-y"
+            className="px-2 py-1 text-xs resize-y"
           />
         )}
       </div>

@@ -14,6 +14,7 @@ import {
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { RadioCard } from "@/components/ui/form-controls";
 import {
   Select,
@@ -313,28 +314,24 @@ function GlobalSettingsSection({
       <div className="grid sm:grid-cols-2 gap-2 mb-4">
         <label className="flex items-center justify-between px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
           <span>Allow user model preferences</span>
-          <input
-            type="checkbox"
+          <Checkbox
             checked={allowUserPreferenceOverride}
-            onChange={() => {
-              setAllowUserPreferenceOverride(!allowUserPreferenceOverride);
+            onCheckedChange={(checked) => {
+              setAllowUserPreferenceOverride(!!checked);
               setDirty(true);
               setError("");
             }}
-            className="rounded border-border"
           />
         </label>
         <label className="flex items-center justify-between px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
           <span>Allow model labels (model:*)</span>
-          <input
-            type="checkbox"
+          <Checkbox
             checked={allowLabelModelOverride}
-            onChange={() => {
-              setAllowLabelModelOverride(!allowLabelModelOverride);
+            onCheckedChange={(checked) => {
+              setAllowLabelModelOverride(!!checked);
               setDirty(true);
               setError("");
             }}
-            className="rounded border-border"
           />
         </label>
       </div>
@@ -342,15 +339,13 @@ function GlobalSettingsSection({
       <div className="mb-4">
         <label className="flex items-center justify-between px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
           <span>Emit tool progress activities</span>
-          <input
-            type="checkbox"
+          <Checkbox
             checked={emitToolProgressActivities}
-            onChange={() => {
-              setEmitToolProgressActivities(!emitToolProgressActivities);
+            onCheckedChange={(checked) => {
+              setEmitToolProgressActivities(!!checked);
               setDirty(true);
               setError("");
             }}
-            className="rounded border-border"
           />
         </label>
       </div>
@@ -399,11 +394,9 @@ function GlobalSettingsSection({
                       key={repo.fullName}
                       className="flex items-center gap-2 px-4 py-2 hover:bg-muted/50 transition cursor-pointer text-sm"
                     >
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         checked={isChecked}
-                        onChange={() => toggleRepo(repo.fullName)}
-                        className="rounded border-border"
+                        onCheckedChange={() => toggleRepo(repo.fullName)}
                       />
                       <span className="text-foreground">{repo.fullName}</span>
                     </label>
@@ -659,14 +652,12 @@ function RepoOverrideRow({
 
         <label className="flex items-center justify-between px-2 py-1 text-sm border border-border rounded-sm">
           <span>Tool updates</span>
-          <input
-            type="checkbox"
+          <Checkbox
             checked={emitToolProgressActivities}
-            onChange={() => {
-              setEmitToolProgressActivities(!emitToolProgressActivities);
+            onCheckedChange={(checked) => {
+              setEmitToolProgressActivities(!!checked);
               setDirty(true);
             }}
-            className="rounded border-border"
           />
         </label>
       </div>
@@ -674,26 +665,22 @@ function RepoOverrideRow({
       <div className="grid sm:grid-cols-2 gap-2">
         <label className="flex items-center justify-between px-2 py-1 text-sm border border-border rounded-sm">
           <span>User preference override</span>
-          <input
-            type="checkbox"
+          <Checkbox
             checked={allowUserPreferenceOverride}
-            onChange={() => {
-              setAllowUserPreferenceOverride(!allowUserPreferenceOverride);
+            onCheckedChange={(checked) => {
+              setAllowUserPreferenceOverride(!!checked);
               setDirty(true);
             }}
-            className="rounded border-border"
           />
         </label>
         <label className="flex items-center justify-between px-2 py-1 text-sm border border-border rounded-sm">
           <span>Label model override</span>
-          <input
-            type="checkbox"
+          <Checkbox
             checked={allowLabelModelOverride}
-            onChange={() => {
-              setAllowLabelModelOverride(!allowLabelModelOverride);
+            onCheckedChange={(checked) => {
+              setAllowLabelModelOverride(!!checked);
               setDirty(true);
             }}
-            className="rounded border-border"
           />
         </label>
       </div>

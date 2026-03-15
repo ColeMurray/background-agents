@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { isValidCron, nextCronOccurrence, describeCron } from "@open-inspect/shared";
 import { RadioCard } from "@/components/ui/form-controls";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -186,12 +187,11 @@ export function CronPicker({ value, onChange, timezone }: CronPickerProps) {
 
       {presetType === "custom" && (
         <div>
-          <input
-            type="text"
+          <Input
             value={customValue}
             onChange={(e) => handleCustomChange(e.target.value)}
             placeholder="0 9 * * 1-5"
-            className="w-full px-3 py-2 text-sm bg-input border border-border focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent placeholder:text-secondary-foreground text-foreground font-mono"
+            className="font-mono placeholder:text-secondary-foreground"
           />
           {customValue && !isValidCron(customValue) && (
             <p className="mt-1 text-xs text-red-500">
