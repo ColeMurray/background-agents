@@ -615,6 +615,8 @@ export function isGitHubAppConfigured(env: {
 
 /**
  * Get GitHub App config from environment.
+ * Returns config for the first installation ID. Use getAllGitHubAppConfigs
+ * when you need to iterate over multiple installations.
  */
 export function getGitHubAppConfig(env: {
   GITHUB_APP_ID?: string;
@@ -625,9 +627,37 @@ export function getGitHubAppConfig(env: {
     return null;
   }
 
+  const firstInstallationId = env.GITHUB_APP_INSTALLATION_ID!.split(",")[0].trim();
+  if (!firstInstallationId) {
+    return null;
+  }
   return {
     appId: env.GITHUB_APP_ID!,
     privateKey: env.GITHUB_APP_PRIVATE_KEY!,
-    installationId: env.GITHUB_APP_INSTALLATION_ID!,
+    installationId: firstInstallationId,
   };
+}
+
+/**
+ * Get GitHub App configs for ALL installation IDs (comma-separated).
+ * Use this when listing repos or checking access across multiple installations.
+ */
+export function getAllGitHubAppConfigs(env: {
+  GITHUB_APP_ID?: string;
+  GITHUB_APP_PRIVATE_KEY?: string;
+  GITHUB_APP_INSTALLATION_ID?: string;
+}): GitHubAppConfig[] {
+  if (!isGitHubAppConfigured(env)) {
+    return [];
+  }
+
+  return env
+    .GITHUB_APP_INSTALLATION_ID!.split(",")
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0)
+    .map((id) => ({
+      appId: env.GITHUB_APP_ID!,
+      privateKey: env.GITHUB_APP_PRIVATE_KEY!,
+      installationId: id,
+    }));
 }

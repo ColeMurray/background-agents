@@ -45,10 +45,14 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
   readonly name = "github";
 
   private readonly appConfig?: GitHubProviderConfig["appConfig"];
+  private readonly allAppConfigs: NonNullable<GitHubProviderConfig["appConfig"]>[];
   private readonly kvCache?: KVNamespace;
 
   constructor(config: GitHubProviderConfig = {}) {
     this.appConfig = config.appConfig;
+    const filtered = config.allAppConfigs?.filter(Boolean);
+    this.allAppConfigs =
+      filtered && filtered.length > 0 ? filtered : config.appConfig ? [config.appConfig] : [];
     this.kvCache = config.kvCache;
   }
 
@@ -204,108 +208,189 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
    * Check whether a repository is accessible to the GitHub App installation.
    */
   async checkRepositoryAccess(config: GetRepositoryConfig): Promise<RepositoryAccessResult | null> {
-    if (!this.appConfig) {
+    if (this.allAppConfigs.length === 0) {
       throw new SourceControlProviderError(
         "GitHub App not configured - cannot check repository access",
         "permanent"
       );
     }
 
-    try {
-      const repo = await getInstallationRepository(
-        this.appConfig,
-        config.owner,
-        config.name,
-        this.kvCache ? { REPOS_CACHE: this.kvCache } : undefined
-      );
-      if (!repo) {
-        return null;
+    // Try each installation until one has access
+    let lastError: unknown;
+
+    for (const appConfig of this.allAppConfigs) {
+      try {
+        const repo = await getInstallationRepository(
+          appConfig,
+          config.owner,
+          config.name,
+          this.kvCache ? { REPOS_CACHE: this.kvCache } : undefined
+        );
+        if (repo) {
+          return {
+            repoId: repo.id,
+            repoOwner: config.owner.toLowerCase(),
+            repoName: config.name.toLowerCase(),
+            defaultBranch: repo.defaultBranch,
+          };
+        }
+      } catch (error) {
+        // Log and continue to next installation
+        console.warn(
+          `checkRepositoryAccess failed for installation ${appConfig.installationId}: ${error instanceof Error ? error.message : String(error)}`
+        );
+        lastError = error;
       }
-      return {
-        repoId: repo.id,
-        repoOwner: config.owner.toLowerCase(),
-        repoName: config.name.toLowerCase(),
-        defaultBranch: repo.defaultBranch,
-      };
-    } catch (error) {
+    }
+
+    // If any installation errored and none found the repo, propagate the error
+    // rather than silently returning null (which the caller treats as "not found").
+    // The repo might live in the installation that failed.
+    if (lastError) {
       throw SourceControlProviderError.fromFetchError(
-        `Failed to check repository access: ${error instanceof Error ? error.message : String(error)}`,
-        error,
-        extractHttpStatus(error)
+        `Failed to check repository access across all installations: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+        lastError,
+        extractHttpStatus(lastError)
       );
     }
+
+    return null;
   }
 
   /**
    * List all repositories accessible to the GitHub App installation.
    */
   async listRepositories(): Promise<InstallationRepository[]> {
-    if (!this.appConfig) {
+    if (this.allAppConfigs.length === 0) {
       throw new SourceControlProviderError(
         "GitHub App not configured - cannot list repositories",
         "permanent"
       );
     }
 
-    try {
-      const result = await listInstallationRepositories(
-        this.appConfig,
-        this.kvCache ? { REPOS_CACHE: this.kvCache } : undefined
-      );
-      return result.repos;
-    } catch (error) {
+    const seen = new Set<string>();
+    const allRepos: InstallationRepository[] = [];
+    let lastError: unknown;
+    let successCount = 0;
+
+    const results = await Promise.allSettled(
+      this.allAppConfigs.map((appConfig) =>
+        listInstallationRepositories(
+          appConfig,
+          this.kvCache ? { REPOS_CACHE: this.kvCache } : undefined
+        )
+      )
+    );
+
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      if (result.status === "fulfilled") {
+        successCount++;
+        for (const repo of result.value.repos) {
+          const key = `${repo.owner}/${repo.name}`.toLowerCase();
+          if (!seen.has(key)) {
+            seen.add(key);
+            allRepos.push(repo);
+          }
+        }
+      } else {
+        const installationId = this.allAppConfigs[i].installationId;
+        console.warn(
+          `Failed to list repos for installation ${installationId}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`
+        );
+        lastError = result.reason;
+      }
+    }
+
+    // If no installation succeeded, surface the error with proper classification
+    if (successCount === 0 && lastError) {
       throw SourceControlProviderError.fromFetchError(
-        `Failed to list repositories: ${error instanceof Error ? error.message : String(error)}`,
-        error,
-        extractHttpStatus(error)
+        `Failed to list repositories: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+        lastError,
+        extractHttpStatus(lastError)
       );
     }
+
+    return allRepos;
   }
 
   /**
    * List branches for a repository.
    */
   async listBranches(config: GetRepositoryConfig): Promise<{ name: string }[]> {
-    if (!this.appConfig) {
+    if (this.allAppConfigs.length === 0) {
       throw new SourceControlProviderError(
         "GitHub App not configured - cannot list branches",
         "permanent"
       );
     }
 
-    try {
-      return await listRepositoryBranches(
-        this.appConfig,
-        config.owner,
-        config.name,
-        this.kvCache ? { REPOS_CACHE: this.kvCache } : undefined
-      );
-    } catch (error) {
-      throw SourceControlProviderError.fromFetchError(
-        `Failed to list branches: ${error instanceof Error ? error.message : String(error)}`,
-        error,
-        extractHttpStatus(error)
-      );
+    let lastError: unknown;
+    for (const appConfig of this.allAppConfigs) {
+      try {
+        return await listRepositoryBranches(
+          appConfig,
+          config.owner,
+          config.name,
+          this.kvCache ? { REPOS_CACHE: this.kvCache } : undefined
+        );
+      } catch (error) {
+        console.warn(
+          `listBranches failed for installation ${appConfig.installationId}: ${error instanceof Error ? error.message : String(error)}`
+        );
+        lastError = error;
+      }
     }
+
+    throw SourceControlProviderError.fromFetchError(
+      `Failed to list branches across all installations: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+      lastError,
+      extractHttpStatus(lastError)
+    );
   }
 
   /**
    * Generate authentication for git push operations using GitHub App.
    */
-  async generatePushAuth(): Promise<GitPushAuthContext> {
-    if (!this.appConfig) {
+  async generatePushAuth(repoOwner?: string, repoName?: string): Promise<GitPushAuthContext> {
+    if (this.allAppConfigs.length === 0) {
       throw new SourceControlProviderError(
         "GitHub App not configured - cannot generate push auth",
         "permanent"
       );
     }
 
+    // If we know the repo, find the owning installation
+    if (repoOwner && repoName) {
+      for (const appConfig of this.allAppConfigs) {
+        let repo: InstallationRepository | null;
+        try {
+          repo = await getInstallationRepository(
+            appConfig,
+            repoOwner,
+            repoName,
+            this.kvCache ? { REPOS_CACHE: this.kvCache } : undefined
+          );
+        } catch {
+          // Repo lookup failed for this installation — try next
+          continue;
+        }
+        if (repo) {
+          // Found the owning installation — token errors must propagate
+          const token = await getCachedInstallationToken(appConfig);
+          return { authType: "app", token };
+        }
+      }
+      // No installation claims this repo
+      console.warn(
+        `generatePushAuth: repo ${repoOwner}/${repoName} not found in any installation, falling back to primary`
+      );
+    }
+
+    // Fallback: use primary installation (no repo context or repo not found)
     try {
-      const token = await getCachedInstallationToken(this.appConfig);
-      return {
-        authType: "app",
-        token,
-      };
+      const token = await getCachedInstallationToken(this.allAppConfigs[0]);
+      return { authType: "app", token };
     } catch (error) {
       throw SourceControlProviderError.fromFetchError(
         `Failed to generate GitHub App token: ${error instanceof Error ? error.message : String(error)}`,

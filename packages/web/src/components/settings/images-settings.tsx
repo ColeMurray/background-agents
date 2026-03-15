@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import useSWR, { mutate } from "swr";
 import { useRepos } from "@/hooks/use-repos";
 import { Button } from "@/components/ui/button";
@@ -31,8 +31,20 @@ export function ImagesSettings() {
   const [togglingRepos, setTogglingRepos] = useState<Set<string>>(new Set());
   const [triggeringRepos, setTriggeringRepos] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
 
   const loading = reposLoading || imagesLoading;
+
+  const filteredRepos = useMemo(() => {
+    if (!search.trim()) return repos;
+    const q = search.toLowerCase();
+    return repos.filter(
+      (repo) =>
+        repo.name.toLowerCase().includes(q) ||
+        repo.owner.toLowerCase().includes(q) ||
+        `${repo.owner}/${repo.name}`.toLowerCase().includes(q)
+    );
+  }, [repos, search]);
 
   const enabledRepos = new Set(data?.enabledRepos ?? []);
 
@@ -118,6 +130,15 @@ export function ImagesSettings() {
         the default branch changes.
       </p>
 
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search repositories..."
+        aria-label="Search repositories"
+        className="w-full px-3 py-2 mb-4 text-sm bg-background border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-accent"
+      />
+
       {error && (
         <div className="mb-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 px-4 py-3 border border-red-200 dark:border-red-800 text-sm">
           {error}
@@ -125,7 +146,7 @@ export function ImagesSettings() {
       )}
 
       <div className="space-y-2">
-        {repos.map((repo) => {
+        {filteredRepos.map((repo) => {
           const repoKey = `${repo.owner}/${repo.name}`.toLowerCase();
           const isEnabled = enabledRepos.has(repoKey);
           const isToggling = togglingRepos.has(repoKey);
@@ -166,6 +187,11 @@ export function ImagesSettings() {
         })}
       </div>
 
+      {filteredRepos.length === 0 && repos.length > 0 && (
+        <p className="text-sm text-muted-foreground">
+          No repositories matching &ldquo;{search}&rdquo;
+        </p>
+      )}
       {repos.length === 0 && (
         <p className="text-sm text-muted-foreground">
           No repositories found. Install the GitHub App on repositories to get started.

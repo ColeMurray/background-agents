@@ -11,7 +11,7 @@ import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
 import { generateId, hashToken, timingSafeEqual, encryptToken, decryptToken } from "../auth/crypto";
-import { getGitHubAppConfig } from "../auth/github-app";
+import { getGitHubAppConfig, getAllGitHubAppConfigs } from "../auth/github-app";
 import { createModalClient } from "../sandbox/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
 import { createLogger, parseLogLevel } from "../logger";
@@ -512,12 +512,14 @@ export class SessionDO extends DurableObject<Env> {
    */
   private createSourceControlProvider(): SourceControlProvider {
     const appConfig = getGitHubAppConfig(this.env);
+    const allAppConfigs = getAllGitHubAppConfigs(this.env);
     const provider = resolveScmProviderFromEnv(this.env.SCM_PROVIDER);
 
     return createSourceControlProviderImpl({
       provider,
       github: {
         appConfig: appConfig ?? undefined,
+        allAppConfigs,
         kvCache: this.env.REPOS_CACHE,
       },
     });
