@@ -167,7 +167,7 @@ class TestConfigureLogging:
         configure_logging()
         assert len(logging.root.handlers) == 1
         assert isinstance(logging.root.handlers[0].formatter, JSONFormatter)
-        assert logging.root.level == logging.DEBUG
+        assert logging.root.level == logging.INFO
 
     def test_replaces_existing_handlers(self):
         logging.root.addHandler(logging.StreamHandler())
