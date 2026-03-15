@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef, type TouchEvent } from "react";
 import { useSession, signOut } from "next-auth/react";
 import useSWR, { mutate } from "swr";
 import { formatRelativeTime, isInactiveSession } from "@/lib/time";
@@ -38,6 +38,9 @@ import type { Session } from "@open-inspect/shared";
 export type SessionItem = Session;
 
 type SessionsResponse = { sessions: SessionItem[] };
+
+const MOBILE_LONG_PRESS_MS = 450;
+const MOBILE_LONG_PRESS_MOVE_THRESHOLD_PX = 10;
 
 export function buildSessionHref(session: SessionItem) {
   return {
@@ -440,7 +443,11 @@ function SessionListItem({
   // Orphan child (parent filtered out) — show a subtle badge
   const isOrphanChild = session.parentSessionId && session.spawnSource === "agent";
   const [isRenaming, setIsRenaming] = useState(false);
+  const [isActionsOpen, setIsActionsOpen] = useState(false);
   const [title, setTitle] = useState(displayTitle);
+  const longPressTimerRef = useRef<number | null>(null);
+  const longPressTriggeredRef = useRef(false);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     if (!isRenaming) {
@@ -449,6 +456,7 @@ function SessionListItem({
   }, [displayTitle, isRenaming]);
 
   const handleStartRename = () => {
+    setIsActionsOpen(false);
     setTitle(displayTitle);
     setIsRenaming(true);
   };
@@ -508,6 +516,57 @@ function SessionListItem({
     }
   };
 
+  const clearLongPressTimer = useCallback(() => {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }, []);
+
+  const handleTouchStart = useCallback(
+    (event: TouchEvent<HTMLAnchorElement>) => {
+      if (!isMobile) return;
+
+      const touch = event.touches[0];
+      if (!touch) return;
+
+      longPressTriggeredRef.current = false;
+      touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+      clearLongPressTimer();
+      longPressTimerRef.current = window.setTimeout(() => {
+        longPressTriggeredRef.current = true;
+        setIsActionsOpen(true);
+      }, MOBILE_LONG_PRESS_MS);
+    },
+    [clearLongPressTimer, isMobile]
+  );
+
+  const handleTouchMove = useCallback(
+    (event: TouchEvent<HTMLAnchorElement>) => {
+      if (!isMobile) return;
+
+      const start = touchStartRef.current;
+      const touch = event.touches[0];
+      if (!start || !touch) return;
+
+      const deltaX = touch.clientX - start.x;
+      const deltaY = touch.clientY - start.y;
+      if (Math.hypot(deltaX, deltaY) > MOBILE_LONG_PRESS_MOVE_THRESHOLD_PX) {
+        clearLongPressTimer();
+      }
+    },
+    [clearLongPressTimer, isMobile]
+  );
+
+  const handleTouchEnd = useCallback(() => {
+    clearLongPressTimer();
+    touchStartRef.current = null;
+  }, [clearLongPressTimer]);
+
+  useEffect(() => {
+    return () => clearLongPressTimer();
+  }, [clearLongPressTimer]);
+
   return (
     <div
       className={`group relative block px-4 py-2.5 border-l-2 transition ${
@@ -543,11 +602,25 @@ function SessionListItem({
       ) : (
         <Link
           href={buildSessionHref(session)}
-          onClick={() => {
+          onClick={(event) => {
+            if (longPressTriggeredRef.current) {
+              event.preventDefault();
+              longPressTriggeredRef.current = false;
+              return;
+            }
             if (isMobile) {
               onSessionSelect?.();
             }
           }}
+          onContextMenu={(event) => {
+            if (isMobile) {
+              event.preventDefault();
+            }
+          }}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          onTouchCancel={handleTouchEnd}
           className="block pr-8"
         >
           <div className="truncate text-sm font-medium text-foreground">{displayTitle}</div>
@@ -573,12 +646,16 @@ function SessionListItem({
       )}
 
       <div className="absolute inset-y-0 right-2 flex items-start pt-2">
-        <DropdownMenu>
+        <DropdownMenu open={isActionsOpen} onOpenChange={setIsActionsOpen}>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
               aria-label="Session actions"
-              className="h-6 w-6 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 data-[state=open]:opacity-100"
+              className={`h-6 w-6 items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition data-[state=open]:opacity-100 ${
+                isMobile
+                  ? "pointer-events-none flex opacity-0"
+                  : "flex opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+              }`}
             >
               <MoreIcon className="w-4 h-4" />
             </button>

@@ -10,6 +10,10 @@ import { buildSessionsPageKey, SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
 
 expect.extend(matchers);
 
+const { mockUseIsMobile } = vi.hoisted(() => ({
+  mockUseIsMobile: vi.fn(() => false),
+}));
+
 vi.mock("next-auth/react", () => ({
   useSession: () => ({
     data: {
@@ -35,12 +39,13 @@ vi.mock("next/link", () => ({
 }));
 
 vi.mock("@/hooks/use-media-query", () => ({
-  useIsMobile: () => false,
+  useIsMobile: mockUseIsMobile,
 }));
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  mockUseIsMobile.mockReturnValue(false);
 });
 
 function createSession(index: number) {
@@ -130,4 +135,48 @@ describe("SessionSidebar", () => {
       );
     });
   });
+
+  it("navigates directly on mobile tap without opening rename actions", async () => {
+    mockUseIsMobile.mockReturnValue(true);
+
+    render(
+      <SWRConfig
+        value={{
+          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false } },
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar onSessionSelect={vi.fn()} />
+      </SWRConfig>
+    );
+
+    const link = await screen.findByRole("link", { name: /session 1/i });
+    fireEvent.click(link);
+
+    expect(screen.queryByText("Rename")).not.toBeInTheDocument();
+  });
+
+  it("opens rename actions on mobile long press", async () => {
+    mockUseIsMobile.mockReturnValue(true);
+
+    render(
+      <SWRConfig
+        value={{
+          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false } },
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    const link = await screen.findByRole("link", { name: /session 1/i });
+    fireEvent.touchStart(link, { touches: [{ clientX: 20, clientY: 20 }] });
+
+    await waitFor(() => {
+      expect(screen.getByText("Rename")).toBeInTheDocument();
+    });
+  }, 7000);
 });
