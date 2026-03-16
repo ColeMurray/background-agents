@@ -14,6 +14,8 @@ import { generateId, hashToken, timingSafeEqual, encryptToken, decryptToken } fr
 import { getGitHubAppConfig } from "../auth/github-app";
 import { createModalClient } from "../sandbox/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
+import { createDaytonaClient } from "../sandbox/daytona-client";
+import { createDaytonaProvider } from "../sandbox/providers/daytona-provider";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import {
@@ -527,14 +529,19 @@ export class SessionDO extends DurableObject<Env> {
    * Create the lifecycle manager with all required adapters.
    */
   private createLifecycleManager(): SandboxLifecycleManager {
-    // Verify Modal configuration
-    if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {
-      throw new Error("MODAL_API_SECRET and MODAL_WORKSPACE are required for lifecycle manager");
+    // Create sandbox provider — prefer Daytona if configured, fall back to Modal
+    let provider;
+    if (this.env.DAYTONA_API_URL && this.env.DAYTONA_API_SECRET) {
+      const daytonaClient = createDaytonaClient(this.env.DAYTONA_API_SECRET, this.env.DAYTONA_API_URL);
+      provider = createDaytonaProvider(daytonaClient);
+    } else {
+      // Verify Modal configuration
+      if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {
+        throw new Error("MODAL_API_SECRET and MODAL_WORKSPACE (or DAYTONA_API_URL and DAYTONA_API_SECRET) are required for lifecycle manager");
+      }
+      const modalClient = createModalClient(this.env.MODAL_API_SECRET, this.env.MODAL_WORKSPACE);
+      provider = createModalProvider(modalClient);
     }
-
-    // Create Modal provider
-    const modalClient = createModalClient(this.env.MODAL_API_SECRET, this.env.MODAL_WORKSPACE);
-    const provider = createModalProvider(modalClient);
 
     // Storage adapter
     const storage: SandboxStorage = {

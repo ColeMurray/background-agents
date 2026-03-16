@@ -236,6 +236,19 @@ variable "nextauth_secret" {
   sensitive   = true
 }
 
+variable "daytona_api_url" {
+  description = "Daytona API base URL (e.g. Cloudflare Tunnel URL). Leave empty to use Modal."
+  type        = string
+  default     = ""
+}
+
+variable "daytona_api_secret" {
+  description = "Shared secret for authenticating control plane to Daytona API"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 # =============================================================================
 # Configuration
 # =============================================================================

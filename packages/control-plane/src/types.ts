@@ -71,6 +71,8 @@ export interface Env {
   WEB_APP_URL?: string; // Base URL for the web app (for PR links)
   CF_ACCOUNT_ID?: string; // Cloudflare account ID
   MODAL_WORKSPACE?: string; // Modal workspace name (used in Modal endpoint URLs)
+  DAYTONA_API_URL?: string; // Base URL for self-hosted Daytona infra API
+  DAYTONA_API_SECRET?: string; // Shared secret for HMAC auth with Daytona
 
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)

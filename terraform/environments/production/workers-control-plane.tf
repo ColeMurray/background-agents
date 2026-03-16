@@ -60,6 +60,7 @@ module "control_plane_worker" {
     { name = "WORKER_URL", value = local.control_plane_url },
     { name = "MODAL_WORKSPACE", value = var.modal_workspace },
     { name = "DEPLOYMENT_NAME", value = var.deployment_name },
+    { name = "DAYTONA_API_URL", value = var.daytona_api_url },
   ]
 
   secrets = [
@@ -74,6 +75,7 @@ module "control_plane_worker" {
     { name = "GITHUB_APP_ID", value = var.github_app_id },
     { name = "GITHUB_APP_PRIVATE_KEY", value = var.github_app_private_key },
     { name = "GITHUB_APP_INSTALLATION_ID", value = var.github_app_installation_id },
+    { name = "DAYTONA_API_SECRET", value = var.daytona_api_secret },
   ]
 
   durable_objects = [
