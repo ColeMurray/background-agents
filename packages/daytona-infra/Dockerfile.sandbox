@@ -1,0 +1,98 @@
+# Base sandbox image for Open-Inspect (Daytona backend).
+# Translated from packages/modal-infra/src/images/base.py
+#
+# Provides a complete development environment with:
+# - Debian slim base with git, curl, build-essential
+# - Node.js 22 LTS, pnpm, Bun runtime
+# - Python 3.12 with uv
+# - OpenCode CLI pre-installed
+# - Playwright with headless Chromium for visual verification
+# - Sandbox entrypoint and bridge code
+
+FROM python:3.12-slim
+
+# System packages (including Playwright browser dependencies)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    build-essential \
+    ca-certificates \
+    gnupg \
+    openssh-client \
+    jq \
+    unzip \
+    # Playwright browser dependencies
+    libnss3 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    libpango-1.0-0 \
+    libcairo2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install GitHub CLI
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main' \
+        > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y gh && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 22 LTS
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && node --version \
+    && npm --version
+
+# Install pnpm and Bun
+RUN npm install -g pnpm@latest \
+    && pnpm --version \
+    && curl -fsSL https://bun.sh/install | bash \
+    && echo 'export BUN_INSTALL="$HOME/.bun"' >> /etc/profile.d/bun.sh \
+    && echo 'export PATH="$BUN_INSTALL/bin:$PATH"' >> /etc/profile.d/bun.sh
+
+# Install Python tools
+RUN pip install --no-cache-dir \
+    uv \
+    httpx \
+    websockets \
+    playwright \
+    'pydantic>=2.0' \
+    'PyJWT[crypto]'
+
+# Install OpenCode CLI and plugin for custom tools
+RUN npm install -g opencode-ai@latest \
+    && (opencode --version || echo 'OpenCode installed') \
+    && npm install -g @opencode-ai/plugin@latest zod
+
+# Install Playwright browsers (Chromium only to save space)
+RUN playwright install chromium \
+    && playwright install-deps chromium
+
+# Create working directories
+RUN mkdir -p /workspace /app/plugins /tmp/opencode \
+    && echo 'Image: daytona-sandbox-base' > /app/image-version.txt
+
+# Set environment variables
+ENV HOME=/root \
+    NODE_ENV=development \
+    PNPM_HOME=/root/.local/share/pnpm \
+    PATH="/root/.bun/bin:/root/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin" \
+    PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
+    PYTHONPATH=/app \
+    NODE_PATH=/usr/lib/node_modules
+
+# Copy sandbox code into the image
+COPY src/sandbox/ /app/sandbox/
+
+WORKDIR /workspace
+
+CMD ["python", "-m", "sandbox.entrypoint"]
