@@ -14,6 +14,7 @@ import {
   addReaction,
   getChannelInfo,
   getThreadMessages,
+  getUserInfo,
   publishView,
 } from "./utils/slack-client";
 import { createClassifier } from "./classifier";
@@ -502,6 +503,28 @@ function buildThreadSession(
 }
 
 /**
+ * Resolve Slack user IDs to display names.
+ * Returns a map of userId → displayName. Falls back to userId on failure.
+ */
+async function resolveUserNames(token: string, userIds: string[]): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  const results = await Promise.allSettled(
+    userIds.map(async (id) => {
+      const info = await getUserInfo(token, id);
+      const displayName =
+        info.user?.profile?.display_name || info.user?.real_name || info.user?.name || id;
+      return { id, displayName };
+    })
+  );
+  for (const result of results) {
+    if (result.status === "fulfilled") {
+      names.set(result.value.id, result.value.displayName);
+    }
+  }
+  return names;
+}
+
+/**
  * Format thread context for inclusion in a prompt.
  * Returns a formatted string with previous messages from the thread.
  */
@@ -851,9 +874,16 @@ async function handleAppMention(
     try {
       const threadResult = await getThreadMessages(env.SLACK_BOT_TOKEN, channel, thread_ts, 10);
       if (threadResult.ok && threadResult.messages) {
-        previousMessages = threadResult.messages
-          .filter((m) => m.ts !== ts) // Exclude current message, but include bot messages
-          .map((m) => (m.bot_id ? `[Bot]: ${m.text}` : `[User]: ${m.text}`))
+        const filtered = threadResult.messages.filter((m) => m.ts !== ts);
+        // Resolve unique user IDs to display names for attribution
+        const uniqueUserIds = [...new Set(filtered.map((m) => m.user).filter(Boolean))] as string[];
+        const userNames = await resolveUserNames(env.SLACK_BOT_TOKEN, uniqueUserIds);
+        previousMessages = filtered
+          .map((m) => {
+            if (m.bot_id) return `[Bot]: ${m.text}`;
+            const name = m.user ? userNames.get(m.user) || m.user : "Unknown";
+            return `[${name}]: ${m.text}`;
+          })
           .slice(-10);
       }
     } catch {
