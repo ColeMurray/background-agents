@@ -165,20 +165,22 @@ export class DaytonaClient {
 
       const result = (await response.json()) as DaytonaApiResponse<{
         sandbox_id: string;
-        provider_object_id?: string;
+        modal_object_id?: string;
         status: string;
         created_at: number;
       }>;
 
       if (!result.success || !result.data) {
-        throw new Error(`Daytona API error: ${result.error || "Unknown error"}`);
+        throw new DaytonaApiError(
+          `Daytona API error: ${result.error || "Unknown error"}`,
+          httpStatus ?? 500
+        );
       }
 
       outcome = "success";
       return {
         sandboxId: result.data.sandbox_id,
-        // Daytona returns provider_object_id; map to modalObjectId for interface compat
-        modalObjectId: result.data.provider_object_id,
+        modalObjectId: result.data.modal_object_id,
         status: result.data.status,
         createdAt: result.data.created_at,
       };
@@ -241,7 +243,7 @@ export class DaytonaClient {
 
       const result = (await response.json()) as DaytonaApiResponse<{
         sandbox_id: string;
-        provider_object_id?: string;
+        modal_object_id?: string;
       }>;
 
       if (!result.success) {
@@ -252,8 +254,7 @@ export class DaytonaClient {
       return {
         success: true,
         sandboxId: result.data?.sandbox_id,
-        // Daytona returns provider_object_id; map to modalObjectId for interface compat
-        modalObjectId: result.data?.provider_object_id,
+        modalObjectId: result.data?.modal_object_id,
       };
     } finally {
       log.info("daytona.request", {
@@ -364,7 +365,7 @@ export class DaytonaClient {
       }>;
 
       if (!result.success || !result.data) {
-        throw new Error(`Daytona API error: ${result.error || "Unknown error"}`);
+        throw new DaytonaApiError(`Daytona API error: ${result.error || "Unknown error"}`, httpStatus ?? 500);
       }
 
       outcome = "success";
@@ -403,7 +404,7 @@ export class DaytonaClient {
     }>;
 
     if (!result.success || !result.data) {
-      throw new Error(`Daytona API error: ${result.error || "Unknown error"}`);
+      throw new DaytonaApiError(`Daytona API error: ${result.error || "Unknown error"}`, response.status);
     }
 
     return result.data;
@@ -426,13 +427,30 @@ export class DaytonaClient {
       return null;
     }
 
-    const result = (await response.json()) as DaytonaApiResponse<SnapshotInfo>;
+    // Daytona returns snake_case fields from Pydantic model_dump()
+    const result = (await response.json()) as DaytonaApiResponse<{
+      id: string;
+      repo_owner: string;
+      repo_name: string;
+      base_sha: string;
+      status: string;
+      created_at: string;
+      expires_at?: string;
+    }>;
 
-    if (!result.success) {
+    if (!result.success || !result.data) {
       return null;
     }
 
-    return result.data || null;
+    return {
+      id: result.data.id,
+      repoOwner: result.data.repo_owner,
+      repoName: result.data.repo_name,
+      baseSha: result.data.base_sha,
+      status: result.data.status,
+      createdAt: result.data.created_at,
+      expiresAt: result.data.expires_at,
+    };
   }
 
   /**
@@ -475,7 +493,7 @@ export class DaytonaClient {
       }>;
 
       if (!result.success || !result.data) {
-        throw new Error(`Daytona API error: ${result.error || "Unknown error"}`);
+        throw new DaytonaApiError(`Daytona API error: ${result.error || "Unknown error"}`, httpStatus ?? 500);
       }
 
       outcome = "success";
@@ -534,7 +552,7 @@ export class DaytonaClient {
       }>;
 
       if (!result.success || !result.data) {
-        throw new Error(`Daytona API error: ${result.error || "Unknown error"}`);
+        throw new DaytonaApiError(`Daytona API error: ${result.error || "Unknown error"}`, httpStatus ?? 500);
       }
 
       outcome = "success";

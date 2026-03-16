@@ -133,10 +133,13 @@ async def api_create_sandbox(
             installation_id = config.github_app_installation_id
 
             if app_id and private_key and installation_id:
+                from .auth.github_app import resolve_api_base
+
                 github_app_token = generate_installation_token(
                     app_id=app_id,
                     private_key=private_key,
                     installation_id=installation_id,
+                    api_base=resolve_api_base(config.github_hostname),
                 )
         except Exception as e:
             log.warn("github.token_error", exc=e)
@@ -376,10 +379,13 @@ async def api_restore_sandbox(
             installation_id = config.github_app_installation_id
 
             if app_id and private_key and installation_id:
+                from .auth.github_app import resolve_api_base
+
                 github_app_token = generate_installation_token(
                     app_id=app_id,
                     private_key=private_key,
                     installation_id=installation_id,
+                    api_base=resolve_api_base(config.github_hostname),
                 )
         except Exception as e:
             log.warn("github.token_error", exc=e)
@@ -604,6 +610,7 @@ async def api_build_repo_image(
 
 @router.post("/api/delete-provider-image")
 async def api_delete_provider_image(
+    request: Request,
     body: dict,
     authorization: str | None = Header(None),
     x_trace_id: str | None = Header(None),
@@ -631,12 +638,20 @@ async def api_delete_provider_image(
         raise HTTPException(status_code=400, detail="provider_image_id is required")
 
     try:
-        # For S3-based snapshots, we can delete the object.
-        # Log the request for auditability regardless.
+        config = request.app.state.config
+        s3 = request.app.state.s3
+
         log.info(
             "image.delete_requested",
             provider_image_id=provider_image_id,
         )
+
+        # Delete the snapshot tarball from S3
+        try:
+            s3.delete_object(Bucket=config.s3_bucket, Key=provider_image_id)
+            log.info("image.deleted", provider_image_id=provider_image_id)
+        except Exception as e:
+            log.warn("image.delete_failed", provider_image_id=provider_image_id, exc=e)
 
         return {
             "success": True,
@@ -728,28 +743,43 @@ def api_snapshot(
 
 
 @router.api_route("/ghes-proxy/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-async def ghes_proxy(request: Request, path: str) -> Response:
+async def ghes_proxy(
+    request: Request,
+    path: str,
+    authorization: str | None = Header(None),
+) -> Response:
     """
     Reverse proxy to GHES for OAuth token exchange and API calls.
 
     The web app (Cloudflare Worker) cannot reach GHES directly because it's
     in a private VPC. This endpoint forwards requests to the GHES instance.
-    No authentication required — the upstream GHES endpoints handle their own auth.
+
+    Requires authentication via Authorization header (same HMAC token as other endpoints).
+    Only proxies to paths under /login/oauth/ and /api/v3/ to limit scope.
     """
+    require_auth(authorization)
+
     ghes_hostname = os.environ.get("GITHUB_HOSTNAME", "")
     if not ghes_hostname:
         raise HTTPException(status_code=503, detail="GITHUB_HOSTNAME not configured")
+
+    # Only allow OAuth and API paths to prevent open proxy abuse
+    allowed_prefixes = ("login/oauth/", "api/v3/")
+    if not any(path.startswith(p) for p in allowed_prefixes):
+        raise HTTPException(status_code=403, detail="Path not allowed through GHES proxy")
 
     target_url = f"https://{ghes_hostname}/{path}"
     body = await request.body()
     headers = {
         k: v
         for k, v in request.headers.items()
-        if k.lower() not in ("host", "cf-connecting-ip", "cf-ray", "cf-visitor", "x-forwarded-for", "x-forwarded-proto")
+        if k.lower() not in ("host", "cf-connecting-ip", "cf-ray", "cf-visitor", "x-forwarded-for", "x-forwarded-proto", "authorization")
     }
     headers["Host"] = ghes_hostname
 
-    async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+    # Use the GHES CA bundle if configured, otherwise use system defaults
+    ca_bundle = os.environ.get("GHES_CA_BUNDLE", True)
+    async with httpx.AsyncClient(verify=ca_bundle, timeout=30.0) as client:
         resp = await client.request(
             method=request.method,
             url=target_url,
