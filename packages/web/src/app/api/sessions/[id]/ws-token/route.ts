@@ -1,8 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { getToken } from "next-auth/jwt";
-import { authOptions } from "@/lib/auth";
+import { authOptions, getAuthenticatedToken } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
 
 /**
@@ -32,7 +31,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const userId = user.id || user.email || "anonymous";
 
     const jwtStart = Date.now();
-    const jwt = await getToken({ req: request });
+    const jwt = await getAuthenticatedToken(request);
     const jwtMs = Date.now() - jwtStart;
 
     const fetchStart = Date.now();

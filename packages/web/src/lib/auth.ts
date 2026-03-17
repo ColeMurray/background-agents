@@ -1,5 +1,8 @@
+import type { NextRequest } from "next/server";
 import type { NextAuthOptions } from "next-auth";
+import type { JWT } from "next-auth/jwt";
 import GitHubProvider from "next-auth/providers/github";
+import { getToken } from "next-auth/jwt";
 import { checkAccessAllowed, parseAllowlist } from "./access-control";
 
 // Extend NextAuth types to include GitHub-specific user info
@@ -40,9 +43,37 @@ interface GitHubTokenRefreshResponse {
   error_description?: string;
 }
 
-async function refreshAccessToken(
-  refreshToken: string
-): Promise<{ accessToken: string; refreshToken: string; expiresAt: number }> {
+interface RefreshedTokens {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+}
+
+/**
+ * In-flight refresh deduplication.
+ * Prevents concurrent requests from consuming the same single-use refresh
+ * token multiple times. Keyed by refresh token value so that a rotated token
+ * starts a fresh entry.
+ */
+let inflightRefresh: { key: string; promise: Promise<RefreshedTokens> } | null = null;
+
+async function refreshAccessToken(refreshToken: string): Promise<RefreshedTokens> {
+  // Deduplicate: if a refresh for the same token is already in flight, join it
+  if (inflightRefresh && inflightRefresh.key === refreshToken) {
+    return inflightRefresh.promise;
+  }
+
+  const promise = doRefreshAccessToken(refreshToken);
+  inflightRefresh = { key: refreshToken, promise };
+  promise.finally(() => {
+    if (inflightRefresh?.key === refreshToken) {
+      inflightRefresh = null;
+    }
+  });
+  return promise;
+}
+
+async function doRefreshAccessToken(refreshToken: string): Promise<RefreshedTokens> {
   const response = await fetch("https://github.com/login/oauth/access_token", {
     method: "POST",
     headers: { Accept: "application/json", "Content-Type": "application/json" },
@@ -65,6 +96,46 @@ async function refreshAccessToken(
     refreshToken: data.refresh_token ?? refreshToken,
     expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : Date.now() + 8 * 3600 * 1000,
   };
+}
+
+function needsRefresh(token: JWT): boolean {
+  return !!(
+    token.accessTokenExpiresAt &&
+    token.refreshToken &&
+    Date.now() + REFRESH_BUFFER_MS >= token.accessTokenExpiresAt
+  );
+}
+
+/**
+ * Get the current user's JWT with fresh tokens.
+ *
+ * In NextAuth v4, `getToken()` decodes the incoming request cookie and does
+ * NOT invoke `callbacks.jwt`. That means the jwt callback's token rotation
+ * only updates the response cookie — the same request still sees stale
+ * values. This helper applies the same refresh logic inline so route
+ * handlers always get current tokens.
+ */
+export async function getAuthenticatedToken(req: NextRequest): Promise<JWT | null> {
+  const token = await getToken({ req });
+  if (!token) return null;
+
+  if (needsRefresh(token)) {
+    try {
+      const refreshed = await refreshAccessToken(token.refreshToken!);
+      return {
+        ...token,
+        accessToken: refreshed.accessToken,
+        refreshToken: refreshed.refreshToken,
+        accessTokenExpiresAt: refreshed.expiresAt,
+        error: undefined,
+      };
+    } catch (error) {
+      console.error("Failed to refresh access token:", error);
+      return { ...token, error: "RefreshAccessTokenError" };
+    }
+  }
+
+  return token;
 }
 
 export const authOptions: NextAuthOptions = {
@@ -117,14 +188,11 @@ export const authOptions: NextAuthOptions = {
         }
       }
 
-      // Token rotation — refresh if access token is expiring soon
-      if (
-        token.accessTokenExpiresAt &&
-        token.refreshToken &&
-        Date.now() + REFRESH_BUFFER_MS >= token.accessTokenExpiresAt
-      ) {
+      // Token rotation — refresh if access token is expiring soon.
+      // Updates the response cookie so subsequent requests get fresh tokens.
+      if (needsRefresh(token)) {
         try {
-          const refreshed = await refreshAccessToken(token.refreshToken);
+          const refreshed = await refreshAccessToken(token.refreshToken!);
           token.accessToken = refreshed.accessToken;
           token.refreshToken = refreshed.refreshToken;
           token.accessTokenExpiresAt = refreshed.expiresAt;
