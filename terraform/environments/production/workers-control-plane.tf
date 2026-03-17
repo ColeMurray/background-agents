@@ -85,9 +85,9 @@ module "control_plane_worker" {
 
   compatibility_date  = "2024-09-23"
   compatibility_flags = ["nodejs_compat"]
-  migration_tag       = "v2"
-  migration_old_tag   = "v1"
-  new_sqlite_classes  = ["SchedulerDO"]
+  migration_tag       = var.control_plane_migration_tag
+  migration_old_tag   = var.control_plane_migration_old_tag
+  new_sqlite_classes  = var.control_plane_new_sqlite_classes
 
   cron_triggers = ["* * * * *"]
 

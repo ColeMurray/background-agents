@@ -54,6 +54,12 @@ variable "modal_workspace" {
   type        = string
 }
 
+variable "modal_cmd" {
+  description = "Full path to modal CLI (optional). Set when modal is not on PATH during terraform apply (e.g. pipx: $HOME/.local/bin/modal)."
+  type        = string
+  default     = null
+}
+
 # =============================================================================
 # GitHub OAuth App Credentials
 # =============================================================================
@@ -260,6 +266,28 @@ variable "enable_durable_object_bindings" {
   description = "Enable DO bindings. For initial deployment: set to false (applies migrations), then set to true (adds bindings)."
   type        = bool
   default     = true
+}
+
+# Control plane Durable Object migration. For a clean first deploy after 412 "expected no tags":
+# 1) Delete the worker open-inspect-control-plane-{name} in Cloudflare (Workers & Pages → worker → Delete).
+# 2) Set control_plane_migration_old_tag = "" and control_plane_migration_tag = "v1" in tfvars.
+# 3) Run Phase 1 (enable_durable_object_bindings = false), then Phase 2 with control_plane_migration_old_tag = "v1".
+variable "control_plane_migration_old_tag" {
+  description = "Previous DO migration tag. Use \"\" for first deploy (after deleting the worker); otherwise \"v1\" or current tag."
+  type        = string
+  default     = "v1"
+}
+
+variable "control_plane_migration_tag" {
+  description = "Current DO migration tag. Use \"v1\" for first deploy; \"v2\" when adding new DO classes later."
+  type        = string
+  default     = "v2"
+}
+
+variable "control_plane_new_sqlite_classes" {
+  description = "DO classes to declare in this migration. Use [] for first deploy (all classes); [\"SchedulerDO\"] for incremental."
+  type        = list(string)
+  default     = ["SchedulerDO"]
 }
 
 variable "enable_service_bindings" {

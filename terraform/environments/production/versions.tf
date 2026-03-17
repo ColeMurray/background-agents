@@ -29,7 +29,9 @@ provider "cloudflare" {
   api_token = var.cloudflare_api_token
 }
 
+# When web_platform = "cloudflare", no Vercel resources are created but the provider still
+# requires a valid-format api_token (24 hex chars). Use a placeholder so Cloudflare-only deploys work.
 provider "vercel" {
-  api_token = var.vercel_api_token
+  api_token = var.web_platform == "vercel" ? var.vercel_api_token : "000000000000000000000000"
   team      = var.web_platform == "vercel" ? var.vercel_team_id : null
 }

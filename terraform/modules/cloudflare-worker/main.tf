@@ -91,15 +91,25 @@ resource "cloudflare_worker_version" "this" {
 
   # Durable Object migrations
   # Phase 1 (enable_durable_object_bindings=false): Apply migrations WITHOUT bindings
-  # Phase 2 (enable_durable_object_bindings=true): Add bindings WITHOUT migrations
+  # Phase 2 (enable_durable_object_bindings=true): Add bindings; send same tag + empty new_sqlite_classes
+  #   so Cloudflare accepts the version (API rejects "old_tag == new_tag" when new_sqlite_classes is non-empty).
   # Note: Free plans require new_sqlite_classes instead of new_classes
   # When new_sqlite_classes is set, only those classes are declared as new (incremental migration).
   # When empty, all DO classes are declared as new (fresh deployment).
-  migrations = length(var.durable_objects) > 0 && !var.enable_durable_object_bindings ? {
-    old_tag            = var.migration_old_tag
-    new_tag            = var.migration_tag
-    new_sqlite_classes = length(var.new_sqlite_classes) > 0 ? var.new_sqlite_classes : [for do in var.durable_objects : do.class_name]
-  } : null
+  # For first deploy: set migration_old_tag = "" so we send old_tag=""; then delete the worker in Cloudflare and run Phase 1.
+  migrations = length(var.durable_objects) > 0 ? (
+    !var.enable_durable_object_bindings ? {
+      old_tag            = (var.migration_old_tag != null && var.migration_old_tag != "") ? var.migration_old_tag : ""
+      new_tag            = var.migration_tag
+      new_sqlite_classes = length(var.new_sqlite_classes) > 0 ? var.new_sqlite_classes : [for do in var.durable_objects : do.class_name]
+    } : {
+      # Same tag as currently deployed (migration_old_tag) + empty new_sqlite_classes so API allows old_tag == new_tag.
+      # Deployment will fail with "expected tag 'v1'" if we use migration_tag here while live is still on migration_old_tag.
+      old_tag            = (var.migration_old_tag != null && var.migration_old_tag != "") ? var.migration_old_tag : var.migration_tag
+      new_tag            = (var.migration_old_tag != null && var.migration_old_tag != "") ? var.migration_old_tag : var.migration_tag
+      new_sqlite_classes = []
+    }
+  ) : null
 }
 
 # =============================================================================
@@ -150,4 +160,7 @@ resource "cloudflare_workers_cron_trigger" "this" {
   account_id  = var.account_id
   script_name = cloudflare_worker.this.name
   schedules   = [for expr in var.cron_triggers : { cron = expr }]
+
+  # Schedules API can 404 until the worker is deployed; create after deployment.
+  depends_on = [cloudflare_workers_deployment.this]
 }
