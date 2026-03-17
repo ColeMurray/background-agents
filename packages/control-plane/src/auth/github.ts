@@ -4,6 +4,7 @@
 
 import { decryptToken, encryptToken } from "./crypto";
 import type { GitHubUser, GitHubTokenResponse } from "../types";
+import { resolveGitHubUrls, type GitHubUrls } from "../github-urls";
 
 /**
  * GitHub OAuth configuration.
@@ -12,6 +13,8 @@ export interface GitHubOAuthConfig {
   clientId: string;
   clientSecret: string;
   encryptionKey: string;
+  /** GitHub URLs resolved from GITHUB_HOSTNAME. Defaults to github.com. */
+  urls?: GitHubUrls;
 }
 
 /**
@@ -31,7 +34,8 @@ export async function exchangeCodeForToken(
   code: string,
   config: GitHubOAuthConfig
 ): Promise<GitHubTokenResponse> {
-  const response = await fetch("https://github.com/login/oauth/access_token", {
+  const urls = config.urls ?? resolveGitHubUrls();
+  const response = await fetch(`${urls.webBase}/login/oauth/access_token`, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -63,7 +67,8 @@ export async function refreshAccessToken(
   refreshToken: string,
   config: GitHubOAuthConfig
 ): Promise<GitHubTokenResponse> {
-  const response = await fetch("https://github.com/login/oauth/access_token", {
+  const urls = config.urls ?? resolveGitHubUrls();
+  const response = await fetch(`${urls.webBase}/login/oauth/access_token`, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -92,8 +97,9 @@ export async function refreshAccessToken(
 /**
  * Get current user info from GitHub.
  */
-export async function getGitHubUser(accessToken: string): Promise<GitHubUser> {
-  const response = await fetch("https://api.github.com/user", {
+export async function getGitHubUser(accessToken: string, urls?: GitHubUrls): Promise<GitHubUser> {
+  const { apiBase } = urls ?? resolveGitHubUrls();
+  const response = await fetch(`${apiBase}/user`, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/vnd.github.v3+json",
@@ -112,9 +118,11 @@ export async function getGitHubUser(accessToken: string): Promise<GitHubUser> {
  * Get user's email addresses from GitHub.
  */
 export async function getGitHubUserEmails(
-  accessToken: string
+  accessToken: string,
+  urls?: GitHubUrls
 ): Promise<Array<{ email: string; primary: boolean; verified: boolean }>> {
-  const response = await fetch("https://api.github.com/user/emails", {
+  const { apiBase } = urls ?? resolveGitHubUrls();
+  const response = await fetch(`${apiBase}/user/emails`, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/vnd.github.v3+json",
@@ -192,8 +200,9 @@ export async function getValidAccessToken(
 /**
  * Generate noreply email for users with private email.
  */
-export function generateNoreplyEmail(githubUser: GitHubUser): string {
-  return `${githubUser.id}+${githubUser.login}@users.noreply.github.com`;
+export function generateNoreplyEmail(githubUser: GitHubUser, urls?: GitHubUrls): string {
+  const { noreplyDomain } = urls ?? resolveGitHubUrls();
+  return `${githubUser.id}+${githubUser.login}@${noreplyDomain}`;
 }
 
 /**

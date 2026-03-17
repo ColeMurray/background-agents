@@ -28,7 +28,8 @@ import {
   fetchWithTimeout,
 } from "../../auth/github-app";
 import type { GitHubProviderConfig } from "./types";
-import { USER_AGENT, GITHUB_API_BASE } from "./constants";
+import { USER_AGENT } from "./constants";
+import { resolveGitHubUrls, type GitHubUrls } from "../../github-urls";
 
 /** Extract HTTP status from upstream errors (GitHubHttpError has a .status property). */
 function extractHttpStatus(error: unknown): number | undefined {
@@ -46,10 +47,12 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
 
   private readonly appConfig?: GitHubProviderConfig["appConfig"];
   private readonly kvCache?: KVNamespace;
+  private readonly urls: GitHubUrls;
 
   constructor(config: GitHubProviderConfig = {}) {
     this.appConfig = config.appConfig;
     this.kvCache = config.kvCache;
+    this.urls = config.urls ?? resolveGitHubUrls();
   }
 
   /**
@@ -60,7 +63,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     config: GetRepositoryConfig
   ): Promise<RepositoryInfo> {
     const response = await fetchWithTimeout(
-      `${GITHUB_API_BASE}/repos/${config.owner}/${config.name}`,
+      `${this.urls.apiBase}/repos/${config.owner}/${config.name}`,
       {
         headers: {
           Accept: "application/vnd.github.v3+json",
@@ -118,7 +121,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     }
 
     const response = await fetchWithTimeout(
-      `${GITHUB_API_BASE}/repos/${config.repository.owner}/${config.repository.name}/pulls`,
+      `${this.urls.apiBase}/repos/${config.repository.owner}/${config.repository.name}/pulls`,
       {
         method: "POST",
         headers: {
@@ -319,13 +322,13 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     const encodedName = encodeURIComponent(config.name);
     const encodedBase = encodeURIComponent(config.targetBranch);
     const encodedHead = encodeURIComponent(config.sourceBranch);
-    return `https://github.com/${encodedOwner}/${encodedName}/pull/new/${encodedBase}...${encodedHead}`;
+    return `${this.urls.webBase}/${encodedOwner}/${encodedName}/pull/new/${encodedBase}...${encodedHead}`;
   }
 
   buildGitPushSpec(config: BuildGitPushSpecConfig): GitPushSpec {
     const force = config.force ?? false;
-    const remoteUrl = `https://x-access-token:${config.auth.token}@github.com/${config.owner}/${config.name}.git`;
-    const redactedRemoteUrl = `https://x-access-token:<redacted>@github.com/${config.owner}/${config.name}.git`;
+    const remoteUrl = `https://x-access-token:${config.auth.token}@${this.urls.gitHost}/${config.owner}/${config.name}.git`;
+    const redactedRemoteUrl = `https://x-access-token:<redacted>@${this.urls.gitHost}/${config.owner}/${config.name}.git`;
 
     return {
       remoteUrl,
@@ -349,7 +352,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
   ): Promise<void> {
     try {
       const response = await fetchWithTimeout(
-        `${GITHUB_API_BASE}/repos/${owner}/${repo}/issues/${prNumber}/labels`,
+        `${this.urls.apiBase}/repos/${owner}/${repo}/issues/${prNumber}/labels`,
         {
           method: "POST",
           headers: {
@@ -384,7 +387,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
   ): Promise<void> {
     try {
       const response = await fetchWithTimeout(
-        `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/requested_reviewers`,
+        `${this.urls.apiBase}/repos/${owner}/${repo}/pulls/${prNumber}/requested_reviewers`,
         {
           method: "POST",
           headers: {

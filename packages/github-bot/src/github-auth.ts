@@ -2,6 +2,14 @@ export interface GitHubAppConfig {
   appId: string;
   privateKey: string;
   installationId: string;
+  /** GitHub REST API base URL. Defaults to https://api.github.com. */
+  apiBase?: string;
+}
+
+/** Resolve the GitHub API base URL from a hostname (supports GHES). */
+export function resolveApiBase(hostname?: string): string {
+  const host = (hostname || "github.com").toLowerCase().replace(/\/+$/, "");
+  return host === "github.com" ? "https://api.github.com" : `https://${host}/api/v3`;
 }
 
 function base64UrlEncode(input: Uint8Array | string): string {
@@ -63,8 +71,13 @@ export async function generateAppJwt(appId: string, privateKey: string): Promise
   return `${signingInput}.${base64UrlEncode(new Uint8Array(signature))}`;
 }
 
-async function getInstallationToken(jwt: string, installationId: string): Promise<string> {
-  const url = `https://api.github.com/app/installations/${installationId}/access_tokens`;
+async function getInstallationToken(
+  jwt: string,
+  installationId: string,
+  apiBase?: string
+): Promise<string> {
+  const base = apiBase ?? "https://api.github.com";
+  const url = `${base}/app/installations/${installationId}/access_tokens`;
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -86,7 +99,7 @@ async function getInstallationToken(jwt: string, installationId: string): Promis
 
 export async function generateInstallationToken(config: GitHubAppConfig): Promise<string> {
   const jwt = await generateAppJwt(config.appId, config.privateKey);
-  return getInstallationToken(jwt, config.installationId);
+  return getInstallationToken(jwt, config.installationId, config.apiBase);
 }
 
 const WRITE_PERMISSIONS = new Set(["write", "maintain", "admin"]);
@@ -100,11 +113,13 @@ export async function checkSenderPermission(
   token: string,
   owner: string,
   repo: string,
-  username: string
+  username: string,
+  apiBase?: string
 ): Promise<PermissionCheckResult> {
+  const base = apiBase ?? "https://api.github.com";
   try {
     const response = await fetch(
-      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/collaborators/${encodeURIComponent(username)}/permission`,
+      `${base}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/collaborators/${encodeURIComponent(username)}/permission`,
       {
         headers: {
           Authorization: `Bearer ${token}`,

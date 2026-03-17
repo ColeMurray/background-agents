@@ -12,6 +12,7 @@ import {
   type SourceControlProvider,
   type RepositoryAccessResult,
 } from "../source-control";
+import { resolveGitHubUrls } from "../github-urls";
 
 /**
  * Request context with correlation IDs and per-request metrics.
@@ -68,11 +69,17 @@ export function error(message: string, status = 400): Response {
 export function createRouteSourceControlProvider(env: Env): SourceControlProvider {
   const appConfig = getGitHubAppConfig(env);
   const provider = resolveScmProviderFromEnv(env.SCM_PROVIDER);
+  // When GHES is behind a private VPC, override apiBase to route through the tunnel proxy
+  const baseUrls = resolveGitHubUrls(env.GITHUB_HOSTNAME);
+  const urls = env.GHES_TUNNEL_URL
+    ? { ...baseUrls, apiBase: `${env.GHES_TUNNEL_URL.replace(/\/+$/, "")}/api/v3` }
+    : baseUrls;
   return createSourceControlProvider({
     provider,
     github: {
       appConfig: appConfig ?? undefined,
       kvCache: env.REPOS_CACHE,
+      urls,
     },
   });
 }

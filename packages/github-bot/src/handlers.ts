@@ -6,7 +6,12 @@ import type {
   ReviewCommentPayload,
 } from "./types";
 import type { Logger } from "./logger";
-import { generateInstallationToken, postReaction, checkSenderPermission } from "./github-auth";
+import {
+  generateInstallationToken,
+  postReaction,
+  checkSenderPermission,
+  resolveApiBase,
+} from "./github-auth";
 import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
 import { generateInternalToken } from "./utils/internal";
 import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
@@ -97,7 +102,7 @@ function fireAndForgetReaction(
 }
 
 type CallerGatingResult =
-  | { allowed: true; ghToken: string; headers: Record<string, string> }
+  | { allowed: true; ghToken: string; headers: Record<string, string>; apiBase: string }
   | {
       allowed: false;
       reason: "sender_not_allowed" | "sender_insufficient_permission" | "permission_check_failed";
@@ -120,11 +125,13 @@ async function resolveCallerGating(
     }
   }
 
+  const apiBase = resolveApiBase(env.GITHUB_HOSTNAME);
   const [ghToken, headers] = await Promise.all([
     generateInstallationToken({
       appId: env.GITHUB_APP_ID,
       privateKey: env.GITHUB_APP_PRIVATE_KEY,
       installationId: env.GITHUB_APP_INSTALLATION_ID,
+      apiBase,
     }),
     getAuthHeaders(env, traceId),
   ]);
@@ -134,7 +141,8 @@ async function resolveCallerGating(
       ghToken,
       owner,
       repoName,
-      senderLogin
+      senderLogin,
+      apiBase
     );
     if (!hasPermission) {
       const reason = error ? "permission_check_failed" : "sender_insufficient_permission";
@@ -150,7 +158,7 @@ async function resolveCallerGating(
     }
   }
 
-  return { allowed: true, ghToken, headers };
+  return { allowed: true, ghToken, headers, apiBase };
 }
 
 export async function handleReviewRequested(
@@ -190,13 +198,13 @@ export async function handleReviewRequested(
     repoFullName
   );
   if (!gating.allowed) return { outcome: "skipped", skip_reason: gating.reason };
-  const { ghToken, headers } = gating;
+  const { ghToken, headers, apiBase } = gating;
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
   fireAndForgetReaction(
     log,
     ghToken,
-    `https://api.github.com/repos/${owner}/${repoName}/issues/${pr.number}/reactions`,
+    `${apiBase}/repos/${owner}/${repoName}/issues/${pr.number}/reactions`,
     meta
   );
 
@@ -286,13 +294,13 @@ export async function handlePullRequestOpened(
     repoFullName
   );
   if (!gating.allowed) return { outcome: "skipped", skip_reason: gating.reason };
-  const { ghToken, headers } = gating;
+  const { ghToken, headers, apiBase } = gating;
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
   fireAndForgetReaction(
     log,
     ghToken,
-    `https://api.github.com/repos/${owner}/${repoName}/issues/${pr.number}/reactions`,
+    `${apiBase}/repos/${owner}/${repoName}/issues/${pr.number}/reactions`,
     meta
   );
 
@@ -386,7 +394,7 @@ export async function handleIssueComment(
     repoFullName
   );
   if (!gating.allowed) return { outcome: "skipped", skip_reason: gating.reason };
-  const { ghToken, headers } = gating;
+  const { ghToken, headers, apiBase } = gating;
 
   const commentBody = stripMention(comment.body, env.GITHUB_BOT_USERNAME);
 
@@ -394,7 +402,7 @@ export async function handleIssueComment(
   fireAndForgetReaction(
     log,
     ghToken,
-    `https://api.github.com/repos/${owner}/${repoName}/issues/comments/${comment.id}/reactions`,
+    `${apiBase}/repos/${owner}/${repoName}/issues/comments/${comment.id}/reactions`,
     meta
   );
 
@@ -481,7 +489,7 @@ export async function handleReviewComment(
     repoFullName
   );
   if (!gating.allowed) return { outcome: "skipped", skip_reason: gating.reason };
-  const { ghToken, headers } = gating;
+  const { ghToken, headers, apiBase } = gating;
 
   const commentBody = stripMention(comment.body, env.GITHUB_BOT_USERNAME);
 
@@ -489,7 +497,7 @@ export async function handleReviewComment(
   fireAndForgetReaction(
     log,
     ghToken,
-    `https://api.github.com/repos/${owner}/${repoName}/pulls/comments/${comment.id}/reactions`,
+    `${apiBase}/repos/${owner}/${repoName}/pulls/comments/${comment.id}/reactions`,
     meta
   );
 

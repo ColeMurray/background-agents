@@ -236,6 +236,18 @@ variable "nextauth_secret" {
   sensitive   = true
 }
 
+variable "github_hostname" {
+  description = "GitHub hostname for GHES (e.g. 'gh.example.com'). Leave empty for github.com."
+  type        = string
+  default     = ""
+}
+
+variable "ghes_tunnel_url" {
+  description = "Proxy URL for reaching GHES from Cloudflare Workers (e.g. bore tunnel). Leave empty for direct access."
+  type        = string
+  default     = ""
+}
+
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -249,6 +261,12 @@ variable "web_platform" {
     condition     = contains(["vercel", "cloudflare"], var.web_platform)
     error_message = "web_platform must be 'vercel' or 'cloudflare'."
   }
+}
+
+variable "web_app_custom_url" {
+  description = "Custom URL for the web app (e.g. https://open-inspect.zlt.dev). Overrides the auto-generated workers.dev/vercel URL for NEXTAUTH_URL and OAuth callbacks."
+  type        = string
+  default     = null
 }
 
 variable "deployment_name" {

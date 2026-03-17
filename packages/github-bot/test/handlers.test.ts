@@ -343,6 +343,7 @@ describe("handleReviewRequested", () => {
       appId: "12345",
       privateKey: "test-key",
       installationId: "67890",
+      apiBase: "https://api.github.com",
     });
 
     expect(postReaction).toHaveBeenCalledWith(

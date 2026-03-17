@@ -59,10 +59,14 @@ export interface ParticipantServiceDeps {
  */
 export function getAvatarUrl(
   login: string | null | undefined,
-  provider: SourceControlProviderName = "github"
+  provider: SourceControlProviderName = "github",
+  githubHostname?: string
 ): string | undefined {
   if (!login) return undefined;
-  if (provider === "github") return `https://github.com/${login}.png`;
+  if (provider === "github") {
+    const host = (githubHostname || "github.com").toLowerCase().replace(/\/+$/, "");
+    return `https://${host}/${login}.png`;
+  }
   return undefined;
 }
 

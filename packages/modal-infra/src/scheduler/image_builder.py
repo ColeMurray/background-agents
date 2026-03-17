@@ -336,6 +336,12 @@ async def _api_post(
         return response.json()
 
 
+def _resolve_vcs_host() -> str:
+    """Resolve the VCS git host from environment."""
+    hostname = os.environ.get("GITHUB_HOSTNAME", "github.com")
+    return hostname.lower().rstrip("/")
+
+
 def _git_ls_remote_sha(
     repo_owner: str,
     repo_name: str,
@@ -347,10 +353,11 @@ def _git_ls_remote_sha(
 
     Returns the SHA string, or None on failure.
     """
+    vcs_host = _resolve_vcs_host()
     if clone_token:
-        url = f"https://x-access-token:{clone_token}@github.com/{repo_owner}/{repo_name}.git"
+        url = f"https://x-access-token:{clone_token}@{vcs_host}/{repo_owner}/{repo_name}.git"
     else:
-        url = f"https://github.com/{repo_owner}/{repo_name}.git"
+        url = f"https://{vcs_host}/{repo_owner}/{repo_name}.git"
 
     try:
         result = subprocess.run(

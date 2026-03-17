@@ -98,6 +98,7 @@ describe("github-app utilities", () => {
         appId: "12345",
         privateKey: "-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----",
         installationId: "67890",
+        apiBase: "https://api.github.com",
       });
     });
 

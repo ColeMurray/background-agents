@@ -32,6 +32,9 @@ export interface Env {
   /** Shared secret for HMAC auth to the control plane. */
   INTERNAL_CALLBACK_SECRET: string;
 
+  /** GitHub hostname for GHES (default: github.com). */
+  GITHUB_HOSTNAME?: string;
+
   /** Optional log level override. */
   LOG_LEVEL?: string;
 }

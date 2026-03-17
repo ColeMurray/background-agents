@@ -127,7 +127,10 @@ class SandboxManager:
             env_vars["VCS_HOST"] = "bitbucket.org"
             env_vars["VCS_CLONE_USERNAME"] = "x-token-auth"
         else:
-            env_vars["VCS_HOST"] = "github.com"
+            # Support GHES: use GITHUB_HOSTNAME if set, otherwise default to github.com
+            env_vars["VCS_HOST"] = (
+                os.environ.get("GITHUB_HOSTNAME", "github.com").lower().rstrip("/")
+            )
             env_vars["VCS_CLONE_USERNAME"] = "x-access-token"
 
         if clone_token:
