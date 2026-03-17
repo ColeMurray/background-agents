@@ -16,6 +16,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import tempfile
 import time
@@ -217,12 +218,6 @@ class AgentBridge:
         self._vnc_active = False
         self._vnc_starting = False
 
-    @staticmethod
-    def _is_vnc_enabled() -> bool:
-        """Check if ENABLE_VNC env var is set to a truthy value."""
-        val = os.environ.get("ENABLE_VNC", "").strip().lower()
-        return val in ("1", "true")
-
     @property
     def ws_url(self) -> str:
         """WebSocket URL for control plane connection."""
@@ -374,10 +369,8 @@ class AgentBridge:
                 just_flushed = await self._flush_event_buffer()
                 await self._flush_pending_acks(skip_ack_ids=just_flushed)
 
-                # Auto-start VNC if ENABLE_VNC env var is truthy
-                vnc_env_val = os.environ.get("ENABLE_VNC", "")
-                self.log.info("vnc.autostart_check", enable_vnc=vnc_env_val, vnc_active=self._vnc_active)
-                if self._is_vnc_enabled() and not self._vnc_active:
+                # Always auto-start VNC
+                if not self._vnc_active:
                     self.log.info("vnc.autostart_triggered")
                     asyncio.create_task(self._handle_enable_vnc())
 
