@@ -16,6 +16,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-cer
 
 WORKDIR /app
 
+# Install shared sandbox utilities (copied from packages/sandbox-shared)
+COPY sandbox-shared/ /tmp/sandbox-shared/
+RUN pip install --no-cache-dir /tmp/sandbox-shared && rm -rf /tmp/sandbox-shared
+
 # Copy project definition and install dependencies
 COPY pyproject.toml .
 RUN pip install --no-cache-dir .
