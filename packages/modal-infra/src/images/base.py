@@ -28,7 +28,7 @@ CODE_SERVER_VERSION = "4.109.5"
 
 # Cache buster - change this to force Modal image rebuild
 # v43: rebase onto upstream with code-server + attachments
-CACHE_BUSTER = "v43-rebase-upstream"
+CACHE_BUSTER = "v44-agent-browser"
 
 # Base image with all development tools
 base_image = (
@@ -107,6 +107,11 @@ base_image = (
         # Install @opencode-ai/plugin globally for custom tools
         # This ensures tools can import the plugin without needing to run bun add
         "npm install -g @opencode-ai/plugin@latest zod",
+    )
+    # Install agent-browser for browser automation
+    .run_commands(
+        "npm install -g agent-browser",
+        "agent-browser install",
     )
     # Install code-server for browser-based VS Code editing (direct .deb from GitHub releases)
     .run_commands(
