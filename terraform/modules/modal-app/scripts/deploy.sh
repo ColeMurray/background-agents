@@ -9,6 +9,21 @@
 
 set -euo pipefail
 
+# Resolve modal CLI (Terraform local-exec often has minimal PATH; check common locations)
+if [[ -n "${MODAL_CMD:-}" ]]; then
+  MODAL_CMD="${MODAL_CMD}"
+elif command -v modal &>/dev/null; then
+  MODAL_CMD="modal"
+elif [[ -x "${HOME:-/invalid}/.local/bin/modal" ]]; then
+  MODAL_CMD="${HOME}/.local/bin/modal"
+elif [[ -x "/usr/local/bin/modal" ]]; then
+  MODAL_CMD="/usr/local/bin/modal"
+else
+  echo "Error: modal CLI not found. Install with: pipx install modal (or pip install modal)."
+  echo "If modal is installed but not on PATH, set MODAL_CMD to its full path before running Terraform."
+  exit 1
+fi
+
 echo "Deploying Modal app: ${APP_NAME}"
 echo "Deploy path: ${DEPLOY_PATH}"
 echo "Deploy module: ${DEPLOY_MODULE}"
@@ -30,25 +45,28 @@ cd "${DEPLOY_PATH}" || {
     exit 1
 }
 
-# Deploy using Modal CLI
-if [ "${DEPLOY_MODULE}" = "deploy" ]; then
-    # Method 1: Use deploy.py wrapper (recommended)
-    modal deploy deploy.py || {
-        echo "Error: Modal deployment failed for ${APP_NAME}"
-        exit 1
-    }
-elif [ "${DEPLOY_MODULE}" = "src" ]; then
-    # Method 2: Deploy the src package directly
-    modal deploy -m src || {
-        echo "Error: Modal deployment failed for ${APP_NAME}"
-        exit 1
-    }
+# Install deps and deploy using project venv so pydantic etc. are available (pipx modal uses its own Python).
+if command -v uv &>/dev/null; then
+    uv sync --frozen 2>/dev/null || uv sync
+    # uv run uses the project venv so deploy.py can import pydantic
+    if [ "${DEPLOY_MODULE}" = "deploy" ]; then
+        uv run modal deploy deploy.py || { echo "Error: Modal deployment failed for ${APP_NAME}"; exit 1; }
+    elif [ "${DEPLOY_MODULE}" = "src" ]; then
+        uv run modal deploy -m src || { echo "Error: Modal deployment failed for ${APP_NAME}"; exit 1; }
+    else
+        uv run modal deploy "${DEPLOY_MODULE}" || { echo "Error: Modal deployment failed for ${APP_NAME}"; exit 1; }
+    fi
 else
-    # Generic deployment
-    modal deploy "${DEPLOY_MODULE}" || {
-        echo "Error: Modal deployment failed for ${APP_NAME}"
-        exit 1
-    }
+    if [[ -f pyproject.toml ]]; then
+        pip install -e . -q 2>/dev/null || true
+    fi
+    if [ "${DEPLOY_MODULE}" = "deploy" ]; then
+        "${MODAL_CMD}" deploy deploy.py || { echo "Error: Modal deployment failed for ${APP_NAME}"; exit 1; }
+    elif [ "${DEPLOY_MODULE}" = "src" ]; then
+        "${MODAL_CMD}" deploy -m src || { echo "Error: Modal deployment failed for ${APP_NAME}"; exit 1; }
+    else
+        "${MODAL_CMD}" deploy "${DEPLOY_MODULE}" || { echo "Error: Modal deployment failed for ${APP_NAME}"; exit 1; }
+    fi
 fi
 
 echo "Modal app ${APP_NAME} deployed successfully"

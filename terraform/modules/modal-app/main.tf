@@ -68,6 +68,7 @@ resource "null_resource" "modal_deploy" {
       APP_NAME           = var.app_name
       DEPLOY_PATH        = var.deploy_path
       DEPLOY_MODULE      = var.deploy_module
+      MODAL_CMD          = var.modal_cmd != null ? var.modal_cmd : ""
     }
   }
 

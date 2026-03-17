@@ -23,6 +23,7 @@ module "modal_app" {
 
   modal_token_id     = var.modal_token_id
   modal_token_secret = var.modal_token_secret
+  modal_cmd          = var.modal_cmd
 
   app_name      = "open-inspect"
   workspace     = var.modal_workspace

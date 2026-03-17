@@ -58,3 +58,9 @@ variable "fetch_app_info" {
   type        = bool
   default     = false
 }
+
+variable "modal_cmd" {
+  description = "Full path to the modal CLI (optional). Set when modal is not on PATH during Terraform local-exec (e.g. pipx install)."
+  type        = string
+  default     = null
+}
