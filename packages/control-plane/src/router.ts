@@ -709,7 +709,7 @@ async function handleCreateSession(
     try {
       scmRefreshTokenEncrypted = await encryptToken(scmRefreshToken, env.TOKEN_ENCRYPTION_KEY);
     } catch (e) {
-      logger.error("Failed to encrypt SCM refresh token", {
+      logger.warn("Session created without refresh token — token refresh will be unavailable", {
         error: e instanceof Error ? e : String(e),
       });
     }
@@ -1456,6 +1456,7 @@ async function handleSpawnChild(
           scmTokenEncrypted: spawnContext.owner.scmAccessTokenEncrypted,
           scmRefreshTokenEncrypted: spawnContext.owner.scmRefreshTokenEncrypted,
           scmTokenExpiresAt: spawnContext.owner.scmTokenExpiresAt,
+          scmUserId: spawnContext.owner.scmUserId,
           branch: spawnContext.baseBranch ?? "main",
           parentSessionId: parentId,
           spawnSource: "agent",
