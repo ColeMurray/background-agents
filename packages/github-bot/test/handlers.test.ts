@@ -13,6 +13,7 @@ vi.mock("../src/github-auth", () => ({
   generateInstallationToken: vi.fn().mockResolvedValue("test-installation-token"),
   postReaction: vi.fn().mockResolvedValue(true),
   checkSenderPermission: vi.fn().mockResolvedValue({ hasPermission: true }),
+  resolveApiBase: vi.fn().mockReturnValue("https://api.github.com"),
 }));
 
 vi.mock("../src/utils/internal", () => ({
