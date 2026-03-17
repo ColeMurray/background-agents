@@ -185,20 +185,20 @@ class DaytonaSandboxManager:
         # The Daytona daemon is PID 1; we run our entrypoint alongside it
         # via docker exec (the bridge has the Docker socket mounted).
         try:
-            import subprocess
-            result = subprocess.run(
-                [
-                    "docker", "exec", "-d",
-                    "-e", f"PYTHONPATH=/app",
-                    sandbox.id,
-                    "python", "-m", "sandbox.entrypoint",
-                ],
-                capture_output=True, text=True, timeout=30,
+            import asyncio
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "exec", "-d",
+                "-e", "PYTHONPATH=/app",
+                sandbox.id,
+                "python", "-m", "sandbox.entrypoint",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            if result.returncode == 0:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            if proc.returncode == 0:
                 log.info("sandbox.entrypoint_started", sandbox_id=sandbox_id, provider_id=sandbox.id)
             else:
-                log.warning("sandbox.entrypoint_start_failed", sandbox_id=sandbox_id, stderr=result.stderr[:500])
+                log.warning("sandbox.entrypoint_start_failed", sandbox_id=sandbox_id, stderr=(stderr or b"").decode()[:500])
         except Exception as e:
             log.warning("sandbox.entrypoint_start_error", sandbox_id=sandbox_id, error=str(e))
 

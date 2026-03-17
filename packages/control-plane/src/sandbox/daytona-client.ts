@@ -165,7 +165,7 @@ export class DaytonaClient {
 
       const result = (await response.json()) as DaytonaApiResponse<{
         sandbox_id: string;
-        modal_object_id?: string;
+        provider_object_id?: string;
         status: string;
         created_at: number;
       }>;
@@ -180,7 +180,7 @@ export class DaytonaClient {
       outcome = "success";
       return {
         sandboxId: result.data.sandbox_id,
-        modalObjectId: result.data.modal_object_id,
+        modalObjectId: result.data.provider_object_id,
         status: result.data.status,
         createdAt: result.data.created_at,
       };
@@ -243,18 +243,21 @@ export class DaytonaClient {
 
       const result = (await response.json()) as DaytonaApiResponse<{
         sandbox_id: string;
-        modal_object_id?: string;
+        provider_object_id?: string;
       }>;
 
-      if (!result.success) {
-        return { success: false, error: result.error || "Unknown restore error" };
+      if (!result.success || !result.data) {
+        throw new DaytonaApiError(
+          `Daytona API error: ${result.error || "Unknown restore error"}`,
+          httpStatus ?? 500
+        );
       }
 
       outcome = "success";
       return {
         success: true,
-        sandboxId: result.data?.sandbox_id,
-        modalObjectId: result.data?.modal_object_id,
+        sandboxId: result.data.sandbox_id,
+        modalObjectId: result.data.provider_object_id,
       };
     } finally {
       log.info("daytona.request", {
@@ -303,12 +306,15 @@ export class DaytonaClient {
       }
 
       const result = (await response.json()) as DaytonaApiResponse<{ image_id: string }>;
-      if (!result.success) {
-        return { success: false, error: result.error || "Unknown snapshot error" };
+      if (!result.success || !result.data) {
+        throw new DaytonaApiError(
+          `Daytona API error: ${result.error || "Unknown snapshot error"}`,
+          httpStatus ?? 500
+        );
       }
 
-      if (!result.data?.image_id) {
-        return { success: false, error: "Snapshot response missing image_id" };
+      if (!result.data.image_id) {
+        throw new DaytonaApiError("Snapshot response missing image_id", httpStatus ?? 500);
       }
 
       outcome = "success";
@@ -365,7 +371,10 @@ export class DaytonaClient {
       }>;
 
       if (!result.success || !result.data) {
-        throw new DaytonaApiError(`Daytona API error: ${result.error || "Unknown error"}`, httpStatus ?? 500);
+        throw new DaytonaApiError(
+          `Daytona API error: ${result.error || "Unknown error"}`,
+          httpStatus ?? 500
+        );
       }
 
       outcome = "success";
@@ -404,7 +413,10 @@ export class DaytonaClient {
     }>;
 
     if (!result.success || !result.data) {
-      throw new DaytonaApiError(`Daytona API error: ${result.error || "Unknown error"}`, response.status);
+      throw new DaytonaApiError(
+        `Daytona API error: ${result.error || "Unknown error"}`,
+        response.status
+      );
     }
 
     return result.data;
@@ -493,7 +505,10 @@ export class DaytonaClient {
       }>;
 
       if (!result.success || !result.data) {
-        throw new DaytonaApiError(`Daytona API error: ${result.error || "Unknown error"}`, httpStatus ?? 500);
+        throw new DaytonaApiError(
+          `Daytona API error: ${result.error || "Unknown error"}`,
+          httpStatus ?? 500
+        );
       }
 
       outcome = "success";
@@ -552,7 +567,10 @@ export class DaytonaClient {
       }>;
 
       if (!result.success || !result.data) {
-        throw new DaytonaApiError(`Daytona API error: ${result.error || "Unknown error"}`, httpStatus ?? 500);
+        throw new DaytonaApiError(
+          `Daytona API error: ${result.error || "Unknown error"}`,
+          httpStatus ?? 500
+        );
       }
 
       outcome = "success";

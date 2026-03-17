@@ -13,7 +13,7 @@ import time
 
 import httpx
 from fastapi import APIRouter, Header, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
 from .auth.internal import AuthConfigurationError, verify_internal_token
 from .log_config import configure_logging, get_logger
@@ -174,7 +174,7 @@ async def api_create_sandbox(
             "success": True,
             "data": {
                 "sandbox_id": handle.sandbox_id,
-                "modal_object_id": handle.provider_object_id,  # Keep same key for API compat
+                "provider_object_id": handle.provider_object_id,
                 "status": handle.status.value,
                 "created_at": handle.created_at,
             },
@@ -183,7 +183,7 @@ async def api_create_sandbox(
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_create_sandbox")
-        return {"success": False, "error": str(e)}
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -282,7 +282,7 @@ async def api_snapshot_sandbox(
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_snapshot_sandbox")
-        return {"success": False, "error": str(e)}
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -406,7 +406,7 @@ async def api_restore_sandbox(
             "success": True,
             "data": {
                 "sandbox_id": handle.sandbox_id,
-                "modal_object_id": handle.provider_object_id,  # Keep same key for API compat
+                "provider_object_id": handle.provider_object_id,
                 "status": handle.status.value,
             },
         }
@@ -418,7 +418,7 @@ async def api_restore_sandbox(
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_restore_sandbox")
-        return {"success": False, "error": str(e)}
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -494,7 +494,7 @@ async def api_warm_sandbox(
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_warm_sandbox")
-        return {"success": False, "error": str(e)}
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -592,7 +592,7 @@ async def api_build_repo_image(
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_build_repo_image")
-        return {"success": False, "error": str(e)}
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -668,7 +668,7 @@ async def api_delete_provider_image(
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_delete_provider_image")
-        return {"success": False, "error": str(e)}
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -724,7 +724,7 @@ def api_snapshot(
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_snapshot")
-        return {"success": False, "error": str(e)}
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -746,7 +746,6 @@ def api_snapshot(
 async def ghes_proxy(
     request: Request,
     path: str,
-    authorization: str | None = Header(None),
 ) -> Response:
     """
     Reverse proxy to GHES for OAuth token exchange and API calls.
@@ -754,11 +753,9 @@ async def ghes_proxy(
     The web app (Cloudflare Worker) cannot reach GHES directly because it's
     in a private VPC. This endpoint forwards requests to the GHES instance.
 
-    Requires authentication via Authorization header (same HMAC token as other endpoints).
+    No HMAC auth required - OAuth paths need to forward GitHub tokens directly.
     Only proxies to paths under /login/oauth/ and /api/v3/ to limit scope.
     """
-    require_auth(authorization)
-
     ghes_hostname = os.environ.get("GITHUB_HOSTNAME", "")
     if not ghes_hostname:
         raise HTTPException(status_code=503, detail="GITHUB_HOSTNAME not configured")
@@ -773,7 +770,7 @@ async def ghes_proxy(
     headers = {
         k: v
         for k, v in request.headers.items()
-        if k.lower() not in ("host", "cf-connecting-ip", "cf-ray", "cf-visitor", "x-forwarded-for", "x-forwarded-proto", "authorization")
+        if k.lower() not in ("host", "cf-connecting-ip", "cf-ray", "cf-visitor", "x-forwarded-for", "x-forwarded-proto")
     }
     headers["Host"] = ghes_hostname
 
