@@ -72,7 +72,10 @@ def require_valid_control_plane_url(url: str | None, request: Request) -> None:
 @router.get("/api/health")
 def api_health() -> dict:
     """Health check endpoint. Does not require authentication."""
-    return {"success": True, "data": {"status": "healthy", "service": "open-inspect-daytona"}}
+    return {
+        "success": True,
+        "data": {"status": "healthy", "service": "open-inspect-daytona"},
+    }
 
 
 @router.post("/api/create-sandbox")
@@ -183,7 +186,9 @@ async def api_create_sandbox(
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_create_sandbox")
-        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+        return JSONResponse(
+            status_code=500, content={"success": False, "error": str(e)}
+        )
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -282,7 +287,9 @@ async def api_snapshot_sandbox(
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_snapshot_sandbox")
-        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+        return JSONResponse(
+            status_code=500, content={"success": False, "error": str(e)}
+        )
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -357,13 +364,18 @@ async def api_restore_sandbox(
 
     try:
         from .auth.github_app import generate_installation_token
-        from .sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, DaytonaSandboxManager
+        from .sandbox.manager import (
+            DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+            DaytonaSandboxManager,
+        )
 
         session_config = body.get("session_config", {})
         sandbox_id = body.get("sandbox_id")
         sandbox_auth_token = body.get("sandbox_auth_token", "")
         user_env_vars = body.get("user_env_vars") or None
-        timeout_seconds = int(body.get("timeout_seconds", DEFAULT_SANDBOX_TIMEOUT_SECONDS))
+        timeout_seconds = int(
+            body.get("timeout_seconds", DEFAULT_SANDBOX_TIMEOUT_SECONDS)
+        )
 
         config = request.app.state.config
         manager = DaytonaSandboxManager(
@@ -418,7 +430,9 @@ async def api_restore_sandbox(
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_restore_sandbox")
-        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+        return JSONResponse(
+            status_code=500, content={"success": False, "error": str(e)}
+        )
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -494,7 +508,9 @@ async def api_warm_sandbox(
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_warm_sandbox")
-        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+        return JSONResponse(
+            status_code=500, content={"success": False, "error": str(e)}
+        )
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -557,7 +573,9 @@ async def api_build_repo_image(
         user_env_vars = body.get("user_env_vars") or None
 
         if not repo_owner or not repo_name:
-            raise HTTPException(status_code=400, detail="repo_owner and repo_name are required")
+            raise HTTPException(
+                status_code=400, detail="repo_owner and repo_name are required"
+            )
 
         if not build_id:
             raise HTTPException(status_code=400, detail="build_id is required")
@@ -592,7 +610,9 @@ async def api_build_repo_image(
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_build_repo_image")
-        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+        return JSONResponse(
+            status_code=500, content={"success": False, "error": str(e)}
+        )
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -668,7 +688,9 @@ async def api_delete_provider_image(
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_delete_provider_image")
-        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+        return JSONResponse(
+            status_code=500, content={"success": False, "error": str(e)}
+        )
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -724,7 +746,9 @@ def api_snapshot(
         outcome = "error"
         http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_snapshot")
-        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+        return JSONResponse(
+            status_code=500, content={"success": False, "error": str(e)}
+        )
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -742,7 +766,9 @@ def api_snapshot(
         )
 
 
-@router.api_route("/ghes-proxy/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+@router.api_route(
+    "/ghes-proxy/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"]
+)
 async def ghes_proxy(
     request: Request,
     path: str,
@@ -763,14 +789,24 @@ async def ghes_proxy(
     # Only allow OAuth and API paths to prevent open proxy abuse
     allowed_prefixes = ("login/oauth/", "api/v3/")
     if not any(path.startswith(p) for p in allowed_prefixes):
-        raise HTTPException(status_code=403, detail="Path not allowed through GHES proxy")
+        raise HTTPException(
+            status_code=403, detail="Path not allowed through GHES proxy"
+        )
 
     target_url = f"https://{ghes_hostname}/{path}"
     body = await request.body()
     headers = {
         k: v
         for k, v in request.headers.items()
-        if k.lower() not in ("host", "cf-connecting-ip", "cf-ray", "cf-visitor", "x-forwarded-for", "x-forwarded-proto")
+        if k.lower()
+        not in (
+            "host",
+            "cf-connecting-ip",
+            "cf-ray",
+            "cf-visitor",
+            "x-forwarded-for",
+            "x-forwarded-proto",
+        )
     }
     headers["Host"] = ghes_hostname
 

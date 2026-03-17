@@ -100,7 +100,9 @@ class DaytonaSandboxManager:
             env_vars["VCS_CLONE_USERNAME"] = "x-token-auth"
         else:
             # Support GHES: use GITHUB_HOSTNAME if set, otherwise default to github.com
-            env_vars["VCS_HOST"] = os.environ.get("GITHUB_HOSTNAME", "github.com").lower().rstrip("/")
+            env_vars["VCS_HOST"] = (
+                os.environ.get("GITHUB_HOSTNAME", "github.com").lower().rstrip("/")
+            )
             env_vars["VCS_CLONE_USERNAME"] = "x-access-token"
 
         if clone_token:
@@ -118,7 +120,10 @@ class DaytonaSandboxManager:
             env_vars.update(config.user_env_vars)
 
         # Use provided sandbox_id from control plane, or generate one
-        sandbox_id = config.sandbox_id or f"sandbox-{config.repo_owner}-{config.repo_name}-{int(time.time() * 1000)}"
+        sandbox_id = (
+            config.sandbox_id
+            or f"sandbox-{config.repo_owner}-{config.repo_name}-{int(time.time() * 1000)}"
+        )
 
         env_vars.update(
             {
@@ -165,7 +170,10 @@ class DaytonaSandboxManager:
         start_time = time.time()
 
         # Use provided sandbox_id from control plane, or generate one
-        sandbox_id = config.sandbox_id or f"sandbox-{config.repo_owner}-{config.repo_name}-{int(time.time() * 1000)}"
+        sandbox_id = (
+            config.sandbox_id
+            or f"sandbox-{config.repo_owner}-{config.repo_name}-{int(time.time() * 1000)}"
+        )
 
         env_vars = self._build_env_vars(config)
         env_vars["SANDBOX_ID"] = sandbox_id  # Ensure consistency
@@ -176,31 +184,49 @@ class DaytonaSandboxManager:
         # Create the sandbox via Daytona SDK
         # Daytona overrides the image CMD with its own daemon, so we start
         # the Open-Inspect entrypoint as a background process after creation.
-        sandbox = self.daytona.create(CreateSandboxFromImageParams(
-            image=image,
-            env_vars=env_vars,
-        ))
+        sandbox = self.daytona.create(
+            CreateSandboxFromImageParams(
+                image=image,
+                env_vars=env_vars,
+            )
+        )
 
         # Start the Open-Inspect supervisor entrypoint inside the sandbox.
         # The Daytona daemon is PID 1; we run our entrypoint alongside it
         # via docker exec (the bridge has the Docker socket mounted).
         try:
             import asyncio
+
             proc = await asyncio.create_subprocess_exec(
-                "docker", "exec", "-d",
-                "-e", "PYTHONPATH=/app",
+                "docker",
+                "exec",
+                "-d",
+                "-e",
+                "PYTHONPATH=/app",
                 sandbox.id,
-                "python", "-m", "sandbox.entrypoint",
+                "python",
+                "-m",
+                "sandbox.entrypoint",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
             if proc.returncode == 0:
-                log.info("sandbox.entrypoint_started", sandbox_id=sandbox_id, provider_id=sandbox.id)
+                log.info(
+                    "sandbox.entrypoint_started",
+                    sandbox_id=sandbox_id,
+                    provider_id=sandbox.id,
+                )
             else:
-                log.warning("sandbox.entrypoint_start_failed", sandbox_id=sandbox_id, stderr=(stderr or b"").decode()[:500])
+                log.warning(
+                    "sandbox.entrypoint_start_failed",
+                    sandbox_id=sandbox_id,
+                    stderr=(stderr or b"").decode()[:500],
+                )
         except Exception as e:
-            log.warning("sandbox.entrypoint_start_error", sandbox_id=sandbox_id, error=str(e))
+            log.warning(
+                "sandbox.entrypoint_start_error", sandbox_id=sandbox_id, error=str(e)
+            )
 
         provider_object_id = sandbox.id
         duration_ms = int((time.time() - start_time) * 1000)
@@ -261,10 +287,12 @@ class DaytonaSandboxManager:
 
         self._inject_vcs_env_vars(env_vars, clone_token or None)
 
-        sandbox = self.daytona.create(CreateSandboxFromImageParams(
-            image=self.config.sandbox_base_image,
-            env_vars=env_vars,
-        ))
+        sandbox = self.daytona.create(
+            CreateSandboxFromImageParams(
+                image=self.config.sandbox_base_image,
+                env_vars=env_vars,
+            )
+        )
 
         provider_object_id = sandbox.id
         duration_ms = int((time.time() - start_time) * 1000)
@@ -457,10 +485,12 @@ class DaytonaSandboxManager:
         self._inject_vcs_env_vars(env_vars, clone_token)
 
         # Create fresh sandbox
-        sandbox = self.daytona.create(CreateSandboxFromImageParams(
-            image=self.config.sandbox_base_image,
-            env_vars=env_vars,
-        ))
+        sandbox = self.daytona.create(
+            CreateSandboxFromImageParams(
+                image=self.config.sandbox_base_image,
+                env_vars=env_vars,
+            )
+        )
 
         provider_object_id = sandbox.id
 

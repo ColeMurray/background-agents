@@ -50,7 +50,9 @@ def require_secret(env_var: str = DEFAULT_SECRET_ENV_VAR) -> str:
     return secret
 
 
-def generate_internal_token(secret: str | None = None, env_var: str = DEFAULT_SECRET_ENV_VAR) -> str:
+def generate_internal_token(
+    secret: str | None = None, env_var: str = DEFAULT_SECRET_ENV_VAR
+) -> str:
     """
     Generate an internal API token for service-to-service calls.
 
@@ -83,7 +85,9 @@ def generate_internal_token(secret: str | None = None, env_var: str = DEFAULT_SE
 
 
 def verify_internal_token(
-    auth_header: str | None, secret: str | None = None, env_var: str = DEFAULT_SECRET_ENV_VAR
+    auth_header: str | None,
+    secret: str | None = None,
+    env_var: str = DEFAULT_SECRET_ENV_VAR,
 ) -> bool:
     """
     Verify an internal API token from the Authorization header.

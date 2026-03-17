@@ -556,7 +556,9 @@ class SandboxSupervisor:
                         self.shutdown_event.set()
                         break
 
-                    delay = min(self.BACKOFF_BASE**bridge_restart_count, self.BACKOFF_MAX)
+                    delay = min(
+                        self.BACKOFF_BASE**bridge_restart_count, self.BACKOFF_MAX
+                    )
                     self.log.info(
                         "bridge.restart",
                         delay_s=round(delay, 1),
@@ -618,7 +620,9 @@ class SandboxSupervisor:
             return True
 
         try:
-            timeout_seconds = int(os.environ.get(timeout_env_var, str(default_timeout_seconds)))
+            timeout_seconds = int(
+                os.environ.get(timeout_env_var, str(default_timeout_seconds))
+            )
         except ValueError:
             timeout_seconds = default_timeout_seconds
 
@@ -640,12 +644,16 @@ class SandboxSupervisor:
             )
 
             try:
-                stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
+                stdout, _ = await asyncio.wait_for(
+                    process.communicate(), timeout=timeout_seconds
+                )
             except TimeoutError:
                 process.kill()
                 stdout = await process.stdout.read() if process.stdout else b""
                 await process.wait()
-                output_tail = "\n".join(stdout.decode(errors="replace").splitlines()[-50:])
+                output_tail = "\n".join(
+                    stdout.decode(errors="replace").splitlines()[-50:]
+                )
                 duration_ms = int((time.time() - start_time) * 1000)
                 self.log.error(
                     f"{hook_name}.timeout",
@@ -922,7 +930,9 @@ class SandboxSupervisor:
         # Set up signal handlers
         loop = asyncio.get_event_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self._handle_signal(s)))
+            loop.add_signal_handler(
+                sig, lambda s=sig: asyncio.create_task(self._handle_signal(s))
+            )
 
         git_sync_success = False
         opencode_ready = False

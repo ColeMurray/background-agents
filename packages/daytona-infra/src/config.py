@@ -58,7 +58,11 @@ class Config:
     def from_env(cls) -> "Config":
         """Load configuration from environment variables."""
         hosts_str = os.environ.get("ALLOWED_CONTROL_PLANE_HOSTS", "")
-        allowed_hosts = {h.strip().lower() for h in hosts_str.split(",") if h.strip()} if hosts_str else set()
+        allowed_hosts = (
+            {h.strip().lower() for h in hosts_str.split(",") if h.strip()}
+            if hosts_str
+            else set()
+        )
 
         return cls(
             daytona_api_url=os.environ.get("DAYTONA_API_URL", ""),

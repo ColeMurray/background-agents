@@ -73,9 +73,13 @@ class SnapshotStore:
         except Exception:
             pass
 
-    def save_snapshot(self, snapshot: Snapshot, metadata: SnapshotMetadata | None = None) -> None:
+    def save_snapshot(
+        self, snapshot: Snapshot, metadata: SnapshotMetadata | None = None
+    ) -> None:
         """Save snapshot metadata."""
-        history_prefix = self._key("snapshots", snapshot.repo_owner, snapshot.repo_name, "history")
+        history_prefix = self._key(
+            "snapshots", snapshot.repo_owner, snapshot.repo_name, "history"
+        )
 
         # Save to history
         snapshot_key = self._key(history_prefix, f"{snapshot.id}.json")
@@ -88,7 +92,9 @@ class SnapshotStore:
 
         # Update latest if this snapshot is ready
         if snapshot.status == SnapshotStatus.READY:
-            latest_key = self._key("snapshots", snapshot.repo_owner, snapshot.repo_name, "latest.json")
+            latest_key = self._key(
+                "snapshots", snapshot.repo_owner, snapshot.repo_name, "latest.json"
+            )
             self._put_json(latest_key, snapshot.model_dump_json(indent=2))
 
     def get_latest_snapshot(self, repo_owner: str, repo_name: str) -> Snapshot | None:
@@ -102,9 +108,13 @@ class SnapshotStore:
         except Exception:
             return None
 
-    def get_snapshot(self, snapshot_id: str, repo_owner: str, repo_name: str) -> Snapshot | None:
+    def get_snapshot(
+        self, snapshot_id: str, repo_owner: str, repo_name: str
+    ) -> Snapshot | None:
         """Get a specific snapshot by ID."""
-        key = self._key("snapshots", repo_owner, repo_name, "history", f"{snapshot_id}.json")
+        key = self._key(
+            "snapshots", repo_owner, repo_name, "history", f"{snapshot_id}.json"
+        )
         data = self._get_json(key)
         if data is None:
             return None
@@ -120,7 +130,13 @@ class SnapshotStore:
         repo_name: str,
     ) -> SnapshotMetadata | None:
         """Get metadata for a specific snapshot."""
-        key = self._key("snapshots", repo_owner, repo_name, "history", f"{snapshot_id}.metadata.json")
+        key = self._key(
+            "snapshots",
+            repo_owner,
+            repo_name,
+            "history",
+            f"{snapshot_id}.metadata.json",
+        )
         data = self._get_json(key)
         if data is None:
             return None

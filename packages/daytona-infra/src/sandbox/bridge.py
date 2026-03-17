@@ -32,13 +32,17 @@ from .types import GitUser
 
 configure_logging()
 
+
 # Fallback git identity when prompt author has no SCM name/email configured.
 # Matches the co-author trailer used in generateCommitMessage (shared/git.ts).
 def _fallback_noreply_domain() -> str:
     host = os.environ.get("GITHUB_HOSTNAME", "github.com").lower().rstrip("/")
     return f"noreply.{host}" if host != "github.com" else "noreply.github.com"
 
-FALLBACK_GIT_USER = GitUser(name="OpenInspect", email=f"open-inspect@{_fallback_noreply_domain()}")
+
+FALLBACK_GIT_USER = GitUser(
+    name="OpenInspect", email=f"open-inspect@{_fallback_noreply_domain()}"
+)
 
 
 class OpenCodeIdentifier:
@@ -66,7 +70,9 @@ class OpenCodeIdentifier:
         "message": "msg",
         "part": "prt",
     }
-    BASE62_CHARS: ClassVar[str] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    BASE62_CHARS: ClassVar[str] = (
+        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    )
     RANDOM_LENGTH: ClassVar[int] = 14
 
     _last_timestamp: ClassVar[int] = 0
@@ -210,7 +216,9 @@ class AgentBridge:
     @property
     def ws_url(self) -> str:
         """WebSocket URL for control plane connection."""
-        url = self.control_plane_url.replace("https://", "wss://").replace("http://", "ws://")
+        url = self.control_plane_url.replace("https://", "wss://").replace(
+            "http://", "ws://"
+        )
         return f"{url}/sessions/{self.session_id}/ws?type=sandbox"
 
     async def run(self) -> None:
@@ -534,7 +542,9 @@ class AgentBridge:
             task = asyncio.create_task(self._handle_prompt(cmd))
             self._current_prompt_task = task
 
-            def handle_task_exception(t: asyncio.Task[None], mid: str = message_id) -> None:
+            def handle_task_exception(
+                t: asyncio.Task[None], mid: str = message_id
+            ) -> None:
                 if self._current_prompt_task is t:
                     self._current_prompt_task = None
                 if t.cancelled():
@@ -798,7 +808,9 @@ class AgentBridge:
                             "thinking": {"type": "adaptive"},
                         }
                         if reasoning_effort in self.ANTHROPIC_ADAPTIVE_EFFORTS:
-                            anthropic_options["outputConfig"] = {"effort": reasoning_effort}
+                            anthropic_options["outputConfig"] = {
+                                "effort": reasoning_effort
+                            }
                         model_spec["options"] = anthropic_options
                     else:
                         budget = self.ANTHROPIC_THINKING_BUDGETS.get(reasoning_effort)
@@ -891,7 +903,9 @@ class AgentBridge:
         )
 
         sse_url = f"{self.opencode_base_url}/event"
-        async_url = f"{self.opencode_base_url}/session/{self.opencode_session_id}/prompt_async"
+        async_url = (
+            f"{self.opencode_base_url}/session/{self.opencode_session_id}/prompt_async"
+        )
 
         cumulative_text: dict[str, str] = {}
         emitted_tool_states: set[str] = set()
@@ -996,7 +1010,9 @@ class AgentBridge:
                 async with self.http_client.stream(
                     "GET",
                     sse_url,
-                    timeout=httpx.Timeout(None, connect=self.HTTP_CONNECT_TIMEOUT, read=None),
+                    timeout=httpx.Timeout(
+                        None, connect=self.HTTP_CONNECT_TIMEOUT, read=None
+                    ),
                 ) as sse_response:
                     if sse_response.status_code != 200:
                         raise SSEConnectionError(
@@ -1020,7 +1036,9 @@ class AgentBridge:
                             f"Async prompt failed: {prompt_response.status_code} - {error_body}"
                         )
 
-                    async for event in self._parse_sse_stream(sse_response, timeout_ctx):
+                    async for event in self._parse_sse_stream(
+                        sse_response, timeout_ctx
+                    ):
                         event_type = event.get("type")
                         props = event.get("properties", {})
 
@@ -1032,7 +1050,10 @@ class AgentBridge:
                                 info = props.get("info", {})
                                 child_id = info.get("id")
                                 child_parent = info.get("parentID")
-                                if child_id and child_parent == self.opencode_session_id:
+                                if (
+                                    child_id
+                                    and child_parent == self.opencode_session_id
+                                ):
                                     tracked_child_session_ids.add(child_id)
                                     self.log.info(
                                         "bridge.child_session_detected",
@@ -1043,9 +1064,9 @@ class AgentBridge:
                                 # and non-matching events would just fall through to no-op.
                                 continue
 
-                            event_session_id = props.get("sessionID") or props.get("part", {}).get(
-                                "sessionID"
-                            )
+                            event_session_id = props.get("sessionID") or props.get(
+                                "part", {}
+                            ).get("sessionID")
                             is_child = event_session_id in tracked_child_session_ids
                             if (
                                 not event_session_id
@@ -1061,8 +1082,12 @@ class AgentBridge:
                                         role = info.get("role", "")
                                         finish = info.get("finish", "")
 
-                                        parent_matches = parent_id == opencode_message_id
-                                        is_compaction_summary = info.get("summary") is True
+                                        parent_matches = (
+                                            parent_id == opencode_message_id
+                                        )
+                                        is_compaction_summary = (
+                                            info.get("summary") is True
+                                        )
 
                                         self.log.debug(
                                             "bridge.message_updated",
@@ -1078,14 +1103,19 @@ class AgentBridge:
                                             # OR compaction happened and this isn't the
                                             # compaction summary itself
                                             if parent_matches or (
-                                                compaction_occurred and not is_compaction_summary
+                                                compaction_occurred
+                                                and not is_compaction_summary
                                             ):
                                                 allowed_assistant_msg_ids.add(oc_msg_id)
-                                                pending = pending_parts.pop(oc_msg_id, [])
+                                                pending = pending_parts.pop(
+                                                    oc_msg_id, []
+                                                )
                                                 if pending:
                                                     pending_parts_total -= len(pending)
                                                     for part, delta in pending:
-                                                        for part_event in handle_part(part, delta):
+                                                        for part_event in handle_part(
+                                                            part, delta
+                                                        ):
                                                             yield part_event
 
                                         if finish and finish not in ("tool-calls", ""):
@@ -1126,7 +1156,11 @@ class AgentBridge:
                                             if isinstance(metadata, dict)
                                             else None
                                         )
-                                        if child_sid and child_sid not in tracked_child_session_ids:
+                                        if (
+                                            child_sid
+                                            and child_sid
+                                            not in tracked_child_session_ids
+                                        ):
                                             tracked_child_session_ids.add(child_sid)
                                             self.log.info(
                                                 "bridge.child_session_detected",
@@ -1136,7 +1170,9 @@ class AgentBridge:
 
                                     if oc_msg_id in allowed_assistant_msg_ids:
                                         if part_session_id in tracked_child_session_ids:
-                                            for ev in handle_part(part, delta, is_subtask=True):
+                                            for ev in handle_part(
+                                                part, delta, is_subtask=True
+                                            ):
                                                 yield ev
                                         else:
                                             for part_event in handle_part(part, delta):
@@ -1154,7 +1190,9 @@ class AgentBridge:
                                             elapsed_s=round(elapsed, 1),
                                             tracked_msgs=len(allowed_assistant_msg_ids),
                                         )
-                                        async for final_event in self._fetch_final_message_state(
+                                        async for (
+                                            final_event
+                                        ) in self._fetch_final_message_state(
                                             message_id,
                                             opencode_message_id,
                                             cumulative_text,
@@ -1178,7 +1216,9 @@ class AgentBridge:
                                             elapsed_s=round(elapsed, 1),
                                             tracked_msgs=len(allowed_assistant_msg_ids),
                                         )
-                                        async for final_event in self._fetch_final_message_state(
+                                        async for (
+                                            final_event
+                                        ) in self._fetch_final_message_state(
                                             message_id,
                                             opencode_message_id,
                                             cumulative_text,
@@ -1194,7 +1234,9 @@ class AgentBridge:
                                         error_msg = self._extract_error_message(
                                             props.get("error", {})
                                         )
-                                        self.log.error("bridge.session_error", error_msg=error_msg)
+                                        self.log.error(
+                                            "bridge.session_error", error_msg=error_msg
+                                        )
                                         yield {
                                             "type": "error",
                                             "error": error_msg or "Unknown error",
@@ -1235,7 +1277,9 @@ class AgentBridge:
                                 elapsed_ms=int(elapsed * 1000),
                                 message_id=message_id,
                             )
-                            await self._request_opencode_stop(reason="prompt_max_duration_timeout")
+                            await self._request_opencode_stop(
+                                reason="prompt_max_duration_timeout"
+                            )
                             async for final_event in self._fetch_final_message_state(
                                 message_id,
                                 opencode_message_id,
@@ -1305,7 +1349,9 @@ class AgentBridge:
         if not self.http_client or not self.opencode_session_id:
             return
 
-        messages_url = f"{self.opencode_base_url}/session/{self.opencode_session_id}/message"
+        messages_url = (
+            f"{self.opencode_base_url}/session/{self.opencode_session_id}/message"
+        )
 
         try:
             response = await self.http_client.get(
@@ -1396,8 +1442,12 @@ class AgentBridge:
 
     async def _handle_push(self, cmd: dict[str, Any]) -> None:
         """Handle push command using provider-generated push spec."""
-        push_spec = cmd.get("pushSpec") if isinstance(cmd.get("pushSpec"), dict) else None
-        branch_name = str(push_spec.get("targetBranch", "")).strip() if push_spec else ""
+        push_spec = (
+            cmd.get("pushSpec") if isinstance(cmd.get("pushSpec"), dict) else None
+        )
+        branch_name = (
+            str(push_spec.get("targetBranch", "")).strip() if push_spec else ""
+        )
 
         self.log.info(
             "git.push_start",
@@ -1556,7 +1606,9 @@ class AgentBridge:
 
     async def _configure_git_identity(self, user: GitUser) -> None:
         """Configure git identity for commit attribution."""
-        self.log.debug("git.identity_configure", git_name=user.name, git_email=user.email)
+        self.log.debug(
+            "git.identity_configure", git_name=user.name, git_email=user.email
+        )
 
         repo_dirs = list(self.repo_path.glob("*/.git"))
         if not repo_dirs:
@@ -1706,7 +1758,9 @@ async def main():
     """Entry point for bridge process."""
     parser = argparse.ArgumentParser(description="Open-Inspect Agent Bridge")
     parser.add_argument("--sandbox-id", required=True, help="Sandbox ID")
-    parser.add_argument("--session-id", required=True, help="Session ID for WebSocket connection")
+    parser.add_argument(
+        "--session-id", required=True, help="Session ID for WebSocket connection"
+    )
     parser.add_argument("--control-plane", required=True, help="Control plane URL")
     parser.add_argument("--token", required=True, help="Auth token")
     parser.add_argument("--opencode-port", type=int, default=4096, help="OpenCode port")

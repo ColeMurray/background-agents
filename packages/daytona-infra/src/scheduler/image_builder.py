@@ -264,8 +264,12 @@ async def build_repo_image(
             raise BuildError(f"Build sandbox timed out after {max_wait}s")
 
         # Snapshot the running sandbox's filesystem to S3
-        handle.provider_sandbox.process.exec("tar czf /tmp/build-snapshot.tar.gz -C /workspace .")
-        snapshot_data = handle.provider_sandbox.filesystem.download("/tmp/build-snapshot.tar.gz")
+        handle.provider_sandbox.process.exec(
+            "tar czf /tmp/build-snapshot.tar.gz -C /workspace ."
+        )
+        snapshot_data = handle.provider_sandbox.filesystem.download(
+            "/tmp/build-snapshot.tar.gz"
+        )
 
         snapshot_key = f"builds/{repo_owner}/{repo_name}/{build_id}.tar.gz"
         s3_client.put_object(
@@ -515,7 +519,9 @@ async def rebuild_repo_images(
 
     try:
         # 1. Get enabled repos
-        enabled_data = await _api_get(f"{control_plane_url}/repo-images/enabled-repos", secret)
+        enabled_data = await _api_get(
+            f"{control_plane_url}/repo-images/enabled-repos", secret
+        )
         enabled_repos: list[dict] = enabled_data.get("repos", [])
 
         if not enabled_repos:

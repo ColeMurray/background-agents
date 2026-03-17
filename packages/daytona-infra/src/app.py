@@ -86,7 +86,9 @@ async def lifespan(application: FastAPI):
 
     # Create S3 client
     application.state.s3 = _create_s3_client(config)
-    log.info("app.s3_client_ready", endpoint=config.s3_endpoint, bucket=config.s3_bucket)
+    log.info(
+        "app.s3_client_ready", endpoint=config.s3_endpoint, bucket=config.s3_bucket
+    )
 
     # Ensure S3 bucket exists
     try:

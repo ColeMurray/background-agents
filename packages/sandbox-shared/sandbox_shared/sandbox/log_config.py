@@ -72,7 +72,11 @@ class JSONFormatter(logging.Formatter):
         }
         # Merge extra fields from record.__dict__ (skip standard attrs)
         for key, value in record.__dict__.items():
-            if key not in _STANDARD_ATTRS and key not in output and not key.startswith("_"):
+            if (
+                key not in _STANDARD_ATTRS
+                and key not in output
+                and not key.startswith("_")
+            ):
                 output[key] = value
         # Extract exception info
         if record.exc_info and record.exc_info[1]:
