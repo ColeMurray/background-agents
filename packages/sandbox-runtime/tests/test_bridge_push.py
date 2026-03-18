@@ -140,7 +140,9 @@ async def test_handle_push_timeout_terminates_process_and_sends_error(tmp_path: 
         return await original_wait_for(coro, timeout=timeout)
 
     with (
-        patch("sandbox_runtime.bridge.asyncio.create_subprocess_exec", AsyncMock(return_value=process)),
+        patch(
+            "sandbox_runtime.bridge.asyncio.create_subprocess_exec", AsyncMock(return_value=process)
+        ),
         patch("sandbox_runtime.bridge.asyncio.wait_for", side_effect=timeout_first_wait_for),
     ):
         await bridge._handle_push(_push_command())
