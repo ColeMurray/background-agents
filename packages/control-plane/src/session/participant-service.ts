@@ -396,8 +396,8 @@ export class ParticipantService {
    *
    * Returns:
    * - `{ auth: SourceControlAuthContext }` on success
-   * - `{ auth: null }` when user has no OAuth token (caller falls back to manual flow)
-   * - `{ error, status }` on failure (token expired and refresh failed, or decryption error)
+   * - `{ auth: null }` when user has no usable OAuth token (caller falls back to app token)
+   * - `{ error, status }` on unexpected failure
    */
   async resolveAuthForPR(
     participant: ParticipantRow
@@ -423,14 +423,10 @@ export class ParticipantService {
       if (refreshed) {
         resolvedParticipant = refreshed;
       } else {
-        this.log.warn("SCM token refresh failed, returning auth error", {
+        this.log.warn("SCM token expired and refresh failed, falling back to app token", {
           user_id: resolvedParticipant.user_id,
         });
-        return {
-          error:
-            "Your source control token has expired and could not be refreshed. Please re-authenticate.",
-          status: 401,
-        };
+        return { auth: null };
       }
     }
 
@@ -451,14 +447,11 @@ export class ParticipantService {
         },
       };
     } catch (error) {
-      this.log.error("Failed to decrypt SCM token for PR creation", {
+      this.log.error("Failed to decrypt SCM token for PR creation, falling back to app token", {
         user_id: resolvedParticipant.user_id,
         error: error instanceof Error ? error : String(error),
       });
-      return {
-        error: "Failed to process source control token for PR creation.",
-        status: 500,
-      };
+      return { auth: null };
     }
   }
 }
