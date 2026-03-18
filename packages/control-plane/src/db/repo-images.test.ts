@@ -24,9 +24,9 @@ const QUERY_PATTERNS = {
   DELETE_BY_ID: /^DELETE FROM repo_images WHERE id = \?$/,
   UPDATE_FAILED: /^UPDATE repo_images SET status = 'failed', error_message = \? WHERE id = \?$/,
   SELECT_LATEST_READY:
-    /^SELECT \* FROM repo_images WHERE repo_owner = \? AND repo_name = \? AND status = 'ready' ORDER BY created_at DESC LIMIT 1$/,
+    /^SELECT ri\.\* FROM repo_images ri INNER JOIN repo_metadata rm ON ri\.repo_owner = rm\.repo_owner AND ri\.repo_name = rm\.repo_name WHERE ri\.repo_owner = \? AND ri\.repo_name = \? AND ri\.status = 'ready' AND rm\.image_build_enabled = 1 ORDER BY ri\.created_at DESC LIMIT 1$/,
   SELECT_LATEST_READY_WITH_BRANCH:
-    /^SELECT \* FROM repo_images WHERE repo_owner = \? AND repo_name = \? AND base_branch = \? AND status = 'ready' ORDER BY created_at DESC LIMIT 1$/,
+    /^SELECT ri\.\* FROM repo_images ri INNER JOIN repo_metadata rm ON ri\.repo_owner = rm\.repo_owner AND ri\.repo_name = rm\.repo_name WHERE ri\.repo_owner = \? AND ri\.repo_name = \? AND ri\.base_branch = \? AND ri\.status = 'ready' AND rm\.image_build_enabled = 1 ORDER BY ri\.created_at DESC LIMIT 1$/,
   SELECT_STATUS:
     /^SELECT \* FROM repo_images WHERE repo_owner = \? AND repo_name = \? ORDER BY created_at DESC LIMIT 10$/,
   SELECT_ALL_STATUS: /^SELECT \* FROM repo_images ORDER BY created_at DESC LIMIT 100$/,
@@ -41,6 +41,18 @@ function normalizeQuery(query: string): string {
 
 class FakeD1Database {
   private rows = new Map<string, RepoImageRow>();
+  private repoMetadata = new Map<string, { image_build_enabled: number }>();
+
+  setImageBuildEnabled(repoOwner: string, repoName: string, enabled: boolean) {
+    this.repoMetadata.set(`${repoOwner.toLowerCase()}/${repoName.toLowerCase()}`, {
+      image_build_enabled: enabled ? 1 : 0,
+    });
+  }
+
+  private isImageBuildEnabled(repoOwner: string, repoName: string): boolean {
+    const meta = this.repoMetadata.get(`${repoOwner.toLowerCase()}/${repoName.toLowerCase()}`);
+    return meta?.image_build_enabled === 1;
+  }
 
   prepare(query: string) {
     return new FakePreparedStatement(this, query);
@@ -74,6 +86,7 @@ class FakeD1Database {
 
     if (QUERY_PATTERNS.SELECT_LATEST_READY_WITH_BRANCH.test(normalized)) {
       const [owner, name, branch] = args as [string, string, string];
+      if (!this.isImageBuildEnabled(owner, name)) return null;
       let latest: RepoImageRow | null = null;
       for (const row of this.rows.values()) {
         if (
@@ -92,6 +105,7 @@ class FakeD1Database {
 
     if (QUERY_PATTERNS.SELECT_LATEST_READY.test(normalized)) {
       const [owner, name] = args as [string, string];
+      if (!this.isImageBuildEnabled(owner, name)) return null;
       let latest: RepoImageRow | null = null;
       for (const row of this.rows.values()) {
         if (row.repo_owner === owner && row.repo_name === name && row.status === "ready") {
@@ -301,6 +315,7 @@ describe("RepoImageStore", () => {
 
   describe("markReady", () => {
     it("updates build to ready with provider image details", async () => {
+      db.setImageBuildEnabled("acme", "repo", true);
       await store.registerBuild({
         id: "img-1",
         repoOwner: "acme",
@@ -321,6 +336,7 @@ describe("RepoImageStore", () => {
     });
 
     it("replaces previous ready image and returns its ID", async () => {
+      db.setImageBuildEnabled("acme", "repo", true);
       await store.registerBuild({
         id: "img-old",
         repoOwner: "acme",
@@ -384,11 +400,13 @@ describe("RepoImageStore", () => {
 
   describe("getLatestReady", () => {
     it("returns null when no ready images exist", async () => {
+      db.setImageBuildEnabled("acme", "repo", true);
       const result = await store.getLatestReady("acme", "repo");
       expect(result).toBeNull();
     });
 
     it("returns null when only building/failed images exist", async () => {
+      db.setImageBuildEnabled("acme", "repo", true);
       await store.registerBuild({
         id: "img-1",
         repoOwner: "acme",
@@ -401,6 +419,7 @@ describe("RepoImageStore", () => {
     });
 
     it("returns the most recent ready image", async () => {
+      db.setImageBuildEnabled("acme", "repo", true);
       await store.registerBuild({
         id: "img-1",
         repoOwner: "acme",
@@ -415,7 +434,36 @@ describe("RepoImageStore", () => {
       expect(result!.provider_image_id).toBe("modal-img-1");
     });
 
+    it("returns null when image_build_enabled is false", async () => {
+      db.setImageBuildEnabled("acme", "repo", false);
+      await store.registerBuild({
+        id: "img-1",
+        repoOwner: "acme",
+        repoName: "repo",
+        baseBranch: "main",
+      });
+      await store.markReady("img-1", "modal-img-1", "sha1", 30);
+
+      const result = await store.getLatestReady("acme", "repo");
+      expect(result).toBeNull();
+    });
+
+    it("returns null when no repo_metadata row exists", async () => {
+      // No setImageBuildEnabled call — simulates repo with no metadata
+      await store.registerBuild({
+        id: "img-1",
+        repoOwner: "acme",
+        repoName: "repo",
+        baseBranch: "main",
+      });
+      await store.markReady("img-1", "modal-img-1", "sha1", 30);
+
+      const result = await store.getLatestReady("acme", "repo");
+      expect(result).toBeNull();
+    });
+
     it("is case-insensitive for repo owner and name", async () => {
+      db.setImageBuildEnabled("acme", "repo", true);
       await store.registerBuild({
         id: "img-1",
         repoOwner: "acme",
@@ -429,6 +477,7 @@ describe("RepoImageStore", () => {
     });
 
     it("filters by baseBranch when provided", async () => {
+      db.setImageBuildEnabled("acme", "repo", true);
       await store.registerBuild({
         id: "img-main",
         repoOwner: "acme",
@@ -470,6 +519,7 @@ describe("RepoImageStore", () => {
 
   describe("markReady branch isolation", () => {
     it("only replaces the previous ready image on the same branch", async () => {
+      db.setImageBuildEnabled("acme", "repo", true);
       // Build and mark ready on main
       await store.registerBuild({
         id: "img-main",

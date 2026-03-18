@@ -90,14 +90,22 @@ export class RepoImageStore {
     if (baseBranch) {
       return this.db
         .prepare(
-          "SELECT * FROM repo_images WHERE repo_owner = ? AND repo_name = ? AND base_branch = ? AND status = 'ready' ORDER BY created_at DESC LIMIT 1"
+          `SELECT ri.* FROM repo_images ri
+           INNER JOIN repo_metadata rm ON ri.repo_owner = rm.repo_owner AND ri.repo_name = rm.repo_name
+           WHERE ri.repo_owner = ? AND ri.repo_name = ? AND ri.base_branch = ? AND ri.status = 'ready'
+           AND rm.image_build_enabled = 1
+           ORDER BY ri.created_at DESC LIMIT 1`
         )
         .bind(repoOwner.toLowerCase(), repoName.toLowerCase(), baseBranch)
         .first<RepoImage>();
     }
     return this.db
       .prepare(
-        "SELECT * FROM repo_images WHERE repo_owner = ? AND repo_name = ? AND status = 'ready' ORDER BY created_at DESC LIMIT 1"
+        `SELECT ri.* FROM repo_images ri
+         INNER JOIN repo_metadata rm ON ri.repo_owner = rm.repo_owner AND ri.repo_name = rm.repo_name
+         WHERE ri.repo_owner = ? AND ri.repo_name = ? AND ri.status = 'ready'
+         AND rm.image_build_enabled = 1
+         ORDER BY ri.created_at DESC LIMIT 1`
       )
       .bind(repoOwner.toLowerCase(), repoName.toLowerCase())
       .first<RepoImage>();
