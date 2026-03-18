@@ -28,15 +28,78 @@ declare module "next-auth/jwt" {
 export const authOptions: NextAuthOptions = {
   debug: process.env.NODE_ENV === "development" || process.env.NEXTAUTH_DEBUG === "true",
   providers: [
-    GitHubProvider({
-      clientId: process.env.GITHUB_CLIENT_ID!,
-      clientSecret: process.env.GITHUB_CLIENT_SECRET!,
-      authorization: {
-        params: {
-          scope: "read:user user:email repo",
+    (() => {
+      const ghHostname = process.env.GITHUB_HOSTNAME;
+      const isGHES = ghHostname && ghHostname !== "github.com";
+      // Browser-side: user's browser redirects here (must be reachable by user)
+      const browserBase = isGHES ? `https://${ghHostname}` : "https://github.com";
+      // Server-side: Worker calls these for token exchange & API (must be reachable from edge)
+      // GHES is in a private VPC, so route through Cloudflare Tunnel
+      const ghesProxyUrl = process.env.GHES_TUNNEL_URL;
+      const serverWebBase = isGHES && ghesProxyUrl ? ghesProxyUrl : browserBase;
+      const serverApiBase =
+        isGHES && ghesProxyUrl
+          ? `${ghesProxyUrl}/api/v3`
+          : isGHES
+            ? `https://${ghHostname}/api/v3`
+            : "https://api.github.com";
+
+      return GitHubProvider({
+        clientId: process.env.GITHUB_CLIENT_ID!,
+        clientSecret: process.env.GITHUB_CLIENT_SECRET!,
+        authorization: {
+          url: `${browserBase}/login/oauth/authorize`,
+          params: { scope: "read:user user:email repo" },
         },
-      },
-    }),
+        token: {
+          url: `${serverWebBase}/login/oauth/access_token`,
+          async request(context: any) {
+            const { params, provider } = context;
+            const res = await fetch(provider.token.url, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Accept: "application/json",
+              },
+              body: JSON.stringify({
+                client_id: provider.clientId,
+                client_secret: provider.clientSecret,
+                code: params.code,
+                redirect_uri: params.redirect_uri,
+              }),
+            });
+            if (!res.ok) {
+              const text = await res.text();
+              throw new Error(`Token exchange failed: ${res.status} ${text}`);
+            }
+            const tokens = await res.json();
+            return { tokens };
+          },
+        },
+        userinfo: {
+          url: `${serverApiBase}/user`,
+          async request(context: any) {
+            const { tokens } = context;
+            const res = await fetch(`${serverApiBase}/user`, {
+              headers: { Authorization: `token ${tokens.access_token}` },
+            });
+            if (!res.ok) throw new Error(`GitHub user fetch failed: ${res.status}`);
+            const profile: Record<string, unknown> = await res.json();
+            if (!profile.email) {
+              const emailsRes = await fetch(`${serverApiBase}/user/emails`, {
+                headers: { Authorization: `token ${tokens.access_token}` },
+              });
+              if (emailsRes.ok) {
+                const emails: { email: string; primary: boolean }[] = await emailsRes.json();
+                const picked = emails.find((e) => e.primary) ?? emails[0];
+                if (picked) profile.email = picked.email;
+              }
+            }
+            return profile;
+          },
+        },
+      });
+    })(),
   ],
   callbacks: {
     async signIn({ profile, user }) {

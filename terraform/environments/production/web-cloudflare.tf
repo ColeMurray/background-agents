@@ -64,6 +64,8 @@ resource "local_file" "web_app_wrangler_production" {
 
     [vars]
     GITHUB_CLIENT_ID = "${var.github_client_id}"
+    GITHUB_HOSTNAME = "${var.github_hostname}"
+    GHES_TUNNEL_URL = "${var.ghes_tunnel_url}"
     NEXTAUTH_URL = "${local.web_app_url}"
     CONTROL_PLANE_URL = "${local.control_plane_url}"
     NEXT_PUBLIC_WS_URL = "${local.ws_url}"

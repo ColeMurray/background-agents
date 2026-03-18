@@ -33,9 +33,15 @@ from .types import GitUser
 
 configure_logging()
 
+
 # Fallback git identity when prompt author has no SCM name/email configured.
 # Matches the co-author trailer used in generateCommitMessage (shared/git.ts).
-FALLBACK_GIT_USER = GitUser(name="OpenInspect", email="open-inspect@noreply.github.com")
+def _fallback_noreply_domain() -> str:
+    host = os.environ.get("GITHUB_HOSTNAME", "github.com").lower().rstrip("/")
+    return f"noreply.{host}" if host != "github.com" else "noreply.github.com"
+
+
+FALLBACK_GIT_USER = GitUser(name="OpenInspect", email=f"open-inspect@{_fallback_noreply_domain()}")
 
 
 class OpenCodeIdentifier:

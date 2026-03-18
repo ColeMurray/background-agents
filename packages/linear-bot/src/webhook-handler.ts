@@ -268,8 +268,9 @@ async function handleNewSession(
   if (!repoOwner) {
     const repos = await getAvailableRepos(env, traceId);
     if (repos.length > 0) {
+      const gitHostname = (env.GITHUB_HOSTNAME || "github.com").toLowerCase().replace(/\/+$/, "");
       const candidates = repos.map((r) => ({
-        hostname: "github.com",
+        hostname: gitHostname,
         repositoryFullName: `${r.owner}/${r.name}`,
       }));
 

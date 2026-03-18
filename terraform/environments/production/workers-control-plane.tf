@@ -60,6 +60,8 @@ module "control_plane_worker" {
     { name = "WORKER_URL", value = local.control_plane_url },
     { name = "MODAL_WORKSPACE", value = var.modal_workspace },
     { name = "DEPLOYMENT_NAME", value = var.deployment_name },
+    { name = "GITHUB_HOSTNAME", value = var.github_hostname },
+    { name = "GHES_TUNNEL_URL", value = var.ghes_tunnel_url },
   ]
 
   secrets = [

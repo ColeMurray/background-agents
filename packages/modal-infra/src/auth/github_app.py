@@ -9,10 +9,27 @@ Generates short-lived installation access tokens for:
 Tokens are valid for ~1 hour.
 """
 
+import os
 import time
 
 import httpx
 import jwt
+
+
+def resolve_api_base(hostname: str | None = None) -> str:
+    """Resolve GitHub API base URL from a hostname (supports GHES).
+
+    Args:
+        hostname: e.g. "github.com" or "github.example.com". Reads
+                  GITHUB_HOSTNAME env var as fallback. Defaults to github.com.
+
+    Returns:
+        API base URL without trailing slash.
+    """
+    host = (hostname or os.environ.get("GITHUB_HOSTNAME", "github.com")).lower().rstrip("/")
+    if host == "github.com":
+        return "https://api.github.com"
+    return f"https://{host}/api/v3"
 
 
 def generate_jwt(app_id: str, private_key: str) -> str:
@@ -35,13 +52,18 @@ def generate_jwt(app_id: str, private_key: str) -> str:
     return jwt.encode(payload, private_key, algorithm="RS256")
 
 
-def get_installation_token(jwt_token: str, installation_id: str) -> str:
+def get_installation_token(
+    jwt_token: str,
+    installation_id: str,
+    api_base: str | None = None,
+) -> str:
     """
     Exchange a JWT for an installation access token.
 
     Args:
         jwt_token: The signed JWT
         installation_id: The GitHub App installation ID
+        api_base: GitHub API base URL (defaults via GITHUB_HOSTNAME env var)
 
     Returns:
         Installation access token (valid for 1 hour)
@@ -49,7 +71,8 @@ def get_installation_token(jwt_token: str, installation_id: str) -> str:
     Raises:
         httpx.HTTPStatusError: If the GitHub API request fails
     """
-    url = f"https://api.github.com/app/installations/{installation_id}/access_tokens"
+    base = api_base or resolve_api_base()
+    url = f"{base}/app/installations/{installation_id}/access_tokens"
     headers = {
         "Authorization": f"Bearer {jwt_token}",
         "Accept": "application/vnd.github+json",
@@ -66,6 +89,7 @@ def generate_installation_token(
     app_id: str,
     private_key: str,
     installation_id: str,
+    api_base: str | None = None,
 ) -> str:
     """
     Generate a fresh GitHub App installation token.
@@ -78,6 +102,7 @@ def generate_installation_token(
         app_id: The GitHub App's ID
         private_key: The App's private key (PEM format)
         installation_id: The GitHub App installation ID
+        api_base: GitHub API base URL (defaults via GITHUB_HOSTNAME env var)
 
     Returns:
         Installation access token (valid for 1 hour)
@@ -87,4 +112,4 @@ def generate_installation_token(
         jwt.PyJWTError: If JWT encoding fails
     """
     jwt_token = generate_jwt(app_id, private_key)
-    return get_installation_token(jwt_token, installation_id)
+    return get_installation_token(jwt_token, installation_id, api_base)

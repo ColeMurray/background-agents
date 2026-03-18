@@ -10,6 +10,7 @@
  */
 
 import type { InstallationRepository } from "@open-inspect/shared";
+import { resolveGitHubUrls } from "../github-urls";
 
 /** Timeout for individual GitHub API requests (ms). */
 export const GITHUB_FETCH_TIMEOUT_MS = 60_000;
@@ -82,6 +83,8 @@ export interface GitHubAppConfig {
   appId: string;
   privateKey: string; // PEM format
   installationId: string;
+  /** GitHub REST API base URL. Defaults to https://api.github.com. */
+  apiBase?: string;
 }
 
 /**
@@ -215,9 +218,11 @@ export async function generateAppJwt(appId: string, privateKey: string): Promise
  */
 async function getInstallationTokenWithMetadata(
   jwt: string,
-  installationId: string
+  installationId: string,
+  apiBase?: string
 ): Promise<InstallationTokenResponse> {
-  const url = `https://api.github.com/app/installations/${installationId}/access_tokens`;
+  const base = apiBase ?? resolveGitHubUrls().apiBase;
+  const url = `${base}/app/installations/${installationId}/access_tokens`;
 
   const response = await fetchWithTimeout(url, {
     method: "POST",
@@ -318,7 +323,11 @@ async function refreshInstallationToken(
 ): Promise<CachedInstallationToken> {
   const nowEpochMs = Date.now();
   const jwt = await generateAppJwt(config.appId, config.privateKey);
-  const tokenData = await getInstallationTokenWithMetadata(jwt, config.installationId);
+  const tokenData = await getInstallationTokenWithMetadata(
+    jwt,
+    config.installationId,
+    config.apiBase
+  );
   const parsedExpiresAtEpochMs = Date.parse(tokenData.expires_at);
   const cached: CachedInstallationToken = {
     token: tokenData.token,
@@ -419,10 +428,11 @@ export async function listInstallationRepositories(
     "User-Agent": "Open-Inspect",
   };
 
+  const apiBase = config.apiBase ?? resolveGitHubUrls().apiBase;
   const fetchPage = async (
     page: number
   ): Promise<{ data: ListInstallationReposResponse; timing: GitHubPageTiming }> => {
-    const url = `https://api.github.com/installation/repositories?per_page=${perPage}&page=${page}`;
+    const url = `${apiBase}/installation/repositories?per_page=${perPage}&page=${page}`;
     const pageStart = performance.now();
 
     const response = await fetchWithTimeout(url, { headers });
@@ -513,7 +523,8 @@ export async function getInstallationRepository(
 
   for (let attempt = 0; attempt < 2; attempt++) {
     const token = await getCachedInstallationToken(config, env, { forceRefresh });
-    response = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}`, {
+    const apiBase = config.apiBase ?? resolveGitHubUrls().apiBase;
+    response = await fetchWithTimeout(`${apiBase}/repos/${owner}/${repo}`, {
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: "application/vnd.github+json",
@@ -570,13 +581,14 @@ export async function listRepositoryBranches(
   env?: InstallationTokenCacheBindings
 ): Promise<{ name: string }[]> {
   const token = await getCachedInstallationToken(config, env);
+  const apiBase = config.apiBase ?? resolveGitHubUrls().apiBase;
   const branches: { name: string }[] = [];
   let page = 1;
 
   // Paginate through branches (100 per page, cap at 500)
   while (branches.length < 500) {
     const response = await fetchWithTimeout(
-      `https://api.github.com/repos/${owner}/${repo}/branches?per_page=100&page=${page}`,
+      `${apiBase}/repos/${owner}/${repo}/branches?per_page=100&page=${page}`,
       {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -620,14 +632,23 @@ export function getGitHubAppConfig(env: {
   GITHUB_APP_ID?: string;
   GITHUB_APP_PRIVATE_KEY?: string;
   GITHUB_APP_INSTALLATION_ID?: string;
+  GITHUB_HOSTNAME?: string;
+  GHES_TUNNEL_URL?: string;
 }): GitHubAppConfig | null {
   if (!isGitHubAppConfigured(env)) {
     return null;
   }
 
+  const urls = resolveGitHubUrls(env.GITHUB_HOSTNAME);
+  // When GHES is behind a private VPC, use the tunnel proxy for API calls
+  const apiBase = env.GHES_TUNNEL_URL
+    ? `${env.GHES_TUNNEL_URL.replace(/\/+$/, "")}/api/v3`
+    : urls.apiBase;
+
   return {
     appId: env.GITHUB_APP_ID!,
     privateKey: env.GITHUB_APP_PRIVATE_KEY!,
     installationId: env.GITHUB_APP_INSTALLATION_ID!,
+    apiBase,
   };
 }

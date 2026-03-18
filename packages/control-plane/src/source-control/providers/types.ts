@@ -3,6 +3,7 @@
  */
 
 import type { GitHubAppConfig } from "../../auth/github-app";
+import type { GitHubUrls } from "../../github-urls";
 
 /**
  * Configuration for GitHubSourceControlProvider.
@@ -12,4 +13,6 @@ export interface GitHubProviderConfig {
   appConfig?: GitHubAppConfig;
   /** KV namespace for caching installation tokens */
   kvCache?: KVNamespace;
+  /** Resolved GitHub URLs for GHES support. Defaults to github.com. */
+  urls?: GitHubUrls;
 }

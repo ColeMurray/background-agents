@@ -30,6 +30,7 @@ export interface Env {
   LINEAR_API_KEY?: string; // kept for backward compat / fallback
   ANTHROPIC_API_KEY: string;
   INTERNAL_CALLBACK_SECRET?: string;
+  GITHUB_HOSTNAME?: string;
   LOG_LEVEL?: string;
 }
 

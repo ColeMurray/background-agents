@@ -47,6 +47,7 @@ module "linear_bot_worker" {
     { name = "DEFAULT_MODEL", value = "claude-sonnet-4-6" },
     { name = "LINEAR_CLIENT_ID", value = var.linear_client_id },
     { name = "WORKER_URL", value = "https://open-inspect-linear-bot-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev" },
+    { name = "GITHUB_HOSTNAME", value = var.github_hostname },
   ]
 
   secrets = [
