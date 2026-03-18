@@ -253,7 +253,7 @@ class TestRebuildRepoImages:
                 return_value="new-sha",
             ),
             patch(
-                "src.auth.github_app.generate_installation_token",
+                "sandbox_runtime.auth.github_app.generate_installation_token",
                 return_value="gh-token",
             ),
         ):
@@ -313,7 +313,7 @@ class TestRebuildRepoImages:
                 return_value="same-sha",
             ),
             patch(
-                "src.auth.github_app.generate_installation_token",
+                "sandbox_runtime.auth.github_app.generate_installation_token",
                 return_value="gh-token",
             ),
         ):
@@ -366,7 +366,7 @@ class TestRebuildRepoImages:
                 return_value="abc123",
             ),
             patch(
-                "src.auth.github_app.generate_installation_token",
+                "sandbox_runtime.auth.github_app.generate_installation_token",
                 return_value="gh-token",
             ),
         ):

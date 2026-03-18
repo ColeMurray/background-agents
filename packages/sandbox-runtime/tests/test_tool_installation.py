@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
-from src.sandbox.entrypoint import SandboxSupervisor
+from sandbox_runtime.entrypoint import SandboxSupervisor
 
 
 def _make_supervisor() -> SandboxSupervisor:
@@ -25,11 +25,11 @@ def _make_supervisor() -> SandboxSupervisor:
 @contextmanager
 def _patch_paths(legacy: Path | str, tools: Path | str, modules: Path | str = "/nonexistent"):
     """Patch Path() calls inside _install_tools to redirect to test paths."""
-    with patch("src.sandbox.entrypoint.Path") as MockPath:
+    with patch("sandbox_runtime.entrypoint.Path") as MockPath:
         MockPath.side_effect = lambda p: Path(
             str(p)
-            .replace("/app/sandbox/inspect-plugin.js", str(legacy))
-            .replace("/app/sandbox/tools", str(tools))
+            .replace("/app/sandbox_runtime/plugins/inspect-plugin.js", str(legacy))
+            .replace("/app/sandbox_runtime/tools", str(tools))
             .replace("/usr/lib/node_modules", str(modules))
         )
         yield

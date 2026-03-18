@@ -1,11 +1,8 @@
-"""Authentication utilities for Open-Inspect.
+"""Authentication utilities for Open-Inspect sandbox runtime."""
 
-Re-exports from sandbox_runtime.auth for backward compatibility.
-"""
-
-from sandbox_runtime.auth import (
+from .github_app import generate_installation_token
+from .internal import (
     AuthConfigurationError,
-    generate_installation_token,
     generate_internal_token,
     require_secret,
     verify_internal_token,

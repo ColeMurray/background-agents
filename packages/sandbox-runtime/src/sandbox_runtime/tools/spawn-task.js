@@ -4,9 +4,9 @@
  * The child inherits the parent's repository and runs independently.
  * Returns immediately with the task ID so the parent can continue working.
  */
-import { tool } from "@opencode-ai/plugin"
-import { z } from "zod"
-import { bridgeFetch, extractError } from "./_bridge-client.js"
+import { tool } from "@opencode-ai/plugin";
+import { z } from "zod";
+import { bridgeFetch, extractError } from "./_bridge-client.js";
 
 export default tool({
   name: "spawn-task",
@@ -22,33 +22,35 @@ export default tool({
     model: z
       .string()
       .optional()
-      .describe("Override the LLM model for the child (e.g. 'anthropic/claude-sonnet-4-6'). Defaults to the parent's model."),
+      .describe(
+        "Override the LLM model for the child (e.g. 'anthropic/claude-sonnet-4-6'). Defaults to the parent's model."
+      ),
   },
   async execute(args) {
     try {
-      const body = { title: args.title, prompt: args.prompt }
+      const body = { title: args.title, prompt: args.prompt };
       if (args.model) {
-        body.model = args.model
+        body.model = args.model;
       }
 
       const response = await bridgeFetch("/children", {
         method: "POST",
         body: JSON.stringify(body),
-      })
+      });
 
       if (!response.ok) {
-        const errorMessage = await extractError(response)
+        const errorMessage = await extractError(response);
 
         if (response.status === 403) {
-          return `Cannot spawn task: ${errorMessage}. This may be a depth limit or repository restriction.`
+          return `Cannot spawn task: ${errorMessage}. This may be a depth limit or repository restriction.`;
         }
         if (response.status === 429) {
-          return `Rate limited: ${errorMessage}. Wait a moment before spawning another task.`
+          return `Rate limited: ${errorMessage}. Wait a moment before spawning another task.`;
         }
-        return `Failed to spawn task: ${errorMessage} (HTTP ${response.status})`
+        return `Failed to spawn task: ${errorMessage} (HTTP ${response.status})`;
       }
 
-      const result = await response.json()
+      const result = await response.json();
       return [
         `Task spawned successfully.`,
         ``,
@@ -56,9 +58,9 @@ export default tool({
         `  Status:  PENDING`,
         ``,
         `Use get-task-status with this task ID to check progress.`,
-      ].join("\n")
+      ].join("\n");
     } catch (error) {
-      return `Failed to spawn task: ${error instanceof Error ? error.message : String(error)}`
+      return `Failed to spawn task: ${error instanceof Error ? error.message : String(error)}`;
     }
   },
-})
+});

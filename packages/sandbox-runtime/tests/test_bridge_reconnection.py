@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.sandbox.bridge import AgentBridge, SessionTerminatedError
+from sandbox_runtime.bridge import AgentBridge, SessionTerminatedError
 
 
 class TestIsFatalConnectionError:

@@ -19,11 +19,12 @@ from dataclasses import dataclass
 
 import modal
 
+from sandbox_runtime.constants import CODE_SERVER_PORT
+from sandbox_runtime.log_config import get_logger
+from sandbox_runtime.types import SandboxStatus, SessionConfig
+
 from ..app import app, llm_secrets
 from ..images.base import base_image
-from .constants import CODE_SERVER_PORT
-from .log_config import get_logger
-from .types import SandboxStatus, SessionConfig
 
 log = get_logger("manager")
 
@@ -214,7 +215,7 @@ class SandboxManager:
         sandbox = await modal.Sandbox.create.aio(
             "python",
             "-m",
-            "sandbox.entrypoint",  # Run the supervisor entrypoint
+            "sandbox_runtime.entrypoint",  # Run the supervisor entrypoint
             **create_kwargs,
         )
 
@@ -290,7 +291,7 @@ class SandboxManager:
         sandbox = await modal.Sandbox.create.aio(
             "python",
             "-m",
-            "sandbox.entrypoint",
+            "sandbox_runtime.entrypoint",
             image=base_image,
             app=app,
             secrets=[],
@@ -529,7 +530,7 @@ class SandboxManager:
         sandbox = await modal.Sandbox.create.aio(
             "python",
             "-m",
-            "sandbox.entrypoint",
+            "sandbox_runtime.entrypoint",
             **create_kwargs,
         )
 

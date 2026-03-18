@@ -14,10 +14,10 @@ from pathlib import Path
 
 import modal
 
-# Get the path to the sandbox code
-SANDBOX_DIR = Path(__file__).parent.parent / "sandbox"
+import sandbox_runtime
 
-# Plugin is now bundled with sandbox code at /app/sandbox/inspect-plugin.js
+# Get the path to the sandbox runtime code (provider-agnostic)
+SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
 
 # OpenCode version to install
 OPENCODE_VERSION = "latest"
@@ -142,10 +142,10 @@ base_image = (
             "NODE_PATH": "/usr/lib/node_modules",
         }
     )
-    # Add sandbox code to the image (includes plugin at /app/sandbox/inspect-plugin.js)
+    # Add sandbox runtime code to the image (provider-agnostic bridge, entrypoint, tools, plugins)
     .add_local_dir(
-        str(SANDBOX_DIR),
-        remote_path="/app/sandbox",
+        str(SANDBOX_RUNTIME_DIR),
+        remote_path="/app/sandbox_runtime",
     )
 )
 

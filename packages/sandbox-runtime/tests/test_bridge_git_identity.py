@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
-from src.sandbox.bridge import FALLBACK_GIT_USER, AgentBridge
-from src.sandbox.types import GitUser
+from sandbox_runtime.bridge import FALLBACK_GIT_USER, AgentBridge
+from sandbox_runtime.types import GitUser
 
 
 @pytest.fixture
@@ -198,7 +198,7 @@ class TestConfigureGitIdentity:
         email_proc.returncode = 0
 
         with patch(
-            "src.sandbox.bridge.asyncio.create_subprocess_exec",
+            "sandbox_runtime.bridge.asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
             side_effect=[name_proc, email_proc],
         ) as mock_exec:
@@ -245,7 +245,7 @@ class TestConfigureGitIdentity:
         failed_proc.returncode = 1
 
         with patch(
-            "src.sandbox.bridge.asyncio.create_subprocess_exec",
+            "sandbox_runtime.bridge.asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
             return_value=failed_proc,
         ) as mock_exec:
@@ -272,7 +272,7 @@ class TestConfigureGitIdentity:
         hanging_proc.kill = MagicMock()
 
         with patch(
-            "src.sandbox.bridge.asyncio.create_subprocess_exec",
+            "sandbox_runtime.bridge.asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
             return_value=hanging_proc,
         ) as mock_exec:

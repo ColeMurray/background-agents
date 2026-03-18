@@ -3,7 +3,7 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.sandbox.entrypoint import SandboxSupervisor
+from sandbox_runtime.entrypoint import SandboxSupervisor
 
 
 def _make_supervisor(tmp_path) -> SandboxSupervisor:

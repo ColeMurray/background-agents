@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.sandbox.bridge import AgentBridge
+from sandbox_runtime.bridge import AgentBridge
 from tests.conftest import MockResponse
 
 

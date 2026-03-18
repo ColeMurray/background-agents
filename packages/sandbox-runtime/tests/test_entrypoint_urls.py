@@ -2,7 +2,7 @@
 
 from unittest.mock import patch
 
-from src.sandbox.entrypoint import SandboxSupervisor
+from sandbox_runtime.entrypoint import SandboxSupervisor
 
 
 def _make_supervisor(env_overrides: dict[str, str] | None = None) -> SandboxSupervisor:

@@ -80,8 +80,36 @@ jobs:
       - name: Build web package
         run: npm run build -w @open-inspect/web
 
+  lint-python-sandbox-runtime:
+    name: Lint & Format (Python - sandbox-runtime)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: packages/sandbox-runtime
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run Ruff linter
+        run: ruff check src/
+
+      - name: Run Ruff formatter check
+        run: ruff format --check src/
+
   lint-python:
-    name: Lint & Format (Python)
+    name: Lint & Format (Python - modal-infra)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -100,6 +128,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install -e ../sandbox-runtime
           pip install -e ".[dev]"
 
       - name: Run Ruff linter
@@ -128,6 +157,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install -e ../sandbox-runtime
           pip install -e ".[dev]"
 
       - name: Run MyPy
@@ -170,8 +200,34 @@ jobs:
       - name: Run web tests
         run: npm test -w @open-inspect/web
 
+  test-python-sandbox-runtime:
+    name: Test (Python - sandbox-runtime)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [lint-python-sandbox-runtime]
+    defaults:
+      run:
+        working-directory: packages/sandbox-runtime
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run tests
+        run: pytest tests/ -v
+
   test-python:
-    name: Test (Python)
+    name: Test (Python - modal-infra)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [lint-python]
@@ -191,6 +247,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install -e ../sandbox-runtime
           pip install -e ".[dev]"
 
       - name: Run tests

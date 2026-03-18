@@ -4,14 +4,14 @@
 
 # Calculate hash of Modal source files for change detection
 # Uses sha256sum (Linux) or shasum (macOS) for cross-platform compatibility
-# Includes both .py and .js files (sandbox plugins are JavaScript)
+# Includes .py, .js, and .ts files (sandbox plugins and tools)
 data "external" "modal_source_hash" {
   program = ["bash", "-c", <<-EOF
-    cd ${var.project_root}/packages/modal-infra
+    cd ${var.project_root}
     if command -v sha256sum &> /dev/null; then
-      hash=$(find src -type f \( -name "*.py" -o -name "*.js" \) -exec sha256sum {} \; | sha256sum | cut -d' ' -f1)
+      hash=$(find packages/modal-infra/src packages/sandbox-runtime/src -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \) -exec sha256sum {} \; | sha256sum | cut -d' ' -f1)
     else
-      hash=$(find src -type f \( -name "*.py" -o -name "*.js" \) -exec shasum -a 256 {} \; | shasum -a 256 | cut -d' ' -f1)
+      hash=$(find packages/modal-infra/src packages/sandbox-runtime/src -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \) -exec shasum -a 256 {} \; | shasum -a 256 | cut -d' ' -f1)
     fi
     echo "{\"hash\": \"$hash\"}"
   EOF

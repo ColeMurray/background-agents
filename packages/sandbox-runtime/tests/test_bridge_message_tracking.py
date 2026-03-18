@@ -12,7 +12,7 @@ events to the correct prompt.
 
 import pytest
 
-from src.sandbox.bridge import AgentBridge, OpenCodeIdentifier
+from sandbox_runtime.bridge import AgentBridge, OpenCodeIdentifier
 
 
 def create_text_part(part_id: str, text: str) -> dict:

@@ -36,7 +36,7 @@ from ..app import (
     internal_api_secret,
     validate_control_plane_url,
 )
-from ..auth.internal import generate_internal_token
+from ..auth import generate_internal_token
 from ..log_config import get_logger
 
 log = get_logger("image_builder")
@@ -121,7 +121,7 @@ async def _callback_with_retry(
 
 def _generate_clone_token() -> str:
     """Generate a GitHub App install token for git operations. Returns empty string on failure."""
-    from ..auth.github_app import generate_installation_token
+    from ..auth import generate_installation_token
 
     try:
         app_id = os.environ.get("GITHUB_APP_ID")

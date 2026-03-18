@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.sandbox.bridge import AgentBridge, OpenCodeIdentifier
+from sandbox_runtime.bridge import AgentBridge, OpenCodeIdentifier
 from tests.conftest import MockResponse
 
 

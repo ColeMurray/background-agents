@@ -36,7 +36,7 @@ def repo_image_env(base_env):
 def _make_supervisor(env_vars: dict):
     """Create a SandboxSupervisor with the given env vars patched in."""
     with patch.dict(os.environ, env_vars, clear=False):
-        from src.sandbox.entrypoint import SandboxSupervisor
+        from sandbox_runtime.entrypoint import SandboxSupervisor
 
         return SandboxSupervisor()
 
@@ -98,7 +98,7 @@ class TestImageBuildMode:
         with (
             patch.dict(os.environ, build_env, clear=False),
             patch(
-                "src.sandbox.entrypoint.asyncio.create_subprocess_exec",
+                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
                 side_effect=fake_subprocess,
             ),
         ):
@@ -307,7 +307,7 @@ class TestNormalMode:
         with (
             patch.dict(os.environ, base_env, clear=False),
             patch(
-                "src.sandbox.entrypoint.asyncio.create_subprocess_exec",
+                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
                 side_effect=fake_subprocess,
             ),
         ):
@@ -380,7 +380,7 @@ class TestUpdateExistingRepo:
             return mock_proc
 
         with patch(
-            "src.sandbox.entrypoint.asyncio.create_subprocess_exec",
+            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
             side_effect=fake_subprocess,
         ):
             result = await supervisor._update_existing_repo()
@@ -399,7 +399,7 @@ class TestUpdateExistingRepo:
         supervisor = _make_supervisor(base_env)
         supervisor.repo_path = tmp_path / "nonexistent"
 
-        with patch("src.sandbox.entrypoint.asyncio.create_subprocess_exec") as mock_exec:
+        with patch("sandbox_runtime.entrypoint.asyncio.create_subprocess_exec") as mock_exec:
             result = await supervisor._update_existing_repo()
             mock_exec.assert_not_called()
 
@@ -422,7 +422,7 @@ class TestUpdateExistingRepo:
             return mock_proc
 
         with patch(
-            "src.sandbox.entrypoint.asyncio.create_subprocess_exec",
+            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
             side_effect=fake_subprocess,
         ):
             result = await supervisor._update_existing_repo()
@@ -450,7 +450,7 @@ class TestUpdateExistingRepo:
             return mock_proc
 
         with patch(
-            "src.sandbox.entrypoint.asyncio.create_subprocess_exec",
+            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
             side_effect=fake_subprocess,
         ):
             await supervisor._update_existing_repo()
@@ -475,7 +475,7 @@ class TestUpdateExistingRepo:
             return mock_proc
 
         with patch(
-            "src.sandbox.entrypoint.asyncio.create_subprocess_exec",
+            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
             side_effect=fake_subprocess,
         ):
             await supervisor._update_existing_repo()
@@ -501,7 +501,7 @@ class TestUpdateExistingRepo:
             return mock_proc
 
         with patch(
-            "src.sandbox.entrypoint.asyncio.create_subprocess_exec",
+            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
             side_effect=fake_subprocess,
         ):
             result = await supervisor._update_existing_repo()
@@ -525,7 +525,7 @@ class TestUpdateExistingRepo:
             return mock_proc
 
         with patch(
-            "src.sandbox.entrypoint.asyncio.create_subprocess_exec",
+            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
             side_effect=fake_subprocess,
         ):
             result = await supervisor._update_existing_repo()
@@ -559,7 +559,7 @@ class TestPerformGitSync:
             return mock_proc
 
         with patch(
-            "src.sandbox.entrypoint.asyncio.create_subprocess_exec",
+            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
             side_effect=fake_subprocess,
         ):
             result = await supervisor.perform_git_sync()
@@ -591,7 +591,7 @@ class TestPerformGitSync:
             return mock_proc
 
         with patch(
-            "src.sandbox.entrypoint.asyncio.create_subprocess_exec",
+            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
             side_effect=fake_subprocess,
         ):
             result = await supervisor.perform_git_sync()
@@ -622,7 +622,7 @@ class TestPerformGitSync:
             return mock_proc
 
         with patch(
-            "src.sandbox.entrypoint.asyncio.create_subprocess_exec",
+            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
             side_effect=fake_subprocess,
         ):
             await supervisor.perform_git_sync()

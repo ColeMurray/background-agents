@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.sandbox.bridge import AgentBridge
+from sandbox_runtime.bridge import AgentBridge
 
 
 def _create_bridge(tmp_path: Path) -> AgentBridge:
@@ -52,7 +52,7 @@ async def test_handle_push_sends_push_complete_on_success(tmp_path: Path):
     process = _fake_process(returncode=0)
 
     with patch(
-        "src.sandbox.bridge.asyncio.create_subprocess_exec", AsyncMock(return_value=process)
+        "sandbox_runtime.bridge.asyncio.create_subprocess_exec", AsyncMock(return_value=process)
     ):
         await bridge._handle_push(_push_command())
 
@@ -80,7 +80,7 @@ async def test_handle_push_sends_redacted_stderr_on_nonzero_exit(tmp_path: Path)
     )
 
     with patch(
-        "src.sandbox.bridge.asyncio.create_subprocess_exec", AsyncMock(return_value=process)
+        "sandbox_runtime.bridge.asyncio.create_subprocess_exec", AsyncMock(return_value=process)
     ):
         await bridge._handle_push(_push_command())
 
@@ -106,7 +106,7 @@ async def test_handle_push_sends_unknown_error_when_stderr_is_empty(tmp_path: Pa
     process = _fake_process(returncode=1)
 
     with patch(
-        "src.sandbox.bridge.asyncio.create_subprocess_exec", AsyncMock(return_value=process)
+        "sandbox_runtime.bridge.asyncio.create_subprocess_exec", AsyncMock(return_value=process)
     ):
         await bridge._handle_push(_push_command())
 
@@ -140,8 +140,8 @@ async def test_handle_push_timeout_terminates_process_and_sends_error(tmp_path: 
         return await original_wait_for(coro, timeout=timeout)
 
     with (
-        patch("src.sandbox.bridge.asyncio.create_subprocess_exec", AsyncMock(return_value=process)),
-        patch("src.sandbox.bridge.asyncio.wait_for", side_effect=timeout_first_wait_for),
+        patch("sandbox_runtime.bridge.asyncio.create_subprocess_exec", AsyncMock(return_value=process)),
+        patch("sandbox_runtime.bridge.asyncio.wait_for", side_effect=timeout_first_wait_for),
     ):
         await bridge._handle_push(_push_command())
 

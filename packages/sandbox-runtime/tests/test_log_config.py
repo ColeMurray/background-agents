@@ -6,7 +6,12 @@ from io import StringIO
 
 import pytest
 
-from src.sandbox.log_config import JSONFormatter, StructuredLogger, configure_logging, get_logger
+from sandbox_runtime.log_config import (
+    JSONFormatter,
+    StructuredLogger,
+    configure_logging,
+    get_logger,
+)
 
 
 @pytest.fixture(autouse=True)

@@ -257,9 +257,9 @@ class SandboxSupervisor:
         tool_dest = opencode_dir / "tool"
 
         # Legacy tool (inspect-plugin.js → create-pull-request.js)
-        legacy_tool = Path("/app/sandbox/inspect-plugin.js")
+        legacy_tool = Path("/app/sandbox_runtime/plugins/inspect-plugin.js")
         # New tools directory
-        tools_dir = Path("/app/sandbox/tools")
+        tools_dir = Path("/app/sandbox_runtime/tools")
 
         has_tools = legacy_tool.exists() or tools_dir.exists()
         if not has_tools:
@@ -394,7 +394,7 @@ class SandboxSupervisor:
 
         # Deploy codex auth proxy plugin if OpenAI OAuth is configured
         opencode_dir = workdir / ".opencode"
-        plugin_source = Path("/app/sandbox/codex-auth-plugin.ts")
+        plugin_source = Path("/app/sandbox_runtime/plugins/codex-auth-plugin.ts")
         if plugin_source.exists() and os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN"):
             plugin_dir = opencode_dir / "plugins"
             plugin_dir.mkdir(parents=True, exist_ok=True)
@@ -490,7 +490,7 @@ class SandboxSupervisor:
         self.bridge_process = await asyncio.create_subprocess_exec(
             "python",
             "-m",
-            "sandbox.bridge",
+            "sandbox_runtime.bridge",
             "--sandbox-id",
             self.sandbox_id,
             "--session-id",

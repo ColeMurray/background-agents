@@ -2,8 +2,8 @@ import json
 
 import pytest
 
+from sandbox_runtime.types import SessionConfig
 from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxConfig, SandboxManager
-from src.sandbox.types import SessionConfig
 
 
 @pytest.mark.asyncio

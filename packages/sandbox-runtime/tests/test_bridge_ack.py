@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from websockets import State
 
-from src.sandbox.bridge import AgentBridge
+from sandbox_runtime.bridge import AgentBridge
 
 
 @pytest.fixture

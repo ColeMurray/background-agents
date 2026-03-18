@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from src.auth.internal import generate_internal_token, verify_internal_token
+from sandbox_runtime.auth.internal import generate_internal_token, verify_internal_token
 from src.scheduler.image_builder import (
     CALLBACK_BACKOFF_BASE,
     CALLBACK_MAX_RETRIES,

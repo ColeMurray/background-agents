@@ -25,7 +25,7 @@ from .app import (
     internal_api_secret,
     validate_control_plane_url,
 )
-from .auth.internal import AuthConfigurationError, verify_internal_token
+from .auth import AuthConfigurationError, verify_internal_token
 from .log_config import configure_logging, get_logger
 
 configure_logging()
@@ -116,9 +116,9 @@ async def api_create_sandbox(
 
     try:
         # Import types and manager directly
-        from .auth.github_app import generate_installation_token
+        from .auth import generate_installation_token
+        from .sandbox import SessionConfig
         from .sandbox.manager import SandboxConfig, SandboxManager
-        from .sandbox.types import SessionConfig
 
         manager = SandboxManager()
 
@@ -493,7 +493,7 @@ async def api_restore_sandbox(
         raise HTTPException(status_code=400, detail="snapshot_image_id is required")
 
     try:
-        from .auth.github_app import generate_installation_token
+        from .auth import generate_installation_token
         from .sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxManager
 
         session_config = request.get("session_config", {})
