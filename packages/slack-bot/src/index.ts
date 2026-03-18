@@ -16,6 +16,7 @@ import {
   getThreadMessages,
   publishView,
 } from "./utils/slack-client";
+import { resolveUserNames } from "./utils/resolve-users";
 import { createClassifier } from "./classifier";
 import { getAvailableRepos } from "./classifier/repos";
 import { callbacksRouter } from "./callbacks";
@@ -851,9 +852,16 @@ async function handleAppMention(
     try {
       const threadResult = await getThreadMessages(env.SLACK_BOT_TOKEN, channel, thread_ts, 10);
       if (threadResult.ok && threadResult.messages) {
-        previousMessages = threadResult.messages
-          .filter((m) => m.ts !== ts) // Exclude current message, but include bot messages
-          .map((m) => (m.bot_id ? `[Bot]: ${m.text}` : `[User]: ${m.text}`))
+        const filtered = threadResult.messages.filter((m) => m.ts !== ts);
+        // Resolve unique user IDs to display names for attribution
+        const uniqueUserIds = [...new Set(filtered.map((m) => m.user).filter(Boolean))] as string[];
+        const userNames = await resolveUserNames(env.SLACK_BOT_TOKEN, uniqueUserIds);
+        previousMessages = filtered
+          .map((m) => {
+            if (m.bot_id) return `[Bot]: ${m.text}`;
+            const name = m.user ? userNames.get(m.user) || m.user : "Unknown";
+            return `[${name}]: ${m.text}`;
+          })
           .slice(-10);
       }
     } catch {

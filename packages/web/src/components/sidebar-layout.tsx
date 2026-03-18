@@ -1,12 +1,15 @@
 "use client";
 
-import { createContext, useCallback, useContext } from "react";
+import { createContext, useCallback, useContext, useState } from "react";
 import { useSession, signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import useSWR from "swr";
 import { SessionSidebar } from "./session-sidebar";
+import { GlobalCommandMenu } from "./global-command-menu";
 import { useSidebar } from "@/hooks/use-sidebar";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
+import { SIDEBAR_SESSIONS_KEY, type SessionListResponse } from "@/lib/session-list";
 import { GitHubIcon } from "@/components/ui/icons";
 
 interface SidebarContextValue {
@@ -35,15 +38,39 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   const router = useRouter();
   const sidebar = useSidebar();
   const isMobile = useIsMobile();
+  const [isCommandMenuOpen, setIsCommandMenuOpen] = useState(false);
+
+  const { data: sessionsResponse } = useSWR<SessionListResponse>(
+    status === "authenticated" && Boolean(session) && isCommandMenuOpen
+      ? SIDEBAR_SESSIONS_KEY
+      : null
+  );
+
   const handleNewSession = useCallback(() => {
+    setIsCommandMenuOpen(false);
     if (isMobile) {
       sidebar.close();
     }
     router.push("/");
   }, [isMobile, router, sidebar]);
 
+  const handleNavigate = useCallback(
+    (href: string) => {
+      if (isMobile) {
+        sidebar.close();
+      }
+      router.push(href);
+    },
+    [isMobile, router, sidebar]
+  );
+
+  const handleOpenCommandMenu = useCallback(() => {
+    setIsCommandMenuOpen((prev) => !prev);
+  }, []);
+
   useGlobalShortcuts({
     enabled: status === "authenticated" && Boolean(session),
+    onOpenCommandMenu: handleOpenCommandMenu,
     onNewSession: handleNewSession,
     onToggleSidebar: sidebar.toggle,
   });
@@ -108,6 +135,13 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
         </div>
         <main className="flex-1 overflow-hidden">{children}</main>
       </div>
+      <GlobalCommandMenu
+        open={isCommandMenuOpen}
+        onOpenChange={setIsCommandMenuOpen}
+        onNavigate={handleNavigate}
+        onNewSession={handleNewSession}
+        sessions={sessionsResponse?.sessions ?? []}
+      />
     </SidebarContext.Provider>
   );
 }

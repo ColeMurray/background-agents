@@ -159,6 +159,7 @@ describe("createChildSessionsHandler", () => {
       baseBranch: "main",
       owner: {
         userId: "user-1",
+        scmUserId: null,
         scmLogin: "octocat",
         scmName: "The Octocat",
         scmEmail: "octocat@example.com",

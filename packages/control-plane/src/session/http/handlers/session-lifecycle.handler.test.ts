@@ -182,6 +182,9 @@ describe("createSessionLifecycleHandler", () => {
           scmName: "The Octocat",
           scmEmail: "octocat@example.com",
           scmToken: "plain-scm-token",
+          scmRefreshTokenEncrypted: "encrypted-refresh-token",
+          scmTokenExpiresAt: 9999999,
+          scmUserId: "github-user-123",
           parentSessionId: "parent-1",
           spawnSource: "agent",
           spawnDepth: 1,
@@ -218,10 +221,13 @@ describe("createSessionLifecycleHandler", () => {
     expect(repository.createParticipant).toHaveBeenCalledWith({
       id: "participant-1",
       userId: "user-1",
+      scmUserId: "github-user-123",
       scmLogin: "octocat",
       scmName: "The Octocat",
       scmEmail: "octocat@example.com",
       scmAccessTokenEncrypted: "encrypted-scm-token",
+      scmRefreshTokenEncrypted: "encrypted-refresh-token",
+      scmTokenExpiresAt: 9999999,
       role: "owner",
       joinedAt: 1234,
     });
