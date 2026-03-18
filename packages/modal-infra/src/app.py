@@ -6,11 +6,17 @@ all sandbox operations.
 """
 
 import os
+from pathlib import Path
 from urllib.parse import urlparse
 
 import modal
 
+import sandbox_runtime
+
 from .log_config import get_logger
+
+# Path to sandbox_runtime source — bundled into function_image so shims can resolve
+_SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
 
 log = get_logger("app")
 
@@ -29,6 +35,8 @@ function_image = (
         "modal",  # Required for sandbox.manager imports
         "PyJWT[crypto]",  # For GitHub App token generation
     )
+    # Bundle sandbox_runtime so modal-infra shims can import from it at runtime
+    .add_local_dir(str(_SANDBOX_RUNTIME_DIR), remote_path="/root/sandbox_runtime")
 )
 
 # Secrets for LLM API keys - defined in Modal dashboard or CLI
