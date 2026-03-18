@@ -26,8 +26,8 @@ OPENCODE_VERSION = "latest"
 CODE_SERVER_VERSION = "4.109.5"
 
 # Cache buster - change this to force Modal image rebuild
-# v42: code-server pin + GPT-5.4 codex allowlist
-CACHE_BUSTER = "v42-code-server-gpt54"
+# v43: copy=True on sandbox dir, version stamp, auth consolidation
+CACHE_BUSTER = "v43"
 
 # Base image with all development tools
 base_image = (
@@ -100,7 +100,7 @@ base_image = (
     # Install OpenCode CLI and plugin for custom tools
     # CACHE_BUSTER is embedded in a no-op echo so Modal invalidates this layer on bump.
     .run_commands(
-        f"echo 'cache: {CACHE_BUSTER}' > /dev/null",
+        f"echo 'cache: {CACHE_BUSTER}' > /tmp/.cache-buster",
         "npm install -g opencode-ai@latest",
         "opencode --version || echo 'OpenCode installed'",
         # Install @opencode-ai/plugin globally for custom tools
@@ -143,10 +143,13 @@ base_image = (
         }
     )
     # Add sandbox code to the image (includes plugin at /app/sandbox/inspect-plugin.js)
+    # copy=True bakes files into the image layer so run_commands can follow
     .add_local_dir(
         str(SANDBOX_DIR),
         remote_path="/app/sandbox",
+        copy=True,
     )
+    .run_commands(f"echo 'sandbox_version={CACHE_BUSTER}' > /app/sandbox/.version")
 )
 
 # Image variant optimized for Node.js/TypeScript projects
