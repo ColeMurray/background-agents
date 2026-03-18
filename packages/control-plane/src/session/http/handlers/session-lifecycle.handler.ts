@@ -22,6 +22,9 @@ interface InitRequest {
   scmEmail?: string;
   scmToken?: string | null;
   scmTokenEncrypted?: string | null;
+  scmRefreshTokenEncrypted?: string | null;
+  scmTokenExpiresAt?: number | null;
+  scmUserId?: string | null;
   parentSessionId?: string | null;
   spawnSource?: SpawnSource;
   spawnDepth?: number;
@@ -131,10 +134,13 @@ export function createSessionLifecycleHandler(
       deps.repository.createParticipant({
         id: participantId,
         userId: body.userId,
+        scmUserId: body.scmUserId ?? null,
         scmLogin: body.scmLogin ?? null,
         scmName: body.scmName ?? null,
         scmEmail: body.scmEmail ?? null,
         scmAccessTokenEncrypted: encryptedToken,
+        scmRefreshTokenEncrypted: body.scmRefreshTokenEncrypted ?? null,
+        scmTokenExpiresAt: body.scmTokenExpiresAt ?? null,
         role: "owner",
         joinedAt: now,
       });

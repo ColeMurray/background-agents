@@ -527,6 +527,7 @@ export interface SpawnContext {
   baseBranch: string | null;
   owner: {
     userId: string;
+    scmUserId: string | null;
     scmLogin: string | null;
     scmName: string | null;
     scmEmail: string | null;

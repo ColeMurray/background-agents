@@ -638,6 +638,9 @@ async function handleCreateSession(
 ): Promise<Response> {
   const body = (await request.json()) as CreateSessionRequest & {
     scmToken?: string;
+    scmRefreshToken?: string;
+    scmTokenExpiresAt?: number;
+    scmUserId?: string;
     userId?: string;
     scmLogin?: string;
     scmName?: string;
@@ -684,7 +687,11 @@ async function handleCreateSession(
   const scmName = body.scmName;
   const scmEmail = body.scmEmail;
   const scmToken = body.scmToken;
+  const scmRefreshToken = body.scmRefreshToken;
+  const scmTokenExpiresAt = body.scmTokenExpiresAt;
+  const scmUserId = body.scmUserId;
   let scmTokenEncrypted: string | null = null;
+  let scmRefreshTokenEncrypted: string | null = null;
 
   // If SCM token provided, encrypt it
   if (scmToken && env.TOKEN_ENCRYPTION_KEY) {
@@ -695,6 +702,16 @@ async function handleCreateSession(
         error: e instanceof Error ? e : String(e),
       });
       return error("Failed to process SCM token", 500);
+    }
+  }
+
+  if (scmRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
+    try {
+      scmRefreshTokenEncrypted = await encryptToken(scmRefreshToken, env.TOKEN_ENCRYPTION_KEY);
+    } catch (e) {
+      logger.warn("Session created without refresh token — token refresh will be unavailable", {
+        error: e instanceof Error ? e : String(e),
+      });
     }
   }
 
@@ -737,6 +754,9 @@ async function handleCreateSession(
           scmName,
           scmEmail,
           scmTokenEncrypted,
+          scmRefreshTokenEncrypted,
+          scmTokenExpiresAt,
+          scmUserId,
           codeServerEnabled,
         }),
       },
@@ -746,6 +766,24 @@ async function handleCreateSession(
 
   if (!initResponse.ok) {
     return error("Failed to create session", 500);
+  }
+
+  // Populate D1 with the user's SCM tokens (non-blocking) so centralized refresh works
+  if (scmUserId && scmToken && scmRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
+    ctx.executionCtx?.waitUntil(
+      new UserScmTokenStore(env.DB, env.TOKEN_ENCRYPTION_KEY)
+        .upsertTokens(
+          scmUserId,
+          scmToken,
+          scmRefreshToken,
+          scmTokenExpiresAt ?? Date.now() + DEFAULT_TOKEN_LIFETIME_MS
+        )
+        .catch((e) =>
+          logger.error("Failed to write tokens to D1", {
+            error: e instanceof Error ? e : String(e),
+          })
+        )
+    );
   }
 
   // Store session in D1 index for listing
@@ -1416,6 +1454,9 @@ async function handleSpawnChild(
           scmName: spawnContext.owner.scmName,
           scmEmail: spawnContext.owner.scmEmail,
           scmTokenEncrypted: spawnContext.owner.scmAccessTokenEncrypted,
+          scmRefreshTokenEncrypted: spawnContext.owner.scmRefreshTokenEncrypted,
+          scmTokenExpiresAt: spawnContext.owner.scmTokenExpiresAt,
+          scmUserId: spawnContext.owner.scmUserId,
           branch: spawnContext.baseBranch ?? "main",
           parentSessionId: parentId,
           spawnSource: "agent",
