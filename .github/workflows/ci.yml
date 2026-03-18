@@ -103,10 +103,10 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Run Ruff linter
-        run: ruff check src/
+        run: ruff check src/ tests/
 
       - name: Run Ruff formatter check
-        run: ruff format --check src/
+        run: ruff format --check src/ tests/
 
   lint-python:
     name: Lint & Format (Python - modal-infra)
@@ -158,6 +158,33 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ../sandbox-runtime
+          pip install -e ".[dev]"
+
+      - name: Run MyPy
+        run: mypy src/
+        continue-on-error: true # Allow failures initially as types are added
+
+  typecheck-python-sandbox-runtime:
+    name: TypeCheck (Python - sandbox-runtime)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [lint-python-sandbox-runtime]
+    defaults:
+      run:
+        working-directory: packages/sandbox-runtime
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
       - name: Run MyPy
