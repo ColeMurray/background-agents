@@ -38,6 +38,7 @@ async def create_sandbox(
     provider: str = "anthropic",
     model: str = "claude-sonnet-4-6",
     branch: str | None = None,
+    mcp_servers: list[dict] | None = None,
 ) -> dict:
     """
     Create a new sandbox for a session.
@@ -89,6 +90,7 @@ async def create_sandbox(
         opencode_session_id=opencode_session_id,
         provider=provider,
         model=model,
+        mcp_servers=mcp_servers,
     )
 
     config = SandboxConfig(

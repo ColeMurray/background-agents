@@ -625,9 +625,36 @@ export function getGitHubAppConfig(env: {
     return null;
   }
 
+  // Use the first installation ID for backwards compatibility
+  const firstId = env.GITHUB_APP_INSTALLATION_ID!.split(",")[0].trim();
   return {
     appId: env.GITHUB_APP_ID!,
     privateKey: env.GITHUB_APP_PRIVATE_KEY!,
-    installationId: env.GITHUB_APP_INSTALLATION_ID!,
+    installationId: firstId,
   };
+}
+
+/**
+ * Get all GitHub App configs (one per installation).
+ * Supports comma-separated GITHUB_APP_INSTALLATION_ID values.
+ */
+export function getAllGitHubAppConfigs(env: {
+  GITHUB_APP_ID?: string;
+  GITHUB_APP_PRIVATE_KEY?: string;
+  GITHUB_APP_INSTALLATION_ID?: string;
+}): GitHubAppConfig[] {
+  if (!isGitHubAppConfigured(env)) {
+    return [];
+  }
+
+  const ids = env
+    .GITHUB_APP_INSTALLATION_ID!.split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+
+  return ids.map((installationId) => ({
+    appId: env.GITHUB_APP_ID!,
+    privateKey: env.GITHUB_APP_PRIVATE_KEY!,
+    installationId,
+  }));
 }

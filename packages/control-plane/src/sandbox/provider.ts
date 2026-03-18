@@ -6,6 +6,7 @@
  */
 
 import type { CorrelationContext } from "../logger";
+import type { McpServerConfig } from "@open-inspect/shared";
 
 /** Default sandbox lifetime in seconds (2 hours). */
 export const DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200;
@@ -59,6 +60,8 @@ export interface CreateSandboxConfig {
   branch?: string;
   /** Whether to enable code-server (browser-based editor) in the sandbox */
   codeServerEnabled?: boolean;
+  /** MCP servers to inject into the agent session */
+  mcpServers?: McpServerConfig[];
 }
 
 /**
@@ -107,6 +110,8 @@ export interface RestoreConfig {
   timeoutSeconds?: number;
   /** Git branch to work on (defaults to repo's default branch) */
   branch?: string;
+  /** MCP servers to inject into the sandbox */
+  mcpServers?: McpServerConfig[];
   /** Correlation context for downstream tracing */
   correlation?: CorrelationContext;
   /** Whether to enable code-server (browser-based editor) in the sandbox */

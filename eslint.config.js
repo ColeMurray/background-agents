@@ -19,6 +19,8 @@ export default tseslint.config(
       "**/*.d.ts",
       // Bundled/generated files
       "packages/modal-infra/**/*.js",
+      // Git worktrees (should not be linted)
+      ".claude/**",
     ],
   },
 

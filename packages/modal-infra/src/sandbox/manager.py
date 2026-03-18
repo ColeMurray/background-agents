@@ -259,9 +259,12 @@ class SandboxManager:
 
         Like create_sandbox() but:
         - Sets IMAGE_BUILD_MODE=true (exits after setup, no OpenCode/bridge)
-        - No CONTROL_PLANE_URL, SANDBOX_AUTH_TOKEN, or LLM secrets
+        - No SANDBOX_AUTH_TOKEN, CONTROL_PLANE_URL, or LLM secrets
         - Shorter timeout (30 min vs 2 hours)
         - Always uses base_image (builds start from the universal base)
+
+        Note: MCP servers are not available during image builds (no session config).
+        MCP packages are installed at first use via npx instead.
         """
         BUILD_TIMEOUT_SECONDS = 1800
 

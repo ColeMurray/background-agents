@@ -47,6 +47,25 @@ export type GitHubGlobalConfig = IntegrationSettingsMap["github"]["global"];
 export type LinearGlobalConfig = IntegrationSettingsMap["linear"]["global"];
 export type CodeServerGlobalConfig = IntegrationSettingsMap["code-server"]["global"];
 
+/** MCP server configuration. */
+export interface McpServerConfig {
+  id: string;
+  name: string;
+  type: "stdio" | "remote";
+  command?: string[];
+  url?: string;
+  /** Process environment variables — only applicable for stdio servers. */
+  env?: Record<string, string>;
+  /**
+   * HTTP request headers — only applicable for remote servers.
+   * Sent with every request to the remote MCP endpoint (e.g. Authorization).
+   * Per OpenCode MCP spec: https://opencode.ai/docs/mcp-servers/#remote
+   */
+  headers?: Record<string, string>;
+  repoScopes?: string[] | null;
+  enabled: boolean;
+}
+
 export const INTEGRATION_DEFINITIONS: {
   id: IntegrationId;
   name: string;

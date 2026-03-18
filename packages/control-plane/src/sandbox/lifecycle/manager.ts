@@ -12,6 +12,7 @@
 
 import type { SandboxStatus } from "../../types";
 import type { SandboxRow, SessionRow } from "../../session/types";
+import type { McpServerConfig } from "@open-inspect/shared";
 import { SandboxProviderError, type SandboxProvider, type CreateSandboxConfig } from "../provider";
 import {
   evaluateCircuitBreaker,
@@ -31,6 +32,7 @@ import {
 import { extractProviderAndModel } from "../../utils/models";
 import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
+// McpServerStore is used via the McpServerLookup interface — not imported directly
 
 const log = createLogger("lifecycle-manager");
 
@@ -139,6 +141,8 @@ export interface SandboxLifecycleConfig {
   model: string;
   /** Session ID for log correlation. Optional — logs will omit sessionId if not provided. */
   sessionId?: string;
+  /** MCP server lookup for injecting servers into sandboxes. */
+  mcpServerLookup?: McpServerLookup;
 }
 
 /**
@@ -153,6 +157,16 @@ export const DEFAULT_LIFECYCLE_CONFIG: Omit<SandboxLifecycleConfig, "controlPlan
 
 /** Child (agent-spawned) sessions get a shorter sandbox timeout. */
 const CHILD_SANDBOX_TIMEOUT_SECONDS = 3600; // 1 hour (vs default 2 hours)
+
+// ==================== MCP Server Lookup ====================
+
+/**
+ * Lookup interface for MCP servers applicable to a session.
+ * Keeps the lifecycle manager free of direct D1Database dependencies.
+ */
+export interface McpServerLookup {
+  getForSession(repoOwner: string, repoName: string): Promise<McpServerConfig[]>;
+}
 
 // ==================== Repo Image Lookup ====================
 
@@ -363,6 +377,8 @@ export class SandboxLifecycleManager {
       const timeoutSeconds =
         session.spawn_source === "agent" ? CHILD_SANDBOX_TIMEOUT_SECONDS : undefined;
 
+      const mcpServers = await this.loadMcpServers(session);
+
       // Create sandbox via provider
       const codeServerEnabled = session.code_server_enabled === 1;
       const createConfig: CreateSandboxConfig = {
@@ -380,6 +396,7 @@ export class SandboxLifecycleManager {
         timeoutSeconds,
         branch: session.base_branch,
         codeServerEnabled,
+        mcpServers,
       };
 
       const result = await this.provider.createSandbox(createConfig);
@@ -440,6 +457,32 @@ export class SandboxLifecycleManager {
   }
 
   /**
+   * Load MCP servers applicable to the current session's repository.
+   * Returns undefined if none are found or DB is not configured.
+   */
+  private async loadMcpServers(session: SessionRow): Promise<McpServerConfig[] | undefined> {
+    try {
+      if (!this.config.mcpServerLookup) return undefined;
+      const servers = await this.config.mcpServerLookup.getForSession(
+        session.repo_owner,
+        session.repo_name
+      );
+      this.log.info("MCP servers loaded", {
+        event: "mcp.loaded",
+        count: servers?.length ?? 0,
+        names: servers?.map((s) => s.name) ?? [],
+      });
+      return servers?.length ? servers : undefined;
+    } catch (err) {
+      this.log.warn("Failed to load MCP servers", {
+        event: "mcp.load_failed",
+        error: String(err),
+      });
+      return undefined;
+    }
+  }
+
+  /**
    * Restore a sandbox from a filesystem snapshot.
    */
   private async restoreFromSnapshot(snapshotImageId: string): Promise<void> {
@@ -490,6 +533,8 @@ export class SandboxLifecycleManager {
         session.spawn_source === "agent" ? CHILD_SANDBOX_TIMEOUT_SECONDS : undefined;
 
       const codeServerEnabled = session.code_server_enabled === 1;
+      const mcpServers = await this.loadMcpServers(session);
+
       const result = await this.provider.restoreFromSnapshot({
         snapshotImageId,
         sessionId: session.session_name || session.id,
@@ -504,6 +549,7 @@ export class SandboxLifecycleManager {
         timeoutSeconds,
         branch: session.base_branch,
         codeServerEnabled,
+        mcpServers,
       });
 
       if (result.success) {

@@ -25,8 +25,10 @@ import {
   type AlarmScheduler,
   type IdGenerator,
   type RepoImageLookup,
+  type McpServerLookup,
 } from "../sandbox/lifecycle/manager";
 import { RepoImageStore } from "../db/repo-images";
+import { McpServerStore } from "../db/mcp-servers";
 import { SessionIndexStore } from "../db/session-index";
 import { DEFAULT_EXECUTION_TIMEOUT_MS } from "../sandbox/lifecycle/decisions";
 import {
@@ -606,6 +608,21 @@ export class SessionDO extends DurableObject<Env> {
     const session = this.repository.getSession();
     const sessionId = session?.session_name || session?.id || this.ctx.id.toString();
 
+    // Create D1-backed lookups if database is available
+    let repoImageLookup: RepoImageLookup | undefined;
+    let mcpServerLookup: McpServerLookup | undefined;
+    if (this.env.DB) {
+      const repoImageStore = new RepoImageStore(this.env.DB);
+      repoImageLookup = {
+        getLatestReady: (repoOwner, repoName, baseBranch) =>
+          repoImageStore.getLatestReady(repoOwner, repoName, baseBranch),
+      };
+      const mcpStore = new McpServerStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+      mcpServerLookup = {
+        getForSession: (repoOwner, repoName) => mcpStore.getForSession(repoOwner, repoName),
+      };
+    }
+
     const config = {
       ...DEFAULT_LIFECYCLE_CONFIG,
       controlPlaneUrl,
@@ -615,17 +632,8 @@ export class SessionDO extends DurableObject<Env> {
         ...DEFAULT_LIFECYCLE_CONFIG.inactivity,
         timeoutMs: parseInt(this.env.SANDBOX_INACTIVITY_TIMEOUT_MS || "600000", 10),
       },
+      mcpServerLookup,
     };
-
-    // Create repo image lookup if D1 is available
-    let repoImageLookup: RepoImageLookup | undefined;
-    if (this.env.DB) {
-      const repoImageStore = new RepoImageStore(this.env.DB);
-      repoImageLookup = {
-        getLatestReady: (repoOwner, repoName, baseBranch) =>
-          repoImageStore.getLatestReady(repoOwner, repoName, baseBranch),
-      };
-    }
 
     return new SandboxLifecycleManager(
       provider,

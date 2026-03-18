@@ -90,6 +90,13 @@ terraform.rc
 docs/internal/
 
 SECURITY-AUDIT.md
+
+# Local deployment scripts with secrets
+scripts/*.env
+
+# Claude Code agent worktrees
+.claude/
+
 terraform/environments/production/plan.out
 terraform/environments/production/backend_override.tf
 terraform/environments/production/terraform.tfstate*

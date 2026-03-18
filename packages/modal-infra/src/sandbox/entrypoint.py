@@ -14,6 +14,7 @@ Runs as PID 1 inside the sandbox. Responsibilities:
 import asyncio
 import json
 import os
+import re
 import shutil
 import signal
 import time
@@ -89,10 +90,12 @@ class SandboxSupervisor:
             session_id=session_id,
         )
 
+        self.log.info("session_config.loaded", keys=list(self.session_config.keys()))
+
     @property
     def base_branch(self) -> str:
         """The branch to clone/fetch — defaults to 'main'."""
-        return self.session_config.get("branch", "main")
+        return self.session_config.get("branch") or "main"
 
     def _build_repo_url(self, authenticated: bool = True) -> str:
         """Build the HTTPS URL for the repository, optionally with clone credentials."""
@@ -291,25 +294,42 @@ class SandboxSupervisor:
             package_json.write_text('{"name": "opencode-tools", "type": "module"}')
 
     def _setup_openai_oauth(self) -> None:
-        """Write OpenCode auth.json for ChatGPT OAuth if refresh token is configured."""
+        """Write OpenCode auth.json for configured LLM providers.
+
+        Builds a unified auth.json from environment variables:
+        - OPENAI_OAUTH_REFRESH_TOKEN → OpenAI OAuth entry
+        - OPENCODE_ZEN_API_KEY → OpenCode Zen (pay-as-you-go) entry
+        - OPENCODE_GO_API_KEY → OpenCode Go (subscription) entry
+        """
+        auth_data: dict[str, dict] = {}
+
         refresh_token = os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN")
-        if not refresh_token:
-            return
-
-        try:
-            auth_dir = Path.home() / ".local" / "share" / "opencode"
-            auth_dir.mkdir(parents=True, exist_ok=True)
-
-            openai_entry = {
+        if refresh_token:
+            entry: dict = {
                 "type": "oauth",
                 "refresh": "managed-by-control-plane",
                 "access": "",
                 "expires": 0,
             }
-
             account_id = os.environ.get("OPENAI_OAUTH_ACCOUNT_ID")
             if account_id:
-                openai_entry["accountId"] = account_id
+                entry["accountId"] = account_id
+            auth_data["openai"] = entry
+
+        zen_key = os.environ.get("OPENCODE_ZEN_API_KEY")
+        if zen_key:
+            auth_data["opencode"] = {"type": "api", "key": zen_key}
+
+        go_key = os.environ.get("OPENCODE_GO_API_KEY")
+        if go_key:
+            auth_data["opencode-go"] = {"type": "api", "key": go_key}
+
+        if not auth_data:
+            return
+
+        try:
+            auth_dir = Path.home() / ".local" / "share" / "opencode"
+            auth_dir.mkdir(parents=True, exist_ok=True)
 
             auth_file = auth_dir / "auth.json"
             tmp_file = auth_dir / ".auth.json.tmp"
@@ -318,12 +338,12 @@ class SandboxSupervisor:
             # atomically rename so the target is never world-readable.
             fd = os.open(str(tmp_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             try:
-                os.write(fd, json.dumps({"openai": openai_entry}).encode())
+                os.write(fd, json.dumps(auth_data).encode())
             finally:
                 os.close(fd)
             tmp_file.replace(auth_file)
 
-            self.log.info("openai_oauth.setup")
+            self.log.info("openai_oauth.setup", providers=list(auth_data.keys()))
         except Exception as e:
             self.log.warn("openai_oauth.setup_error", exc=e)
 
@@ -367,23 +387,143 @@ class SandboxSupervisor:
         except Exception as e:
             self.log.warn("code_server.log_forward_error", exc=e)
 
+    def _resolve_mcp_servers(self) -> list[dict]:
+        """Resolve MCP servers from session config."""
+        return self.session_config.get("mcp_servers") or []
+
+    # Validates npm package names before passing to `npm install -g`.
+    # Accepts: "package", "@scope/package", "package@1.0.0", "@scope/package@1.0.0"
+    # Rejects anything with shell metacharacters or path traversal sequences.
+    # NOTE: if a legitimate package is rejected, widen this regex rather than
+    # removing the check — the package name comes from user-supplied config.
+    _NPM_PKG_RE = re.compile(r"^(@[\w.-]+/)?[\w.-]+(@[\w.-]+)?$")
+
+    def _install_mcp_packages(self, servers: list[dict]) -> None:
+        """Install npm packages required by STDIO MCP servers.
+
+        For each non-remote server whose command starts with 'npx', installs
+        the package globally so npx doesn't download it at runtime (which can
+        fail or be slow inside sandboxes).
+        """
+        packages: list[str] = []
+        for server in servers:
+            if server.get("type") == "remote":
+                continue
+            cmd = server.get("command", [])
+            if not cmd:
+                continue
+            # npx @scope/package  →  install @scope/package
+            # npx -y @scope/package  →  install @scope/package
+            parts = [c for c in cmd if isinstance(c, str)]
+            if not parts or parts[0] != "npx":
+                continue
+            # Resolve the package name to install.
+            #
+            # Two common npx patterns:
+            #   npx [-y] @scope/pkg          → pkg = @scope/pkg (first non-flag)
+            #   npx -p @scope/pkg binary     → pkg = @scope/pkg (-p value)
+            #
+            # The -p/--package flag explicitly names the package to install,
+            # while the following arg is the binary to run. If we extracted
+            # the binary name instead, npm would install the wrong package.
+            pkg: str | None = None
+            for i, part in enumerate(parts):
+                if part in ("-p", "--package") and i + 1 < len(parts):
+                    pkg = parts[i + 1]
+                    break
+            if pkg is None:
+                non_flags = [p for p in parts[1:] if not p.startswith("-")]
+                pkg = non_flags[0] if non_flags else None
+
+            if pkg:
+                if self._NPM_PKG_RE.match(pkg):
+                    packages.append(pkg)
+                else:
+                    self.log.warn(
+                        "mcp.invalid_package_name",
+                        package=pkg,
+                        note="package skipped — npx will attempt download at runtime",
+                    )
+
+        packages = list(dict.fromkeys(packages))  # deduplicate, preserve order
+        if not packages:
+            return
+
+        self.log.info("mcp.install_packages", packages=packages)
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                ["npm", "install", "-g", *packages],
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            if result.returncode == 0:
+                self.log.info("mcp.packages_installed", packages=packages)
+            else:
+                self.log.warn(
+                    "mcp.packages_install_failed",
+                    packages=packages,
+                    stderr=result.stderr[:500],
+                )
+        except Exception as e:
+            self.log.warn("mcp.packages_install_error", packages=packages, exc=str(e))
+
+    def _build_mcp_config(self, servers: list[dict]) -> dict[str, dict]:
+        """Convert MCP server list to OpenCode mcp config format.
+
+        OpenCode MCP config reference: https://opencode.ai/docs/mcp-servers/
+        - Local servers: {"type": "local", "command": [...], "environment": {...}}
+        - Remote servers: {"type": "remote", "url": "...", "headers": {...}}
+          For remote servers, env vars are mapped to HTTP request headers
+          (e.g. {"Authorization": "Bearer <token>"}). This is the OpenCode-
+          documented way to pass auth credentials to remote MCP endpoints.
+        """
+        config: dict[str, dict] = {}
+        for server in servers:
+            name = server.get("name", "")
+            if not name:
+                continue
+            if server.get("type") == "remote":
+                entry: dict = {"type": "remote", "url": server.get("url", "")}
+                # Remote auth headers — read from `headers` (new) or `env` (legacy fallback).
+                # Do NOT log this value — may contain bearer tokens / API keys.
+                auth_headers = server.get("headers") or server.get("env") or {}
+                if auth_headers:
+                    entry["headers"] = auth_headers
+                config[name] = entry
+            else:
+                entry = {
+                    "type": "local",
+                    "command": server.get("command", []),
+                }
+                if server.get("env"):
+                    entry["environment"] = server["env"]
+                config[name] = entry
+        return config
+
     async def start_opencode(self) -> None:
         """Start OpenCode server with configuration."""
         self._setup_openai_oauth()
         self.log.info("opencode.start")
 
         # Build OpenCode config from session settings
-        # Model format is "provider/model", e.g. "anthropic/claude-sonnet-4-6"
         provider = self.session_config.get("provider", "anthropic")
         model = self.session_config.get("model", "claude-sonnet-4-6")
-        opencode_config = {
+        opencode_config: dict = {
             "model": f"{provider}/{model}",
-            "permission": {
-                "*": {
-                    "*": "allow",
-                },
-            },
+            "permission": {"*": {"*": "allow"}},
         }
+
+        # Inject MCP servers
+        mcp_servers = self._resolve_mcp_servers()
+        if mcp_servers:
+            self._install_mcp_packages(mcp_servers)
+            mcp_config = self._build_mcp_config(mcp_servers)
+            if mcp_config:
+                opencode_config["mcp"] = mcp_config
+                self.log.info("mcp.configured", count=len(mcp_config))
 
         # Determine working directory - use repo path if cloned, otherwise /workspace
         workdir = self.workspace_path
@@ -647,7 +787,7 @@ class SandboxSupervisor:
 
     async def _report_fatal_error(self, message: str) -> None:
         """Report a fatal error to the control plane."""
-        self.log.error("supervisor.fatal", message=message)
+        self.log.error("supervisor.fatal", error_message=message)
 
         if not self.control_plane_url:
             return
@@ -872,9 +1012,9 @@ class SandboxSupervisor:
             else:
                 start_success = None
 
-            # Image build mode: signal completion, then keep sandbox alive for
-            # snapshot_filesystem(). The builder streams stdout, detects this
-            # event, snapshots the running sandbox, then terminates us.
+            # Image build mode: signal completion then keep sandbox alive for
+            # snapshot_filesystem(). MCP packages are not pre-installed during
+            # builds — they are installed at first use via npx at session start.
             if image_build_mode:
                 duration_ms = int((time.time() - startup_start) * 1000)
                 self.log.info("image_build.complete", duration_ms=duration_ms)
