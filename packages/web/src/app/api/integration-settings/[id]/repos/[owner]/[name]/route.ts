@@ -16,7 +16,9 @@ export async function GET(
   const { id, owner, name } = await params;
 
   try {
-    const response = await controlPlaneFetch(`/integration-settings/${id}/repos/${owner}/${name}`);
+    const response = await controlPlaneFetch(
+      `/integration-settings/${encodeURIComponent(id)}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
+    );
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
@@ -41,10 +43,13 @@ export async function PUT(
 
   try {
     const body = await request.json();
-    const response = await controlPlaneFetch(`/integration-settings/${id}/repos/${owner}/${name}`, {
-      method: "PUT",
-      body: JSON.stringify(body),
-    });
+    const response = await controlPlaneFetch(
+      `/integration-settings/${encodeURIComponent(id)}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }
+    );
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
@@ -68,9 +73,12 @@ export async function DELETE(
   const { id, owner, name } = await params;
 
   try {
-    const response = await controlPlaneFetch(`/integration-settings/${id}/repos/${owner}/${name}`, {
-      method: "DELETE",
-    });
+    const response = await controlPlaneFetch(
+      `/integration-settings/${encodeURIComponent(id)}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
+      {
+        method: "DELETE",
+      }
+    );
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
