@@ -40,7 +40,7 @@ export function CodeServerSection({ url, password, sandboxStatus }: CodeServerSe
   return (
     <div className="flex items-center gap-2 text-sm">
       <TerminalIcon
-        className={`w-4 h-4 shrink-0 ${isActive ? "text-muted-foreground" : "text-muted-foreground/50"}`}
+        className={`w-4 h-4 shrink-0 ${isActive && safeUrl ? "text-muted-foreground" : "text-muted-foreground/50"}`}
       />
       {isActive && safeUrl ? (
         <a

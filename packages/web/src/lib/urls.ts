@@ -1,5 +1,9 @@
 const LOCAL_HTTP_HOSTNAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1"]);
 
+function normalizeHostname(hostname: string): string {
+  return hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+}
+
 export function getSafeExternalUrl(url: string | null | undefined): string | null {
   if (!url) {
     return null;
@@ -7,6 +11,7 @@ export function getSafeExternalUrl(url: string | null | undefined): string | nul
 
   try {
     const parsedUrl = new URL(url);
+    const hostname = normalizeHostname(parsedUrl.hostname);
 
     if (parsedUrl.protocol === "https:") {
       return parsedUrl.href;
@@ -14,7 +19,7 @@ export function getSafeExternalUrl(url: string | null | undefined): string | nul
 
     if (
       parsedUrl.protocol === "http:" &&
-      (LOCAL_HTTP_HOSTNAMES.has(parsedUrl.hostname) || parsedUrl.hostname.endsWith(".localhost"))
+      (LOCAL_HTTP_HOSTNAMES.has(hostname) || hostname.endsWith(".localhost"))
     ) {
       return parsedUrl.href;
     }

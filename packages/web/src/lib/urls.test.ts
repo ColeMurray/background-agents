@@ -11,6 +11,8 @@ describe("getSafeExternalUrl", () => {
       "http://localhost:3000/preview"
     );
     expect(getSafeExternalUrl("http://127.0.0.1:8080")).toBe("http://127.0.0.1:8080/");
+    expect(getSafeExternalUrl("http://0.0.0.0:8080")).toBe("http://0.0.0.0:8080/");
+    expect(getSafeExternalUrl("http://[::1]:3000")).toBe("http://[::1]:3000/");
     expect(getSafeExternalUrl("http://dev.localhost:3000")).toBe("http://dev.localhost:3000/");
   });
 
