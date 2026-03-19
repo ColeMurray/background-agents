@@ -49,15 +49,39 @@ export function buildCodeReviewPrompt(params: {
   const { owner, repo, number, title, body, author, base, head, isPublic, codeReviewInstructions } =
     params;
 
+  const prTitleBlock = buildUntrustedUserContentBlock({
+    source: "github_pr_title",
+    author: "github",
+    content: title,
+  });
+  const prAuthorBlock = buildUntrustedUserContentBlock({
+    source: "github_pr_author",
+    author: "github",
+    content: `@${author}`,
+  });
+  const prBranchesBlock = buildUntrustedUserContentBlock({
+    source: "github_pr_branches",
+    author: "github",
+    content: `base: ${base}\nhead: ${head}`,
+  });
+  const prDescriptionBlock = buildUntrustedUserContentBlock({
+    source: "github_pr_description",
+    author: "github",
+    content: body ?? "_No description provided._",
+  });
+
   return `You are reviewing Pull Request #${number} in ${owner}/${repo}.
-The repository has been cloned and you are on the ${head} branch.
+The repository has been cloned and you are on the PR head branch.
 
 ## PR Details
-- **Title**: ${title}
-- **Author**: @${author}
-- **Branch**: ${base} ← ${head}
+- **Title**:
+${prTitleBlock}
+- **Author**:
+${prAuthorBlock}
+- **Branches**:
+${prBranchesBlock}
 - **Description**:
-${body ?? "_No description provided._"}
+${prDescriptionBlock}
 
 ## Instructions
 1. Run \`gh pr diff ${number}\` to see the full diff
