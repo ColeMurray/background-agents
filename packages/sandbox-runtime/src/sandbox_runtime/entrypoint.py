@@ -14,6 +14,7 @@ Runs as PID 1 inside the sandbox. Responsibilities:
 import asyncio
 import json
 import os
+import re
 import shutil
 import signal
 import time
@@ -100,6 +101,17 @@ class SandboxSupervisor:
             return f"https://{self.vcs_clone_username}:{self.vcs_clone_token}@{self.vcs_host}/{self.repo_owner}/{self.repo_name}.git"
         return f"https://{self.vcs_host}/{self.repo_owner}/{self.repo_name}.git"
 
+    def _redact_git_stderr(self, stderr_text: str) -> str:
+        """Redact credential-bearing URLs from git stderr."""
+        redacted_stderr = stderr_text
+        if self.vcs_clone_token:
+            redacted_stderr = redacted_stderr.replace(
+                self._build_repo_url(),
+                self._build_repo_url(authenticated=False),
+            )
+
+        return re.sub(r"(https?://)([^/\s@]+)@", r"\1***@", redacted_stderr)
+
     # ------------------------------------------------------------------
     # Git primitives
     # ------------------------------------------------------------------
@@ -130,7 +142,7 @@ class SandboxSupervisor:
         if result.returncode != 0:
             self.log.error(
                 "git.clone_error",
-                stderr=stderr.decode(),
+                stderr=self._redact_git_stderr(stderr.decode()),
                 exit_code=result.returncode,
             )
             return False
@@ -154,7 +166,11 @@ class SandboxSupervisor:
         )
         _stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
-            self.log.warn("git.set_url_failed", exit_code=proc.returncode, stderr=stderr.decode())
+            self.log.warn(
+                "git.set_url_failed",
+                exit_code=proc.returncode,
+                stderr=self._redact_git_stderr(stderr.decode()),
+            )
 
     async def _fetch_branch(self, branch: str) -> bool:
         """Fetch a branch with an explicit refspec.
@@ -175,7 +191,7 @@ class SandboxSupervisor:
         if result.returncode != 0:
             self.log.error(
                 "git.fetch_error",
-                stderr=stderr.decode(),
+                stderr=self._redact_git_stderr(stderr.decode()),
                 exit_code=result.returncode,
             )
             return False
@@ -197,7 +213,7 @@ class SandboxSupervisor:
         if result.returncode != 0:
             self.log.warn(
                 "git.checkout_error",
-                stderr=stderr.decode(),
+                stderr=self._redact_git_stderr(stderr.decode()),
                 exit_code=result.returncode,
                 target_branch=branch,
             )
