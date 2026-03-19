@@ -7,10 +7,12 @@ import { cleanD1Tables } from "./cleanup";
 
 describe("D1 RepoImageStore", () => {
   let store: RepoImageStore;
+  let metadataStore: RepoMetadataStore;
 
   beforeEach(async () => {
     await cleanD1Tables();
     store = new RepoImageStore(env.DB);
+    metadataStore = new RepoMetadataStore(env.DB);
   });
 
   it("registerBuild creates a building row", async () => {
@@ -36,6 +38,7 @@ describe("D1 RepoImageStore", () => {
   });
 
   it("markReady updates build with provider image details", async () => {
+    await metadataStore.setImageBuildEnabled("acme", "repo", true);
     await store.registerBuild({
       id: "img-1",
       repoOwner: "acme",
@@ -55,6 +58,7 @@ describe("D1 RepoImageStore", () => {
   });
 
   it("markReady replaces previous ready image", async () => {
+    await metadataStore.setImageBuildEnabled("acme", "repo", true);
     await store.registerBuild({
       id: "img-old",
       repoOwner: "acme",
@@ -97,11 +101,13 @@ describe("D1 RepoImageStore", () => {
   });
 
   it("getLatestReady returns null when no ready images", async () => {
+    await metadataStore.setImageBuildEnabled("acme", "repo", true);
     const result = await store.getLatestReady("acme", "repo");
     expect(result).toBeNull();
   });
 
   it("getLatestReady ignores building and failed images", async () => {
+    await metadataStore.setImageBuildEnabled("acme", "repo", true);
     await store.registerBuild({
       id: "img-building",
       repoOwner: "acme",
@@ -121,6 +127,7 @@ describe("D1 RepoImageStore", () => {
   });
 
   it("getLatestReady is case-insensitive", async () => {
+    await metadataStore.setImageBuildEnabled("acme", "repo", true);
     await store.registerBuild({
       id: "img-1",
       repoOwner: "Acme",
@@ -130,6 +137,41 @@ describe("D1 RepoImageStore", () => {
     await store.markReady("img-1", "modal-img-1", "sha1", 30);
 
     const result = await store.getLatestReady("ACME", "REPO");
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe("img-1");
+  });
+
+  it("getLatestReady returns null when image_build_enabled is false", async () => {
+    await metadataStore.setImageBuildEnabled("acme", "repo", false);
+    await store.registerBuild({
+      id: "img-1",
+      repoOwner: "acme",
+      repoName: "repo",
+      baseBranch: "main",
+    });
+    await store.markReady("img-1", "modal-img-1", "sha1", 30);
+
+    const result = await store.getLatestReady("acme", "repo");
+    expect(result).toBeNull();
+  });
+
+  it("getLatestReady returns image after re-enabling builds", async () => {
+    await metadataStore.setImageBuildEnabled("acme", "repo", true);
+    await store.registerBuild({
+      id: "img-1",
+      repoOwner: "acme",
+      repoName: "repo",
+      baseBranch: "main",
+    });
+    await store.markReady("img-1", "modal-img-1", "sha1", 30);
+
+    // Disable — image should not be returned
+    await metadataStore.setImageBuildEnabled("acme", "repo", false);
+    expect(await store.getLatestReady("acme", "repo")).toBeNull();
+
+    // Re-enable — same image should be returned immediately
+    await metadataStore.setImageBuildEnabled("acme", "repo", true);
+    const result = await store.getLatestReady("acme", "repo");
     expect(result).not.toBeNull();
     expect(result!.id).toBe("img-1");
   });
@@ -203,6 +245,8 @@ describe("D1 RepoImageStore", () => {
   });
 
   it("different repos have independent images", async () => {
+    await metadataStore.setImageBuildEnabled("acme", "repo-a", true);
+    await metadataStore.setImageBuildEnabled("acme", "repo-b", true);
     await store.registerBuild({
       id: "img-a",
       repoOwner: "acme",
@@ -236,13 +280,16 @@ async function authHeaders(): Promise<Record<string, string>> {
 
 describe("Repo image HTTP routes", () => {
   let store: RepoImageStore;
+  let metadataStore: RepoMetadataStore;
 
   beforeEach(async () => {
     await cleanD1Tables();
     store = new RepoImageStore(env.DB);
+    metadataStore = new RepoMetadataStore(env.DB);
   });
 
   it("POST /repo-images/build-complete marks build as ready", async () => {
+    await metadataStore.setImageBuildEnabled("acme", "repo", true);
     await store.registerBuild({
       id: "img-test-1",
       repoOwner: "acme",

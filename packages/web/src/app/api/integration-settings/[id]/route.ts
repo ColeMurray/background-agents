@@ -13,7 +13,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const { id } = await params;
 
   try {
-    const response = await controlPlaneFetch(`/integration-settings/${id}`);
+    const response = await controlPlaneFetch(`/integration-settings/${encodeURIComponent(id)}`);
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
@@ -32,7 +32,7 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
 
   try {
     const body = await request.json();
-    const response = await controlPlaneFetch(`/integration-settings/${id}`, {
+    const response = await controlPlaneFetch(`/integration-settings/${encodeURIComponent(id)}`, {
       method: "PUT",
       body: JSON.stringify(body),
     });
@@ -56,7 +56,7 @@ export async function DELETE(
   const { id } = await params;
 
   try {
-    const response = await controlPlaneFetch(`/integration-settings/${id}`, {
+    const response = await controlPlaneFetch(`/integration-settings/${encodeURIComponent(id)}`, {
       method: "DELETE",
     });
     const data = await response.json();

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { copyToClipboard } from "@/lib/format";
+import { getSafeExternalUrl } from "@/lib/urls";
 import { TerminalIcon, KeyIcon, CheckIcon } from "@/components/ui/icons";
 import type { SandboxStatus } from "@open-inspect/shared";
 
@@ -25,6 +26,7 @@ export function CodeServerSection({ url, password, sandboxStatus }: CodeServerSe
 
   const isActive = ACTIVE_STATUSES.has(sandboxStatus);
   const isStarting = STARTING_STATUSES.has(sandboxStatus);
+  const safeUrl = getSafeExternalUrl(url);
 
   const handleCopyPassword = async () => {
     if (!password) return;
@@ -38,11 +40,11 @@ export function CodeServerSection({ url, password, sandboxStatus }: CodeServerSe
   return (
     <div className="flex items-center gap-2 text-sm">
       <TerminalIcon
-        className={`w-4 h-4 shrink-0 ${isActive ? "text-muted-foreground" : "text-muted-foreground/50"}`}
+        className={`w-4 h-4 shrink-0 ${isActive && safeUrl ? "text-muted-foreground" : "text-muted-foreground/50"}`}
       />
-      {isActive ? (
+      {isActive && safeUrl ? (
         <a
-          href={url}
+          href={safeUrl}
           target="_blank"
           rel="noopener noreferrer"
           className="text-accent hover:underline truncate"
