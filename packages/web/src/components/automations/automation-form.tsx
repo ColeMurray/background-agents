@@ -13,20 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { RepoIcon, BranchIcon, ModelIcon, ChevronDownIcon } from "@/components/ui/icons";
 import { CronPicker } from "./cron-picker";
 
-const COMMON_TIMEZONES = [
-  "UTC",
-  "America/New_York",
-  "America/Chicago",
-  "America/Denver",
-  "America/Los_Angeles",
-  "Europe/London",
-  "Europe/Berlin",
-  "Europe/Paris",
-  "Asia/Tokyo",
-  "Asia/Shanghai",
-  "Asia/Kolkata",
-  "Australia/Sydney",
-];
+const ALL_TIMEZONES = Intl.supportedValuesOf('timeZone');
 
 export interface AutomationFormValues {
   name: string;
@@ -207,7 +194,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         <Combobox
           value={scheduleTz}
           onChange={setScheduleTz}
-          items={COMMON_TIMEZONES.map((tz) => ({
+          items={ALL_TIMEZONES.map((tz) => ({
             value: tz,
             label: tz.replace(/_/g, " "),
           }))}
