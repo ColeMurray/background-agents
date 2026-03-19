@@ -656,9 +656,7 @@ class TestPerformGitSync:
         supervisor.repo_path = tmp_path
         supervisor.log = MagicMock()
 
-        stderr_text = (
-            f"fatal: Authentication failed for '{supervisor._build_repo_url()}'"
-        )
+        stderr_text = f"fatal: Authentication failed for '{supervisor._build_repo_url()}'"
 
         async def fake_subprocess(*args, **kwargs):
             mock_proc = MagicMock()
@@ -676,9 +674,27 @@ class TestPerformGitSync:
         assert log_call.args[0] == event_name
         assert supervisor.vcs_clone_token not in log_call.kwargs["stderr"]
         assert supervisor._build_repo_url() not in log_call.kwargs["stderr"]
-        assert (
-            supervisor._build_repo_url(authenticated=False) in log_call.kwargs["stderr"]
+        assert supervisor._build_repo_url(authenticated=False) in log_call.kwargs["stderr"]
+
+    def test_redact_git_stderr_hides_bare_tokens_and_fallback_urls(self, base_env):
+        env = {
+            **base_env,
+            "VCS_HOST": "github.com",
+            "VCS_CLONE_USERNAME": "x-access-token",
+            "VCS_CLONE_TOKEN": "ghp_secret123",
+        }
+        supervisor = _make_supervisor(env)
+
+        stderr_text = (
+            "fatal: could not read credentials for ghp_secret123\n"
+            "fatal: redirected to https://other-user:other-secret@example.com/acme/my-repo.git"
         )
+
+        redacted_stderr = supervisor._redact_git_stderr(stderr_text)  # type: ignore[attr-defined]
+
+        assert "ghp_secret123" not in redacted_stderr
+        assert "other-secret" not in redacted_stderr
+        assert "https://***@example.com/acme/my-repo.git" in redacted_stderr
 
 
 class TestBaseBranchProperty:

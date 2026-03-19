@@ -109,6 +109,7 @@ class SandboxSupervisor:
                 self._build_repo_url(),
                 self._build_repo_url(authenticated=False),
             )
+            redacted_stderr = redacted_stderr.replace(self.vcs_clone_token, "***")
 
         return re.sub(r"(https?://)([^/\s@]+)@", r"\1***@", redacted_stderr)
 
