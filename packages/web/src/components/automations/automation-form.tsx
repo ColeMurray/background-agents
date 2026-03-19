@@ -13,7 +13,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { RepoIcon, BranchIcon, ModelIcon, ChevronDownIcon } from "@/components/ui/icons";
 import { CronPicker } from "./cron-picker";
 
-const ALL_TIMEZONES = Intl.supportedValuesOf('timeZone');
+const ALL_TIMEZONES = Intl.supportedValuesOf("timeZone");
+const ALL_TIMEZONE_OPTIONS = ALL_TIMEZONES.map((tz) => ({
+  value: tz,
+  label: tz.replace(/_/g, " "),
+}));
 
 export interface AutomationFormValues {
   name: string;
@@ -194,10 +198,8 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         <Combobox
           value={scheduleTz}
           onChange={setScheduleTz}
-          items={ALL_TIMEZONES.map((tz) => ({
-            value: tz,
-            label: tz.replace(/_/g, " "),
-          }))}
+          items={ALL_TIMEZONE_OPTIONS}
+          maxDisplayed={20}
           searchable
           searchPlaceholder="Search timezones..."
           filterFn={(option, query) =>
