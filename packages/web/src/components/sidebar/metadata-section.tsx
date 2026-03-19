@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { formatModelName, truncateBranch, copyToClipboard } from "@/lib/format";
 import { formatRelativeTime } from "@/lib/time";
+import { getSafeExternalUrl } from "@/lib/urls";
 import type { Artifact } from "@/types/session";
 import {
   ClockIcon,
@@ -48,7 +49,9 @@ export function MetadataSection({
   );
   const prNumber = prArtifact?.metadata?.prNumber;
   const prState = prArtifact?.metadata?.prState;
-  const prUrl = prArtifact?.url || manualPrArtifact?.metadata?.createPrUrl || manualPrArtifact?.url;
+  const prUrl = getSafeExternalUrl(
+    prArtifact?.url || manualPrArtifact?.metadata?.createPrUrl || manualPrArtifact?.url
+  );
   const branchUrl =
     branchName && repoOwner && repoName
       ? `https://github.com/${repoOwner}/${repoName}/tree/${encodeURIComponent(branchName)}`

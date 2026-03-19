@@ -28,6 +28,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { getSafeExternalUrl } from "@/lib/urls";
 
 interface ActionBarProps {
   sessionId: string;
@@ -49,6 +50,8 @@ export function ActionBar({
 
   const prArtifact = artifacts.find((a) => a.type === "pr");
   const previewArtifact = artifacts.find((a) => a.type === "preview");
+  const previewUrl = getSafeExternalUrl(previewArtifact?.url);
+  const prUrl = getSafeExternalUrl(prArtifact?.url);
 
   const isArchived = sessionStatus === "archived";
 
@@ -86,12 +89,12 @@ export function ActionBar({
     <>
       <div className="flex flex-wrap items-stretch gap-2">
         {/* View Preview */}
-        {previewArtifact?.url && (
+        {previewUrl && (
           <Button variant="outline" size="sm" className="gap-1.5" asChild>
-            <a href={previewArtifact.url} target="_blank" rel="noopener noreferrer">
+            <a href={previewUrl} target="_blank" rel="noopener noreferrer">
               <GlobeIcon className="w-4 h-4" />
               <span>View preview</span>
-              {previewArtifact.metadata?.previewStatus === "outdated" && (
+              {previewArtifact?.metadata?.previewStatus === "outdated" && (
                 <span className="text-xs text-yellow-600 dark:text-yellow-400">(outdated)</span>
               )}
             </a>
@@ -99,9 +102,9 @@ export function ActionBar({
         )}
 
         {/* View PR */}
-        {prArtifact?.url && (
+        {prUrl && (
           <Button variant="outline" size="sm" className="gap-1.5" asChild>
-            <a href={prArtifact.url} target="_blank" rel="noopener noreferrer">
+            <a href={prUrl} target="_blank" rel="noopener noreferrer">
               <GitPrIcon className="w-4 h-4" />
               <span>View PR</span>
             </a>
@@ -132,9 +135,9 @@ export function ActionBar({
               <LinkIcon className="w-4 h-4" />
               Copy link
             </DropdownMenuItem>
-            {prArtifact?.url && (
+            {prUrl && (
               <DropdownMenuItem asChild>
-                <a href={prArtifact.url} target="_blank" rel="noopener noreferrer">
+                <a href={prUrl} target="_blank" rel="noopener noreferrer">
                   <GitHubIcon className="w-4 h-4" />
                   View in GitHub
                 </a>
