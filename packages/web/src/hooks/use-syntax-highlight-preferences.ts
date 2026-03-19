@@ -82,12 +82,9 @@ export function useSyntaxHighlightPreferences() {
   }, []);
 
   const update = useCallback((patch: Partial<SyntaxHighlightPreferences>) => {
-    setPrefs((prev) => {
-      const next = { ...prev, ...patch };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      return next;
-    });
-    // Notify other hook instances (e.g. SyntaxHighlightTheme) after state update
+    setPrefs((prev) => ({ ...prev, ...patch }));
+    const next = { ...read(), ...patch };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
     window.dispatchEvent(new CustomEvent(CHANGE_EVENT));
   }, []);
 
