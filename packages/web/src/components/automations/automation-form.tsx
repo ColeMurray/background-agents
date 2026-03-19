@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { DEFAULT_MODEL } from "@open-inspect/shared";
+import { DEFAULT_MODEL, isValidCron } from "@open-inspect/shared";
 import { useRepos } from "@/hooks/use-repos";
 import { useBranches } from "@/hooks/use-branches";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
@@ -66,6 +66,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     initialValues?.scheduleTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone
   );
   const [instructions, setInstructions] = useState(initialValues?.instructions ?? "");
+  const isScheduleValid = isValidCron(scheduleCron);
 
   const handleRepoChange = useCallback(
     (repoFullName: string) => {
@@ -78,7 +79,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !selectedRepo || !instructions.trim() || !scheduleCron) return;
+    if (!name.trim() || !selectedRepo || !instructions.trim() || !isScheduleValid) return;
     const values: AutomationFormValues = {
       name: name.trim(),
       repoOwner,
@@ -243,7 +244,9 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       <div className="flex justify-end gap-3">
         <Button
           type="submit"
-          disabled={submitting || !name.trim() || !selectedRepo || !instructions.trim()}
+          disabled={
+            submitting || !name.trim() || !selectedRepo || !instructions.trim() || !isScheduleValid
+          }
         >
           {submitting
             ? mode === "create"
