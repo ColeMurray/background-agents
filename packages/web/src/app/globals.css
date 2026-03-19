@@ -8,6 +8,12 @@
   content: none;
 }
 
+/* Let <pre>'s bg-card be authoritative — avoid color frame from hljs theme background */
+pre code.hljs {
+  background: transparent;
+  padding: 0;
+}
+
 /*
  * Design System Color Tokens
  *

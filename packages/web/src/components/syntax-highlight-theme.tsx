@@ -25,9 +25,7 @@ export function SyntaxHighlightTheme() {
     const href = HLJS_THEMES[resolvedTheme ?? "light"] ?? HLJS_THEMES.light;
 
     // Check if this theme is already loaded
-    const existing = document.querySelector(
-      'link[data-hljs-theme]',
-    ) as HTMLLinkElement | null;
+    const existing = document.querySelector("link[data-hljs-theme]") as HTMLLinkElement | null;
     if (existing?.getAttribute("href") === href) return;
 
     const link = document.createElement("link");
@@ -40,9 +38,12 @@ export function SyntaxHighlightTheme() {
     document.head.appendChild(link);
 
     // Fallback removal if onload doesn't fire (e.g. cached)
-    if (existing) {
-      setTimeout(() => existing.remove(), 100);
-    }
+    const timer = existing ? setTimeout(() => existing.remove(), 100) : undefined;
+
+    return () => {
+      clearTimeout(timer);
+      link.remove();
+    };
   }, [resolvedTheme]);
 
   return null;
