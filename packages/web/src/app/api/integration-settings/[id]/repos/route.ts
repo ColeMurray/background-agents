@@ -13,7 +13,9 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const { id } = await params;
 
   try {
-    const response = await controlPlaneFetch(`/integration-settings/${id}/repos`);
+    const response = await controlPlaneFetch(
+      `/integration-settings/${encodeURIComponent(id)}/repos`
+    );
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
