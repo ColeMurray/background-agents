@@ -6,7 +6,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import type { ComponentPropsWithoutRef } from "react";
 
-import "highlight.js/styles/atom-one-dark.css";
+import { SyntaxHighlightTheme } from "./syntax-highlight-theme";
 
 // Strict sanitization schema to prevent XSS
 // Based on GitHub's sanitization but even more restrictive
@@ -66,6 +66,7 @@ interface SafeMarkdownProps {
 export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
   return (
     <div className={`prose prose-sm dark:prose-invert max-w-none break-words ${className}`}>
+      <SyntaxHighlightTheme />
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight, [rehypeSanitize, sanitizeSchema]]}
