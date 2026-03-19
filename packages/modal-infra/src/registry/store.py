@@ -31,7 +31,7 @@ class SnapshotStore:
         self.snapshots_path.mkdir(parents=True, exist_ok=True)
         self.repos_path.mkdir(parents=True, exist_ok=True)
 
-    _VALID_PATH_SEGMENT_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
+    _VALID_PATH_SEGMENT_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
 
     def _validate_path_segment(self, name: str, value: str) -> str:
         """Ensure filesystem path segments cannot escape the storage root."""
@@ -77,9 +77,12 @@ class SnapshotStore:
 
     def get_latest_snapshot(self, repo_owner: str, repo_name: str) -> Snapshot | None:
         """Get the latest ready snapshot for a repository."""
-        repo_dir = self._repo_snapshot_dir(repo_owner, repo_name)
-        latest_file = repo_dir / "latest.json"
+        try:
+            repo_dir = self._repo_snapshot_dir(repo_owner, repo_name)
+        except ValueError:
+            return None
 
+        latest_file = repo_dir / "latest.json"
         if not latest_file.exists():
             return None
 
@@ -91,8 +94,12 @@ class SnapshotStore:
 
     def get_snapshot(self, snapshot_id: str, repo_owner: str, repo_name: str) -> Snapshot | None:
         """Get a specific snapshot by ID."""
-        repo_dir = self._repo_snapshot_dir(repo_owner, repo_name)
-        snapshot_id = self._validate_path_segment("snapshot_id", snapshot_id)
+        try:
+            repo_dir = self._repo_snapshot_dir(repo_owner, repo_name)
+            snapshot_id = self._validate_path_segment("snapshot_id", snapshot_id)
+        except ValueError:
+            return None
+
         snapshot_file = repo_dir / "history" / f"{snapshot_id}.json"
 
         if not snapshot_file.exists():
@@ -111,8 +118,12 @@ class SnapshotStore:
         repo_name: str,
     ) -> SnapshotMetadata | None:
         """Get metadata for a specific snapshot."""
-        repo_dir = self._repo_snapshot_dir(repo_owner, repo_name)
-        snapshot_id = self._validate_path_segment("snapshot_id", snapshot_id)
+        try:
+            repo_dir = self._repo_snapshot_dir(repo_owner, repo_name)
+            snapshot_id = self._validate_path_segment("snapshot_id", snapshot_id)
+        except ValueError:
+            return None
+
         metadata_file = repo_dir / "history" / f"{snapshot_id}.metadata.json"
 
         if not metadata_file.exists():
@@ -131,7 +142,11 @@ class SnapshotStore:
         limit: int = 10,
     ) -> list[Snapshot]:
         """List recent snapshots for a repository."""
-        repo_dir = self._repo_snapshot_dir(repo_owner, repo_name)
+        try:
+            repo_dir = self._repo_snapshot_dir(repo_owner, repo_name)
+        except ValueError:
+            return []
+
         history_dir = repo_dir / "history"
 
         if not history_dir.exists():
@@ -160,7 +175,11 @@ class SnapshotStore:
         max_age_days: int = 7,
     ) -> int:
         """Clean up expired snapshots. Returns count of deleted snapshots."""
-        repo_dir = self._repo_snapshot_dir(repo_owner, repo_name)
+        try:
+            repo_dir = self._repo_snapshot_dir(repo_owner, repo_name)
+        except ValueError:
+            return 0
+
         history_dir = repo_dir / "history"
 
         if not history_dir.exists():
@@ -176,11 +195,12 @@ class SnapshotStore:
             try:
                 data = json.loads(file.read_text())
                 snapshot = Snapshot.model_validate(data)
+                snapshot_id = self._validate_path_segment("snapshot_id", snapshot.id)
 
                 if snapshot.created_at < cutoff:
                     file.unlink()
                     # Also delete metadata file
-                    metadata_file = history_dir / f"{snapshot.id}.metadata.json"
+                    metadata_file = history_dir / f"{snapshot_id}.metadata.json"
                     if metadata_file.exists():
                         metadata_file.unlink()
                     deleted += 1
@@ -199,7 +219,11 @@ class SnapshotStore:
 
     def get_repository(self, repo_owner: str, repo_name: str) -> Repository | None:
         """Get repository configuration."""
-        repo_owner, repo_name = self._validate_repo_identifiers(repo_owner, repo_name)
+        try:
+            repo_owner, repo_name = self._validate_repo_identifiers(repo_owner, repo_name)
+        except ValueError:
+            return None
+
         repo_file = self.repos_path / f"{repo_owner}_{repo_name}.json"
 
         if not repo_file.exists():
@@ -226,7 +250,11 @@ class SnapshotStore:
 
     def delete_repository(self, repo_owner: str, repo_name: str) -> bool:
         """Delete a repository configuration. Returns True if deleted."""
-        repo_owner, repo_name = self._validate_repo_identifiers(repo_owner, repo_name)
+        try:
+            repo_owner, repo_name = self._validate_repo_identifiers(repo_owner, repo_name)
+        except ValueError:
+            return False
+
         repo_file = self.repos_path / f"{repo_owner}_{repo_name}.json"
 
         if repo_file.exists():
