@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
+import { buildControlPlanePath } from "@/lib/control-plane-query";
 
 export async function GET(request: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -10,9 +11,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const searchParams = request.nextUrl.searchParams;
-  const queryString = searchParams.toString();
-  const path = queryString ? `/automations?${queryString}` : "/automations";
+  const path = buildControlPlanePath("/automations", request.nextUrl.searchParams);
 
   try {
     const response = await controlPlaneFetch(path);
