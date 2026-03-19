@@ -4,7 +4,10 @@ import { getServerSession } from "next-auth";
 import { getToken } from "next-auth/jwt";
 import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
-import { buildControlPlanePath } from "@/lib/control-plane-query";
+import {
+  buildControlPlanePath,
+  SESSION_CONTROL_PLANE_QUERY_PARAMS,
+} from "@/lib/control-plane-query";
 
 export async function GET(request: NextRequest) {
   const routeStart = Date.now();
@@ -16,7 +19,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const path = buildControlPlanePath("/sessions", request.nextUrl.searchParams);
+  const path = buildControlPlanePath(
+    "/sessions",
+    request.nextUrl.searchParams,
+    SESSION_CONTROL_PLANE_QUERY_PARAMS
+  );
 
   try {
     const fetchStart = Date.now();
