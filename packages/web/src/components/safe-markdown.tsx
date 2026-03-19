@@ -6,7 +6,6 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import type { ComponentPropsWithoutRef } from "react";
 
-import { SyntaxHighlightTheme } from "./syntax-highlight-theme";
 
 // Strict sanitization schema to prevent XSS
 // Based on GitHub's sanitization but even more restrictive
@@ -66,7 +65,6 @@ interface SafeMarkdownProps {
 export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
   return (
     <div className={`prose prose-sm dark:prose-invert max-w-none break-words ${className}`}>
-      <SyntaxHighlightTheme />
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight, [rehypeSanitize, sanitizeSchema]]}
@@ -85,7 +83,7 @@ export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
           ),
           // Code blocks with styling
           pre: ({ children, ...props }: ComponentPropsWithoutRef<"pre">) => (
-            <pre className="bg-card text-foreground p-3 overflow-x-auto text-sm" {...props}>
+            <pre className="not-prose overflow-x-auto text-[0.8125rem] leading-relaxed rounded" {...props}>
               {children}
             </pre>
           ),
