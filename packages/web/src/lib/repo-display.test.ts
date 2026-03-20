@@ -22,6 +22,11 @@ describe("repo-display", () => {
       label: "octo-org/demo",
       description: "Private repository",
     });
+    expect(getRepoSelectorOption({ fullName: "octo-org/demo", private: false })).toEqual({
+      value: "octo-org/demo",
+      label: "octo-org/demo",
+      description: undefined,
+    });
   });
 
   it("falls back when no repository is selected", () => {

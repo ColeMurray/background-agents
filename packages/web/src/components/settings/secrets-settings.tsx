@@ -17,9 +17,11 @@ export function SecretsSettings() {
   const isGlobal = selectedRepo === GLOBAL_SCOPE;
   const displayRepoName = isGlobal
     ? "All Repositories (Global)"
-    : loadingRepos
-      ? "Loading..."
-      : getSelectedRepoDisplayName(selectedRepoObj, "Select a repository");
+    : selectedRepoObj
+      ? getSelectedRepoDisplayName(selectedRepoObj, "Select a repository")
+      : loadingRepos
+        ? "Loading..."
+        : "Select a repository";
 
   return (
     <div>
