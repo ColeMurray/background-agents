@@ -1,6 +1,7 @@
 """Tests for SandboxManager.create_build_sandbox()."""
 
 import json
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -10,7 +11,7 @@ from src.sandbox.manager import SandboxManager
 def _fake_sandbox_create(captured):
     """Return a fake Sandbox.create that captures kwargs."""
 
-    def fake_create(*args, **kwargs):
+    async def fake_create_aio(*args, **kwargs):
         captured["args"] = args
         captured["kwargs"] = kwargs
         captured["env"] = kwargs.get("env")
@@ -24,6 +25,8 @@ def _fake_sandbox_create(captured):
 
         return FakeSandbox()
 
+    fake_create = MagicMock()
+    fake_create.aio = fake_create_aio
     return fake_create
 
 
@@ -41,6 +44,21 @@ async def test_env_vars_include_image_build_mode(monkeypatch):
 
     env = captured["env"]
     assert env["IMAGE_BUILD_MODE"] == "true"
+
+
+@pytest.mark.asyncio
+async def test_build_sandbox_uses_sandbox_runtime_entrypoint(monkeypatch):
+    """Build sandbox should launch the extracted sandbox runtime entrypoint."""
+    captured = {}
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+
+    manager = SandboxManager()
+    await manager.create_build_sandbox(
+        repo_owner="acme",
+        repo_name="my-repo",
+    )
+
+    assert captured["args"] == ("python", "-m", "sandbox_runtime.entrypoint")
 
 
 @pytest.mark.asyncio

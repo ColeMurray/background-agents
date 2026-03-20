@@ -97,6 +97,10 @@ See `.env.example` for a full list of environment variables.
 ### Deploy
 
 ```bash
+# Bootstrap local Python packages once per checkout
+pip install -e ../sandbox-runtime
+pip install -e ".[dev]"
+
 # Deploy the app (recommended)
 modal deploy deploy.py
 
@@ -109,6 +113,9 @@ modal run src/
 
 > **Note**: Never deploy `src/app.py` directly - it only defines the app and shared resources.
 > Use `deploy.py` or `-m src` to ensure all function modules are registered.
+> `sandbox-runtime` is a sibling package in this monorepo, so a clean checkout
+> should install `../sandbox-runtime` before deploying or running `modal-infra`
+> commands directly.
 
 ## HTTP API
 
@@ -177,6 +184,7 @@ Set via Modal secrets:
 
 ```bash
 # Install dev dependencies
+pip install -e ../sandbox-runtime
 pip install -e ".[dev]"
 
 # Run tests

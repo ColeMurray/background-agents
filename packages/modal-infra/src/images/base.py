@@ -10,14 +10,41 @@ This image provides a complete development environment with:
 - Sandbox entrypoint and bridge code
 """
 
+from importlib import import_module
 from pathlib import Path
 
 import modal
 
-import sandbox_runtime
+
+def _resolve_sandbox_runtime_dir() -> Path:
+    """
+    Resolve the sandbox runtime package for both local and deployed contexts.
+
+    In deployed Modal functions, `sandbox_runtime` is mounted as an importable
+    Python package. During local development, fall back to the sibling monorepo
+    package path so image builds do not depend on prior editable installs.
+    """
+    try:
+        module_file = import_module("sandbox_runtime").__file__
+        if module_file is None:
+            raise RuntimeError("sandbox_runtime package is missing a __file__ path")
+        runtime_dir = Path(module_file).resolve().parent
+    except ModuleNotFoundError:
+        runtime_dir = (
+            Path(__file__).resolve().parents[3] / "sandbox-runtime" / "src" / "sandbox_runtime"
+        )
+    expected_files = ("__init__.py", "entrypoint.py", "bridge.py")
+    missing_files = [name for name in expected_files if not (runtime_dir / name).exists()]
+    if missing_files:
+        raise RuntimeError(
+            "sandbox_runtime source files are missing from the monorepo checkout. "
+            f"Expected files under {runtime_dir}: {', '.join(missing_files)}"
+        )
+    return runtime_dir
+
 
 # Get the path to the sandbox runtime code (provider-agnostic)
-SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
+SANDBOX_RUNTIME_DIR = _resolve_sandbox_runtime_dir()
 
 # OpenCode version to install
 OPENCODE_VERSION = "latest"
@@ -29,8 +56,8 @@ CODE_SERVER_VERSION = "4.109.5"
 AGENT_BROWSER_VERSION = "0.21.2"
 
 # Cache buster - change this to force Modal image rebuild
-# v44: replace Playwright with agent-browser for browser automation
-CACHE_BUSTER = "v44-agent-browser"
+# v45: bootstrap sandbox_runtime from monorepo paths during deploy and image build
+CACHE_BUSTER = "v45-sandbox-runtime-bootstrap"
 
 # Base image with all development tools
 base_image = (

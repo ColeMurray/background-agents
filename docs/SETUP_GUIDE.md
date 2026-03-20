@@ -194,6 +194,8 @@ Critical notes before deploy:
 - Build `@open-inspect/shared` first.
 - Use two-phase Terraform deploy for DO/service bindings.
 - Deploy Modal with `modal deploy deploy.py` (not `src/app.py`).
+- For direct `modal-infra` development or deployment, install the sibling `packages/sandbox-runtime`
+  package first.
 
 ## Common Issues and Fixes
 
