@@ -7,6 +7,7 @@ This image provides a complete development environment with:
 - Python 3.12 with uv
 - OpenCode CLI pre-installed
 - Playwright with headless Chrome for visual verification
+- agent-browser CLI configured to reuse Playwright Chromium
 - Sandbox entrypoint and bridge code
 """
 
@@ -25,9 +26,12 @@ OPENCODE_VERSION = "latest"
 # code-server version to install (pinned for reproducible images)
 CODE_SERVER_VERSION = "4.109.5"
 
+# agent-browser version to install (pinned for reproducible images)
+AGENT_BROWSER_VERSION = "0.21.2"
+
 # Cache buster - change this to force Modal image rebuild
-# v43: sandbox_runtime package extraction (files moved from /app/sandbox to /app/sandbox_runtime)
-CACHE_BUSTER = "v43-sandbox-runtime-extraction"
+# v44: add agent-browser and reuse Playwright Chromium for browser automation
+CACHE_BUSTER = "v44-agent-browser"
 
 # Base image with all development tools
 base_image = (
@@ -107,6 +111,11 @@ base_image = (
         # This ensures tools can import the plugin without needing to run bun add
         "npm install -g @opencode-ai/plugin@latest zod",
     )
+    # Install agent-browser CLI
+    .run_commands(
+        f"npm install -g agent-browser@{AGENT_BROWSER_VERSION}",
+        "agent-browser --version",
+    )
     # Install code-server for browser-based VS Code editing (direct .deb from GitHub releases)
     .run_commands(
         f"curl -fsSL -o /tmp/code-server.deb"
@@ -120,6 +129,7 @@ base_image = (
     .run_commands(
         "playwright install chromium",
         "playwright install-deps chromium",
+        "python -c \"from pathlib import Path; matches = sorted(Path('/root/.cache/ms-playwright').glob('chromium-*/chrome-linux/chrome')); assert matches, 'Chromium executable not found'; target = Path('/usr/local/bin/agent-browser-chromium'); target.unlink(missing_ok=True); target.symlink_to(matches[-1]); print(matches[-1])\"",
     )
     # Create working directories
     .run_commands(
@@ -135,6 +145,7 @@ base_image = (
             "NODE_ENV": "development",
             "PNPM_HOME": "/root/.local/share/pnpm",
             "PATH": "/root/.bun/bin:/root/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin",
+            "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/local/bin/agent-browser-chromium",
             "PLAYWRIGHT_BROWSERS_PATH": "/root/.cache/ms-playwright",
             "PYTHONPATH": "/app",
             "SANDBOX_VERSION": CACHE_BUSTER,

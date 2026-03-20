@@ -38,6 +38,7 @@ Base image definition with:
 - Python 3.12 with uv
 - OpenCode CLI
 - Playwright + headless Chrome
+- agent-browser CLI wired to the Playwright Chromium binary
 
 ### Sandbox (`src/sandbox/`)
 
