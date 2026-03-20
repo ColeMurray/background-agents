@@ -40,7 +40,7 @@ export function sanitizeBranchName(name: string | null | undefined): string | nu
     return null;
   }
 
-  return trimmed;
+  return normalizeBranchName(trimmed);
 }
 
 /**
