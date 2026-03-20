@@ -1,13 +1,14 @@
 """Deployment bootstrap and image path smoke tests."""
 
+import sys
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
-
-from src.images.base import SANDBOX_RUNTIME_DIR
 
 
 def _load_deploy_module():
     """Load deploy.py as a module for smoke testing."""
+    sys.modules.pop("sandbox_runtime", None)
+
     deploy_path = Path(__file__).resolve().parents[1] / "deploy.py"
     spec = spec_from_file_location("modal_infra_deploy_test", deploy_path)
     assert spec is not None
@@ -31,6 +32,8 @@ def test_deploy_bootstrap_adds_sandbox_runtime_src() -> None:
 
 def test_base_image_uses_monorepo_sandbox_runtime_dir() -> None:
     """Base image should bundle sandbox-runtime from the repository checkout."""
+    from src.images.base import SANDBOX_RUNTIME_DIR
+
     expected_dir = (
         Path(__file__).resolve().parents[2] / "sandbox-runtime" / "src" / "sandbox_runtime"
     )

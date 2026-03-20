@@ -52,7 +52,14 @@ def bootstrap_local_deploy_paths() -> Path:
             "Ensure the local monorepo checkout includes packages/sandbox-runtime."
         ) from exc
 
-    return Path(sandbox_runtime.__file__).resolve().parent
+    runtime_file = sandbox_runtime.__file__
+    if runtime_file is None:
+        raise RuntimeError(
+            "sandbox_runtime package is missing a __file__ path. "
+            "Ensure packages/sandbox-runtime is a regular package, not a namespace package."
+        )
+
+    return Path(runtime_file).resolve().parent
 
 
 RUNTIME_DIR = bootstrap_local_deploy_paths()
