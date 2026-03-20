@@ -206,7 +206,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       <div>
         <label className="block text-sm font-medium text-foreground mb-1">Reasoning Effort</label>
         <Select
-          value={reasoningEffort || DEFAULT_REASONING_VALUE}
+          value={reasoningConfig ? reasoningEffort || DEFAULT_REASONING_VALUE : ""}
           onValueChange={(value) =>
             setReasoningEffort(value === DEFAULT_REASONING_VALUE ? "" : value)
           }

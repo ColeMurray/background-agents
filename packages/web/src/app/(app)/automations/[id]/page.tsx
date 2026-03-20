@@ -3,7 +3,7 @@
 import { useState, use } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { describeCron } from "@open-inspect/shared";
+import { describeCron, getReasoningConfig } from "@open-inspect/shared";
 import { useSidebarContext } from "@/components/sidebar-layout";
 import { useAutomation, useAutomationRuns } from "@/hooks/use-automations";
 import { RunHistory } from "@/components/automations/run-history";
@@ -29,6 +29,10 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   } = useAutomationRuns(id, RUNS_PAGE_SIZE + runsOffset, 0);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const reasoningLabel = automation
+    ? (automation.reasoningEffort ??
+      (getReasoningConfig(automation.model) ? "Model default" : "Not supported"))
+    : null;
 
   const handleAction = async (action: "pause" | "resume" | "trigger") => {
     setActionError(null);
@@ -219,7 +223,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
               </div>
               <div>
                 <dt className="text-muted-foreground">Reasoning</dt>
-                <dd className="text-foreground">{automation.reasoningEffort ?? "Model default"}</dd>
+                <dd className="text-foreground">{reasoningLabel}</dd>
               </div>
               <div>
                 <dt className="text-muted-foreground">Next Run</dt>
