@@ -37,7 +37,7 @@ Base image definition with:
 - Node.js 22, pnpm, Bun
 - Python 3.12 with uv
 - OpenCode CLI
-- Playwright + headless Chrome
+- agent-browser CLI + headless Chrome
 
 ### Sandbox (`src/sandbox/`)
 
