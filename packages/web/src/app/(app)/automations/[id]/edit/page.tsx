@@ -108,6 +108,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
               repoName: automation.repoName,
               baseBranch: automation.baseBranch,
               model: automation.model,
+              reasoningEffort: automation.reasoningEffort,
               scheduleCron: automation.scheduleCron ?? "0 9 * * *",
               scheduleTz: automation.scheduleTz,
               instructions: automation.instructions,

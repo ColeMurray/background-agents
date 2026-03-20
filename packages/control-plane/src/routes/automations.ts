@@ -7,6 +7,7 @@ import {
   nextCronOccurrence,
   cronIntervalMinutes,
   isValidModel,
+  isValidReasoningEffort,
   getValidModelOrDefault,
   type CreateAutomationRequest,
   type UpdateAutomationRequest,
@@ -38,6 +39,14 @@ const MAX_INSTRUCTIONS_LENGTH = 10_000;
 
 /** Warn if next run is more than 31 days away. */
 const FAR_FUTURE_THRESHOLD_MS = 31 * 24 * 60 * 60 * 1000;
+
+function resolveReasoningEffort(
+  model: string,
+  reasoningEffort: string | null | undefined
+): string | null {
+  if (reasoningEffort === undefined || reasoningEffort === null) return null;
+  return isValidReasoningEffort(model, reasoningEffort) ? reasoningEffort : null;
+}
 
 /**
  * Validate an IANA timezone string.
@@ -127,6 +136,10 @@ async function handleCreateAutomation(
 
   // Validate model
   const model = getValidModelOrDefault(body.model);
+  const reasoningEffort = resolveReasoningEffort(model, body.reasoningEffort);
+  if (body.reasoningEffort !== undefined && body.reasoningEffort !== null && !reasoningEffort) {
+    return error("Invalid reasoning effort for selected model", 400);
+  }
 
   // Resolve repository
   const repoOwner = body.repoOwner.toLowerCase();
@@ -173,6 +186,7 @@ async function handleCreateAutomation(
     schedule_cron: body.scheduleCron,
     schedule_tz: body.scheduleTz,
     model,
+    reasoning_effort: reasoningEffort,
     enabled: 1,
     next_run_at: nextRunAt,
     consecutive_failures: 0,
@@ -274,13 +288,33 @@ async function handleUpdateAutomation(
     return error("Invalid model", 400);
   }
 
+  const nextModel = body.model !== undefined ? getValidModelOrDefault(body.model) : existing.model;
+  const requestedReasoningEffort = body.reasoningEffort;
+  const resolvedReasoningEffort =
+    requestedReasoningEffort !== undefined
+      ? resolveReasoningEffort(nextModel, requestedReasoningEffort)
+      : body.model !== undefined && existing.reasoning_effort !== null
+        ? resolveReasoningEffort(nextModel, existing.reasoning_effort)
+        : existing.reasoning_effort;
+
+  if (
+    requestedReasoningEffort !== undefined &&
+    requestedReasoningEffort !== null &&
+    resolvedReasoningEffort === null
+  ) {
+    return error("Invalid reasoning effort for selected model", 400);
+  }
+
   // Build update fields
   const updateFields: Record<string, unknown> = {};
   if (body.name !== undefined) updateFields.name = body.name.trim();
   if (body.instructions !== undefined) updateFields.instructions = body.instructions;
   if (body.scheduleCron !== undefined) updateFields.schedule_cron = body.scheduleCron;
   if (body.scheduleTz !== undefined) updateFields.schedule_tz = body.scheduleTz;
-  if (body.model !== undefined) updateFields.model = getValidModelOrDefault(body.model);
+  if (body.model !== undefined) updateFields.model = nextModel;
+  if (body.reasoningEffort !== undefined || body.model !== undefined) {
+    updateFields.reasoning_effort = resolvedReasoningEffort;
+  }
   if (body.baseBranch !== undefined) updateFields.base_branch = body.baseBranch;
 
   // Recompute next_run_at if schedule changed

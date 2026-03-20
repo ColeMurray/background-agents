@@ -8,6 +8,7 @@ import {
   KeyboardIcon,
   DataControlsIcon,
   IntegrationsIcon,
+  AppearanceIcon,
   ChevronRightIcon,
 } from "@/components/ui/icons";
 
@@ -26,6 +27,11 @@ const NAV_ITEMS = [
     id: "images",
     label: "Images",
     icon: BoxIcon,
+  },
+  {
+    id: "appearance",
+    label: "Appearance",
+    icon: AppearanceIcon,
   },
   {
     id: "keyboard-shortcuts",
