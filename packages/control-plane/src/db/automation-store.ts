@@ -21,6 +21,7 @@ export interface AutomationRow {
   schedule_cron: string | null;
   schedule_tz: string;
   model: string;
+  reasoning_effort: string | null;
   enabled: number; // SQLite integer boolean
   next_run_at: number | null;
   consecutive_failures: number;
@@ -63,6 +64,7 @@ export function toAutomation(row: AutomationRow): Automation {
     scheduleCron: row.schedule_cron,
     scheduleTz: row.schedule_tz,
     model: row.model,
+    reasoningEffort: row.reasoning_effort,
     enabled: row.enabled === 1,
     nextRunAt: row.next_run_at,
     consecutiveFailures: row.consecutive_failures,
@@ -102,9 +104,9 @@ export class AutomationStore {
       .prepare(
         `INSERT INTO automations
          (id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
-          trigger_type, schedule_cron, schedule_tz, model, enabled, next_run_at,
+          trigger_type, schedule_cron, schedule_tz, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, created_at, updated_at, deleted_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
@@ -118,6 +120,7 @@ export class AutomationStore {
         row.schedule_cron,
         row.schedule_tz,
         row.model,
+        row.reasoning_effort,
         row.enabled,
         row.next_run_at,
         row.consecutive_failures,
@@ -172,6 +175,7 @@ export class AutomationStore {
       "schedule_cron",
       "schedule_tz",
       "model",
+      "reasoning_effort",
       "base_branch",
       "next_run_at",
       "enabled",

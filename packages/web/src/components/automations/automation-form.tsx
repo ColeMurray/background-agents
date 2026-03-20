@@ -1,32 +1,37 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { DEFAULT_MODEL } from "@open-inspect/shared";
+import {
+  DEFAULT_MODEL,
+  getReasoningConfig,
+  isValidCron,
+  isValidReasoningEffort,
+} from "@open-inspect/shared";
 import { useRepos } from "@/hooks/use-repos";
 import { useBranches } from "@/hooks/use-branches";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { formatModelNameLower } from "@/lib/format";
+import { getRepoSelectorOption, getSelectedRepoDisplayName } from "@/lib/repo-display";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { RepoIcon, BranchIcon, ModelIcon, ChevronDownIcon } from "@/components/ui/icons";
 import { CronPicker } from "./cron-picker";
 
-const COMMON_TIMEZONES = [
-  "UTC",
-  "America/New_York",
-  "America/Chicago",
-  "America/Denver",
-  "America/Los_Angeles",
-  "Europe/London",
-  "Europe/Berlin",
-  "Europe/Paris",
-  "Asia/Tokyo",
-  "Asia/Shanghai",
-  "Asia/Kolkata",
-  "Australia/Sydney",
-];
+const ALL_TIMEZONES = Intl.supportedValuesOf("timeZone");
+const DEFAULT_REASONING_VALUE = "__default__";
+const ALL_TIMEZONE_OPTIONS = ALL_TIMEZONES.map((tz) => ({
+  value: tz,
+  label: tz.replace(/_/g, " "),
+}));
 
 export interface AutomationFormValues {
   name: string;
@@ -34,6 +39,7 @@ export interface AutomationFormValues {
   repoName: string;
   baseBranch: string;
   model: string;
+  reasoningEffort: string | null;
   scheduleCron: string;
   scheduleTz: string;
   instructions: string;
@@ -61,11 +67,13 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const { branches, loading: loadingBranches } = useBranches(repoOwner, repoName);
   const [baseBranch, setBaseBranch] = useState(initialValues?.baseBranch ?? "");
   const [model, setModel] = useState(initialValues?.model ?? DEFAULT_MODEL);
+  const [reasoningEffort, setReasoningEffort] = useState(initialValues?.reasoningEffort ?? "");
   const [scheduleCron, setScheduleCron] = useState(initialValues?.scheduleCron ?? "0 9 * * *");
   const [scheduleTz, setScheduleTz] = useState(
     initialValues?.scheduleTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone
   );
   const [instructions, setInstructions] = useState(initialValues?.instructions ?? "");
+  const isScheduleValid = isValidCron(scheduleCron);
 
   const handleRepoChange = useCallback(
     (repoFullName: string) => {
@@ -78,13 +86,14 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !selectedRepo || !instructions.trim() || !scheduleCron) return;
+    if (!name.trim() || !selectedRepo || !instructions.trim() || !isScheduleValid) return;
     const values: AutomationFormValues = {
       name: name.trim(),
       repoOwner,
       repoName,
       baseBranch,
       model,
+      reasoningEffort: reasoningEffort || null,
       scheduleCron,
       scheduleTz,
       instructions: instructions.trim(),
@@ -98,7 +107,8 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   };
 
   const selectedRepoObj = repos.find((r) => r.fullName === selectedRepo);
-  const displayRepoName = selectedRepoObj ? selectedRepoObj.name : "Select repository";
+  const displayRepoName = getSelectedRepoDisplayName(selectedRepoObj, "Select repository");
+  const reasoningConfig = getReasoningConfig(model);
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
@@ -121,11 +131,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         <Combobox
           value={selectedRepo}
           onChange={handleRepoChange}
-          items={repos.map((repo) => ({
-            value: repo.fullName,
-            label: repo.name,
-            description: `${repo.owner}${repo.private ? " \u2022 private" : ""}`,
-          }))}
+          items={repos.map(getRepoSelectorOption)}
           searchable
           searchPlaceholder="Search repositories..."
           filterFn={(option, query) =>
@@ -175,7 +181,12 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         <label className="block text-sm font-medium text-foreground mb-1">Model</label>
         <Combobox
           value={model}
-          onChange={setModel}
+          onChange={(nextModel) => {
+            setModel(nextModel);
+            if (reasoningEffort && !isValidReasoningEffort(nextModel, reasoningEffort)) {
+              setReasoningEffort("");
+            }
+          }}
           items={
             enabledModelOptions.map((group) => ({
               category: group.category,
@@ -195,6 +206,31 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         </Combobox>
       </div>
 
+      <div>
+        <label className="block text-sm font-medium text-foreground mb-1">Reasoning Effort</label>
+        <Select
+          value={reasoningConfig ? reasoningEffort || DEFAULT_REASONING_VALUE : ""}
+          onValueChange={(value) =>
+            setReasoningEffort(value === DEFAULT_REASONING_VALUE ? "" : value)
+          }
+          disabled={!reasoningConfig}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue
+              placeholder={reasoningConfig ? "Use model default" : "Not supported for this model"}
+            />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={DEFAULT_REASONING_VALUE}>Use model default</SelectItem>
+            {(reasoningConfig?.efforts ?? []).map((value) => (
+              <SelectItem key={value} value={value}>
+                {value}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
       {/* Schedule */}
       <div>
         <label className="block text-sm font-medium text-foreground mb-1">Schedule</label>
@@ -207,10 +243,8 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         <Combobox
           value={scheduleTz}
           onChange={setScheduleTz}
-          items={COMMON_TIMEZONES.map((tz) => ({
-            value: tz,
-            label: tz.replace(/_/g, " "),
-          }))}
+          items={ALL_TIMEZONE_OPTIONS}
+          maxDisplayed={20}
           searchable
           searchPlaceholder="Search timezones..."
           filterFn={(option, query) =>
@@ -243,7 +277,9 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       <div className="flex justify-end gap-3">
         <Button
           type="submit"
-          disabled={submitting || !name.trim() || !selectedRepo || !instructions.trim()}
+          disabled={
+            submitting || !name.trim() || !selectedRepo || !instructions.trim() || !isScheduleValid
+          }
         >
           {submitting
             ? mode === "create"

@@ -141,7 +141,7 @@ development environment.
 - Debian Linux with common dev tools
 - Node.js 22, Python 3.12, git, curl
 - Package managers: npm, pnpm, pip, uv
-- Playwright + headless Chrome (for visual verification)
+- agent-browser CLI + headless Chrome (for browser automation)
 - OpenCode (the coding agent)
 
 **Why Modal?** Modal sandboxes start near-instantly and support filesystem snapshots. This lets us

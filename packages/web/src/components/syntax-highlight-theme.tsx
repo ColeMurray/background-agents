@@ -2,49 +2,52 @@
 
 import { useTheme } from "next-themes";
 import { useEffect } from "react";
+import {
+  useSyntaxHighlightPreferences,
+  HLJS_THEME_REGISTRY,
+  LIGHT_THEMES,
+  DARK_THEMES,
+} from "@/hooks/use-syntax-highlight-preferences";
 
-/**
- * Maps color scheme to highlight.js theme CSS files served from /hljs-themes/.
- *
- * To support user-configurable themes, extend this mapping or accept
- * theme names as props/from user settings.
- */
-const HLJS_THEMES: Record<string, string> = {
-  light: "/hljs-themes/atom-one-light.css",
-  dark: "/hljs-themes/atom-one-dark.css",
-};
+const LINK_ID = "hljs-theme-link";
 
 /**
  * Dynamically loads the appropriate highlight.js theme stylesheet based on
- * the current color scheme. Cleanly swaps stylesheets when the theme changes.
+ * user preferences. Must be rendered as a single instance (in Providers).
  */
 export function SyntaxHighlightTheme() {
   const { resolvedTheme } = useTheme();
+  const { colorSchemeMode, preferredLightTheme, preferredDarkTheme } =
+    useSyntaxHighlightPreferences();
 
   useEffect(() => {
-    const href = HLJS_THEMES[resolvedTheme ?? "light"] ?? HLJS_THEMES.light;
+    // Determine which color scheme is active
+    let activeScheme: "light" | "dark";
+    if (colorSchemeMode === "system") {
+      activeScheme = (resolvedTheme as "light" | "dark") ?? "light";
+    } else {
+      activeScheme = colorSchemeMode;
+    }
 
-    // Check if this theme is already loaded
-    const existing = document.querySelector("link[data-hljs-theme]") as HTMLLinkElement | null;
-    if (existing?.getAttribute("href") === href) return;
+    // Pick the user's preferred theme for that scheme, falling back to first registry entry
+    const themeId = activeScheme === "dark" ? preferredDarkTheme : preferredLightTheme;
+    const fallbackThemes = activeScheme === "dark" ? DARK_THEMES : LIGHT_THEMES;
+    const themeDef = HLJS_THEME_REGISTRY.find((t) => t.id === themeId) ?? fallbackThemes[0];
+    const href = themeDef.cssPath;
 
-    const link = document.createElement("link");
-    link.rel = "stylesheet";
-    link.href = href;
-    link.setAttribute("data-hljs-theme", "true");
-
-    // Swap: add new stylesheet, then remove old one once loaded to avoid FOUC
-    link.onload = () => existing?.remove();
-    document.head.appendChild(link);
-
-    // Fallback removal if onload doesn't fire (e.g. cached)
-    const timer = existing ? setTimeout(() => existing.remove(), 100) : undefined;
-
-    return () => {
-      clearTimeout(timer);
-      link.remove();
-    };
-  }, [resolvedTheme]);
+    // Reuse a single link element by ID — no duplication, no accumulation
+    let link = document.getElementById(LINK_ID) as HTMLLinkElement | null;
+    if (link) {
+      if (link.getAttribute("href") === href) return;
+      link.href = href;
+    } else {
+      link = document.createElement("link");
+      link.id = LINK_ID;
+      link.rel = "stylesheet";
+      link.href = href;
+      document.head.appendChild(link);
+    }
+  }, [resolvedTheme, colorSchemeMode, preferredLightTheme, preferredDarkTheme]);
 
   return null;
 }

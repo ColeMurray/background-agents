@@ -7,6 +7,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { useSidebarContext } from "@/components/sidebar-layout";
 import { formatModelNameLower } from "@/lib/format";
+import { getRepoSelectorOption, getSelectedRepoDisplayName } from "@/lib/repo-display";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
 import {
@@ -346,7 +347,7 @@ function HomeContent({
   };
 
   const selectedRepoObj = repos.find((r) => r.fullName === selectedRepo);
-  const displayRepoName = selectedRepoObj ? selectedRepoObj.name : "Select repo";
+  const displayRepoName = getSelectedRepoDisplayName(selectedRepoObj, "Select repo");
 
   return (
     <div className="h-full flex flex-col">
@@ -431,11 +432,7 @@ function HomeContent({
                     <Combobox
                       value={selectedRepo}
                       onChange={(value) => setSelectedRepo(value)}
-                      items={repos.map((repo) => ({
-                        value: repo.fullName,
-                        label: repo.name,
-                        description: `${repo.owner}${repo.private ? " \u2022 private" : ""}`,
-                      }))}
+                      items={repos.map(getRepoSelectorOption)}
                       searchable
                       searchPlaceholder="Search repositories..."
                       filterFn={(option, query) =>
@@ -449,7 +446,10 @@ function HomeContent({
                       triggerClassName="flex max-w-full items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
                     >
                       <RepoIcon className="w-4 h-4" />
-                      <span className="truncate max-w-[12rem] sm:max-w-none">
+                      <span
+                        className="truncate max-w-[16rem] sm:max-w-none"
+                        title={displayRepoName}
+                      >
                         {loadingRepos ? "Loading..." : displayRepoName}
                       </span>
                       <ChevronDownIcon className="w-3 h-3" />

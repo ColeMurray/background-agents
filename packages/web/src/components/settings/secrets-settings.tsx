@@ -2,6 +2,7 @@
 
 import { SecretsEditor } from "@/components/secrets-editor";
 import { useRepos } from "@/hooks/use-repos";
+import { getRepoSelectorOption, getSelectedRepoDisplayName } from "@/lib/repo-display";
 import { useState } from "react";
 import { ChevronDownIcon, CheckIcon } from "@/components/ui/icons";
 import { Combobox } from "@/components/ui/combobox";
@@ -17,7 +18,7 @@ export function SecretsSettings() {
   const displayRepoName = isGlobal
     ? "All Repositories (Global)"
     : selectedRepoObj
-      ? selectedRepoObj.fullName
+      ? getSelectedRepoDisplayName(selectedRepoObj, "Select a repository")
       : loadingRepos
         ? "Loading..."
         : "Select a repository";
@@ -35,11 +36,7 @@ export function SecretsSettings() {
         <Combobox
           value={selectedRepo}
           onChange={setSelectedRepo}
-          items={repos.map((repo) => ({
-            value: repo.fullName,
-            label: repo.name,
-            description: `${repo.owner}${repo.private ? " \u2022 private" : ""}`,
-          }))}
+          items={repos.map(getRepoSelectorOption)}
           searchable
           searchPlaceholder="Search repositories..."
           filterFn={(option, query) =>

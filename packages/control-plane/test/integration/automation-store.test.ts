@@ -24,6 +24,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     schedule_cron: "0 9 * * *",
     schedule_tz: "UTC",
     model: "anthropic/claude-sonnet-4-6",
+    reasoning_effort: null,
     enabled: 1,
     next_run_at: now + 86400000,
     consecutive_failures: 0,
@@ -119,7 +120,12 @@ describe("AutomationStore (D1 integration)", () => {
 
     it("toAutomation maps row to camelCase", async () => {
       const store = new AutomationStore(env.DB);
-      const row = makeAutomation({ id: "auto-map", enabled: 1, consecutive_failures: 2 });
+      const row = makeAutomation({
+        id: "auto-map",
+        enabled: 1,
+        consecutive_failures: 2,
+        reasoning_effort: "high",
+      });
       await store.create(row);
 
       const dbRow = (await store.getById("auto-map"))!;
@@ -128,6 +134,7 @@ describe("AutomationStore (D1 integration)", () => {
       expect(automation.repoName).toBe("web-app");
       expect(automation.baseBranch).toBe("main");
       expect(automation.scheduleCron).toBe("0 9 * * *");
+      expect(automation.reasoningEffort).toBe("high");
       expect(automation.enabled).toBe(true);
       expect(automation.consecutiveFailures).toBe(2);
       expect(automation.createdBy).toBe("user-1");

@@ -8,10 +8,10 @@
   content: none;
 }
 
-/* Let <pre>'s bg-card be authoritative — avoid color frame from hljs theme background */
+/* Let the hljs theme control code block background and text color.
+   Padding lives on code.hljs so the theme background covers the full box. */
 pre code.hljs {
-  background: transparent;
-  padding: 0;
+  padding: 0.75rem;
 }
 
 /*

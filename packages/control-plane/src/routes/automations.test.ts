@@ -127,6 +127,7 @@ const sampleRow = {
   schedule_cron: "0 9 * * *",
   schedule_tz: "UTC",
   model: "anthropic/claude-sonnet-4-6",
+  reasoning_effort: null,
   enabled: 1,
   next_run_at: now,
   consecutive_failures: 0,
@@ -189,6 +190,30 @@ describe("automation route handlers", () => {
       const res = await callRoute("POST", "/automations", { body: validBody });
       expect(res.status).toBe(201);
       expect(mockStore.create).toHaveBeenCalledTimes(1);
+    });
+
+    it("stores reasoning effort when valid for the selected model", async () => {
+      mockStore.create.mockResolvedValue(undefined);
+      mockStore.getById.mockResolvedValue({ ...sampleRow, reasoning_effort: "high" });
+
+      const res = await callRoute("POST", "/automations", {
+        body: { ...validBody, model: "anthropic/claude-sonnet-4-6", reasoningEffort: "high" },
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockStore.create).toHaveBeenCalledWith(
+        expect.objectContaining({ model: "anthropic/claude-sonnet-4-6", reasoning_effort: "high" })
+      );
+    });
+
+    it("returns 400 for invalid reasoning effort", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: { ...validBody, model: "anthropic/claude-sonnet-4-6", reasoningEffort: "xhigh" },
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json<{ error: string }>();
+      expect(body.error).toContain("reasoning");
     });
 
     it("returns 400 when name is missing", async () => {
@@ -292,6 +317,52 @@ describe("automation route handlers", () => {
         "auto-1",
         expect.objectContaining({ name: "Updated" })
       );
+    });
+
+    it("updates reasoning effort when valid for the selected model", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockStore.update.mockResolvedValue({ ...sampleRow, reasoning_effort: "high" });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { reasoningEffort: "high" },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.update).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({ reasoning_effort: "high" })
+      );
+    });
+
+    it("clears incompatible reasoning effort when model changes", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, reasoning_effort: "max" });
+      mockStore.update.mockResolvedValue({
+        ...sampleRow,
+        model: "openai/gpt-5.4",
+        reasoning_effort: null,
+      });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { model: "openai/gpt-5.4" },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.update).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({ model: "openai/gpt-5.4", reasoning_effort: null })
+      );
+    });
+
+    it("returns 400 for invalid reasoning effort in update", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "xhigh" },
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json<{ error: string }>();
+      expect(body.error).toContain("reasoning");
     });
 
     it("returns 404 when automation not found", async () => {

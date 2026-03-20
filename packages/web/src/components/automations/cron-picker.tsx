@@ -83,9 +83,7 @@ export function CronPicker({ value, onChange, timezone }: CronPickerProps) {
 
   const handleCustomChange = (cron: string) => {
     setCustomValue(cron);
-    if (isValidCron(cron)) {
-      onChange(cron);
-    }
+    onChange(isValidCron(cron) ? cron : "");
   };
 
   const isValid = isValidCron(value);
