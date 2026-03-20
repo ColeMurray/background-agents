@@ -29,7 +29,9 @@ def _resolve_sandbox_runtime_dir() -> Path:
         if module_file is None:
             raise RuntimeError("sandbox_runtime package is missing a __file__ path")
         runtime_dir = Path(module_file).resolve().parent
-    except ModuleNotFoundError:
+    except ModuleNotFoundError as exc:
+        if exc.name != "sandbox_runtime":
+            raise
         runtime_dir = (
             Path(__file__).resolve().parents[3] / "sandbox-runtime" / "src" / "sandbox_runtime"
         )

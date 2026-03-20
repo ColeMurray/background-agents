@@ -15,7 +15,12 @@ def _load_deploy_module():
     assert spec.loader is not None
 
     module = module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.modules["modal_infra_deploy_test"] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop("modal_infra_deploy_test", None)
+        raise
     return module
 
 
