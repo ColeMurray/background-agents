@@ -89,6 +89,7 @@ const sampleRow: AutomationRow = {
   schedule_cron: "0 9 * * *",
   schedule_tz: "UTC",
   model: "anthropic/claude-sonnet-4-6",
+  reasoning_effort: null,
   enabled: 1,
   next_run_at: now + 86400000,
   consecutive_failures: 0,
@@ -122,6 +123,7 @@ describe("toAutomation", () => {
     expect(automation.baseBranch).toBe("main");
     expect(automation.scheduleCron).toBe("0 9 * * *");
     expect(automation.scheduleTz).toBe("UTC");
+    expect(automation.reasoningEffort).toBeNull();
     expect(automation.enabled).toBe(true);
     expect(automation.triggerType).toBe("schedule");
     expect(automation.consecutiveFailures).toBe(0);

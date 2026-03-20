@@ -573,6 +573,7 @@ export interface Automation {
   scheduleCron: string | null;
   scheduleTz: string;
   model: string;
+  reasoningEffort: string | null;
   enabled: boolean;
   nextRunAt: number | null;
   consecutiveFailures: number;
@@ -592,6 +593,7 @@ export interface CreateAutomationRequest {
   scheduleCron: string;
   scheduleTz: string;
   model?: string;
+  reasoningEffort?: string | null;
 }
 
 export interface UpdateAutomationRequest {
@@ -600,6 +602,7 @@ export interface UpdateAutomationRequest {
   scheduleCron?: string;
   scheduleTz?: string;
   model?: string;
+  reasoningEffort?: string | null;
   baseBranch?: string;
 }
 

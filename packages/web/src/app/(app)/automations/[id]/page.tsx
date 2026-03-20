@@ -218,6 +218,10 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 <dd className="text-foreground">{formatModelNameLower(automation.model)}</dd>
               </div>
               <div>
+                <dt className="text-muted-foreground">Reasoning</dt>
+                <dd className="text-foreground">{automation.reasoningEffort ?? "Model default"}</dd>
+              </div>
+              <div>
                 <dt className="text-muted-foreground">Next Run</dt>
                 <dd className="text-foreground">
                   {automation.nextRunAt ? new Date(automation.nextRunAt).toLocaleString() : "—"}
