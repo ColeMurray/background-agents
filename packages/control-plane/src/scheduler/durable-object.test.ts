@@ -110,6 +110,7 @@ const sampleAutomation = {
   schedule_cron: "0 9 * * *",
   schedule_tz: "UTC",
   model: "anthropic/claude-sonnet-4-6",
+  reasoning_effort: null,
   enabled: 1,
   next_run_at: now - 60000,
   consecutive_failures: 0,
@@ -174,6 +175,32 @@ describe("SchedulerDO", () => {
         expect.any(String),
         expect.objectContaining({ status: "running" })
       );
+    });
+
+    it("passes automation reasoning effort into created sessions", async () => {
+      const automation = { ...sampleAutomation, reasoning_effort: "high" };
+      mockStore.getOverdueAutomations.mockResolvedValue([automation]);
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      const initCall = fetchMock.mock.calls.find((call) => {
+        const input = call[0];
+        const url =
+          typeof input === "string" ? input : input instanceof Request ? input.url : String(input);
+        return new URL(url).pathname === "/internal/init";
+      });
+
+      expect(initCall).toBeDefined();
+      const initBody = JSON.parse(String(initCall?.[1]?.body));
+      expect(initBody.reasoningEffort).toBe("high");
     });
 
     it("skips automation with active run (concurrency guard)", async () => {
