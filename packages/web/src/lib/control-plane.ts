@@ -73,6 +73,9 @@ function isServiceBinding(value: unknown): value is ServiceBinding {
 async function getServiceBinding(): Promise<ServiceBinding | null> {
   // In local development, always use URL-based fetch — the service binding
   // resolves to a local wrangler proxy that won't be running.
+  // In local development (next dev), always use URL-based fetch. When
+  // @opennextjs/cloudflare is loaded in a Node.js dev server it can return a
+  // stub service binding whose fetch fails with a "no local dev session" error.
   if (process.env.NODE_ENV === "development") {
     return null;
   }
