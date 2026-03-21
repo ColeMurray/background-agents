@@ -263,10 +263,19 @@ export class IntegrationSettingsStore {
     }
 
     if (
-      settings.commentActionInstructions !== undefined &&
-      typeof settings.commentActionInstructions !== "string"
+      settings.issueSessionInstructions !== undefined &&
+      typeof settings.issueSessionInstructions !== "string"
     ) {
-      throw new IntegrationSettingsValidationError("commentActionInstructions must be a string");
+      throw new IntegrationSettingsValidationError("issueSessionInstructions must be a string");
+    }
+
+    if (
+      typeof settings.issueSessionInstructions === "string" &&
+      settings.issueSessionInstructions.length > 10000
+    ) {
+      throw new IntegrationSettingsValidationError(
+        "issueSessionInstructions must be 10000 characters or fewer"
+      );
     }
   }
 

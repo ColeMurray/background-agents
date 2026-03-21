@@ -546,8 +546,8 @@ async function handleNewSession(
     ? buildPromptContextPrompt(webhook.agentSession.promptContext)
     : buildPrompt(issue, issueDetails, comment);
 
-  if (integrationConfig.commentActionInstructions) {
-    prompt += `\n\n## Additional Instructions\n\n${integrationConfig.commentActionInstructions}`;
+  if (integrationConfig.issueSessionInstructions) {
+    prompt += `\n\n## Additional Instructions\n\n${integrationConfig.issueSessionInstructions}`;
   }
 
   const callbackContext: CallbackContext = {

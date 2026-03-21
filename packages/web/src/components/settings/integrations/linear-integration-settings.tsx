@@ -139,8 +139,8 @@ function GlobalSettingsSection({
   const [emitToolProgressActivities, setEmitToolProgressActivities] = useState(
     settings?.defaults?.emitToolProgressActivities ?? true
   );
-  const [commentActionInstructions, setCommentActionInstructions] = useState(
-    settings?.defaults?.commentActionInstructions ?? ""
+  const [issueSessionInstructions, setIssueSessionInstructions] = useState(
+    settings?.defaults?.issueSessionInstructions ?? ""
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -158,7 +158,7 @@ function GlobalSettingsSection({
         setAllowUserPreferenceOverride(settings.defaults?.allowUserPreferenceOverride ?? true);
         setAllowLabelModelOverride(settings.defaults?.allowLabelModelOverride ?? true);
         setEmitToolProgressActivities(settings.defaults?.emitToolProgressActivities ?? true);
-        setCommentActionInstructions(settings.defaults?.commentActionInstructions ?? "");
+        setIssueSessionInstructions(settings.defaults?.issueSessionInstructions ?? "");
       }
       setInitialized(true);
     }
@@ -190,7 +190,7 @@ function GlobalSettingsSection({
         setAllowUserPreferenceOverride(true);
         setAllowLabelModelOverride(true);
         setEmitToolProgressActivities(true);
-        setCommentActionInstructions("");
+        setIssueSessionInstructions("");
         setDirty(false);
         toast.success("Settings reset to defaults.");
       } else {
@@ -216,7 +216,7 @@ function GlobalSettingsSection({
 
     if (model) defaults.model = model;
     if (effort) defaults.reasoningEffort = effort;
-    if (commentActionInstructions) defaults.commentActionInstructions = commentActionInstructions;
+    if (issueSessionInstructions) defaults.issueSessionInstructions = issueSessionInstructions;
 
     const body: LinearGlobalConfig = { defaults };
     if (repoScopeMode === "selected") {
@@ -359,16 +359,17 @@ function GlobalSettingsSection({
 
       <div className="mb-4">
         <label className="block text-sm font-medium text-foreground mb-1">
-          Comment Action Instructions
+          Issue Session Instructions
         </label>
         <p className="text-xs text-muted-foreground mb-2">
-          Custom instructions appended to agent prompts. Use this to guide how the agent approaches
-          Linear issues.
+          Custom instructions appended to agent prompts for all Linear issue sessions. Use this to
+          guide how the agent approaches issues (e.g., coding standards, preferred tools, MR
+          conventions).
         </p>
         <Textarea
-          value={commentActionInstructions}
+          value={issueSessionInstructions}
           onChange={(e) => {
-            setCommentActionInstructions(e.target.value);
+            setIssueSessionInstructions(e.target.value);
             setDirty(true);
             setError("");
           }}

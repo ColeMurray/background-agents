@@ -7,7 +7,7 @@ export interface ResolvedLinearConfig {
   allowUserPreferenceOverride: boolean;
   allowLabelModelOverride: boolean;
   emitToolProgressActivities: boolean;
-  commentActionInstructions: string | null;
+  issueSessionInstructions: string | null;
   enabledRepos: string[] | null;
 }
 
@@ -17,7 +17,7 @@ const DEFAULT_CONFIG: ResolvedLinearConfig = {
   allowUserPreferenceOverride: true,
   allowLabelModelOverride: true,
   emitToolProgressActivities: true,
-  commentActionInstructions: null,
+  issueSessionInstructions: null,
   enabledRepos: null,
 };
 

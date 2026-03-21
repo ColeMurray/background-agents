@@ -28,7 +28,7 @@ export interface LinearBotSettings {
   allowUserPreferenceOverride?: boolean;
   allowLabelModelOverride?: boolean;
   emitToolProgressActivities?: boolean;
-  commentActionInstructions?: string;
+  issueSessionInstructions?: string;
 }
 
 /** Overridable behavior settings for the code-server integration. */
