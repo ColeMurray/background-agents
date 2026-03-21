@@ -6,7 +6,7 @@ This image provides a complete development environment with:
 - Node.js 22 LTS, pnpm, Bun runtime
 - Python 3.12 with uv
 - OpenCode CLI pre-installed
-- Playwright with headless Chrome for visual verification
+- agent-browser CLI with headless Chrome for browser automation
 - Sandbox entrypoint and bridge code
 """
 
@@ -25,9 +25,12 @@ OPENCODE_VERSION = "latest"
 # code-server version to install (pinned for reproducible images)
 CODE_SERVER_VERSION = "4.109.5"
 
+# agent-browser version to install (pinned for reproducible images)
+AGENT_BROWSER_VERSION = "0.21.2"
+
 # Cache buster - change this to force Modal image rebuild
-# v43: sandbox_runtime package extraction (files moved from /app/sandbox to /app/sandbox_runtime)
-CACHE_BUSTER = "v43-sandbox-runtime-extraction"
+# v44: replace Playwright with agent-browser for browser automation
+CACHE_BUSTER = "v44-agent-browser"
 
 # Base image with all development tools
 base_image = (
@@ -42,7 +45,7 @@ base_image = (
         "openssh-client",
         "jq",
         "unzip",  # Required for Bun installation
-        # For Playwright
+        # Shared libraries required by headless Chromium
         "libnss3",
         "libnspr4",
         "libatk1.0-0",
@@ -93,7 +96,6 @@ base_image = (
         "uv",
         "httpx",
         "websockets",
-        "playwright",
         "pydantic>=2.0",  # Required for sandbox types
         "PyJWT[crypto]",  # For GitHub App token generation (includes cryptography)
     )
@@ -116,10 +118,11 @@ base_image = (
         "rm /tmp/code-server.deb",
         "code-server --version",
     )
-    # Install Playwright browsers (Chromium only to save space)
+    # Install agent-browser CLI and download Chromium
     .run_commands(
-        "playwright install chromium",
-        "playwright install-deps chromium",
+        f"npm install -g agent-browser@{AGENT_BROWSER_VERSION}",
+        "agent-browser install",
+        "agent-browser --version",
     )
     # Create working directories
     .run_commands(
@@ -135,7 +138,6 @@ base_image = (
             "NODE_ENV": "development",
             "PNPM_HOME": "/root/.local/share/pnpm",
             "PATH": "/root/.bun/bin:/root/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin",
-            "PLAYWRIGHT_BROWSERS_PATH": "/root/.cache/ms-playwright",
             "PYTHONPATH": "/app",
             "SANDBOX_VERSION": CACHE_BUSTER,
             # NODE_PATH for globally installed modules (used by custom tools)

@@ -8,6 +8,13 @@
 export const BRANCH_PREFIX = "open-inspect";
 
 /**
+ * Normalize a git branch name for consistent Open-Inspect branch handling.
+ */
+export function normalizeBranchName(branchName: string): string {
+  return branchName.trim().toLowerCase();
+}
+
+/**
  * Generate a branch name for a session.
  *
  * @param sessionId - Session ID
@@ -16,7 +23,7 @@ export const BRANCH_PREFIX = "open-inspect";
  */
 export function generateBranchName(sessionId: string, _title?: string): string {
   // Use just session ID to keep it short and unique
-  return `${BRANCH_PREFIX}/${sessionId}`;
+  return normalizeBranchName(`${BRANCH_PREFIX}/${sessionId}`);
 }
 
 /**
@@ -27,15 +34,16 @@ export function generateBranchName(sessionId: string, _title?: string): string {
  */
 export function extractSessionIdFromBranch(branchName: string): string | null {
   const prefix = `${BRANCH_PREFIX}/`;
-  if (!branchName.startsWith(prefix)) {
+  const normalizedBranchName = normalizeBranchName(branchName);
+  if (!normalizedBranchName.startsWith(prefix)) {
     return null;
   }
-  return branchName.slice(prefix.length);
+  return normalizedBranchName.slice(prefix.length);
 }
 
 /**
  * Check if a branch name is an Open-Inspect branch.
  */
 export function isInspectBranch(branchName: string): boolean {
-  return branchName.startsWith(`${BRANCH_PREFIX}/`);
+  return normalizeBranchName(branchName).startsWith(`${BRANCH_PREFIX}/`);
 }
