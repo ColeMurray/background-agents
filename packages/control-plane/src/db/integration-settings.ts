@@ -261,6 +261,13 @@ export class IntegrationSettingsStore {
     ) {
       throw new IntegrationSettingsValidationError("emitToolProgressActivities must be a boolean");
     }
+
+    if (
+      settings.commentActionInstructions !== undefined &&
+      typeof settings.commentActionInstructions !== "string"
+    ) {
+      throw new IntegrationSettingsValidationError("commentActionInstructions must be a string");
+    }
   }
 
   private validateCodeServerSettings(settings: CodeServerSettings): void {

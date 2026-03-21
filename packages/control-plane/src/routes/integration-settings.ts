@@ -333,6 +333,7 @@ async function handleGetResolvedConfig(
         allowUserPreferenceOverride: linearSettings.allowUserPreferenceOverride ?? true,
         allowLabelModelOverride: linearSettings.allowLabelModelOverride ?? true,
         emitToolProgressActivities: linearSettings.emitToolProgressActivities ?? true,
+        commentActionInstructions: linearSettings.commentActionInstructions ?? null,
         enabledRepos,
       },
     });
