@@ -4,8 +4,7 @@ version = "0.1.0"
 description = "Modal sandbox infrastructure for Open-Inspect coding agent"
 requires-python = ">=3.12"
 dependencies = [
-    # open-inspect-sandbox-runtime is a sibling package (not on PyPI).
-    # Install it first: pip install -e ../sandbox-runtime
+    "open-inspect-sandbox-runtime",  # sibling package, resolved via [tool.uv.sources]
     "modal>=0.73.0",
     "httpx>=0.27.0",
     "websockets>=13.0",
@@ -21,6 +20,9 @@ dev = [
     "ruff>=0.9.0",
     "mypy>=1.14.0",
 ]
+
+[tool.uv.sources]
+open-inspect-sandbox-runtime = { path = "../sandbox-runtime", editable = true }
 
 [build-system]
 requires = ["hatchling"]

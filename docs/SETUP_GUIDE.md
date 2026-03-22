@@ -173,10 +173,11 @@ npm test -w @open-inspect/linear-bot
 ```bash
 cd packages/modal-infra
 
-# preferred
+# preferred (sandbox-runtime resolved automatically via uv.lock)
 uv sync --frozen --extra dev
 
-# alternative
+# alternative (install sandbox-runtime sibling package first)
+pip install -e ../sandbox-runtime
 pip install -e ".[dev]"
 
 pytest tests/ -v

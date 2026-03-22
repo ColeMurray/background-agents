@@ -97,6 +97,7 @@ setup_python() {
   # shellcheck disable=SC1091
   source "$MODAL_DIR/.venv/bin/activate"
   info "Installing Python dev dependencies…"
+  pip install -q -e "$REPO_ROOT/packages/sandbox-runtime"
   pip install -q -e "$MODAL_DIR[dev]"
   deactivate
   info "Python environment ready (activate with: source packages/modal-infra/.venv/bin/activate)"
