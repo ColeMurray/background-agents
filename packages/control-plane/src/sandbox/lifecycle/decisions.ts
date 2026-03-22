@@ -425,6 +425,69 @@ export function evaluateHeartbeatHealth(
   return { isStale: false };
 }
 
+// ==================== Connecting Timeout ====================
+
+/**
+ * Configuration for the initial-connect watchdog.
+ */
+export interface ConnectingTimeoutConfig {
+  /** Maximum time in ms a sandbox can stay in "connecting" before being failed */
+  timeoutMs: number;
+}
+
+/**
+ * Default connecting timeout: 2 minutes.
+ * Boot sequence (git clone → setup.sh → start.sh → opencode → bridge connect) typically
+ * takes 30–90 seconds. Two minutes provides margin without leaving users waiting too long.
+ */
+export const DEFAULT_CONNECTING_TIMEOUT_CONFIG: ConnectingTimeoutConfig = {
+  timeoutMs: 120_000,
+};
+
+/**
+ * Result of connecting timeout evaluation.
+ */
+export interface ConnectingTimeoutResult {
+  /** Whether the sandbox has exceeded the connecting timeout */
+  isTimedOut: boolean;
+  /** Time elapsed since sandbox was created (ms) */
+  elapsedMs: number;
+}
+
+/**
+ * Evaluate whether a sandbox has been stuck in "connecting" too long.
+ *
+ * After a sandbox is spawned, it must establish a WebSocket connection to the
+ * control plane within the configured timeout. If the bridge never connects
+ * (crash, network failure, etc.), this function detects the timeout so the
+ * alarm handler can fail the sandbox.
+ *
+ * Pure function: no side effects. Safe to call for any status — returns
+ * `isTimedOut: false` for non-connecting sandboxes.
+ *
+ * @param status - Current sandbox status
+ * @param createdAt - Timestamp (ms) when the sandbox was spawned
+ * @param config - Connecting timeout configuration
+ * @param now - Current timestamp (ms)
+ * @returns Whether the sandbox has timed out and how long it's been connecting
+ */
+export function evaluateConnectingTimeout(
+  status: SandboxStatus,
+  createdAt: number,
+  config: ConnectingTimeoutConfig,
+  now: number
+): ConnectingTimeoutResult {
+  if (status !== "connecting") {
+    return { isTimedOut: false, elapsedMs: 0 };
+  }
+
+  const elapsedMs = now - createdAt;
+  return {
+    isTimedOut: elapsedMs >= config.timeoutMs,
+    elapsedMs,
+  };
+}
+
 // ==================== Warm Decision ====================
 
 /**

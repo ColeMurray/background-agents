@@ -18,15 +18,18 @@ import {
   evaluateSpawnDecision,
   evaluateInactivityTimeout,
   evaluateHeartbeatHealth,
+  evaluateConnectingTimeout,
   evaluateWarmDecision,
   DEFAULT_CIRCUIT_BREAKER_CONFIG,
   DEFAULT_SPAWN_CONFIG,
   DEFAULT_INACTIVITY_CONFIG,
   DEFAULT_HEARTBEAT_CONFIG,
+  DEFAULT_CONNECTING_TIMEOUT_CONFIG,
   type CircuitBreakerConfig,
   type SpawnConfig,
   type InactivityConfig,
   type HeartbeatConfig,
+  type ConnectingTimeoutConfig,
 } from "./decisions";
 import { extractProviderAndModel } from "../../utils/models";
 import { createLogger, type Logger } from "../../logger";
@@ -134,6 +137,7 @@ export interface SandboxLifecycleConfig {
   spawn: SpawnConfig;
   inactivity: InactivityConfig;
   heartbeat: HeartbeatConfig;
+  connectingTimeout: ConnectingTimeoutConfig;
   controlPlaneUrl: string;
   /** Default model ID used when the session has no model override. */
   model: string;
@@ -149,6 +153,7 @@ export const DEFAULT_LIFECYCLE_CONFIG: Omit<SandboxLifecycleConfig, "controlPlan
   spawn: DEFAULT_SPAWN_CONFIG,
   inactivity: DEFAULT_INACTIVITY_CONFIG,
   heartbeat: DEFAULT_HEARTBEAT_CONFIG,
+  connectingTimeout: DEFAULT_CONNECTING_TIMEOUT_CONFIG,
 };
 
 /** Child (agent-spawned) sessions get a shorter sandbox timeout. */
@@ -403,6 +408,11 @@ export class SandboxLifecycleManager {
       this.storage.updateSandboxStatus("connecting");
       this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
 
+      // Schedule connecting timeout watchdog — if the bridge doesn't connect
+      // within the allowed window, handleAlarm() will fail the sandbox.
+      // This alarm is naturally replaced by the inactivity alarm on successful connect.
+      await this.alarmScheduler.scheduleAlarm(Date.now() + this.config.connectingTimeout.timeoutMs);
+
       // Reset circuit breaker on successful spawn initiation
       this.storage.resetCircuitBreaker();
     } catch (error) {
@@ -525,6 +535,12 @@ export class SandboxLifecycleManager {
 
         this.storage.updateSandboxStatus("connecting");
         this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
+
+        // Schedule connecting timeout watchdog (same as doSpawn)
+        await this.alarmScheduler.scheduleAlarm(
+          Date.now() + this.config.connectingTimeout.timeoutMs
+        );
+
         this.broadcaster.broadcast({
           type: "sandbox_restored",
           message: "Session restored from snapshot",
@@ -662,7 +678,33 @@ export class SandboxLifecycleManager {
       return;
     }
 
-    // Check heartbeat health first
+    // Check connecting timeout — sandbox failed to connect within allowed time
+    const connectingResult = evaluateConnectingTimeout(
+      sandbox.status as SandboxStatus,
+      sandbox.created_at,
+      this.config.connectingTimeout,
+      now
+    );
+
+    if (connectingResult.isTimedOut) {
+      this.log.warn("Connecting timeout", {
+        event: "sandbox.connecting_timeout",
+        elapsed_ms: connectingResult.elapsedMs,
+        timeout_ms: this.config.connectingTimeout.timeoutMs,
+      });
+      await this.callbacks.onSandboxTerminating?.();
+      this.storage.updateSandboxStatus("failed");
+      this.storage.clearSandboxCodeServer();
+      this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
+      this.broadcaster.broadcast({
+        type: "sandbox_error",
+        error:
+          "Sandbox failed to connect within the allowed time. It will be retried on your next message.",
+      });
+      return;
+    }
+
+    // Check heartbeat health
     const heartbeatHealth = evaluateHeartbeatHealth(
       sandbox.last_heartbeat,
       this.config.heartbeat,
