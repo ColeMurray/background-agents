@@ -187,7 +187,7 @@ Set via Modal secrets:
 
 ```bash
 # Using uv (recommended — resolves sandbox-runtime automatically)
-uv sync --extra dev
+uv sync --frozen --extra dev
 
 # Using pip (install sandbox-runtime first)
 pip install -e ../sandbox-runtime
