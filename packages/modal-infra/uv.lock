@@ -774,6 +774,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "modal" },
+    { name = "open-inspect-sandbox-runtime" },
     { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "websockets" },
@@ -792,6 +793,31 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.110.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "modal", specifier = ">=0.73.0" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14.0" },
+    { name = "open-inspect-sandbox-runtime", editable = "../sandbox-runtime" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.9.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9.0" },
+    { name = "websockets", specifier = ">=13.0" },
+]
+provides-extras = ["dev"]
+
+[[package]]
+name = "open-inspect-sandbox-runtime"
+version = "0.1.0"
+source = { editable = "../sandbox-runtime" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "pyjwt", extra = ["crypto"] },
+    { name = "websockets" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.9.0" },

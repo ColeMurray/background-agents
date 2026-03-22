@@ -6,6 +6,10 @@ describe("sanitizeBranchName", () => {
     expect(sanitizeBranchName("feature/test")).toBe("feature/test");
   });
 
+  it("normalizes valid branch names to lowercase", () => {
+    expect(sanitizeBranchName(" Feature/Test ")).toBe("feature/test");
+  });
+
   it("rejects invalid or unsafe branch names", () => {
     expect(sanitizeBranchName("")).toBeNull();
     expect(sanitizeBranchName("HEAD")).toBeNull();
@@ -17,7 +21,7 @@ describe("sanitizeBranchName", () => {
 describe("resolveHeadBranchForPr", () => {
   it("prefers request branch when valid", () => {
     const result = resolveHeadBranchForPr({
-      requestedHeadBranch: "feature/requested",
+      requestedHeadBranch: "Feature/Requested",
       sessionBranchName: "feature/session",
       generatedBranchName: "open-inspect/session-1",
       baseBranch: "main",
@@ -30,7 +34,7 @@ describe("resolveHeadBranchForPr", () => {
   it("falls back to session branch when requested branch is invalid", () => {
     const result = resolveHeadBranchForPr({
       requestedHeadBranch: "feature invalid",
-      sessionBranchName: "feature/session",
+      sessionBranchName: "Feature/Session",
       generatedBranchName: "open-inspect/session-1",
       baseBranch: "main",
     });
@@ -41,8 +45,8 @@ describe("resolveHeadBranchForPr", () => {
 
   it("skips branches that match base and falls back to generated branch", () => {
     const result = resolveHeadBranchForPr({
-      requestedHeadBranch: "main",
-      sessionBranchName: " main ",
+      requestedHeadBranch: "Main",
+      sessionBranchName: " Main ",
       generatedBranchName: "open-inspect/session-1",
       baseBranch: "main",
     });

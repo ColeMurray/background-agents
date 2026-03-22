@@ -15,6 +15,7 @@ import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
 import { RadioCard } from "@/components/ui/form-controls";
 import {
   Select,
@@ -138,6 +139,9 @@ function GlobalSettingsSection({
   const [emitToolProgressActivities, setEmitToolProgressActivities] = useState(
     settings?.defaults?.emitToolProgressActivities ?? true
   );
+  const [issueSessionInstructions, setIssueSessionInstructions] = useState(
+    settings?.defaults?.issueSessionInstructions ?? ""
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [dirty, setDirty] = useState(false);
@@ -154,6 +158,7 @@ function GlobalSettingsSection({
         setAllowUserPreferenceOverride(settings.defaults?.allowUserPreferenceOverride ?? true);
         setAllowLabelModelOverride(settings.defaults?.allowLabelModelOverride ?? true);
         setEmitToolProgressActivities(settings.defaults?.emitToolProgressActivities ?? true);
+        setIssueSessionInstructions(settings.defaults?.issueSessionInstructions ?? "");
       }
       setInitialized(true);
     }
@@ -185,6 +190,7 @@ function GlobalSettingsSection({
         setAllowUserPreferenceOverride(true);
         setAllowLabelModelOverride(true);
         setEmitToolProgressActivities(true);
+        setIssueSessionInstructions("");
         setDirty(false);
         toast.success("Settings reset to defaults.");
       } else {
@@ -210,6 +216,7 @@ function GlobalSettingsSection({
 
     if (model) defaults.model = model;
     if (effort) defaults.reasoningEffort = effort;
+    if (issueSessionInstructions) defaults.issueSessionInstructions = issueSessionInstructions;
 
     const body: LinearGlobalConfig = { defaults };
     if (repoScopeMode === "selected") {
@@ -348,6 +355,28 @@ function GlobalSettingsSection({
             }}
           />
         </label>
+      </div>
+
+      <div className="mb-4">
+        <label className="block text-sm font-medium text-foreground mb-1">
+          Issue Session Instructions
+        </label>
+        <p className="text-xs text-muted-foreground mb-2">
+          Custom instructions appended to agent prompts for all Linear issue sessions. Use this to
+          guide how the agent approaches issues (e.g., coding standards, preferred tools, MR
+          conventions).
+        </p>
+        <Textarea
+          value={issueSessionInstructions}
+          onChange={(e) => {
+            setIssueSessionInstructions(e.target.value);
+            setDirty(true);
+            setError("");
+          }}
+          rows={3}
+          placeholder="e.g., Always run tests before pushing changes. Prefer minimal diffs."
+          className="resize-y"
+        />
       </div>
 
       <div className="mb-4">
