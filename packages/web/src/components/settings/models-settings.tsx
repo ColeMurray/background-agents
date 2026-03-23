@@ -3,22 +3,28 @@
 import { useState } from "react";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
-import { MODEL_OPTIONS, DEFAULT_ENABLED_MODELS } from "@open-inspect/shared";
+import { MODEL_OPTIONS, DEFAULT_ENABLED_MODELS, isValidModel } from "@open-inspect/shared";
 import { MODEL_PREFERENCES_KEY } from "@/hooks/use-enabled-models";
 import { formatPremiumMultiplierLabel } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 
+function sanitizeEnabledModels(modelIds: Iterable<string>): Set<string> {
+  return new Set(Array.from(modelIds).filter((modelId) => isValidModel(modelId)));
+}
+
 export function ModelsSettings() {
   const { data, isLoading: loading } = useSWR<{ enabledModels: string[] }>(MODEL_PREFERENCES_KEY);
-  const [enabledModels, setEnabledModels] = useState<Set<string>>(new Set(DEFAULT_ENABLED_MODELS));
+  const [enabledModels, setEnabledModels] = useState<Set<string>>(
+    sanitizeEnabledModels(DEFAULT_ENABLED_MODELS)
+  );
   const [initialized, setInitialized] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
   // Sync SWR data into local state once on initial load
   if (data?.enabledModels && !initialized) {
-    setEnabledModels(new Set(data.enabledModels));
+    setEnabledModels(sanitizeEnabledModels(data.enabledModels));
     setInitialized(true);
   }
 
@@ -56,10 +62,11 @@ export function ModelsSettings() {
     setSaving(true);
 
     try {
+      const sanitizedEnabledModels = Array.from(sanitizeEnabledModels(enabledModels));
       const res = await fetch("/api/model-preferences", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabledModels: Array.from(enabledModels) }),
+        body: JSON.stringify({ enabledModels: sanitizedEnabledModels }),
       });
 
       if (res.ok) {

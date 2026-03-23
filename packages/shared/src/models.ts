@@ -305,7 +305,7 @@ export const MODEL_OPTIONS: ModelCategory[] = [
 
 /**
  * Models enabled by default when no preferences are stored.
- * Excludes GitHub Copilot and zen models, which must be opted into via settings.
+ * Includes a curated Copilot starter set and excludes zen models.
  */
 export const DEFAULT_ENABLED_MODELS: ValidModel[] = [
   "anthropic/claude-haiku-4-5",
@@ -318,6 +318,15 @@ export const DEFAULT_ENABLED_MODELS: ValidModel[] = [
   "openai/gpt-5.2-codex",
   "openai/gpt-5.3-codex",
   "openai/gpt-5.3-codex-spark",
+  "github-copilot/claude-haiku-4-5",
+  "github-copilot/claude-opus-4-6",
+  "github-copilot/claude-sonnet-4-6",
+  "github-copilot/gemini-3-flash",
+  "github-copilot/gpt-4.1",
+  "github-copilot/gpt-4o",
+  "github-copilot/gpt-5-mini",
+  "github-copilot/gpt-5.3-codex",
+  "github-copilot/gpt-5.4",
 ];
 
 // === Normalization ===

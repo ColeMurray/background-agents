@@ -20,7 +20,8 @@ export class ModelPreferencesStore {
 
     if (!row) return null;
 
-    return JSON.parse(row.enabled_models) as string[];
+    const parsed = JSON.parse(row.enabled_models) as string[];
+    return parsed.filter((id) => isValidModel(id));
   }
 
   /**

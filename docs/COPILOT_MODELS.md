@@ -118,7 +118,9 @@ entry or the provider entry pasted directly.
 
 ### A model is missing from the dropdown
 
-Copilot-backed models are opt-in. Enable them in model settings after adding the auth secret.
+Most Copilot-backed models are available in model settings by default, but your saved preferences
+may still exclude some of them. Enable any additional models you want in model settings after
+adding the auth secret.
 
 ### A model appears but requests fail
 

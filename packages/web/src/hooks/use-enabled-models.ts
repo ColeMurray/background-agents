@@ -1,6 +1,11 @@
 import { useMemo } from "react";
 import useSWR from "swr";
-import { MODEL_OPTIONS, DEFAULT_ENABLED_MODELS, type ModelCategory } from "@open-inspect/shared";
+import {
+  MODEL_OPTIONS,
+  DEFAULT_ENABLED_MODELS,
+  isValidModel,
+  type ModelCategory,
+} from "@open-inspect/shared";
 
 export const MODEL_PREFERENCES_KEY = "/api/model-preferences";
 
@@ -12,7 +17,10 @@ export function useEnabledModels() {
   const { data, isLoading } = useSWR<ModelPreferencesResponse>(MODEL_PREFERENCES_KEY);
 
   const enabledModels = useMemo(
-    () => data?.enabledModels ?? (isLoading ? [] : (DEFAULT_ENABLED_MODELS as string[])),
+    () =>
+      (data?.enabledModels ?? (isLoading ? [] : (DEFAULT_ENABLED_MODELS as string[]))).filter(
+        (modelId) => isValidModel(modelId)
+      ),
     [data?.enabledModels, isLoading]
   );
 
