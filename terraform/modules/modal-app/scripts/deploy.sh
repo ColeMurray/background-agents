@@ -13,6 +13,11 @@ echo "Deploying Modal app: ${APP_NAME}"
 echo "Deploy path: ${DEPLOY_PATH}"
 echo "Deploy module: ${DEPLOY_MODULE}"
 
+# Ensure Python CLI tools emit UTF-8 on Windows shells (Git Bash/PowerShell).
+# Prevents Unicode logging from failing with "charmap" codec errors.
+export PYTHONUTF8=1
+export PYTHONIOENCODING=utf-8
+
 # Verify required environment variables
 if [[ -z "${MODAL_TOKEN_ID:-}" ]]; then
     echo "Error: MODAL_TOKEN_ID environment variable is not set"

@@ -7,13 +7,12 @@ MIGRATIONS_DIR="${2:-$SCRIPT_DIR/../terraform/d1/migrations}"
 
 WRANGLER="npx wrangler"
 
+# Keep bootstrap SQL as one statement to avoid shell/newline parsing edge cases.
+CREATE_MIGRATIONS_TABLE_SQL="CREATE TABLE IF NOT EXISTS _schema_migrations (version TEXT PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')));"
+
 # 1. Ensure tracking table exists
 $WRANGLER d1 execute "$DATABASE_NAME" --remote \
-  --command "CREATE TABLE IF NOT EXISTS _schema_migrations (
-    version TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-  )"
+  --command "$CREATE_MIGRATIONS_TABLE_SQL"
 
 # 2. Get applied versions (parse JSON output)
 APPLIED=$($WRANGLER d1 execute "$DATABASE_NAME" --remote \
