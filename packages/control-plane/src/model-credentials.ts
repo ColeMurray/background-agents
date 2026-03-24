@@ -31,9 +31,7 @@ function hasCopilotAuthEntry(authObject: Record<string, unknown>): boolean {
   );
 }
 
-function getCopilotAuthEntry(
-  authObject: Record<string, unknown>
-): Record<string, unknown> | null {
+function getCopilotAuthEntry(authObject: Record<string, unknown>): Record<string, unknown> | null {
   const directEntry = authObject["github-copilot"] ?? authObject["copilot"];
   if (directEntry && typeof directEntry === "object" && !Array.isArray(directEntry)) {
     return directEntry as Record<string, unknown>;
@@ -78,8 +76,13 @@ export function extractCopilotAccessTokenFromAuthJson(authJson: string): string 
     return null;
   }
 
-  const normalizedExpiresAt =
-    expires > 0 && expires < 1_000_000_000_000 ? expires * 1000 : expires;
+  // OpenCode may persist 0 here for provider-managed OAuth sessions. Treat that
+  // as "no trusted expiry provided" rather than rejecting an otherwise usable token.
+  if (expires === 0) {
+    return access.trim();
+  }
+
+  const normalizedExpiresAt = expires > 0 && expires < 1_000_000_000_000 ? expires * 1000 : expires;
   if (normalizedExpiresAt <= Date.now() + COPILOT_ACCESS_TOKEN_EXPIRY_BUFFER_MS) {
     return null;
   }

@@ -223,6 +223,21 @@ describe("model-credentials", () => {
       ).toBeNull();
     });
 
+    it("accepts access tokens when OpenCode stores expires as zero", () => {
+      expect(
+        extractCopilotAccessTokenFromAuthJson(
+          JSON.stringify({
+            "github-copilot": {
+              type: "oauth",
+              access: "copilot-token",
+              refresh: "refresh-token",
+              expires: 0,
+            },
+          })
+        )
+      ).toBe("copilot-token");
+    });
+
     it("returns null when the Copilot access token is expired", () => {
       expect(
         extractCopilotAccessTokenFromAuthJson(
