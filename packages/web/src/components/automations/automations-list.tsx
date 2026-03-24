@@ -17,6 +17,39 @@ interface AutomationsListProps {
   onDelete: (id: string) => void;
 }
 
+function describeTrigger(automation: Automation): string {
+  if (automation.triggerType === "schedule" && automation.scheduleCron) {
+    return describeCron(automation.scheduleCron, automation.scheduleTz);
+  }
+
+  const TRIGGER_LABELS: Record<string, string> = {
+    sentry: "Sentry alert",
+    webhook: "Inbound webhook",
+    github_event: "GitHub event",
+    linear_event: "Linear event",
+  };
+
+  const label = TRIGGER_LABELS[automation.triggerType] || automation.triggerType;
+
+  if (automation.eventType) {
+    const EVENT_LABELS: Record<string, string> = {
+      "issue.created": "new error",
+      "issue.regression": "error regression",
+      "metric_alert.critical": "metric alert",
+      "pull_request.opened": "PR opened",
+      "pull_request.synchronize": "PR updated",
+      "issues.opened": "issue opened",
+      "issue_comment.created": "comment created",
+      "check_suite.completed": "CI completed",
+      "webhook.received": "webhook received",
+    };
+    const eventLabel = EVENT_LABELS[automation.eventType] || automation.eventType;
+    return `${label}: ${eventLabel}`;
+  }
+
+  return label;
+}
+
 export function AutomationsList({
   automations,
   onPause,
@@ -30,7 +63,9 @@ export function AutomationsList({
     return (
       <div className="border border-border-muted rounded-md bg-background p-8 text-center">
         <p className="text-muted-foreground">No automations yet.</p>
-        <p className="text-sm text-muted-foreground mt-1">Create one to run tasks on a schedule.</p>
+        <p className="text-sm text-muted-foreground mt-1">
+          Create one to run tasks on a schedule or in response to events.
+        </p>
       </div>
     );
   }
@@ -102,11 +137,9 @@ export function AutomationsList({
             </span>
             <span className="inline-flex items-center gap-1">
               <ClockIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
-              {automation.scheduleCron
-                ? describeCron(automation.scheduleCron, automation.scheduleTz)
-                : "No schedule"}
+              {describeTrigger(automation)}
             </span>
-            {automation.nextRunAt && (
+            {automation.triggerType === "schedule" && automation.nextRunAt && (
               <span className="inline-flex items-center gap-1">
                 Next: {formatRelativeTime(automation.nextRunAt)}
               </span>

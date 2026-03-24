@@ -192,6 +192,13 @@ variable "linear_api_key" {
   sensitive   = true
 }
 
+variable "sentry_webhook_secret" {
+  description = "Client secret from Sentry internal integration for webhook signature verification"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 # =============================================================================
 # API Keys
 # =============================================================================

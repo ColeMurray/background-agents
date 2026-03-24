@@ -34,6 +34,9 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     created_at: now,
     updated_at: now,
     deleted_at: null,
+    event_type: null,
+    trigger_config: null,
+    webhook_secret_hash: null,
     ...overrides,
   };
 }
@@ -51,6 +54,8 @@ function makeRun(automationId: string, overrides?: Partial<AutomationRunRow>): A
     started_at: null,
     completed_at: null,
     created_at: now,
+    trigger_key: null,
+    concurrency_key: null,
     ...overrides,
   };
 }

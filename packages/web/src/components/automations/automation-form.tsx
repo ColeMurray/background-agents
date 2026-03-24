@@ -6,6 +6,10 @@ import {
   getReasoningConfig,
   isValidCron,
   isValidReasoningEffort,
+  triggerSources,
+  type AutomationTriggerType,
+  type AutomationEventSource,
+  type TriggerCondition,
 } from "@open-inspect/shared";
 import { useRepos } from "@/hooks/use-repos";
 import { useBranches } from "@/hooks/use-branches";
@@ -24,6 +28,8 @@ import {
 } from "@/components/ui/select";
 import { RepoIcon, BranchIcon, ModelIcon, ChevronDownIcon } from "@/components/ui/icons";
 import { CronPicker } from "./cron-picker";
+import { TriggerTypeSelector } from "./trigger-type-selector";
+import { ConditionBuilder } from "./condition-builder";
 
 const COMMON_TIMEZONES = [
   "UTC",
@@ -53,6 +59,13 @@ const TIMEZONE_GROUPS: ComboboxGroup[] = [
   },
 ];
 
+const TRIGGER_SOURCE_MAP: Record<string, string> = {
+  github_event: "github",
+  linear_event: "linear",
+  sentry: "sentry",
+  webhook: "webhook",
+};
+
 export interface AutomationFormValues {
   name: string;
   repoOwner: string;
@@ -63,6 +76,9 @@ export interface AutomationFormValues {
   scheduleCron: string;
   scheduleTz: string;
   instructions: string;
+  triggerType: AutomationTriggerType;
+  eventType?: string;
+  triggerConfig?: { conditions: TriggerCondition[] };
 }
 
 interface AutomationFormProps {
@@ -93,7 +109,20 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     initialValues?.scheduleTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone
   );
   const [instructions, setInstructions] = useState(initialValues?.instructions ?? "");
-  const isScheduleValid = isValidCron(scheduleCron);
+  const [triggerType, setTriggerType] = useState<AutomationTriggerType>(
+    initialValues?.triggerType ?? "schedule"
+  );
+  const [eventType, setEventType] = useState(initialValues?.eventType ?? "");
+  const [conditions, setConditions] = useState<TriggerCondition[]>(
+    initialValues?.triggerConfig?.conditions ?? []
+  );
+
+  const isSchedule = triggerType === "schedule";
+  const isScheduleValid = !isSchedule || isValidCron(scheduleCron);
+
+  // Get event types for the selected trigger type
+  const triggerSourceDef = triggerSources.find((s) => TRIGGER_SOURCE_MAP[triggerType] === s.source);
+  const eventTypes = triggerSourceDef?.eventTypes ?? [];
 
   const handleRepoChange = useCallback(
     (repoFullName: string) => {
@@ -107,6 +136,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !selectedRepo || !instructions.trim() || !isScheduleValid) return;
+
     const values: AutomationFormValues = {
       name: name.trim(),
       repoOwner,
@@ -117,9 +147,19 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       scheduleCron,
       scheduleTz,
       instructions: instructions.trim(),
+      triggerType,
     };
+
+    if (!isSchedule) {
+      // Don't send schedule fields for non-schedule types
+      delete (values as Partial<AutomationFormValues>).scheduleCron;
+      delete (values as Partial<AutomationFormValues>).scheduleTz;
+
+      if (eventType) values.eventType = eventType;
+      if (conditions.length > 0) values.triggerConfig = { conditions };
+    }
+
     if (mode === "edit") {
-      // UpdateAutomationRequest does not accept repoOwner/repoName
       delete (values as Partial<AutomationFormValues>).repoOwner;
       delete (values as Partial<AutomationFormValues>).repoName;
     }
@@ -132,6 +172,14 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
+      {/* Trigger Type (only on create) */}
+      {mode === "create" && (
+        <div>
+          <label className="block text-sm font-medium text-foreground mb-2">Trigger Type</label>
+          <TriggerTypeSelector value={triggerType} onChange={setTriggerType} />
+        </div>
+      )}
+
       {/* Name */}
       <div>
         <label className="block text-sm font-medium text-foreground mb-1">Name</label>
@@ -139,7 +187,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="Daily code review"
+          placeholder={isSchedule ? "Daily code review" : "Review new PRs"}
           maxLength={200}
           required
         />
@@ -255,33 +303,70 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         </Select>
       </div>
 
-      {/* Schedule */}
-      <div>
-        <label className="block text-sm font-medium text-foreground mb-1">Schedule</label>
-        <CronPicker value={scheduleCron} onChange={setScheduleCron} timezone={scheduleTz} />
-      </div>
+      {/* Schedule fields (only for schedule type) */}
+      {isSchedule && (
+        <>
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-1">Schedule</label>
+            <CronPicker value={scheduleCron} onChange={setScheduleCron} timezone={scheduleTz} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-1">Timezone</label>
+            <Combobox
+              value={scheduleTz}
+              onChange={setScheduleTz}
+              items={TIMEZONE_GROUPS}
+              maxDisplayed={20}
+              searchable
+              searchPlaceholder="Search timezones..."
+              filterFn={(option, query) =>
+                option.label.toLowerCase().includes(query) ||
+                String(option.value).toLowerCase().includes(query)
+              }
+              dropdownWidth="w-64"
+              triggerClassName="flex w-full items-center gap-1.5 px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/20 transition"
+            >
+              <span className="truncate flex-1 text-left">{scheduleTz.replace(/_/g, " ")}</span>
+              <ChevronDownIcon className="w-3 h-3 text-muted-foreground" />
+            </Combobox>
+          </div>
+        </>
+      )}
 
-      {/* Timezone */}
-      <div>
-        <label className="block text-sm font-medium text-foreground mb-1">Timezone</label>
-        <Combobox
-          value={scheduleTz}
-          onChange={setScheduleTz}
-          items={TIMEZONE_GROUPS}
-          maxDisplayed={20}
-          searchable
-          searchPlaceholder="Search timezones..."
-          filterFn={(option, query) =>
-            option.label.toLowerCase().includes(query) ||
-            String(option.value).toLowerCase().includes(query)
-          }
-          dropdownWidth="w-64"
-          triggerClassName="flex w-full items-center gap-1.5 px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/20 transition"
-        >
-          <span className="truncate flex-1 text-left">{scheduleTz.replace(/_/g, " ")}</span>
-          <ChevronDownIcon className="w-3 h-3 text-muted-foreground" />
-        </Combobox>
-      </div>
+      {/* Event type selector (for Sentry) */}
+      {triggerType === "sentry" && eventTypes.length > 0 && (
+        <div>
+          <label className="block text-sm font-medium text-foreground mb-1">Event Type</label>
+          <Select value={eventType} onValueChange={setEventType}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select event type..." />
+            </SelectTrigger>
+            <SelectContent>
+              {eventTypes.map((et) => (
+                <SelectItem key={et.eventType} value={et.eventType}>
+                  {et.displayName}
+                  <span className="text-muted-foreground ml-2 text-xs">{et.description}</span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
+      {/* Conditions (for non-schedule types) */}
+      {!isSchedule && TRIGGER_SOURCE_MAP[triggerType] && (
+        <div>
+          <label className="block text-sm font-medium text-foreground mb-1">
+            Conditions
+            <span className="text-xs text-muted-foreground ml-1 font-normal">(optional)</span>
+          </label>
+          <ConditionBuilder
+            conditions={conditions}
+            onChange={setConditions}
+            triggerSource={TRIGGER_SOURCE_MAP[triggerType] as AutomationEventSource}
+          />
+        </div>
+      )}
 
       {/* Instructions */}
       <div>
@@ -289,7 +374,13 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         <Textarea
           value={instructions}
           onChange={(e) => setInstructions(e.target.value)}
-          placeholder="Run the test suite and fix any failing tests. If all tests pass, look for TODO comments and address the most impactful one."
+          placeholder={
+            isSchedule
+              ? "Run the test suite and fix any failing tests. If all tests pass, look for TODO comments and address the most impactful one."
+              : triggerType === "sentry"
+                ? "Investigate this Sentry error. Find the root cause in the codebase, then open a PR with a fix."
+                : "Process this webhook payload and take the appropriate action."
+          }
           maxLength={10000}
           required
           rows={6}

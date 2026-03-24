@@ -41,6 +41,7 @@ import { reposRoutes } from "./routes/repos";
 import { repoImageRoutes } from "./routes/repo-images";
 import { secretsRoutes } from "./routes/secrets";
 import { automationRoutes } from "./routes/automations";
+import { webhookRoutes } from "./webhooks";
 
 const logger = createLogger("router");
 
@@ -128,7 +129,7 @@ function getSessionStub(env: Env, match: RegExpMatchArray): DurableObjectStub | 
 /**
  * Routes that do not require authentication.
  */
-const PUBLIC_ROUTES: RegExp[] = [/^\/health$/];
+const PUBLIC_ROUTES: RegExp[] = [/^\/health$/, /^\/webhooks\//];
 
 /**
  * Routes that accept sandbox authentication.
@@ -475,6 +476,9 @@ const routes: Route[] = [
 
   // Automations
   ...automationRoutes,
+
+  // Webhooks (public routes — auth handled per-route)
+  ...webhookRoutes,
 ];
 
 /**

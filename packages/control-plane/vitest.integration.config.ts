@@ -38,6 +38,7 @@ export default defineWorkersConfig(async () => {
               DEPLOYMENT_NAME: "integration-test",
               MODAL_API_SECRET: "test-modal-api-secret",
               MODAL_WORKSPACE: "test-workspace",
+              SENTRY_WEBHOOK_SECRET: "test-sentry-webhook-secret",
               TEST_MIGRATIONS: migrations,
             },
           },

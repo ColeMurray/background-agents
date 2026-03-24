@@ -29,6 +29,9 @@ export interface AutomationRow {
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
+  event_type: string | null;
+  trigger_config: string | null; // JSON-serialized TriggerConfig
+  webhook_secret_hash: string | null;
 }
 
 export interface AutomationRunRow {
@@ -42,6 +45,8 @@ export interface AutomationRunRow {
   started_at: number | null;
   completed_at: number | null;
   created_at: number;
+  trigger_key: string | null;
+  concurrency_key: string | null;
 }
 
 export interface EnrichedRunRow extends AutomationRunRow {
@@ -72,6 +77,8 @@ export function toAutomation(row: AutomationRow): Automation {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
+    eventType: row.event_type ?? null,
+    triggerConfig: row.trigger_config ? JSON.parse(row.trigger_config) : null,
   };
 }
 
@@ -89,6 +96,8 @@ export function toAutomationRun(row: EnrichedRunRow): AutomationRun {
     createdAt: row.created_at,
     sessionTitle: row.session_title,
     artifactSummary: row.artifact_summary,
+    triggerKey: row.trigger_key ?? null,
+    concurrencyKey: row.concurrency_key ?? null,
   };
 }
 
@@ -105,8 +114,9 @@ export class AutomationStore {
         `INSERT INTO automations
          (id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
           trigger_type, schedule_cron, schedule_tz, model, reasoning_effort, enabled, next_run_at,
-          consecutive_failures, created_by, created_at, updated_at, deleted_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          consecutive_failures, created_by, created_at, updated_at, deleted_at,
+          event_type, trigger_config, webhook_secret_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
@@ -127,7 +137,10 @@ export class AutomationStore {
         row.created_by,
         row.created_at,
         row.updated_at,
-        row.deleted_at
+        row.deleted_at,
+        row.event_type,
+        row.trigger_config,
+        row.webhook_secret_hash
       )
       .run();
   }
@@ -180,6 +193,9 @@ export class AutomationStore {
       "next_run_at",
       "enabled",
       "consecutive_failures",
+      "event_type",
+      "trigger_config",
+      "webhook_secret_hash",
     ];
 
     for (const field of allowedFields) {
@@ -227,7 +243,7 @@ export class AutomationStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  async resume(id: string, nextRunAt: number): Promise<boolean> {
+  async resume(id: string, nextRunAt: number | null): Promise<boolean> {
     const now = Date.now();
     const result = await this.db
       .prepare(
@@ -273,8 +289,8 @@ export class AutomationStore {
       .prepare(
         `INSERT INTO automation_runs
          (id, automation_id, session_id, status, skip_reason, failure_reason,
-          scheduled_at, started_at, completed_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          scheduled_at, started_at, completed_at, created_at, trigger_key, concurrency_key)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         run.id,
@@ -286,7 +302,9 @@ export class AutomationStore {
         run.scheduled_at,
         run.started_at,
         run.completed_at,
-        run.created_at
+        run.created_at,
+        run.trigger_key ?? null,
+        run.concurrency_key ?? null
       );
   }
 
@@ -388,6 +406,54 @@ export class AutomationStore {
       )
       .bind(runId, automationId)
       .first<EnrichedRunRow>();
+  }
+
+  // --- Event matching queries ---
+
+  async getAutomationsForEvent(
+    repoOwner: string,
+    repoName: string,
+    triggerType: string,
+    eventType: string
+  ): Promise<AutomationRow[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT * FROM automations
+         WHERE repo_owner = ? AND repo_name = ? AND trigger_type = ? AND event_type = ?
+         AND enabled = 1 AND deleted_at IS NULL`
+      )
+      .bind(repoOwner.toLowerCase(), repoName.toLowerCase(), triggerType, eventType)
+      .all<AutomationRow>();
+    return result.results || [];
+  }
+
+  async getAutomationsForSentryEvent(eventType: string): Promise<AutomationRow[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT * FROM automations
+         WHERE trigger_type = 'sentry' AND event_type = ?
+         AND enabled = 1 AND deleted_at IS NULL`
+      )
+      .bind(eventType)
+      .all<AutomationRow>();
+    return result.results || [];
+  }
+
+  async getActiveRunForKey(
+    automationId: string,
+    concurrencyKey: string | null
+  ): Promise<AutomationRunRow | null> {
+    if (concurrencyKey === null) {
+      return this.getActiveRunForAutomation(automationId);
+    }
+    return this.db
+      .prepare(
+        `SELECT * FROM automation_runs
+         WHERE automation_id = ? AND concurrency_key = ? AND status IN ('starting', 'running')
+         ORDER BY created_at DESC LIMIT 1`
+      )
+      .bind(automationId, concurrencyKey)
+      .first<AutomationRunRow>();
   }
 
   // --- Recovery sweep queries ---

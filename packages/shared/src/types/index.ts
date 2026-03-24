@@ -557,9 +557,17 @@ export interface ChildSessionDetail {
 
 // ─── Automation Engine ────────────────────────────────────────────────────────
 
-export type AutomationTriggerType = "schedule";
+export type AutomationTriggerType =
+  | "schedule"
+  | "github_event"
+  | "linear_event"
+  | "sentry"
+  | "webhook";
 
 export type AutomationRunStatus = "starting" | "running" | "completed" | "failed" | "skipped";
+
+// Re-export TriggerConfig for use in automation interfaces below
+import type { TriggerConfig } from "../triggers/conditions";
 
 export interface Automation {
   id: string;
@@ -581,6 +589,8 @@ export interface Automation {
   createdAt: number;
   updatedAt: number;
   deletedAt: number | null;
+  eventType: string | null;
+  triggerConfig: TriggerConfig | null;
 }
 
 export interface CreateAutomationRequest {
@@ -590,10 +600,12 @@ export interface CreateAutomationRequest {
   baseBranch?: string;
   instructions: string;
   triggerType?: AutomationTriggerType;
-  scheduleCron: string;
-  scheduleTz: string;
+  scheduleCron?: string;
+  scheduleTz?: string;
   model?: string;
   reasoningEffort?: string | null;
+  eventType?: string;
+  triggerConfig?: TriggerConfig;
 }
 
 export interface UpdateAutomationRequest {
@@ -604,6 +616,7 @@ export interface UpdateAutomationRequest {
   model?: string;
   reasoningEffort?: string | null;
   baseBranch?: string;
+  triggerConfig?: TriggerConfig;
 }
 
 export interface AutomationRun {
@@ -619,6 +632,8 @@ export interface AutomationRun {
   createdAt: number;
   sessionTitle: string | null;
   artifactSummary: string | null;
+  triggerKey: string | null;
+  concurrencyKey: string | null;
 }
 
 export interface ListAutomationsResponse {

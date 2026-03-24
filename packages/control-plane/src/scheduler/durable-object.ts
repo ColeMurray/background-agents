@@ -9,7 +9,14 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
-import { nextCronOccurrence, type AutomationCallbackContext } from "@open-inspect/shared";
+import {
+  nextCronOccurrence,
+  matchesConditions,
+  conditionRegistry,
+  type AutomationCallbackContext,
+  type AutomationEvent,
+  type TriggerConfig,
+} from "@open-inspect/shared";
 import { AutomationStore, toAutomationRun, type AutomationRow } from "../db/automation-store";
 import { SessionIndexStore } from "../db/session-index";
 import { generateId } from "../auth/crypto";
@@ -74,6 +81,9 @@ export class SchedulerDO extends DurableObject<Env> {
     if (request.method === "POST" && path === "/internal/trigger") {
       return this.handleTrigger(request);
     }
+    if (request.method === "POST" && path === "/internal/event") {
+      return this.handleEvent(request);
+    }
     if (request.method === "POST" && path === "/internal/run-complete") {
       return this.handleRunComplete(request);
     }
@@ -120,6 +130,8 @@ export class SchedulerDO extends DurableObject<Env> {
             started_at: null,
             completed_at: now,
             created_at: now,
+            trigger_key: null,
+            concurrency_key: null,
           });
           await store.update(automation.id, { next_run_at: nextRunAt });
           skipped++;
@@ -146,6 +158,8 @@ export class SchedulerDO extends DurableObject<Env> {
             started_at: null,
             completed_at: null,
             created_at: now,
+            trigger_key: null,
+            concurrency_key: null,
           },
           automation.id,
           nextRunAt
@@ -233,6 +247,114 @@ export class SchedulerDO extends DurableObject<Env> {
     }
   }
 
+  // ─── Event handler ───────────────────────────────────────────────────────
+
+  private async handleEvent(request: Request): Promise<Response> {
+    const event = (await request.json()) as AutomationEvent;
+    const store = new AutomationStore(this.env.DB);
+
+    // 1. Find matching automations
+    let candidates: AutomationRow[];
+    switch (event.source) {
+      case "webhook": {
+        const automation = await store.getById(event.automationId);
+        candidates =
+          automation && automation.enabled === 1 && !automation.deleted_at ? [automation] : [];
+        break;
+      }
+      case "sentry":
+        candidates = await store.getAutomationsForSentryEvent(event.eventType);
+        break;
+      case "github":
+      case "linear":
+        candidates = await store.getAutomationsForEvent(
+          event.repoOwner,
+          event.repoName,
+          event.source === "github" ? "github_event" : "linear_event",
+          event.eventType
+        );
+        break;
+    }
+
+    let triggered = 0;
+    let skipped = 0;
+
+    for (const automation of candidates) {
+      // 2. Evaluate conditions
+      const config: TriggerConfig = automation.trigger_config
+        ? JSON.parse(automation.trigger_config)
+        : { conditions: [] };
+      if (!matchesConditions(config.conditions, event, conditionRegistry)) {
+        continue;
+      }
+
+      // 3. Concurrency check (per-event-instance)
+      const activeRun = await store.getActiveRunForKey(automation.id, event.concurrencyKey);
+      if (activeRun) {
+        skipped++;
+        continue;
+      }
+
+      // 4. Create run (dedup via unique index on trigger_key)
+      const runId = generateId();
+      const now = Date.now();
+      try {
+        await store.insertRun({
+          id: runId,
+          automation_id: automation.id,
+          session_id: null,
+          status: "starting",
+          skip_reason: null,
+          failure_reason: null,
+          scheduled_at: now,
+          started_at: null,
+          completed_at: null,
+          created_at: now,
+          trigger_key: event.triggerKey,
+          concurrency_key: event.concurrencyKey,
+        });
+      } catch (e) {
+        if (isDuplicateKeyError(e)) {
+          skipped++;
+          continue;
+        }
+        throw e;
+      }
+
+      // 5. Create session + send prompt (with event context prepended)
+      try {
+        const instructions = `${event.contextBlock}\n---\n\n${automation.instructions}`;
+        const { sessionId } = await this.createSessionForAutomation(automation, runId);
+        await this.sendPromptToSession(sessionId, automation, runId, instructions);
+
+        await store.updateRun(runId, {
+          status: "running",
+          session_id: sessionId,
+          started_at: Date.now(),
+        });
+
+        triggered++;
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        await this.failRunAndTrack(store, runId, automation.id, message);
+      }
+    }
+
+    this.log.info("Event processed", {
+      event: "scheduler.event_processed",
+      source: event.source,
+      event_type: event.eventType,
+      trigger_key: event.triggerKey,
+      triggered,
+      skipped,
+      candidates: candidates.length,
+    });
+
+    return new Response(JSON.stringify({ triggered, skipped }), {
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   // ─── Manual trigger ──────────────────────────────────────────────────────
 
   private async handleTrigger(request: Request): Promise<Response> {
@@ -279,6 +401,8 @@ export class SchedulerDO extends DurableObject<Env> {
       started_at: null,
       completed_at: null,
       created_at: now,
+      trigger_key: null,
+      concurrency_key: null,
     });
 
     try {
@@ -460,7 +584,8 @@ export class SchedulerDO extends DurableObject<Env> {
   private async sendPromptToSession(
     sessionId: string,
     automation: AutomationRow,
-    runId: string
+    runId: string,
+    instructionsOverride?: string
   ): Promise<void> {
     const doId = this.env.SESSION.idFromName(sessionId);
     const stub = this.env.SESSION.get(doId);
@@ -476,7 +601,7 @@ export class SchedulerDO extends DurableObject<Env> {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        content: automation.instructions,
+        content: instructionsOverride ?? automation.instructions,
         authorId: automation.created_by,
         source: "automation",
         callbackContext,
@@ -487,4 +612,9 @@ export class SchedulerDO extends DurableObject<Env> {
       throw new Error(`Prompt enqueue failed with status ${promptResponse.status}`);
     }
   }
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("UNIQUE constraint failed");
 }

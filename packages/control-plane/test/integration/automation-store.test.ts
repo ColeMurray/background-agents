@@ -32,6 +32,9 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     created_at: now,
     updated_at: now,
     deleted_at: null,
+    event_type: null,
+    trigger_config: null,
+    webhook_secret_hash: null,
     ...overrides,
   };
 }
@@ -49,6 +52,8 @@ function makeRun(automationId: string, overrides?: Partial<AutomationRunRow>): A
     started_at: null,
     completed_at: null,
     created_at: now,
+    trigger_key: null,
+    concurrency_key: null,
     ...overrides,
   };
 }
@@ -562,6 +567,174 @@ describe("AutomationStore (D1 integration)", () => {
       const row = await store.getById("auto-f3");
       expect(row!.enabled).toBe(0);
       expect(row!.next_run_at).toBeNull();
+    });
+  });
+
+  // ─── Event matching queries ───────────────────────────────────────────────
+
+  describe("event matching queries", () => {
+    it("getAutomationsForEvent finds matching automations by repo + trigger type + event type", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(
+        makeAutomation({
+          id: "auto-ev1",
+          repo_owner: "acme",
+          repo_name: "api",
+          trigger_type: "github_event",
+          event_type: "pull_request.opened",
+        })
+      );
+      await store.create(
+        makeAutomation({
+          id: "auto-ev2",
+          repo_owner: "acme",
+          repo_name: "api",
+          trigger_type: "github_event",
+          event_type: "issues.opened",
+        })
+      );
+
+      const results = await store.getAutomationsForEvent(
+        "acme",
+        "api",
+        "github_event",
+        "pull_request.opened"
+      );
+      expect(results).toHaveLength(1);
+      expect(results[0].id).toBe("auto-ev1");
+    });
+
+    it("getAutomationsForEvent excludes disabled and deleted automations", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(
+        makeAutomation({
+          id: "auto-ev3",
+          repo_owner: "acme",
+          repo_name: "api",
+          trigger_type: "github_event",
+          event_type: "pull_request.opened",
+          enabled: 0,
+        })
+      );
+
+      const results = await store.getAutomationsForEvent(
+        "acme",
+        "api",
+        "github_event",
+        "pull_request.opened"
+      );
+      expect(results).toHaveLength(0);
+    });
+
+    it("getAutomationsForSentryEvent finds matching sentry automations", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(
+        makeAutomation({
+          id: "auto-sentry1",
+          trigger_type: "sentry",
+          event_type: "issue.created",
+        })
+      );
+      await store.create(
+        makeAutomation({
+          id: "auto-sentry2",
+          trigger_type: "sentry",
+          event_type: "metric_alert.critical",
+        })
+      );
+
+      const results = await store.getAutomationsForSentryEvent("issue.created");
+      expect(results).toHaveLength(1);
+      expect(results[0].id).toBe("auto-sentry1");
+    });
+
+    it("getActiveRunForKey finds active run by concurrency key", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-ck1" }));
+
+      await store.insertRun(
+        makeRun("auto-ck1", {
+          id: "run-ck1",
+          status: "running",
+          concurrency_key: "pr:42",
+          started_at: Date.now(),
+        })
+      );
+
+      const active = await store.getActiveRunForKey("auto-ck1", "pr:42");
+      expect(active).not.toBeNull();
+      expect(active!.id).toBe("run-ck1");
+    });
+
+    it("getActiveRunForKey returns null for different concurrency key", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-ck2" }));
+
+      await store.insertRun(
+        makeRun("auto-ck2", {
+          id: "run-ck2",
+          status: "running",
+          concurrency_key: "pr:42",
+          started_at: Date.now(),
+        })
+      );
+
+      const active = await store.getActiveRunForKey("auto-ck2", "pr:99");
+      expect(active).toBeNull();
+    });
+
+    it("getActiveRunForKey with null key falls back to getActiveRunForAutomation", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-ck3" }));
+
+      await store.insertRun(
+        makeRun("auto-ck3", {
+          id: "run-ck3",
+          status: "running",
+          concurrency_key: null,
+          started_at: Date.now(),
+        })
+      );
+
+      const active = await store.getActiveRunForKey("auto-ck3", null);
+      expect(active).not.toBeNull();
+      expect(active!.id).toBe("run-ck3");
+    });
+
+    it("trigger_key unique index prevents duplicate runs", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-dedup1" }));
+
+      await store.insertRun(
+        makeRun("auto-dedup1", {
+          id: "run-dedup1",
+          trigger_key: "sentry_issue:123",
+        })
+      );
+
+      await expect(
+        store.insertRun(
+          makeRun("auto-dedup1", {
+            id: "run-dedup2",
+            trigger_key: "sentry_issue:123",
+          })
+        )
+      ).rejects.toThrow("UNIQUE constraint failed");
+    });
+
+    it("trigger_key unique index allows null trigger keys", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-dedup2" }));
+
+      await store.insertRun(
+        makeRun("auto-dedup2", { id: "run-null1", trigger_key: null, scheduled_at: 1 })
+      );
+      await store.insertRun(
+        makeRun("auto-dedup2", { id: "run-null2", trigger_key: null, scheduled_at: 2 })
+      );
+
+      const runs = await store.listRunsForAutomation("auto-dedup2", { limit: 10, offset: 0 });
+      expect(runs.total).toBe(2);
     });
   });
 });

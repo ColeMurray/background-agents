@@ -97,6 +97,9 @@ const sampleRow: AutomationRow = {
   created_at: now,
   updated_at: now,
   deleted_at: null,
+  event_type: null,
+  trigger_config: null,
+  webhook_secret_hash: null,
 };
 
 const sampleRunRow: AutomationRunRow = {
@@ -110,6 +113,8 @@ const sampleRunRow: AutomationRunRow = {
   started_at: null,
   completed_at: null,
   created_at: now,
+  trigger_key: null,
+  concurrency_key: null,
 };
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -126,6 +131,8 @@ describe("toAutomation", () => {
     expect(automation.reasoningEffort).toBeNull();
     expect(automation.enabled).toBe(true);
     expect(automation.triggerType).toBe("schedule");
+    expect(automation.eventType).toBeNull();
+    expect(automation.triggerConfig).toBeNull();
     expect(automation.consecutiveFailures).toBe(0);
     expect(automation.createdBy).toBe("user-1");
   });
@@ -149,6 +156,8 @@ describe("toAutomationRun", () => {
     expect(run.sessionTitle).toBe("Test Session");
     expect(run.artifactSummary).toBe("2 artifacts");
     expect(run.status).toBe("starting");
+    expect(run.triggerKey).toBeNull();
+    expect(run.concurrencyKey).toBeNull();
   });
 });
 
