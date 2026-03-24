@@ -206,17 +206,54 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
             <h2 className="text-sm font-medium text-foreground mb-3">Configuration</h2>
             <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
               <div>
-                <dt className="text-muted-foreground">Schedule</dt>
+                <dt className="text-muted-foreground">Trigger</dt>
                 <dd className="text-foreground">
-                  {automation.scheduleCron
-                    ? describeCron(automation.scheduleCron, automation.scheduleTz)
-                    : "None"}
+                  {automation.triggerType === "schedule"
+                    ? automation.scheduleCron
+                      ? describeCron(automation.scheduleCron, automation.scheduleTz)
+                      : "Schedule (no cron)"
+                    : {
+                        sentry: "Sentry Alert",
+                        webhook: "Inbound Webhook",
+                        github_event: "GitHub Event",
+                        linear_event: "Linear Event",
+                      }[automation.triggerType] || automation.triggerType}
+                  {automation.eventType && (
+                    <span className="text-muted-foreground ml-1">({automation.eventType})</span>
+                  )}
                 </dd>
               </div>
-              <div>
-                <dt className="text-muted-foreground">Timezone</dt>
-                <dd className="text-foreground">{automation.scheduleTz}</dd>
-              </div>
+              {automation.triggerType === "schedule" && (
+                <div>
+                  <dt className="text-muted-foreground">Timezone</dt>
+                  <dd className="text-foreground">{automation.scheduleTz}</dd>
+                </div>
+              )}
+              {automation.triggerType === "webhook" && (
+                <div className="sm:col-span-2">
+                  <dt className="text-muted-foreground">Webhook URL</dt>
+                  <dd className="text-foreground font-mono text-xs break-all">
+                    POST /webhooks/automation/{automation.id}
+                  </dd>
+                </div>
+              )}
+              {automation.triggerConfig?.conditions &&
+                automation.triggerConfig.conditions.length > 0 && (
+                  <div className="sm:col-span-2">
+                    <dt className="text-muted-foreground">Conditions</dt>
+                    <dd className="text-foreground">
+                      {automation.triggerConfig.conditions.map((c, i) => (
+                        <span
+                          key={i}
+                          className="inline-block mr-2 mb-1 px-2 py-0.5 bg-muted rounded text-xs"
+                        >
+                          {c.type}: {c.operator}{" "}
+                          {Array.isArray(c.value) ? c.value.join(", ") : String(c.value)}
+                        </span>
+                      ))}
+                    </dd>
+                  </div>
+                )}
               <div>
                 <dt className="text-muted-foreground">Model</dt>
                 <dd className="text-foreground">{formatModelNameLower(automation.model)}</dd>
@@ -225,12 +262,14 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 <dt className="text-muted-foreground">Reasoning</dt>
                 <dd className="text-foreground">{reasoningLabel}</dd>
               </div>
-              <div>
-                <dt className="text-muted-foreground">Next Run</dt>
-                <dd className="text-foreground">
-                  {automation.nextRunAt ? new Date(automation.nextRunAt).toLocaleString() : "—"}
-                </dd>
-              </div>
+              {automation.triggerType === "schedule" && (
+                <div>
+                  <dt className="text-muted-foreground">Next Run</dt>
+                  <dd className="text-foreground">
+                    {automation.nextRunAt ? new Date(automation.nextRunAt).toLocaleString() : "—"}
+                  </dd>
+                </div>
+              )}
               <div className="sm:col-span-2">
                 <dt className="text-muted-foreground">Instructions</dt>
                 <dd className="text-foreground whitespace-pre-wrap mt-1">

@@ -112,6 +112,9 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
               scheduleCron: automation.scheduleCron ?? "0 9 * * *",
               scheduleTz: automation.scheduleTz,
               instructions: automation.instructions,
+              triggerType: automation.triggerType,
+              eventType: automation.eventType ?? undefined,
+              triggerConfig: automation.triggerConfig ?? undefined,
             }}
             onSubmit={handleSubmit}
             submitting={submitting}

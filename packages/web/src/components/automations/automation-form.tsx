@@ -172,11 +172,25 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      {/* Trigger Type (only on create) */}
-      {mode === "create" && (
+      {/* Trigger Type */}
+      {mode === "create" ? (
         <div>
           <label className="block text-sm font-medium text-foreground mb-2">Trigger Type</label>
           <TriggerTypeSelector value={triggerType} onChange={setTriggerType} />
+        </div>
+      ) : (
+        <div>
+          <label className="block text-sm font-medium text-foreground mb-1">Trigger Type</label>
+          <div className="text-sm text-muted-foreground px-3 py-2 border border-border-muted rounded-md bg-muted/30">
+            {{
+              schedule: "Schedule",
+              sentry: "Sentry Alert",
+              webhook: "Inbound Webhook",
+              github_event: "GitHub Event",
+              linear_event: "Linear Event",
+            }[triggerType] || triggerType}
+            <span className="text-xs ml-2">(cannot be changed)</span>
+          </div>
         </div>
       )}
 
