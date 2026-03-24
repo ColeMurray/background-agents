@@ -93,6 +93,7 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
     const data = (await response.json()) as {
       id: number;
       name: string;
+      path: string;
       path_with_namespace: string;
       namespace: { path: string };
       default_branch: string;
@@ -101,7 +102,7 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
 
     return {
       owner: data.namespace.path,
-      name: data.name,
+      name: data.path,
       fullName: data.path_with_namespace,
       defaultBranch: data.default_branch,
       isPrivate: data.visibility !== "public",
@@ -125,14 +126,18 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
       target_branch: config.targetBranch,
     };
 
-    if (config.draft) {
+    if (config.draft && !config.title.startsWith("Draft: ")) {
       // GitLab supports draft MRs via title prefix "Draft: "
       requestBody.title = `Draft: ${config.title}`;
     }
 
     if (config.reviewers && config.reviewers.length > 0) {
-      // GitLab accepts reviewer_ids, but we only have usernames here — skip silently
-      // to avoid an extra API call to resolve usernames → IDs
+      // GitLab requires numeric reviewer_ids; resolving usernames → IDs would need
+      // an extra API call per reviewer. Log a warning so operators are aware.
+      console.warn(
+        "[gitlab] reviewer assignment is not supported (username→ID resolution not implemented); ignoring reviewers:",
+        config.reviewers
+      );
     }
 
     if (config.labels && config.labels.length > 0) {
@@ -352,8 +357,10 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
 
   buildGitPushSpec(config: BuildGitPushSpecConfig): GitPushSpec {
     const force = config.force ?? false;
-    const remoteUrl = `https://oauth2:${config.auth.token}@gitlab.com/${config.owner}/${config.name}.git`;
-    const redactedRemoteUrl = `https://oauth2:<redacted>@gitlab.com/${config.owner}/${config.name}.git`;
+    const encodedOwner = encodeURIComponent(config.owner);
+    const encodedName = encodeURIComponent(config.name);
+    const remoteUrl = `https://oauth2:${config.auth.token}@gitlab.com/${encodedOwner}/${encodedName}.git`;
+    const redactedRemoteUrl = `https://oauth2:<redacted>@gitlab.com/${encodedOwner}/${encodedName}.git`;
 
     return {
       remoteUrl,

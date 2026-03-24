@@ -23,11 +23,12 @@ describe("GitLabSourceControlProvider", () => {
   });
 
   describe("getRepository", () => {
-    it("maps GitLab project response to RepositoryInfo", async () => {
+    it("maps GitLab project response to RepositoryInfo using path not display name", async () => {
       mockFetch.mockResolvedValueOnce(
         makeResponse({
           id: 42,
-          name: "web",
+          name: "My Web App", // display name — should NOT be used
+          path: "web", // URL slug — should be used as name
           path_with_namespace: "acme/web",
           namespace: { path: "acme" },
           default_branch: "main",
@@ -43,7 +44,7 @@ describe("GitLabSourceControlProvider", () => {
 
       expect(repo).toEqual({
         owner: "acme",
-        name: "web",
+        name: "web", // path, not display name
         fullName: "acme/web",
         defaultBranch: "main",
         isPrivate: true,
@@ -55,7 +56,8 @@ describe("GitLabSourceControlProvider", () => {
       mockFetch.mockResolvedValueOnce(
         makeResponse({
           id: 7,
-          name: "oss",
+          name: "OSS Project",
+          path: "oss",
           path_with_namespace: "acme/oss",
           namespace: { path: "acme" },
           default_branch: "main",
@@ -180,6 +182,46 @@ describe("GitLabSourceControlProvider", () => {
       );
 
       expect(capturedBody?.title).toBe("Draft: WIP change");
+    });
+
+    it("does not double-prefix when title already starts with 'Draft: '", async () => {
+      let capturedBody: Record<string, unknown> | undefined;
+      mockFetch.mockImplementationOnce((_url: string, init: RequestInit) => {
+        capturedBody = JSON.parse(init.body as string) as Record<string, unknown>;
+        return Promise.resolve(
+          makeResponse({
+            iid: 7,
+            web_url: "https://gitlab.com/acme/web/-/merge_requests/7",
+            _links: { self: "https://gitlab.com/api/v4/projects/acme%2Fweb/merge_requests/7" },
+            state: "opened",
+            draft: true,
+            source_branch: "feature/baz",
+            target_branch: "main",
+          })
+        );
+      });
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      await provider.createPullRequest(
+        { authType: "pat", token: "user-token" },
+        {
+          repository: {
+            owner: "acme",
+            name: "web",
+            fullName: "acme/web",
+            defaultBranch: "main",
+            isPrivate: true,
+            providerRepoId: 42,
+          },
+          title: "Draft: already prefixed",
+          body: "",
+          sourceBranch: "feature/baz",
+          targetBranch: "main",
+          draft: true,
+        }
+      );
+
+      expect(capturedBody?.title).toBe("Draft: already prefixed");
     });
   });
 
@@ -409,6 +451,22 @@ describe("GitLabSourceControlProvider", () => {
       expect(spec.remoteUrl).toContain("glpat-super-secret");
       expect(spec.redactedRemoteUrl).not.toContain("glpat-super-secret");
       expect(spec.redactedRemoteUrl).toContain("<redacted>");
+    });
+
+    it("URL-encodes owner and name in remote URL", () => {
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const spec = provider.buildGitPushSpec({
+        owner: "acme org",
+        name: "web app",
+        sourceRef: "HEAD",
+        targetBranch: "main",
+        auth: { authType: "pat", token: "glpat-secret" },
+      });
+
+      expect(spec.remoteUrl).toContain("acme%20org");
+      expect(spec.remoteUrl).toContain("web%20app");
+      expect(spec.redactedRemoteUrl).toContain("acme%20org");
+      expect(spec.redactedRemoteUrl).toContain("web%20app");
     });
   });
 });
