@@ -4,7 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
 
-export async function POST(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -13,8 +13,10 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
   const { id } = await params;
 
   try {
+    const body = await request.text();
     const response = await controlPlaneFetch(`/automations/${id}/regenerate-key`, {
       method: "POST",
+      ...(body ? { headers: { "Content-Type": "application/json" }, body } : {}),
     });
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
