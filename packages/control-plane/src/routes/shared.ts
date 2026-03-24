@@ -74,6 +74,12 @@ export function createRouteSourceControlProvider(env: Env): SourceControlProvide
       appConfig: appConfig ?? undefined,
       kvCache: env.REPOS_CACHE,
     },
+    ...(env.GITLAB_ACCESS_TOKEN && {
+      gitlab: {
+        accessToken: env.GITLAB_ACCESS_TOKEN,
+        namespace: env.GITLAB_NAMESPACE,
+      },
+    }),
   });
 }
 

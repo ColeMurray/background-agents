@@ -27,7 +27,7 @@ export interface RepositoryInfo {
 /**
  * Supported source control provider names.
  */
-export type SourceControlProviderName = "github" | "bitbucket";
+export type SourceControlProviderName = "github" | "bitbucket" | "gitlab";
 
 /**
  * Authentication context for source control API operations.

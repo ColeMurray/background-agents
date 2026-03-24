@@ -13,3 +13,13 @@ export interface GitHubProviderConfig {
   /** KV namespace for caching installation tokens */
   kvCache?: KVNamespace;
 }
+
+/**
+ * Configuration for GitLabSourceControlProvider.
+ */
+export interface GitLabProviderConfig {
+  /** Personal access token for GitLab API access */
+  accessToken: string;
+  /** GitLab group namespace to scope repository listing (optional) */
+  namespace?: string;
+}

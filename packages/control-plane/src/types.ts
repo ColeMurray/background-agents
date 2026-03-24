@@ -64,6 +64,10 @@ export interface Env {
   GITHUB_APP_PRIVATE_KEY?: string;
   GITHUB_APP_INSTALLATION_ID?: string;
 
+  // GitLab secrets (for git operations and API access when SCM_PROVIDER=gitlab)
+  GITLAB_ACCESS_TOKEN?: string;
+  GITLAB_NAMESPACE?: string; // Group namespace to scope repository listing
+
   // Variables
   DEPLOYMENT_NAME: string;
   SCM_PROVIDER?: string; // Source control provider for this deployment (default: github)

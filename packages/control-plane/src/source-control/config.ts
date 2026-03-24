@@ -9,12 +9,12 @@ export function resolveScmProviderFromEnv(value: string | undefined): SourceCont
     return DEFAULT_SCM_PROVIDER;
   }
 
-  if (normalized === "github" || normalized === "bitbucket") {
+  if (normalized === "github" || normalized === "bitbucket" || normalized === "gitlab") {
     return normalized;
   }
 
   throw new SourceControlProviderError(
-    `Invalid SCM_PROVIDER value '${normalized}'. Supported values: github, bitbucket.`,
+    `Invalid SCM_PROVIDER value '${normalized}'. Supported values: github, bitbucket, gitlab.`,
     "permanent"
   );
 }
