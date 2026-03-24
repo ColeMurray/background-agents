@@ -228,7 +228,7 @@ async function handleCreateAutomation(
     webhookApiKey = generateWebhookApiKey();
     triggerAuthData = await hashApiKey(webhookApiKey);
   } else if (triggerType === "sentry") {
-    const sentrySecret = (body as Record<string, unknown>).sentryClientSecret;
+    const sentrySecret = body.sentryClientSecret;
     if (!sentrySecret || typeof sentrySecret !== "string" || sentrySecret.trim().length === 0) {
       return error("sentryClientSecret is required for sentry triggers", 400);
     }
