@@ -166,8 +166,12 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     onSubmit(values);
   };
 
-  const selectedRepoObj = repos.find((r) => r.fullName === selectedRepo);
-  const displayRepoName = selectedRepoObj ? selectedRepoObj.name : "Select repository";
+  const selectedRepoObj = repos.find(
+    (r) => r.fullName === selectedRepo || r.fullName.toLowerCase() === selectedRepo.toLowerCase()
+  );
+  const displayRepoName = selectedRepoObj
+    ? selectedRepoObj.name
+    : selectedRepo || "Select repository";
   const reasoningConfig = getReasoningConfig(model);
 
   return (
@@ -226,7 +230,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
             String(option.value).toLowerCase().includes(query)
           }
           dropdownWidth="w-72"
-          disabled={loadingRepos}
+          disabled={loadingRepos || mode === "edit"}
           triggerClassName="flex w-full items-center gap-1.5 px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/20 transition"
         >
           <RepoIcon className="w-4 h-4 text-muted-foreground" />
