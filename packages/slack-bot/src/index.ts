@@ -405,8 +405,8 @@ async function getUserRepoBranchPreferences(
         continue;
       }
 
-      const branch = await getUserRepoBranchPreference(env, userId, repoId);
-      if (!branch) {
+      const branch = normalizeBranchPreference((await env.SLACK_KV.get(key.name)) ?? undefined);
+      if (!branch || !isValidBranchName(branch)) {
         continue;
       }
 
