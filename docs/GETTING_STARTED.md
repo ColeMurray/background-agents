@@ -592,6 +592,7 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `CLOUDFLARE_API_TOKEN`        | Your Cloudflare API token                                                     |
 | `CLOUDFLARE_ACCOUNT_ID`       | Your Cloudflare account ID                                                    |
 | `CLOUDFLARE_WORKER_SUBDOMAIN` | Your workers.dev subdomain                                                    |
+| `DEPLOYMENT_NAME`             | Your deployment name (for example, `nivalis`)                                 |
 | `R2_ACCESS_KEY_ID`            | R2 access key ID                                                              |
 | `R2_SECRET_ACCESS_KEY`        | R2 secret access key                                                          |
 | `WEB_PLATFORM`                | `vercel` or `cloudflare`                                                      |
@@ -602,8 +603,8 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `MODAL_TOKEN_ID`              | Modal token ID                                                                |
 | `MODAL_TOKEN_SECRET`          | Modal token secret                                                            |
 | `MODAL_WORKSPACE`             | Modal workspace name                                                          |
-| `GH_APP_CLIENT_ID`            | GitHub App client ID                                                          |
-| `GH_APP_CLIENT_SECRET`        | GitHub App client secret                                                      |
+| `GH_OAUTH_CLIENT_ID`          | GitHub App OAuth client ID                                                    |
+| `GH_OAUTH_CLIENT_SECRET`      | GitHub App OAuth client secret                                                |
 | `GH_APP_ID`                   | GitHub App ID                                                                 |
 | `GH_APP_PRIVATE_KEY`          | GitHub App private key (PKCS#8 format)                                        |
 | `GH_APP_INSTALLATION_ID`      | GitHub App installation ID                                                    |
@@ -638,6 +639,13 @@ Then upload all at once (run from your fork's directory, or use
 
 ```bash
 gh secret set -f .secrets
+```
+
+If you bulk upload from a file, set multiline secrets like `GH_APP_PRIVATE_KEY` separately so the
+PEM formatting is preserved:
+
+```bash
+gh secret set GH_APP_PRIVATE_KEY < private-key-pkcs8.pem
 ```
 
 Once configured, the GitHub Actions workflow will:
