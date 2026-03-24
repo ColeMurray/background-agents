@@ -7,6 +7,7 @@ import {
   isValidCron,
   isValidReasoningEffort,
   triggerSources,
+  TRIGGER_TYPE_TO_SOURCE,
   type AutomationTriggerType,
   type AutomationEventSource,
   type TriggerCondition,
@@ -58,13 +59,6 @@ const TIMEZONE_GROUPS: ComboboxGroup[] = [
     options: ALL_TIMEZONES.filter((tz) => !COMMON_SET.has(tz)).map(toOption),
   },
 ];
-
-const TRIGGER_SOURCE_MAP: Record<string, string> = {
-  github_event: "github",
-  linear_event: "linear",
-  sentry: "sentry",
-  webhook: "webhook",
-};
 
 export interface AutomationFormValues {
   name: string;
@@ -123,7 +117,9 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const isScheduleValid = !isSchedule || isValidCron(scheduleCron);
 
   // Get event types for the selected trigger type
-  const triggerSourceDef = triggerSources.find((s) => TRIGGER_SOURCE_MAP[triggerType] === s.source);
+  const triggerSourceDef = triggerSources.find(
+    (s) => TRIGGER_TYPE_TO_SOURCE[triggerType] === s.source
+  );
   const eventTypes = triggerSourceDef?.eventTypes ?? [];
 
   const handleRepoChange = useCallback(
@@ -398,7 +394,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       )}
 
       {/* Conditions (for non-schedule types) */}
-      {!isSchedule && TRIGGER_SOURCE_MAP[triggerType] && (
+      {!isSchedule && TRIGGER_TYPE_TO_SOURCE[triggerType] && (
         <div>
           <label className="block text-sm font-medium text-foreground mb-1">
             Conditions
@@ -407,7 +403,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
           <ConditionBuilder
             conditions={conditions}
             onChange={setConditions}
-            triggerSource={TRIGGER_SOURCE_MAP[triggerType] as AutomationEventSource}
+            triggerSource={TRIGGER_TYPE_TO_SOURCE[triggerType] as AutomationEventSource}
           />
         </div>
       )}

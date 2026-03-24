@@ -11,10 +11,10 @@ import {
   getValidModelOrDefault,
   validateConditions,
   conditionRegistry,
+  TRIGGER_TYPE_TO_SOURCE,
   type CreateAutomationRequest,
   type UpdateAutomationRequest,
   type AutomationTriggerType,
-  type AutomationEventSource,
 } from "@open-inspect/shared";
 import { AutomationStore, toAutomation, toAutomationRun } from "../db/automation-store";
 import { generateId } from "../auth/crypto";
@@ -161,17 +161,11 @@ async function handleCreateAutomation(
 
   // Validate conditions
   if (body.triggerConfig?.conditions?.length) {
-    const sourceMap: Record<string, string> = {
-      github_event: "github",
-      linear_event: "linear",
-      sentry: "sentry",
-      webhook: "webhook",
-    };
-    const source = sourceMap[triggerType];
+    const source = TRIGGER_TYPE_TO_SOURCE[triggerType];
     if (source) {
       const conditionErrors = validateConditions(
         body.triggerConfig.conditions,
-        source as AutomationEventSource,
+        source,
         conditionRegistry
       );
       if (conditionErrors.length > 0) {
@@ -419,17 +413,11 @@ async function handleUpdateAutomation(
       updateFields.trigger_config = null;
     } else {
       if (body.triggerConfig.conditions?.length) {
-        const sourceMap: Record<string, string> = {
-          github_event: "github",
-          linear_event: "linear",
-          sentry: "sentry",
-          webhook: "webhook",
-        };
-        const source = sourceMap[existing.trigger_type];
+        const source = TRIGGER_TYPE_TO_SOURCE[existing.trigger_type];
         if (source) {
           const conditionErrors = validateConditions(
             body.triggerConfig.conditions,
-            source as AutomationEventSource,
+            source,
             conditionRegistry
           );
           if (conditionErrors.length > 0) {

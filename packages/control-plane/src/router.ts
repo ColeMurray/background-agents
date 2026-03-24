@@ -129,7 +129,11 @@ function getSessionStub(env: Env, match: RegExpMatchArray): DurableObjectStub | 
 /**
  * Routes that do not require authentication.
  */
-const PUBLIC_ROUTES: RegExp[] = [/^\/health$/, /^\/webhooks\//];
+const PUBLIC_ROUTES: RegExp[] = [
+  /^\/health$/,
+  /^\/webhooks\/sentry\/[^/]+$/,
+  /^\/webhooks\/automation\/[^/]+$/,
+];
 
 /**
  * Routes that accept sandbox authentication.

@@ -9,6 +9,17 @@ import type { ConditionType } from "./conditions";
 
 export type AutomationEventSource = "github" | "linear" | "sentry" | "webhook";
 
+/**
+ * Maps AutomationTriggerType → AutomationEventSource.
+ * Used by control-plane validation and web UI condition builders.
+ */
+export const TRIGGER_TYPE_TO_SOURCE: Record<string, AutomationEventSource> = {
+  github_event: "github",
+  linear_event: "linear",
+  sentry: "sentry",
+  webhook: "webhook",
+};
+
 // ─── Base Event ───────────────────────────────────────────────────────────────
 
 interface BaseAutomationEvent {

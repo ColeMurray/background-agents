@@ -8,6 +8,7 @@ import {
   type AutomationFormValues,
 } from "@/components/automations/automation-form";
 import { WebhookConfig } from "@/components/automations/webhook-config";
+import { Button } from "@/components/ui/button";
 import { SidebarIcon, BackIcon } from "@/components/ui/icons";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import Link from "next/link";
@@ -108,9 +109,7 @@ export default function NewAutomationPage() {
 
             <div className="mt-6">
               <Link href={`/automations/${webhookResult.automationId}`}>
-                <button className="px-4 py-2 bg-accent text-white rounded-md text-sm hover:bg-accent/90 transition">
-                  Go to Automation
-                </button>
+                <Button size="sm">Go to Automation</Button>
               </Link>
             </div>
           </div>

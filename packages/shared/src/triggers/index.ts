@@ -12,6 +12,7 @@ export type {
   WebhookAutomationEvent,
   TriggerSourceDefinition,
 } from "./types";
+export { TRIGGER_TYPE_TO_SOURCE } from "./types";
 
 // Condition system
 export type {
