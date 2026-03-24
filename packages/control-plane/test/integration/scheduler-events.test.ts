@@ -83,9 +83,13 @@ async function sendEvent(event: SentryAutomationEvent | WebhookAutomationEvent):
   }
 }
 
-function makeSentryEvent(overrides?: Partial<SentryAutomationEvent>): SentryAutomationEvent {
+function makeSentryEvent(
+  automationId: string,
+  overrides?: Partial<SentryAutomationEvent>
+): SentryAutomationEvent {
   return {
     source: "sentry",
+    automationId,
     eventType: "issue.created",
     triggerKey: `sentry_issue:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     concurrencyKey: `sentry_issue:${Date.now()}`,
@@ -133,7 +137,7 @@ describe("SchedulerDO /internal/event (integration)", () => {
         })
       );
 
-      const event = makeSentryEvent();
+      const event = makeSentryEvent(automationId);
       const res = await sendEvent(event);
 
       expect(res.status).toBe(200);
@@ -205,7 +209,7 @@ describe("SchedulerDO /internal/event (integration)", () => {
       );
 
       // Send event with a non-matching project
-      const event = makeSentryEvent({ sentryProject: "frontend" });
+      const event = makeSentryEvent(automationId, { sentryProject: "frontend" });
       const res = await sendEvent(event);
 
       expect(res.status).toBe(200);
@@ -234,7 +238,7 @@ describe("SchedulerDO /internal/event (integration)", () => {
         })
       );
 
-      const event = makeSentryEvent({ sentryProject: "backend" });
+      const event = makeSentryEvent(automationId, { sentryProject: "backend" });
       const res = await sendEvent(event);
 
       expect(res.status).toBe(200);
@@ -262,7 +266,7 @@ describe("SchedulerDO /internal/event (integration)", () => {
       );
 
       const sharedTriggerKey = `sentry_issue:dedup-${Date.now()}`;
-      const event = makeSentryEvent({ triggerKey: sharedTriggerKey });
+      const event = makeSentryEvent(automationId, { triggerKey: sharedTriggerKey });
 
       // First event — should create a run
       const res1 = await sendEvent(event);
@@ -313,7 +317,7 @@ describe("SchedulerDO /internal/event (integration)", () => {
       );
 
       // Send a new event with the same concurrency key but different trigger key
-      const event = makeSentryEvent({
+      const event = makeSentryEvent(automationId, {
         concurrencyKey,
         triggerKey: `sentry_issue:second-${Date.now()}`,
       });
@@ -348,7 +352,7 @@ describe("SchedulerDO /internal/event (integration)", () => {
         })
       );
 
-      const event = makeSentryEvent();
+      const event = makeSentryEvent(automationId);
       const res = await sendEvent(event);
 
       expect(res.status).toBe(200);

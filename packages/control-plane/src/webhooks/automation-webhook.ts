@@ -47,7 +47,11 @@ async function handleAutomationWebhook(
   const valid = await verifyWebhookApiKey(apiKey, automation.trigger_auth_data);
   if (!valid) return error("Invalid API key", 401);
 
-  // 5. Parse body
+  // 5. Parse body — fast-path reject on Content-Length before reading
+  const contentLength = parseInt(request.headers.get("content-length") ?? "0", 10);
+  if (contentLength > MAX_PAYLOAD_SIZE) {
+    return error("Payload too large", 413);
+  }
   const bodyText = await request.text();
   if (bodyText.length > MAX_PAYLOAD_SIZE) {
     return error("Payload too large", 413);

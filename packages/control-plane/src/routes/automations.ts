@@ -415,7 +415,30 @@ async function handleUpdateAutomation(
     if (existing.trigger_type === "schedule") {
       return error("Cannot set triggerConfig on schedule automations", 400);
     }
-    updateFields.trigger_config = JSON.stringify(body.triggerConfig);
+    if (body.triggerConfig === null) {
+      updateFields.trigger_config = null;
+    } else {
+      if (body.triggerConfig.conditions?.length) {
+        const sourceMap: Record<string, string> = {
+          github_event: "github",
+          linear_event: "linear",
+          sentry: "sentry",
+          webhook: "webhook",
+        };
+        const source = sourceMap[existing.trigger_type];
+        if (source) {
+          const conditionErrors = validateConditions(
+            body.triggerConfig.conditions,
+            source as AutomationEventSource,
+            conditionRegistry
+          );
+          if (conditionErrors.length > 0) {
+            return error(conditionErrors.join("; "), 400);
+          }
+        }
+      }
+      updateFields.trigger_config = JSON.stringify(body.triggerConfig);
+    }
   }
 
   // Recompute next_run_at if schedule changed (only for schedule types)

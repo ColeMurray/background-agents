@@ -262,9 +262,12 @@ export class SchedulerDO extends DurableObject<Env> {
           automation && automation.enabled === 1 && !automation.deleted_at ? [automation] : [];
         break;
       }
-      case "sentry":
-        candidates = await store.getAutomationsForSentryEvent(event.eventType);
+      case "sentry": {
+        const automation = await store.getById(event.automationId);
+        candidates =
+          automation && automation.enabled === 1 && !automation.deleted_at ? [automation] : [];
         break;
+      }
       case "github":
       case "linear":
         candidates = await store.getAutomationsForEvent(

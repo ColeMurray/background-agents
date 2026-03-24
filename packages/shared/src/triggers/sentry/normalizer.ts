@@ -73,7 +73,8 @@ interface SentryMetricAlertPayload {
 }
 
 export function normalizeSentryEvent(
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  automationId?: string
 ): SentryAutomationEvent | null {
   // Issue alert (event_alert action or issue action)
   if (isIssueAlertPayload(payload)) {
@@ -88,6 +89,7 @@ export function normalizeSentryEvent(
 
     return {
       source: "sentry",
+      automationId: automationId ?? "",
       eventType,
       triggerKey,
       concurrencyKey,
@@ -114,6 +116,7 @@ export function normalizeSentryEvent(
 
     return {
       source: "sentry",
+      automationId: automationId ?? "",
       eventType: "metric_alert.critical",
       triggerKey,
       concurrencyKey,

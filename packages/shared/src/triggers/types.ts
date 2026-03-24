@@ -52,6 +52,7 @@ export interface LinearAutomationEvent extends BaseAutomationEvent {
 
 export interface SentryAutomationEvent extends BaseAutomationEvent {
   source: "sentry";
+  automationId: string;
   sentryProject: string;
   sentryLevel: string;
   culpritFile?: string;
