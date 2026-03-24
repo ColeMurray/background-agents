@@ -39,12 +39,12 @@ async function handleAutomationWebhook(
     return error("Not found", 404);
   }
 
-  if (!automation.webhook_secret_hash) {
+  if (!automation.trigger_auth_data) {
     return error("Webhook not configured", 500);
   }
 
   // 4. Verify API key
-  const valid = await verifyWebhookApiKey(apiKey, automation.webhook_secret_hash);
+  const valid = await verifyWebhookApiKey(apiKey, automation.trigger_auth_data);
   if (!valid) return error("Invalid API key", 401);
 
   // 5. Parse body

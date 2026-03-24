@@ -6,6 +6,7 @@
  */
 
 import { timingSafeEqual } from "@open-inspect/shared";
+import { encryptToken, decryptToken } from "./crypto";
 
 export function generateWebhookApiKey(): string {
   const bytes = new Uint8Array(32);
@@ -23,6 +24,19 @@ export async function hashApiKey(key: string): Promise<string> {
 export async function verifyWebhookApiKey(key: string, hash: string): Promise<boolean> {
   const computed = await hashApiKey(key);
   return timingSafeEqual(computed, hash);
+}
+
+/** Encrypt a Sentry client secret for storage (AES-256-GCM). */
+export async function encryptSentrySecret(secret: string, encryptionKey: string): Promise<string> {
+  return encryptToken(secret, encryptionKey);
+}
+
+/** Decrypt a stored Sentry client secret. */
+export async function decryptSentrySecret(
+  encrypted: string,
+  encryptionKey: string
+): Promise<string> {
+  return decryptToken(encrypted, encryptionKey);
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {

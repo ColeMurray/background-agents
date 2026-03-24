@@ -79,6 +79,7 @@ export interface AutomationFormValues {
   triggerType: AutomationTriggerType;
   eventType?: string;
   triggerConfig?: { conditions: TriggerCondition[] };
+  sentryClientSecret?: string;
 }
 
 interface AutomationFormProps {
@@ -116,6 +117,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const [conditions, setConditions] = useState<TriggerCondition[]>(
     initialValues?.triggerConfig?.conditions ?? []
   );
+  const [sentryClientSecret, setSentryClientSecret] = useState("");
 
   const isSchedule = triggerType === "schedule";
   const isScheduleValid = !isSchedule || isValidCron(scheduleCron);
@@ -136,6 +138,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !selectedRepo || !instructions.trim() || !isScheduleValid) return;
+    if (triggerType === "sentry" && mode === "create" && !sentryClientSecret.trim()) return;
 
     const values: AutomationFormValues = {
       name: name.trim(),
@@ -157,6 +160,9 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       if (eventType) values.eventType = eventType;
       if (conditions.length > 0) values.triggerConfig = { conditions };
+      if (triggerType === "sentry" && mode === "create" && sentryClientSecret.trim()) {
+        values.sentryClientSecret = sentryClientSecret.trim();
+      }
     }
 
     if (mode === "edit") {
@@ -371,6 +377,26 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         </div>
       )}
 
+      {/* Sentry Client Secret (create mode only) */}
+      {triggerType === "sentry" && mode === "create" && (
+        <div>
+          <label className="block text-sm font-medium text-foreground mb-1">
+            Sentry Client Secret
+          </label>
+          <Input
+            type="password"
+            value={sentryClientSecret}
+            onChange={(e) => setSentryClientSecret(e.target.value)}
+            placeholder="Paste your Sentry Custom Integration client secret"
+            required
+          />
+          <p className="text-xs text-muted-foreground mt-1">
+            Found in your Sentry Custom Integration settings. This will be encrypted and stored
+            securely.
+          </p>
+        </div>
+      )}
+
       {/* Conditions (for non-schedule types) */}
       {!isSchedule && TRIGGER_SOURCE_MAP[triggerType] && (
         <div>
@@ -411,7 +437,12 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         <Button
           type="submit"
           disabled={
-            submitting || !name.trim() || !selectedRepo || !instructions.trim() || !isScheduleValid
+            submitting ||
+            !name.trim() ||
+            !selectedRepo ||
+            !instructions.trim() ||
+            !isScheduleValid ||
+            (triggerType === "sentry" && mode === "create" && !sentryClientSecret.trim())
           }
         >
           {submitting

@@ -69,7 +69,6 @@ module "control_plane_worker" {
     { name = "MODAL_TOKEN_ID", value = var.modal_token_id },
     { name = "MODAL_TOKEN_SECRET", value = var.modal_token_secret },
     { name = "MODAL_API_SECRET", value = var.modal_api_secret },
-    { name = "SENTRY_WEBHOOK_SECRET", value = var.sentry_webhook_secret },
     { name = "INTERNAL_CALLBACK_SECRET", value = var.internal_callback_secret },
     # GitHub App credentials for /repos endpoint (listInstallationRepositories)
     { name = "GITHUB_APP_ID", value = var.github_app_id },

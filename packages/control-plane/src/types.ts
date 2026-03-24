@@ -46,9 +46,6 @@ export interface Env {
   // Durable Objects
   SCHEDULER?: DurableObjectNamespace; // SchedulerDO for automation engine
 
-  // Webhook secrets
-  SENTRY_WEBHOOK_SECRET?: string;
-
   // D1 database
   DB: D1Database;
 

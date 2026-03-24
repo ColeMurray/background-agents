@@ -606,6 +606,7 @@ export interface CreateAutomationRequest {
   reasoningEffort?: string | null;
   eventType?: string;
   triggerConfig?: TriggerConfig;
+  sentryClientSecret?: string;
 }
 
 export interface UpdateAutomationRequest {

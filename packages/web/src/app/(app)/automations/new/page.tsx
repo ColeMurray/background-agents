@@ -19,8 +19,9 @@ export default function NewAutomationPage() {
   const [error, setError] = useState("");
   const [webhookResult, setWebhookResult] = useState<{
     automationId: string;
-    webhookApiKey: string;
-    webhookUrl: string;
+    webhookApiKey?: string;
+    webhookUrl?: string;
+    sentryWebhookUrl?: string;
   } | null>(null);
 
   const handleSubmit = async (values: AutomationFormValues) => {
@@ -36,12 +37,13 @@ export default function NewAutomationPage() {
 
       if (res.ok) {
         const data = await res.json();
-        // For webhook automations, show the API key before navigating away
-        if (data.webhookApiKey && data.webhookUrl) {
+        // For webhook/sentry automations, show post-create info before navigating
+        if (data.webhookApiKey || data.sentryWebhookUrl) {
           setWebhookResult({
             automationId: data.automation.id,
             webhookApiKey: data.webhookApiKey,
             webhookUrl: data.webhookUrl,
+            sentryWebhookUrl: data.sentryWebhookUrl,
           });
           setSubmitting(false);
         } else {
@@ -80,15 +82,29 @@ export default function NewAutomationPage() {
         <div className="flex-1 overflow-y-auto p-8">
           <div className="max-w-2xl mx-auto">
             <h1 className="text-2xl font-semibold text-foreground mb-2">Automation Created</h1>
-            <p className="text-sm text-muted-foreground mb-6">
-              Save the webhook URL and API key below. The API key will not be shown again.
-            </p>
-
-            <WebhookConfig
-              webhookUrl={webhookResult.webhookUrl}
-              webhookApiKey={webhookResult.webhookApiKey}
-              automationId={webhookResult.automationId}
-            />
+            {webhookResult.sentryWebhookUrl ? (
+              <>
+                <p className="text-sm text-muted-foreground mb-6">
+                  Configure the webhook URL below in your Sentry Custom Integration settings.
+                </p>
+                <WebhookConfig
+                  webhookUrl={webhookResult.sentryWebhookUrl}
+                  automationId={webhookResult.automationId}
+                  variant="sentry"
+                />
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground mb-6">
+                  Save the webhook URL and API key below. The API key will not be shown again.
+                </p>
+                <WebhookConfig
+                  webhookUrl={webhookResult.webhookUrl}
+                  webhookApiKey={webhookResult.webhookApiKey}
+                  automationId={webhookResult.automationId}
+                />
+              </>
+            )}
 
             <div className="mt-6">
               <Link href={`/automations/${webhookResult.automationId}`}>

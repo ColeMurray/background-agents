@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { hashApiKey } from "../../src/auth/webhook-key";
+import { encryptToken } from "../../src/auth/crypto";
 import { cleanD1Tables } from "./cleanup";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -43,9 +44,28 @@ function makeAutomation(overrides: Partial<AutomationRow> = {}): AutomationRow {
     deleted_at: null,
     event_type: null,
     trigger_config: null,
-    webhook_secret_hash: null,
+    trigger_auth_data: null,
     ...overrides,
   };
+}
+
+const SENTRY_TEST_SECRET = "test-sentry-client-secret-for-hmac";
+
+async function createSentryAutomation(
+  overrides: Partial<AutomationRow> = {}
+): Promise<AutomationRow> {
+  const store = new AutomationStore(env.DB);
+  const encrypted = await encryptToken(SENTRY_TEST_SECRET, env.REPO_SECRETS_ENCRYPTION_KEY);
+  const automation = makeAutomation({
+    trigger_type: "sentry",
+    event_type: "issue.created",
+    schedule_cron: null,
+    next_run_at: null,
+    trigger_auth_data: encrypted,
+    ...overrides,
+  });
+  await store.create(automation);
+  return automation;
 }
 
 const sentryIssuePayload = {
@@ -76,16 +96,17 @@ const sentryIssuePayload = {
   actor: { type: "application", id: 1, name: "Sentry" },
 };
 
-// ─── Sentry webhook tests ─────────────────────────────────────────────────────
+// ─── Sentry webhook tests (per-automation) ───────────────────────────────────
 
-describe("POST /webhooks/sentry", () => {
+describe("POST /webhooks/sentry/:id", () => {
   beforeEach(cleanD1Tables);
 
   it("accepts valid signature (does not return 401)", async () => {
+    const automation = await createSentryAutomation();
     const body = JSON.stringify(sentryIssuePayload);
-    const signature = await signSentryPayload(body, env.SENTRY_WEBHOOK_SECRET!);
+    const signature = await signSentryPayload(body, SENTRY_TEST_SECRET);
 
-    const response = await SELF.fetch("https://test.local/webhooks/sentry", {
+    const response = await SELF.fetch(`https://test.local/webhooks/sentry/${automation.id}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -101,9 +122,10 @@ describe("POST /webhooks/sentry", () => {
   });
 
   it("returns 401 with invalid signature", async () => {
+    const automation = await createSentryAutomation();
     const body = JSON.stringify(sentryIssuePayload);
 
-    const response = await SELF.fetch("https://test.local/webhooks/sentry", {
+    const response = await SELF.fetch(`https://test.local/webhooks/sentry/${automation.id}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -116,9 +138,10 @@ describe("POST /webhooks/sentry", () => {
   });
 
   it("returns 401 with missing signature", async () => {
+    const automation = await createSentryAutomation();
     const body = JSON.stringify(sentryIssuePayload);
 
-    const response = await SELF.fetch("https://test.local/webhooks/sentry", {
+    const response = await SELF.fetch(`https://test.local/webhooks/sentry/${automation.id}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body,
@@ -128,11 +151,12 @@ describe("POST /webhooks/sentry", () => {
   });
 
   it("returns 200 with skipped: true for unsupported event shape", async () => {
+    const automation = await createSentryAutomation();
     const unsupportedPayload = { action: "unknown", data: { something: "else" } };
     const body = JSON.stringify(unsupportedPayload);
-    const signature = await signSentryPayload(body, env.SENTRY_WEBHOOK_SECRET!);
+    const signature = await signSentryPayload(body, SENTRY_TEST_SECRET);
 
-    const response = await SELF.fetch("https://test.local/webhooks/sentry", {
+    const response = await SELF.fetch(`https://test.local/webhooks/sentry/${automation.id}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -145,6 +169,40 @@ describe("POST /webhooks/sentry", () => {
     const result = await response.json<{ ok: boolean; skipped: boolean }>();
     expect(result.ok).toBe(true);
     expect(result.skipped).toBe(true);
+  });
+
+  it("returns 404 for non-sentry automation", async () => {
+    const store = new AutomationStore(env.DB);
+    const automation = makeAutomation({ trigger_type: "schedule" });
+    await store.create(automation);
+
+    const body = JSON.stringify(sentryIssuePayload);
+    const signature = await signSentryPayload(body, SENTRY_TEST_SECRET);
+
+    const response = await SELF.fetch(`https://test.local/webhooks/sentry/${automation.id}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "sentry-hook-signature": signature,
+      },
+      body,
+    });
+
+    expect(response.status).toBe(404);
+  });
+
+  it("returns 404 for non-existent automation", async () => {
+    const body = JSON.stringify(sentryIssuePayload);
+    const response = await SELF.fetch("https://test.local/webhooks/sentry/nonexistent", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "sentry-hook-signature": "anything",
+      },
+      body,
+    });
+
+    expect(response.status).toBe(404);
   });
 });
 
@@ -165,7 +223,7 @@ describe("POST /webhooks/automation/:id", () => {
       event_type: "webhook.received",
       schedule_cron: null,
       next_run_at: null,
-      webhook_secret_hash: hash,
+      trigger_auth_data: hash,
       ...overrides,
     });
     await store.create(automation);

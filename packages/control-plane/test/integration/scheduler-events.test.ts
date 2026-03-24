@@ -37,7 +37,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     deleted_at: null,
     event_type: null,
     trigger_config: null,
-    webhook_secret_hash: null,
+    trigger_auth_data: null,
     ...overrides,
   };
 }

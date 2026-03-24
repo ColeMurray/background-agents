@@ -18,7 +18,7 @@ import {
 } from "@open-inspect/shared";
 import { AutomationStore, toAutomation, toAutomationRun } from "../db/automation-store";
 import { generateId } from "../auth/crypto";
-import { generateWebhookApiKey, hashApiKey } from "../auth/webhook-key";
+import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
 import {
   type Route,
@@ -221,12 +221,21 @@ async function handleCreateAutomation(
   const id = generateId();
   const now = Date.now();
 
-  // Generate webhook API key if this is a webhook trigger
+  // Generate auth data for trigger types that need it
   let webhookApiKey: string | undefined;
-  let webhookSecretHash: string | null = null;
+  let triggerAuthData: string | null = null;
   if (triggerType === "webhook") {
     webhookApiKey = generateWebhookApiKey();
-    webhookSecretHash = await hashApiKey(webhookApiKey);
+    triggerAuthData = await hashApiKey(webhookApiKey);
+  } else if (triggerType === "sentry") {
+    const sentrySecret = (body as Record<string, unknown>).sentryClientSecret;
+    if (!sentrySecret || typeof sentrySecret !== "string" || sentrySecret.trim().length === 0) {
+      return error("sentryClientSecret is required for sentry triggers", 400);
+    }
+    if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
+      return error("Encryption key not configured", 503);
+    }
+    triggerAuthData = await encryptSentrySecret(sentrySecret, env.REPO_SECRETS_ENCRYPTION_KEY);
   }
 
   const store = new AutomationStore(env.DB);
@@ -252,7 +261,7 @@ async function handleCreateAutomation(
     deleted_at: null,
     event_type: body.eventType ?? null,
     trigger_config: body.triggerConfig ? JSON.stringify(body.triggerConfig) : null,
-    webhook_secret_hash: webhookSecretHash,
+    trigger_auth_data: triggerAuthData,
   });
 
   const automation = toAutomation((await store.getById(id))!);
@@ -266,17 +275,22 @@ async function handleCreateAutomation(
     trace_id: ctx.trace_id,
   });
 
+  const workerUrl = env.WORKER_URL || "";
   const result: {
     automation: typeof automation;
     warning?: string;
     webhookApiKey?: string;
     webhookUrl?: string;
+    sentryWebhookUrl?: string;
   } = { automation };
 
   if (webhookApiKey) {
     result.webhookApiKey = webhookApiKey;
-    const workerUrl = env.WORKER_URL || "";
     result.webhookUrl = `${workerUrl}/webhooks/automation/${id}`;
+  }
+
+  if (triggerType === "sentry") {
+    result.sentryWebhookUrl = `${workerUrl}/webhooks/sentry/${id}`;
   }
 
   if (nextRunAt && nextRunAt - now > FAR_FUTURE_THRESHOLD_MS) {
@@ -618,7 +632,7 @@ async function handleGetRun(
 }
 
 async function handleRegenerateKey(
-  _request: Request,
+  request: Request,
   env: Env,
   match: RegExpMatchArray,
   ctx: RequestContext
@@ -630,16 +644,49 @@ async function handleRegenerateKey(
   const automation = await store.getById(id);
   if (!automation) return error("Automation not found", 404);
 
-  if (automation.trigger_type !== "webhook") {
-    return error("Only webhook automations have API keys", 400);
+  const workerUrl = env.WORKER_URL || "";
+
+  if (automation.trigger_type === "sentry") {
+    // Sentry: user provides a new client secret
+    let body: { sentryClientSecret?: string };
+    try {
+      body = (await request.json()) as { sentryClientSecret?: string };
+    } catch {
+      return error("Invalid JSON body", 400);
+    }
+    if (!body.sentryClientSecret || typeof body.sentryClientSecret !== "string") {
+      return error("sentryClientSecret is required", 400);
+    }
+    if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
+      return error("Encryption key not configured", 503);
+    }
+    const encrypted = await encryptSentrySecret(
+      body.sentryClientSecret,
+      env.REPO_SECRETS_ENCRYPTION_KEY
+    );
+    await store.update(id, { trigger_auth_data: encrypted } as Record<string, unknown>);
+
+    logger.info("automation.secret_updated", {
+      event: "automation.secret_updated",
+      automation_id: id,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+
+    return json({
+      sentryWebhookUrl: `${workerUrl}/webhooks/sentry/${id}`,
+    });
   }
 
+  if (automation.trigger_type !== "webhook") {
+    return error("Only webhook and sentry automations support key regeneration", 400);
+  }
+
+  // Webhook: generate a new API key
   const apiKey = generateWebhookApiKey();
   const hash = await hashApiKey(apiKey);
 
-  await store.update(id, { webhook_secret_hash: hash } as Record<string, unknown>);
-
-  const workerUrl = env.WORKER_URL || "";
+  await store.update(id, { trigger_auth_data: hash } as Record<string, unknown>);
 
   logger.info("automation.key_regenerated", {
     event: "automation.key_regenerated",

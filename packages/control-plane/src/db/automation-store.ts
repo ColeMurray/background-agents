@@ -31,7 +31,7 @@ export interface AutomationRow {
   deleted_at: number | null;
   event_type: string | null;
   trigger_config: string | null; // JSON-serialized TriggerConfig
-  webhook_secret_hash: string | null;
+  trigger_auth_data: string | null;
 }
 
 export interface AutomationRunRow {
@@ -115,7 +115,7 @@ export class AutomationStore {
          (id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
           trigger_type, schedule_cron, schedule_tz, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, created_at, updated_at, deleted_at,
-          event_type, trigger_config, webhook_secret_hash)
+          event_type, trigger_config, trigger_auth_data)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
@@ -140,7 +140,7 @@ export class AutomationStore {
         row.deleted_at,
         row.event_type,
         row.trigger_config,
-        row.webhook_secret_hash
+        row.trigger_auth_data
       )
       .run();
   }
@@ -195,7 +195,7 @@ export class AutomationStore {
       "consecutive_failures",
       "event_type",
       "trigger_config",
-      "webhook_secret_hash",
+      "trigger_auth_data",
     ];
 
     for (const field of allowedFields) {

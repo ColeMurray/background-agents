@@ -237,6 +237,14 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                   </dd>
                 </div>
               )}
+              {automation.triggerType === "sentry" && (
+                <div className="sm:col-span-2">
+                  <dt className="text-muted-foreground">Sentry Webhook URL</dt>
+                  <dd className="text-foreground font-mono text-xs break-all">
+                    POST /webhooks/sentry/{automation.id}
+                  </dd>
+                </div>
+              )}
               {automation.triggerConfig?.conditions &&
                 automation.triggerConfig.conditions.length > 0 && (
                   <div className="sm:col-span-2">

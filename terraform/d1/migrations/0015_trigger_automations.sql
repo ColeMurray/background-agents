@@ -1,7 +1,7 @@
 -- Add trigger configuration to automations
 ALTER TABLE automations ADD COLUMN event_type TEXT;
 ALTER TABLE automations ADD COLUMN trigger_config TEXT;
-ALTER TABLE automations ADD COLUMN webhook_secret_hash TEXT;
+ALTER TABLE automations ADD COLUMN trigger_auth_data TEXT;
 
 -- Add trigger_key and concurrency_key to automation_runs
 ALTER TABLE automation_runs ADD COLUMN trigger_key TEXT;
