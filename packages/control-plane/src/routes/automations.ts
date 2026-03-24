@@ -388,6 +388,14 @@ async function handleUpdateAutomation(
   }
   if (body.baseBranch !== undefined) updateFields.base_branch = body.baseBranch;
 
+  // Update event type — only for non-schedule types
+  if (body.eventType !== undefined) {
+    if (existing.trigger_type === "schedule") {
+      return error("Cannot set eventType on schedule automations", 400);
+    }
+    updateFields.event_type = body.eventType;
+  }
+
   // Update trigger config (conditions) — only for non-schedule types
   if (body.triggerConfig !== undefined) {
     if (existing.trigger_type === "schedule") {

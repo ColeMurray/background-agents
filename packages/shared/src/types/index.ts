@@ -616,6 +616,7 @@ export interface UpdateAutomationRequest {
   model?: string;
   reasoningEffort?: string | null;
   baseBranch?: string;
+  eventType?: string;
   triggerConfig?: TriggerConfig;
 }
 
