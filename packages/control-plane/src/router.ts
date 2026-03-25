@@ -1425,10 +1425,7 @@ async function handleSpawnChild(
   // can self-correct instead of silently falling back to the default model.
   const rawModel = body.model ?? spawnContext.model;
   if (body.model !== undefined && !isValidModel(body.model)) {
-    return error(
-      `Invalid model "${body.model}". Valid models: ${VALID_MODELS.join(", ")}`,
-      400
-    );
+    return error(`Invalid model "${body.model}". Valid models: ${VALID_MODELS.join(", ")}`, 400);
   }
   const model = getValidModelOrDefault(rawModel);
   const reasoningEffort =
