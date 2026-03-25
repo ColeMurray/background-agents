@@ -265,7 +265,12 @@ export class SchedulerDO extends DurableObject<Env> {
       case "sentry": {
         const automation = await store.getById(event.automationId);
         candidates =
-          automation && automation.enabled === 1 && !automation.deleted_at ? [automation] : [];
+          automation &&
+          automation.enabled === 1 &&
+          !automation.deleted_at &&
+          automation.event_type === event.eventType
+            ? [automation]
+            : [];
         break;
       }
       case "github":
