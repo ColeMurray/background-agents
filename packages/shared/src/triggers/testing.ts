@@ -43,6 +43,7 @@ const defaults: Record<AutomationEventSource, () => AutomationEvent> = {
   sentry: () =>
     ({
       source: "sentry",
+      automationId: "test-automation",
       eventType: "issue.created",
       triggerKey: "sentry_issue:123",
       concurrencyKey: "sentry_issue:123",
@@ -50,7 +51,7 @@ const defaults: Record<AutomationEventSource, () => AutomationEvent> = {
       meta: {},
       sentryProject: "test-project",
       sentryLevel: "error",
-    }) as SentryAutomationEvent,
+    }) satisfies SentryAutomationEvent,
   webhook: () =>
     ({
       source: "webhook",

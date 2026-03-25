@@ -427,18 +427,6 @@ export class AutomationStore {
     return result.results || [];
   }
 
-  async getAutomationsForSentryEvent(eventType: string): Promise<AutomationRow[]> {
-    const result = await this.db
-      .prepare(
-        `SELECT * FROM automations
-         WHERE trigger_type = 'sentry' AND event_type = ?
-         AND enabled = 1 AND deleted_at IS NULL`
-      )
-      .bind(eventType)
-      .all<AutomationRow>();
-    return result.results || [];
-  }
-
   async getActiveRunForKey(
     automationId: string,
     concurrencyKey: string | null

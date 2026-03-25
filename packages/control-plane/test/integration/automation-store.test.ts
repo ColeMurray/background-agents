@@ -626,28 +626,6 @@ describe("AutomationStore (D1 integration)", () => {
       expect(results).toHaveLength(0);
     });
 
-    it("getAutomationsForSentryEvent finds matching sentry automations", async () => {
-      const store = new AutomationStore(env.DB);
-      await store.create(
-        makeAutomation({
-          id: "auto-sentry1",
-          trigger_type: "sentry",
-          event_type: "issue.created",
-        })
-      );
-      await store.create(
-        makeAutomation({
-          id: "auto-sentry2",
-          trigger_type: "sentry",
-          event_type: "metric_alert.critical",
-        })
-      );
-
-      const results = await store.getAutomationsForSentryEvent("issue.created");
-      expect(results).toHaveLength(1);
-      expect(results[0].id).toBe("auto-sentry1");
-    });
-
     it("getActiveRunForKey finds active run by concurrency key", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-ck1" }));
