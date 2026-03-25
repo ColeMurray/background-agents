@@ -419,7 +419,7 @@ async function handleUpdateAutomation(
         if (!Array.isArray(body.triggerConfig.conditions)) {
           return error("triggerConfig.conditions must be an array", 400);
         }
-        const source = TRIGGER_TYPE_TO_SOURCE[existing.trigger_type];
+        const source = TRIGGER_TYPE_TO_SOURCE[existing.trigger_type as AutomationTriggerType];
         if (source) {
           const conditionErrors = validateConditions(
             body.triggerConfig.conditions,
