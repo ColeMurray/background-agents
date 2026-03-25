@@ -160,7 +160,10 @@ async function handleCreateAutomation(
   }
 
   // Validate conditions
-  if (body.triggerConfig?.conditions?.length) {
+  if (body.triggerConfig?.conditions) {
+    if (!Array.isArray(body.triggerConfig.conditions)) {
+      return error("triggerConfig.conditions must be an array", 400);
+    }
     const source = TRIGGER_TYPE_TO_SOURCE[triggerType];
     if (source) {
       const conditionErrors = validateConditions(
@@ -412,7 +415,10 @@ async function handleUpdateAutomation(
     if (body.triggerConfig === null) {
       updateFields.trigger_config = null;
     } else {
-      if (body.triggerConfig.conditions?.length) {
+      if (body.triggerConfig.conditions) {
+        if (!Array.isArray(body.triggerConfig.conditions)) {
+          return error("triggerConfig.conditions must be an array", 400);
+        }
         const source = TRIGGER_TYPE_TO_SOURCE[existing.trigger_type];
         if (source) {
           const conditionErrors = validateConditions(
