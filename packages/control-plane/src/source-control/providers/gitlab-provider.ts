@@ -26,7 +26,7 @@ import { USER_AGENT } from "./constants";
 /** GitLab API base URL. */
 export const GITLAB_API_BASE = "https://gitlab.com/api/v4";
 
-/** Default per_page for paginated GitLab API requests. */
+/** Default per_page for paginated GitLab API requests (GitLab API maximum). */
 const PER_PAGE = 100;
 
 /** Timeout for GitLab API requests in milliseconds. */
@@ -172,15 +172,14 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
       target_branch: string;
     };
 
+    // Check terminal states first — a merged/closed MR cannot also be a draft.
     let state: CreatePullRequestResult["state"];
-    if (data.draft) {
-      state = "draft";
-    } else if (data.state === "merged") {
+    if (data.state === "merged") {
       state = "merged";
-    } else if (data.state === "opened") {
-      state = "open";
     } else if (data.state === "closed") {
       state = "closed";
+    } else if (data.draft) {
+      state = "draft";
     } else {
       state = "open";
     }
@@ -357,10 +356,10 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
 
   buildGitPushSpec(config: BuildGitPushSpecConfig): GitPushSpec {
     const force = config.force ?? false;
-    const encodedOwner = encodeURIComponent(config.owner);
-    const encodedName = encodeURIComponent(config.name);
-    const remoteUrl = `https://oauth2:${config.auth.token}@gitlab.com/${encodedOwner}/${encodedName}.git`;
-    const redactedRemoteUrl = `https://oauth2:<redacted>@gitlab.com/${encodedOwner}/${encodedName}.git`;
+    // GitLab project paths are always URL-safe (alphanumeric, hyphens, underscores, dots).
+    // No percent-encoding — git clients expect literal path segments in remote URLs.
+    const remoteUrl = `https://oauth2:${config.auth.token}@gitlab.com/${config.owner}/${config.name}.git`;
+    const redactedRemoteUrl = `https://oauth2:<redacted>@gitlab.com/${config.owner}/${config.name}.git`;
 
     return {
       remoteUrl,

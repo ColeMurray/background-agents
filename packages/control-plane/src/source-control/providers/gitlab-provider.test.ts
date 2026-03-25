@@ -256,6 +256,18 @@ describe("GitLabSourceControlProvider", () => {
       expect(result).toBeNull();
     });
 
+    it("throws on non-404 API errors", async () => {
+      mockFetch.mockResolvedValueOnce(makeResponse("internal server error", 500));
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const err = await provider
+        .checkRepositoryAccess({ owner: "acme", name: "web" })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).httpStatus).toBe(500);
+    });
+
     it("normalizes owner and name to lowercase", async () => {
       mockFetch.mockResolvedValueOnce(
         makeResponse({
@@ -453,20 +465,19 @@ describe("GitLabSourceControlProvider", () => {
       expect(spec.redactedRemoteUrl).toContain("<redacted>");
     });
 
-    it("URL-encodes owner and name in remote URL", () => {
+    it("uses literal (unencoded) path segments in remote URL", () => {
       const provider = new GitLabSourceControlProvider(fakeConfig);
       const spec = provider.buildGitPushSpec({
-        owner: "acme org",
-        name: "web app",
+        owner: "acme",
+        name: "my-repo",
         sourceRef: "HEAD",
         targetBranch: "main",
         auth: { authType: "pat", token: "glpat-secret" },
       });
 
-      expect(spec.remoteUrl).toContain("acme%20org");
-      expect(spec.remoteUrl).toContain("web%20app");
-      expect(spec.redactedRemoteUrl).toContain("acme%20org");
-      expect(spec.redactedRemoteUrl).toContain("web%20app");
+      // git expects literal path segments, not percent-encoded ones
+      expect(spec.remoteUrl).toBe("https://oauth2:glpat-secret@gitlab.com/acme/my-repo.git");
+      expect(spec.redactedRemoteUrl).toBe("https://oauth2:<redacted>@gitlab.com/acme/my-repo.git");
     });
   });
 });
