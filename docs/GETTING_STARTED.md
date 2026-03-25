@@ -592,7 +592,7 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `CLOUDFLARE_API_TOKEN`        | Your Cloudflare API token                                                     |
 | `CLOUDFLARE_ACCOUNT_ID`       | Your Cloudflare account ID                                                    |
 | `CLOUDFLARE_WORKER_SUBDOMAIN` | Your workers.dev subdomain                                                    |
-| `DEPLOYMENT_NAME`             | Your deployment name                              |
+| `DEPLOYMENT_NAME`             | Your deployment name                                                          |
 | `R2_ACCESS_KEY_ID`            | R2 access key ID                                                              |
 | `R2_SECRET_ACCESS_KEY`        | R2 secret access key                                                          |
 | `WEB_PLATFORM`                | `vercel` or `cloudflare`                                                      |
