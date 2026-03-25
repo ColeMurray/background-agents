@@ -387,6 +387,7 @@ async function handleNewSession(
       issue.description,
       labelNames,
       projectInfo?.name,
+      comment?.body,
       traceId
     );
 

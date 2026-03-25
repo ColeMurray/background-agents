@@ -40,6 +40,7 @@ async function buildClassificationPrompt(
   issueDescription: string | null | undefined,
   labels: string[],
   projectName: string | null | undefined,
+  triggerComment: string | null | undefined,
   traceId?: string
 ): Promise<string> {
   const repoDescriptions = await buildRepoDescriptions(env, traceId);
@@ -56,7 +57,7 @@ ${repoDescriptions}
 ## Issue
 **Title**: ${issueTitle}
 ${issueDescription ? `**Description**: ${issueDescription}` : ""}
-${contextSection}
+${contextSection}${triggerComment ? `\n\n## User Comment\n${triggerComment}` : ""}
 
 ## Your Task
 
@@ -153,6 +154,7 @@ export async function classifyRepo(
   issueDescription: string | null | undefined,
   labels: string[],
   projectName: string | null | undefined,
+  triggerComment: string | null | undefined,
   traceId?: string
 ): Promise<ClassificationResult> {
   const repos = await getAvailableRepos(env, traceId);
@@ -182,6 +184,7 @@ export async function classifyRepo(
       issueDescription,
       labels,
       projectName,
+      triggerComment,
       traceId
     );
 
