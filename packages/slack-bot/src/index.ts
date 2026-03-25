@@ -787,6 +787,7 @@ async function handleSlackEvent(
       thread_ts?: string;
       bot_id?: string;
       tab?: string;
+      channel_type?: string;
     };
   },
   env: Env,
@@ -806,6 +807,31 @@ async function handleSlackEvent(
   // Handle app_home_opened events
   if (event.type === "app_home_opened" && event.tab === "home" && event.user) {
     await publishAppHome(env, event.user);
+    return;
+  }
+
+  // Handle direct messages (DMs) to the bot
+  // message.im events have channel_type "im" - these are 1:1 DMs with the bot
+  if (
+    event.type === "message" &&
+    event.channel_type === "im" &&
+    event.channel &&
+    event.ts &&
+    event.user
+  ) {
+    await handleDirectMessage(
+      {
+        type: event.type,
+        text: event.text,
+        user: event.user,
+        channel: event.channel,
+        ts: event.ts,
+        thread_ts: event.thread_ts,
+        channel_type: event.channel_type,
+      },
+      env,
+      traceId
+    );
     return;
   }
 
@@ -1079,6 +1105,282 @@ async function handleAppMention(
           text: {
             type: "mrkdwn",
             text: `Working on *${repo.fullName}*...\n_${result.reasoning}_`,
+          },
+        },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              text: {
+                type: "plain_text",
+                text: "View Session",
+              },
+              url: `${env.WEB_APP_URL}/session/${sessionResult.sessionId}`,
+              action_id: "view_session",
+            },
+          ],
+        },
+      ],
+    });
+  }
+
+  // Post that the agent is working
+  await postSessionStartedMessage(env, channel, threadKey, sessionResult.sessionId);
+}
+
+/**
+ * Handle direct messages (DMs) to the bot.
+ * Similar to app_mention but users don't need to @mention the bot in DMs.
+ */
+async function handleDirectMessage(
+  event: {
+    type: string;
+    text?: string;
+    user?: string;
+    channel: string;
+    ts: string;
+    thread_ts?: string;
+    channel_type?: string;
+  },
+  env: Env,
+  traceId?: string
+): Promise<void> {
+  const userId = event.user;
+  if (!userId) return;
+
+  // In DMs, the text doesn't have a bot mention to strip
+  const rawText = event.text || "";
+  const messageText = rawText.trim();
+
+  if (!messageText) {
+    log.info("slack.dm.empty_message", { trace_id: traceId });
+    return;
+  }
+
+  const channel = event.channel;
+  const { ts, thread_ts } = event;
+  const threadTs = thread_ts || ts;
+
+  // Get thread context if in a thread (include bot messages for better context)
+  // Fetched early so it's available for both existing session prompts and new sessions
+  let previousMessages: string[] | undefined;
+  if (thread_ts) {
+    try {
+      const threadResult = await getThreadMessages(env.SLACK_BOT_TOKEN, channel, thread_ts, 10);
+      if (threadResult.ok && threadResult.messages) {
+        const filtered = threadResult.messages.filter((m) => m.ts !== ts);
+        // Resolve unique user IDs to display names for attribution
+        const uniqueUserIds = [...new Set(filtered.map((m) => m.user).filter(Boolean))] as string[];
+        const userNames = await resolveUserNames(env.SLACK_BOT_TOKEN, uniqueUserIds);
+        previousMessages = filtered
+          .map((m) => {
+            if (m.bot_id) return `[Bot]: ${m.text}`;
+            const name = m.user ? userNames.get(m.user) || m.user : "Unknown";
+            return `[${name}]: ${m.text}`;
+          })
+          .slice(-10);
+      }
+    } catch {
+      // Thread messages not available
+    }
+  }
+
+  // Check for an existing session in this DM thread
+  if (thread_ts) {
+    const existingSession = await lookupThreadSession(env, channel, thread_ts);
+    if (existingSession) {
+      const callbackContext: CallbackContext = {
+        source: "slack",
+        channel,
+        threadTs: thread_ts,
+        repoFullName: existingSession.repoFullName,
+        model: existingSession.model,
+        reasoningEffort: existingSession.reasoningEffort,
+        reactionMessageTs: ts,
+      };
+
+      // DMs don't have channel context
+      const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
+      const promptContent = threadContext + messageText;
+
+      const promptResult = await sendPrompt(
+        env,
+        existingSession.sessionId,
+        promptContent,
+        `slack:${userId}`,
+        callbackContext,
+        traceId
+      );
+
+      if (promptResult) {
+        const reactionResult = await addReaction(env.SLACK_BOT_TOKEN, channel, ts, "eyes");
+        if (!reactionResult.ok && reactionResult.error !== "already_reacted") {
+          log.warn("slack.reaction.add", {
+            trace_id: traceId,
+            channel,
+            message_ts: ts,
+            reaction: "eyes",
+            slack_error: reactionResult.error,
+          });
+        }
+        return;
+      }
+
+      log.warn("thread_session.stale", {
+        trace_id: traceId,
+        session_id: existingSession.sessionId,
+        channel,
+        thread_ts,
+      });
+      await clearThreadSession(env, channel, thread_ts);
+    }
+  }
+
+  // Classify the repository (no channel context for DMs)
+  const classifier = createClassifier(env);
+  const result = await classifier.classify(
+    messageText,
+    {
+      channelId: channel,
+      threadTs: thread_ts,
+      previousMessages,
+    },
+    traceId
+  );
+
+  // Post initial response
+  if (result.needsClarification || !result.repo) {
+    // Need to clarify which repo
+    const repos = await getAvailableRepos(env, traceId);
+
+    if (repos.length === 0) {
+      await postMessage(
+        env.SLACK_BOT_TOKEN,
+        channel,
+        "Sorry, no repositories are currently available. Please check that the GitHub App is installed and configured.",
+        { thread_ts: threadTs }
+      );
+      return;
+    }
+
+    // Store original message in KV for later retrieval when user selects a repo
+    const pendingKey = `pending:${channel}:${threadTs}`;
+    await env.SLACK_KV.put(
+      pendingKey,
+      JSON.stringify({
+        message: messageText,
+        userId,
+        previousMessages,
+      }),
+      { expirationTtl: 3600 } // Expire after 1 hour
+    );
+
+    // Build repo selection message
+    const repoOptions = (result.alternatives || repos.slice(0, 5)).map((r) => ({
+      text: {
+        type: "plain_text" as const,
+        text: r.displayName,
+      },
+      description: {
+        type: "plain_text" as const,
+        text: r.description.slice(0, 75),
+      },
+      value: r.id,
+    }));
+
+    await postMessage(
+      env.SLACK_BOT_TOKEN,
+      channel,
+      `I couldn't determine which repository you're referring to. ${result.reasoning}`,
+      {
+        thread_ts: threadTs,
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `I couldn't determine which repository you're referring to.
+
+_${result.reasoning}_`,
+            },
+          },
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "Which repository should I work with?",
+            },
+            accessory: {
+              type: "static_select",
+              placeholder: {
+                type: "plain_text",
+                text: "Select a repository",
+              },
+              options: repoOptions,
+              action_id: "select_repo",
+            },
+          },
+        ],
+      }
+    );
+    return;
+  }
+
+  // We have a confident repo match - acknowledge and start session
+  const { repo } = result;
+
+  // Post initial acknowledgment
+  const ackResult = await postMessage(
+    env.SLACK_BOT_TOKEN,
+    channel,
+    `Working on *${repo.fullName}*...`,
+    {
+      thread_ts: threadTs,
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `Working on *${repo.fullName}*...
+_${result.reasoning}_`,
+          },
+        },
+      ],
+    }
+  );
+
+  const ackTs = ackResult.ts;
+  const threadKey = threadTs;
+
+  // Create session and send prompt using shared logic (no channel name/description for DMs)
+  const sessionResult = await startSessionAndSendPrompt(
+    env,
+    repo,
+    channel,
+    threadKey,
+    messageText,
+    userId,
+    previousMessages,
+    undefined,
+    undefined,
+    traceId
+  );
+
+  if (!sessionResult) {
+    return;
+  }
+
+  // Update the acknowledgment message with session link button
+  if (ackTs) {
+    await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, `Working on *${repo.fullName}*...`, {
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `Working on *${repo.fullName}*...
+_${result.reasoning}_`,
           },
         },
         {
