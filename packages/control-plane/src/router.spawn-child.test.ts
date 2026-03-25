@@ -137,6 +137,47 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     expect(payload.error).toContain("Valid models:");
   });
 
+  it("returns 400 when child specifies an empty-string model", async () => {
+    const store = makeStore();
+    vi.mocked(SessionIndexStore).mockImplementation(() => store as never);
+
+    const parentStub: DurableObjectStub = {
+      fetch: vi.fn(async () => Response.json(spawnContext)),
+    } as never;
+
+    const env = {
+      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      SCM_PROVIDER: "github",
+      DB: {},
+      SESSION: {
+        idFromName: (name: string) => name,
+        get: () => parentStub,
+      },
+    };
+
+    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
+
+    const response = await handleRequest(
+      new Request(`https://test.local/sessions/${parentId}/children`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          title: "Child task",
+          prompt: "Do the thing",
+          model: "",
+        }),
+      }),
+      env as never
+    );
+
+    expect(response.status).toBe(400);
+    const payload = await response.json<{ error: string }>();
+    expect(payload.error).toContain('Invalid model ""');
+  });
+
   it("returns an error and marks child failed when prompt enqueue fails", async () => {
     const store = makeStore();
     vi.mocked(SessionIndexStore).mockImplementation(() => store as never);

@@ -18,7 +18,6 @@ import { buildSessionInternalUrl, SessionInternalPaths } from "./session/contrac
 import {
   getValidModelOrDefault,
   isValidModel,
-  normalizeModelId,
   isValidReasoningEffort,
   VALID_MODELS,
   type CodeServerSettings,
@@ -1424,12 +1423,10 @@ async function handleSpawnChild(
 
   // Validate explicit model from the agent; reject invalid names so the agent
   // can self-correct instead of silently falling back to the default model.
-  const rawModel = body.model || spawnContext.model;
-  if (body.model && !isValidModel(body.model)) {
-    const hint = normalizeModelId(body.model);
-    const suggestion = isValidModel(hint) ? ` Did you mean "${hint}"?` : "";
+  const rawModel = body.model ?? spawnContext.model;
+  if (body.model !== undefined && !isValidModel(body.model)) {
     return error(
-      `Invalid model "${body.model}".${suggestion} Valid models: ${VALID_MODELS.join(", ")}`,
+      `Invalid model "${body.model}". Valid models: ${VALID_MODELS.join(", ")}`,
       400
     );
   }
