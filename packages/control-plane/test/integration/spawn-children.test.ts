@@ -217,6 +217,28 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(body.error).toContain("same repository");
   });
 
+  it("rejects invalid model with 400 and helpful message", async () => {
+    const { parentName, sandboxToken } = await setupParent();
+
+    const res = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({
+        title: "Bad model",
+        prompt: "This should fail",
+        model: "not-a-real-model",
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json<{ error: string }>();
+    expect(body.error).toContain('Invalid model "not-a-real-model"');
+    expect(body.error).toContain("Valid models:");
+  });
+
   it("rejects without auth (401)", async () => {
     const res = await SELF.fetch(`https://test.local/sessions/any-session/children`, {
       method: "POST",

@@ -159,6 +159,7 @@ export const DEFAULT_ENABLED_MODELS: ValidModel[] = [
 export function normalizeModelId(modelId: string): string {
   if (modelId.includes("/")) return modelId;
   if (modelId.startsWith("claude-")) return `anthropic/${modelId}`;
+  if (modelId.startsWith("gpt-")) return `openai/${modelId}`;
   return modelId;
 }
 

@@ -23,7 +23,7 @@ export default tool({
       .string()
       .optional()
       .describe(
-        "Override the LLM model for the child (e.g. 'anthropic/claude-sonnet-4-6'). Defaults to the parent's model."
+        "Override the LLM model for the child. Must use 'provider/model' format (e.g. 'anthropic/claude-sonnet-4-6', 'openai/gpt-5.4'). Defaults to the parent's model."
       ),
   },
   async execute(args) {
