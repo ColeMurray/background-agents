@@ -788,6 +788,7 @@ async function handleSlackEvent(
       bot_id?: string;
       tab?: string;
       channel_type?: string;
+      subtype?: string;
     };
   },
   env: Env,
@@ -812,8 +813,10 @@ async function handleSlackEvent(
 
   // Handle direct messages (DMs) to the bot
   // message.im events have channel_type "im" - these are 1:1 DMs with the bot
+  // Guard on !event.subtype to skip message_changed / message_deleted events
   if (
     event.type === "message" &&
+    !event.subtype &&
     event.channel_type === "im" &&
     event.channel &&
     event.ts &&
@@ -1149,17 +1152,23 @@ async function handleDirectMessage(
   const userId = event.user;
   if (!userId) return;
 
-  // In DMs, the text doesn't have a bot mention to strip
+  // In DMs, strip any @mention tokens (e.g. users can type "@Bot fix this")
   const rawText = event.text || "";
-  const messageText = rawText.trim();
-
-  if (!messageText) {
-    log.info("slack.dm.empty_message", { trace_id: traceId });
-    return;
-  }
+  const messageText = rawText.replace(/<@[A-Z0-9]+>/g, "").trim();
 
   const channel = event.channel;
   const { ts, thread_ts } = event;
+
+  if (!messageText) {
+    log.info("slack.dm.empty_message", { trace_id: traceId });
+    await postMessage(
+      env.SLACK_BOT_TOKEN,
+      channel,
+      "Hi! Please include a message with your request.",
+      { thread_ts: ts }
+    );
+    return;
+  }
   const threadTs = thread_ts || ts;
 
   // Get thread context if in a thread (include bot messages for better context)
