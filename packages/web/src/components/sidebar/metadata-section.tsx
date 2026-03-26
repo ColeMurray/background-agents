@@ -10,9 +10,9 @@ import type { Artifact } from "@/types/session";
 import {
   ClockIcon,
   SparkleIcon,
-  GitHubIcon,
   GitPrIcon,
   BranchIcon,
+  RepoIcon,
   CopyIcon,
   CheckIcon,
   LinkIcon,
@@ -98,7 +98,7 @@ export function MetadataSection({
       {/* PR Badge */}
       {(prNumber || prUrl) && (
         <div className="flex items-center gap-2 text-sm">
-          <GitHubIcon className="w-4 h-4 text-muted-foreground" />
+          <RepoIcon className="w-4 h-4 text-muted-foreground" />
           {prUrl ? (
             <a
               href={prUrl}
@@ -177,7 +177,7 @@ export function MetadataSection({
       {/* Repository tag */}
       {repoOwner && repoName && (
         <div className="flex items-center gap-2 text-sm">
-          <GitHubIcon className="w-4 h-4 text-muted-foreground" />
+          <RepoIcon className="w-4 h-4 text-muted-foreground" />
           <a
             href={getScmRepoUrl(repoOwner, repoName)}
             target="_blank"
