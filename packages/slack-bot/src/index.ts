@@ -7,6 +7,7 @@
 
 import { Hono } from "hono";
 import type { Env, RepoConfig, CallbackContext, ThreadSession, UserPreferences } from "./types";
+import { stripMentions, isDmDispatchable } from "./dm-utils";
 import {
   verifySlackSignature,
   postMessage,
@@ -821,16 +822,7 @@ async function handleSlackEvent(
   }
 
   // Handle direct messages (DMs) to the bot
-  // message.im events have channel_type "im" - these are 1:1 DMs with the bot
-  // Ignore message subtypes (bot_message, message_changed, etc.) to prevent loops/duplicates
-  if (
-    event.type === "message" &&
-    !event.subtype &&
-    event.channel_type === "im" &&
-    event.channel &&
-    event.ts &&
-    event.user
-  ) {
+  if (isDmDispatchable(event)) {
     await handleDirectMessage(
       {
         type: event.type,
@@ -1166,9 +1158,7 @@ async function handleDirectMessage(
 
   log.info("slack.dm.received", { trace_id: traceId, user: userId, channel });
 
-  // Strip any @mention tokens (e.g. users can type "@Bot fix this" in DMs)
-  const rawText = event.text || "";
-  const messageText = rawText.replace(/<@[A-Z0-9]+>/g, "").trim();
+  const messageText = stripMentions(text);
 
   if (!messageText) {
     log.info("slack.dm.empty_message", { trace_id: traceId });
