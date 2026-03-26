@@ -826,10 +826,10 @@ async function handleSlackEvent(
     await handleDirectMessage(
       {
         type: event.type,
-        text: event.text,
-        user: event.user,
-        channel: event.channel,
-        ts: event.ts,
+        text: event.text!,
+        user: event.user!,
+        channel: event.channel!,
+        ts: event.ts!,
         thread_ts: event.thread_ts,
         channel_type: event.channel_type,
       },
