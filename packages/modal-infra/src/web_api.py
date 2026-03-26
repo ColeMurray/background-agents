@@ -122,7 +122,9 @@ async def api_create_sandbox(
 
         manager = SandboxManager()
 
-        # Generate GitHub App token for git operations
+        # Generate clone token for git operations.
+        # Prefer GitHub App token; fall back to GitLab PAT for GitLab deployments
+        # (where SCM_PROVIDER=gitlab and GITLAB_ACCESS_TOKEN is configured).
         github_app_token = None
         try:
             app_id = os.environ.get("GITHUB_APP_ID")
@@ -137,6 +139,8 @@ async def api_create_sandbox(
                 )
         except Exception as e:
             log.warn("github.token_error", exc=e)
+
+        clone_token = github_app_token or os.environ.get("GITLAB_ACCESS_TOKEN")
 
         session_config = SessionConfig(
             session_id=request.get("session_id"),
@@ -156,7 +160,7 @@ async def api_create_sandbox(
             session_config=session_config,
             control_plane_url=control_plane_url,
             sandbox_auth_token=request.get("sandbox_auth_token"),
-            clone_token=github_app_token,
+            clone_token=clone_token,
             user_env_vars=request.get("user_env_vars") or None,
             repo_image_id=request.get("repo_image_id") or None,
             repo_image_sha=request.get("repo_image_sha") or None,
@@ -519,6 +523,7 @@ async def api_restore_sandbox(
         except Exception as e:
             log.warn("github.token_error", exc=e)
 
+        clone_token = github_app_token or os.environ.get("GITLAB_ACCESS_TOKEN")
         code_server_enabled = bool(request.get("code_server_enabled", False))
 
         # Restore sandbox from snapshot
@@ -528,7 +533,7 @@ async def api_restore_sandbox(
             sandbox_id=sandbox_id,
             control_plane_url=control_plane_url,
             sandbox_auth_token=sandbox_auth_token,
-            clone_token=github_app_token,
+            clone_token=clone_token,
             user_env_vars=user_env_vars,
             timeout_seconds=timeout_seconds,
             code_server_enabled=code_server_enabled,
