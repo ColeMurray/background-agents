@@ -100,9 +100,10 @@ export function MetadataSection({
       )}
 
       {typeof totalCost === "number" && totalCost > 0 && (
+      {typeof totalCost === "number" && totalCost > 0 && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <span className="w-4 text-center">$</span>
-          <span>OpenCode cost {formatSessionCost(totalCost)}</span>
+          <span>Session cost: {totalCost >= 1 ? totalCost.toFixed(2) : totalCost.toFixed(4)}</span>
         </div>
       )}
 
