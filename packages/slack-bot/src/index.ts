@@ -787,8 +787,17 @@ async function handleSlackEvent(
       thread_ts?: string;
       bot_id?: string;
       tab?: string;
-      channel_type?: string;
-      subtype?: string;
+      channel_type?: string; // "im" for direct messages, "channel" for public channels, etc.
+      subtype?: string; // e.g. "bot_message", "message_changed", etc.
+      attachments?: Array<{
+        text?: string;
+        pretext?: string;
+        author_name?: string;
+        from_url?: string;
+        channel_name?: string;
+        footer?: string;
+      }>;
+      files?: SlackFile[];
     };
   },
   env: Env,
@@ -813,7 +822,7 @@ async function handleSlackEvent(
 
   // Handle direct messages (DMs) to the bot
   // message.im events have channel_type "im" - these are 1:1 DMs with the bot
-  // Guard on !event.subtype to skip message_changed / message_deleted events
+  // Ignore message subtypes (bot_message, message_changed, etc.) to prevent loops/duplicates
   if (
     event.type === "message" &&
     !event.subtype &&
@@ -1152,12 +1161,14 @@ async function handleDirectMessage(
   const userId = event.user;
   if (!userId) return;
 
-  // In DMs, strip any @mention tokens (e.g. users can type "@Bot fix this")
-  const rawText = event.text || "";
-  const messageText = rawText.replace(/<@[A-Z0-9]+>/g, "").trim();
-
   const channel = event.channel;
   const { ts, thread_ts } = event;
+
+  log.info("slack.dm.received", { trace_id: traceId, user: userId, channel });
+
+  // Strip any @mention tokens (e.g. users can type "@Bot fix this" in DMs)
+  const rawText = event.text || "";
+  const messageText = rawText.replace(/<@[A-Z0-9]+>/g, "").trim();
 
   if (!messageText) {
     log.info("slack.dm.empty_message", { trace_id: traceId });
