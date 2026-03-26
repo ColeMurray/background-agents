@@ -223,6 +223,111 @@ describe("GitLabSourceControlProvider", () => {
 
       expect(capturedBody?.title).toBe("Draft: already prefixed");
     });
+
+    it("maps merged MR state correctly", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse({
+          iid: 8,
+          web_url: "https://gitlab.com/acme/web/-/merge_requests/8",
+          _links: { self: "https://gitlab.com/api/v4/projects/acme%2Fweb/merge_requests/8" },
+          state: "merged",
+          draft: false,
+          source_branch: "feature/done",
+          target_branch: "main",
+        })
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const result = await provider.createPullRequest(
+        { authType: "pat", token: "user-token" },
+        {
+          repository: {
+            owner: "acme",
+            name: "web",
+            fullName: "acme/web",
+            defaultBranch: "main",
+            isPrivate: true,
+            providerRepoId: 42,
+          },
+          title: "Merged MR",
+          body: "",
+          sourceBranch: "feature/done",
+          targetBranch: "main",
+        }
+      );
+
+      expect(result.state).toBe("merged");
+    });
+
+    it("maps closed MR state correctly", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse({
+          iid: 9,
+          web_url: "https://gitlab.com/acme/web/-/merge_requests/9",
+          _links: { self: "https://gitlab.com/api/v4/projects/acme%2Fweb/merge_requests/9" },
+          state: "closed",
+          draft: false,
+          source_branch: "feature/abandoned",
+          target_branch: "main",
+        })
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const result = await provider.createPullRequest(
+        { authType: "pat", token: "user-token" },
+        {
+          repository: {
+            owner: "acme",
+            name: "web",
+            fullName: "acme/web",
+            defaultBranch: "main",
+            isPrivate: true,
+            providerRepoId: 42,
+          },
+          title: "Closed MR",
+          body: "",
+          sourceBranch: "feature/abandoned",
+          targetBranch: "main",
+        }
+      );
+
+      expect(result.state).toBe("closed");
+    });
+
+    it("maps draft MR state correctly", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse({
+          iid: 10,
+          web_url: "https://gitlab.com/acme/web/-/merge_requests/10",
+          _links: { self: "https://gitlab.com/api/v4/projects/acme%2Fweb/merge_requests/10" },
+          state: "opened",
+          draft: true,
+          source_branch: "feature/wip",
+          target_branch: "main",
+        })
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const result = await provider.createPullRequest(
+        { authType: "pat", token: "user-token" },
+        {
+          repository: {
+            owner: "acme",
+            name: "web",
+            fullName: "acme/web",
+            defaultBranch: "main",
+            isPrivate: true,
+            providerRepoId: 42,
+          },
+          title: "Draft: WIP feature",
+          body: "",
+          sourceBranch: "feature/wip",
+          targetBranch: "main",
+        }
+      );
+
+      expect(result.state).toBe("draft");
+    });
   });
 
   describe("checkRepositoryAccess", () => {
@@ -292,8 +397,8 @@ describe("GitLabSourceControlProvider", () => {
         makeResponse([
           {
             id: 1,
-            name: "web",
-            path: "web",
+            name: "My Web App", // display name — should NOT be used
+            path: "web", // URL slug — should be used as name
             path_with_namespace: "acme/web",
             namespace: { path: "acme" },
             description: "The web app",
@@ -314,7 +419,7 @@ describe("GitLabSourceControlProvider", () => {
       expect(repos[0]).toEqual({
         id: 1,
         owner: "acme",
-        name: "web",
+        name: "web", // path, not display name
         fullName: "acme/web",
         description: "The web app",
         private: true,
