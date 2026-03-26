@@ -123,24 +123,32 @@ async def api_create_sandbox(
         manager = SandboxManager()
 
         # Generate clone token for git operations.
-        # Prefer GitHub App token; fall back to GitLab PAT for GitLab deployments
-        # (where SCM_PROVIDER=gitlab and GITLAB_ACCESS_TOKEN is configured).
-        github_app_token = None
-        try:
-            app_id = os.environ.get("GITHUB_APP_ID")
-            private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
-            installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID")
+        # Token selection is driven by SCM_PROVIDER (stored in the internal-api Modal secret):
+        #   - "github" (default): generate a short-lived GitHub App installation token.
+        #   - "gitlab": read GITLAB_ACCESS_TOKEN from the internal-api secret.
+        # This keeps credential types coupled to their provider and avoids a GitHub App
+        # token being passed to gitlab.com in misconfigured deployments.
+        scm_provider = os.environ.get("SCM_PROVIDER", "github")
+        clone_token: str | None = None
 
-            if app_id and private_key and installation_id:
-                github_app_token = generate_installation_token(
-                    app_id=app_id,
-                    private_key=private_key,
-                    installation_id=installation_id,
-                )
-        except Exception as e:
-            log.warn("github.token_error", exc=e)
+        if scm_provider == "gitlab":
+            clone_token = os.environ.get("GITLAB_ACCESS_TOKEN")
+        else:
+            try:
+                app_id = os.environ.get("GITHUB_APP_ID")
+                private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
+                installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID")
 
-        clone_token = github_app_token or os.environ.get("GITLAB_ACCESS_TOKEN")
+                if app_id and private_key and installation_id:
+                    clone_token = str(
+                        generate_installation_token(
+                            app_id=app_id,
+                            private_key=private_key,
+                            installation_id=installation_id,
+                        )
+                    )
+            except Exception as e:
+                log.warn("github.token_error", exc=e)
 
         session_config = SessionConfig(
             session_id=request.get("session_id"),
@@ -508,22 +516,28 @@ async def api_restore_sandbox(
 
         manager = SandboxManager()
 
-        github_app_token = None
-        try:
-            app_id = os.environ.get("GITHUB_APP_ID")
-            private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
-            installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID")
+        scm_provider = os.environ.get("SCM_PROVIDER", "github")
+        clone_token: str | None = None
 
-            if app_id and private_key and installation_id:
-                github_app_token = generate_installation_token(
-                    app_id=app_id,
-                    private_key=private_key,
-                    installation_id=installation_id,
-                )
-        except Exception as e:
-            log.warn("github.token_error", exc=e)
+        if scm_provider == "gitlab":
+            clone_token = os.environ.get("GITLAB_ACCESS_TOKEN")
+        else:
+            try:
+                app_id = os.environ.get("GITHUB_APP_ID")
+                private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
+                installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID")
 
-        clone_token = github_app_token or os.environ.get("GITLAB_ACCESS_TOKEN")
+                if app_id and private_key and installation_id:
+                    clone_token = str(
+                        generate_installation_token(
+                            app_id=app_id,
+                            private_key=private_key,
+                            installation_id=installation_id,
+                        )
+                    )
+            except Exception as e:
+                log.warn("github.token_error", exc=e)
+
         code_server_enabled = bool(request.get("code_server_enabled", False))
 
         # Restore sandbox from snapshot
