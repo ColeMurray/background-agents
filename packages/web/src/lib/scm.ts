@@ -27,15 +27,15 @@ export function getScmRepoUrl(owner: string, name: string): string {
 
 export function getScmBranchUrl(owner: string, name: string, branch: string): string {
   const provider = getProvider();
-  const o = encodeURIComponent(owner);
-  const n = encodeURIComponent(name);
-  const b = encodeURIComponent(branch);
+  const encodedOwner = encodeURIComponent(owner);
+  const encodedName = encodeURIComponent(name);
+  const encodedBranch = encodeURIComponent(branch);
   if (provider === "gitlab") {
-    return `${BASE_URLS[provider]}/${o}/${n}/-/tree/${b}`;
+    return `${BASE_URLS[provider]}/${encodedOwner}/${encodedName}/-/tree/${encodedBranch}`;
   }
   if (provider === "bitbucket") {
-    return `${BASE_URLS[provider]}/${o}/${n}/src/${b}`;
+    return `${BASE_URLS[provider]}/${encodedOwner}/${encodedName}/src/${encodedBranch}`;
   }
   // github (default)
-  return `${BASE_URLS[provider]}/${o}/${n}/tree/${b}`;
+  return `${BASE_URLS[provider]}/${encodedOwner}/${encodedName}/tree/${encodedBranch}`;
 }
