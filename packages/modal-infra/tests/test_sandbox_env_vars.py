@@ -367,6 +367,30 @@ async def test_vcs_env_vars_explicit_github(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_vcs_env_vars_gitlab(monkeypatch):
+    """SCM_PROVIDER=gitlab → gitlab.com + oauth2."""
+    captured = {}
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+    monkeypatch.setenv("SCM_PROVIDER", "gitlab")
+
+    manager = SandboxManager()
+    config = SandboxConfig(
+        repo_owner="acme",
+        repo_name="repo",
+        clone_token="glpat_test123",
+    )
+    await manager.create_sandbox(config)
+
+    env = captured["env"]
+    assert env["VCS_HOST"] == "gitlab.com"
+    assert env["VCS_CLONE_USERNAME"] == "oauth2"
+    assert env["VCS_CLONE_TOKEN"] == "glpat_test123"
+    # GitHub-specific vars not set for GitLab
+    assert "GITHUB_APP_TOKEN" not in env
+    assert "GITHUB_TOKEN" not in env
+
+
+@pytest.mark.asyncio
 async def test_vcs_env_vars_bitbucket(monkeypatch):
     """SCM_PROVIDER=bitbucket → bitbucket.org + x-token-auth."""
     captured = {}

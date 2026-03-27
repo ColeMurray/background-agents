@@ -56,6 +56,41 @@ def require_auth(authorization: str | None) -> None:
         )
 
 
+def _resolve_clone_token() -> str | None:
+    """Resolve a VCS clone token based on SCM_PROVIDER.
+
+    - "gitlab": reads GITLAB_ACCESS_TOKEN from the environment.
+    - "github" (default): generates a short-lived GitHub App installation token.
+
+    Returns None if credentials are missing or token generation fails.
+    """
+    from .auth import generate_installation_token
+
+    scm_provider = os.environ.get("SCM_PROVIDER", "github")
+
+    if scm_provider == "gitlab":
+        token = os.environ.get("GITLAB_ACCESS_TOKEN")
+        if not token:
+            log.warn("gitlab.token_missing")
+        return token
+
+    try:
+        app_id = os.environ.get("GITHUB_APP_ID")
+        private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
+        installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID")
+
+        if app_id and private_key and installation_id:
+            return generate_installation_token(
+                app_id=app_id,
+                private_key=private_key,
+                installation_id=installation_id,
+            )
+    except Exception as e:
+        log.warn("github.token_error", exc=e)
+
+    return None
+
+
 def require_valid_control_plane_url(url: str | None) -> None:
     """
     Validate control_plane_url, raising HTTPException on failure.
@@ -116,39 +151,12 @@ async def api_create_sandbox(
 
     try:
         # Import types and manager directly
-        from .auth import generate_installation_token
         from .sandbox import SessionConfig
         from .sandbox.manager import SandboxConfig, SandboxManager
 
         manager = SandboxManager()
 
-        # Generate clone token for git operations.
-        # Token selection is driven by SCM_PROVIDER (stored in the internal-api Modal secret):
-        #   - "github" (default): generate a short-lived GitHub App installation token.
-        #   - "gitlab": read GITLAB_ACCESS_TOKEN from the internal-api secret.
-        # This keeps credential types coupled to their provider and avoids a GitHub App
-        # token being passed to gitlab.com in misconfigured deployments.
-        scm_provider = os.environ.get("SCM_PROVIDER", "github")
-        clone_token: str | None = None
-
-        if scm_provider == "gitlab":
-            clone_token = os.environ.get("GITLAB_ACCESS_TOKEN")
-        else:
-            try:
-                app_id = os.environ.get("GITHUB_APP_ID")
-                private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
-                installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID")
-
-                if app_id and private_key and installation_id:
-                    clone_token = str(
-                        generate_installation_token(
-                            app_id=app_id,
-                            private_key=private_key,
-                            installation_id=installation_id,
-                        )
-                    )
-            except Exception as e:
-                log.warn("github.token_error", exc=e)
+        clone_token = _resolve_clone_token()
 
         session_config = SessionConfig(
             session_id=request.get("session_id"),
@@ -505,7 +513,6 @@ async def api_restore_sandbox(
         raise HTTPException(status_code=400, detail="snapshot_image_id is required")
 
     try:
-        from .auth import generate_installation_token
         from .sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxManager
 
         session_config = request.get("session_config", {})
@@ -515,28 +522,7 @@ async def api_restore_sandbox(
         timeout_seconds = int(request.get("timeout_seconds", DEFAULT_SANDBOX_TIMEOUT_SECONDS))
 
         manager = SandboxManager()
-
-        scm_provider = os.environ.get("SCM_PROVIDER", "github")
-        clone_token: str | None = None
-
-        if scm_provider == "gitlab":
-            clone_token = os.environ.get("GITLAB_ACCESS_TOKEN")
-        else:
-            try:
-                app_id = os.environ.get("GITHUB_APP_ID")
-                private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
-                installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID")
-
-                if app_id and private_key and installation_id:
-                    clone_token = str(
-                        generate_installation_token(
-                            app_id=app_id,
-                            private_key=private_key,
-                            installation_id=installation_id,
-                        )
-                    )
-            except Exception as e:
-                log.warn("github.token_error", exc=e)
+        clone_token = _resolve_clone_token()
 
         code_server_enabled = bool(request.get("code_server_enabled", False))
 
