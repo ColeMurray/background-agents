@@ -219,6 +219,7 @@ export async function getThreadMessages(
     text: string;
     user?: string;
     bot_id?: string;
+    attachments?: Array<{ text?: string }>;
   }>;
   error?: string;
 }> {
@@ -238,6 +239,7 @@ export async function getThreadMessages(
       text: string;
       user?: string;
       bot_id?: string;
+      attachments?: Array<{ text?: string }>;
     }>;
     error?: string;
   }>;
@@ -258,6 +260,7 @@ export async function getUserInfo(
     profile?: {
       display_name?: string;
       real_name?: string;
+      email?: string;
     };
   };
   error?: string;
@@ -277,10 +280,47 @@ export async function getUserInfo(
       profile?: {
         display_name?: string;
         real_name?: string;
+        email?: string;
       };
     };
     error?: string;
   }>;
+}
+
+/**
+ * Download a file from Slack using the bot token for authentication.
+ *
+ * @param token - Slack bot token
+ * @param urlPrivateDownload - The url_private_download from a Slack file object
+ * @param maxSizeBytes - Maximum allowed file size in bytes
+ * @returns ArrayBuffer of the file content, or null if the file is too large or download fails
+ */
+export async function downloadSlackFile(
+  token: string,
+  urlPrivateDownload: string,
+  maxSizeBytes: number
+): Promise<{ data: ArrayBuffer; size: number } | null> {
+  const response = await fetch(urlPrivateDownload, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const contentLength = response.headers.get("content-length");
+  if (contentLength && parseInt(contentLength, 10) > maxSizeBytes) {
+    return null;
+  }
+
+  const data = await response.arrayBuffer();
+  if (data.byteLength > maxSizeBytes) {
+    return null;
+  }
+
+  return { data, size: data.byteLength };
 }
 
 /**

@@ -15,6 +15,7 @@ import {
   getChannelInfo,
   getThreadMessages,
   publishView,
+  downloadSlackFile,
 } from "./utils/slack-client";
 import { resolveUserNames } from "./utils/resolve-users";
 import { createClassifier } from "./classifier";
@@ -32,6 +33,32 @@ import {
   getDefaultReasoningEffort,
   isValidReasoningEffort,
 } from "@open-inspect/shared";
+
+/**
+ * Slack file object from event payload.
+ */
+interface SlackFile {
+  id: string;
+  name: string;
+  mimetype: string;
+  filetype: string;
+  size: number;
+  url_private_download?: string;
+  url_private?: string;
+}
+
+/**
+ * A file attachment to send with a prompt.
+ */
+interface FileAttachment {
+  type: "image" | "file";
+  name: string;
+  content: string; // base64-encoded
+  url?: string;
+}
+
+const MAX_FILE_ATTACHMENTS = 3;
+const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
 
 const log = createLogger("handler");
 
@@ -127,7 +154,8 @@ async function sendPrompt(
   content: string,
   authorId: string,
   callbackContext?: CallbackContext,
-  traceId?: string
+  traceId?: string,
+  attachments?: FileAttachment[]
 ): Promise<{ messageId: string } | null> {
   const startTime = Date.now();
   const base = { trace_id: traceId, session_id: sessionId, source: "slack" };
@@ -143,6 +171,7 @@ async function sendPrompt(
           authorId,
           source: "slack",
           callbackContext,
+          ...(attachments?.length ? { attachments } : {}),
         }),
       }
     );
@@ -529,6 +558,86 @@ function formatChannelContext(channelName: string, channelDescription?: string):
 }
 
 /**
+ * Download and base64-encode Slack file attachments.
+ * Skips files that are too large or fail to download.
+ */
+async function downloadAndEncodeSlackFiles(
+  token: string,
+  files: SlackFile[]
+): Promise<FileAttachment[]> {
+  const attachments: FileAttachment[] = [];
+  const filesToProcess = files.slice(0, MAX_FILE_ATTACHMENTS);
+
+  for (const file of filesToProcess) {
+    const downloadUrl = file.url_private_download || file.url_private;
+    if (!downloadUrl) {
+      log.warn("slack.file.skip", { file_id: file.id, reason: "no_download_url" });
+      continue;
+    }
+
+    try {
+      const result = await downloadSlackFile(token, downloadUrl, MAX_FILE_SIZE_BYTES);
+      if (!result) {
+        log.warn("slack.file.skip", { file_id: file.id, reason: "download_failed_or_too_large" });
+        continue;
+      }
+
+      // Convert ArrayBuffer to base64
+      const bytes = new Uint8Array(result.data);
+      let binary = "";
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const base64 = btoa(binary);
+
+      const type = file.mimetype.startsWith("image/") ? "image" : "file";
+      attachments.push({
+        type,
+        name: file.name,
+        content: base64,
+        url: downloadUrl,
+      });
+    } catch (e) {
+      log.error("slack.file.download", {
+        file_id: file.id,
+        error: e instanceof Error ? e : new Error(String(e)),
+      });
+    }
+  }
+
+  return attachments;
+}
+
+/**
+ * Format Slack message attachments (quoted/forwarded messages) as context text.
+ */
+function formatAttachments(
+  attachments?: Array<{ text?: string; fallback?: string; pretext?: string }>
+): string {
+  if (!attachments || attachments.length === 0) {
+    return "";
+  }
+
+  const parts: string[] = [];
+  for (const att of attachments) {
+    const text = att.text || att.fallback;
+    if (text) {
+      if (att.pretext) {
+        parts.push(`${att.pretext}\n${text}`);
+      } else {
+        parts.push(text);
+      }
+    }
+  }
+
+  if (parts.length === 0) {
+    return "";
+  }
+
+  return `Quoted message context:\n---\n${parts.join("\n\n")}\n---\n\n`;
+}
+
+/**
  * Create a session and send the initial prompt.
  * Shared logic between handleAppMention and handleRepoSelection.
  *
@@ -544,7 +653,8 @@ async function startSessionAndSendPrompt(
   previousMessages?: string[],
   channelName?: string,
   channelDescription?: string,
-  traceId?: string
+  traceId?: string,
+  fileAttachments?: FileAttachment[]
 ): Promise<{ sessionId: string } | null> {
   // Fetch user's preferred model and reasoning effort
   const userPrefs = await getUserPreferences(env, userId);
@@ -604,7 +714,8 @@ async function startSessionAndSendPrompt(
     promptContent,
     `slack:${userId}`,
     callbackContext,
-    traceId
+    traceId,
+    fileAttachments
   );
 
   if (!promptResult) {
@@ -787,6 +898,8 @@ async function handleSlackEvent(
       thread_ts?: string;
       bot_id?: string;
       tab?: string;
+      files?: SlackFile[];
+      attachments?: Array<{ text?: string; fallback?: string; pretext?: string }>;
     };
   },
   env: Env,
@@ -811,7 +924,20 @@ async function handleSlackEvent(
 
   // Handle app_mention events
   if (event.type === "app_mention" && event.text && event.channel && event.ts) {
-    await handleAppMention(event as Required<typeof event>, env, traceId);
+    await handleAppMention(
+      event as {
+        type: string;
+        text: string;
+        user: string;
+        channel: string;
+        ts: string;
+        thread_ts?: string;
+        files?: SlackFile[];
+        attachments?: Array<{ text?: string; fallback?: string; pretext?: string }>;
+      },
+      env,
+      traceId
+    );
   }
 }
 
@@ -826,6 +952,8 @@ async function handleAppMention(
     channel: string;
     ts: string;
     thread_ts?: string;
+    files?: SlackFile[];
+    attachments?: Array<{ text?: string; fallback?: string; pretext?: string }>;
   },
   env: Env,
   traceId?: string
@@ -833,7 +961,11 @@ async function handleAppMention(
   const { text, channel, ts, thread_ts } = event;
 
   // Remove the bot mention from the text
-  const messageText = text.replace(/<@[A-Z0-9]+>/g, "").trim();
+  const cleanedText = text.replace(/<@[A-Z0-9]+>/g, "").trim();
+
+  // Format Slack message attachments (quoted/forwarded messages) as context
+  const attachmentContext = formatAttachments(event.attachments);
+  const messageText = attachmentContext + cleanedText;
 
   if (!messageText) {
     await postMessage(
@@ -883,6 +1015,15 @@ async function handleAppMention(
     // Channel info not available
   }
 
+  // Download file attachments if present
+  let fileAttachments: FileAttachment[] | undefined;
+  if (event.files && event.files.length > 0) {
+    fileAttachments = await downloadAndEncodeSlackFiles(env.SLACK_BOT_TOKEN, event.files);
+    if (fileAttachments.length === 0) {
+      fileAttachments = undefined;
+    }
+  }
+
   if (thread_ts) {
     const existingSession = await lookupThreadSession(env, channel, thread_ts);
     if (existingSession) {
@@ -908,7 +1049,8 @@ async function handleAppMention(
         promptContent,
         `slack:${event.user}`,
         callbackContext,
-        traceId
+        traceId,
+        fileAttachments
       );
 
       if (promptResult) {
@@ -974,6 +1116,7 @@ async function handleAppMention(
         previousMessages,
         channelName,
         channelDescription,
+        fileAttachments,
       }),
       { expirationTtl: 3600 } // Expire after 1 hour
     );
@@ -1063,7 +1206,8 @@ async function handleAppMention(
     previousMessages,
     channelName,
     channelDescription,
-    traceId
+    traceId,
+    fileAttachments
   );
 
   if (!sessionResult) {
@@ -1134,12 +1278,14 @@ async function handleRepoSelection(
     previousMessages,
     channelName,
     channelDescription,
+    fileAttachments,
   } = pendingData as {
     message: string;
     userId: string;
     previousMessages?: string[];
     channelName?: string;
     channelDescription?: string;
+    fileAttachments?: FileAttachment[];
   };
 
   // Find the repo config
@@ -1174,7 +1320,8 @@ async function handleRepoSelection(
     previousMessages,
     channelName,
     channelDescription,
-    traceId
+    traceId,
+    fileAttachments
   );
 
   if (!sessionResult) {
