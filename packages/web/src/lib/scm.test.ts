@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { getScmRepoUrl, getScmBranchUrl } from "./scm";
 
 describe("scm", () => {
@@ -49,18 +49,14 @@ describe("scm", () => {
 
     it("encodes owner and name", () => {
       setProvider("github");
-      expect(getScmRepoUrl("my org", "my repo")).toBe(
-        "https://github.com/my%20org/my%20repo"
-      );
+      expect(getScmRepoUrl("my org", "my repo")).toBe("https://github.com/my%20org/my%20repo");
     });
   });
 
   describe("getScmBranchUrl", () => {
     it("returns github branch URL by default", () => {
       setProvider(undefined);
-      expect(getScmBranchUrl("acme", "app", "main")).toBe(
-        "https://github.com/acme/app/tree/main"
-      );
+      expect(getScmBranchUrl("acme", "app", "main")).toBe("https://github.com/acme/app/tree/main");
     });
 
     it("returns gitlab branch URL with /-/tree/ path", () => {
