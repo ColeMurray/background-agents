@@ -224,7 +224,7 @@ After Terraform deployment, guide user:
 1. App Home → Show Tabs → Enable **"Home Tab"**
 2. Save Changes
 
-The App Home provides a settings interface where users can configure their preferred Claude model.
+The App Home provides a settings interface where users can configure their preferred Codex model.
 
 ### Configure Event Subscriptions
 

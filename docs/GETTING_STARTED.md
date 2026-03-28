@@ -225,6 +225,8 @@ Skip this step if you don't need Slack integration.
    - `channels:read`
    - `groups:history`
    - `groups:read`
+   - `im:history`
+   - `im:read`
    - `reactions:write`
 3. Click **"Install to Workspace"**
 4. Note the **Bot Token** (`xoxb-...`)
@@ -444,6 +446,7 @@ The App Home provides a settings interface where users can configure their prefe
    - `app_home_opened` (required for App Home settings)
    - `app_mention`
    - `message.channels` (optional - if you want the bot to see all channel messages)
+   - `message.im` (enables direct message support)
 6. Click **Save Changes**
 
 ### Configure Interactivity

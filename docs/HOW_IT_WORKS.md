@@ -156,7 +156,7 @@ can make HTTP requests and maintain WebSocket connections can participate.
 **Current clients:**
 
 - **Web**: Next.js app with real-time streaming, session management, and settings
-- **Slack**: Bot that responds to @mentions, classifies repos, and posts results
+- **Slack**: Bot that responds to @mentions and direct messages, classifies repos, and posts results
 
 All clients see the same session state. Send a prompt from Slack, watch the results on web. This
 works because state lives in the control plane, not the client.
