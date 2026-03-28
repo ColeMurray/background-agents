@@ -42,6 +42,7 @@ import {
   saveUserRepoBranchPreference,
   normalizeBranchPreference,
   isValidBranchName,
+  getValidatedBranch,
   isBranchModalCallbackId,
   getSubmittedBranch,
   getBranchSubmissionValidationError,
@@ -468,10 +469,7 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
     prefs?.reasoningEffort && isValidReasoningEffort(currentModel, prefs.reasoningEffort)
       ? prefs.reasoningEffort
       : getDefaultReasoningEffort(currentModel);
-  const currentBranch =
-    prefs?.branch && isValidBranchName(prefs.branch)
-      ? normalizeBranchPreference(prefs.branch)
-      : undefined;
+  const currentBranch = getValidatedBranch(prefs?.branch);
 
   const repos = await getAvailableRepos(env);
   const repoBranchPreferences = await getUserRepoBranchPreferences(env, userId);
@@ -891,10 +889,7 @@ async function startSessionAndSendPrompt(
     userPrefs?.reasoningEffort && isValidReasoningEffort(model, userPrefs.reasoningEffort)
       ? userPrefs.reasoningEffort
       : getDefaultReasoningEffort(model);
-  const globalBranch =
-    userPrefs?.branch && isValidBranchName(userPrefs.branch)
-      ? normalizeBranchPreference(userPrefs.branch)
-      : undefined;
+  const globalBranch = getValidatedBranch(userPrefs?.branch);
   const repoBranch = await getUserRepoBranchPreference(env, userId, repo.id);
   const branch = repoBranch ?? globalBranch;
 
@@ -1707,10 +1702,7 @@ async function handleSlackInteraction(
       // Validate the selected model before saving
       if (selectedModel && userId && isValidModel(selectedModel)) {
         const currentPrefs = await getUserPreferences(env, userId);
-        const preservedBranch =
-          currentPrefs?.branch && isValidBranchName(currentPrefs.branch)
-            ? normalizeBranchPreference(currentPrefs.branch)
-            : undefined;
+        const preservedBranch = getValidatedBranch(currentPrefs?.branch);
         // Reset reasoning effort to new model's default when model changes
         const newDefault = getDefaultReasoningEffort(selectedModel);
         await saveUserPreferences(env, userId, selectedModel, newDefault, preservedBranch);
@@ -1727,10 +1719,7 @@ async function handleSlackInteraction(
         const currentModel = getValidModelOrDefault(
           currentPrefs?.model ?? env.DEFAULT_MODEL ?? DEFAULT_MODEL
         );
-        const preservedBranch =
-          currentPrefs?.branch && isValidBranchName(currentPrefs.branch)
-            ? normalizeBranchPreference(currentPrefs.branch)
-            : undefined;
+        const preservedBranch = getValidatedBranch(currentPrefs?.branch);
         if (isValidReasoningEffort(currentModel, selectedEffort)) {
           await saveUserPreferences(env, userId, currentModel, selectedEffort, preservedBranch);
           await publishAppHome(env, userId);
@@ -1742,10 +1731,7 @@ async function handleSlackInteraction(
     case "open_branch_modal": {
       if (!userId || !payload.trigger_id) return;
       const currentPrefs = await getUserPreferences(env, userId);
-      const currentBranch =
-        currentPrefs?.branch && isValidBranchName(currentPrefs.branch)
-          ? normalizeBranchPreference(currentPrefs.branch)
-          : undefined;
+      const currentBranch = getValidatedBranch(currentPrefs?.branch);
       await openBranchPreferenceModal(env, userId, payload.trigger_id, currentBranch);
       break;
     }

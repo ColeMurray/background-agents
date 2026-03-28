@@ -63,7 +63,7 @@ function makeEnv(): Env {
             JSON.stringify({
               repos: [
                 {
-                  id: 1,
+                  id: "acme/app",
                   owner: "acme",
                   name: "app",
                   fullName: "acme/app",
@@ -280,6 +280,55 @@ describe("POST /interactions", () => {
     expect(mockPublishView).toHaveBeenCalledOnce();
   });
 
+  it("persists global branch preference to KV", async () => {
+    mockPublishView.mockResolvedValue({ ok: true });
+
+    const payload = {
+      type: "view_submission",
+      user: { id: "U123" },
+      view: {
+        callback_id: "branch_preference_modal",
+        state: {
+          values: {
+            branch_input: {
+              branch_value: {
+                type: "plain_text_input",
+                value: "staging",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const request = new Request("http://localhost/interactions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "x-slack-signature": "v0=test",
+        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
+      },
+      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
+    });
+
+    const env = makeEnv();
+    const ctx = makeCtx();
+    const response = await app.fetch(request, env, ctx);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ response_action: "clear" });
+
+    await flushWaitUntil(ctx);
+
+    const kvPut = (env.SLACK_KV as unknown as { put: ReturnType<typeof vi.fn> }).put;
+    const prefsCall = kvPut.mock.calls.find(
+      (args: unknown[]) => args[0] === "user_prefs:U123"
+    );
+    expect(prefsCall).toBeTruthy();
+    const saved = JSON.parse(prefsCall![1] as string) as { branch?: string };
+    expect(saved.branch).toBe("staging");
+  });
+
   it("stores repo-specific branch preference from repo branch modal", async () => {
     mockPublishView.mockResolvedValue({ ok: true });
 
@@ -439,7 +488,7 @@ describe("POST /interactions", () => {
             JSON.stringify({
               repos: [
                 {
-                  id: 1,
+                  id: "acme/app",
                   owner: "acme",
                   name: "app",
                   fullName: "acme/app",
@@ -566,7 +615,7 @@ describe("POST /interactions", () => {
     const repos = Array.from({ length: 150 }, (_, idx) => {
       const number = String(idx + 1).padStart(3, "0");
       return {
-        id: idx + 1,
+        id: `acme/repo-${number}`,
         owner: "acme",
         name: `repo-${number}`,
         fullName: `acme/repo-${number}`,

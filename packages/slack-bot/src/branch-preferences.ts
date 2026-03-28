@@ -64,6 +64,8 @@ export async function getUserRepoBranchPreferences(
   const prefix = getUserRepoBranchPrefix(userId);
 
   try {
+    // KV list returns up to 1000 keys per page; pagination is not handled
+    // since users are unlikely to configure that many repo overrides.
     const listed = await env.SLACK_KV.list({ prefix });
 
     for (const key of listed.keys) {
@@ -130,6 +132,14 @@ export async function saveUserRepoBranchPreference(
 export function normalizeBranchPreference(branch: string | undefined): string | undefined {
   const normalized = branch?.trim();
   return normalized ? normalized : undefined;
+}
+
+/**
+ * Return the validated+normalized branch from a preferences object, or undefined.
+ */
+export function getValidatedBranch(branch: string | undefined): string | undefined {
+  const normalized = normalizeBranchPreference(branch);
+  return normalized && isValidBranchName(normalized) ? normalized : undefined;
 }
 
 function hasControlCharacters(value: string): boolean {
