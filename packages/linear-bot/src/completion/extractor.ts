@@ -1,205 +1,39 @@
 /**
  * Extract and aggregate agent response from control-plane events.
- * Ported from slack-bot/src/completion/extractor.ts.
+ *
+ * Delegates to the shared extractor from @open-inspect/shared, adapting
+ * the package-specific Env bindings into the generic ExtractorDeps interface.
+ * The Linear-specific `formatAgentResponse` remains here.
  */
 
-import type {
-  Env,
-  EventResponse,
-  ListEventsResponse,
-  ListArtifactsResponse,
-  AgentResponse,
-  ToolCallSummary,
-  ArtifactInfo,
-} from "../types";
-import type { ArtifactType } from "@open-inspect/shared";
-import { buildInternalAuthHeaders } from "../utils/internal";
+import type { Env } from "../types";
+import type { AgentResponse } from "@open-inspect/shared";
+import { extractAgentResponse as sharedExtract } from "@open-inspect/shared";
 import { createLogger } from "../logger";
 
 const log = createLogger("extractor");
 
-const EVENTS_PAGE_LIMIT = 200;
-
+/**
+ * Fetch events for a message and aggregate them into a response.
+ *
+ * Thin wrapper that maps the Linear-bot Env into the shared ExtractorDeps.
+ */
 export async function extractAgentResponse(
   env: Env,
   sessionId: string,
   messageId: string,
   traceId?: string
 ): Promise<AgentResponse> {
-  const startTime = Date.now();
-  const base = { trace_id: traceId, session_id: sessionId, message_id: messageId };
-  try {
-    const headers: Record<string, string> = {
-      Accept: "application/json",
-      ...(await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId)),
-    };
-
-    const allEvents: EventResponse[] = [];
-    let cursor: string | undefined;
-
-    do {
-      const url = new URL(`https://internal/sessions/${sessionId}/events`);
-      url.searchParams.set("message_id", messageId);
-      url.searchParams.set("limit", String(EVENTS_PAGE_LIMIT));
-      if (cursor) url.searchParams.set("cursor", cursor);
-
-      const response = await env.CONTROL_PLANE.fetch(url.toString(), { headers });
-      if (!response.ok) {
-        log.error("control_plane.fetch_events", {
-          ...base,
-          outcome: "error",
-          http_status: response.status,
-          duration_ms: Date.now() - startTime,
-        });
-        return { textContent: "", toolCalls: [], artifacts: [], success: false };
-      }
-
-      const data = (await response.json()) as ListEventsResponse;
-      allEvents.push(...data.events);
-      cursor = data.hasMore ? data.cursor : undefined;
-    } while (cursor);
-
-    // Get final text from last token event
-    const tokenEvents = allEvents
-      .filter((e): e is EventResponse & { type: "token" } => e.type === "token")
-      .sort((a, b) => {
-        const timeDiff = (a.createdAt as number) - (b.createdAt as number);
-        return timeDiff !== 0 ? timeDiff : a.id.localeCompare(b.id);
-      });
-    const lastToken = tokenEvents[tokenEvents.length - 1];
-    const textContent = lastToken ? String(lastToken.data.content ?? "") : "";
-
-    // Extract tool calls
-    const toolCalls: ToolCallSummary[] = allEvents
-      .filter((e) => e.type === "tool_call")
-      .map((e) => summarizeToolCall(e.data));
-
-    // Fetch artifacts
-    const eventArtifacts: ArtifactInfo[] = allEvents
-      .filter((e) => e.type === "artifact")
-      .map((e) => toEventArtifactInfo(e.data))
-      .filter((artifact: ArtifactInfo | null): artifact is ArtifactInfo => artifact !== null);
-
-    const artifacts = await fetchSessionArtifacts(env, sessionId, headers, base);
-    const finalArtifacts = artifacts.length > 0 ? artifacts : eventArtifacts;
-
-    const completionEvent = allEvents.find((e) => e.type === "execution_complete");
-
-    log.info("control_plane.fetch_events", {
-      ...base,
-      outcome: "success",
-      event_count: allEvents.length,
-      tool_call_count: toolCalls.length,
-      artifact_count: finalArtifacts.length,
-      has_text: Boolean(textContent),
-      duration_ms: Date.now() - startTime,
-    });
-
-    return {
-      textContent,
-      toolCalls,
-      artifacts: finalArtifacts,
-      success: Boolean(completionEvent?.data.success),
-    };
-  } catch (error) {
-    log.error("control_plane.fetch_events", {
-      ...base,
-      outcome: "error",
-      error: error instanceof Error ? error : new Error(String(error)),
-      duration_ms: Date.now() - startTime,
-    });
-    return { textContent: "", toolCalls: [], artifacts: [], success: false };
-  }
-}
-
-async function fetchSessionArtifacts(
-  env: Env,
-  sessionId: string,
-  headers: Record<string, string>,
-  base: Record<string, unknown>
-): Promise<ArtifactInfo[]> {
-  try {
-    const response = await env.CONTROL_PLANE.fetch(
-      `https://internal/sessions/${sessionId}/artifacts`,
-      { headers }
-    );
-    if (!response.ok) return [];
-
-    const data = (await response.json()) as ListArtifactsResponse;
-    return data.artifacts.map((a) => ({
-      type: a.type,
-      url: a.url ? String(a.url) : "",
-      label: getArtifactLabelFromArtifact(a.type, a.metadata),
-      metadata: a.metadata ?? null,
-    }));
-  } catch (error) {
-    log.error("control_plane.fetch_artifacts", {
-      ...base,
-      outcome: "error",
-      error: error instanceof Error ? error : new Error(String(error)),
-    });
-    return [];
-  }
-}
-
-function summarizeToolCall(data: Record<string, unknown>): ToolCallSummary {
-  const tool = String(data.tool ?? "Unknown");
-  const args = (data.args ?? {}) as Record<string, unknown>;
-  switch (tool) {
-    case "Read":
-      return { tool, summary: `Read ${args.file_path ?? "file"}` };
-    case "Edit":
-      return { tool, summary: `Edited ${args.file_path ?? "file"}` };
-    case "Write":
-      return { tool, summary: `Created ${args.file_path ?? "file"}` };
-    case "Bash": {
-      const cmd = String(args.command ?? "").slice(0, 40);
-      return { tool, summary: `Ran: ${cmd}${cmd.length >= 40 ? "..." : ""}` };
-    }
-    case "Grep":
-      return { tool, summary: `Searched for "${args.pattern ?? ""}"` };
-    default:
-      return { tool, summary: `Used ${tool}` };
-  }
-}
-
-function getArtifactLabel(data: Record<string, unknown>): string {
-  const type = String(data.artifactType ?? "artifact");
-  if (type === "pr") {
-    const metadata = data.metadata as Record<string, unknown> | undefined;
-    return metadata?.number ? `PR #${metadata.number}` : "Pull Request";
-  }
-  if (type === "branch") {
-    const metadata = data.metadata as Record<string, unknown> | undefined;
-    return `Branch: ${metadata?.name ?? "branch"}`;
-  }
-  return type;
-}
-
-function getArtifactLabelFromArtifact(
-  type: ArtifactType,
-  metadata: Record<string, unknown> | null
-): string {
-  if (type === "pr") return metadata?.number ? `PR #${metadata.number}` : "Pull Request";
-  if (type === "branch") return `Branch: ${metadata?.head ?? "branch"}`;
-  return type;
-}
-
-function toEventArtifactInfo(data: Record<string, unknown>): ArtifactInfo | null {
-  const type = toArtifactType(data.artifactType);
-  if (!type) return null;
-
-  return {
-    type,
-    url: String(data.url ?? ""),
-    label: getArtifactLabel(data),
-  };
-}
-
-function toArtifactType(value: unknown): ArtifactType | null {
-  return value === "pr" || value === "screenshot" || value === "preview" || value === "branch"
-    ? value
-    : null;
+  return sharedExtract(
+    {
+      fetcher: env.CONTROL_PLANE,
+      internalSecret: env.INTERNAL_CALLBACK_SECRET,
+      log,
+    },
+    sessionId,
+    messageId,
+    traceId
+  );
 }
 
 /**
