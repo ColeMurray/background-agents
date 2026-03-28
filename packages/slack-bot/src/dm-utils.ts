@@ -3,7 +3,7 @@
  * DMs may include self-mentions when users type "@Bot <request>".
  */
 export function stripMentions(text: string): string {
-  return text.replace(/<@[A-Z0-9]+>/g, "").trim();
+  return text.replace(/<@[A-Z0-9]+>/g, "").replace(/\s+/g, " ").trim();
 }
 
 /**

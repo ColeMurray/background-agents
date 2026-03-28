@@ -7,7 +7,7 @@ describe("stripMentions", () => {
   });
 
   it("removes multiple mentions", () => {
-    expect(stripMentions("<@U12345> and <@U67890> help me")).toBe("and  help me");
+    expect(stripMentions("<@U12345> and <@U67890> help me")).toBe("and help me");
     expect(stripMentions("<@ABC123> <@DEF456> hello")).toBe("hello");
   });
 
