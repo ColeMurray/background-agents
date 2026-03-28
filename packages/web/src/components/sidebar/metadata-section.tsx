@@ -29,6 +29,7 @@ interface MetadataSectionProps {
   repoName?: string;
   artifacts?: Artifact[];
   parentSessionId?: string | null;
+  totalCost?: number;
 }
 
 export function MetadataSection({
@@ -41,6 +42,7 @@ export function MetadataSection({
   repoName,
   artifacts = [],
   parentSessionId,
+  totalCost,
 }: MetadataSectionProps) {
   const [copied, setCopied] = useState(false);
 
@@ -92,6 +94,13 @@ export function MetadataSection({
             {formatModelName(model)}
             {reasoningEffort && <span> · {reasoningEffort}</span>}
           </span>
+        </div>
+      )}
+
+      {typeof totalCost === "number" && totalCost > 0 && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span className="w-4 text-center">$</span>
+          <span>Session cost: {totalCost >= 1 ? totalCost.toFixed(2) : totalCost.toFixed(4)}</span>
         </div>
       )}
 
