@@ -64,6 +64,22 @@ describe("checkAccessAllowed", () => {
     });
   });
 
+  describe("when allowedUsers contains email addresses (Google auth)", () => {
+    const config = { allowedDomains: [], allowedUsers: ["alice@company.com"] };
+
+    it("allows users with matching email", () => {
+      expect(checkAccessAllowed(config, { email: "alice@company.com" })).toBe(true);
+    });
+
+    it("allows users with different case email", () => {
+      expect(checkAccessAllowed(config, { email: "Alice@Company.COM" })).toBe(true);
+    });
+
+    it("denies users with non-matching email", () => {
+      expect(checkAccessAllowed(config, { email: "bob@company.com" })).toBe(false);
+    });
+  });
+
   describe("when allowedDomains is set", () => {
     const config = { allowedDomains: ["company.com"], allowedUsers: [] };
 

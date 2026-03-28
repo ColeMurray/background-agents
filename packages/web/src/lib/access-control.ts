@@ -25,6 +25,7 @@ export function parseAllowlist(value: string | undefined): string[] {
  * Returns true if:
  * - Both allowlists are empty (no restrictions)
  * - User's GitHub username is in allowedUsers
+ * - User's email address is in allowedUsers (for Google auth)
  * - User's email domain is in allowedDomains
  *
  * Logic is OR-based: matching either list grants access.
@@ -41,8 +42,11 @@ export function checkAccessAllowed(
     return true;
   }
 
-  // Check explicit user allowlist (GitHub username)
+  // Check explicit user allowlist (GitHub username or email address)
   if (githubUsername && allowedUsers.includes(githubUsername.toLowerCase())) {
+    return true;
+  }
+  if (email && allowedUsers.includes(email.toLowerCase())) {
     return true;
   }
 
