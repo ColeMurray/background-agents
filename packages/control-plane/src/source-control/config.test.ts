@@ -10,12 +10,17 @@ describe("resolveScmProviderFromEnv", () => {
   it("normalizes case and whitespace", () => {
     expect(resolveScmProviderFromEnv("  GITHUB ")).toBe("github");
     expect(resolveScmProviderFromEnv(" bitbucket ")).toBe("bitbucket");
+    expect(resolveScmProviderFromEnv("  GITLAB  ")).toBe("gitlab");
+  });
+
+  it("accepts gitlab as a valid provider", () => {
+    expect(resolveScmProviderFromEnv("gitlab")).toBe("gitlab");
   });
 
   it("throws for unknown provider values", () => {
-    expect(() => resolveScmProviderFromEnv("gitlab")).toThrow(SourceControlProviderError);
-    expect(() => resolveScmProviderFromEnv("gitlab")).toThrow(
-      "Invalid SCM_PROVIDER value 'gitlab'"
+    expect(() => resolveScmProviderFromEnv("unknown")).toThrow(SourceControlProviderError);
+    expect(() => resolveScmProviderFromEnv("unknown")).toThrow(
+      "Invalid SCM_PROVIDER value 'unknown'"
     );
   });
 });

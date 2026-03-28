@@ -127,6 +127,9 @@ class SandboxManager:
         if scm_provider == "bitbucket":
             env_vars["VCS_HOST"] = "bitbucket.org"
             env_vars["VCS_CLONE_USERNAME"] = "x-token-auth"
+        elif scm_provider == "gitlab":
+            env_vars["VCS_HOST"] = "gitlab.com"
+            env_vars["VCS_CLONE_USERNAME"] = "oauth2"
         else:
             env_vars["VCS_HOST"] = "github.com"
             env_vars["VCS_CLONE_USERNAME"] = "x-access-token"

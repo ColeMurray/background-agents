@@ -262,6 +262,24 @@ variable "enable_durable_object_bindings" {
   default     = true
 }
 
+variable "control_plane_migration_tag" {
+  description = "Current migration tag for control plane DO migrations"
+  type        = string
+  default     = "v1"
+}
+
+variable "control_plane_migration_old_tag" {
+  description = "Previous migration tag for control plane DO migrations (null for fresh deployments)"
+  type        = string
+  default     = null
+}
+
+variable "control_plane_new_sqlite_classes" {
+  description = "DO classes new in this control plane migration step (empty means treat all configured classes as new)"
+  type        = list(string)
+  default     = []
+}
+
 variable "enable_service_bindings" {
   description = "Enable service bindings. Set false for initial deployment if target workers don't exist yet."
   type        = bool

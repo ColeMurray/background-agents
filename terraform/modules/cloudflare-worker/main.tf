@@ -150,4 +150,6 @@ resource "cloudflare_workers_cron_trigger" "this" {
   account_id  = var.account_id
   script_name = cloudflare_worker.this.name
   schedules   = [for expr in var.cron_triggers : { cron = expr }]
+
+  depends_on = [cloudflare_workers_deployment.this]
 }

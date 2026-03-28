@@ -155,6 +155,12 @@ project_root = "../../../"
 enable_durable_object_bindings = false
 enable_service_bindings = false
 
+# Optional: override these only when an existing deployment needs to re-enter
+# Phase 1 for a later Durable Object migration. Fresh deployments can omit them.
+# control_plane_migration_tag = "v1"
+# control_plane_migration_old_tag = null
+# control_plane_new_sqlite_classes = []
+
 # =============================================================================
 # Access Control
 # =============================================================================

@@ -100,6 +100,31 @@ export interface SlackAppMentionEvent {
 }
 
 /**
+ * Slack interaction payload (buttons, selects, modals).
+ */
+export type SlackInteractionPayload = {
+  type: string;
+  action_id?: string;
+  value?: string;
+  trigger_id?: string;
+  actions?: Array<{
+    action_id: string;
+    selected_option?: { value: string };
+    value?: string;
+  }>;
+  channel?: { id: string };
+  message?: { ts: string; thread_ts?: string };
+  user?: { id: string };
+  view?: {
+    callback_id?: string;
+    private_metadata?: string;
+    state?: {
+      values?: Record<string, Record<string, { type?: string; value?: string }>>;
+    };
+  };
+};
+
+/**
  * Callback context passed with prompts for follow-up notifications.
  */
 export type { SlackCallbackContext, CallbackContext } from "@open-inspect/shared";

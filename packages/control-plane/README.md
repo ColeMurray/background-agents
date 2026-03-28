@@ -222,9 +222,14 @@ All secrets are configured via Terraform. Required secrets include:
 
 Optional variables:
 
-- `SCM_PROVIDER` - Source control provider for this deployment (`github` or `bitbucket`, default:
-  `github`). Current implementation supports `github` only; `bitbucket` returns explicit
-  `501 Not Implemented` responses until implemented.
+- `SCM_PROVIDER` - Source control provider for this deployment (`github`, `bitbucket`, or `gitlab`,
+  default: `github`). `bitbucket` returns explicit `501 Not Implemented` responses until
+  implemented.
+- `GITLAB_ACCESS_TOKEN` - Personal Access Token for GitLab API access (required when
+  `SCM_PROVIDER=gitlab`). Must have `read_api` scope for reads and `api` scope to create merge
+  requests and push branches.
+- `GITLAB_NAMESPACE` - GitLab group namespace to scope repository listing (optional). When set,
+  `GET /repos` lists projects within the group instead of all projects the token has access to.
 
 See
 [terraform/environments/production/terraform.tfvars.example](../../terraform/environments/production/terraform.tfvars.example)

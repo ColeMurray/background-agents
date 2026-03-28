@@ -437,6 +437,7 @@ export interface UserPreferences {
   userId: string;
   model: string;
   reasoningEffort?: string;
+  branch?: string;
   updatedAt: number;
 }
 
