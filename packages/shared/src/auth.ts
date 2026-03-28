@@ -56,6 +56,32 @@ export async function generateInternalToken(secret: string): Promise<string> {
 }
 
 /**
+ * Build internal authentication headers for service-to-service requests.
+ *
+ * Returns a headers object with `Authorization` (when a secret is provided)
+ * and `x-trace-id` (when a trace ID is provided). Callers add their own
+ * `Content-Type` or `Accept` header as needed.
+ *
+ * @param secret - The shared secret for HMAC signing (omit to skip auth)
+ * @param traceId - Optional trace ID for request correlation
+ * @returns A headers record with auth and tracing fields
+ */
+export async function buildInternalAuthHeaders(
+  secret: string | undefined,
+  traceId?: string
+): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {};
+  if (secret) {
+    const token = await generateInternalToken(secret);
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  if (traceId) {
+    headers["x-trace-id"] = traceId;
+  }
+  return headers;
+}
+
+/**
  * Verify an internal API token from the Authorization header.
  *
  * @param authHeader - The Authorization header value (e.g., "Bearer timestamp.signature")

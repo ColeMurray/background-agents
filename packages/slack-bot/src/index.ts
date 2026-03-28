@@ -28,7 +28,7 @@ import { resolveUserNames } from "./utils/resolve-users";
 import { createClassifier } from "./classifier";
 import { getAvailableRepos } from "./classifier/repos";
 import { callbacksRouter } from "./callbacks";
-import { generateInternalToken } from "./utils/internal";
+import { buildInternalAuthHeaders } from "./utils/internal";
 import { createLogger } from "./logger";
 import {
   BRANCH_MODAL_CALLBACK_ID,
@@ -65,20 +65,10 @@ const MAX_REPO_SUGGESTION_OPTIONS = 100;
  * Build authenticated headers for control plane requests.
  */
 async function getAuthHeaders(env: Env, traceId?: string): Promise<Record<string, string>> {
-  const headers: Record<string, string> = {
+  return {
     "Content-Type": "application/json",
+    ...(await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId)),
   };
-
-  if (env.INTERNAL_CALLBACK_SECRET) {
-    const authToken = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
-    headers["Authorization"] = `Bearer ${authToken}`;
-  }
-
-  if (traceId) {
-    headers["x-trace-id"] = traceId;
-  }
-
-  return headers;
 }
 
 /**

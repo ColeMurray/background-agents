@@ -7,7 +7,7 @@
  * URL-based fetch for Vercel / local development.
  */
 
-import { generateInternalToken } from "@open-inspect/shared";
+import { buildInternalAuthHeaders } from "@open-inspect/shared";
 
 /**
  * Get the control plane URL from environment.
@@ -42,11 +42,9 @@ function getInternalSecret(): string {
  */
 async function getControlPlaneHeaders(): Promise<HeadersInit> {
   const secret = getInternalSecret();
-  const token = await generateInternalToken(secret);
-
   return {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${token}`,
+    ...(await buildInternalAuthHeaders(secret)),
   };
 }
 
