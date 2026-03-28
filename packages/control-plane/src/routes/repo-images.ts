@@ -22,6 +22,8 @@ import {
   parsePattern,
   json,
   error,
+  parseJsonBody,
+  extractRepoParams,
   createRouteSourceControlProvider,
   resolveInstalledRepo,
 } from "./shared";
@@ -42,17 +44,13 @@ async function handleBuildComplete(
     return error("Database not configured", 503);
   }
 
-  let body: {
+  const body = await parseJsonBody<{
     build_id?: string;
     provider_image_id?: string;
     base_sha?: string;
     build_duration_seconds?: number;
-  };
-  try {
-    body = (await request.json()) as typeof body;
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
+  }>(request);
+  if (body instanceof Response) return body;
 
   const buildId = body.build_id;
   const providerImageId = body.provider_image_id;
@@ -125,12 +123,8 @@ async function handleBuildFailed(
     return error("Database not configured", 503);
   }
 
-  let body: { build_id?: string; error?: string };
-  try {
-    body = (await request.json()) as typeof body;
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
+  const body = await parseJsonBody<{ build_id?: string; error?: string }>(request);
+  if (body instanceof Response) return body;
 
   const buildId = body.build_id;
   if (!buildId) {
@@ -181,11 +175,9 @@ async function handleTriggerBuild(
     return error("WORKER_URL not configured", 503);
   }
 
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-  if (!owner || !name) {
-    return error("Owner and name are required", 400);
-  }
+  const params = extractRepoParams(match);
+  if (params instanceof Response) return params;
+  const { owner, name } = params;
 
   const store = new RepoImageStore(env.DB);
   const now = Date.now();
@@ -432,18 +424,12 @@ async function handleToggleImageBuild(
     return error("Database not configured", 503);
   }
 
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-  if (!owner || !name) {
-    return error("Owner and name are required", 400);
-  }
+  const params = extractRepoParams(match);
+  if (params instanceof Response) return params;
+  const { owner, name } = params;
 
-  let body: { enabled?: unknown };
-  try {
-    body = (await request.json()) as typeof body;
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
+  const body = await parseJsonBody<{ enabled?: unknown }>(request);
+  if (body instanceof Response) return body;
 
   if (typeof body.enabled !== "boolean") {
     return error("enabled must be a boolean", 400);

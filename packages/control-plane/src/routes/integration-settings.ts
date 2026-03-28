@@ -16,7 +16,15 @@ import {
 } from "../db/integration-settings";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
-import { type Route, type RequestContext, parsePattern, json, error } from "./shared";
+import {
+  type Route,
+  type RequestContext,
+  parsePattern,
+  json,
+  error,
+  parseJsonBody,
+  extractRepoParams,
+} from "./shared";
 
 const logger = createLogger("router:integration-settings");
 
@@ -57,12 +65,8 @@ async function handleSetIntegrationSettings(
     return error("Integration settings storage is not configured", 503);
   }
 
-  let body: { settings?: Record<string, unknown> };
-  try {
-    body = (await request.json()) as { settings?: Record<string, unknown> };
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
+  const body = await parseJsonBody<{ settings?: Record<string, unknown> }>(request);
+  if (body instanceof Response) return body;
 
   if (!body?.settings || typeof body.settings !== "object") {
     return error("Request body must include settings object", 400);
@@ -157,9 +161,9 @@ async function handleGetRepoSettings(
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
 
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-  if (!owner || !name) return error("Owner and name are required", 400);
+  const params = extractRepoParams(match);
+  if (params instanceof Response) return params;
+  const { owner, name } = params;
 
   const repo = `${owner}/${name}`;
 
@@ -181,20 +185,16 @@ async function handleSetRepoSettings(
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
 
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-  if (!owner || !name) return error("Owner and name are required", 400);
+  const params = extractRepoParams(match);
+  if (params instanceof Response) return params;
+  const { owner, name } = params;
 
   if (!env.DB) {
     return error("Integration settings storage is not configured", 503);
   }
 
-  let body: { settings?: Record<string, unknown> };
-  try {
-    body = (await request.json()) as { settings?: Record<string, unknown> };
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
+  const body = await parseJsonBody<{ settings?: Record<string, unknown> }>(request);
+  if (body instanceof Response) return body;
 
   if (!body?.settings || typeof body.settings !== "object") {
     return error("Request body must include settings object", 400);
@@ -237,9 +237,9 @@ async function handleDeleteRepoSettings(
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
 
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-  if (!owner || !name) return error("Owner and name are required", 400);
+  const params = extractRepoParams(match);
+  if (params instanceof Response) return params;
+  const { owner, name } = params;
 
   if (!env.DB) {
     return error("Integration settings storage is not configured", 503);
@@ -279,9 +279,9 @@ async function handleGetResolvedConfig(
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
 
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-  if (!owner || !name) return error("Owner and name are required", 400);
+  const params = extractRepoParams(match);
+  if (params instanceof Response) return params;
+  const { owner, name } = params;
 
   if (!env.DB) {
     return json({ integrationId: id, repo: `${owner}/${name}`, config: null });
