@@ -321,9 +321,7 @@ describe("POST /interactions", () => {
     await flushWaitUntil(ctx);
 
     const kvPut = (env.SLACK_KV as unknown as { put: ReturnType<typeof vi.fn> }).put;
-    const prefsCall = kvPut.mock.calls.find(
-      (args: unknown[]) => args[0] === "user_prefs:U123"
-    );
+    const prefsCall = kvPut.mock.calls.find((args: unknown[]) => args[0] === "user_prefs:U123");
     expect(prefsCall).toBeTruthy();
     const saved = JSON.parse(prefsCall![1] as string) as { branch?: string };
     expect(saved.branch).toBe("staging");
