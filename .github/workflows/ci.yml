@@ -191,11 +191,11 @@ jobs:
         run: mypy src/
         continue-on-error: true # Allow failures initially as types are added
 
-  test-typescript:
-    name: Test (TypeScript)
+  test-cp-unit:
+    name: Test (control-plane unit)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    needs: [lint-typescript, typecheck-typescript, build-web]
+    timeout-minutes: 5
+    needs: [lint-typescript, typecheck-typescript]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -212,8 +212,32 @@ jobs:
       - name: Build shared package
         run: npm run build -w @open-inspect/shared
 
-      - name: Run control-plane tests
+      - name: Run shared tests
+        run: npm test -w @open-inspect/shared
+
+      - name: Run control-plane unit tests
         run: npm test -w @open-inspect/control-plane
+
+  test-cp-integration:
+    name: Test (control-plane integration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [lint-typescript, typecheck-typescript]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared package
+        run: npm run build -w @open-inspect/shared
 
       - name: Install workerd runtime dependency
         run: sudo apt-get update && sudo apt-get install -y libc++1
@@ -221,11 +245,59 @@ jobs:
       - name: Run control-plane integration tests
         run: npm run test:integration -w @open-inspect/control-plane
 
-      - name: Run github-bot tests
-        run: npm test -w @open-inspect/github-bot
+  test-web:
+    name: Test (web)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [lint-typescript, typecheck-typescript]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared package
+        run: npm run build -w @open-inspect/shared
 
       - name: Run web tests
         run: npm test -w @open-inspect/web
+
+  test-bots:
+    name: Test (bots)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [lint-typescript, typecheck-typescript]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared package
+        run: npm run build -w @open-inspect/shared
+
+      - name: Run github-bot tests
+        run: npm test -w @open-inspect/github-bot
+
+      - name: Run slack-bot tests
+        run: npm test -w @open-inspect/slack-bot
+
+      - name: Run linear-bot tests
+        run: npm test -w @open-inspect/linear-bot
 
   test-python-sandbox-runtime:
     name: Test (Python - sandbox-runtime)
