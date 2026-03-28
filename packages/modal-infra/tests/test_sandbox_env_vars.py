@@ -10,7 +10,7 @@ from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxConfig, 
 async def test_user_env_vars_override_order(monkeypatch):
     captured = {}
 
-    def fake_create(*args, **kwargs):
+    async def fake_create_aio(*args, **kwargs):
         captured["env"] = kwargs.get("env")
 
         class FakeSandbox:
@@ -19,7 +19,8 @@ async def test_user_env_vars_override_order(monkeypatch):
 
         return FakeSandbox()
 
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+    fake_create_aio.aio = fake_create_aio
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create_aio)
 
     manager = SandboxManager()
     config = SandboxConfig(
@@ -50,7 +51,7 @@ async def test_restore_user_env_vars_override_order(monkeypatch):
     def fake_from_id(*args, **kwargs):
         return FakeImage()
 
-    def fake_create(*args, **kwargs):
+    async def fake_create_aio(*args, **kwargs):
         captured["env"] = kwargs.get("env")
 
         class FakeSandbox:
@@ -59,8 +60,9 @@ async def test_restore_user_env_vars_override_order(monkeypatch):
 
         return FakeSandbox()
 
+    fake_create_aio.aio = fake_create_aio
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", fake_from_id)
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create_aio)
 
     manager = SandboxManager()
     await manager.restore_from_snapshot(
@@ -100,7 +102,7 @@ async def test_restore_uses_default_timeout(monkeypatch):
     def fake_from_id(*args, **kwargs):
         return FakeImage()
 
-    def fake_create(*args, **kwargs):
+    async def fake_create_aio(*args, **kwargs):
         captured["timeout"] = kwargs.get("timeout")
 
         class FakeSandbox:
@@ -109,8 +111,9 @@ async def test_restore_uses_default_timeout(monkeypatch):
 
         return FakeSandbox()
 
+    fake_create_aio.aio = fake_create_aio
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", fake_from_id)
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create_aio)
 
     manager = SandboxManager()
     await manager.restore_from_snapshot(
@@ -138,7 +141,7 @@ async def test_restore_uses_custom_timeout(monkeypatch):
     def fake_from_id(*args, **kwargs):
         return FakeImage()
 
-    def fake_create(*args, **kwargs):
+    async def fake_create_aio(*args, **kwargs):
         captured["timeout"] = kwargs.get("timeout")
 
         class FakeSandbox:
@@ -147,8 +150,9 @@ async def test_restore_uses_custom_timeout(monkeypatch):
 
         return FakeSandbox()
 
+    fake_create_aio.aio = fake_create_aio
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", fake_from_id)
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create_aio)
 
     manager = SandboxManager()
     await manager.restore_from_snapshot(
@@ -178,7 +182,7 @@ async def test_create_and_restore_timeout_consistency(monkeypatch):
     def fake_from_id(*args, **kwargs):
         return FakeImage()
 
-    def fake_create(*args, **kwargs):
+    async def fake_create_aio(*args, **kwargs):
         return_key = "restore" if captured_create.get("timeout") is not None else "create"
         if return_key == "create":
             captured_create["timeout"] = kwargs.get("timeout")
@@ -191,8 +195,9 @@ async def test_create_and_restore_timeout_consistency(monkeypatch):
 
         return FakeSandbox()
 
+    fake_create_aio.aio = fake_create_aio
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", fake_from_id)
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create_aio)
 
     manager = SandboxManager()
 
@@ -308,9 +313,9 @@ async def test_restore_with_session_config_object(monkeypatch):
 
 
 def _fake_sandbox_create(captured):
-    """Return a fake Sandbox.create that captures env vars."""
+    """Return a fake Sandbox.create that supports .aio and captures env vars."""
 
-    def fake_create(*args, **kwargs):
+    async def fake_create_aio(*args, **kwargs):
         captured["env"] = kwargs.get("env")
 
         class FakeSandbox:
@@ -319,7 +324,8 @@ def _fake_sandbox_create(captured):
 
         return FakeSandbox()
 
-    return fake_create
+    fake_create_aio.aio = fake_create_aio
+    return fake_create_aio
 
 
 @pytest.mark.asyncio

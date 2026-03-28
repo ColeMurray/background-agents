@@ -279,4 +279,3 @@ jobs:
 
       - name: Run tests
         run: pytest tests/ -v
-        continue-on-error: true # Allow failures if tests directory is empty
