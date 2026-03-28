@@ -40,7 +40,7 @@ export interface ControlPlaneFetcher {
  * depend on any package-specific `Env` type.
  */
 export interface ExtractorDeps {
-  /** Service binding (or any HTTP-capable client) pointing at the control plane. */
+  /** Cloudflare Workers service binding pointing at the control plane (resolves `https://internal` URLs). */
   fetcher: ControlPlaneFetcher;
   /** Shared secret for HMAC-based internal auth. If omitted, requests are sent without auth. */
   internalSecret?: string;
