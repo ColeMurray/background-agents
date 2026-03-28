@@ -10,7 +10,6 @@ import { useSidebar } from "@/hooks/use-sidebar";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
 import { SIDEBAR_SESSIONS_KEY, type SessionListResponse } from "@/lib/session-list";
-import { GitHubIcon } from "@/components/ui/icons";
 
 interface SidebarContextValue {
   isOpen: boolean;
@@ -93,11 +92,10 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
           Background coding agent for your team. Ship faster with AI-powered code changes.
         </p>
         <button
-          onClick={() => signIn("github")}
+          onClick={() => signIn()}
           className="flex items-center gap-2 bg-primary text-primary-foreground px-6 py-3 font-medium hover:opacity-90 transition"
         >
-          <GitHubIcon className="w-5 h-5" />
-          Sign in with GitHub
+          Sign in
         </button>
       </div>
     );
