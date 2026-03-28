@@ -10,7 +10,8 @@
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
-import { generateId, hashToken, timingSafeEqual, encryptToken, decryptToken } from "../auth/crypto";
+import { timingSafeEqual } from "@open-inspect/shared";
+import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { getGitHubAppConfig } from "../auth/github-app";
 import { createModalClient } from "../sandbox/client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";

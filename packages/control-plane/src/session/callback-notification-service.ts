@@ -7,6 +7,7 @@
  * - HMAC payload signing for callback authentication
  */
 
+import { computeHmacHex } from "@open-inspect/shared";
 import type { Logger } from "../logger";
 import type { SessionRow } from "./types";
 
@@ -58,19 +59,7 @@ export class CallbackNotificationService {
    * Generate HMAC signature for callback payload.
    */
   private async signPayload(data: object, secret: string): Promise<string> {
-    const encoder = new TextEncoder();
-    const key = await crypto.subtle.importKey(
-      "raw",
-      encoder.encode(secret),
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["sign"]
-    );
-    const signatureData = encoder.encode(JSON.stringify(data));
-    const sig = await crypto.subtle.sign("HMAC", key, signatureData);
-    return Array.from(new Uint8Array(sig))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
+    return computeHmacHex(JSON.stringify(data), secret);
   }
 
   /**
