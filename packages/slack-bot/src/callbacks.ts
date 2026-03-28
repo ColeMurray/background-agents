@@ -2,6 +2,7 @@
  * Callback handlers for control-plane notifications.
  */
 
+import { computeHmacHex, timingSafeEqual } from "@open-inspect/shared";
 import { Hono } from "hono";
 import type { Env, CompletionCallback } from "./types";
 import { extractAgentResponse } from "./completion/extractor";
@@ -44,20 +45,8 @@ async function verifyCallbackSignature(
   secret: string
 ): Promise<boolean> {
   const { signature, ...data } = payload;
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const signatureData = encoder.encode(JSON.stringify(data));
-  const expectedSig = await crypto.subtle.sign("HMAC", key, signatureData);
-  const expectedHex = Array.from(new Uint8Array(expectedSig))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-  return signature === expectedHex;
+  const expectedHex = await computeHmacHex(JSON.stringify(data), secret);
+  return timingSafeEqual(signature, expectedHex);
 }
 
 /**

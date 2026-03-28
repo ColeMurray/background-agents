@@ -1,12 +1,6 @@
 import { describe, it, expect } from "vitest";
-import {
-  encryptToken,
-  decryptToken,
-  generateEncryptionKey,
-  generateId,
-  hashToken,
-  timingSafeEqual,
-} from "./crypto";
+import { timingSafeEqual } from "@open-inspect/shared";
+import { encryptToken, decryptToken, generateEncryptionKey, generateId, hashToken } from "./crypto";
 
 describe("crypto", () => {
   describe("generateEncryptionKey", () => {

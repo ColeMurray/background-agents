@@ -17,6 +17,9 @@ vi.mock("../src/github-auth", () => ({
 
 vi.mock("../src/utils/internal", () => ({
   generateInternalToken: vi.fn().mockResolvedValue("test-internal-token"),
+  buildInternalAuthHeaders: vi.fn().mockResolvedValue({
+    Authorization: "Bearer test-internal-token",
+  }),
 }));
 
 vi.mock("../src/utils/integration-config", () => ({

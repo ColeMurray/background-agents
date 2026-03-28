@@ -1,6 +1,6 @@
 import type { Env } from "../types";
 import type { Logger } from "../logger";
-import { generateInternalToken } from "./internal";
+import { buildInternalAuthHeaders } from "./internal";
 
 export interface ResolvedGitHubConfig {
   model: string;
@@ -27,13 +27,13 @@ export async function getGitHubConfig(
   log?: Logger
 ): Promise<ResolvedGitHubConfig> {
   const [owner, name] = repo.split("/");
-  const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
+  const headers = await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET);
 
   let response: Response;
   try {
     response = await env.CONTROL_PLANE.fetch(
       `https://internal/integration-settings/github/resolved/${owner}/${name}`,
-      { headers: { Authorization: `Bearer ${token}` } }
+      { headers }
     );
   } catch (err) {
     log?.warn("config.fetch_error", {

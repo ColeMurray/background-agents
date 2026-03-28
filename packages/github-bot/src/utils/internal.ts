@@ -4,4 +4,4 @@
  * Re-exports from @open-inspect/shared for consistency across packages.
  */
 
-export { generateInternalToken } from "@open-inspect/shared";
+export { generateInternalToken, buildInternalAuthHeaders } from "@open-inspect/shared";

@@ -26,6 +26,31 @@ export function timingSafeEqual(a: string, b: string): boolean {
 }
 
 /**
+ * Compute HMAC-SHA256 and return the result as a lowercase hex string.
+ *
+ * This is the shared primitive used by webhook verification, callback
+ * signing, and internal token generation across all Open-Inspect services.
+ *
+ * @param data - The data to sign
+ * @param secret - The HMAC secret key
+ * @returns 64-character lowercase hex string
+ */
+export async function computeHmacHex(data: string, secret: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(data));
+  return Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
  * Generate an internal API token for service-to-service calls.
  *
  * Token format: `timestamp.signature` where:
@@ -37,22 +62,34 @@ export function timingSafeEqual(a: string, b: string): boolean {
  */
 export async function generateInternalToken(secret: string): Promise<string> {
   const timestamp = Date.now().toString();
-  const encoder = new TextEncoder();
-
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-
-  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(timestamp));
-  const signatureHex = Array.from(new Uint8Array(signature))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-
+  const signatureHex = await computeHmacHex(timestamp, secret);
   return `${timestamp}.${signatureHex}`;
+}
+
+/**
+ * Build internal authentication headers for service-to-service requests.
+ *
+ * Returns a headers object with `Authorization` (when a secret is provided)
+ * and `x-trace-id` (when a trace ID is provided). Callers add their own
+ * `Content-Type` or `Accept` header as needed.
+ *
+ * @param secret - The shared secret for HMAC signing (omit to skip auth)
+ * @param traceId - Optional trace ID for request correlation
+ * @returns A headers record with auth and tracing fields
+ */
+export async function buildInternalAuthHeaders(
+  secret: string | undefined,
+  traceId?: string
+): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {};
+  if (secret) {
+    const token = await generateInternalToken(secret);
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  if (traceId) {
+    headers["x-trace-id"] = traceId;
+  }
+  return headers;
 }
 
 /**
@@ -85,19 +122,6 @@ export async function verifyInternalToken(
   }
 
   // Verify HMAC signature
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-
-  const expectedSig = await crypto.subtle.sign("HMAC", key, encoder.encode(timestamp));
-  const expectedHex = Array.from(new Uint8Array(expectedSig))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-
+  const expectedHex = await computeHmacHex(timestamp, secret);
   return timingSafeEqual(signature, expectedHex);
 }

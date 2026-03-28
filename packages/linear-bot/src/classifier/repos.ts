@@ -4,7 +4,7 @@
  */
 
 import type { Env, RepoConfig, ControlPlaneRepo, ControlPlaneReposResponse } from "../types";
-import { generateInternalToken } from "../utils/internal";
+import { buildInternalAuthHeaders } from "../utils/internal";
 import { createLogger } from "../logger";
 
 const log = createLogger("repos");
@@ -40,12 +40,10 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
 
   const startTime = Date.now();
   try {
-    const headers: Record<string, string> = { Accept: "application/json" };
-    if (env.INTERNAL_CALLBACK_SECRET) {
-      const authToken = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
-      headers["Authorization"] = `Bearer ${authToken}`;
-    }
-    if (traceId) headers["x-trace-id"] = traceId;
+    const headers: Record<string, string> = {
+      Accept: "application/json",
+      ...(await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId)),
+    };
 
     const response = await env.CONTROL_PLANE.fetch("https://internal/repos", { headers });
 

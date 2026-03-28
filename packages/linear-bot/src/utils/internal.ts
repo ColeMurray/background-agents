@@ -2,4 +2,4 @@
  * Internal API authentication for service-to-service calls.
  */
 
-export { generateInternalToken } from "@open-inspect/shared";
+export { generateInternalToken, buildInternalAuthHeaders } from "@open-inspect/shared";
