@@ -34,8 +34,7 @@ import {
   parsePattern,
   json,
   error,
-  createRouteSourceControlProvider,
-  resolveInstalledRepo,
+  resolveRepoOrError,
 } from "./routes/shared";
 import { integrationSettingsRoutes } from "./routes/integration-settings";
 import { modelPreferencesRoutes } from "./routes/model-preferences";
@@ -670,27 +669,10 @@ async function handleCreateSession(
   const repoOwner = body.repoOwner.toLowerCase();
   const repoName = body.repoName.toLowerCase();
 
-  let repoId: number;
-  let defaultBranch: string;
-  try {
-    const provider = createRouteSourceControlProvider(env);
-    const resolved = await resolveInstalledRepo(provider, repoOwner, repoName);
-    if (!resolved) {
-      return error("Repository is not installed for the GitHub App", 404);
-    }
-    repoId = resolved.repoId;
-    defaultBranch = resolved.defaultBranch;
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    logger.error("Failed to resolve repository", {
-      error: message,
-      repo_owner: repoOwner,
-      repo_name: repoName,
-    });
-    const isConfigError =
-      e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus;
-    return error(isConfigError ? message : "Failed to resolve repository", 500);
-  }
+  const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
+  if (resolved instanceof Response) return resolved;
+
+  const { repoId, defaultBranch } = resolved;
 
   const userId = body.userId || "anonymous";
   const scmLogin = body.scmLogin;

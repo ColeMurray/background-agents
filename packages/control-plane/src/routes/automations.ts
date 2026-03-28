@@ -26,8 +26,8 @@ import {
   parsePattern,
   json,
   error,
-  createRouteSourceControlProvider,
-  resolveInstalledRepo,
+  parseJsonBody,
+  resolveRepoOrError,
 } from "./shared";
 import type { Env } from "../types";
 
@@ -92,12 +92,8 @@ async function handleCreateAutomation(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  let body: CreateAutomationRequest & { userId?: string };
-  try {
-    body = (await request.json()) as CreateAutomationRequest & { userId?: string };
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
+  const body = await parseJsonBody<CreateAutomationRequest & { userId?: string }>(request);
+  if (body instanceof Response) return body;
 
   // Validate required fields
   if (!body.name || typeof body.name !== "string" || body.name.trim().length === 0) {
@@ -188,26 +184,10 @@ async function handleCreateAutomation(
   const repoOwner = body.repoOwner.toLowerCase();
   const repoName = body.repoName.toLowerCase();
 
-  let repoId: number;
-  let defaultBranch: string;
-  try {
-    const provider = createRouteSourceControlProvider(env);
-    const resolved = await resolveInstalledRepo(provider, repoOwner, repoName);
-    if (!resolved) {
-      return error("Repository is not installed for the GitHub App", 404);
-    }
-    repoId = resolved.repoId;
-    defaultBranch = resolved.defaultBranch;
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    logger.error("Failed to resolve repository", {
-      error: message,
-      repo_owner: repoOwner,
-      repo_name: repoName,
-    });
-    return error("Failed to resolve repository", 500);
-  }
+  const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
+  if (resolved instanceof Response) return resolved;
 
+  const { repoId, defaultBranch } = resolved;
   const baseBranch = body.baseBranch || defaultBranch;
 
   // Compute next run (only for schedule triggers)
@@ -326,12 +306,8 @@ async function handleUpdateAutomation(
   const existing = await store.getById(id);
   if (!existing) return error("Automation not found", 404);
 
-  let body: UpdateAutomationRequest;
-  try {
-    body = (await request.json()) as UpdateAutomationRequest;
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
+  const body = await parseJsonBody<UpdateAutomationRequest>(request);
+  if (body instanceof Response) return body;
 
   // Validate fields if provided
   if (body.name !== undefined) {
@@ -665,12 +641,8 @@ async function handleRegenerateKey(
 
   if (automation.trigger_type === "sentry") {
     // Sentry: user provides a new client secret
-    let body: { sentryClientSecret?: string };
-    try {
-      body = (await request.json()) as { sentryClientSecret?: string };
-    } catch {
-      return error("Invalid JSON body", 400);
-    }
+    const body = await parseJsonBody<{ sentryClientSecret?: string }>(request);
+    if (body instanceof Response) return body;
     if (!body.sentryClientSecret || typeof body.sentryClientSecret !== "string") {
       return error("sentryClientSecret is required", 400);
     }

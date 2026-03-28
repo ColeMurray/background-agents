@@ -6,7 +6,14 @@ import { DEFAULT_ENABLED_MODELS } from "@open-inspect/shared";
 import { ModelPreferencesStore, ModelPreferencesValidationError } from "../db/model-preferences";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
-import { type Route, type RequestContext, parsePattern, json, error } from "./shared";
+import {
+  type Route,
+  type RequestContext,
+  parsePattern,
+  json,
+  error,
+  parseJsonBody,
+} from "./shared";
 
 const logger = createLogger("router:model-preferences");
 
@@ -46,12 +53,8 @@ async function handleSetModelPreferences(
     return error("Model preferences storage is not configured", 503);
   }
 
-  let body: { enabledModels?: string[] };
-  try {
-    body = (await request.json()) as { enabledModels?: string[] };
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
+  const body = await parseJsonBody<{ enabledModels?: string[] }>(request);
+  if (body instanceof Response) return body;
 
   if (!body?.enabledModels || !Array.isArray(body.enabledModels)) {
     return error("Request body must include enabledModels array", 400);

@@ -17,6 +17,7 @@ import {
   parsePattern,
   json,
   error,
+  extractRepoParams,
   createRouteSourceControlProvider,
 } from "./shared";
 
@@ -222,12 +223,9 @@ async function handleUpdateRepoMetadata(
   match: RegExpMatchArray,
   _ctx: RequestContext
 ): Promise<Response> {
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-
-  if (!owner || !name) {
-    return error("Owner and name are required");
-  }
+  const params = extractRepoParams(match);
+  if (params instanceof Response) return params;
+  const { owner, name } = params;
 
   const body = (await request.json()) as RepoMetadata;
 
@@ -275,12 +273,9 @@ async function handleGetRepoMetadata(
   match: RegExpMatchArray,
   _ctx: RequestContext
 ): Promise<Response> {
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-
-  if (!owner || !name) {
-    return error("Owner and name are required");
-  }
+  const params = extractRepoParams(match);
+  if (params instanceof Response) return params;
+  const { owner, name } = params;
 
   const normalizedRepo = `${owner.toLowerCase()}/${name.toLowerCase()}`;
   const metadataStore = new RepoMetadataStore(env.DB);
@@ -307,12 +302,9 @@ async function handleListBranches(
   match: RegExpMatchArray,
   _ctx: RequestContext
 ): Promise<Response> {
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-
-  if (!owner || !name) {
-    return error("Owner and name are required");
-  }
+  const params = extractRepoParams(match);
+  if (params instanceof Response) return params;
+  const { owner, name } = params;
 
   try {
     const provider = createRouteSourceControlProvider(env);
