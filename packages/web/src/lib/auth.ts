@@ -76,10 +76,9 @@ export const authOptions: NextAuthOptions = {
             return false;
           }
         }
-        return true;
       }
 
-      // GitHub access control
+      // Access control (applies to both providers)
       const config = {
         allowedDomains: parseAllowlist(process.env.ALLOWED_EMAIL_DOMAINS),
         allowedUsers: parseAllowlist(process.env.ALLOWED_USERS),
@@ -87,7 +86,7 @@ export const authOptions: NextAuthOptions = {
 
       const githubProfile = profile as { login?: string };
       return checkAccessAllowed(config, {
-        githubUsername: githubProfile.login,
+        githubUsername: AUTH_PROVIDER === "github" ? githubProfile.login : undefined,
         email: user.email ?? undefined,
       });
     },
