@@ -24,10 +24,13 @@ Required:
 - npm
 - Git
 
-Optional (needed for `modal-infra` development):
+Required if you will commit Python files (pre-commit hooks run `ruff` from the venv):
 
 - Python `3.12+`
 - `uv` (recommended) or `pip`
+
+Optional (needed to run or deploy Modal sandboxes):
+
 - Modal CLI (`modal`)
 
 Optional (needed for full deployment):

@@ -108,7 +108,10 @@ if [ -d "$MODAL_DIR" ]; then
   if command -v python3 &>/dev/null; then
     setup_python
   else
-    info "python3 not found — skipping optional modal-infra Python setup."
+    warn "python3 not found — skipping modal-infra Python setup."
+    warn "The pre-commit hook runs ruff from packages/modal-infra/.venv/bin/ruff."
+    warn "If you commit Python files without the venv, the hook will fail."
+    warn "Install Python 3.12+ and re-run this script to fix it."
   fi
 fi
 
