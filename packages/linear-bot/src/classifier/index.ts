@@ -48,11 +48,15 @@ async function buildClassificationPrompt(
   const repoDescriptions = await buildRepoDescriptions(env, traceId);
 
   const escapeUntrusted = (s: string) =>
-    s.replaceAll("<user_content", "<\\user_content").replaceAll("</user_content>", "<\\/user_content>");
+    s
+      .replaceAll("<user_content", "<\\user_content")
+      .replaceAll("</user_content>", "<\\/user_content>");
 
   let contextSection = "";
-  if (teamName) contextSection += `\n**Team**: ${escapeUntrusted(teamName)}${teamKey ? ` (${escapeUntrusted(teamKey)})` : ""}`;
-  if (labels.length > 0) contextSection += `\n**Labels**: ${labels.map(escapeUntrusted).join(", ")}`;
+  if (teamName)
+    contextSection += `\n**Team**: ${escapeUntrusted(teamName)}${teamKey ? ` (${escapeUntrusted(teamKey)})` : ""}`;
+  if (labels.length > 0)
+    contextSection += `\n**Labels**: ${labels.map(escapeUntrusted).join(", ")}`;
   if (projectName) contextSection += `\n**Project**: ${escapeUntrusted(projectName)}`;
 
   return `You are a repository classifier for a coding agent. Your job is to determine which code repository a Linear issue belongs to.
@@ -241,7 +245,8 @@ export async function classifyRepo(
     return {
       repo: null,
       confidence: "low",
-      reasoning: "Could not classify repository automatically. Please reply with the repository name.",
+      reasoning:
+        "Could not classify repository automatically. Please reply with the repository name.",
       alternatives: repos.slice(0, 5),
       needsClarification: true,
     };
