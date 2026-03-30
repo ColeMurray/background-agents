@@ -246,7 +246,7 @@ export async function classifyRepo(
       repo: null,
       confidence: "low",
       reasoning:
-        "Could not classify repository automatically. Please reply with the repository name.",
+        "Could not classify repository automatically. Please reply with the repository name (e.g., `owner/repo`).",
       alternatives: repos.slice(0, 5),
       needsClarification: true,
     };

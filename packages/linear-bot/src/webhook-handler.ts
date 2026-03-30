@@ -418,7 +418,7 @@ async function handleNewSession(
   if (!repoOwner || !repoName || !repoFullName) {
     await emitAgentActivity(client, agentSessionId, {
       type: "elicitation",
-      body: "I couldn't determine which repository to work on. Please configure a project→repo or team→repo mapping and try again.",
+      body: "I couldn't determine which repository to work on. Please reply with the repository name (e.g., `owner/repo`).",
     });
     log.warn("agent_session.repo_resolution_failed", {
       trace_id: traceId,
