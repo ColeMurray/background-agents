@@ -384,6 +384,8 @@ async function handleNewSession(
       issue.description,
       labelNames,
       projectInfo?.name,
+      issue.team?.name ?? null,
+      issue.team?.key ?? null,
       comment?.body,
       traceId
     );
@@ -395,7 +397,7 @@ async function handleNewSession(
 
       await emitAgentActivity(client, agentSessionId, {
         type: "elicitation",
-        body: `I couldn't determine which repository to work on.\n\n${classification.reasoning}\n\n**Available repositories:**\n${altList || "None available"}\n\nPlease reply with the repository name, or configure a project→repo mapping.`,
+        body: `I couldn't determine which repository to work on.\n\n${classification.reasoning}\n\n**Available repositories:**\n${altList || "None available"}\n\nPlease reply with the repository name (e.g., \`owner/repo\`).`,
       });
 
       log.warn("agent_session.classification_uncertain", {

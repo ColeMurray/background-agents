@@ -344,6 +344,8 @@ export interface InstallationRepository {
   description: string | null;
   private: boolean;
   defaultBranch: string;
+  language?: string | null;
+  topics?: string[];
 }
 
 export interface RepoMetadata {
@@ -367,6 +369,8 @@ export interface RepoConfig {
   description: string;
   defaultBranch: string;
   private: boolean;
+  language?: string | null;
+  topics?: string[];
   aliases?: string[];
   keywords?: string[];
   channelAssociations?: string[];

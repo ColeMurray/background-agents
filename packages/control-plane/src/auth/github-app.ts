@@ -388,6 +388,8 @@ interface ListInstallationReposResponse {
     description: string | null;
     private: boolean;
     default_branch: string;
+    language: string | null;
+    topics?: string[];
     owner: {
       login: string;
     };
@@ -450,6 +452,8 @@ export async function listInstallationRepositories(
       description: repo.description,
       private: repo.private,
       defaultBranch: repo.default_branch,
+      language: repo.language,
+      topics: repo.topics,
     }));
 
   // Fetch page 1 to learn total_count

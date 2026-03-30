@@ -28,6 +28,8 @@ function toRepoConfig(repo: ControlPlaneRepo): RepoConfig {
     description: repo.metadata?.description || repo.description || repo.name,
     defaultBranch: repo.defaultBranch,
     private: repo.private,
+    language: repo.language,
+    topics: repo.topics,
     aliases: repo.metadata?.aliases,
     keywords: repo.metadata?.keywords,
   };
@@ -119,6 +121,8 @@ export async function buildRepoDescriptions(env: Env, traceId?: string): Promise
     .map(
       (repo) => `- **${repo.id}** (${repo.fullName})
   - Description: ${repo.description}
+  - Language: ${repo.language || "N/A"}
+  - Topics: ${repo.topics?.join(", ") || "N/A"}
   - Also known as: ${repo.aliases?.join(", ") || "N/A"}
   - Keywords: ${repo.keywords?.join(", ") || "N/A"}
   - Default branch: ${repo.defaultBranch}

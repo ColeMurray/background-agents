@@ -40,12 +40,15 @@ async function buildClassificationPrompt(
   issueDescription: string | null | undefined,
   labels: string[],
   projectName: string | null | undefined,
+  teamName: string | null | undefined,
+  teamKey: string | null | undefined,
   triggerComment: string | null | undefined,
   traceId?: string
 ): Promise<string> {
   const repoDescriptions = await buildRepoDescriptions(env, traceId);
 
   let contextSection = "";
+  if (teamName) contextSection += `\n**Team**: ${teamName}${teamKey ? ` (${teamKey})` : ""}`;
   if (labels.length > 0) contextSection += `\n**Labels**: ${labels.join(", ")}`;
   if (projectName) contextSection += `\n**Project**: ${projectName}`;
 
@@ -65,10 +68,11 @@ Analyze the issue to determine which repository it belongs to.
 
 Consider:
 1. Explicit mentions of repository names or aliases
-2. Technical keywords that match repository technologies
+2. Technical keywords that match repository technologies or languages
 3. File paths or code patterns mentioned
-4. Project name associations
-5. Label associations
+4. The team name and what area of the codebase it likely owns
+5. Project name associations
+6. Label associations
 
 Return your decision by calling the ${CLASSIFY_REPO_TOOL_NAME} tool.`;
 }
@@ -154,6 +158,8 @@ export async function classifyRepo(
   issueDescription: string | null | undefined,
   labels: string[],
   projectName: string | null | undefined,
+  teamName: string | null | undefined,
+  teamKey: string | null | undefined,
   triggerComment: string | null | undefined,
   traceId?: string
 ): Promise<ClassificationResult> {
@@ -184,6 +190,8 @@ export async function classifyRepo(
       issueDescription,
       labels,
       projectName,
+      teamName,
+      teamKey,
       triggerComment,
       traceId
     );
@@ -230,7 +238,7 @@ export async function classifyRepo(
     return {
       repo: null,
       confidence: "low",
-      reasoning: "Could not classify repository. Please configure project→repo mapping.",
+      reasoning: "Could not classify repository automatically. Please reply with the repository name.",
       alternatives: repos.slice(0, 5),
       needsClarification: true,
     };
