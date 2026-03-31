@@ -47,10 +47,6 @@
     ],
     "*.{js,jsx,json,md,yaml,yml,css}": [
       "prettier --write"
-    ],
-    "packages/modal-infra/**/*.py": [
-      "ruff check --fix",
-      "ruff format"
     ]
   }
 }

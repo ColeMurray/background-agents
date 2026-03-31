@@ -9,8 +9,6 @@ on:
       - "packages/control-plane/**"
       - "packages/slack-bot/**"
       - "packages/github-bot/**"
-      - "packages/linear-bot/**"
-      - "packages/modal-infra/**"
       - "packages/sandbox-runtime/**"
       - "packages/shared/**"
       - "packages/web/**" # Web app deployed via Terraform when web_platform = "cloudflare"
@@ -23,8 +21,6 @@ on:
       - "packages/control-plane/**"
       - "packages/slack-bot/**"
       - "packages/github-bot/**"
-      - "packages/linear-bot/**"
-      - "packages/modal-infra/**"
       - "packages/sandbox-runtime/**"
       - "packages/shared/**"
       - "packages/web/**"
@@ -154,7 +150,6 @@ jobs:
           npm run build -w @open-inspect/control-plane
           npm run build -w @open-inspect/slack-bot
           npm run build -w @open-inspect/github-bot
-          npm run build -w @open-inspect/linear-bot
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -276,7 +271,6 @@ jobs:
           npm run build -w @open-inspect/control-plane
           npm run build -w @open-inspect/slack-bot
           npm run build -w @open-inspect/github-bot
-          npm run build -w @open-inspect/linear-bot
 
       - name: Setup Python
         uses: actions/setup-python@v5
