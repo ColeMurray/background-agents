@@ -1,24 +1,45 @@
-// Test-only config. Production deployment is managed via Terraform.
+// wrangler.jsonc — local dev config (Terraform manages production)
 {
-  "name": "open-inspect-control-plane-test",
+  "name": "open-inspect-control-plane",
   "main": "src/index.ts",
-  "compatibility_date": "2024-12-30",
+  "compatibility_date": "2026-01-10",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "containers": [
+    {
+      "class_name": "SandboxContainer",
+      "image": "./Dockerfile.sandbox",
+      "instance_type": "standard-3",
+      "max_instances": 10
+    }
+  ],
+
   "durable_objects": {
     "bindings": [
       { "name": "SESSION", "class_name": "SessionDO" },
       { "name": "SCHEDULER", "class_name": "SchedulerDO" },
-    ],
+      { "name": "SANDBOX_CONTAINER", "class_name": "SandboxContainer" }
+    ]
   },
+
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["SessionDO"] },
-    { "tag": "v2", "new_sqlite_classes": ["SchedulerDO"] },
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["SessionDO", "SchedulerDO"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["SandboxContainer"]
+    }
   ],
+
   "d1_databases": [
     {
       "binding": "DB",
       "database_id": "00000000-0000-0000-0000-000000000000",
-      "database_name": "open-inspect-test",
-    },
+      "database_name": "open-inspect-test"
+    }
   ],
-  "kv_namespaces": [{ "binding": "REPOS_CACHE", "id": "00000000000000000000000000000000" }],
+
+  "kv_namespaces": [{ "binding": "REPOS_CACHE", "id": "00000000000000000000000000000000" }]
 }
