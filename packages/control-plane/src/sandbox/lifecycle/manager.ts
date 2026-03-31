@@ -370,6 +370,16 @@ export class SandboxLifecycleManager {
 
       // Create sandbox via provider
       const codeServerEnabled = session.code_server_enabled === 1;
+
+      // Parse TUNNEL_PORTS from repo secrets (e.g., "3000,3001") into extra ports to expose
+      const tunnelPortsEnv = userEnvVars?.TUNNEL_PORTS;
+      const extraPorts = tunnelPortsEnv
+        ? tunnelPortsEnv
+            .split(",")
+            .map((p) => parseInt(p.trim(), 10))
+            .filter((p) => !isNaN(p))
+        : undefined;
+
       const createConfig: CreateSandboxConfig = {
         sessionId,
         sandboxId: expectedSandboxId,
@@ -385,6 +395,7 @@ export class SandboxLifecycleManager {
         timeoutSeconds,
         branch: session.base_branch,
         codeServerEnabled,
+        extraPorts,
       };
 
       const result = await this.provider.createSandbox(createConfig);
@@ -500,6 +511,16 @@ export class SandboxLifecycleManager {
         session.spawn_source === "agent" ? CHILD_SANDBOX_TIMEOUT_SECONDS : undefined;
 
       const codeServerEnabled = session.code_server_enabled === 1;
+
+      // Parse TUNNEL_PORTS from repo secrets (same as doSpawn)
+      const tunnelPortsEnv = userEnvVars?.TUNNEL_PORTS;
+      const extraPorts = tunnelPortsEnv
+        ? tunnelPortsEnv
+            .split(",")
+            .map((p) => parseInt(p.trim(), 10))
+            .filter((p) => !isNaN(p))
+        : undefined;
+
       const result = await this.provider.restoreFromSnapshot({
         snapshotImageId,
         sessionId: session.session_name || session.id,
@@ -514,6 +535,7 @@ export class SandboxLifecycleManager {
         timeoutSeconds,
         branch: session.base_branch,
         codeServerEnabled,
+        extraPorts,
       });
 
       if (result.success) {

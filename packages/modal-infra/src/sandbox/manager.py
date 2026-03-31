@@ -48,6 +48,9 @@ class SandboxConfig:
     repo_image_id: str | None = None  # Pre-built repo image ID from provider
     repo_image_sha: str | None = None  # Git SHA the repo image was built from
     code_server_enabled: bool = False  # Whether to start code-server in the sandbox
+    extra_ports: list[int] | None = (
+        None  # Additional ports to expose via tunnels (e.g., dev servers)
+    )
 
 
 @dataclass
@@ -62,6 +65,7 @@ class SandboxHandle:
     modal_object_id: str | None = None  # Modal's internal sandbox ID for API calls
     code_server_url: str | None = None
     code_server_password: str | None = None
+    tunnel_urls: dict[int, str] | None = None  # port -> tunnel URL mapping for extra ports
 
     def get_logs(self) -> str:
         """Get sandbox logs."""
@@ -96,29 +100,52 @@ class SandboxManager:
         return secrets.token_urlsafe(16)
 
     @staticmethod
-    async def _resolve_code_server_tunnel(
-        sandbox: modal.Sandbox, sandbox_id: str, retries: int = 3, backoff: float = 1.0
-    ) -> str | None:
-        """Resolve the code-server tunnel URL from Modal, retrying on failure."""
+    async def _resolve_tunnels(
+        sandbox: modal.Sandbox,
+        sandbox_id: str,
+        ports: list[int],
+        retries: int = 3,
+        backoff: float = 1.0,
+    ) -> dict[int, str]:
+        """Resolve tunnel URLs for the given ports from Modal, retrying on failure."""
+        resolved: dict[int, str] = {}
         for attempt in range(retries):
             try:
                 loop = asyncio.get_running_loop()
                 tunnels = await loop.run_in_executor(None, sandbox.tunnels)
-                tunnel = tunnels[CODE_SERVER_PORT]
-                log.info("code_server.tunnel", sandbox_id=sandbox_id, url=tunnel.url)
-                return tunnel.url
+                for port in ports:
+                    if port in tunnels and port not in resolved:
+                        resolved[port] = tunnels[port].url
+                        log.info(
+                            "tunnel.resolved",
+                            sandbox_id=sandbox_id,
+                            port=port,
+                            url=tunnels[port].url,
+                        )
+                if len(resolved) == len(ports):
+                    return resolved
             except Exception as e:
                 log.warn(
-                    "code_server.tunnel_error",
+                    "tunnel.resolve_error",
                     sandbox_id=sandbox_id,
                     attempt=attempt + 1,
                     retries=retries,
                     error=type(e).__name__,
                     exc=e,
                 )
-                if attempt < retries - 1:
-                    await asyncio.sleep(backoff * (attempt + 1))
-        return None
+            if attempt < retries - 1:
+                await asyncio.sleep(backoff * (attempt + 1))
+        return resolved
+
+    @staticmethod
+    async def _resolve_code_server_tunnel(
+        sandbox: modal.Sandbox, sandbox_id: str, retries: int = 3, backoff: float = 1.0
+    ) -> str | None:
+        """Resolve the code-server tunnel URL from Modal, retrying on failure."""
+        resolved = await SandboxManager._resolve_tunnels(
+            sandbox, sandbox_id, [CODE_SERVER_PORT], retries, backoff
+        )
+        return resolved.get(CODE_SERVER_PORT)
 
     @staticmethod
     def _inject_vcs_env_vars(env_vars: dict[str, str], clone_token: str | None) -> None:
@@ -182,6 +209,17 @@ class SandboxManager:
             }
         )
 
+        # Forward git committer identity to the sandbox (set via Terraform secrets)
+        for key in (
+            "GIT_COMMITTER_NAME",
+            "GIT_COMMITTER_EMAIL",
+            "GITHUB_APP_ID",
+            "GITHUB_BOT_USERNAME",
+        ):
+            val = os.environ.get(key, "")
+            if val:
+                env_vars[key] = val
+
         self._inject_vcs_env_vars(env_vars, config.clone_token)
 
         code_server_password: str | None = None
@@ -212,8 +250,14 @@ class SandboxManager:
             "workdir": "/workspace",
             "env": env_vars,
         }
+        # Collect all ports to expose via encrypted tunnels
+        exposed_ports: list[int] = []
         if config.code_server_enabled:
-            create_kwargs["encrypted_ports"] = [CODE_SERVER_PORT]
+            exposed_ports.append(CODE_SERVER_PORT)
+        if config.extra_ports:
+            exposed_ports.extend(config.extra_ports)
+        if exposed_ports:
+            create_kwargs["encrypted_ports"] = exposed_ports
 
         sandbox = await modal.Sandbox.create.aio(
             "python",
@@ -225,8 +269,25 @@ class SandboxManager:
         # Get Modal's internal object ID for API calls (snapshot, etc.)
         modal_object_id = sandbox.object_id
         code_server_url: str | None = None
+        tunnel_urls: dict[int, str] | None = None
         if config.code_server_enabled:
             code_server_url = await self._resolve_code_server_tunnel(sandbox, sandbox_id)
+        if config.extra_ports:
+            tunnel_urls = await self._resolve_tunnels(sandbox, sandbox_id, config.extra_ports)
+            # Write tunnel URLs to a file inside the sandbox so the agent can read them
+            if tunnel_urls:
+                lines = [f"{port}={url}" for port, url in tunnel_urls.items()]
+                tunnel_content = "\n".join(lines)
+                try:
+                    process = await sandbox.exec.aio(
+                        "bash", "-c", f"echo '{tunnel_content}' > /workspace/.tunnel-urls"
+                    )
+                    await process.wait.aio()
+                    log.info(
+                        "tunnel.urls_written", sandbox_id=sandbox_id, ports=list(tunnel_urls.keys())
+                    )
+                except Exception as e:
+                    log.warn("tunnel.urls_write_failed", sandbox_id=sandbox_id, error=str(e))
 
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -248,6 +309,7 @@ class SandboxManager:
             modal_object_id=modal_object_id,
             code_server_url=code_server_url,
             code_server_password=code_server_password,
+            tunnel_urls=tunnel_urls,
         )
 
     async def create_build_sandbox(
@@ -440,6 +502,7 @@ class SandboxManager:
         user_env_vars: dict[str, str] | None = None,
         timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS,
         code_server_enabled: bool = False,
+        extra_ports: list[int] | None = None,
     ) -> SandboxHandle:
         """
         Create a new sandbox from a filesystem snapshot Image.
@@ -511,6 +574,17 @@ class SandboxManager:
             }
         )
 
+        # Forward git committer identity to the sandbox (set via Terraform secrets)
+        for key in (
+            "GIT_COMMITTER_NAME",
+            "GIT_COMMITTER_EMAIL",
+            "GITHUB_APP_ID",
+            "GITHUB_BOT_USERNAME",
+        ):
+            val = os.environ.get(key, "")
+            if val:
+                env_vars[key] = val
+
         self._inject_vcs_env_vars(env_vars, clone_token)
 
         code_server_password: str | None = None
@@ -527,8 +601,14 @@ class SandboxManager:
             "workdir": "/workspace",
             "env": env_vars,
         }
+        # Collect all ports to expose via encrypted tunnels
+        exposed_ports: list[int] = []
         if code_server_enabled:
-            create_kwargs["encrypted_ports"] = [CODE_SERVER_PORT]
+            exposed_ports.append(CODE_SERVER_PORT)
+        if extra_ports:
+            exposed_ports.extend(extra_ports)
+        if exposed_ports:
+            create_kwargs["encrypted_ports"] = exposed_ports
 
         sandbox = await modal.Sandbox.create.aio(
             "python",
@@ -539,8 +619,21 @@ class SandboxManager:
 
         modal_object_id = sandbox.object_id
         code_server_url: str | None = None
+        tunnel_urls: dict[int, str] | None = None
         if code_server_enabled:
             code_server_url = await self._resolve_code_server_tunnel(sandbox, sandbox_id)
+        if extra_ports:
+            tunnel_urls = await self._resolve_tunnels(sandbox, sandbox_id, extra_ports)
+            if tunnel_urls:
+                lines = [f"{port}={url}" for port, url in tunnel_urls.items()]
+                tunnel_content = "\n".join(lines)
+                try:
+                    process = await sandbox.exec.aio(
+                        "bash", "-c", f"echo '{tunnel_content}' > /workspace/.tunnel-urls"
+                    )
+                    await process.wait.aio()
+                except Exception as e:
+                    log.warn("tunnel.urls_write_failed", sandbox_id=sandbox_id, error=str(e))
 
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -563,6 +656,7 @@ class SandboxManager:
             modal_object_id=modal_object_id,
             code_server_url=code_server_url,
             code_server_password=code_server_password,
+            tunnel_urls=tunnel_urls,
         )
 
     async def maintain_warm_pool(

@@ -73,6 +73,7 @@ export class ModalSandboxProvider implements SandboxProvider {
           timeoutSeconds: config.timeoutSeconds,
           branch: config.branch,
           codeServerEnabled: config.codeServerEnabled,
+          extraPorts: config.extraPorts,
         },
         config.correlation
       );
@@ -84,6 +85,7 @@ export class ModalSandboxProvider implements SandboxProvider {
         createdAt: result.createdAt,
         codeServerUrl: result.codeServerUrl,
         codeServerPassword: result.codeServerPassword,
+        tunnelUrls: result.tunnelUrls,
       };
     } catch (error) {
       throw this.classifyError("Failed to create sandbox", error);

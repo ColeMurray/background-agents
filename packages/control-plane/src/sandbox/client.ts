@@ -39,6 +39,7 @@ export interface CreateSandboxRequest {
   timeoutSeconds?: number;
   branch?: string;
   codeServerEnabled?: boolean;
+  extraPorts?: number[];
 }
 
 export interface CreateSandboxResponse {
@@ -48,6 +49,7 @@ export interface CreateSandboxResponse {
   createdAt: number;
   codeServerUrl?: string;
   codeServerPassword?: string;
+  tunnelUrls?: Record<string, string>;
 }
 
 export interface RestoreSandboxRequest {
@@ -64,6 +66,7 @@ export interface RestoreSandboxRequest {
   timeoutSeconds?: number;
   branch?: string;
   codeServerEnabled?: boolean;
+  extraPorts?: number[];
 }
 
 export interface RestoreSandboxResponse {
@@ -73,6 +76,7 @@ export interface RestoreSandboxResponse {
   error?: string;
   codeServerUrl?: string;
   codeServerPassword?: string;
+  tunnelUrls?: Record<string, string>;
 }
 
 export interface SnapshotSandboxRequest {
@@ -251,6 +255,7 @@ export class ModalClient {
           timeout_seconds: request.timeoutSeconds || null,
           branch: request.branch || null,
           code_server_enabled: request.codeServerEnabled ?? false,
+          extra_ports: request.extraPorts || null,
         }),
       });
 
@@ -268,6 +273,7 @@ export class ModalClient {
         created_at: number;
         code_server_url?: string;
         code_server_password?: string;
+        tunnel_urls?: Record<string, string>;
       }>;
 
       if (!result.success || !result.data) {
@@ -282,6 +288,7 @@ export class ModalClient {
         createdAt: result.data.created_at,
         codeServerUrl: result.data.code_server_url,
         codeServerPassword: result.data.code_server_password,
+        tunnelUrls: result.data.tunnel_urls,
       };
     } finally {
       log.info("modal.request", {
@@ -331,6 +338,7 @@ export class ModalClient {
           user_env_vars: request.userEnvVars || null,
           timeout_seconds: request.timeoutSeconds || null,
           code_server_enabled: request.codeServerEnabled ?? false,
+          extra_ports: request.extraPorts || null,
         }),
       });
 
@@ -346,6 +354,7 @@ export class ModalClient {
         modal_object_id?: string;
         code_server_url?: string;
         code_server_password?: string;
+        tunnel_urls?: Record<string, string>;
       }>;
 
       if (!result.success) {
@@ -359,6 +368,7 @@ export class ModalClient {
         modalObjectId: result.data?.modal_object_id,
         codeServerUrl: result.data?.code_server_url,
         codeServerPassword: result.data?.code_server_password,
+        tunnelUrls: result.data?.tunnel_urls,
       };
     } finally {
       log.info("modal.request", {

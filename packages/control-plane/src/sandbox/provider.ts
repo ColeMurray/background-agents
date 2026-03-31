@@ -59,6 +59,8 @@ export interface CreateSandboxConfig {
   branch?: string;
   /** Whether to enable code-server (browser-based editor) in the sandbox */
   codeServerEnabled?: boolean;
+  /** Additional ports to expose via tunnels (e.g., dev server ports) */
+  extraPorts?: number[];
 }
 
 /**
@@ -77,6 +79,8 @@ export interface CreateSandboxResult {
   codeServerUrl?: string;
   /** Code-server password (if available) */
   codeServerPassword?: string;
+  /** Tunnel URLs for extra ports (port -> URL mapping) */
+  tunnelUrls?: Record<string, string>;
 }
 
 /**
@@ -111,6 +115,8 @@ export interface RestoreConfig {
   correlation?: CorrelationContext;
   /** Whether to enable code-server (browser-based editor) in the sandbox */
   codeServerEnabled?: boolean;
+  /** Additional ports to expose via tunnels (e.g., dev server ports) */
+  extraPorts?: number[];
 }
 
 /**
@@ -129,6 +135,8 @@ export interface RestoreResult {
   codeServerUrl?: string;
   /** Code-server password (if available) */
   codeServerPassword?: string;
+  /** Tunnel URLs for extra ports (port -> URL mapping) */
+  tunnelUrls?: Record<string, string>;
 }
 
 /**
