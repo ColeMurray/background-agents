@@ -41,7 +41,6 @@ export interface Env {
 
   // Service bindings
   SLACK_BOT?: Fetcher; // Optional - only if slack-bot is deployed
-  LINEAR_BOT?: Fetcher; // Optional - only if linear-bot is deployed
 
   // Durable Objects
   SCHEDULER?: DurableObjectNamespace; // SchedulerDO for automation engine
@@ -54,9 +53,10 @@ export interface Env {
   GITHUB_CLIENT_SECRET?: string;
   TOKEN_ENCRYPTION_KEY: string;
   REPO_SECRETS_ENCRYPTION_KEY?: string;
-  MODAL_TOKEN_ID?: string;
-  MODAL_TOKEN_SECRET?: string;
-  MODAL_API_SECRET?: string; // Shared secret for authenticating with Modal endpoints
+  // Cloudflare Container binding for sandboxes
+  SANDBOX_CONTAINER?: DurableObjectNamespace;
+  // Anthropic API key (injected into sandbox containers)
+  ANTHROPIC_API_KEY?: string;
   INTERNAL_CALLBACK_SECRET?: string; // For signing callbacks to slack-bot
 
   // GitHub App secrets (for git operations)
@@ -74,7 +74,6 @@ export interface Env {
   WORKER_URL?: string; // Base URL for the worker (for callbacks)
   WEB_APP_URL?: string; // Base URL for the web app (for PR links)
   CF_ACCOUNT_ID?: string; // Cloudflare account ID
-  MODAL_WORKSPACE?: string; // Modal workspace name (used in Modal endpoint URLs)
 
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)

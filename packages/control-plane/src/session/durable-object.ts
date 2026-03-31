@@ -13,8 +13,7 @@ import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
 import { timingSafeEqual } from "@open-inspect/shared";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { getGitHubAppConfig } from "../auth/github-app";
-import { createModalClient } from "../sandbox/client";
-import { createModalProvider } from "../sandbox/providers/modal-provider";
+import { createContainerProvider } from "../sandbox/providers/container-provider";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import {
@@ -528,14 +527,18 @@ export class SessionDO extends DurableObject<Env> {
    * Create the lifecycle manager with all required adapters.
    */
   private createLifecycleManager(): SandboxLifecycleManager {
-    // Verify Modal configuration
-    if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {
-      throw new Error("MODAL_API_SECRET and MODAL_WORKSPACE are required for lifecycle manager");
+    // Verify container binding is available
+    if (!this.env.SANDBOX_CONTAINER) {
+      throw new Error("SANDBOX_CONTAINER binding is required for lifecycle manager");
     }
 
-    // Create Modal provider
-    const modalClient = createModalClient(this.env.MODAL_API_SECRET, this.env.MODAL_WORKSPACE);
-    const provider = createModalProvider(modalClient);
+    // Create Cloudflare Container provider
+    const provider = createContainerProvider(this.env.SANDBOX_CONTAINER, {
+      anthropicApiKey: this.env.ANTHROPIC_API_KEY,
+      githubAppId: this.env.GITHUB_APP_ID,
+      githubAppPrivateKey: this.env.GITHUB_APP_PRIVATE_KEY,
+      githubAppInstallationId: this.env.GITHUB_APP_INSTALLATION_ID,
+    });
 
     // Storage adapter
     const storage: SandboxStorage = {

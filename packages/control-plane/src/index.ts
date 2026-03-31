@@ -13,6 +13,7 @@ const logger = createLogger("worker");
 // Re-export Durable Objects for Cloudflare to discover
 export { SessionDO } from "./session/durable-object";
 export { SchedulerDO } from "./scheduler/durable-object";
+export { SandboxContainer } from "./containers/sandbox-container";
 
 /**
  * Worker fetch handler.
