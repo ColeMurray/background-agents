@@ -255,7 +255,7 @@ export class SandboxProviderError extends Error {
  *
  * @example
  * ```typescript
- * const provider: SandboxProvider = new ModalSandboxProvider(client);
+ * const provider: SandboxProvider = createProvider(env);
  *
  * try {
  *   const result = await provider.createSandbox(config);

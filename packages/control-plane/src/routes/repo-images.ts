@@ -13,7 +13,6 @@ import { RepoMetadataStore } from "../db/repo-metadata";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
-import { createModalClient } from "../sandbox/client";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
 import {
@@ -80,23 +79,7 @@ async function handleBuildComplete(
       trace_id: ctx.trace_id,
     });
 
-    // Fire-and-forget: delete the replaced provider image if one was replaced
-    if (result.replacedImageId && env.MODAL_API_SECRET && env.MODAL_WORKSPACE) {
-      ctx.executionCtx?.waitUntil(
-        (async () => {
-          try {
-            const client = createModalClient(env.MODAL_API_SECRET!, env.MODAL_WORKSPACE!);
-            await client.deleteProviderImage({ providerImageId: result.replacedImageId! });
-          } catch (e) {
-            logger.warn("repo_image.delete_old_failed", {
-              provider_image_id: result.replacedImageId,
-              error: e instanceof Error ? e.message : String(e),
-            });
-          }
-        })()
-      );
-    }
-
+    // TODO: implement provider image cleanup for Cloudflare Containers
     return json({ ok: true, replacedImageId: result.replacedImageId });
   } catch (e) {
     logger.error("repo_image.build_complete_error", {
@@ -168,9 +151,7 @@ async function handleTriggerBuild(
   if (!env.DB) {
     return error("Database not configured", 503);
   }
-  if (!env.MODAL_API_SECRET || !env.MODAL_WORKSPACE) {
-    return error("Modal configuration not available", 503);
-  }
+  // TODO: re-implement repo image builds for Cloudflare Containers
   if (!env.WORKER_URL) {
     return error("WORKER_URL not configured", 503);
   }
@@ -242,19 +223,9 @@ async function handleTriggerBuild(
       }
     }
 
-    // Trigger build on Modal
-    const client = createModalClient(env.MODAL_API_SECRET, env.MODAL_WORKSPACE);
-    await client.buildRepoImage(
-      {
-        repoOwner: owner,
-        repoName: name,
-        defaultBranch: "main",
-        buildId,
-        callbackUrl,
-        userEnvVars,
-      },
-      { trace_id: ctx.trace_id, request_id: ctx.request_id }
-    );
+    // TODO: trigger build via Cloudflare Containers provider
+    void callbackUrl;
+    void userEnvVars;
 
     logger.info("repo_image.build_triggered", {
       build_id: buildId,

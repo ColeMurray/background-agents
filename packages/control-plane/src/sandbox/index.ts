@@ -2,17 +2,6 @@
  * Sandbox module exports.
  */
 
-// Client
-export {
-  ModalClient,
-  createModalClient,
-  type CreateSandboxRequest,
-  type CreateSandboxResponse,
-  type WarmSandboxRequest,
-  type WarmSandboxResponse,
-  type SnapshotInfo,
-} from "./client";
-
 // Provider interface
 export {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
@@ -27,9 +16,6 @@ export {
   type SnapshotResult,
   type SandboxErrorType,
 } from "./provider";
-
-// Modal provider
-export { ModalSandboxProvider, createModalProvider } from "./providers/modal-provider";
 
 // Lifecycle decisions
 export {
