@@ -14,6 +14,16 @@ export default defineWorkersConfig(async () => {
   const migrations = await readD1Migrations(migrationsPath);
 
   return {
+    resolve: {
+      alias: {
+        // @cloudflare/containers is a runtime module provided by workerd at deploy
+        // time. Miniflare doesn't bundle it, so we alias to a minimal stub.
+        "@cloudflare/containers": path.resolve(
+          __dirname,
+          "test/integration/stubs/cloudflare-containers.ts"
+        ),
+      },
+    },
     test: {
       include: ["test/integration/**/*.test.ts"],
       setupFiles: ["test/integration/apply-migrations.ts"],
