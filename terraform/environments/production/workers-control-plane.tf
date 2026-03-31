@@ -43,12 +43,6 @@ module "control_plane_worker" {
         binding_name = "SLACK_BOT"
         service_name = "open-inspect-slack-bot-${local.name_suffix}"
       }
-    ] : [],
-    var.enable_linear_bot ? [
-      {
-        binding_name = "LINEAR_BOT"
-        service_name = "open-inspect-linear-bot-${local.name_suffix}"
-      }
     ] : []
   )
 
@@ -58,7 +52,6 @@ module "control_plane_worker" {
     { name = "GITHUB_CLIENT_ID", value = var.github_client_id },
     { name = "WEB_APP_URL", value = local.web_app_url },
     { name = "WORKER_URL", value = local.control_plane_url },
-    { name = "MODAL_WORKSPACE", value = var.modal_workspace },
     { name = "DEPLOYMENT_NAME", value = var.deployment_name },
   ]
 
@@ -66,9 +59,7 @@ module "control_plane_worker" {
     { name = "GITHUB_CLIENT_SECRET", value = var.github_client_secret },
     { name = "TOKEN_ENCRYPTION_KEY", value = var.token_encryption_key },
     { name = "REPO_SECRETS_ENCRYPTION_KEY", value = var.repo_secrets_encryption_key },
-    { name = "MODAL_TOKEN_ID", value = var.modal_token_id },
-    { name = "MODAL_TOKEN_SECRET", value = var.modal_token_secret },
-    { name = "MODAL_API_SECRET", value = var.modal_api_secret },
+    { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
     { name = "INTERNAL_CALLBACK_SECRET", value = var.internal_callback_secret },
     # GitHub App credentials for /repos endpoint (listInstallationRepositories)
     { name = "GITHUB_APP_ID", value = var.github_app_id },
@@ -79,6 +70,7 @@ module "control_plane_worker" {
   durable_objects = [
     { binding_name = "SESSION", class_name = "SessionDO" },
     { binding_name = "SCHEDULER", class_name = "SchedulerDO" },
+    { binding_name = "SANDBOX_CONTAINER", class_name = "SandboxContainer" },
   ]
 
   enable_durable_object_bindings = var.enable_durable_object_bindings
@@ -91,5 +83,5 @@ module "control_plane_worker" {
 
   cron_triggers = ["* * * * *"]
 
-  depends_on = [null_resource.control_plane_build, module.session_index_kv, null_resource.d1_migrations, module.linear_bot_worker]
+  depends_on = [null_resource.control_plane_build, module.session_index_kv, null_resource.d1_migrations]
 }

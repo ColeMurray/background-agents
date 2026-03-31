@@ -24,11 +24,3 @@ module "github_kv" {
   account_id     = var.cloudflare_account_id
   namespace_name = "open-inspect-github-kv-${local.name_suffix}"
 }
-
-module "linear_kv" {
-  count  = var.enable_linear_bot ? 1 : 0
-  source = "../../modules/cloudflare-kv"
-
-  account_id     = var.cloudflare_account_id
-  namespace_name = "open-inspect-linear-kv-${local.name_suffix}"
-}

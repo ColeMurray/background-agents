@@ -37,23 +37,6 @@ variable "vercel_team_id" {
   default     = "unused"
 }
 
-variable "modal_token_id" {
-  description = "Modal API token ID"
-  type        = string
-  sensitive   = true
-}
-
-variable "modal_token_secret" {
-  description = "Modal API token secret"
-  type        = string
-  sensitive   = true
-}
-
-variable "modal_workspace" {
-  description = "Modal workspace name (used in endpoint URLs)"
-  type        = string
-}
-
 # =============================================================================
 # GitHub OAuth App Credentials
 # =============================================================================
@@ -70,7 +53,7 @@ variable "github_client_secret" {
 }
 
 # =============================================================================
-# GitHub App Credentials (for Modal sandbox)
+# GitHub App Credentials
 # =============================================================================
 
 variable "github_app_id" {
@@ -147,52 +130,6 @@ variable "slack_signing_secret" {
 }
 
 # =============================================================================
-# Linear Agent Credentials
-# =============================================================================
-
-variable "enable_linear_bot" {
-  description = "Enable the Linear bot worker. Requires linear_client_id, linear_client_secret, and linear_webhook_secret."
-  type        = bool
-  default     = false
-
-  validation {
-    condition = var.enable_linear_bot == false || (
-      length(var.linear_client_id) > 0 &&
-      length(var.linear_client_secret) > 0 &&
-      length(var.linear_webhook_secret) > 0
-    )
-    error_message = "When enable_linear_bot is true, linear_client_id, linear_client_secret, and linear_webhook_secret must be non-empty."
-  }
-}
-
-variable "linear_client_id" {
-  description = "Linear OAuth Application Client ID (from Settings → API → Applications)"
-  type        = string
-  default     = ""
-}
-
-variable "linear_client_secret" {
-  description = "Linear OAuth Application Client Secret"
-  type        = string
-  default     = ""
-  sensitive   = true
-}
-
-variable "linear_webhook_secret" {
-  description = "Linear webhook signing secret (from the OAuth Application config)"
-  type        = string
-  default     = ""
-  sensitive   = true
-}
-
-variable "linear_api_key" {
-  description = "Linear API key for fallback comment posting"
-  type        = string
-  default     = ""
-  sensitive   = true
-}
-
-# =============================================================================
 # API Keys
 # =============================================================================
 
@@ -220,12 +157,6 @@ variable "repo_secrets_encryption_key" {
 
 variable "internal_callback_secret" {
   description = "Shared secret for internal service communication (generate with: openssl rand -base64 32)"
-  type        = string
-  sensitive   = true
-}
-
-variable "modal_api_secret" {
-  description = "Shared secret for authenticating control plane to Modal API calls (generate with: openssl rand -hex 32)"
   type        = string
   sensitive   = true
 }
@@ -306,4 +237,20 @@ variable "allowed_email_domains" {
   description = "Comma-separated list of email domains allowed to sign in (e.g., 'example.com,corp.io'). Empty = allow all domains."
   type        = string
   default     = ""
+}
+
+# =============================================================================
+# Sandbox Container Configuration
+# =============================================================================
+
+variable "sandbox_instance_type" {
+  description = "Cloudflare Container instance type for sandboxes (e.g., standard-2, standard-3, standard-4)"
+  type        = string
+  default     = "standard-3"
+}
+
+variable "sandbox_max_instances" {
+  description = "Maximum number of concurrent sandbox containers"
+  type        = number
+  default     = 20
 }

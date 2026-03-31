@@ -40,26 +40,6 @@ output "slack_bot_worker_name" {
   value       = var.enable_slack_bot ? module.slack_bot_worker[0].worker_name : null
 }
 
-output "linear_kv_id" {
-  description = "Linear KV namespace ID"
-  value       = var.enable_linear_bot ? module.linear_kv[0].namespace_id : null
-}
-
-output "linear_bot_worker_name" {
-  description = "Linear bot worker name"
-  value       = var.enable_linear_bot ? module.linear_bot_worker[0].worker_name : null
-}
-
-output "linear_bot_webhook_url" {
-  description = "Linear bot webhook URL (set in Linear OAuth Application webhook config)"
-  value       = var.enable_linear_bot ? "${module.linear_bot_worker[0].worker_url}/webhook" : null
-}
-
-output "linear_bot_oauth_authorize_url" {
-  description = "Visit this URL to install the Linear agent in your workspace (requires admin)"
-  value       = var.enable_linear_bot ? "${module.linear_bot_worker[0].worker_url}/oauth/authorize" : null
-}
-
 output "github_bot_worker_name" {
   description = "GitHub bot worker name"
   value       = var.enable_github_bot ? module.github_bot_worker[0].worker_name : null
@@ -81,17 +61,6 @@ output "web_app_project_id" {
   value       = var.web_platform == "vercel" ? module.web_app[0].project_id : null
 }
 
-# Modal
-output "modal_app_name" {
-  description = "Modal app name"
-  value       = module.modal_app.app_name
-}
-
-output "modal_health_url" {
-  description = "Modal health check endpoint"
-  value       = module.modal_app.api_health_url
-}
-
 # =============================================================================
 # Verification Commands
 # =============================================================================
@@ -103,13 +72,10 @@ output "verification_commands" {
     # 1. Health check control plane
     curl ${module.control_plane_worker.worker_url}/health
 
-    # 2. Health check Modal
-    curl ${module.modal_app.api_health_url}
-
-    # 3. Verify web app deployment
+    # 2. Verify web app deployment
     curl ${local.web_app_url}
 
-    # 4. Test authenticated endpoint (should return 401)
+    # 3. Test authenticated endpoint (should return 401)
     curl ${module.control_plane_worker.worker_url}/sessions
 
   EOF
