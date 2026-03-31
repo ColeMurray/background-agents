@@ -38,6 +38,34 @@ configure_logging()
 FALLBACK_GIT_USER = GitUser(name="OpenInspect", email="open-inspect@noreply.github.com")
 
 
+def _get_bot_git_user() -> GitUser:
+    """Resolve the git identity for sandbox commits.
+
+    Priority:
+    1. GIT_COMMITTER_NAME / GIT_COMMITTER_EMAIL (explicit override, e.g. a
+       Vercel team member so pushes trigger Vercel builds)
+    2. GITHUB_APP_ID + GITHUB_BOT_USERNAME (GitHub App noreply email, e.g.
+       123456+my-app[bot]@users.noreply.github.com)
+    3. FALLBACK_GIT_USER (generic open-inspect identity)
+    """
+    # 1. Explicit committer override
+    committer_name = os.environ.get("GIT_COMMITTER_NAME", "")
+    committer_email = os.environ.get("GIT_COMMITTER_EMAIL", "")
+    if committer_name and committer_email:
+        return GitUser(name=committer_name, email=committer_email)
+
+    # 2. GitHub App bot identity
+    app_id = os.environ.get("GITHUB_APP_ID", "")
+    bot_username = os.environ.get("GITHUB_BOT_USERNAME", "")
+    if app_id and bot_username:
+        return GitUser(
+            name=bot_username,
+            email=f"{app_id}+{bot_username}@users.noreply.github.com",
+        )
+
+    return FALLBACK_GIT_USER
+
+
 class OpenCodeIdentifier:
     """
     Generate OpenCode-compatible ascending IDs.
@@ -610,10 +638,11 @@ class AgentBridge:
 
         scm_name = author_data.get("scmName")
         scm_email = author_data.get("scmEmail")
+        bot_user = _get_bot_git_user()
         await self._configure_git_identity(
             GitUser(
-                name=scm_name or FALLBACK_GIT_USER.name,
-                email=scm_email or FALLBACK_GIT_USER.email,
+                name=scm_name or bot_user.name,
+                email=scm_email or bot_user.email,
             )
         )
 

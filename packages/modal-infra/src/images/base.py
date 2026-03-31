@@ -29,8 +29,8 @@ CODE_SERVER_VERSION = "4.109.5"
 AGENT_BROWSER_VERSION = "0.21.2"
 
 # Cache buster - change this to force Modal image rebuild
-# v44: replace Playwright with agent-browser for browser automation
-CACHE_BUSTER = "v44-agent-browser"
+# v46: forward git committer env vars into sandbox
+CACHE_BUSTER = "v46-sandbox-git-env"
 
 # Base image with all development tools
 base_image = (

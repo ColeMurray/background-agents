@@ -117,6 +117,18 @@ variable "github_bot_username" {
   default     = ""
 }
 
+variable "git_committer_name" {
+  description = "Git committer name for sandbox commits. If set, overrides the default bot identity. Use a name associated with a Vercel team member to trigger Vercel builds."
+  type        = string
+  default     = ""
+}
+
+variable "git_committer_email" {
+  description = "Git committer email for sandbox commits. If set, overrides the default bot identity. Use an email associated with a Vercel team member to trigger Vercel builds."
+  type        = string
+  default     = ""
+}
+
 # =============================================================================
 # Slack App Credentials
 # =============================================================================
