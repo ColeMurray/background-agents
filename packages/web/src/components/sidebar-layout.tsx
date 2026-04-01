@@ -92,7 +92,7 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
           Background coding agent for your team. Ship faster with AI-powered code changes.
         </p>
         <button
-          onClick={() => signIn()}
+          onClick={() => signIn(undefined, { callbackUrl: "/" })}
           className="flex items-center gap-2 bg-primary text-primary-foreground px-6 py-3 font-medium hover:opacity-90 transition"
         >
           Sign in

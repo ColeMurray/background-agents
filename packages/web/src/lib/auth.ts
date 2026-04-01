@@ -92,9 +92,14 @@ export const authOptions: NextAuthOptions = {
     },
     async jwt({ token, account, profile }) {
       if (account) {
-        token.accessToken = account.access_token;
-        token.refreshToken = account.refresh_token as string | undefined;
-        token.accessTokenExpiresAt = account.expires_at ? account.expires_at * 1000 : undefined;
+        // Only store OAuth tokens for GitHub — they are used as SCM credentials
+        // for PR creation. Google tokens are not SCM tokens and should not be
+        // passed downstream as scmToken.
+        if (AUTH_PROVIDER === "github") {
+          token.accessToken = account.access_token;
+          token.refreshToken = account.refresh_token as string | undefined;
+          token.accessTokenExpiresAt = account.expires_at ? account.expires_at * 1000 : undefined;
+        }
       }
       if (profile) {
         if (AUTH_PROVIDER === "google") {
