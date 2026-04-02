@@ -8,6 +8,7 @@ function createProcessor() {
     getProcessingMessage: vi.fn(() => null as { id: string } | null),
     upsertTokenEvent: vi.fn(),
     createEvent: vi.fn(),
+    addSessionCost: vi.fn(),
     upsertExecutionCompleteEvent: vi.fn(),
     updateMessageCompletion: vi.fn(),
     getMessageTimestamps: vi.fn(
@@ -101,6 +102,23 @@ describe("SessionSandboxEventProcessor", () => {
     await h.processor.processSandboxEvent(event);
 
     expect(h.repository.upsertTokenEvent).toHaveBeenCalledWith("msg-1", event, expect.any(Number));
+    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+  });
+
+  it("adds step_finish cost to session aggregate and broadcasts event", async () => {
+    const h = createProcessor();
+    const event: SandboxEvent = {
+      type: "step_finish",
+      messageId: "msg-1",
+      sandboxId: "sb-1",
+      timestamp: 1000,
+      cost: 0.0123,
+    };
+
+    await h.processor.processSandboxEvent(event);
+
+    expect(h.repository.addSessionCost).toHaveBeenCalledWith(0.0123);
+    expect(h.repository.createEvent).not.toHaveBeenCalled();
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
   });
 

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { formatModelName, truncateBranch, copyToClipboard } from "@/lib/format";
+import { formatSessionCost } from "@/lib/session-cost";
 import { formatRelativeTime } from "@/lib/time";
 import { getSafeExternalUrl } from "@/lib/urls";
 import { getScmBranchUrl, getScmRepoUrl } from "@/lib/scm";
@@ -29,6 +30,7 @@ interface MetadataSectionProps {
   repoName?: string;
   artifacts?: Artifact[];
   parentSessionId?: string | null;
+  totalCost?: number;
 }
 
 export function MetadataSection({
@@ -41,6 +43,7 @@ export function MetadataSection({
   repoName,
   artifacts = [],
   parentSessionId,
+  totalCost,
 }: MetadataSectionProps) {
   const [copied, setCopied] = useState(false);
 
@@ -92,6 +95,12 @@ export function MetadataSection({
             {formatModelName(model)}
             {reasoningEffort && <span> · {reasoningEffort}</span>}
           </span>
+        </div>
+      )}
+
+      {typeof totalCost === "number" && totalCost > 0 && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span>Session cost: {formatSessionCost(totalCost)}</span>
         </div>
       )}
 
