@@ -45,6 +45,9 @@ module "modal_app" {
         GITHUB_APP_ID              = var.github_app_id
         GITHUB_APP_PRIVATE_KEY     = var.github_app_private_key
         GITHUB_APP_INSTALLATION_ID = var.github_app_installation_id
+        GITHUB_BOT_USERNAME        = var.github_bot_username
+        GIT_COMMITTER_NAME         = var.git_committer_name
+        GIT_COMMITTER_EMAIL        = var.git_committer_email
       }
     },
     {
