@@ -37,7 +37,7 @@ RUN corepack enable \
     && ln -sf /root/.bun/bin/bunx /usr/local/bin/bunx
 
 # ── Python tools ─────────────────────────────────────────────────────
-RUN pip3 install --break-system-packages uv httpx websockets "pydantic>=2.0" "PyJWT[crypto]"
+RUN pip3 install uv httpx websockets "pydantic>=2.0" "PyJWT[crypto]"
 
 # ── Global Node tools ────────────────────────────────────────────────
 RUN npm install -g \
