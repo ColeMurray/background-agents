@@ -26,8 +26,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # Bun runtime
 RUN curl -fsSL https://bun.sh/install | bash
 
-# Python tools
-RUN pip3 install --break-system-packages uv
+# Python tools (sandbox base has python3 but pip may not be available)
+RUN (pip3 install --break-system-packages uv 2>/dev/null || pip install --break-system-packages uv 2>/dev/null || true)
 
 # OpenCode CLI + plugin
 RUN npm install -g opencode-ai@latest @opencode-ai/plugin@latest zod
