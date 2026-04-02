@@ -4,15 +4,28 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-01-10",
   "compatibility_flags": ["nodejs_compat"],
+  // Build before starting dev server. The build script externalizes
+  // @cloudflare/containers, and we provide a local shim via alias.
+  "build": {
+    "command": "npm run build",
+    "watch_dir": "src"
+  },
+  "alias": {
+    "@cloudflare/containers": "./shims/cloudflare-containers.js"
+  },
 
-  "containers": [
-    {
-      "class_name": "SandboxContainer",
-      "image": "./Dockerfile.sandbox",
-      "instance_type": "standard-3",
-      "max_instances": 10
-    }
-  ],
+  // NOTE: containers config is for production deploy only.
+  // wrangler dev does not support containers — the SANDBOX_CONTAINER
+  // DO binding still works but won't start real containers locally.
+  //
+  // "containers": [
+  //   {
+  //     "class_name": "SandboxContainer",
+  //     "image": "./Dockerfile.sandbox",
+  //     "instance_type": "standard-3",
+  //     "max_instances": 10
+  //   }
+  // ],
 
   "durable_objects": {
     "bindings": [
@@ -36,10 +49,10 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_id": "00000000-0000-0000-0000-000000000000",
-      "database_name": "open-inspect-test"
+      "database_id": "33575f50-8ec3-4056-a368-f216c12cbc9f",
+      "database_name": "open-inspect-jdunn"
     }
   ],
 
-  "kv_namespaces": [{ "binding": "REPOS_CACHE", "id": "00000000000000000000000000000000" }]
+  "kv_namespaces": [{ "binding": "REPOS_CACHE", "id": "02a7cfab1c8b4479bb4ffea0962b345f" }]
 }
