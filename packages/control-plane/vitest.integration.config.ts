@@ -16,11 +16,11 @@ export default defineWorkersConfig(async () => {
   return {
     resolve: {
       alias: {
-        // @cloudflare/containers is a runtime module provided by workerd at deploy
+        // @cloudflare/sandbox is a runtime module provided by workerd at deploy
         // time. Miniflare doesn't bundle it, so we alias to a minimal stub.
-        "@cloudflare/containers": path.resolve(
+        "@cloudflare/sandbox": path.resolve(
           __dirname,
-          "test/integration/stubs/cloudflare-containers.ts"
+          "test/integration/stubs/cloudflare-sandbox.ts"
         ),
       },
     },

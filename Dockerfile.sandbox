@@ -1,107 +1,52 @@
-# Dockerfile.sandbox — mirrors the Modal base image from packages/modal-infra/src/images/base.py
-# Provides a complete sandboxed dev environment for coding agents.
-#
-# Build context must be the repo root so that COPY can reach packages/sandbox-runtime/.
-# Example:  docker build -f packages/control-plane/Dockerfile.sandbox .
+FROM docker.io/cloudflare/sandbox:0.7.18
 
-FROM debian:bookworm-slim
-
-# ── System packages ──────────────────────────────────────────────────────────
+# Additional system packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    curl \
     build-essential \
-    ca-certificates \
-    gnupg \
     openssh-client \
     jq \
     unzip \
-    # Shared libraries required by headless Chromium
-    libnss3 \
-    libnspr4 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libxkbcommon0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libasound2 \
-    libpango-1.0-0 \
-    libcairo2 \
-  && rm -rf /var/lib/apt/lists/*
+    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+    libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+    libgbm1 libasound2 libpango-1.0-0 libcairo2 \
+    && rm -rf /var/lib/apt/lists/*
 
-# ── GitHub CLI ───────────────────────────────────────────────────────────────
+# GitHub CLI
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
- && echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main' \
+    && echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main' \
       > /etc/apt/sources.list.d/github-cli.list \
- && apt-get update && apt-get install -y gh \
- && rm -rf /var/lib/apt/lists/*
+    && apt-get update && apt-get install -y gh && rm -rf /var/lib/apt/lists/*
 
-# ── Node.js 22 LTS ──────────────────────────────────────────────────────────
+# Node.js 22 LTS
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
- && apt-get install -y nodejs \
- && node --version \
- && npm --version
+    && apt-get install -y nodejs \
+    && npm install -g pnpm@latest
 
-# ── pnpm + Bun ──────────────────────────────────────────────────────────────
-RUN npm install -g pnpm@latest \
- && pnpm --version \
- && curl -fsSL https://bun.sh/install | bash \
- && echo 'export BUN_INSTALL="$HOME/.bun"' >> /etc/profile.d/bun.sh \
- && echo 'export PATH="$BUN_INSTALL/bin:$PATH"' >> /etc/profile.d/bun.sh
+# Bun runtime
+RUN curl -fsSL https://bun.sh/install | bash
 
-# ── Python 3.12 + pip packages ──────────────────────────────────────────────
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 \
-    python3-pip \
-    python3-venv \
- && rm -rf /var/lib/apt/lists/* \
- && pip3 install --break-system-packages \
-    uv \
-    httpx \
-    websockets \
-    "pydantic>=2.0" \
-    "PyJWT[crypto]"
+# Python tools
+RUN pip3 install --break-system-packages uv
 
-# ── OpenCode CLI + plugin ───────────────────────────────────────────────────
-RUN npm install -g opencode-ai@latest \
- && (opencode --version || echo 'OpenCode installed') \
- && npm install -g @opencode-ai/plugin@latest zod
+# OpenCode CLI + plugin
+RUN npm install -g opencode-ai@latest @opencode-ai/plugin@latest zod
 
-# ── code-server v4.109.5 ────────────────────────────────────────────────────
+# code-server
 RUN curl -fsSL -o /tmp/code-server.deb \
       https://github.com/coder/code-server/releases/download/v4.109.5/code-server_4.109.5_amd64.deb \
- && dpkg -i /tmp/code-server.deb \
- && rm /tmp/code-server.deb \
- && code-server --version
+    && dpkg -i /tmp/code-server.deb && rm /tmp/code-server.deb
 
-# ── agent-browser + Chromium ────────────────────────────────────────────────
-RUN npm install -g agent-browser@0.21.2 \
- && agent-browser install \
- && agent-browser --version
+# agent-browser + Chromium
+RUN npm install -g agent-browser@0.21.2 && agent-browser install
 
-# ── Working directories ─────────────────────────────────────────────────────
-RUN mkdir -p /workspace /app/plugins /tmp/opencode \
- && echo 'Image: Dockerfile.sandbox' > /app/image-version.txt
+# Working directories
+RUN mkdir -p /workspace /app/plugins /tmp/opencode
 
-# ── Environment variables ────────────────────────────────────────────────────
 ENV HOME=/root \
     NODE_ENV=development \
-    PNPM_HOME=/root/.local/share/pnpm \
-    PATH=/root/.bun/bin:/root/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin \
-    PYTHONPATH=/app \
     NODE_PATH=/usr/lib/node_modules
 
-# ── Sandbox runtime ─────────────────────────────────────────────────────────
-# Build context is the repo root (Dockerfile lives at repo root).
-COPY packages/sandbox-runtime/ /app/sandbox_runtime_pkg/
-RUN cp -r /app/sandbox_runtime_pkg/src/sandbox_runtime /app/sandbox_runtime
-
-# ── Entrypoint ───────────────────────────────────────────────────────────────
 WORKDIR /workspace
-CMD ["python3", "-m", "sandbox_runtime.entrypoint"]
+
+EXPOSE 4096 8080

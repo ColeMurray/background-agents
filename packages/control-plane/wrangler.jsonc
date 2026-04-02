@@ -5,13 +5,13 @@
   "compatibility_date": "2026-01-10",
   "compatibility_flags": ["nodejs_compat"],
   // Build before starting dev server. The build script externalizes
-  // @cloudflare/containers, and we provide a local shim via alias.
+  // @cloudflare/sandbox, and we provide a local shim via alias.
   "build": {
     "command": "npm run build",
     "watch_dir": "src"
   },
   "alias": {
-    "@cloudflare/containers": "./shims/cloudflare-containers.js"
+    "@cloudflare/sandbox": "./shims/cloudflare-sandbox.js"
   },
 
   // NOTE: containers config is for production deploy only.
