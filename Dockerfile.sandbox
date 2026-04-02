@@ -1,52 +1,74 @@
 FROM docker.io/cloudflare/sandbox:0.7.18
 
-# Additional system packages
+# ── System packages ──────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    openssh-client \
-    jq \
-    unzip \
-    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
-    libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
-    libgbm1 libasound2 libpango-1.0-0 libcairo2 \
+      python3 python3-pip python3-venv \
+      curl wget jq \
+      build-essential \
+      openssh-client \
+      zip unzip \
+      sqlite3 \
+      ca-certificates \
+      gnupg \
+      # Chromium shared libs for agent-browser / Playwright
+      libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+      libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+      libgbm1 libasound2 libpango-1.0-0 libcairo2 \
     && rm -rf /var/lib/apt/lists/*
 
-# GitHub CLI
+# ── GitHub CLI ───────────────────────────────────────────────────────
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
     && echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main' \
       > /etc/apt/sources.list.d/github-cli.list \
     && apt-get update && apt-get install -y gh && rm -rf /var/lib/apt/lists/*
 
-# Node.js 22 LTS
+# ── Node.js 22 (LTS) ────────────────────────────────────────────────
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
-    && npm install -g pnpm@latest
+    && rm -rf /var/lib/apt/lists/*
 
-# Bun runtime
-RUN curl -fsSL https://bun.sh/install | bash
+# ── Package managers ─────────────────────────────────────────────────
+RUN corepack enable \
+    && corepack prepare pnpm@10.15.0 --activate \
+    && npm install -g yarn \
+    && curl -fsSL https://bun.sh/install | bash \
+    && ln -sf /root/.bun/bin/bun /usr/local/bin/bun \
+    && ln -sf /root/.bun/bin/bunx /usr/local/bin/bunx
 
-# Python tools (sandbox base has python3 but pip may not be available)
-RUN (pip3 install --break-system-packages uv 2>/dev/null || pip install --break-system-packages uv 2>/dev/null || true)
+# ── Python tools ─────────────────────────────────────────────────────
+RUN pip3 install --break-system-packages uv httpx websockets "pydantic>=2.0" "PyJWT[crypto]"
 
-# OpenCode CLI + plugin
-RUN npm install -g opencode-ai@latest @opencode-ai/plugin@latest zod
+# ── Global Node tools ────────────────────────────────────────────────
+RUN npm install -g \
+      opencode-ai@latest \
+      @opencode-ai/plugin@latest \
+      zod \
+      serve \
+      tsx
 
-# code-server
+# ── code-server ──────────────────────────────────────────────────────
 RUN curl -fsSL -o /tmp/code-server.deb \
       https://github.com/coder/code-server/releases/download/v4.109.5/code-server_4.109.5_amd64.deb \
     && dpkg -i /tmp/code-server.deb && rm /tmp/code-server.deb
 
-# agent-browser + Chromium
+# ── agent-browser + Chromium ─────────────────────────────────────────
 RUN npm install -g agent-browser@0.21.2 && agent-browser install
 
-# Working directories
+# ── Web terminal (ttyd) ──────────────────────────────────────────────
+RUN curl -fsSL -L -o /usr/local/bin/ttyd \
+      https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64 \
+    && chmod +x /usr/local/bin/ttyd
+
+# ── Working directories ─────────────────────────────────────────────
 RUN mkdir -p /workspace /app/plugins /tmp/opencode
 
+# ── Environment ──────────────────────────────────────────────────────
 ENV HOME=/root \
     NODE_ENV=development \
-    NODE_PATH=/usr/lib/node_modules
+    NODE_PATH=/usr/lib/node_modules \
+    COMMAND_TIMEOUT_MS=3600000
 
 WORKDIR /workspace
 
-EXPOSE 4096 8080
+EXPOSE 4096 8080 5173 8000 7681
