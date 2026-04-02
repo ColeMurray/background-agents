@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/index.js --platform=browser --target=es2022 --external:cloudflare:* --external:node:* --external:@cloudflare/containers",
+    "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/index.js --platform=browser --target=es2022 --external:cloudflare:* --external:node:* --external:@cloudflare/sandbox --external:@cloudflare/containers",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts",
@@ -13,7 +13,7 @@
     "lint:fix": "eslint src/ --fix"
   },
   "dependencies": {
-    "@cloudflare/containers": "^0.2.2",
+    "@cloudflare/sandbox": "^0.8.4",
     "@cloudflare/workers-types": "^4.20241230.0",
     "@open-inspect/shared": "file:../shared"
   },
