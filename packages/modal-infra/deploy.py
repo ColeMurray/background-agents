@@ -11,6 +11,8 @@ from pathlib import Path
 
 # Add src to path so imports work
 sys.path.insert(0, str(Path(__file__).parent / "src"))
+# Add sandbox_runtime so app.py can import it (used to locate the runtime bundle)
+sys.path.insert(0, str(Path(__file__).parent.parent / "sandbox-runtime" / "src"))
 
 # Import the app
 # Import modules to register functions with the app
