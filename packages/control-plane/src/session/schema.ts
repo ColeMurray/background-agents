@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS session (
   spawn_source TEXT NOT NULL DEFAULT 'user',        -- 'user' or 'agent'
   spawn_depth INTEGER NOT NULL DEFAULT 0,           -- 0 for top-level, parent.depth + 1 for children
   code_server_enabled INTEGER NOT NULL DEFAULT 0,   -- 0 = disabled, 1 = enabled (opt-in)
+  total_cost REAL NOT NULL DEFAULT 0,              -- Running session cost from step_finish events
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -356,6 +357,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 27,
     description: "Add code_server_enabled to session",
     run: `ALTER TABLE session ADD COLUMN code_server_enabled INTEGER NOT NULL DEFAULT 0`,
+  },
+  {
+    id: 28,
+    description: "Add total_cost to session",
+    run: `ALTER TABLE session ADD COLUMN total_cost REAL NOT NULL DEFAULT 0`,
   },
 ];
 

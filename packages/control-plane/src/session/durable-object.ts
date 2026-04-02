@@ -1474,6 +1474,7 @@ export class SessionDO extends DurableObject<Env> {
       reasoningEffort: session?.reasoning_effort ?? undefined,
       isProcessing,
       parentSessionId: session?.parent_session_id ?? null,
+      totalCost: session?.total_cost ?? 0,
       codeServerUrl: sandbox?.code_server_url ?? null,
       codeServerPassword,
     };

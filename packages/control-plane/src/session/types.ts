@@ -37,6 +37,7 @@ export interface SessionRow {
   spawn_source: SpawnSource;
   spawn_depth: number;
   code_server_enabled: number; // 0 = disabled (default), 1 = enabled
+  total_cost?: number; // Running aggregate of step_finish event costs
   created_at: number;
   updated_at: number;
 }

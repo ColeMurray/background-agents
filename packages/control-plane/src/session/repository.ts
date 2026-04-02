@@ -284,6 +284,15 @@ export class SessionRepository {
     );
   }
 
+  addSessionCost(cost: number): void {
+    this.sql.exec(
+      `UPDATE session
+       SET total_cost = total_cost + ?
+       WHERE id = (SELECT id FROM session LIMIT 1)`,
+      cost
+    );
+  }
+
   // === SANDBOX ===
   // Note: Each session DO has exactly one sandbox row, so update methods use
   // a subquery `WHERE id = (SELECT id FROM sandbox LIMIT 1)` to find it.

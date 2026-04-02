@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { formatModelName, truncateBranch, copyToClipboard } from "@/lib/format";
+import { formatSessionCost } from "@/lib/session-cost";
 import { formatRelativeTime } from "@/lib/time";
 import { getSafeExternalUrl } from "@/lib/urls";
 import type { Artifact } from "@/types/session";
@@ -100,8 +101,7 @@ export function MetadataSection({
 
       {typeof totalCost === "number" && totalCost > 0 && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span className="w-4 text-center">$</span>
-          <span>Session cost: {totalCost >= 1 ? totalCost.toFixed(2) : totalCost.toFixed(4)}</span>
+          <span>Session cost: {formatSessionCost(totalCost)}</span>
         </div>
       )}
 
