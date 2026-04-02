@@ -436,12 +436,13 @@ export interface ConnectingTimeoutConfig {
 }
 
 /**
- * Default connecting timeout: 2 minutes.
- * Boot sequence (git clone → setup.sh → start.sh → opencode → bridge connect) typically
- * takes 30–90 seconds. Two minutes provides margin without leaving users waiting too long.
+ * Default connecting timeout: 10 minutes.
+ * Boot sequence (git clone → setup.sh → start.sh → opencode → bridge connect) can take
+ * 3–5 minutes for repos with heavy dependencies (npm install). Ten minutes provides margin
+ * for cold starts without pre-built images.
  */
 export const DEFAULT_CONNECTING_TIMEOUT_CONFIG: ConnectingTimeoutConfig = {
-  timeoutMs: 120_000,
+  timeoutMs: 600_000,
 };
 
 /**

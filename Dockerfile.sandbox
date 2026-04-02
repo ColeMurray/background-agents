@@ -98,9 +98,8 @@ ENV HOME=/root \
     NODE_PATH=/usr/lib/node_modules
 
 # ── Sandbox runtime ─────────────────────────────────────────────────────────
-# Wrangler sets the build context to the package directory (packages/control-plane/).
-# The sandbox-runtime is a sibling package, so we reference it via ../sandbox-runtime/.
-COPY ../sandbox-runtime/ /app/sandbox_runtime_pkg/
+# Build context is the repo root (Dockerfile lives at repo root).
+COPY packages/sandbox-runtime/ /app/sandbox_runtime_pkg/
 RUN cp -r /app/sandbox_runtime_pkg/src/sandbox_runtime /app/sandbox_runtime
 
 # ── Entrypoint ───────────────────────────────────────────────────────────────

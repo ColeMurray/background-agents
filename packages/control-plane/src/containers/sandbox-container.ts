@@ -97,7 +97,12 @@ export class SandboxContainer extends Container {
     const config = (await request.json()) as SandboxSessionConfig;
 
     // Fix 3: Validate required configuration fields before persisting
-    if (!config.sandboxId || !config.sessionId || !config.controlPlaneUrl || !config.sandboxAuthToken) {
+    if (
+      !config.sandboxId ||
+      !config.sessionId ||
+      !config.controlPlaneUrl ||
+      !config.sandboxAuthToken
+    ) {
       return Response.json({ error: "Missing required configuration fields" }, { status: 400 });
     }
 
@@ -106,27 +111,30 @@ export class SandboxContainer extends Container {
     // Persist config in DO storage so it survives deploys
     await this.ctx.storage.put("sessionConfig", config);
 
+    // Build SESSION_CONFIG JSON — the Python sandbox_runtime reads session_id,
+    // provider, model, branch from this JSON blob, NOT from individual env vars.
+    const sessionConfigJson = JSON.stringify({
+      session_id: config.sessionId,
+      provider: config.provider,
+      model: config.model,
+      branch: config.branch || "main",
+    });
+
     // Build environment variables for the container process
     const envVars: Record<string, string> = {
       SANDBOX_ID: config.sandboxId,
-      SESSION_ID: config.sessionId,
+      SESSION_CONFIG: sessionConfigJson,
       CONTROL_PLANE_URL: config.controlPlaneUrl,
       SANDBOX_AUTH_TOKEN: config.sandboxAuthToken,
       REPO_OWNER: config.repoOwner,
       REPO_NAME: config.repoName,
       VCS_HOST: "github.com",
       VCS_CLONE_USERNAME: "x-access-token",
-      PROVIDER: config.provider,
-      MODEL: config.model,
       PYTHONUNBUFFERED: "1",
       HOME: "/root",
       NODE_ENV: "development",
       NODE_PATH: "/usr/lib/node_modules",
     };
-
-    if (config.branch) {
-      envVars.BRANCH = config.branch;
-    }
     if (config.anthropicApiKey) {
       envVars.ANTHROPIC_API_KEY = config.anthropicApiKey;
     }
@@ -150,14 +158,12 @@ export class SandboxContainer extends Container {
       }
     }
 
-    // Build required ports list
-    const ports = config.codeServerEnabled
-      ? [SANDBOX_DEFAULT_PORT, SANDBOX_CODE_SERVER_PORT]
-      : [SANDBOX_DEFAULT_PORT];
-
-    // Fix 4: Wrap startAndWaitForPorts in try/catch
+    // Start the container in the background — don't block the response.
+    // The sandbox runtime will clone the repo, run setup, start OpenCode,
+    // then the bridge connects back to the control plane via WebSocket.
+    // This matches Modal's behavior: API returns immediately, sandbox connects later.
     try {
-      await this.startAndWaitForPorts({ ports, startOptions: { envVars } });
+      await this.ctx.container.start({ envVars });
     } catch (error) {
       console.error("SandboxContainer start failed:", error);
       return Response.json({ success: false, error: String(error) }, { status: 500 });

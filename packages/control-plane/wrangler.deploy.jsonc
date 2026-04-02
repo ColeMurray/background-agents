@@ -1,0 +1,51 @@
+// wrangler.deploy.jsonc — production deployment config
+// Usage: wrangler deploy -c wrangler.deploy.jsonc
+{
+  "name": "open-inspect-cp-jdunn",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-10",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "containers": [
+    {
+      "class_name": "SandboxContainer",
+      "image": "../../Dockerfile.sandbox",
+      "instance_type": "standard-3",
+      "max_instances": 5,
+      "observability": { "logs": { "enabled": true } }
+    }
+  ],
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "SESSION", "class_name": "SessionDO" },
+      { "name": "SCHEDULER", "class_name": "SchedulerDO" },
+      { "name": "SANDBOX_CONTAINER", "class_name": "SandboxContainer" }
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["SessionDO", "SchedulerDO", "SandboxContainer"]
+    }
+  ],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_id": "33575f50-8ec3-4056-a368-f216c12cbc9f",
+      "database_name": "open-inspect-jdunn"
+    }
+  ],
+
+  "kv_namespaces": [
+    { "binding": "REPOS_CACHE", "id": "02a7cfab1c8b4479bb4ffea0962b345f" }
+  ],
+
+  "vars": {
+    "DEPLOYMENT_NAME": "jdunn",
+    "WORKER_URL": "https://open-inspect-cp-jdunn.telus.workers.dev",
+    "WEB_APP_URL": "http://localhost:3000"
+  }
+}
