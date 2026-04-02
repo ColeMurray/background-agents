@@ -7,16 +7,20 @@ interface ParticipantsSectionProps {
 }
 
 export function ParticipantsSection({ participants }: ParticipantsSectionProps) {
-  if (participants.length === 0) return null;
+  const uniqueParticipants = participants.filter(
+    (p, i, arr) => arr.findIndex((x) => x.participantId === p.participantId) === i
+  );
 
-  const count = participants.length;
+  if (uniqueParticipants.length === 0) return null;
+
+  const count = uniqueParticipants.length;
   const label = count === 1 ? "prompt engineer" : "prompt engineers";
 
   return (
     <div className="flex items-center gap-2">
       {/* Avatar stack */}
       <div className="flex -space-x-2">
-        {participants.slice(0, 4).map((participant) => (
+        {uniqueParticipants.slice(0, 4).map((participant) => (
           <div key={participant.participantId} className="relative" title={participant.name}>
             {participant.avatar ? (
               <img
