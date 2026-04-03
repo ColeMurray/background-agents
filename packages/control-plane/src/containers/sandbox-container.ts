@@ -6,8 +6,9 @@
  * a Durable Object via the export in index.ts.
  */
 
-// Re-export Sandbox as SandboxContainer for the DO binding
-export { Sandbox as SandboxContainer } from "@cloudflare/sandbox";
+// Re-export Sandbox directly — class_name in wrangler must match exactly.
+// The c3po project uses "Sandbox" everywhere and it works.
+export { Sandbox } from "@cloudflare/sandbox";
 
-// Re-export getSandbox for the provider to obtain instances
+// Re-export getSandbox for the provider
 export { getSandbox } from "@cloudflare/sandbox";

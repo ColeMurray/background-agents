@@ -8,11 +8,10 @@
 
   "containers": [
     {
-      "class_name": "SandboxContainer",
+      "class_name": "Sandbox",
       "image": "../../Dockerfile.sandbox",
       "instance_type": "standard-3",
-      "max_instances": 5,
-      "observability": { "logs": { "enabled": true } }
+      "max_instances": 5
     }
   ],
 
@@ -20,7 +19,7 @@
     "bindings": [
       { "name": "SESSION", "class_name": "SessionDO" },
       { "name": "SCHEDULER", "class_name": "SchedulerDO" },
-      { "name": "SANDBOX_CONTAINER", "class_name": "SandboxContainer" }
+      { "name": "SANDBOX_CONTAINER", "class_name": "Sandbox" }
     ]
   },
 
@@ -28,6 +27,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["SessionDO", "SchedulerDO", "SandboxContainer"]
+    },
+    {
+      "tag": "v2",
+      "renamed_classes": [{ "from": "SandboxContainer", "to": "Sandbox" }]
     }
   ],
 
