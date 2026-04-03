@@ -2,10 +2,12 @@
 
 import { useRepos } from "@/hooks/use-repos";
 import { useState, useCallback } from "react";
-import { ChevronDownIcon, CheckIcon } from "@/components/ui/icons";
+import { ChevronDownIcon, CheckIcon, PlusIcon } from "@/components/ui/icons";
 import { Combobox } from "@/components/ui/combobox";
+import { Input } from "@/components/ui/input";
 import useSWR from "swr";
 import type { SandboxSettings } from "@open-inspect/shared";
+import { MAX_TUNNEL_PORTS } from "@open-inspect/shared";
 
 const GLOBAL_SCOPE = "__global__";
 
@@ -22,14 +24,8 @@ interface RepoSettingsResponse {
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
-function parsePorts(value: string): number[] {
-  const seen = new Set<number>();
-  return value
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s) => /^\d+$/.test(s))
-    .map(Number)
-    .filter((n) => n >= 1 && n <= 65535 && !seen.has(n) && seen.add(n));
+function isValidPort(value: string): boolean {
+  return /^\d+$/.test(value) && Number(value) >= 1 && Number(value) <= 65535;
 }
 
 function SandboxSettingsEditor({
@@ -55,21 +51,45 @@ function SandboxSettingsEditor({
     ? ((data as GlobalSettingsResponse)?.settings?.defaults?.tunnelPorts ?? [])
     : ((data as RepoSettingsResponse)?.settings?.tunnelPorts ?? []);
 
-  const [portsInput, setPortsInput] = useState<string | null>(null);
+  const [portRows, setPortRows] = useState<string[] | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
-  // Use current ports as display value unless user is editing
-  const displayValue = portsInput ?? currentPorts.join(", ");
+  // Use server state unless user is editing
+  const rows = portRows ?? currentPorts.map(String);
+
+  const handleAddRow = () => {
+    if (rows.length >= MAX_TUNNEL_PORTS) return;
+    setPortRows([...rows, ""]);
+  };
+
+  const handleUpdateRow = (index: number, value: string) => {
+    const updated = [...rows];
+    updated[index] = value;
+    setPortRows(updated);
+  };
+
+  const handleRemoveRow = (index: number) => {
+    const updated = rows.filter((_, i) => i !== index);
+    setPortRows(updated);
+  };
 
   const handleSave = useCallback(async () => {
+    // Validate all non-empty rows
+    const nonEmpty = rows.filter((r) => r.trim() !== "");
+    const invalid = nonEmpty.filter((r) => !isValidPort(r.trim()));
+    if (invalid.length > 0) {
+      setError(`Invalid port numbers: ${invalid.join(", ")}`);
+      return;
+    }
+
+    const ports = [...new Set(nonEmpty.map((r) => Number(r.trim())))];
+
     setSaving(true);
     setError(null);
     setSuccess(false);
     try {
-      const ports = parsePorts(displayValue);
-      // Preserve existing enabledRepos when saving global settings
       const existingEnabledRepos = isGlobal
         ? (data as GlobalSettingsResponse)?.settings?.enabledRepos
         : undefined;
@@ -88,7 +108,7 @@ function SandboxSettingsEditor({
         throw new Error(data?.error ?? `Failed to save (${res.status})`);
       }
 
-      setPortsInput(null);
+      setPortRows(null);
       setSuccess(true);
       setTimeout(() => setSuccess(false), 2000);
       await mutate();
@@ -97,9 +117,12 @@ function SandboxSettingsEditor({
     } finally {
       setSaving(false);
     }
-  }, [displayValue, isGlobal, apiUrl, mutate, data]);
+  }, [rows, isGlobal, apiUrl, mutate, data]);
 
-  const hasChanges = portsInput !== null && portsInput !== currentPorts.join(", ");
+  const hasChanges =
+    portRows !== null &&
+    JSON.stringify(portRows.filter((r) => r.trim() !== "").map((r) => r.trim())) !==
+      JSON.stringify(currentPorts.map(String));
 
   if (isLoading) {
     return <p className="text-sm text-muted-foreground">Loading...</p>;
@@ -108,17 +131,46 @@ function SandboxSettingsEditor({
   return (
     <div className="space-y-4">
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">Tunnel Ports</label>
+        <div className="flex items-center justify-between max-w-sm mb-1.5">
+          <label className="block text-sm font-medium text-foreground">Tunnel Ports</label>
+          <button
+            type="button"
+            onClick={handleAddRow}
+            disabled={rows.length >= MAX_TUNNEL_PORTS}
+            className="flex items-center gap-1 text-xs text-accent hover:text-accent/80 disabled:opacity-50 disabled:cursor-not-allowed transition"
+          >
+            <PlusIcon className="w-3 h-3" />
+            Add port
+          </button>
+        </div>
         <p className="text-xs text-muted-foreground mb-2">
           Expose additional ports from sandboxes via public tunnel URLs (e.g., dev server ports).
         </p>
-        <input
-          type="text"
-          value={displayValue}
-          onChange={(e) => setPortsInput(e.target.value)}
-          placeholder="e.g. 3000, 3001, 5173"
-          className="w-full max-w-sm px-3 py-2 text-sm border border-border bg-input text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent transition"
-        />
+        <div className="space-y-2 max-w-sm">
+          {rows.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-2">No tunnel ports configured.</p>
+          ) : (
+            rows.map((value, index) => (
+              <div key={index} className="flex items-center gap-2">
+                <Input
+                  type="text"
+                  inputMode="numeric"
+                  value={value}
+                  onChange={(e) => handleUpdateRow(index, e.target.value)}
+                  placeholder="e.g. 3000"
+                  className="flex-1"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleRemoveRow(index)}
+                  className="text-xs px-2 py-1 border border-border-muted text-muted-foreground hover:text-red-500 hover:border-red-300 transition"
+                >
+                  Remove
+                </button>
+              </div>
+            ))
+          )}
+        </div>
       </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
