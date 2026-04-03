@@ -23,10 +23,13 @@ interface RepoSettingsResponse {
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 function parsePorts(value: string): number[] {
+  const seen = new Set<number>();
   return value
     .split(",")
-    .map((s) => parseInt(s.trim(), 10))
-    .filter((n) => !isNaN(n) && n >= 1 && n <= 65535);
+    .map((s) => s.trim())
+    .filter((s) => /^\d+$/.test(s))
+    .map(Number)
+    .filter((n) => n >= 1 && n <= 65535 && !seen.has(n) && seen.add(n));
 }
 
 function SandboxSettingsEditor({

@@ -892,16 +892,19 @@ export class SandboxLifecycleManager {
   private parseSandboxSettings(session: SessionRow): SandboxSettings {
     if (!session.sandbox_settings) return {};
     try {
-      const parsed = JSON.parse(session.sandbox_settings);
+      const parsed: unknown = JSON.parse(session.sandbox_settings);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+
+      const settings = parsed as Record<string, unknown>;
       // Validate tunnelPorts at the boundary — data may come from untrusted callers
-      if (parsed.tunnelPorts !== undefined) {
-        if (!Array.isArray(parsed.tunnelPorts)) return {};
-        const valid = parsed.tunnelPorts.filter(
+      if (settings.tunnelPorts !== undefined) {
+        if (!Array.isArray(settings.tunnelPorts)) return {};
+        const valid = settings.tunnelPorts.filter(
           (p: unknown) => typeof p === "number" && Number.isInteger(p) && p >= 1 && p <= 65535
         );
-        parsed.tunnelPorts = valid.slice(0, MAX_TUNNEL_PORTS);
+        return { tunnelPorts: valid.slice(0, MAX_TUNNEL_PORTS) };
       }
-      return parsed;
+      return settings as SandboxSettings;
     } catch {
       this.log.warn("Failed to parse sandbox_settings, using defaults");
       return {};
