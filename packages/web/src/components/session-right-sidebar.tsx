@@ -80,15 +80,14 @@ export function SessionRightSidebarContent({
       )}
 
       {/* Tunnel URLs */}
-      {sessionState.tunnelUrls &&
-        Object.keys(sessionState.tunnelUrls).length > 0 && (
-          <div className="px-4 py-4 border-b border-border-muted">
-            <TunnelUrlsSection
-              urls={sessionState.tunnelUrls}
-              sandboxStatus={sessionState.sandboxStatus}
-            />
-          </div>
-        )}
+      {sessionState.tunnelUrls && Object.keys(sessionState.tunnelUrls).length > 0 && (
+        <div className="px-4 py-4 border-b border-border-muted">
+          <TunnelUrlsSection
+            urls={sessionState.tunnelUrls}
+            sandboxStatus={sessionState.sandboxStatus}
+          />
+        </div>
+      )}
 
       {/* Tasks */}
       {tasks.length > 0 && (

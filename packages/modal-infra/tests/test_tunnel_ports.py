@@ -81,9 +81,7 @@ class TestResolveAndSetupTunnels:
     @pytest.mark.asyncio
     async def test_returns_none_none_for_no_ports(self):
         sandbox = MagicMock()
-        cs_url, extra = await SandboxManager._resolve_and_setup_tunnels(
-            sandbox, "sb-1", False, []
-        )
+        cs_url, extra = await SandboxManager._resolve_and_setup_tunnels(sandbox, "sb-1", False, [])
         assert cs_url is None
         assert extra is None
 
@@ -107,7 +105,10 @@ class TestResolveAndSetupTunnels:
 
     @pytest.mark.asyncio
     async def test_splits_code_server_from_extra_ports(self):
-        resolved = {CODE_SERVER_PORT: "https://cs.example.com", 3000: "https://tunnel-3000.example.com"}
+        resolved = {
+            CODE_SERVER_PORT: "https://cs.example.com",
+            3000: "https://tunnel-3000.example.com",
+        }
 
         sandbox = MagicMock()
 
@@ -146,8 +147,6 @@ class TestCollectExposedPorts:
         assert tunnel == [3000, 5173]
 
     def test_combined_code_server_and_tunnels(self):
-        exposed, tunnel = SandboxManager._collect_exposed_ports(
-            True, {"tunnelPorts": [3000]}
-        )
+        exposed, tunnel = SandboxManager._collect_exposed_ports(True, {"tunnelPorts": [3000]})
         assert exposed == [CODE_SERVER_PORT, 3000]
         assert tunnel == [3000]

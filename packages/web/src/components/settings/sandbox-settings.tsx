@@ -52,8 +52,8 @@ function SandboxSettingsEditor({
   );
 
   const currentPorts: number[] = isGlobal
-    ? (data as GlobalSettingsResponse)?.settings?.defaults?.tunnelPorts ?? []
-    : (data as RepoSettingsResponse)?.settings?.tunnelPorts ?? [];
+    ? ((data as GlobalSettingsResponse)?.settings?.defaults?.tunnelPorts ?? [])
+    : ((data as RepoSettingsResponse)?.settings?.tunnelPorts ?? []);
 
   const [portsInput, setPortsInput] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);

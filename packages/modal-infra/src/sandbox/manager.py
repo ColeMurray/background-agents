@@ -577,9 +577,7 @@ class SandboxManager:
             "workdir": "/workspace",
             "env": env_vars,
         }
-        exposed_ports, tunnel_ports = self._collect_exposed_ports(
-            code_server_enabled, settings
-        )
+        exposed_ports, tunnel_ports = self._collect_exposed_ports(code_server_enabled, settings)
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports
 
