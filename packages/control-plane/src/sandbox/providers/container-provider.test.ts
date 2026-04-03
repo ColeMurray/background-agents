@@ -1,22 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { SandboxProviderError } from "../provider";
+import type { Sandbox } from "../../containers/sandbox-container";
 
 // Mock @cloudflare/sandbox via the re-export module
 vi.mock("../../containers/sandbox-container", () => ({
   getSandbox: vi.fn(),
-  SandboxContainer: class {},
+  Sandbox: class {},
 }));
 
 function createMockSandbox(overrides: Record<string, unknown> = {}) {
-  const mockProcess = {
-    waitForPort: vi.fn().mockResolvedValue(undefined),
-    id: "proc-1",
-  };
   return {
-    setEnvVars: vi.fn().mockResolvedValue(undefined),
     gitCheckout: vi.fn().mockResolvedValue({ success: true }),
     exec: vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0, success: true }),
-    startProcess: vi.fn().mockResolvedValue(mockProcess),
     ...overrides,
   };
 }
@@ -39,7 +34,7 @@ describe("CloudflareContainerProvider", () => {
 
   it("reports correct capabilities", async () => {
     const { CloudflareContainerProvider } = await import("./container-provider");
-    const binding = {} as DurableObjectNamespace;
+    const binding = {} as unknown as DurableObjectNamespace<Sandbox>;
     const provider = new CloudflareContainerProvider(binding, {});
     expect(provider.name).toBe("cloudflare-sandbox");
     expect(provider.capabilities.supportsSnapshots).toBe(false);
@@ -53,24 +48,33 @@ describe("CloudflareContainerProvider", () => {
     (getSandbox as ReturnType<typeof vi.fn>).mockReturnValue(mockSandbox);
 
     const { CloudflareContainerProvider } = await import("./container-provider");
-    const binding = {} as DurableObjectNamespace;
+    const binding = {} as unknown as DurableObjectNamespace<Sandbox>;
     const provider = new CloudflareContainerProvider(binding, { anthropicApiKey: "sk-test" });
 
     const result = await provider.createSandbox(testConfig);
 
     expect(result.sandboxId).toBe("sandbox-123");
-    expect(result.status).toBe("running");
+    expect(result.status).toBe("warming");
 
-    // Verify SDK calls in order
-    expect(mockSandbox.setEnvVars).toHaveBeenCalledWith(
-      expect.objectContaining({ ANTHROPIC_API_KEY: "sk-test", SANDBOX_ID: "sandbox-123" })
-    );
+    // Verify gitCheckout called
     expect(mockSandbox.gitCheckout).toHaveBeenCalledWith(
       "https://github.com/testowner/testrepo.git",
       expect.objectContaining({ targetDir: "/workspace/testrepo", depth: 100 })
     );
-    expect(mockSandbox.exec).toHaveBeenCalled();
-    expect(mockSandbox.startProcess).toHaveBeenCalled();
+
+    // Verify exec called with env option (not inline shell exports)
+    expect(mockSandbox.exec).toHaveBeenCalledWith(
+      "cd /workspace/testrepo && python3 -m sandbox_runtime.entrypoint",
+      expect.objectContaining({
+        env: expect.objectContaining({
+          SANDBOX_ID: "sandbox-123",
+          CONTROL_PLANE_URL: "https://control-plane.test",
+          SANDBOX_AUTH_TOKEN: "auth-token",
+          ANTHROPIC_API_KEY: "sk-test",
+          RESTORED_FROM_SNAPSHOT: "true",
+        }),
+      })
+    );
   });
 
   it("wraps errors as SandboxProviderError", async () => {
@@ -81,7 +85,7 @@ describe("CloudflareContainerProvider", () => {
     (getSandbox as ReturnType<typeof vi.fn>).mockReturnValue(mockSandbox);
 
     const { CloudflareContainerProvider } = await import("./container-provider");
-    const binding = {} as DurableObjectNamespace;
+    const binding = {} as unknown as DurableObjectNamespace<Sandbox>;
     const provider = new CloudflareContainerProvider(binding, {});
 
     await expect(provider.createSandbox(testConfig)).rejects.toThrow(SandboxProviderError);
@@ -91,12 +95,12 @@ describe("CloudflareContainerProvider", () => {
     const { getSandbox } = await import("../../containers/sandbox-container");
     const original = new SandboxProviderError("test error", "permanent");
     const mockSandbox = createMockSandbox({
-      setEnvVars: vi.fn().mockRejectedValue(original),
+      gitCheckout: vi.fn().mockRejectedValue(original),
     });
     (getSandbox as ReturnType<typeof vi.fn>).mockReturnValue(mockSandbox);
 
     const { CloudflareContainerProvider } = await import("./container-provider");
-    const binding = {} as DurableObjectNamespace;
+    const binding = {} as unknown as DurableObjectNamespace<Sandbox>;
     const provider = new CloudflareContainerProvider(binding, {});
 
     try {

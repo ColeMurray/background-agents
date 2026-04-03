@@ -19,9 +19,9 @@ vi.mock("@cloudflare/sandbox", () => {
 });
 
 describe("SandboxContainer exports", () => {
-  it("re-exports SandboxContainer from @cloudflare/sandbox", async () => {
-    const { SandboxContainer } = await import("./sandbox-container");
-    expect(SandboxContainer).toBeDefined();
+  it("re-exports Sandbox from @cloudflare/sandbox", async () => {
+    const { Sandbox } = await import("./sandbox-container");
+    expect(Sandbox).toBeDefined();
   });
 
   it("re-exports getSandbox from @cloudflare/sandbox", async () => {

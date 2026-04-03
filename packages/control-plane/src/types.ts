@@ -10,6 +10,7 @@ import type {
   ParticipantRole,
   SessionStatus,
 } from "@open-inspect/shared";
+import type { Sandbox } from "./containers/sandbox-container";
 
 export type {
   ArtifactType,
@@ -54,7 +55,7 @@ export interface Env {
   TOKEN_ENCRYPTION_KEY: string;
   REPO_SECRETS_ENCRYPTION_KEY?: string;
   // Cloudflare Container binding for sandboxes
-  SANDBOX_CONTAINER?: DurableObjectNamespace;
+  SANDBOX_CONTAINER?: DurableObjectNamespace<Sandbox>;
   // Anthropic API key (injected into sandbox containers)
   ANTHROPIC_API_KEY?: string;
   INTERNAL_CALLBACK_SECRET?: string; // For signing callbacks to slack-bot

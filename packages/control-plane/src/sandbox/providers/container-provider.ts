@@ -13,7 +13,7 @@ import {
   type CreateSandboxConfig,
   type CreateSandboxResult,
 } from "../provider";
-import { getSandbox } from "../../containers/sandbox-container";
+import { getSandbox, type Sandbox } from "../../containers/sandbox-container";
 
 /**
  * Secrets passed from the control plane env to the sandbox.
@@ -42,7 +42,7 @@ export class CloudflareContainerProvider implements SandboxProvider {
   };
 
   constructor(
-    private readonly sandboxBinding: DurableObjectNamespace,
+    private readonly sandboxBinding: DurableObjectNamespace<Sandbox>,
     private readonly secrets: ContainerSecrets
   ) {}
 
@@ -52,29 +52,6 @@ export class CloudflareContainerProvider implements SandboxProvider {
       const sandbox = getSandbox(this.sandboxBinding, config.sandboxId, {
         sleepAfter: "1h",
       });
-
-      // Set env vars (fast — just stores config, doesn't block on container start)
-      await sandbox.setEnvVars({
-        ANTHROPIC_API_KEY: this.secrets.anthropicApiKey,
-        GITHUB_APP_ID: this.secrets.githubAppId,
-        GITHUB_APP_PRIVATE_KEY: this.secrets.githubAppPrivateKey,
-        GITHUB_APP_INSTALLATION_ID: this.secrets.githubAppInstallationId,
-        SANDBOX_ID: config.sandboxId,
-        CONTROL_PLANE_URL: config.controlPlaneUrl,
-        SANDBOX_AUTH_TOKEN: config.sandboxAuthToken,
-        REPO_OWNER: config.repoOwner,
-        REPO_NAME: config.repoName,
-        SESSION_CONFIG: JSON.stringify({
-          session_id: config.sessionId,
-          provider: config.provider,
-          model: config.model,
-          branch: config.branch || "main",
-        }),
-      });
-
-      if (config.userEnvVars && Object.keys(config.userEnvVars).length > 0) {
-        await sandbox.setEnvVars(config.userEnvVars);
-      }
 
       // Clone repo (triggers container start, relatively fast for public repos)
       const repoUrl = `https://github.com/${config.repoOwner}/${config.repoName}.git`;
@@ -86,20 +63,68 @@ export class CloudflareContainerProvider implements SandboxProvider {
       });
       console.log("[sandbox] gitCheckout done");
 
-      // Start the full sandbox runtime (setup + OpenCode + bridge) in the background.
-      // The Python entrypoint handles: setup.sh → start.sh → OpenCode → bridge.
-      // The bridge connects back to the control plane via WebSocket, which transitions
-      // the sandbox from "connecting" to "running".
-      console.log("[sandbox] starting sandbox runtime (entrypoint)");
+      // Pass env vars via the SDK's `env` option on exec().
+      // setEnvVars() does NOT propagate to exec() — the SDK only documents
+      // per-call `env` for passing environment to commands.
+      const sandboxEnv: Record<string, string> = {
+        SANDBOX_ID: config.sandboxId,
+        CONTROL_PLANE_URL: config.controlPlaneUrl,
+        SANDBOX_AUTH_TOKEN: config.sandboxAuthToken,
+        REPO_OWNER: config.repoOwner,
+        REPO_NAME: config.repoName,
+        VCS_HOST: "github.com",
+        VCS_CLONE_USERNAME: "x-access-token",
+        PYTHONPATH: "/app",
+        PYTHONUNBUFFERED: "1",
+        HOME: "/root",
+        // Skip git clone — we already did it via gitCheckout() above.
+        RESTORED_FROM_SNAPSHOT: "true",
+        SESSION_CONFIG: JSON.stringify({
+          session_id: config.sessionId,
+          provider: config.provider,
+          model: config.model,
+          branch: config.branch || "main",
+        }),
+      };
+
+      if (this.secrets.anthropicApiKey) {
+        sandboxEnv.ANTHROPIC_API_KEY = this.secrets.anthropicApiKey;
+      }
+      if (this.secrets.githubAppId) {
+        sandboxEnv.GITHUB_APP_ID = this.secrets.githubAppId;
+      }
+      if (this.secrets.githubAppPrivateKey) {
+        sandboxEnv.GITHUB_APP_PRIVATE_KEY = this.secrets.githubAppPrivateKey;
+      }
+      if (this.secrets.githubAppInstallationId) {
+        sandboxEnv.GITHUB_APP_INSTALLATION_ID = this.secrets.githubAppInstallationId;
+      }
+
+      // Merge user-configured env vars (repo secrets from the UI).
+      if (config.userEnvVars) {
+        Object.assign(sandboxEnv, config.userEnvVars);
+      }
+
+      // Start the Python entrypoint as a fire-and-forget command.
+      // The entrypoint handles: setup.sh → start.sh → OpenCode → bridge.
+      // The bridge connects back to the control plane via WebSocket.
+      // On timeout, the SDK closes the caller-side connection but the
+      // process continues running inside the container.
+      console.log("[sandbox] starting entrypoint via exec with env");
       sandbox
         .exec(`cd /workspace/${config.repoName} && python3 -m sandbox_runtime.entrypoint`, {
           timeout: 600_000,
+          env: sandboxEnv,
         })
         .then((result) => {
-          console.log("[sandbox] entrypoint exited", { exitCode: result.exitCode });
+          console.log("[sandbox] entrypoint exited", {
+            exitCode: result.exitCode,
+            stdout: result.stdout?.substring(0, 200),
+            stderr: result.stderr?.substring(0, 200),
+          });
         })
         .catch((err) => {
-          console.error("[sandbox] entrypoint failed", err);
+          console.error("[sandbox] entrypoint failed", String(err));
         });
 
       // Return "warming" — the bridge will connect back via WebSocket and
@@ -126,7 +151,7 @@ export class CloudflareContainerProvider implements SandboxProvider {
  * Factory function to create a CloudflareContainerProvider.
  */
 export function createContainerProvider(
-  sandboxBinding: DurableObjectNamespace,
+  sandboxBinding: DurableObjectNamespace<Sandbox>,
   secrets: ContainerSecrets
 ): CloudflareContainerProvider {
   return new CloudflareContainerProvider(sandboxBinding, secrets);
