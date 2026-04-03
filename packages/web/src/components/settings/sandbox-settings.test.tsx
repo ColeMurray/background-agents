@@ -107,11 +107,23 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     expect(screen.getByText("Add port").closest("button")).toBeDisabled();
   });
 
-  it("shows validation error for invalid port numbers", async () => {
-    const { fetchMock } = renderWithSWR({ integrationId: "sandbox", settings: null });
+  it("keeps Save disabled when only invalid input is entered", async () => {
+    renderWithSWR({ integrationId: "sandbox", settings: null });
     await user.click(screen.getByText("Add port"));
 
     await user.type(screen.getByPlaceholderText("e.g. 3000"), "abc");
+
+    expect(screen.getByText("Save Settings").closest("button")).toBeDisabled();
+  });
+
+  it("shows validation error for mixed valid and invalid ports", async () => {
+    const { fetchMock } = renderWithSWR({ integrationId: "sandbox", settings: null });
+    await user.click(screen.getByText("Add port"));
+    await user.click(screen.getByText("Add port"));
+
+    const inputs = screen.getAllByPlaceholderText("e.g. 3000");
+    await user.type(inputs[0], "3000");
+    await user.type(inputs[1], "abc");
     await user.click(screen.getByText("Save Settings"));
 
     expect(screen.getByText(/Invalid port numbers/)).toBeInTheDocument();
@@ -210,6 +222,16 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
 
   it("keeps Save disabled when no changes made", () => {
     renderWithSWR(globalSettings([3000]));
+    expect(screen.getByText("Save Settings").closest("button")).toBeDisabled();
+  });
+
+  it("keeps Save disabled when adding a duplicate of an existing port", async () => {
+    renderWithSWR(globalSettings([3000]));
+    await user.click(screen.getByText("Add port"));
+
+    const inputs = screen.getAllByPlaceholderText("e.g. 3000");
+    await user.type(inputs[1], "3000");
+
     expect(screen.getByText("Save Settings").closest("button")).toBeDisabled();
   });
 });

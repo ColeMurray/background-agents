@@ -75,20 +75,27 @@ function SandboxSettingsEditor({
     setPortRows(updated);
   };
 
-  const handleSave = useCallback(async () => {
-    // Validate all non-empty rows
-    const nonEmpty = rows.filter((r) => r.trim() !== "");
+  /** Trim, filter empty, validate, parse to number, dedupe. */
+  const normalizePorts = (input: string[]): { ports: number[]; invalid: string[] } => {
+    const nonEmpty = input.filter((r) => r.trim() !== "");
     const invalid = nonEmpty.filter((r) => !isValidPort(r.trim()));
+    const ports = [
+      ...new Set(nonEmpty.filter((r) => isValidPort(r.trim())).map((r) => Number(r.trim()))),
+    ];
+    return { ports, invalid };
+  };
+
+  const handleSave = useCallback(async () => {
+    setError(null);
+    setSuccess(false);
+
+    const { ports, invalid } = normalizePorts(rows);
     if (invalid.length > 0) {
       setError(`Invalid port numbers: ${invalid.join(", ")}`);
       return;
     }
 
-    const ports = [...new Set(nonEmpty.map((r) => Number(r.trim())))];
-
     setSaving(true);
-    setError(null);
-    setSuccess(false);
     try {
       const existingEnabledRepos = isGlobal
         ? (data as GlobalSettingsResponse)?.settings?.enabledRepos
@@ -108,10 +115,10 @@ function SandboxSettingsEditor({
         throw new Error(data?.error ?? `Failed to save (${res.status})`);
       }
 
+      await mutate();
       setPortRows(null);
       setSuccess(true);
       setTimeout(() => setSuccess(false), 2000);
-      await mutate();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save");
     } finally {
@@ -121,8 +128,7 @@ function SandboxSettingsEditor({
 
   const hasChanges =
     portRows !== null &&
-    JSON.stringify(portRows.filter((r) => r.trim() !== "").map((r) => r.trim())) !==
-      JSON.stringify(currentPorts.map(String));
+    JSON.stringify(normalizePorts(portRows).ports) !== JSON.stringify(currentPorts);
 
   if (isLoading) {
     return <p className="text-sm text-muted-foreground">Loading...</p>;
