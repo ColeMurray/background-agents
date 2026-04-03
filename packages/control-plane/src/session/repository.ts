@@ -70,6 +70,7 @@ export interface UpsertSessionData {
   spawnSource?: SpawnSource;
   spawnDepth?: number;
   codeServerEnabled?: boolean;
+  sandboxSettings?: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -226,8 +227,8 @@ export class SessionRepository {
 
   upsertSession(data: UpsertSessionData): void {
     this.sql.exec(
-      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, sandbox_settings, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.sessionName,
       data.title,
@@ -242,6 +243,7 @@ export class SessionRepository {
       data.spawnSource ?? "user",
       data.spawnDepth ?? 0,
       data.codeServerEnabled ? 1 : 0,
+      data.sandboxSettings ?? null,
       data.createdAt,
       data.updatedAt
     );
@@ -387,6 +389,19 @@ export class SessionRepository {
   clearSandboxCodeServer(): void {
     this.sql.exec(
       `UPDATE sandbox SET code_server_url = NULL, code_server_password = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
+    );
+  }
+
+  updateSandboxTunnelUrls(urls: Record<string, string>): void {
+    this.sql.exec(
+      `UPDATE sandbox SET tunnel_urls = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      JSON.stringify(urls)
+    );
+  }
+
+  clearSandboxTunnelUrls(): void {
+    this.sql.exec(
+      `UPDATE sandbox SET tunnel_urls = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
     );
   }
 

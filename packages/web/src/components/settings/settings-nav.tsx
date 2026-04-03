@@ -9,6 +9,7 @@ import {
   DataControlsIcon,
   IntegrationsIcon,
   AppearanceIcon,
+  TerminalIcon,
   ChevronRightIcon,
 } from "@/components/ui/icons";
 
@@ -42,6 +43,11 @@ const NAV_ITEMS = [
     id: "data-controls",
     label: "Data Controls",
     icon: DataControlsIcon,
+  },
+  {
+    id: "sandbox",
+    label: "Sandbox",
+    icon: TerminalIcon,
   },
   {
     id: "integrations",

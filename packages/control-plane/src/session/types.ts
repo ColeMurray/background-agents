@@ -37,6 +37,7 @@ export interface SessionRow {
   spawn_source: SpawnSource;
   spawn_depth: number;
   code_server_enabled: number; // 0 = disabled (default), 1 = enabled
+  sandbox_settings: string | null; // JSON blob of SandboxSettings
   created_at: number;
   updated_at: number;
 }
@@ -105,6 +106,7 @@ export interface SandboxRow {
   last_spawn_error_at: number | null;
   code_server_url: string | null;
   code_server_password: string | null;
+  tunnel_urls: string | null; // JSON mapping of port -> tunnel URL
   created_at: number;
 }
 

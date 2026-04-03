@@ -653,6 +653,64 @@ describe("IntegrationSettingsStore", () => {
     });
   });
 
+  describe("sandbox integration", () => {
+    it("isValidIntegrationId('sandbox') returns true", () => {
+      expect(isValidIntegrationId("sandbox")).toBe(true);
+    });
+
+    it("round-trips global sandbox settings", async () => {
+      await store.setGlobal("sandbox", { defaults: { tunnelPorts: [3000, 3001] } });
+
+      const result = await store.getGlobal("sandbox");
+      expect(result).toEqual({ defaults: { tunnelPorts: [3000, 3001] } });
+    });
+
+    it("round-trips per-repo sandbox settings", async () => {
+      await store.setRepoSettings("sandbox", "acme/app", { tunnelPorts: [5173] });
+
+      const result = await store.getRepoSettings("sandbox", "acme/app");
+      expect(result).toEqual({ tunnelPorts: [5173] });
+    });
+
+    it("getResolvedConfig merges global defaults with repo overrides", async () => {
+      await store.setGlobal("sandbox", { defaults: { tunnelPorts: [3000, 3001] } });
+      await store.setRepoSettings("sandbox", "acme/app", { tunnelPorts: [5173] });
+
+      const config = await store.getResolvedConfig("sandbox", "acme/app");
+      // Repo tunnelPorts wins over global defaults
+      expect(config.settings.tunnelPorts).toEqual([5173]);
+    });
+
+    it("getResolvedConfig falls back to global defaults when no repo override", async () => {
+      await store.setGlobal("sandbox", { defaults: { tunnelPorts: [3000, 3001] } });
+
+      const config = await store.getResolvedConfig("sandbox", "acme/other");
+      expect(config.settings.tunnelPorts).toEqual([3000, 3001]);
+    });
+
+    it("rejects non-array tunnelPorts", async () => {
+      await expect(
+        store.setGlobal("sandbox", {
+          defaults: { tunnelPorts: "not-an-array" as unknown as number[] },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects port out of range", async () => {
+      await expect(
+        store.setGlobal("sandbox", { defaults: { tunnelPorts: [99999] } })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects too many ports (>10)", async () => {
+      await expect(
+        store.setGlobal("sandbox", {
+          defaults: { tunnelPorts: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+  });
+
   describe("linear settings", () => {
     it("round-trips global linear settings", async () => {
       await store.setGlobal("linear", {

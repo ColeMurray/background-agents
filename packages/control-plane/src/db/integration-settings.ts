@@ -7,6 +7,7 @@ import {
   type GitHubBotSettings,
   type LinearBotSettings,
   type CodeServerSettings,
+  type SandboxSettings,
 } from "@open-inspect/shared";
 
 export class IntegrationSettingsValidationError extends Error {
@@ -184,6 +185,10 @@ export class IntegrationSettingsStore {
       this.validateCodeServerSettings(settings as CodeServerSettings);
     }
 
+    if (integrationId === "sandbox") {
+      this.validateSandboxSettings(settings as SandboxSettings);
+    }
+
     return settings;
   }
 
@@ -282,6 +287,26 @@ export class IntegrationSettingsStore {
   private validateCodeServerSettings(settings: CodeServerSettings): void {
     if (settings.enabled !== undefined && typeof settings.enabled !== "boolean") {
       throw new IntegrationSettingsValidationError("enabled must be a boolean");
+    }
+  }
+
+  private validateSandboxSettings(settings: SandboxSettings): void {
+    if (settings.tunnelPorts !== undefined) {
+      if (!Array.isArray(settings.tunnelPorts)) {
+        throw new IntegrationSettingsValidationError("tunnelPorts must be an array of numbers");
+      }
+      // Deduplicate before validating length
+      settings.tunnelPorts = [...new Set(settings.tunnelPorts)];
+      if (settings.tunnelPorts.length > 10) {
+        throw new IntegrationSettingsValidationError("tunnelPorts must have 10 or fewer entries");
+      }
+      for (const port of settings.tunnelPorts) {
+        if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) {
+          throw new IntegrationSettingsValidationError(
+            `Invalid port number: ${port}. Must be an integer between 1 and 65535`
+          );
+        }
+      }
     }
   }
 }

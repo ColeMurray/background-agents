@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS session (
   spawn_source TEXT NOT NULL DEFAULT 'user',        -- 'user' or 'agent'
   spawn_depth INTEGER NOT NULL DEFAULT 0,           -- 0 for top-level, parent.depth + 1 for children
   code_server_enabled INTEGER NOT NULL DEFAULT 0,   -- 0 = disabled, 1 = enabled (opt-in)
+  sandbox_settings TEXT DEFAULT NULL,               -- JSON blob of SandboxSettings (resolved at session creation)
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -104,6 +105,7 @@ CREATE TABLE IF NOT EXISTS sandbox (
   last_spawn_failure INTEGER,                       -- Timestamp of last spawn failure
   code_server_url TEXT,                             -- Code-server tunnel URL (rotates on wake/restore)
   code_server_password TEXT,                        -- Code-server password (rotates on each wake/restore)
+  tunnel_urls TEXT,                                 -- JSON mapping of port -> tunnel URL for extra ports
   created_at INTEGER NOT NULL
 );
 
@@ -356,6 +358,14 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 27,
     description: "Add code_server_enabled to session",
     run: `ALTER TABLE session ADD COLUMN code_server_enabled INTEGER NOT NULL DEFAULT 0`,
+  },
+  {
+    id: 28,
+    description: "Add sandbox_settings to session and tunnel_urls to sandbox",
+    run: `
+      ALTER TABLE session ADD COLUMN sandbox_settings TEXT DEFAULT NULL;
+      ALTER TABLE sandbox ADD COLUMN tunnel_urls TEXT;
+    `,
   },
 ];
 

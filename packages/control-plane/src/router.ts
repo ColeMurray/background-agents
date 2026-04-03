@@ -21,6 +21,7 @@ import {
   isValidReasoningEffort,
   VALID_MODELS,
   type CodeServerSettings,
+  type SandboxSettings,
   type SessionStatus,
   type CallbackContext,
   type SpawnChildSessionRequest,
@@ -75,6 +76,28 @@ async function resolveCodeServerEnabled(
       error: e instanceof Error ? e.message : String(e),
     });
     return false;
+  }
+}
+
+/**
+ * Resolve sandbox settings for a given repo, merging global defaults with per-repo overrides.
+ */
+async function resolveSandboxSettings(
+  db: D1Database | undefined,
+  repoOwner: string,
+  repoName: string
+): Promise<SandboxSettings> {
+  if (!db) return {};
+  const repo = `${repoOwner}/${repoName}`;
+  try {
+    const store = new IntegrationSettingsStore(db);
+    const { settings } = await store.getResolvedConfig("sandbox", repo);
+    return settings as SandboxSettings;
+  } catch (e) {
+    logger.warn("Failed to resolve sandbox settings, using defaults", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return {};
   }
 }
 
@@ -721,8 +744,11 @@ async function handleCreateSession(
       ? body.reasoningEffort
       : null;
 
-  // Resolve code-server integration setting for this repo
-  const codeServerEnabled = await resolveCodeServerEnabled(env.DB, repoOwner, repoName);
+  // Resolve code-server integration setting and sandbox settings for this repo
+  const [codeServerEnabled, sandboxSettings] = await Promise.all([
+    resolveCodeServerEnabled(env.DB, repoOwner, repoName),
+    resolveSandboxSettings(env.DB, repoOwner, repoName),
+  ]);
 
   // Initialize session with user info and optional encrypted token
   const initResponse = await stub.fetch(
@@ -750,6 +776,7 @@ async function handleCreateSession(
           scmTokenExpiresAt,
           scmUserId,
           codeServerEnabled,
+          sandboxSettings,
         }),
       },
       ctx
@@ -1425,12 +1452,11 @@ async function handleSpawnChild(
     model,
   });
 
-  // Resolve code-server integration setting for child (same repo as parent)
-  const childCodeServerEnabled = await resolveCodeServerEnabled(
-    env.DB,
-    spawnContext.repoOwner,
-    spawnContext.repoName
-  );
+  // Resolve code-server integration setting and sandbox settings for child (same repo as parent)
+  const [childCodeServerEnabled, childSandboxSettings] = await Promise.all([
+    resolveCodeServerEnabled(env.DB, spawnContext.repoOwner, spawnContext.repoName),
+    resolveSandboxSettings(env.DB, spawnContext.repoOwner, spawnContext.repoName),
+  ]);
 
   // Initialize child DO
   const initResponse = await childStub.fetch(
@@ -1460,6 +1486,7 @@ async function handleSpawnChild(
           spawnSource: "agent",
           spawnDepth: childDepth,
           codeServerEnabled: childCodeServerEnabled,
+          sandboxSettings: childSandboxSettings,
         }),
       },
       ctx

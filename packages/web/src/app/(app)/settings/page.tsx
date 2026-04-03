@@ -9,6 +9,7 @@ import { ModelsSettings } from "@/components/settings/models-settings";
 import { DataControlsSettings } from "@/components/settings/data-controls-settings";
 import { KeyboardShortcutsSettings } from "@/components/settings/keyboard-shortcuts-settings";
 import { IntegrationsSettings } from "@/components/settings/integrations-settings";
+import { SandboxSettingsPage } from "@/components/settings/sandbox-settings";
 import { ImagesSettings } from "@/components/settings/images-settings";
 import { AppearanceSettings } from "@/components/settings/appearance-settings";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
@@ -22,6 +23,7 @@ const CATEGORY_LABELS: Record<SettingsCategory, string> = {
   appearance: "Appearance",
   "keyboard-shortcuts": "Keyboard",
   "data-controls": "Data Controls",
+  sandbox: "Sandbox",
   integrations: "Integrations",
 };
 
@@ -32,6 +34,7 @@ const VALID_CATEGORIES = new Set<string>([
   "appearance",
   "keyboard-shortcuts",
   "data-controls",
+  "sandbox",
   "integrations",
 ]);
 
@@ -71,6 +74,7 @@ export default function SettingsPage() {
       {activeCategory === "appearance" && <AppearanceSettings />}
       {activeCategory === "keyboard-shortcuts" && <KeyboardShortcutsSettings />}
       {activeCategory === "data-controls" && <DataControlsSettings />}
+      {activeCategory === "sandbox" && <SandboxSettingsPage />}
       {activeCategory === "integrations" && <IntegrationsSettings />}
     </>
   );

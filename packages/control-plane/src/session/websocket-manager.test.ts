@@ -166,6 +166,7 @@ function createSandboxRow(modalSandboxId: string): SandboxRow {
     last_spawn_error_at: null,
     code_server_url: null,
     code_server_password: null,
+    tunnel_urls: null,
     created_at: Date.now(),
   };
 }

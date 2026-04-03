@@ -5,6 +5,7 @@
  * enabling unit testing and future provider support.
  */
 
+import type { SandboxSettings } from "@open-inspect/shared";
 import type { CorrelationContext } from "../logger";
 
 /** Default sandbox lifetime in seconds (2 hours). */
@@ -59,6 +60,8 @@ export interface CreateSandboxConfig {
   branch?: string;
   /** Whether to enable code-server (browser-based editor) in the sandbox */
   codeServerEnabled?: boolean;
+  /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
+  sandboxSettings?: SandboxSettings;
 }
 
 /**
@@ -77,6 +80,8 @@ export interface CreateSandboxResult {
   codeServerUrl?: string;
   /** Code-server password (if available) */
   codeServerPassword?: string;
+  /** Tunnel URLs for extra ports (port -> URL mapping) */
+  tunnelUrls?: Record<string, string>;
 }
 
 /**
@@ -111,6 +116,8 @@ export interface RestoreConfig {
   correlation?: CorrelationContext;
   /** Whether to enable code-server (browser-based editor) in the sandbox */
   codeServerEnabled?: boolean;
+  /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
+  sandboxSettings?: SandboxSettings;
 }
 
 /**
@@ -129,6 +136,8 @@ export interface RestoreResult {
   codeServerUrl?: string;
   /** Code-server password (if available) */
   codeServerPassword?: string;
+  /** Tunnel URLs for extra ports (port -> URL mapping) */
+  tunnelUrls?: Record<string, string>;
 }
 
 /**

@@ -8,6 +8,7 @@ import {
   type GitHubBotSettings,
   type IntegrationId,
   type LinearBotSettings,
+  type SandboxSettings,
 } from "@open-inspect/shared";
 import {
   IntegrationSettingsStore,
@@ -346,6 +347,18 @@ async function handleGetResolvedConfig(
       repo,
       config: {
         enabled: codeServerSettings.enabled ?? false,
+        enabledRepos,
+      },
+    });
+  }
+
+  if (id === "sandbox") {
+    const sandboxSettings = settings as SandboxSettings;
+    return json({
+      integrationId: id,
+      repo,
+      config: {
+        tunnelPorts: sandboxSettings.tunnelPorts ?? [],
         enabledRepos,
       },
     });

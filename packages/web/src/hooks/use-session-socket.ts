@@ -321,6 +321,10 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           );
           break;
 
+        case "tunnel_urls":
+          setSessionState((prev) => (prev ? { ...prev, tunnelUrls: data.urls } : null));
+          break;
+
         case "sandbox_ready":
           setSessionState((prev) => (prev ? { ...prev, sandboxStatus: "ready" } : null));
           break;
