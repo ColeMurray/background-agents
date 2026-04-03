@@ -1479,7 +1479,7 @@ export class SessionDO extends DurableObject<Env> {
       parentSessionId: session?.parent_session_id ?? null,
       codeServerUrl: sandbox?.code_server_url ?? null,
       codeServerPassword,
-      tunnelUrls: sandbox?.tunnel_urls ? JSON.parse(sandbox.tunnel_urls) : null,
+      tunnelUrls: sandbox?.tunnel_urls ? this.safeParseTunnelUrls(sandbox.tunnel_urls) : null,
     };
   }
 
@@ -1488,6 +1488,15 @@ export class SessionDO extends DurableObject<Env> {
    */
   private getIsProcessing(): boolean {
     return this.repository.getProcessingMessage() !== null;
+  }
+
+  private safeParseTunnelUrls(raw: string): Record<string, string> | null {
+    try {
+      return JSON.parse(raw) as Record<string, string>;
+    } catch {
+      this.log.warn("Invalid sandbox tunnel_urls JSON");
+      return null;
+    }
   }
 
   // Database helpers

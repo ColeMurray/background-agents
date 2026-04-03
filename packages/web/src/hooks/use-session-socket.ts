@@ -295,6 +295,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
                   sandboxStatus: "spawning",
                   codeServerUrl: undefined,
                   codeServerPassword: undefined,
+                  tunnelUrls: undefined,
                 }
               : null
           );
@@ -308,7 +309,11 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
               ? {
                   ...prev,
                   sandboxStatus: data.status,
-                  ...(isTerminal && { codeServerUrl: undefined, codeServerPassword: undefined }),
+                  ...(isTerminal && {
+                    codeServerUrl: undefined,
+                    codeServerPassword: undefined,
+                    tunnelUrls: undefined,
+                  }),
                 }
               : null
           );

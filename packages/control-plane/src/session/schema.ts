@@ -362,10 +362,10 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
   {
     id: 28,
     description: "Add sandbox_settings to session and tunnel_urls to sandbox",
-    run: `
-      ALTER TABLE session ADD COLUMN sandbox_settings TEXT DEFAULT NULL;
-      ALTER TABLE sandbox ADD COLUMN tunnel_urls TEXT;
-    `,
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE session ADD COLUMN sandbox_settings TEXT DEFAULT NULL`);
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN tunnel_urls TEXT`);
+    },
   },
 ];
 

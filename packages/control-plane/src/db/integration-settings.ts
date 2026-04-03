@@ -186,7 +186,9 @@ export class IntegrationSettingsStore {
     }
 
     if (integrationId === "sandbox") {
-      this.validateSandboxSettings(settings as SandboxSettings);
+      return this.validateSandboxSettings(
+        settings as SandboxSettings
+      ) as IntegrationSettingsMap[K]["repo"];
     }
 
     return settings;
@@ -290,24 +292,25 @@ export class IntegrationSettingsStore {
     }
   }
 
-  private validateSandboxSettings(settings: SandboxSettings): void {
+  private validateSandboxSettings(settings: SandboxSettings): SandboxSettings {
     if (settings.tunnelPorts !== undefined) {
       if (!Array.isArray(settings.tunnelPorts)) {
         throw new IntegrationSettingsValidationError("tunnelPorts must be an array of numbers");
       }
-      // Deduplicate before validating length
-      settings.tunnelPorts = [...new Set(settings.tunnelPorts)];
-      if (settings.tunnelPorts.length > 10) {
+      const dedupedPorts = [...new Set(settings.tunnelPorts)];
+      if (dedupedPorts.length > 10) {
         throw new IntegrationSettingsValidationError("tunnelPorts must have 10 or fewer entries");
       }
-      for (const port of settings.tunnelPorts) {
+      for (const port of dedupedPorts) {
         if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) {
           throw new IntegrationSettingsValidationError(
             `Invalid port number: ${port}. Must be an integer between 1 and 65535`
           );
         }
       }
+      return { ...settings, tunnelPorts: dedupedPorts };
     }
+    return settings;
   }
 }
 

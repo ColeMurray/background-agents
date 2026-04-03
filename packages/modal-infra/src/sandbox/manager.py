@@ -16,6 +16,7 @@ import os
 import secrets
 import time
 from dataclasses import dataclass
+from typing import Any
 
 import modal
 
@@ -48,7 +49,9 @@ class SandboxConfig:
     repo_image_id: str | None = None  # Pre-built repo image ID from provider
     repo_image_sha: str | None = None  # Git SHA the repo image was built from
     code_server_enabled: bool = False  # Whether to start code-server in the sandbox
-    settings: dict | None = None  # Sandbox settings (tunnelPorts, etc.) from control plane
+    settings: dict[str, Any] | None = (
+        None  # Sandbox settings (tunnelPorts, etc.) from control plane
+    )
 
 
 @dataclass
@@ -71,7 +74,7 @@ class SandboxHandle:
 
     async def terminate(self) -> None:
         """Terminate the sandbox."""
-        await self.modal_sandbox.terminate()
+        self.modal_sandbox.terminate()
 
 
 class SandboxManager:
@@ -85,7 +88,7 @@ class SandboxManager:
     - Maintain warm pools for high-volume repos
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._warm_pools: dict[str, list[SandboxHandle]] = {}
 
     def _get_repo_key(self, repo_owner: str, repo_name: str) -> str:
@@ -148,7 +151,7 @@ class SandboxManager:
 
     @staticmethod
     def _collect_exposed_ports(
-        code_server_enabled: bool, settings: dict | None
+        code_server_enabled: bool, settings: dict[str, Any] | None
     ) -> tuple[list[int], list[int]]:
         """Return (all_exposed_ports, extra_tunnel_ports) from settings and code-server flag."""
         raw_ports = (settings or {}).get("tunnelPorts", [])
@@ -501,7 +504,7 @@ class SandboxManager:
         user_env_vars: dict[str, str] | None = None,
         timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS,
         code_server_enabled: bool = False,
-        settings: dict | None = None,
+        settings: dict[str, Any] | None = None,
     ) -> SandboxHandle:
         """
         Create a new sandbox from a filesystem snapshot Image.

@@ -91,7 +91,9 @@ async function resolveSandboxSettings(
   const repo = `${repoOwner}/${repoName}`;
   try {
     const store = new IntegrationSettingsStore(db);
-    const { settings } = await store.getResolvedConfig("sandbox", repo);
+    const { enabledRepos, settings } = await store.getResolvedConfig("sandbox", repo);
+    // enabledRepos: null → all repos, [] → none, [...] → allowlist
+    if (enabledRepos !== null && !enabledRepos.includes(repo)) return {};
     return settings as SandboxSettings;
   } catch (e) {
     logger.warn("Failed to resolve sandbox settings, using defaults", {

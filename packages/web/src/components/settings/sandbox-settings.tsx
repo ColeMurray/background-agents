@@ -69,8 +69,12 @@ function SandboxSettingsEditor({
     setSuccess(false);
     try {
       const ports = parsePorts(displayValue);
+      // Preserve existing enabledRepos when saving global settings
+      const existingEnabledRepos = isGlobal
+        ? (data as GlobalSettingsResponse)?.settings?.enabledRepos
+        : undefined;
       const body = isGlobal
-        ? { settings: { defaults: { tunnelPorts: ports } } }
+        ? { settings: { defaults: { tunnelPorts: ports }, enabledRepos: existingEnabledRepos } }
         : { settings: { tunnelPorts: ports } };
 
       const res = await fetch(apiUrl, {
@@ -93,7 +97,7 @@ function SandboxSettingsEditor({
     } finally {
       setSaving(false);
     }
-  }, [displayValue, isGlobal, apiUrl, mutate]);
+  }, [displayValue, isGlobal, apiUrl, mutate, data]);
 
   const hasChanges = portsInput !== null && portsInput !== currentPorts.join(", ");
 
