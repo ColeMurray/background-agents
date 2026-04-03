@@ -505,7 +505,7 @@ class SandboxSupervisor:
 
         # Run bridge as a module (works with relative imports)
         self.bridge_process = await asyncio.create_subprocess_exec(
-            "python",
+            sys.executable,
             "-m",
             "sandbox_runtime.bridge",
             "--sandbox-id",
