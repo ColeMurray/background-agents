@@ -36,6 +36,9 @@ export interface CodeServerSettings {
   enabled?: boolean;
 }
 
+/** Maximum number of tunnel ports a user can configure per sandbox. */
+export const MAX_TUNNEL_PORTS = 10;
+
 /** Sandbox environment settings. Provider-agnostic: describes what the user wants, not how it's done. */
 export interface SandboxSettings {
   /** Extra ports to expose via tunnels (e.g., dev server ports 3000, 5173). */

@@ -151,6 +151,13 @@ class TestCollectExposedPorts:
         assert exposed == [CODE_SERVER_PORT, 3000]
         assert tunnel == [3000]
 
+    def test_deduplicates_code_server_port_from_tunnels(self):
+        exposed, tunnel = SandboxManager._collect_exposed_ports(
+            True, {"tunnelPorts": [CODE_SERVER_PORT, 3000]}
+        )
+        assert exposed == [CODE_SERVER_PORT, 3000]
+        assert tunnel == [3000]
+
 
 class TestValidatePorts:
     """SandboxManager._validate_ports tests."""

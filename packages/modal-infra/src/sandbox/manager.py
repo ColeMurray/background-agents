@@ -30,6 +30,7 @@ from ..images.base import base_image
 log = get_logger("manager")
 
 DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200  # 2 hours
+MAX_TUNNEL_PORTS = 10
 
 
 @dataclass
@@ -140,12 +141,12 @@ class SandboxManager:
 
     @staticmethod
     def _validate_ports(raw: list) -> list[int]:
-        """Validate and sanitize tunnel ports: must be int, 1-65535, max 10."""
+        """Validate and sanitize tunnel ports: must be int, 1-65535, max MAX_TUNNEL_PORTS."""
         ports: list[int] = []
         for p in raw:
             if isinstance(p, int) and 1 <= p <= 65535:
                 ports.append(p)
-            if len(ports) >= 10:
+            if len(ports) >= MAX_TUNNEL_PORTS:
                 break
         return ports
 
@@ -159,6 +160,8 @@ class SandboxManager:
         exposed: list[int] = []
         if code_server_enabled:
             exposed.append(CODE_SERVER_PORT)
+            # Remove CODE_SERVER_PORT from tunnel_ports to avoid duplicates
+            tunnel_ports = [p for p in tunnel_ports if p != CODE_SERVER_PORT]
         exposed.extend(tunnel_ports)
         return exposed, tunnel_ports
 

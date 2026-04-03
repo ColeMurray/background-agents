@@ -10,7 +10,7 @@
  * spawn attempts within the same request.
  */
 
-import type { SandboxSettings } from "@open-inspect/shared";
+import { MAX_TUNNEL_PORTS, type SandboxSettings } from "@open-inspect/shared";
 import type { SandboxStatus } from "../../types";
 import type { SandboxRow, SessionRow } from "../../session/types";
 import { SandboxProviderError, type SandboxProvider, type CreateSandboxConfig } from "../provider";
@@ -899,7 +899,7 @@ export class SandboxLifecycleManager {
         const valid = parsed.tunnelPorts.filter(
           (p: unknown) => typeof p === "number" && Number.isInteger(p) && p >= 1 && p <= 65535
         );
-        parsed.tunnelPorts = valid.slice(0, 10);
+        parsed.tunnelPorts = valid.slice(0, MAX_TUNNEL_PORTS);
       }
       return parsed;
     } catch {

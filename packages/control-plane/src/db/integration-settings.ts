@@ -8,6 +8,7 @@ import {
   type LinearBotSettings,
   type CodeServerSettings,
   type SandboxSettings,
+  MAX_TUNNEL_PORTS,
 } from "@open-inspect/shared";
 
 export class IntegrationSettingsValidationError extends Error {
@@ -298,8 +299,10 @@ export class IntegrationSettingsStore {
         throw new IntegrationSettingsValidationError("tunnelPorts must be an array of numbers");
       }
       const dedupedPorts = [...new Set(settings.tunnelPorts)];
-      if (dedupedPorts.length > 10) {
-        throw new IntegrationSettingsValidationError("tunnelPorts must have 10 or fewer entries");
+      if (dedupedPorts.length > MAX_TUNNEL_PORTS) {
+        throw new IntegrationSettingsValidationError(
+          `tunnelPorts must have ${MAX_TUNNEL_PORTS} or fewer entries`
+        );
       }
       for (const port of dedupedPorts) {
         if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) {

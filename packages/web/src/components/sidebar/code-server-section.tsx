@@ -5,14 +5,13 @@ import { copyToClipboard } from "@/lib/format";
 import { getSafeExternalUrl } from "@/lib/urls";
 import { TerminalIcon, KeyIcon, CheckIcon } from "@/components/ui/icons";
 import type { SandboxStatus } from "@open-inspect/shared";
+import { ACTIVE_SANDBOX_STATUSES } from "./index";
 
 interface CodeServerSectionProps {
   url: string;
   password: string | null;
   sandboxStatus: SandboxStatus;
 }
-
-const ACTIVE_STATUSES: Set<SandboxStatus> = new Set(["ready", "running", "snapshotting"]);
 const STARTING_STATUSES: Set<SandboxStatus> = new Set([
   "pending",
   "spawning",
@@ -24,7 +23,7 @@ const STARTING_STATUSES: Set<SandboxStatus> = new Set([
 export function CodeServerSection({ url, password, sandboxStatus }: CodeServerSectionProps) {
   const [copiedPassword, setCopiedPassword] = useState(false);
 
-  const isActive = ACTIVE_STATUSES.has(sandboxStatus);
+  const isActive = ACTIVE_SANDBOX_STATUSES.has(sandboxStatus);
   const isStarting = STARTING_STATUSES.has(sandboxStatus);
   const safeUrl = getSafeExternalUrl(url);
 

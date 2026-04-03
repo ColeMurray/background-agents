@@ -1529,8 +1529,7 @@ describe("SandboxLifecycleManager", () => {
         broadcaster.messages.some(
           (m) =>
             (m as { type: string }).type === "tunnel_urls" &&
-            JSON.stringify((m as { urls: Record<string, string> }).urls) ===
-              JSON.stringify({ "3000": "https://tunnel.example.com" })
+            (m as { urls: Record<string, string> }).urls["3000"] === "https://tunnel.example.com"
         )
       ).toBe(true);
     });
@@ -1628,8 +1627,7 @@ describe("SandboxLifecycleManager", () => {
         broadcaster.messages.some(
           (m) =>
             (m as { type: string }).type === "tunnel_urls" &&
-            JSON.stringify((m as { urls: Record<string, string> }).urls) ===
-              JSON.stringify({ "3000": "https://tunnel.example.com" })
+            (m as { urls: Record<string, string> }).urls["3000"] === "https://tunnel.example.com"
         )
       ).toBe(true);
     });

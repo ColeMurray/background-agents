@@ -3,16 +3,15 @@
 import { getSafeExternalUrl } from "@/lib/urls";
 import { GlobeIcon } from "@/components/ui/icons";
 import type { SandboxStatus } from "@open-inspect/shared";
+import { ACTIVE_SANDBOX_STATUSES } from "./index";
 
 interface TunnelUrlsSectionProps {
   urls: Record<string, string>;
   sandboxStatus: SandboxStatus;
 }
 
-const ACTIVE_STATUSES: Set<SandboxStatus> = new Set(["ready", "running", "snapshotting"]);
-
 export function TunnelUrlsSection({ urls, sandboxStatus }: TunnelUrlsSectionProps) {
-  const isActive = ACTIVE_STATUSES.has(sandboxStatus);
+  const isActive = ACTIVE_SANDBOX_STATUSES.has(sandboxStatus);
   const entries = Object.entries(urls);
 
   return (

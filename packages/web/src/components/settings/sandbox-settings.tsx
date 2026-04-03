@@ -5,22 +5,19 @@ import { useState, useCallback } from "react";
 import { ChevronDownIcon, CheckIcon } from "@/components/ui/icons";
 import { Combobox } from "@/components/ui/combobox";
 import useSWR from "swr";
+import type { SandboxSettings } from "@open-inspect/shared";
 
 const GLOBAL_SCOPE = "__global__";
 
-interface SandboxSettingsData {
-  tunnelPorts?: number[];
-}
-
 interface GlobalSettingsResponse {
   integrationId: string;
-  settings: { defaults?: SandboxSettingsData; enabledRepos?: string[] } | null;
+  settings: { defaults?: SandboxSettings; enabledRepos?: string[] } | null;
 }
 
 interface RepoSettingsResponse {
   integrationId: string;
   repo: string;
-  settings: SandboxSettingsData | null;
+  settings: SandboxSettings | null;
 }
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
