@@ -136,11 +136,23 @@ class SandboxManager:
         return resolved
 
     @staticmethod
+    def _validate_ports(raw: list) -> list[int]:
+        """Validate and sanitize tunnel ports: must be int, 1-65535, max 10."""
+        ports: list[int] = []
+        for p in raw:
+            if isinstance(p, int) and 1 <= p <= 65535:
+                ports.append(p)
+            if len(ports) >= 10:
+                break
+        return ports
+
+    @staticmethod
     def _collect_exposed_ports(
         code_server_enabled: bool, settings: dict | None
     ) -> tuple[list[int], list[int]]:
         """Return (all_exposed_ports, extra_tunnel_ports) from settings and code-server flag."""
-        tunnel_ports: list[int] = (settings or {}).get("tunnelPorts", [])
+        raw_ports = (settings or {}).get("tunnelPorts", [])
+        tunnel_ports = SandboxManager._validate_ports(raw_ports) if raw_ports else []
         exposed: list[int] = []
         if code_server_enabled:
             exposed.append(CODE_SERVER_PORT)

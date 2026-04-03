@@ -1468,6 +1468,33 @@ describe("SandboxLifecycleManager", () => {
       );
     });
 
+    it("doSpawn() sanitizes malformed tunnelPorts from stored settings", async () => {
+      const session = createMockSession({
+        sandbox_settings: '{"tunnelPorts":["not-a-number", -1, 99999, 3000]}',
+      });
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(session, sandbox);
+      const provider = createMockProvider();
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sandboxSettings: { tunnelPorts: [3000] },
+        })
+      );
+    });
+
     it("doSpawn() broadcasts tunnel_urls when provider returns them", async () => {
       const session = createMockSession({
         sandbox_settings: '{"tunnelPorts":[3000]}',

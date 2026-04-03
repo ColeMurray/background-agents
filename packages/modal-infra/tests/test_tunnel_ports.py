@@ -150,3 +150,23 @@ class TestCollectExposedPorts:
         exposed, tunnel = SandboxManager._collect_exposed_ports(True, {"tunnelPorts": [3000]})
         assert exposed == [CODE_SERVER_PORT, 3000]
         assert tunnel == [3000]
+
+
+class TestValidatePorts:
+    """SandboxManager._validate_ports tests."""
+
+    def test_accepts_valid_ports(self):
+        assert SandboxManager._validate_ports([80, 3000, 65535]) == [80, 3000, 65535]
+
+    def test_rejects_out_of_range(self):
+        assert SandboxManager._validate_ports([0, -1, 65536, 3000]) == [3000]
+
+    def test_rejects_non_integers(self):
+        assert SandboxManager._validate_ports(["3000", 3.5, None, 8080]) == [8080]
+
+    def test_caps_at_ten(self):
+        ports = list(range(1, 20))
+        assert len(SandboxManager._validate_ports(ports)) == 10
+
+    def test_empty_list(self):
+        assert SandboxManager._validate_ports([]) == []

@@ -892,7 +892,16 @@ export class SandboxLifecycleManager {
   private parseSandboxSettings(session: SessionRow): SandboxSettings {
     if (!session.sandbox_settings) return {};
     try {
-      return JSON.parse(session.sandbox_settings);
+      const parsed = JSON.parse(session.sandbox_settings);
+      // Validate tunnelPorts at the boundary — data may come from untrusted callers
+      if (parsed.tunnelPorts !== undefined) {
+        if (!Array.isArray(parsed.tunnelPorts)) return {};
+        const valid = parsed.tunnelPorts.filter(
+          (p: unknown) => typeof p === "number" && Number.isInteger(p) && p >= 1 && p <= 65535
+        );
+        parsed.tunnelPorts = valid.slice(0, 10);
+      }
+      return parsed;
     } catch {
       this.log.warn("Failed to parse sandbox_settings, using defaults");
       return {};
