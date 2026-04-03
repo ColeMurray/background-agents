@@ -24,6 +24,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && apt-get update && apt-get install -y gh && rm -rf /var/lib/apt/lists/*
 
 # ── Node.js 22 (LTS) ────────────────────────────────────────────────
+# The c3po sandbox also upgrades to Node 22 and it works fine.
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
@@ -60,6 +61,13 @@ RUN curl -fsSL -L -o /usr/local/bin/ttyd \
       https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64 \
     && chmod +x /usr/local/bin/ttyd
 
+# ── Sandbox runtime (bridge + supervisor) ────────────────────────────
+# The Python bridge connects back to the control plane via WebSocket,
+# receives prompts, forwards them to OpenCode, and streams responses.
+COPY packages/sandbox-runtime/ /app/sandbox_runtime_pkg/
+RUN cp -r /app/sandbox_runtime_pkg/src/sandbox_runtime /app/sandbox_runtime \
+    && pip3 install -e /app/sandbox_runtime_pkg/
+
 # ── Working directories ─────────────────────────────────────────────
 RUN mkdir -p /workspace /app/plugins /tmp/opencode
 
@@ -67,8 +75,10 @@ RUN mkdir -p /workspace /app/plugins /tmp/opencode
 ENV HOME=/root \
     NODE_ENV=development \
     NODE_PATH=/usr/lib/node_modules \
+    PYTHONPATH=/app \
     COMMAND_TIMEOUT_MS=3600000
 
 WORKDIR /workspace
 
-EXPOSE 4096 8080 5173 8000 7681
+# Common dev server ports (port 3000 reserved by SDK)
+EXPOSE 5173 8080 8000 7681

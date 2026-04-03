@@ -49,12 +49,11 @@ export class CloudflareContainerProvider implements SandboxProvider {
   async createSandbox(config: CreateSandboxConfig): Promise<CreateSandboxResult> {
     try {
       // Get a sandbox instance keyed by sandbox ID (session affinity).
-      // The container auto-starts on first operation — no manual start() needed.
       const sandbox = getSandbox(this.sandboxBinding, config.sandboxId, {
         sleepAfter: "1h",
       });
 
-      // Set environment variables for the sandbox process
+      // Set env vars (fast — just stores config, doesn't block on container start)
       await sandbox.setEnvVars({
         ANTHROPIC_API_KEY: this.secrets.anthropicApiKey,
         GITHUB_APP_ID: this.secrets.githubAppId,
@@ -73,45 +72,52 @@ export class CloudflareContainerProvider implements SandboxProvider {
         }),
       });
 
-      // Merge user env vars (repo secrets)
       if (config.userEnvVars && Object.keys(config.userEnvVars).length > 0) {
         await sandbox.setEnvVars(config.userEnvVars);
       }
 
-      // Clone the repository
+      // Clone repo (triggers container start, relatively fast for public repos)
       const repoUrl = `https://github.com/${config.repoOwner}/${config.repoName}.git`;
+      console.log("[sandbox] gitCheckout", repoUrl);
       await sandbox.gitCheckout(repoUrl, {
         branch: config.branch,
         targetDir: `/workspace/${config.repoName}`,
         depth: 100,
       });
+      console.log("[sandbox] gitCheckout done");
 
-      // Run setup script if it exists (5 min timeout)
-      await sandbox.exec(
-        `cd /workspace/${config.repoName} && [ -f .openinspect/setup.sh ] && bash .openinspect/setup.sh || true`,
-        { timeout: 300_000 }
-      );
+      // Start the full sandbox runtime (setup + OpenCode + bridge) in the background.
+      // The Python entrypoint handles: setup.sh → start.sh → OpenCode → bridge.
+      // The bridge connects back to the control plane via WebSocket, which transitions
+      // the sandbox from "connecting" to "running".
+      console.log("[sandbox] starting sandbox runtime (entrypoint)");
+      sandbox
+        .exec(`cd /workspace/${config.repoName} && python3 -m sandbox_runtime.entrypoint`, {
+          timeout: 600_000,
+        })
+        .then((result) => {
+          console.log("[sandbox] entrypoint exited", { exitCode: result.exitCode });
+        })
+        .catch((err) => {
+          console.error("[sandbox] entrypoint failed", err);
+        });
 
-      // Start OpenCode server as a background process
-      const proc = await sandbox.startProcess(
-        `cd /workspace/${config.repoName} && opencode server --port 4096`,
-        { cwd: `/workspace/${config.repoName}` }
-      );
-
-      // Wait for OpenCode to be ready (30s timeout)
-      await proc.waitForPort(4096, { timeout: 30_000 });
-
+      // Return "warming" — the bridge will connect back via WebSocket and
+      // transition the sandbox to "running". The lifecycle manager waits
+      // for this in the "connecting" phase.
       return {
         sandboxId: config.sandboxId,
         providerObjectId: config.sandboxId,
-        status: "running",
+        status: "warming",
         createdAt: Date.now(),
       };
     } catch (error) {
       if (error instanceof SandboxProviderError) {
         throw error;
       }
-      throw SandboxProviderError.fromFetchError("Failed to create sandbox", error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.error("Sandbox creation failed:", errorMsg);
+      throw SandboxProviderError.fromFetchError(`Failed to create sandbox: ${errorMsg}`, error);
     }
   }
 }
