@@ -13,7 +13,7 @@
     "lint:fix": "eslint src/ --fix"
   },
   "dependencies": {
-    "@cloudflare/sandbox": "^0.8.4",
+    "@cloudflare/sandbox": "0.7.18",
     "@cloudflare/workers-types": "^4.20241230.0",
     "@open-inspect/shared": "file:../shared"
   },

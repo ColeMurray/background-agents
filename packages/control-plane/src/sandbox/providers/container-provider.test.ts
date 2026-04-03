@@ -10,8 +10,8 @@ vi.mock("../../containers/sandbox-container", () => ({
 
 function createMockSandbox(overrides: Record<string, unknown> = {}) {
   return {
+    setEnvVars: vi.fn().mockResolvedValue(undefined),
     gitCheckout: vi.fn().mockResolvedValue({ success: true }),
-    writeFile: vi.fn().mockResolvedValue(undefined),
     exec: vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0, success: true }),
     ...overrides,
   };
@@ -63,15 +63,20 @@ describe("CloudflareContainerProvider", () => {
       expect.objectContaining({ targetDir: "/workspace/testrepo", depth: 100 })
     );
 
-    // Verify env file written with base64-encoded vars
-    expect(mockSandbox.writeFile).toHaveBeenCalledWith(
-      "/tmp/sandbox-env.sh",
-      expect.stringContaining("SANDBOX_ID")
+    // Verify setEnvVars called with all env vars
+    expect(mockSandbox.setEnvVars).toHaveBeenCalledWith(
+      expect.objectContaining({
+        SANDBOX_ID: "sandbox-123",
+        CONTROL_PLANE_URL: "https://control-plane.test",
+        SANDBOX_AUTH_TOKEN: "auth-token",
+        ANTHROPIC_API_KEY: "sk-test",
+        RESTORED_FROM_SNAPSHOT: "true",
+      })
     );
 
-    // Verify exec sources the env file
+    // Verify exec runs the entrypoint
     expect(mockSandbox.exec).toHaveBeenCalledWith(
-      "source /tmp/sandbox-env.sh && cd /workspace/testrepo && python3 -m sandbox_runtime.entrypoint",
+      "cd /workspace/testrepo && python3 -m sandbox_runtime.entrypoint",
       expect.objectContaining({ timeout: 600_000 })
     );
   });

@@ -63,11 +63,10 @@ export class CloudflareContainerProvider implements SandboxProvider {
       });
       console.log("[sandbox] gitCheckout done");
 
-      // Build env vars map. We write these to a file inside the container
-      // and source it in the exec command — this is the most reliable approach
-      // since setEnvVars() doesn't propagate to exec(), and the exec `env`
-      // option may not be supported by the container agent (v0.7.18 vs SDK v0.8.4).
-      const sandboxEnv: Record<string, string> = {
+      // Set env vars via setEnvVars() — this works reliably when the SDK
+      // version matches the container version (both 0.7.18). The working
+      // c3po codebase uses this same pattern successfully.
+      await sandbox.setEnvVars({
         SANDBOX_ID: config.sandboxId,
         CONTROL_PLANE_URL: config.controlPlaneUrl,
         SANDBOX_AUTH_TOKEN: config.sandboxAuthToken,
@@ -86,52 +85,36 @@ export class CloudflareContainerProvider implements SandboxProvider {
           model: config.model,
           branch: config.branch || "main",
         }),
-      };
-
-      if (this.secrets.anthropicApiKey) {
-        sandboxEnv.ANTHROPIC_API_KEY = this.secrets.anthropicApiKey;
-      }
-      if (this.secrets.githubAppId) {
-        sandboxEnv.GITHUB_APP_ID = this.secrets.githubAppId;
-      }
-      if (this.secrets.githubAppPrivateKey) {
-        sandboxEnv.GITHUB_APP_PRIVATE_KEY = this.secrets.githubAppPrivateKey;
-      }
-      if (this.secrets.githubAppInstallationId) {
-        sandboxEnv.GITHUB_APP_INSTALLATION_ID = this.secrets.githubAppInstallationId;
-      }
+        ...(this.secrets.anthropicApiKey && { ANTHROPIC_API_KEY: this.secrets.anthropicApiKey }),
+        ...(this.secrets.githubAppId && { GITHUB_APP_ID: this.secrets.githubAppId }),
+        ...(this.secrets.githubAppPrivateKey && {
+          GITHUB_APP_PRIVATE_KEY: this.secrets.githubAppPrivateKey,
+        }),
+        ...(this.secrets.githubAppInstallationId && {
+          GITHUB_APP_INSTALLATION_ID: this.secrets.githubAppInstallationId,
+        }),
+      });
 
       // Merge user-configured env vars (repo secrets from the UI).
-      if (config.userEnvVars) {
-        Object.assign(sandboxEnv, config.userEnvVars);
+      if (config.userEnvVars && Object.keys(config.userEnvVars).length > 0) {
+        await sandbox.setEnvVars(config.userEnvVars);
       }
-
-      // Write env vars to a file inside the container, then source it.
-      // Uses base64-encoded values to avoid any shell escaping issues with
-      // multiline PEM keys, JSON, or special characters.
-      const envLines = Object.entries(sandboxEnv).map(
-        ([k, v]) => `export ${k}="$(echo '${Buffer.from(v).toString("base64")}' | base64 -d)"`
-      );
-      const envScript = `#!/bin/sh\n${envLines.join("\n")}\n`;
-      console.log("[sandbox] writing env file with", Object.keys(sandboxEnv).length, "vars");
-      await sandbox.writeFile("/tmp/sandbox-env.sh", envScript);
 
       // Start the Python entrypoint as a fire-and-forget command.
       // The entrypoint handles: setup.sh → start.sh → OpenCode → bridge.
       // The bridge connects back to the control plane via WebSocket.
       // On timeout, the SDK closes the caller-side connection but the
       // process continues running inside the container.
-      console.log("[sandbox] starting entrypoint via exec");
+      console.log("[sandbox] starting entrypoint");
       sandbox
-        .exec(
-          `source /tmp/sandbox-env.sh && cd /workspace/${config.repoName} && python3 -m sandbox_runtime.entrypoint`,
-          { timeout: 600_000 }
-        )
+        .exec(`cd /workspace/${config.repoName} && python3 -m sandbox_runtime.entrypoint`, {
+          timeout: 600_000,
+        })
         .then((result) => {
           console.log("[sandbox] entrypoint exited", {
             exitCode: result.exitCode,
-            stdout: result.stdout?.substring(0, 200),
-            stderr: result.stderr?.substring(0, 200),
+            stdout: result.stdout?.substring(0, 500),
+            stderr: result.stderr?.substring(0, 500),
           });
         })
         .catch((err) => {
