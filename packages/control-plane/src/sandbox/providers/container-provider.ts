@@ -63,9 +63,10 @@ export class CloudflareContainerProvider implements SandboxProvider {
       });
       console.log("[sandbox] gitCheckout done");
 
-      // Pass env vars via the SDK's `env` option on exec().
-      // setEnvVars() does NOT propagate to exec() — the SDK only documents
-      // per-call `env` for passing environment to commands.
+      // Build env vars map. We write these to a file inside the container
+      // and source it in the exec command — this is the most reliable approach
+      // since setEnvVars() doesn't propagate to exec(), and the exec `env`
+      // option may not be supported by the container agent (v0.7.18 vs SDK v0.8.4).
       const sandboxEnv: Record<string, string> = {
         SANDBOX_ID: config.sandboxId,
         CONTROL_PLANE_URL: config.controlPlaneUrl,
@@ -105,17 +106,27 @@ export class CloudflareContainerProvider implements SandboxProvider {
         Object.assign(sandboxEnv, config.userEnvVars);
       }
 
+      // Write env vars to a file inside the container, then source it.
+      // Uses base64-encoded values to avoid any shell escaping issues with
+      // multiline PEM keys, JSON, or special characters.
+      const envLines = Object.entries(sandboxEnv).map(
+        ([k, v]) => `export ${k}="$(echo '${Buffer.from(v).toString("base64")}' | base64 -d)"`
+      );
+      const envScript = `#!/bin/sh\n${envLines.join("\n")}\n`;
+      console.log("[sandbox] writing env file with", Object.keys(sandboxEnv).length, "vars");
+      await sandbox.writeFile("/tmp/sandbox-env.sh", envScript);
+
       // Start the Python entrypoint as a fire-and-forget command.
       // The entrypoint handles: setup.sh → start.sh → OpenCode → bridge.
       // The bridge connects back to the control plane via WebSocket.
       // On timeout, the SDK closes the caller-side connection but the
       // process continues running inside the container.
-      console.log("[sandbox] starting entrypoint via exec with env");
+      console.log("[sandbox] starting entrypoint via exec");
       sandbox
-        .exec(`cd /workspace/${config.repoName} && python3 -m sandbox_runtime.entrypoint`, {
-          timeout: 600_000,
-          env: sandboxEnv,
-        })
+        .exec(
+          `source /tmp/sandbox-env.sh && cd /workspace/${config.repoName} && python3 -m sandbox_runtime.entrypoint`,
+          { timeout: 600_000 }
+        )
         .then((result) => {
           console.log("[sandbox] entrypoint exited", {
             exitCode: result.exitCode,

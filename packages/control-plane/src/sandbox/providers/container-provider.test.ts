@@ -11,6 +11,7 @@ vi.mock("../../containers/sandbox-container", () => ({
 function createMockSandbox(overrides: Record<string, unknown> = {}) {
   return {
     gitCheckout: vi.fn().mockResolvedValue({ success: true }),
+    writeFile: vi.fn().mockResolvedValue(undefined),
     exec: vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0, success: true }),
     ...overrides,
   };
@@ -62,18 +63,16 @@ describe("CloudflareContainerProvider", () => {
       expect.objectContaining({ targetDir: "/workspace/testrepo", depth: 100 })
     );
 
-    // Verify exec called with env option (not inline shell exports)
+    // Verify env file written with base64-encoded vars
+    expect(mockSandbox.writeFile).toHaveBeenCalledWith(
+      "/tmp/sandbox-env.sh",
+      expect.stringContaining("SANDBOX_ID")
+    );
+
+    // Verify exec sources the env file
     expect(mockSandbox.exec).toHaveBeenCalledWith(
-      "cd /workspace/testrepo && python3 -m sandbox_runtime.entrypoint",
-      expect.objectContaining({
-        env: expect.objectContaining({
-          SANDBOX_ID: "sandbox-123",
-          CONTROL_PLANE_URL: "https://control-plane.test",
-          SANDBOX_AUTH_TOKEN: "auth-token",
-          ANTHROPIC_API_KEY: "sk-test",
-          RESTORED_FROM_SNAPSHOT: "true",
-        }),
-      })
+      "source /tmp/sandbox-env.sh && cd /workspace/testrepo && python3 -m sandbox_runtime.entrypoint",
+      expect.objectContaining({ timeout: 600_000 })
     );
   });
 
