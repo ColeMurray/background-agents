@@ -14,6 +14,7 @@ import { GlobalSecretsStore } from "../db/global-secrets";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
 import { createModalClient } from "../sandbox/client";
+import { isModalSandboxBackend } from "../sandbox/provider-name";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
 import {
@@ -30,6 +31,14 @@ import {
 
 const logger = createLogger("router:repo-images");
 
+function requireModalRepoImages(env: Env): Response | null {
+  if (isModalSandboxBackend(env.SANDBOX_PROVIDER)) {
+    return null;
+  }
+
+  return error("Repo images are only available when SANDBOX_PROVIDER=modal", 501);
+}
+
 /**
  * POST /repo-images/build-complete
  * Callback from Modal async builder on success.
@@ -40,6 +49,9 @@ async function handleBuildComplete(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
+  const providerError = requireModalRepoImages(env);
+  if (providerError) return providerError;
+
   if (!env.DB) {
     return error("Database not configured", 503);
   }
@@ -119,6 +131,9 @@ async function handleBuildFailed(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
+  const providerError = requireModalRepoImages(env);
+  if (providerError) return providerError;
+
   if (!env.DB) {
     return error("Database not configured", 503);
   }
@@ -165,6 +180,9 @@ async function handleTriggerBuild(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
+  const providerError = requireModalRepoImages(env);
+  if (providerError) return providerError;
+
   if (!env.DB) {
     return error("Database not configured", 503);
   }
@@ -287,6 +305,9 @@ async function handleGetStatus(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
+  const providerError = requireModalRepoImages(env);
+  if (providerError) return providerError;
+
   if (!env.DB) {
     return error("Database not configured", 503);
   }
@@ -326,6 +347,9 @@ async function handleMarkStale(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
+  const providerError = requireModalRepoImages(env);
+  if (providerError) return providerError;
+
   if (!env.DB) {
     return error("Database not configured", 503);
   }
@@ -373,6 +397,9 @@ async function handleCleanup(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
+  const providerError = requireModalRepoImages(env);
+  if (providerError) return providerError;
+
   if (!env.DB) {
     return error("Database not configured", 503);
   }
@@ -420,6 +447,9 @@ async function handleToggleImageBuild(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
+  const providerError = requireModalRepoImages(env);
+  if (providerError) return providerError;
+
   if (!env.DB) {
     return error("Database not configured", 503);
   }
@@ -471,6 +501,9 @@ async function handleGetEnabledRepos(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
+  const providerError = requireModalRepoImages(env);
+  if (providerError) return providerError;
+
   if (!env.DB) {
     return error("Database not configured", 503);
   }

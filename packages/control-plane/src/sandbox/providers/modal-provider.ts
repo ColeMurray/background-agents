@@ -47,6 +47,8 @@ export class ModalSandboxProvider implements SandboxProvider {
     supportsSnapshots: true,
     supportsRestore: true,
     supportsWarm: true,
+    supportsPersistentResume: false,
+    supportsExplicitStop: false,
   };
 
   constructor(private readonly client: ModalClient) {}

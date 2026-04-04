@@ -17,8 +17,12 @@ export {
 export {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   SandboxProviderError,
+  type ResumeConfig,
+  type ResumeResult,
   type SandboxProvider,
   type SandboxProviderCapabilities,
+  type StopConfig,
+  type StopResult,
   type CreateSandboxConfig,
   type CreateSandboxResult,
   type RestoreConfig,
@@ -30,6 +34,23 @@ export {
 
 // Modal provider
 export { ModalSandboxProvider, createModalProvider } from "./providers/modal-provider";
+export { DaytonaSandboxProvider, createDaytonaProvider } from "./providers/daytona-provider";
+export {
+  DaytonaServiceClient,
+  DaytonaServiceApiError,
+  createDaytonaServiceClient,
+  type DaytonaCreateSandboxRequest,
+  type DaytonaCreateSandboxResponse,
+  type DaytonaResumeSandboxRequest,
+  type DaytonaResumeSandboxResponse,
+  type DaytonaStopSandboxRequest,
+  type DaytonaStopSandboxResponse,
+} from "./daytona-service-client";
+export {
+  resolveSandboxBackendName,
+  isModalSandboxBackend,
+  type SandboxBackendName,
+} from "./provider-name";
 
 // Lifecycle decisions
 export {

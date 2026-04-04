@@ -19,7 +19,7 @@ Open-Inspect uses Terraform to automate deployment across three cloud providers:
 | -------------------------------------- | -------------------------------- | ----------------------------------------------------------------- |
 | **Cloudflare**                         | Control plane, session state     | Workers, KV namespaces, Durable Objects, D1 Database              |
 | **Vercel** _or_ **Cloudflare Workers** | Web application                  | Project + env vars (Vercel) _or_ Worker via OpenNext (Cloudflare) |
-| **Modal**                              | Sandbox execution infrastructure | App deployment, secrets, volumes                                  |
+| **Modal** _or_ **Daytona shim**        | Sandbox execution infrastructure | Modal app deployment _or_ control-plane config for external shim  |
 
 > **Web platform choice**: Set `web_platform` in your `terraform.tfvars` to `"vercel"` (default) or
 > `"cloudflare"`. The Cloudflare option deploys the Next.js app as a Cloudflare Worker using
@@ -40,7 +40,8 @@ Create accounts on these services before continuing:
 | ------------------------------------------------ | -------------------------------------------------------------- |
 | [Cloudflare](https://dash.cloudflare.com)        | Control plane hosting (+ web app if using Cloudflare platform) |
 | [Vercel](https://vercel.com) _(optional)_        | Web application hosting (only if `web_platform = "vercel"`)    |
-| [Modal](https://modal.com)                       | Sandbox infrastructure                                         |
+| [Modal](https://modal.com) _(optional)_          | Sandbox infrastructure when `sandbox_provider = "modal"`       |
+| [Daytona](https://app.daytona.io) _(optional)_   | Sandbox infrastructure when `sandbox_provider = "daytona"`     |
 | [GitHub](https://github.com/settings/developers) | OAuth + repository access                                      |
 | [Anthropic](https://console.anthropic.com)       | Claude API                                                     |
 | [Slack](https://api.slack.com/apps) _(optional)_ | Slack bot integration                                          |
@@ -55,7 +56,8 @@ brew install terraform
 # Node.js (22+)
 brew install node@22
 
-# Python 3.12+ and Modal CLI
+# Python 3.12+, uv, and Modal CLI
+brew install python@3.12 uv
 pipx install modal
 modal setup
 
@@ -133,10 +135,30 @@ Create an R2 API Token:
 
 ### Modal
 
+> Only required when `sandbox_provider = "modal"`.
+
 1. Go to [Modal Settings](https://modal.com/settings)
 2. **Create a new API token**: Settings -> API Tokens -> New Token
 3. Note the **Token ID** and **Token Secret**
 4. Note your **Workspace name** (visible in your Modal dashboard URL)
+
+### Daytona
+
+> Only required when `sandbox_provider = "daytona"`.
+
+1. Create a Daytona API key and note the **API key**, optional **API URL**, and optional **target**
+2. Deploy the shim service from [`packages/daytona-infra`](../packages/daytona-infra/README.md)
+3. Seed the named base snapshot before pointing traffic at Daytona:
+   ```bash
+   cd packages/daytona-infra
+   uv sync --extra dev
+   uv run python -m src.bootstrap --force
+   ```
+4. Set `sandbox_provider = "daytona"` in `terraform.tfvars`
+5. Set `daytona_service_url` and `daytona_service_secret` in `terraform.tfvars`
+
+Terraform only configures Open-Inspect to call the shim. It does not deploy the Daytona service for
+you.
 
 ### Anthropic
 
