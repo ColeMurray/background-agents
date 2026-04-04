@@ -28,10 +28,46 @@ import websockets
 from websockets import ClientConnection, State
 from websockets.exceptions import InvalidStatus
 
+import sys
+
 from .log_config import configure_logging, get_logger
 from .types import GitUser
 
 configure_logging()
+
+# Backport asyncio.timeout_at for Python < 3.11
+if sys.version_info >= (3, 11):
+    _timeout_at = asyncio.timeout_at
+else:
+
+    class _TimeoutCtx:
+        """Minimal backport of asyncio.Timeout for Python 3.10."""
+
+        def __init__(self, deadline: float) -> None:
+            self._deadline = deadline
+            self._task: asyncio.Task | None = None  # type: ignore[type-arg]
+
+        def reschedule(self, new_deadline: float) -> None:
+            self._deadline = new_deadline
+
+        async def __aenter__(self) -> "_TimeoutCtx":
+            self._task = asyncio.current_task()
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+            pass
+
+    @contextlib.asynccontextmanager
+    async def _timeout_at(deadline: float):  # type: ignore[misc]
+        """asyncio.timeout_at backport using wait_for semantics."""
+        ctx = _TimeoutCtx(deadline)
+        loop = asyncio.get_running_loop()
+        try:
+            yield ctx
+        except asyncio.CancelledError:
+            if loop.time() >= ctx._deadline:
+                raise asyncio.TimeoutError from None
+            raise
 
 # Fallback git identity when prompt author has no SCM name/email configured.
 # Matches the co-author trailer used in generateCommitMessage (shared/git.ts).
@@ -825,7 +861,7 @@ class AgentBridge:
     async def _parse_sse_stream(
         self,
         response: httpx.Response,
-        timeout_ctx: asyncio.Timeout | None = None,
+        timeout_ctx: Any | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Parse Server-Sent Events stream from OpenCode.
 
@@ -998,7 +1034,7 @@ class AgentBridge:
 
         try:
             deadline = asyncio.get_running_loop().time() + self.sse_inactivity_timeout
-            async with asyncio.timeout_at(deadline) as timeout_ctx:
+            async with _timeout_at(deadline) as timeout_ctx:
                 async with self.http_client.stream(
                     "GET",
                     sse_url,
