@@ -392,17 +392,7 @@ class SandboxSupervisor:
 
         # Build OpenCode config from session settings
         # Model format is "provider/model", e.g. "anthropic/claude-sonnet-4-6"
-        provider = self.session_config.get("provider", "anthropic")
         model = self.session_config.get("model", "claude-sonnet-4-6")
-
-        opencode_config = {
-            "model": f"{provider}/{model}",
-            "permission": {
-                "*": {
-                    "*": "allow",
-                },
-            },
-        }
 
         # Determine working directory - use repo path if cloned, otherwise /workspace
         workdir = self.workspace_path
@@ -410,6 +400,46 @@ class SandboxSupervisor:
             workdir = self.repo_path
 
         self._install_tools(workdir)
+
+        # When an LLM proxy is configured (e.g. Fuelix), write a .opencode.json
+        # config that uses @ai-sdk/openai-compatible as a custom provider.
+        # OpenCode's built-in Anthropic provider hardcodes x-api-key auth and
+        # uses dated model IDs (claude-sonnet-4-20250514) — neither works with
+        # proxies. The file-based config supports custom providers (unlike
+        # OPENCODE_CONFIG_CONTENT which only handles built-in providers).
+        llm_proxy_url = os.environ.get("ANTHROPIC_BASE_URL", "")
+        llm_proxy_key = os.environ.get("ANTHROPIC_API_KEY", "")
+
+        if llm_proxy_url and llm_proxy_key:
+            opencode_config = {
+                "provider": {
+                    "fuelix": {
+                        "npm": "@ai-sdk/openai-compatible",
+                        "name": "FuelIX",
+                        "options": {
+                            "baseURL": llm_proxy_url,
+                            "apiKey": llm_proxy_key,
+                        },
+                        "models": {
+                            model: {"name": model},
+                        },
+                    },
+                },
+                "model": f"fuelix/{model}",
+                "permission": {"*": {"*": "allow"}},
+            }
+            self.log.info("opencode.fuelix_provider", base_url=llm_proxy_url, model=model)
+        else:
+            opencode_config = {
+                "model": f"anthropic/{model}",
+                "permission": {"*": {"*": "allow"}},
+            }
+
+        # Write config to .opencode.json in the workspace (file-based config
+        # supports custom providers; OPENCODE_CONFIG_CONTENT does not).
+        config_path = workdir / ".opencode.json"
+        config_path.write_text(json.dumps(opencode_config, indent=2))
+        self.log.info("opencode.config_written", path=str(config_path))
 
         # Deploy codex auth proxy plugin if OpenAI OAuth is configured
         opencode_dir = workdir / ".opencode"
@@ -422,21 +452,12 @@ class SandboxSupervisor:
 
         env = {
             **os.environ,
-            "OPENCODE_CONFIG_CONTENT": json.dumps(opencode_config),
-            # Disable OpenCode's question tool in headless mode. The tool blocks
-            # on a Promise waiting for user input via the HTTP API, but the bridge
-            # has no channel to relay questions to the web client and back. Without
-            # this, the session hangs until the SSE inactivity timeout (120s).
-            # See: https://github.com/anomalyco/opencode/blob/19b1222cd/packages/opencode/src/tool/registry.ts#L100
             "OPENCODE_CLIENT": "serve",
         }
 
-        # When using an LLM proxy (ANTHROPIC_BASE_URL set), strip ANTHROPIC_API_KEY
-        # from OpenCode's env. Without it, OpenCode's Go code won't pass an explicit
-        # key to the Anthropic SDK, so the SDK falls back to env vars and finds
-        # ANTHROPIC_AUTH_TOKEN → sends Authorization: Bearer (which proxies expect).
-        # ANTHROPIC_BASE_URL is also picked up by the SDK to redirect requests.
-        if os.environ.get("ANTHROPIC_BASE_URL"):
+        # Strip ANTHROPIC_API_KEY so OpenCode doesn't auto-configure its native
+        # Anthropic provider (which would shadow the custom Fuelix provider).
+        if llm_proxy_url:
             env.pop("ANTHROPIC_API_KEY", None)
 
         # Start OpenCode server in the repo directory
