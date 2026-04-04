@@ -462,6 +462,12 @@ class SandboxSupervisor:
             "OPENCODE_CLIENT": "serve",
         }
 
+        # When using a custom provider (Fuelix), remove ANTHROPIC_API_KEY from
+        # OpenCode's env so it doesn't auto-configure the native Anthropic provider
+        # (which would shadow our custom fuelix provider with x-api-key auth).
+        if llm_proxy_url:
+            env.pop("ANTHROPIC_API_KEY", None)
+
         # Start OpenCode server in the repo directory
         self.opencode_process = await asyncio.create_subprocess_exec(
             "opencode",

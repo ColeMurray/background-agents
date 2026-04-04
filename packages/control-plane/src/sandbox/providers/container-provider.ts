@@ -88,10 +88,6 @@ export class CloudflareContainerProvider implements SandboxProvider {
         }),
         ...(this.secrets.anthropicApiKey && { ANTHROPIC_API_KEY: this.secrets.anthropicApiKey }),
         ...(this.secrets.anthropicBaseUrl && { ANTHROPIC_BASE_URL: this.secrets.anthropicBaseUrl }),
-        // Proxies like Fuelix expect Authorization: Bearer, not x-api-key.
-        // ANTHROPIC_AUTH_TOKEN triggers Bearer auth in the Anthropic SDK.
-        ...(this.secrets.anthropicBaseUrl &&
-          this.secrets.anthropicApiKey && { ANTHROPIC_AUTH_TOKEN: this.secrets.anthropicApiKey }),
         ...(this.secrets.githubAppId && { GITHUB_APP_ID: this.secrets.githubAppId }),
         ...(this.secrets.githubAppPrivateKey && {
           GITHUB_APP_PRIVATE_KEY: this.secrets.githubAppPrivateKey,
