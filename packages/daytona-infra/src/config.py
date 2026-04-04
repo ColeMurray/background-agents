@@ -64,10 +64,22 @@ def require_env(name: str) -> str:
     return value
 
 
+def normalize_control_plane_host(value: str) -> str:
+    """Normalize a host allowlist entry or URL origin for comparisons."""
+    parsed = urlparse(value if "://" in value else f"//{value}")
+    if parsed.hostname is None:
+        raise RuntimeError(f"Invalid control plane host: {value}")
+
+    if parsed.port in (None, 443):
+        return parsed.hostname.lower()
+
+    return f"{parsed.hostname.lower()}:{parsed.port}"
+
+
 def validate_control_plane_url(url: str) -> None:
     """Reject unexpected control-plane callback hosts."""
     allowed_hosts = {
-        host.strip().lower()
+        normalize_control_plane_host(host.strip())
         for host in os.environ.get("ALLOWED_CONTROL_PLANE_HOSTS", "").split(",")
         if host.strip()
     }
@@ -75,7 +87,10 @@ def validate_control_plane_url(url: str) -> None:
         raise RuntimeError("ALLOWED_CONTROL_PLANE_HOSTS must be configured")
 
     parsed = urlparse(url)
-    if parsed.netloc.lower() not in allowed_hosts:
+    if parsed.scheme != "https":
+        raise RuntimeError(f"Invalid control plane URL: {url}")
+
+    if normalize_control_plane_host(url) not in allowed_hosts:
         raise RuntimeError(f"Invalid control plane URL: {url}")
 
 

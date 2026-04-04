@@ -224,27 +224,26 @@ class DaytonaSandboxService:
 
         try:
             sandbox = client.get(request.provider_object_id)
+            if str(sandbox.state) in {"error", "build_failed"} and sandbox.recoverable:
+                sandbox.recover()
+            elif str(sandbox.state) != "started":
+                sandbox.start()
+            else:
+                sandbox.refresh_data()
+
+            code_server_url, code_server_password, tunnel_urls = self._build_tunnel_urls(
+                sandbox,
+                request.timeout_seconds,
+                request.code_server_enabled,
+                request.sandbox_settings,
+                request.sandbox_id,
+            )
         except DaytonaNotFoundError:
             return {
                 "success": False,
                 "error": "Sandbox no longer exists in Daytona",
                 "shouldSpawnFresh": True,
             }
-
-        if str(sandbox.state) in {"error", "build_failed"} and sandbox.recoverable:
-            sandbox.recover()
-        elif str(sandbox.state) != "started":
-            sandbox.start()
-        else:
-            sandbox.refresh_data()
-
-        code_server_url, code_server_password, tunnel_urls = self._build_tunnel_urls(
-            sandbox,
-            request.timeout_seconds,
-            request.code_server_enabled,
-            request.sandbox_settings,
-            request.sandbox_id,
-        )
 
         return {
             "success": True,
@@ -263,5 +262,9 @@ class DaytonaSandboxService:
         except DaytonaNotFoundError:
             return {"success": True}
 
-        sandbox.stop()
+        try:
+            sandbox.stop()
+        except DaytonaNotFoundError:
+            return {"success": True}
+
         return {"success": True}

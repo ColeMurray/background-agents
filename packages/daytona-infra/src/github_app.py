@@ -8,6 +8,8 @@ import time
 import httpx
 import jwt
 
+GITHUB_INSTALLATION_TOKEN_TIMEOUT_SECONDS = 30.0
+
 
 def generate_installation_token() -> str:
     """Generate a GitHub App installation token from environment variables."""
@@ -30,7 +32,7 @@ def generate_installation_token() -> str:
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         },
-        timeout=30.0,
+        timeout=GITHUB_INSTALLATION_TOKEN_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
     return response.json()["token"]

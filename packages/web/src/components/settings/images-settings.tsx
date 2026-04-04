@@ -41,7 +41,7 @@ export function ImagesSettings() {
       <div>
         <h2 className="text-xl font-semibold text-foreground mb-1">Pre-Built Images</h2>
         <p className="text-sm text-muted-foreground">
-          Pre-built images are only available when `SANDBOX_PROVIDER=modal`.
+          Pre-built images are only available when <code>SANDBOX_PROVIDER=modal</code>.
         </p>
       </div>
     );

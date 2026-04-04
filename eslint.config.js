@@ -15,6 +15,8 @@ export default tseslint.config(
       "**/build/**",
       "**/.wrangler/**",
       "**/coverage/**",
+      "**/.venv/**",
+      "**/venv/**",
       "opencode-reference/**",
       "**/*.d.ts",
       // Bundled/generated files

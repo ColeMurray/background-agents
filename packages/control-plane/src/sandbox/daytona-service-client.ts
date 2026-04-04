@@ -10,6 +10,7 @@ import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";
 
 const log = createLogger("daytona-service-client");
+const DAYTONA_SERVICE_TIMEOUT_MS = 15_000;
 
 export interface DaytonaCreateSandboxRequest {
   sessionId: string;
@@ -132,7 +133,7 @@ export class DaytonaServiceClient {
     correlation?: CorrelationContext
   ): Promise<TResponse> {
     const headers = await this.buildHeaders(correlation);
-    const response = await fetch(url, {
+    const response = await this.fetchWithTimeout(url, {
       method: "POST",
       headers,
       body: JSON.stringify(request),
@@ -151,8 +152,19 @@ export class DaytonaServiceClient {
     return payload.data;
   }
 
+  private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), DAYTONA_SERVICE_TIMEOUT_MS);
+
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
   async health(correlation?: CorrelationContext): Promise<Response> {
-    const response = await fetch(this.healthUrl, {
+    const response = await this.fetchWithTimeout(this.healthUrl, {
       headers: await this.buildHeaders(correlation),
     });
     return response;

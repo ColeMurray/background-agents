@@ -5,9 +5,17 @@
 export type PublicSandboxProvider = "modal" | "daytona";
 
 export function getPublicSandboxProvider(): PublicSandboxProvider {
-  const value = process.env.NEXT_PUBLIC_SANDBOX_PROVIDER ?? process.env.SANDBOX_PROVIDER ?? "modal";
+  const rawValue = process.env.NEXT_PUBLIC_SANDBOX_PROVIDER ?? process.env.SANDBOX_PROVIDER;
+  if (!rawValue || rawValue.trim() === "") {
+    return "modal";
+  }
 
-  return value.trim().toLowerCase() === "daytona" ? "daytona" : "modal";
+  const value = rawValue.trim().toLowerCase();
+  if (value === "modal" || value === "daytona") {
+    return value;
+  }
+
+  throw new Error(`Invalid sandbox provider: ${rawValue}`);
 }
 
 export function supportsRepoImages(): boolean {

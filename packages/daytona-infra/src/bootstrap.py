@@ -13,7 +13,11 @@ from .toolchain import create_base_snapshot
 def main() -> None:
     """Create or recreate the configured Daytona base snapshot."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--force", action="store_true", help="Accepted for CLI compatibility.")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Delete the existing named snapshot before rebuilding it.",
+    )
     args = parser.parse_args()
 
     config = load_config()

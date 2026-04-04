@@ -68,7 +68,11 @@ export default function SettingsPage() {
     if (isValidCategory(tabParam) && (tabParam !== "images" || repoImagesEnabled)) {
       setActiveCategoryRaw(tabParam);
       setMobileView("detail");
+      return;
     }
+
+    setActiveCategoryRaw("secrets");
+    setMobileView("list");
   }, [repoImagesEnabled, tabParam]);
 
   const content = (

@@ -56,7 +56,8 @@ brew install terraform
 # Node.js (22+)
 brew install node@22
 
-# Python 3.12+ and Modal CLI
+# Python 3.12+, uv, and Modal CLI
+brew install python@3.12 uv
 pipx install modal
 modal setup
 
@@ -153,7 +154,8 @@ Create an R2 API Token:
    uv sync --extra dev
    uv run python -m src.bootstrap --force
    ```
-4. Set `daytona_service_url` and `daytona_service_secret` in `terraform.tfvars`
+4. Set `sandbox_provider = "daytona"` in `terraform.tfvars`
+5. Set `daytona_service_url` and `daytona_service_secret` in `terraform.tfvars`
 
 Terraform only configures Open-Inspect to call the shim. It does not deploy the Daytona service for
 you.
