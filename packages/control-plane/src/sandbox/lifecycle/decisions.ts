@@ -117,6 +117,8 @@ export interface SandboxState {
   status: SandboxStatus;
   /** When the sandbox was created/spawned */
   createdAt: number;
+  /** Provider object ID if the sandbox exists remotely */
+  providerObjectId?: string | null;
   /** Snapshot image ID if available for restore */
   snapshotImageId: string | null;
   /** Whether an active WebSocket connection exists */
@@ -146,6 +148,7 @@ export const DEFAULT_SPAWN_CONFIG: SpawnConfig = {
  */
 export type SpawnAction =
   | { action: "spawn" }
+  | { action: "resume"; providerObjectId: string }
   | { action: "restore"; snapshotImageId: string }
   | { action: "skip"; reason: string }
   | { action: "wait"; reason: string };
@@ -185,9 +188,18 @@ export function evaluateSpawnDecision(
   state: SandboxState,
   config: SpawnConfig,
   now: number,
-  isSpawningInMemory: boolean
+  isSpawningInMemory: boolean,
+  supportsPersistentResume = false
 ): SpawnAction {
   const timeSinceLastSpawn = now - state.createdAt;
+
+  if (
+    supportsPersistentResume &&
+    state.providerObjectId &&
+    (state.status === "stopped" || state.status === "stale")
+  ) {
+    return { action: "resume", providerObjectId: state.providerObjectId };
+  }
 
   // Check if we have a snapshot to restore from
   // This implements the Ramp spec: restore if sandbox has exited and user sends a follow-up

@@ -12,6 +12,7 @@ import {
   TerminalIcon,
   ChevronRightIcon,
 } from "@/components/ui/icons";
+import { supportsRepoImages } from "@/lib/sandbox-provider";
 
 const NAV_ITEMS = [
   {
@@ -66,13 +67,16 @@ interface SettingsNavProps {
 
 export function SettingsNav({ activeCategory, onSelect, onNavigate }: SettingsNavProps) {
   const isMobile = useIsMobile();
+  const navItems = supportsRepoImages()
+    ? NAV_ITEMS
+    : NAV_ITEMS.filter((item) => item.id !== "images");
 
   if (isMobile) {
     return (
       <nav className="p-4">
         <h2 className="text-lg font-semibold text-foreground mb-4">Settings</h2>
         <ul className="space-y-1">
-          {NAV_ITEMS.map((item) => {
+          {navItems.map((item) => {
             const Icon = item.icon;
             return (
               <li key={item.id}>
@@ -99,7 +103,7 @@ export function SettingsNav({ activeCategory, onSelect, onNavigate }: SettingsNa
     <nav className="w-48 flex-shrink-0 border-r border-border-muted p-4">
       <h2 className="text-lg font-semibold text-foreground mb-4">Settings</h2>
       <ul className="space-y-1">
-        {NAV_ITEMS.map((item) => {
+        {navItems.map((item) => {
           const isActive = activeCategory === item.id;
           const Icon = item.icon;
           return (

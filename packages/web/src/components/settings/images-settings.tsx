@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { RefreshIcon } from "@/components/ui/icons";
 import { formatRelativeTime } from "@/lib/time";
+import { supportsRepoImages } from "@/lib/sandbox-provider";
 
 interface RepoImage {
   repo_owner: string;
@@ -26,11 +27,25 @@ interface ImageRegistryData {
 const REPO_IMAGES_KEY = "/api/repo-images";
 
 export function ImagesSettings() {
+  const repoImagesSupported = supportsRepoImages();
   const { repos, loading: reposLoading } = useRepos();
-  const { data, isLoading: imagesLoading } = useSWR<ImageRegistryData>(REPO_IMAGES_KEY);
+  const { data, isLoading: imagesLoading } = useSWR<ImageRegistryData>(
+    repoImagesSupported ? REPO_IMAGES_KEY : null
+  );
   const [togglingRepos, setTogglingRepos] = useState<Set<string>>(new Set());
   const [triggeringRepos, setTriggeringRepos] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
+
+  if (!repoImagesSupported) {
+    return (
+      <div>
+        <h2 className="text-xl font-semibold text-foreground mb-1">Pre-Built Images</h2>
+        <p className="text-sm text-muted-foreground">
+          Pre-built images are only available when `SANDBOX_PROVIDER=modal`.
+        </p>
+      </div>
+    );
+  }
 
   const loading = reposLoading || imagesLoading;
 

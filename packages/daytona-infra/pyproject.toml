@@ -1,0 +1,67 @@
+[project]
+name = "open-inspect-daytona"
+version = "0.1.0"
+description = "Daytona sandbox infrastructure for Open-Inspect"
+requires-python = ">=3.12"
+dependencies = [
+    "daytona",
+    "fastapi>=0.110.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.0",
+    "PyJWT[crypto]>=2.9.0",
+    "uvicorn[standard]>=0.30.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.14.0",
+    "pytest>=8.0",
+    "ruff>=0.9.0",
+]
+
+[tool.uv.sources]
+daytona = { path = "../../../daytona/libs/sdk-python", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "B",
+    "C4",
+    "UP",
+    "ARG",
+    "SIM",
+    "TCH",
+    "PTH",
+    "RUF",
+]
+ignore = [
+    "E501",
+    "ARG001",
+    "ARG002",
+    "PTH123",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true

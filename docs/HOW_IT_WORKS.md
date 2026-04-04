@@ -131,7 +131,7 @@ gets its own lightweight database that can handle hundreds of events per second 
 other sessions. The WebSocket Hibernation API keeps connections alive during idle periods without
 incurring compute costs.
 
-### Data Plane (Modal Sandboxes)
+### Data Plane (Sandbox Backends)
 
 The data plane is where code actually runs. Each session gets an isolated sandbox with a full
 development environment.
@@ -144,9 +144,14 @@ development environment.
 - agent-browser CLI + headless Chrome (for browser automation)
 - OpenCode (the coding agent)
 
-**Why Modal?** Modal sandboxes start near-instantly and support filesystem snapshots. This lets us
-freeze a sandbox's state after setup, then restore it later in seconds instead of re-cloning and
-reinstalling dependencies.
+Open-Inspect supports two backend patterns:
+
+- **Modal**: near-instant startup plus filesystem snapshot restore
+- **Daytona**: persistent stop/start sandboxes resumed through an external shim service
+
+Modal is still the only backend with repo-image builds and live filesystem snapshot restore. Daytona
+uses persistent sandboxes instead: the control plane stops the sandbox on inactivity or stale
+heartbeat, then resumes that same sandbox later with the same logical sandbox ID and auth token.
 
 ### Clients
 
