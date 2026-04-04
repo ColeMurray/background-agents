@@ -205,6 +205,37 @@ You should now have:
 
 ---
 
+## Step 3b: Google OAuth (Alternative to GitHub OAuth)
+
+If you prefer Google authentication instead of GitHub OAuth, set `AUTH_PROVIDER=google` in your web
+app environment. This is useful for organizations that use Google Workspace and don't need GitHub
+user OAuth for PR creation (the GitHub App token handles SCM operations instead).
+
+1. Go to [Google Cloud Console → Credentials](https://console.cloud.google.com/apis/credentials)
+2. Click **"Create Credentials"** → **"OAuth client ID"**
+3. Select **"Web application"**
+4. Add your web app URL to **Authorized redirect URIs**:
+   - `{your-web-app-url}/api/auth/callback/google`
+5. Note the **Client ID** and **Client Secret**
+
+Add to your `terraform.tfvars`:
+
+```hcl
+auth_provider           = "google"
+google_client_id        = "your-client-id.apps.googleusercontent.com"
+google_client_secret    = "GOCSPX-your-secret"
+google_workspace_domain = "example.com"  # optional: restrict to your Workspace domain
+```
+
+When using Google auth:
+
+- `ALLOWED_USERS` accepts **email addresses** (not GitHub usernames)
+- `ALLOWED_EMAIL_DOMAINS` works the same way
+- PR creation uses the **GitHub App token** (not user OAuth)
+- Leave both allowlists empty to allow all authenticated users
+
+---
+
 ## Step 4: Create Slack App (Optional)
 
 Skip this step if you don't need Slack integration.
