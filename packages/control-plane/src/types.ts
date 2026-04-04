@@ -56,8 +56,9 @@ export interface Env {
   REPO_SECRETS_ENCRYPTION_KEY?: string;
   // Cloudflare Container binding for sandboxes
   SANDBOX_CONTAINER?: DurableObjectNamespace<Sandbox>;
-  // Anthropic API key (injected into sandbox containers)
+  // Anthropic API key and optional base URL override (e.g. Fuelix proxy)
   ANTHROPIC_API_KEY?: string;
+  ANTHROPIC_BASE_URL?: string;
   INTERNAL_CALLBACK_SECRET?: string; // For signing callbacks to slack-bot
 
   // GitHub App secrets (for git operations)

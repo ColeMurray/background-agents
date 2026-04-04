@@ -20,6 +20,7 @@ import { getSandbox, type Sandbox } from "../../containers/sandbox-container";
  */
 export interface ContainerSecrets {
   anthropicApiKey?: string;
+  anthropicBaseUrl?: string;
   githubAppId?: string;
   githubAppPrivateKey?: string;
   githubAppInstallationId?: string;
@@ -86,6 +87,7 @@ export class CloudflareContainerProvider implements SandboxProvider {
           branch: config.branch || "main",
         }),
         ...(this.secrets.anthropicApiKey && { ANTHROPIC_API_KEY: this.secrets.anthropicApiKey }),
+        ...(this.secrets.anthropicBaseUrl && { ANTHROPIC_BASE_URL: this.secrets.anthropicBaseUrl }),
         ...(this.secrets.githubAppId && { GITHUB_APP_ID: this.secrets.githubAppId }),
         ...(this.secrets.githubAppPrivateKey && {
           GITHUB_APP_PRIVATE_KEY: this.secrets.githubAppPrivateKey,

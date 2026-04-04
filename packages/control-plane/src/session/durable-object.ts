@@ -535,6 +535,7 @@ export class SessionDO extends DurableObject<Env> {
     // Create Cloudflare Container provider
     const provider = createContainerProvider(this.env.SANDBOX_CONTAINER, {
       anthropicApiKey: this.env.ANTHROPIC_API_KEY,
+      anthropicBaseUrl: this.env.ANTHROPIC_BASE_URL,
       githubAppId: this.env.GITHUB_APP_ID,
       githubAppPrivateKey: this.env.GITHUB_APP_PRIVATE_KEY,
       githubAppInstallationId: this.env.GITHUB_APP_INSTALLATION_ID,
