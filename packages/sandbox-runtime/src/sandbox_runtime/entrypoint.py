@@ -394,14 +394,46 @@ class SandboxSupervisor:
         # Model format is "provider/model", e.g. "anthropic/claude-sonnet-4-6"
         provider = self.session_config.get("provider", "anthropic")
         model = self.session_config.get("model", "claude-sonnet-4-6")
-        opencode_config = {
-            "model": f"{provider}/{model}",
-            "permission": {
-                "*": {
-                    "*": "allow",
+
+        # When an LLM proxy base URL is set (e.g. Fuelix), configure a custom
+        # OpenAI-compatible provider instead of the built-in Anthropic provider.
+        # OpenCode's native Anthropic provider hardcodes x-api-key auth which
+        # proxies don't accept — they need Authorization: Bearer.
+        llm_proxy_url = os.environ.get("ANTHROPIC_BASE_URL", "")
+        llm_proxy_key = os.environ.get("ANTHROPIC_API_KEY", "")
+
+        if llm_proxy_url and llm_proxy_key:
+            opencode_config = {
+                "provider": {
+                    "fuelix": {
+                        "npm": "@ai-sdk/openai-compatible",
+                        "name": "FuelIX",
+                        "options": {
+                            "baseURL": llm_proxy_url,
+                            "apiKey": llm_proxy_key,
+                        },
+                        "models": {
+                            model: {"name": model},
+                        },
+                    },
                 },
-            },
-        }
+                "model": f"fuelix/{model}",
+                "permission": {
+                    "*": {
+                        "*": "allow",
+                    },
+                },
+            }
+            self.log.info("opencode.fuelix_provider", base_url=llm_proxy_url, model=model)
+        else:
+            opencode_config = {
+                "model": f"{provider}/{model}",
+                "permission": {
+                    "*": {
+                        "*": "allow",
+                    },
+                },
+            }
 
         # Determine working directory - use repo path if cloned, otherwise /workspace
         workdir = self.workspace_path

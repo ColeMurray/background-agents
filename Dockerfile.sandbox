@@ -46,7 +46,8 @@ RUN npm install -g \
       @opencode-ai/plugin@latest \
       zod \
       serve \
-      tsx
+      tsx \
+      @ai-sdk/openai-compatible
 
 # ── code-server ──────────────────────────────────────────────────────
 RUN curl -fsSL -o /tmp/code-server.deb \
