@@ -393,12 +393,18 @@ class SandboxSupervisor:
             self.log.info("ttyd.skip", reason="TERMINAL_ENABLED not set")
             return
 
-        workdir = str(self.repo_path) if self.repo_path and (self.repo_path / ".git").exists() else "/workspace"
+        workdir = (
+            str(self.repo_path)
+            if self.repo_path and (self.repo_path / ".git").exists()
+            else "/workspace"
+        )
 
         cmd = [
             "ttyd",
-            "--port", str(TTYD_PORT),
-            "--interface", "127.0.0.1",  # localhost only — proxy is the only external gateway
+            "--port",
+            str(TTYD_PORT),
+            "--interface",
+            "127.0.0.1",  # localhost only — proxy is the only external gateway
             "--writable",
             "bash",
         ]
@@ -790,9 +796,7 @@ class SandboxSupervisor:
                         self.log.warn("ttyd_proxy.restart_failed", exc=e)
                         self.ttyd_proxy_process = None
                 else:
-                    self.log.warn(
-                        "ttyd_proxy.max_restarts", restart_count=ttyd_proxy_restart_count
-                    )
+                    self.log.warn("ttyd_proxy.max_restarts", restart_count=ttyd_proxy_restart_count)
                     self.ttyd_proxy_process = None
 
             await asyncio.sleep(1.0)
@@ -1044,7 +1048,9 @@ class SandboxSupervisor:
                     self.log.warn(f"{sidecar_name}.start_failed", exc=e)
 
             if self.ttyd_process is not None:
-                ttyd_ready = await self._wait_for_port(TTYD_PORT, timeout_seconds=self.SIDECAR_TIMEOUT_SECONDS)
+                ttyd_ready = await self._wait_for_port(
+                    TTYD_PORT, timeout_seconds=self.SIDECAR_TIMEOUT_SECONDS
+                )
                 if ttyd_ready:
                     try:
                         await self.start_ttyd_proxy()
@@ -1115,7 +1121,9 @@ class SandboxSupervisor:
             self.log.info("ttyd_proxy.terminating")
             self.ttyd_proxy_process.terminate()
             try:
-                await asyncio.wait_for(self.ttyd_proxy_process.wait(), timeout=self.SIDECAR_TIMEOUT_SECONDS)
+                await asyncio.wait_for(
+                    self.ttyd_proxy_process.wait(), timeout=self.SIDECAR_TIMEOUT_SECONDS
+                )
             except TimeoutError:
                 self.ttyd_proxy_process.kill()
 
@@ -1124,7 +1132,9 @@ class SandboxSupervisor:
             self.log.info("ttyd.terminating")
             self.ttyd_process.terminate()
             try:
-                await asyncio.wait_for(self.ttyd_process.wait(), timeout=self.SIDECAR_TIMEOUT_SECONDS)
+                await asyncio.wait_for(
+                    self.ttyd_process.wait(), timeout=self.SIDECAR_TIMEOUT_SECONDS
+                )
             except TimeoutError:
                 self.ttyd_process.kill()
 
