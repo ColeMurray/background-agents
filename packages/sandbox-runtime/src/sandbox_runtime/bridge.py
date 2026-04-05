@@ -828,6 +828,12 @@ class AgentBridge:
                 provider_id, model_id = model.split("/", 1)
             else:
                 provider_id, model_id = "anthropic", model
+
+            # When using an LLM proxy (Fuelix), remap to the custom provider
+            # so OpenCode uses the .opencode.json provider config instead of
+            # its built-in Anthropic provider (which has hardcoded model IDs).
+            if provider_id == "anthropic" and os.environ.get("ANTHROPIC_BASE_URL"):
+                provider_id = "fuelix"
             model_spec: dict[str, Any] = {
                 "providerID": provider_id,
                 "modelID": model_id,
