@@ -456,7 +456,6 @@ function SessionListItem({
   const timestamp = session.updatedAt || session.createdAt;
   const relativeTime = formatRelativeTime(timestamp);
   const displayTitle = session.title || `${session.repoOwner}/${session.repoName}`;
-  const repoInfo = `${session.repoOwner}/${session.repoName}`;
   // Orphan child (parent filtered out) — show a subtle badge
   const isOrphanChild = session.parentSessionId && session.spawnSource === "agent";
   const [isRenaming, setIsRenaming] = useState(false);
@@ -612,8 +611,6 @@ function SessionListItem({
           />
           <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
             <span>{relativeTime}</span>
-            <span>·</span>
-            <span className="truncate">{repoInfo}</span>
           </div>
         </>
       ) : (
@@ -643,8 +640,6 @@ function SessionListItem({
           <div className="truncate text-sm font-medium text-foreground">{displayTitle}</div>
           <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
             <span>{relativeTime}</span>
-            <span>·</span>
-            <span className="truncate">{repoInfo}</span>
             {isOrphanChild && (
               <>
                 <span>·</span>
