@@ -308,6 +308,29 @@ class SandboxSupervisor:
         if not package_json.exists():
             package_json.write_text('{"name": "opencode-tools", "type": "module"}')
 
+        # Symlink .claude/skills/ and .agents/skills/ into .opencode/skills/
+        # so OpenCode discovers them alongside its native skill directory.
+        opencode_skills = opencode_dir / "skills"
+        for alt_dir in [".claude/skills", ".agents/skills"]:
+            src = workdir / alt_dir
+            if not src.exists() or not src.is_dir():
+                continue
+            opencode_skills.mkdir(parents=True, exist_ok=True)
+            for skill_dir in src.iterdir():
+                if not skill_dir.is_dir():
+                    continue
+                target = opencode_skills / skill_dir.name
+                if not target.exists():
+                    try:
+                        target.symlink_to(skill_dir.resolve())
+                        self.log.info(
+                            "opencode.skill_symlink",
+                            source=str(skill_dir),
+                            target=str(target),
+                        )
+                    except Exception as e:
+                        self.log.warn("opencode.skill_symlink_error", exc=e)
+
     def _setup_openai_oauth(self) -> None:
         """Write OpenCode auth.json for ChatGPT OAuth if refresh token is configured."""
         refresh_token = os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN")
@@ -413,6 +436,7 @@ class SandboxSupervisor:
         if llm_proxy_url and llm_proxy_key:
             opencode_config = {
                 "$schema": "https://opencode.ai/config.json",
+                "plugin": ["superpowers@git+https://github.com/obra/superpowers.git"],
                 "provider": {
                     "fuelix": {
                         "npm": "@ai-sdk/openai-compatible",
@@ -434,6 +458,7 @@ class SandboxSupervisor:
             self.log.info("opencode.fuelix_provider", base_url=llm_proxy_url, model=model)
         else:
             opencode_config = {
+                "plugin": ["superpowers@git+https://github.com/obra/superpowers.git"],
                 "model": f"anthropic/{model}",
                 "permission": {"*": {"*": "allow"}},
             }
@@ -449,7 +474,10 @@ class SandboxSupervisor:
         # serve mode can find it (serve mode doesn't auto-install like TUI does).
         if llm_proxy_url:
             install_proc = await asyncio.create_subprocess_exec(
-                "npm", "install", "--no-save", "@ai-sdk/openai-compatible",
+                "npm",
+                "install",
+                "--no-save",
+                "@ai-sdk/openai-compatible",
                 cwd=workdir,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,

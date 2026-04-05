@@ -191,6 +191,11 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
         ]);
       }
       setEvents((prev) => [...prev, event]);
+    } else if (event.type === "skills_discovered") {
+      // Update session state with the discovered skills catalog.
+      setSessionState((prev) => (prev ? { ...prev, skills: event.skills } : null));
+      // Also add to events for timeline rendering.
+      setEvents((prev) => [...prev, event]);
     } else {
       // Other events (tool_call, user_message, git_sync, etc.) - add normally
       setEvents((prev) => [...prev, event]);

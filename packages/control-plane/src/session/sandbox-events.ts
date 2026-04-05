@@ -1,7 +1,7 @@
 import { generateId } from "../auth/crypto";
 import type { Logger } from "../logger";
 import type { GitPushSpec } from "../source-control";
-import type { SandboxEvent, ServerMessage } from "../types";
+import type { SandboxEvent, ServerMessage, SkillInfo } from "../types";
 import { shouldPersistToolCallEvent } from "./event-persistence";
 import type { SessionRepository } from "./repository";
 import type { CallbackNotificationService } from "./callback-notification-service";
@@ -22,6 +22,7 @@ interface SessionSandboxEventProcessorDeps {
   updateLastActivity: (timestamp: number) => void;
   scheduleInactivityCheck: () => Promise<void>;
   processMessageQueue: () => Promise<void>;
+  updateSkills: (skills: SkillInfo[]) => void;
 }
 
 /** Event types that require delivery acknowledgement. */
@@ -165,6 +166,12 @@ export class SessionSandboxEventProcessor {
       await this.deps.scheduleInactivityCheck();
       await this.deps.processMessageQueue();
       this.sendAck(ackId);
+      return;
+    }
+
+    if (event.type === "skills_discovered") {
+      this.deps.updateSkills(event.skills);
+      this.deps.broadcast({ type: "sandbox_event", event });
       return;
     }
 

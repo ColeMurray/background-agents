@@ -17,6 +17,7 @@ import os
 import re
 import secrets
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import AsyncIterator
@@ -28,9 +29,8 @@ import websockets
 from websockets import ClientConnection, State
 from websockets.exceptions import InvalidStatus
 
-import sys
-
 from .log_config import configure_logging, get_logger
+from .skill_scanner import scan_skills
 from .types import GitUser
 
 configure_logging()
@@ -66,8 +66,9 @@ else:
             yield ctx
         except asyncio.CancelledError:
             if loop.time() >= ctx._deadline:
-                raise asyncio.TimeoutError from None
+                raise TimeoutError from None
             raise
+
 
 # Fallback git identity when prompt author has no SCM name/email configured.
 # Matches the co-author trailer used in generateCommitMessage (shared/git.ts).
@@ -390,6 +391,9 @@ class AgentBridge:
                 just_flushed = await self._flush_event_buffer()
                 await self._flush_pending_acks(skip_ack_ids=just_flushed)
 
+                # Emit skill catalog (static manifest + repo scan — fast, no retry needed).
+                await self._emit_skills_discovered()
+
                 heartbeat_task = asyncio.create_task(self._heartbeat_loop())
                 background_tasks: set[asyncio.Task[None]] = set()
 
@@ -495,6 +499,36 @@ class AgentBridge:
             remaining=len(self._event_buffer),
         )
         return just_added
+
+    async def _emit_skills_discovered(self) -> None:
+        """Scan for skills and emit a skills_discovered event.
+
+        Container skills come from a static manifest (always available).
+        Repo skills come from filesystem scanning of .opencode/skills/,
+        .claude/skills/, and .agents/skills/.
+        """
+        try:
+            workspace = Path("/workspace")
+            repo_name = os.environ.get("REPO_NAME", "")
+            if repo_name:
+                repo_dir = workspace / repo_name
+                if repo_dir.exists() and (repo_dir / ".git").exists():
+                    workspace = repo_dir
+
+            skills = scan_skills(workspace=workspace)
+
+            if skills:
+                await self._send_event(
+                    {
+                        "type": "skills_discovered",
+                        "skills": skills,
+                    }
+                )
+                self.log.info("skills.emitted", count=len(skills))
+            else:
+                self.log.info("skills.none_found")
+        except Exception as e:
+            self.log.warn("skills.scan_error", exc=str(e))
 
     def _buffer_event(self, event: dict[str, Any]) -> None:
         """Buffer an event for later delivery after WS reconnect."""

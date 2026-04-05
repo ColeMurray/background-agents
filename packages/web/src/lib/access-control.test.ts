@@ -32,9 +32,9 @@ describe("parseAllowlist", () => {
 });
 
 describe("checkAccessAllowed", () => {
-  describe("when both allowlists are empty", () => {
+  describe("when all allowlists are empty", () => {
     it("allows all users", () => {
-      const config = { allowedDomains: [], allowedUsers: [] };
+      const config = { allowedDomains: [], allowedUsers: [], allowedOrgs: [] };
 
       expect(checkAccessAllowed(config, {})).toBe(true);
       expect(checkAccessAllowed(config, { githubUsername: "anyuser" })).toBe(true);
@@ -43,7 +43,7 @@ describe("checkAccessAllowed", () => {
   });
 
   describe("when allowedUsers is set", () => {
-    const config = { allowedDomains: [], allowedUsers: ["alloweduser"] };
+    const config = { allowedDomains: [], allowedUsers: ["alloweduser"], allowedOrgs: [] };
 
     it("allows users in the list", () => {
       expect(checkAccessAllowed(config, { githubUsername: "alloweduser" })).toBe(true);
@@ -65,7 +65,7 @@ describe("checkAccessAllowed", () => {
   });
 
   describe("when allowedDomains is set", () => {
-    const config = { allowedDomains: ["company.com"], allowedUsers: [] };
+    const config = { allowedDomains: ["company.com"], allowedUsers: [], allowedOrgs: [] };
 
     it("allows users with matching email domain", () => {
       expect(checkAccessAllowed(config, { email: "user@company.com" })).toBe(true);
@@ -85,10 +85,36 @@ describe("checkAccessAllowed", () => {
     });
   });
 
+  describe("when allowedOrgs is set", () => {
+    const config = { allowedDomains: [], allowedUsers: [], allowedOrgs: ["mycompany"] };
+
+    it("allows users in the org", () => {
+      expect(checkAccessAllowed(config, { githubOrgs: ["mycompany"] })).toBe(true);
+    });
+
+    it("allows users with different case org", () => {
+      expect(checkAccessAllowed(config, { githubOrgs: ["MyCompany"] })).toBe(true);
+    });
+
+    it("allows users in any matching org", () => {
+      expect(checkAccessAllowed(config, { githubOrgs: ["other-org", "mycompany"] })).toBe(true);
+    });
+
+    it("denies users not in any allowed org", () => {
+      expect(checkAccessAllowed(config, { githubOrgs: ["other-org"] })).toBe(false);
+    });
+
+    it("denies when no orgs provided", () => {
+      expect(checkAccessAllowed(config, {})).toBe(false);
+      expect(checkAccessAllowed(config, { githubUsername: "someuser" })).toBe(false);
+    });
+  });
+
   describe("when both allowedUsers and allowedDomains are set (OR logic)", () => {
     const config = {
       allowedDomains: ["company.com"],
       allowedUsers: ["specialuser"],
+      allowedOrgs: [],
     };
 
     it("allows users matching username", () => {
@@ -125,10 +151,39 @@ describe("checkAccessAllowed", () => {
     });
   });
 
+  describe("when all three allowlists are set (OR logic)", () => {
+    const config = {
+      allowedDomains: ["company.com"],
+      allowedUsers: ["specialuser"],
+      allowedOrgs: ["mycompany"],
+    };
+
+    it("allows users matching org only", () => {
+      expect(
+        checkAccessAllowed(config, {
+          githubUsername: "randomuser",
+          email: "user@other.com",
+          githubOrgs: ["mycompany"],
+        })
+      ).toBe(true);
+    });
+
+    it("denies users matching none", () => {
+      expect(
+        checkAccessAllowed(config, {
+          githubUsername: "randomuser",
+          email: "user@other.com",
+          githubOrgs: ["other-org"],
+        })
+      ).toBe(false);
+    });
+  });
+
   describe("multiple values in allowlists", () => {
     const config = {
       allowedDomains: ["company.com", "partner.org"],
       allowedUsers: ["admin", "developer"],
+      allowedOrgs: ["org-a", "org-b"],
     };
 
     it("allows any user from the list", () => {
@@ -139,6 +194,11 @@ describe("checkAccessAllowed", () => {
     it("allows any domain from the list", () => {
       expect(checkAccessAllowed(config, { email: "user@company.com" })).toBe(true);
       expect(checkAccessAllowed(config, { email: "user@partner.org" })).toBe(true);
+    });
+
+    it("allows any org from the list", () => {
+      expect(checkAccessAllowed(config, { githubOrgs: ["org-a"] })).toBe(true);
+      expect(checkAccessAllowed(config, { githubOrgs: ["org-b"] })).toBe(true);
     });
   });
 });

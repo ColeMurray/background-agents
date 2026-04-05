@@ -8,10 +8,12 @@ import {
   TasksSection,
   FilesChangedSection,
   CodeServerSection,
+  SkillsTimelineSection,
 } from "./sidebar";
 import { ChildSessionsSection } from "./sidebar/child-sessions-section";
 import { extractLatestTasks } from "@/lib/tasks";
 import { extractChangedFiles } from "@/lib/files";
+import { extractSkillTimeline } from "@/lib/skills";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { ParticipantPresence, SessionState } from "@open-inspect/shared";
 
@@ -32,6 +34,7 @@ export function SessionRightSidebarContent({
 }: SessionRightSidebarContentProps) {
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
   const filesChanged = useMemo(() => extractChangedFiles(events), [events]);
+  const skillTimeline = useMemo(() => extractSkillTimeline(events), [events]);
 
   if (!sessionState) {
     return (
@@ -76,6 +79,13 @@ export function SessionRightSidebarContent({
             sandboxStatus={sessionState.sandboxStatus}
           />
         </div>
+      )}
+
+      {/* Skills Timeline */}
+      {skillTimeline.length > 0 && (
+        <CollapsibleSection title="Skills" defaultOpen={true}>
+          <SkillsTimelineSection phases={skillTimeline} />
+        </CollapsibleSection>
       )}
 
       {/* Tasks */}

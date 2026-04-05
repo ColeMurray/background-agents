@@ -1,6 +1,6 @@
 import type { NextAuthOptions } from "next-auth";
 import GitHubProvider from "next-auth/providers/github";
-import { checkAccessAllowed, parseAllowlist } from "./access-control";
+import { checkAccessAllowed, fetchGitHubOrgs, parseAllowlist } from "./access-control";
 
 // Extend NextAuth types to include GitHub-specific user info
 declare module "next-auth" {
@@ -33,22 +33,31 @@ export const authOptions: NextAuthOptions = {
       clientSecret: process.env.GITHUB_CLIENT_SECRET!,
       authorization: {
         params: {
-          scope: "read:user user:email repo",
+          scope: "read:user user:email read:org repo",
         },
       },
     }),
   ],
   callbacks: {
-    async signIn({ profile, user }) {
+    async signIn({ profile, user, account }) {
       const config = {
         allowedDomains: parseAllowlist(process.env.ALLOWED_EMAIL_DOMAINS),
         allowedUsers: parseAllowlist(process.env.ALLOWED_USERS),
+        allowedOrgs: parseAllowlist(process.env.ALLOWED_GITHUB_ORGS),
       };
 
       const githubProfile = profile as { login?: string };
+
+      // Fetch org membership if org allowlist is configured
+      let githubOrgs: string[] | undefined;
+      if (config.allowedOrgs.length > 0 && account?.access_token) {
+        githubOrgs = await fetchGitHubOrgs(account.access_token);
+      }
+
       const isAllowed = checkAccessAllowed(config, {
         githubUsername: githubProfile.login,
         email: user.email ?? undefined,
+        githubOrgs,
       });
 
       if (!isAllowed) {

@@ -9,6 +9,8 @@ else:
 
     class StrEnum(str, Enum):
         """Backport of StrEnum for Python < 3.11."""
+
+
 from typing import Any
 
 from pydantic import BaseModel

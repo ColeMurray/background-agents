@@ -40,6 +40,9 @@ import {
   ErrorIcon,
 } from "@/components/ui/icons";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
+import { SkillTransitionHeader } from "@/components/skill-transition-header";
+import { SkillPalette } from "@/components/skill-palette";
+import { mergeSkills } from "@/lib/default-skills";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 import type { SessionItem } from "@/components/session-sidebar";
@@ -78,11 +81,19 @@ function groupEvents(events: SandboxEvent[]): EventGroup[] {
 
   for (const event of events) {
     if (event.type === "tool_call") {
-      // Check if same tool as current group
-      if (currentToolGroup.length > 0 && currentToolGroup[0].tool === event.tool) {
+      const isSkillCall = event.tool?.toLowerCase() === "skill";
+
+      if (isSkillCall) {
+        // Skill calls always break groups and render as standalone
+        flushToolGroup();
+        groups.push({
+          type: "single",
+          event,
+          id: `skill-${event.callId || event.timestamp}-${groupIndex++}`,
+        });
+      } else if (currentToolGroup.length > 0 && currentToolGroup[0].tool === event.tool) {
         currentToolGroup.push(event);
       } else {
-        // Flush previous group and start new one
         flushToolGroup();
         currentToolGroup = [event];
       }
@@ -291,6 +302,7 @@ function SessionPageContent() {
   );
 
   const [prompt, setPrompt] = useState("");
+  const [selectedSkill, setSelectedSkill] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
     getDefaultReasoningEffort(DEFAULT_MODEL)
@@ -327,10 +339,12 @@ function SessionPageContent() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!prompt.trim() || isProcessing) return;
+    if ((!prompt.trim() && !selectedSkill) || isProcessing) return;
 
-    sendPrompt(prompt, selectedModel, reasoningEffort);
+    const message = selectedSkill ? `/${selectedSkill} ${prompt}`.trim() : prompt;
+    sendPrompt(message, selectedModel, reasoningEffort);
     setPrompt("");
+    setSelectedSkill(null);
     // Revalidate sidebar so this session bubbles to the top
     mutate(SIDEBAR_SESSIONS_KEY);
   };
@@ -338,11 +352,30 @@ function SessionPageContent() {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
 
+    // Backspace with empty input removes the skill pill
+    if (e.key === "Backspace" && selectedSkill && !prompt) {
+      e.preventDefault();
+      handleSkillRemove();
+      return;
+    }
+
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
       e.preventDefault();
       handleSubmit(e);
     }
   };
+
+  const handleSkillSelect = useCallback((skillName: string) => {
+    setSelectedSkill(skillName);
+    setPrompt("");
+    inputRef.current?.focus();
+  }, []);
+
+  const handleSkillRemove = useCallback(() => {
+    setSelectedSkill(null);
+    setPrompt("/");
+    inputRef.current?.focus();
+  }, []);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setPrompt(e.target.value);
@@ -380,6 +413,9 @@ function SessionPageContent() {
       handleKeyDown={handleKeyDown}
       setSelectedModel={handleModelChange}
       setReasoningEffort={setReasoningEffort}
+      selectedSkill={selectedSkill}
+      onSkillSelect={handleSkillSelect}
+      onSkillRemove={handleSkillRemove}
       stopExecution={stopExecution}
       handleArchive={handleArchive}
       handleUnarchive={handleUnarchive}
@@ -423,6 +459,9 @@ function SessionContent({
   loadOlderEvents,
   modelOptions,
   fallbackSessionInfo,
+  selectedSkill,
+  onSkillSelect,
+  onSkillRemove,
 }: {
   sessionState: SessionState;
   connected: boolean;
@@ -454,10 +493,18 @@ function SessionContent({
   loadOlderEvents: () => void;
   modelOptions: ModelCategory[];
   fallbackSessionInfo: FallbackSessionInfo;
+  selectedSkill: string | null;
+  onSkillSelect: (skillName: string) => void;
+  onSkillRemove: () => void;
 }) {
   const { isOpen, toggle } = useSidebarContext();
   const isBelowLg = useMediaQuery("(max-width: 1023px)");
   const isPhone = useMediaQuery("(max-width: 767px)");
+
+  // Skill palette derived state
+  const isPaletteOpen = !selectedSkill && prompt.startsWith("/");
+  const paletteFilter = isPaletteOpen ? prompt.slice(1) : "";
+  const skills = mergeSkills(sessionState?.skills);
   const resolvedRepoOwner = sessionState?.repoOwner ?? fallbackSessionInfo.repoOwner;
   const resolvedRepoName = sessionState?.repoName ?? fallbackSessionInfo.repoName;
   const fallbackRepoLabel =
@@ -905,15 +952,35 @@ function SessionContent({
           <div className="border border-border bg-input">
             {/* Text input area with floating send button */}
             <div className="relative">
-              <textarea
-                ref={inputRef}
-                value={prompt}
-                onChange={handleInputChange}
-                onKeyDown={handleKeyDown}
-                placeholder={isProcessing ? "Type your next message..." : "Ask or build anything"}
-                className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-foreground placeholder:text-secondary-foreground"
-                rows={3}
-              />
+              {/* Input area with optional skill pill */}
+              <div className="flex items-start px-4 pt-4 pb-12">
+                {selectedSkill && (
+                  <button
+                    type="button"
+                    onClick={onSkillRemove}
+                    className="inline-flex items-center gap-1 bg-accent/10 text-accent px-2 py-1 rounded-full text-xs font-semibold mr-2 mt-0.5 flex-shrink-0 hover:bg-accent/20 transition-colors"
+                  >
+                    /{selectedSkill}
+                    <span className="text-accent/60">&times;</span>
+                  </button>
+                )}
+                <textarea
+                  ref={inputRef}
+                  value={prompt}
+                  onChange={handleInputChange}
+                  onKeyDown={handleKeyDown}
+                  placeholder={
+                    selectedSkill
+                      ? "Add a message (optional)..."
+                      : isProcessing
+                        ? "Type your next message..."
+                        : "Ask or build anything"
+                  }
+                  className="flex-1 resize-none bg-transparent focus:outline-none text-foreground placeholder:text-secondary-foreground"
+                  rows={3}
+                />
+              </div>
+
               {/* Floating action buttons */}
               <div className="absolute bottom-3 right-3 flex items-center gap-2">
                 {isProcessing && prompt.trim() && (
@@ -931,7 +998,7 @@ function SessionContent({
                 )}
                 <button
                   type="submit"
-                  disabled={!prompt.trim() || isProcessing}
+                  disabled={(!prompt.trim() && !selectedSkill) || isProcessing}
                   className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
                   title={
                     isProcessing && prompt.trim()
@@ -948,6 +1015,17 @@ function SessionContent({
                 </button>
               </div>
             </div>
+
+            {/* Skill palette — renders inside input container, below text area */}
+            <SkillPalette
+              skills={skills}
+              isOpen={isPaletteOpen}
+              filterQuery={paletteFilter}
+              onSelect={onSkillSelect}
+              onClose={() => {
+                /* handled by handleInputChange */
+              }}
+            />
 
             {/* Footer row with model selector, reasoning pills, and agent label */}
             <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">
@@ -1244,9 +1322,16 @@ const EventItem = memo(function EventItem({
       );
     }
 
-    case "tool_call":
-      // Tool calls are handled by ToolCallGroup component
+    case "tool_call": {
+      // Skill calls render as transition headers
+      if (event.tool?.toLowerCase() === "skill") {
+        const skillName = typeof event.args?.skill === "string" ? event.args.skill : "Skill";
+        const description = typeof event.args?.args === "string" ? event.args.args : undefined;
+        return <SkillTransitionHeader skillName={skillName} description={description} />;
+      }
+      // Other tool calls are handled by ToolCallGroup
       return null;
+    }
 
     case "tool_result":
       // Tool results are now shown inline with tool calls

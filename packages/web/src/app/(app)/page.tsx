@@ -6,6 +6,9 @@ import { mutate } from "swr";
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { useSidebarContext } from "@/components/sidebar-layout";
+import { SkillPalette } from "@/components/skill-palette";
+import { mergeSkills } from "@/lib/default-skills";
+import { useWarmSkills } from "@/hooks/use-warm-skills";
 import { formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
@@ -14,6 +17,7 @@ import {
   getDefaultReasoningEffort,
   isValidReasoningEffort,
   type ModelCategory,
+  type SkillInfo,
 } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { useRepos, type Repo } from "@/hooks/use-repos";
@@ -48,6 +52,9 @@ export default function Home() {
   const [error, setError] = useState("");
   const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
+  const [selectedSkill, setSelectedSkill] = useState<string | null>(null);
+  const warmSkills = useWarmSkills(pendingSessionId);
+  const skills = mergeSkills(warmSkills.length > 0 ? warmSkills : undefined);
   const sessionCreationPromise = useRef<Promise<string | null> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const pendingConfigRef = useRef<{ repo: string; model: string; branch: string } | null>(null);
@@ -219,7 +226,7 @@ export default function Home() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!prompt.trim()) return;
+    if (!prompt.trim() && !selectedSkill) return;
     if (!selectedRepo) {
       setError("Please select a repository");
       return;
@@ -240,17 +247,19 @@ export default function Home() {
         return;
       }
 
+      const message = selectedSkill ? `/${selectedSkill} ${prompt}`.trim() : prompt;
       const res = await fetch(`/api/sessions/${sessionId}/prompt`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content: prompt,
+          content: message,
           model: selectedModel,
           reasoningEffort,
         }),
       });
 
       if (res.ok) {
+        setSelectedSkill(null);
         mutate(SIDEBAR_SESSIONS_KEY);
         router.push(`/session/${sessionId}`);
       } else {
@@ -286,6 +295,9 @@ export default function Home() {
       error={error}
       handleSubmit={handleSubmit}
       modelOptions={enabledModelOptions}
+      skills={skills}
+      selectedSkill={selectedSkill}
+      setSelectedSkill={setSelectedSkill}
     />
   );
 }
@@ -311,6 +323,9 @@ function HomeContent({
   error,
   handleSubmit,
   modelOptions,
+  skills,
+  selectedSkill,
+  setSelectedSkill,
 }: {
   isAuthenticated: boolean;
   repos: Repo[];
@@ -332,12 +347,40 @@ function HomeContent({
   error: string;
   handleSubmit: (e: React.FormEvent) => void;
   modelOptions: ModelCategory[];
+  skills: SkillInfo[];
+  selectedSkill: string | null;
+  setSelectedSkill: (value: string | null) => void;
 }) {
   const { isOpen, toggle } = useSidebarContext();
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  const isPaletteOpen = !selectedSkill && prompt.startsWith("/");
+  const paletteFilter = isPaletteOpen ? prompt.slice(1) : "";
+
+  const handleSkillSelect = useCallback(
+    (skillName: string) => {
+      setSelectedSkill(skillName);
+      handlePromptChange("");
+      inputRef.current?.focus();
+    },
+    [setSelectedSkill, handlePromptChange]
+  );
+
+  const handleSkillRemove = useCallback(() => {
+    setSelectedSkill(null);
+    handlePromptChange("/");
+    inputRef.current?.focus();
+  }, [setSelectedSkill, handlePromptChange]);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
+
+    // Backspace with empty input removes the skill pill
+    if (e.key === "Backspace" && selectedSkill && !prompt) {
+      e.preventDefault();
+      handleSkillRemove();
+      return;
+    }
 
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
       e.preventDefault();
@@ -391,17 +434,32 @@ function HomeContent({
 
               <div className="border border-border bg-input">
                 {/* Text input area */}
+                {/* Text input area */}
                 <div className="relative">
-                  <textarea
-                    ref={inputRef}
-                    value={prompt}
-                    onChange={(e) => handlePromptChange(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder="What do you want to build?"
-                    disabled={creating}
-                    className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-foreground placeholder:text-secondary-foreground disabled:opacity-50"
-                    rows={3}
-                  />
+                  <div className="flex items-start px-4 pt-4 pb-12">
+                    {selectedSkill && (
+                      <button
+                        type="button"
+                        onClick={handleSkillRemove}
+                        className="inline-flex items-center gap-1 bg-accent/10 text-accent px-2 py-1 rounded-full text-xs font-semibold mr-2 mt-0.5 flex-shrink-0 hover:bg-accent/20 transition-colors"
+                      >
+                        /{selectedSkill}
+                        <span className="text-accent/60">&times;</span>
+                      </button>
+                    )}
+                    <textarea
+                      ref={inputRef}
+                      value={prompt}
+                      onChange={(e) => handlePromptChange(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder={
+                        selectedSkill ? "Add a message (optional)..." : "What do you want to build?"
+                      }
+                      disabled={creating}
+                      className="flex-1 resize-none bg-transparent focus:outline-none text-foreground placeholder:text-secondary-foreground disabled:opacity-50"
+                      rows={3}
+                    />
+                  </div>
                   {/* Submit button */}
                   <div className="absolute bottom-3 right-3 flex items-center gap-2">
                     {isCreatingSession && (
@@ -409,7 +467,7 @@ function HomeContent({
                     )}
                     <button
                       type="submit"
-                      disabled={!prompt.trim() || creating || !selectedRepo}
+                      disabled={(!prompt.trim() && !selectedSkill) || creating || !selectedRepo}
                       className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
                       title={`Send (${SHORTCUT_LABELS.SEND_PROMPT})`}
                       aria-label={`Send (${SHORTCUT_LABELS.SEND_PROMPT})`}
@@ -422,6 +480,15 @@ function HomeContent({
                     </button>
                   </div>
                 </div>
+
+                {/* Skill palette — renders inside the input container, below the text area */}
+                <SkillPalette
+                  skills={skills}
+                  isOpen={isPaletteOpen}
+                  filterQuery={paletteFilter}
+                  onSelect={handleSkillSelect}
+                  onClose={() => handlePromptChange("")}
+                />
 
                 {/* Footer row with repo and model selectors */}
                 <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">

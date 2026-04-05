@@ -39,7 +39,8 @@ export type EventType =
   | "artifact"
   | "push_complete"
   | "push_error"
-  | "user_message";
+  | "user_message"
+  | "skills_discovered";
 export type ParticipantRole = "owner" | "member";
 export type SpawnSource = "user" | "agent" | "automation";
 export type ConfidenceLevel = "high" | "medium" | "low";
@@ -135,6 +136,15 @@ export interface PullRequest {
   baseRef: string;
   createdAt: string;
   updatedAt: string;
+}
+
+// Skill metadata discovered from container plugins and repo directories
+export interface SkillInfo {
+  name: string;
+  description: string;
+  source: "container" | "repo";
+  plugin?: string;
+  path?: string;
 }
 
 // Sandbox events (from Modal / control-plane synthesized)
@@ -237,6 +247,12 @@ export type SandboxEvent =
         name: string;
         avatar?: string;
       };
+    }
+  | {
+      type: "skills_discovered";
+      skills: SkillInfo[];
+      sandboxId: string;
+      timestamp: number;
     };
 
 // WebSocket message types
@@ -323,6 +339,7 @@ export interface SessionState {
   parentSessionId?: string | null;
   codeServerUrl?: string | null;
   codeServerPassword?: string | null;
+  skills?: SkillInfo[];
 }
 
 // Participant presence info
