@@ -11,6 +11,7 @@ This module handles:
 
 import argparse
 import asyncio
+import base64
 import contextlib
 import json
 import os
@@ -73,6 +74,56 @@ else:
 # Fallback git identity when prompt author has no SCM name/email configured.
 # Matches the co-author trailer used in generateCommitMessage (shared/git.ts).
 FALLBACK_GIT_USER = GitUser(name="OpenInspect", email="open-inspect@noreply.github.com")
+
+# ---------------------------------------------------------------------------
+# Screenshot detection and encoding
+# ---------------------------------------------------------------------------
+
+# Maximum screenshot file size to inline (500 KB). Larger files are skipped.
+MAX_SCREENSHOT_BYTES = 500_000
+
+# Pattern: optional checkmark + "Screenshot saved to <path>" or "Full page screenshot saved to <path>"
+_SCREENSHOT_RE = re.compile(
+    r"(?:Full page )?[Ss]creenshot saved to (\S+\.(?:png|jpg|jpeg|webp))",
+)
+
+_MIME_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
+
+
+def extract_screenshot_path(output: str | None) -> str | None:
+    """Extract screenshot file path from agent-browser CLI output."""
+    if not output:
+        return None
+    match = _SCREENSHOT_RE.search(output)
+    return match.group(1) if match else None
+
+
+def encode_screenshot(file_path: str) -> dict[str, str] | None:
+    """Read a screenshot file and return base64-encoded data, or None if unavailable."""
+    path = Path(file_path)
+    if not path.exists():
+        return None
+
+    if path.stat().st_size > MAX_SCREENSHOT_BYTES:
+        return None
+
+    suffix = path.suffix.lower()
+    mime_type = _MIME_TYPES.get(suffix, "image/png")
+
+    try:
+        data = path.read_bytes()
+        return {
+            "base64": base64.b64encode(data).decode("ascii"),
+            "mimeType": mime_type,
+            "filename": path.name,
+        }
+    except OSError:
+        return None
 
 
 class OpenCodeIdentifier:
@@ -799,15 +850,33 @@ class AgentBridge:
             if status in ("pending", "") and not tool_input:
                 return None
 
-            return {
+            tool_name = part.get("tool", "")
+            output = state.get("output", "")
+
+            event = {
                 "type": "tool_call",
-                "tool": part.get("tool", ""),
+                "tool": tool_name,
                 "args": tool_input,
                 "callId": part.get("callID", ""),
                 "status": status,
-                "output": state.get("output", ""),
+                "output": output,
                 "messageId": message_id,
             }
+
+            # Detect and inline screenshots from agent-browser Bash output
+            if tool_name.lower() == "bash" and status == "completed":
+                screenshot_path = extract_screenshot_path(output)
+                if screenshot_path:
+                    encoded = encode_screenshot(screenshot_path)
+                    if encoded:
+                        event["images"] = [encoded]
+                        self.log.info(
+                            "bridge.screenshot_detected",
+                            path=screenshot_path,
+                            size_bytes=len(encoded["base64"]),
+                        )
+
+            return event
         elif part_type == "step-finish":
             return {
                 "type": "step_finish",
