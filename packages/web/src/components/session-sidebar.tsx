@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useState, useMemo, useCallback, useEffect, useRef, type TouchEvent } from "react";
 import { useSession, signOut } from "next-auth/react";
 import useSWR, { mutate } from "swr";
-import { formatRelativeTime, isInactiveSession } from "@/lib/time";
+import { formatRelativeTime } from "@/lib/time";
 import {
   buildSessionsPageKey,
   mergeUniqueSessions,
@@ -22,6 +22,7 @@ import {
   SettingsIcon,
   AutomationsIcon,
   BranchIcon,
+  ChevronRightIcon,
 } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -41,6 +42,7 @@ type SessionsResponse = { sessions: SessionItem[] };
 
 export const MOBILE_LONG_PRESS_MS = 450;
 const MOBILE_LONG_PRESS_MOVE_THRESHOLD_PX = 10;
+const COLLAPSED_REPOS_KEY = "open-inspect-sidebar-collapsed-repos";
 
 export function buildSessionHref(session: SessionItem) {
   return {
@@ -66,11 +68,19 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const [extraSessions, setExtraSessions] = useState<SessionItem[]>([]);
   const [hasMorePages, setHasMorePages] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+
+  const [collapsedRepos, setCollapsedRepos] = useState<Record<string, boolean>>({});
+  const [isCollapsedHydrated, setIsCollapsedHydrated] = useState(false);
+
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const offsetRef = useRef(0);
   const hasMoreRef = useRef(false);
   const loadingMoreRef = useRef(false);
   const isMobile = useIsMobile();
+
+  const toggleRepoCollapsed = useCallback((repoKey: string) => {
+    setCollapsedRepos((prev) => ({ ...prev, [repoKey]: !prev[repoKey] }));
+  }, []);
 
   const { data, isLoading: loading } = useSWR<SessionListResponse>(
     authSession ? SIDEBAR_SESSIONS_KEY : null
@@ -85,6 +95,27 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
     prevDataRef.current = data;
     effectiveExtraSessions = [];
   }
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(COLLAPSED_REPOS_KEY);
+      if (stored) {
+        setCollapsedRepos(JSON.parse(stored) as Record<string, boolean>);
+      }
+    } catch {
+      // localStorage unavailable
+    }
+    setIsCollapsedHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isCollapsedHydrated) return;
+    try {
+      localStorage.setItem(COLLAPSED_REPOS_KEY, JSON.stringify(collapsedRepos));
+    } catch {
+      // localStorage unavailable (e.g. private browsing or storage quota exceeded)
+    }
+  }, [collapsedRepos, isCollapsedHydrated]);
 
   useEffect(() => {
     if (!data) return;
@@ -159,8 +190,8 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   );
 
   // Sort sessions by updatedAt (most recent first), filter by search query,
-  // and group children under their parent sessions
-  const { activeSessions, inactiveSessions, childrenMap } = useMemo(() => {
+  // and group children under their parent sessions, then group top-level sessions by repo
+  const { repoGroups, childrenMap } = useMemo(() => {
     const filtered = sessions
       .filter((session) => session.status !== "archived")
       .filter((session) => {
@@ -171,7 +202,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
         return title.includes(query) || repo.includes(query);
       });
 
-    // Sort by updatedAt descending
+    // Sort all sessions by updatedAt descending
     const sorted = [...filtered].sort((a, b) => {
       const aTime = a.updatedAt || a.createdAt;
       const bTime = b.updatedAt || b.createdAt;
@@ -181,36 +212,39 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
     // Build set of visible session IDs for orphan detection
     const visibleIds = new Set(sorted.map((s) => s.id));
 
-    // Group children by parent ID
+    // Group children by parent ID; collect top-level sessions
     const children = new Map<string, SessionItem[]>();
     const topLevel: SessionItem[] = [];
 
     for (const session of sorted) {
       const parentId = session.parentSessionId;
       if (parentId && visibleIds.has(parentId)) {
-        // Parent is visible — nest under it
         const siblings = children.get(parentId) ?? [];
         siblings.push(session);
         children.set(parentId, siblings);
       } else {
-        // Top-level session (or orphan child whose parent is filtered out)
         topLevel.push(session);
       }
     }
 
-    const active: SessionItem[] = [];
-    const inactive: SessionItem[] = [];
-
+    // Group top-level sessions by repo key
+    const groupMap = new Map<string, SessionItem[]>();
     for (const session of topLevel) {
-      const timestamp = session.updatedAt || session.createdAt;
-      if (isInactiveSession(timestamp)) {
-        inactive.push(session);
-      } else {
-        active.push(session);
-      }
+      const key = `${session.repoOwner}/${session.repoName}`;
+      const group = groupMap.get(key) ?? [];
+      group.push(session);
+      groupMap.set(key, group);
     }
 
-    return { activeSessions: active, inactiveSessions: inactive, childrenMap: children };
+    // Sort groups by the updatedAt of their most-recent session (already sorted above)
+    const groups = Array.from(groupMap.entries()).map(([key, groupSessions]) => ({
+      key,
+      sessions: groupSessions, // already sorted by updatedAt descending
+    }));
+    // groups are naturally ordered by insertion order into groupMap, which follows
+    // the sorted topLevel array — so the first group always has the most-recent session.
+
+    return { repoGroups: groups, childrenMap: children };
   }, [sessions, searchQuery]);
 
   const currentSessionId = pathname?.startsWith("/session/") ? pathname.split("/")[2] : null;
@@ -294,42 +328,25 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           <div className="flex justify-center py-8">
             <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-muted-foreground" />
           </div>
-        ) : sessions.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm text-muted-foreground">No sessions yet</div>
+        ) : repoGroups.length === 0 ? (
+          <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+            {searchQuery ? "No sessions match your search" : "No sessions yet"}
+          </div>
         ) : (
           <>
-            {/* Active Sessions */}
-            {activeSessions.map((session) => (
-              <SessionWithChildren
-                key={session.id}
-                session={session}
-                childSessions={childrenMap.get(session.id)}
+            {repoGroups.map(({ key, sessions: groupSessions }) => (
+              <RepoGroup
+                key={key}
+                repoKey={key}
+                sessions={groupSessions}
+                childrenMap={childrenMap}
                 currentSessionId={currentSessionId}
                 isMobile={isMobile}
                 onSessionSelect={onSessionSelect}
+                collapsed={!!collapsedRepos[key]}
+                onToggle={() => toggleRepoCollapsed(key)}
               />
             ))}
-
-            {/* Inactive Divider */}
-            {inactiveSessions.length > 0 && (
-              <>
-                <div className="px-4 py-2 mt-2">
-                  <span className="text-xs font-medium text-secondary-foreground uppercase tracking-wide">
-                    Inactive
-                  </span>
-                </div>
-                {inactiveSessions.map((session) => (
-                  <SessionWithChildren
-                    key={session.id}
-                    session={session}
-                    childSessions={childrenMap.get(session.id)}
-                    currentSessionId={currentSessionId}
-                    isMobile={isMobile}
-                    onSessionSelect={onSessionSelect}
-                  />
-                ))}
-              </>
-            )}
 
             {loadingMore && (
               <div className="flex justify-center py-3">
@@ -439,7 +456,6 @@ function SessionListItem({
   const timestamp = session.updatedAt || session.createdAt;
   const relativeTime = formatRelativeTime(timestamp);
   const displayTitle = session.title || `${session.repoOwner}/${session.repoName}`;
-  const repoInfo = `${session.repoOwner}/${session.repoName}`;
   // Orphan child (parent filtered out) — show a subtle badge
   const isOrphanChild = session.parentSessionId && session.spawnSource === "agent";
   const [isRenaming, setIsRenaming] = useState(false);
@@ -595,8 +611,6 @@ function SessionListItem({
           />
           <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
             <span>{relativeTime}</span>
-            <span>·</span>
-            <span className="truncate">{repoInfo}</span>
           </div>
         </>
       ) : (
@@ -626,8 +640,6 @@ function SessionListItem({
           <div className="truncate text-sm font-medium text-foreground">{displayTitle}</div>
           <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
             <span>{relativeTime}</span>
-            <span>·</span>
-            <span className="truncate">{repoInfo}</span>
             {isOrphanChild && (
               <>
                 <span>·</span>
@@ -700,5 +712,73 @@ function ChildSessionListItem({
         <span className="truncate font-medium text-foreground">{displayTitle}</span>
       </div>
     </Link>
+  );
+}
+
+function RepoGroupHeader({
+  repoKey,
+  count,
+  collapsed,
+  onToggle,
+}: {
+  repoKey: string;
+  count: number;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={`${collapsed ? "Expand" : "Collapse"} ${repoKey}`}
+      aria-expanded={!collapsed}
+      onClick={onToggle}
+      className="w-full flex items-center gap-1.5 px-3 py-1.5 mt-1 text-left text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition"
+    >
+      <ChevronRightIcon className={`w-3 h-3 transition ${collapsed ? "" : "rotate-90"}`} />
+      <span className="truncate flex-1">{repoKey}</span>
+      <span className="shrink-0 text-xs tabular-nums">{count}</span>
+    </button>
+  );
+}
+
+function RepoGroup({
+  repoKey,
+  sessions,
+  childrenMap,
+  currentSessionId,
+  isMobile,
+  onSessionSelect,
+  collapsed,
+  onToggle,
+}: {
+  repoKey: string;
+  sessions: SessionItem[];
+  childrenMap: Map<string, SessionItem[]>;
+  currentSessionId: string | null;
+  isMobile: boolean;
+  onSessionSelect?: () => void;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div>
+      <RepoGroupHeader
+        repoKey={repoKey}
+        count={sessions.length}
+        collapsed={collapsed}
+        onToggle={onToggle}
+      />
+      {!collapsed &&
+        sessions.map((session) => (
+          <SessionWithChildren
+            key={session.id}
+            session={session}
+            childSessions={childrenMap.get(session.id)}
+            currentSessionId={currentSessionId}
+            isMobile={isMobile}
+            onSessionSelect={onSessionSelect}
+          />
+        ))}
+    </div>
   );
 }
