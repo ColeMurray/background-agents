@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it } from "vitest";
-import { matchGlobalShortcut, shouldIgnoreGlobalShortcutForAction } from "./keyboard-shortcuts";
+import {
+  isEditableElement,
+  matchGlobalShortcut,
+  shouldIgnoreGlobalShortcutForAction,
+} from "./keyboard-shortcuts";
 
 function createKeyEvent(overrides: Partial<KeyboardEvent> = {}) {
   return {
@@ -55,6 +59,35 @@ describe("matchGlobalShortcut", () => {
     expect(
       matchGlobalShortcut(createKeyEvent({ ctrlKey: true, code: "Slash", altKey: true }))
     ).toBeNull();
+  });
+});
+
+describe("isEditableElement", () => {
+  it("returns false for null target", () => {
+    expect(isEditableElement(null)).toBe(false);
+  });
+
+  it("returns false for non-HTMLElement targets", () => {
+    // A plain object is not an HTMLElement
+    expect(isEditableElement({} as EventTarget)).toBe(false);
+  });
+
+  it("returns true for input elements", () => {
+    expect(isEditableElement(document.createElement("input"))).toBe(true);
+  });
+
+  it("returns true for textarea elements", () => {
+    expect(isEditableElement(document.createElement("textarea"))).toBe(true);
+  });
+
+  it("returns true for select elements", () => {
+    expect(isEditableElement(document.createElement("select"))).toBe(true);
+  });
+
+  it("returns false for non-editable elements like div and button", () => {
+    expect(isEditableElement(document.createElement("div"))).toBe(false);
+    expect(isEditableElement(document.createElement("button"))).toBe(false);
+    expect(isEditableElement(document.createElement("span"))).toBe(false);
   });
 });
 
