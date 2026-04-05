@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useState, useMemo, useCallback, useEffect, useRef, type TouchEvent } from "react";
 import { useSession, signOut } from "next-auth/react";
 import useSWR, { mutate } from "swr";
-import { formatRelativeTime, isInactiveSession } from "@/lib/time";
+import { formatRelativeTime } from "@/lib/time";
 import {
   buildSessionsPageKey,
   mergeUniqueSessions,
@@ -328,42 +328,25 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           <div className="flex justify-center py-8">
             <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-muted-foreground" />
           </div>
-        ) : sessions.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm text-muted-foreground">No sessions yet</div>
+        ) : sessions.length === 0 || repoGroups.length === 0 ? (
+          <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+            {sessions.length === 0 ? "No sessions yet" : "No sessions match your search"}
+          </div>
         ) : (
           <>
-            {/* Active Sessions */}
-            {activeSessions.map((session) => (
-              <SessionWithChildren
-                key={session.id}
-                session={session}
-                childSessions={childrenMap.get(session.id)}
+            {repoGroups.map(({ key, sessions: groupSessions }) => (
+              <RepoGroup
+                key={key}
+                repoKey={key}
+                sessions={groupSessions}
+                childrenMap={childrenMap}
                 currentSessionId={currentSessionId}
                 isMobile={isMobile}
                 onSessionSelect={onSessionSelect}
+                collapsed={!!collapsedRepos[key]}
+                onToggle={() => toggleRepoCollapsed(key)}
               />
             ))}
-
-            {/* Inactive Divider */}
-            {inactiveSessions.length > 0 && (
-              <>
-                <div className="px-4 py-2 mt-2">
-                  <span className="text-xs font-medium text-secondary-foreground uppercase tracking-wide">
-                    Inactive
-                  </span>
-                </div>
-                {inactiveSessions.map((session) => (
-                  <SessionWithChildren
-                    key={session.id}
-                    session={session}
-                    childSessions={childrenMap.get(session.id)}
-                    currentSessionId={currentSessionId}
-                    isMobile={isMobile}
-                    onSessionSelect={onSessionSelect}
-                  />
-                ))}
-              </>
-            )}
 
             {loadingMore && (
               <div className="flex justify-center py-3">
