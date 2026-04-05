@@ -20,7 +20,7 @@ from typing import Any
 
 import modal
 
-from sandbox_runtime.constants import CODE_SERVER_PORT
+from sandbox_runtime.constants import CODE_SERVER_PORT, TTYD_PROXY_PORT
 from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.types import SandboxStatus, SessionConfig
 
@@ -67,6 +67,7 @@ class SandboxHandle:
     modal_object_id: str | None = None  # Modal's internal sandbox ID for API calls
     code_server_url: str | None = None
     code_server_password: str | None = None
+    ttyd_url: str | None = None  # proxy tunnel URL (not ttyd directly)
     tunnel_urls: dict[int, str] | None = None  # port -> tunnel URL mapping for extra ports
 
     def get_logs(self) -> str:
@@ -152,16 +153,24 @@ class SandboxManager:
 
     @staticmethod
     def _collect_exposed_ports(
-        code_server_enabled: bool, settings: dict[str, Any] | None
+        code_server_enabled: bool,
+        terminal_enabled: bool,
+        settings: dict[str, Any] | None,
     ) -> tuple[list[int], list[int]]:
-        """Return (all_exposed_ports, extra_tunnel_ports) from settings and code-server flag."""
-        raw_ports = (settings or {}).get("tunnelPorts", [])
-        tunnel_ports = SandboxManager._validate_ports(raw_ports) if raw_ports else []
+        """Return (all_exposed_ports, extra_tunnel_ports) from settings and feature flags."""
+        reserved: set[int] = set()
         exposed: list[int] = []
         if code_server_enabled:
             exposed.append(CODE_SERVER_PORT)
-            # Remove CODE_SERVER_PORT from tunnel_ports to avoid duplicates
-            tunnel_ports = [p for p in tunnel_ports if p != CODE_SERVER_PORT]
+            reserved.add(CODE_SERVER_PORT)
+        if terminal_enabled:
+            exposed.append(TTYD_PROXY_PORT)
+            reserved.add(TTYD_PROXY_PORT)
+
+        raw_ports = (settings or {}).get("tunnelPorts", [])
+        tunnel_ports = SandboxManager._validate_ports(raw_ports) if raw_ports else []
+        # Remove reserved ports from tunnel_ports to avoid duplicates
+        tunnel_ports = [p for p in tunnel_ports if p not in reserved]
         exposed.extend(tunnel_ports)
         return exposed, tunnel_ports
 
@@ -170,19 +179,27 @@ class SandboxManager:
         sandbox: modal.Sandbox,
         sandbox_id: str,
         code_server_enabled: bool,
+        terminal_enabled: bool,
         extra_ports: list[int],
-    ) -> tuple[str | None, dict[int, str] | None]:
-        """Resolve all tunnels in a single pass, splitting code-server from extra ports."""
-        all_ports = ([CODE_SERVER_PORT] if code_server_enabled else []) + extra_ports
+    ) -> tuple[str | None, str | None, dict[int, str] | None]:
+        """Resolve all tunnels in a single pass. Returns (code_server_url, ttyd_url, extra_urls)."""
+        all_ports: list[int] = []
+        if code_server_enabled:
+            all_ports.append(CODE_SERVER_PORT)
+        if terminal_enabled:
+            all_ports.append(TTYD_PROXY_PORT)
+        all_ports.extend(extra_ports)
+
         if not all_ports:
-            return None, None
+            return None, None, None
 
         resolved = await SandboxManager._resolve_tunnels(sandbox, sandbox_id, all_ports)
 
-        code_server_url = resolved.pop(CODE_SERVER_PORT, None) if code_server_enabled else None
+        code_server_url = resolved.pop(CODE_SERVER_PORT, None)
+        ttyd_url = resolved.pop(TTYD_PROXY_PORT, None)
         extra_urls = resolved if resolved else None
 
-        return code_server_url, extra_urls
+        return code_server_url, ttyd_url, extra_urls
 
     @staticmethod
     def _inject_vcs_env_vars(env_vars: dict[str, str], clone_token: str | None) -> None:
@@ -253,6 +270,10 @@ class SandboxManager:
             code_server_password = self._generate_code_server_password()
             env_vars["CODE_SERVER_PASSWORD"] = code_server_password
 
+        terminal_enabled = bool((config.settings or {}).get("terminalEnabled", False))
+        if terminal_enabled:
+            env_vars["TERMINAL_ENABLED"] = "true"
+
         if config.session_config:
             env_vars["SESSION_CONFIG"] = config.session_config.model_dump_json()
 
@@ -277,7 +298,7 @@ class SandboxManager:
             "env": env_vars,
         }
         exposed_ports, tunnel_ports = self._collect_exposed_ports(
-            config.code_server_enabled, config.settings
+            config.code_server_enabled, terminal_enabled, config.settings
         )
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports
@@ -290,8 +311,8 @@ class SandboxManager:
         )
 
         modal_object_id = sandbox.object_id
-        code_server_url, extra_tunnel_urls = await self._resolve_and_setup_tunnels(
-            sandbox, sandbox_id, config.code_server_enabled, tunnel_ports
+        code_server_url, ttyd_url, extra_tunnel_urls = await self._resolve_and_setup_tunnels(
+            sandbox, sandbox_id, config.code_server_enabled, terminal_enabled, tunnel_ports
         )
 
         duration_ms = int((time.time() - start_time) * 1000)
@@ -314,6 +335,7 @@ class SandboxManager:
             modal_object_id=modal_object_id,
             code_server_url=code_server_url,
             code_server_password=code_server_password,
+            ttyd_url=ttyd_url,
             tunnel_urls=extra_tunnel_urls,
         )
 
@@ -586,6 +608,10 @@ class SandboxManager:
             code_server_password = self._generate_code_server_password()
             env_vars["CODE_SERVER_PASSWORD"] = code_server_password
 
+        terminal_enabled = bool((settings or {}).get("terminalEnabled", False))
+        if terminal_enabled:
+            env_vars["TERMINAL_ENABLED"] = "true"
+
         # Create the sandbox from the snapshot image
         create_kwargs: dict = {
             "image": image,  # Use the snapshot image directly
@@ -595,7 +621,9 @@ class SandboxManager:
             "workdir": "/workspace",
             "env": env_vars,
         }
-        exposed_ports, tunnel_ports = self._collect_exposed_ports(code_server_enabled, settings)
+        exposed_ports, tunnel_ports = self._collect_exposed_ports(
+            code_server_enabled, terminal_enabled, settings
+        )
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports
 
@@ -607,8 +635,8 @@ class SandboxManager:
         )
 
         modal_object_id = sandbox.object_id
-        code_server_url, extra_tunnel_urls = await self._resolve_and_setup_tunnels(
-            sandbox, sandbox_id, code_server_enabled, tunnel_ports
+        code_server_url, ttyd_url, extra_tunnel_urls = await self._resolve_and_setup_tunnels(
+            sandbox, sandbox_id, code_server_enabled, terminal_enabled, tunnel_ports
         )
 
         duration_ms = int((time.time() - start_time) * 1000)
@@ -632,6 +660,7 @@ class SandboxManager:
             modal_object_id=modal_object_id,
             code_server_url=code_server_url,
             code_server_password=code_server_password,
+            ttyd_url=ttyd_url,
             tunnel_urls=extra_tunnel_urls,
         )
 

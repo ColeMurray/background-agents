@@ -1,87 +1,112 @@
-"""Tests for code-server integration in SandboxManager and SandboxSupervisor."""
+"""Tests for ttyd web terminal integration in SandboxManager."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.sandbox.manager import CODE_SERVER_PORT, SandboxConfig, SandboxManager
+from src.sandbox.manager import (
+    CODE_SERVER_PORT,
+    TTYD_PROXY_PORT,
+    SandboxConfig,
+    SandboxManager,
+)
 
 
-class TestGenerateCodeServerPassword:
-    """SandboxManager._generate_code_server_password tests."""
+class TestCollectExposedPortsTerminal:
+    """_collect_exposed_ports with terminal_enabled flag."""
 
-    def test_returns_nonempty_password(self):
-        password = SandboxManager._generate_code_server_password()
-        assert len(password) > 0
+    def test_terminal_enabled_includes_proxy_port(self):
+        exposed, _extra = SandboxManager._collect_exposed_ports(
+            code_server_enabled=False, terminal_enabled=True, settings=None
+        )
+        assert TTYD_PROXY_PORT in exposed
+        # ttyd raw port (7681) should NOT be exposed
+        assert 7681 not in exposed
 
-    def test_generates_unique_passwords(self):
-        passwords = set()
-        for _ in range(20):
-            passwords.add(SandboxManager._generate_code_server_password())
-        assert len(passwords) == 20
+    def test_terminal_disabled_excludes_proxy_port(self):
+        exposed, _extra = SandboxManager._collect_exposed_ports(
+            code_server_enabled=False, terminal_enabled=False, settings=None
+        )
+        assert TTYD_PROXY_PORT not in exposed
+
+    def test_terminal_and_code_server_both_enabled(self):
+        exposed, _extra = SandboxManager._collect_exposed_ports(
+            code_server_enabled=True, terminal_enabled=True, settings=None
+        )
+        assert CODE_SERVER_PORT in exposed
+        assert TTYD_PROXY_PORT in exposed
+
+    def test_terminal_port_deduped_from_tunnel_ports(self):
+        """If user explicitly lists TTYD_PROXY_PORT in tunnelPorts, it should not duplicate."""
+        settings = {"tunnelPorts": [TTYD_PROXY_PORT, 3000]}
+        exposed, extra = SandboxManager._collect_exposed_ports(
+            code_server_enabled=False, terminal_enabled=True, settings=settings
+        )
+        assert exposed.count(TTYD_PROXY_PORT) == 1
+        assert 3000 in exposed
+        # TTYD_PROXY_PORT should not be in extra (reserved)
+        assert TTYD_PROXY_PORT not in extra
+        assert 3000 in extra
 
 
-class TestResolveCodeServerTunnel:
-    """SandboxManager._resolve_tunnels tests for code-server port."""
+class TestResolveTunnelsTerminal:
+    """_resolve_and_setup_tunnels extracts ttyd_url from resolved tunnels."""
 
     @pytest.mark.asyncio
-    async def test_returns_tunnel_url_on_success(self):
+    async def test_returns_ttyd_url_when_terminal_enabled(self):
         tunnel = MagicMock()
-        tunnel.url = "https://tunnel.example.com"
+        tunnel.url = "https://ttyd.example.com"
 
         sandbox = MagicMock()
-        sandbox.tunnels.return_value = {CODE_SERVER_PORT: tunnel}
+        sandbox.tunnels.return_value = {TTYD_PROXY_PORT: tunnel}
 
-        resolved = await SandboxManager._resolve_tunnels(sandbox, "sb-123", [CODE_SERVER_PORT])
-        assert resolved.get(CODE_SERVER_PORT) == "https://tunnel.example.com"
+        cs_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
+            sandbox, "sb-123", code_server_enabled=False, terminal_enabled=True, extra_ports=[]
+        )
+        assert cs_url is None
+        assert ttyd_url == "https://ttyd.example.com"
+        assert extra is None
 
     @pytest.mark.asyncio
-    async def test_returns_empty_on_exception_after_retries(self):
+    async def test_returns_none_when_terminal_disabled(self):
         sandbox = MagicMock()
-        sandbox.tunnels.side_effect = Exception("tunnel unavailable")
-
-        with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
-            resolved = await SandboxManager._resolve_tunnels(
-                sandbox, "sb-123", [CODE_SERVER_PORT], retries=2, backoff=0.0
-            )
-        assert resolved == {}
-        assert sandbox.tunnels.call_count == 2
+        cs_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
+            sandbox, "sb-123", code_server_enabled=False, terminal_enabled=False, extra_ports=[]
+        )
+        assert cs_url is None
+        assert ttyd_url is None
+        assert extra is None
 
     @pytest.mark.asyncio
-    async def test_returns_empty_when_port_missing_after_retries(self):
-        sandbox = MagicMock()
-        sandbox.tunnels.return_value = {}  # no entry for CODE_SERVER_PORT
-
-        with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
-            resolved = await SandboxManager._resolve_tunnels(
-                sandbox, "sb-123", [CODE_SERVER_PORT], retries=2, backoff=0.0
-            )
-        assert resolved == {}
-
-    @pytest.mark.asyncio
-    async def test_retries_then_succeeds(self):
-        tunnel = MagicMock()
-        tunnel.url = "https://tunnel.example.com"
+    async def test_both_code_server_and_terminal(self):
+        cs_tunnel = MagicMock()
+        cs_tunnel.url = "https://cs.example.com"
+        ttyd_tunnel = MagicMock()
+        ttyd_tunnel.url = "https://ttyd.example.com"
 
         sandbox = MagicMock()
-        sandbox.tunnels.side_effect = [
-            Exception("not ready"),
-            {CODE_SERVER_PORT: tunnel},
-        ]
+        sandbox.tunnels.return_value = {
+            CODE_SERVER_PORT: cs_tunnel,
+            TTYD_PROXY_PORT: ttyd_tunnel,
+        }
 
-        with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
-            resolved = await SandboxManager._resolve_tunnels(
-                sandbox, "sb-123", [CODE_SERVER_PORT], retries=3, backoff=0.0
-            )
-        assert resolved.get(CODE_SERVER_PORT) == "https://tunnel.example.com"
-        assert sandbox.tunnels.call_count == 2
+        cs_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
+            sandbox,
+            "sb-123",
+            code_server_enabled=True,
+            terminal_enabled=True,
+            extra_ports=[],
+        )
+        assert cs_url == "https://cs.example.com"
+        assert ttyd_url == "https://ttyd.example.com"
+        assert extra is None
 
 
-class TestCreateSandboxCodeServer:
-    """create_sandbox populates code-server fields on the returned handle."""
+class TestCreateSandboxTerminal:
+    """create_sandbox populates ttyd fields on the returned handle."""
 
     @pytest.mark.asyncio
-    async def test_handle_contains_code_server_fields(self, monkeypatch):
+    async def test_handle_contains_ttyd_url(self, monkeypatch):
         captured = {}
 
         async def fake_create_aio(*args, **kwargs):
@@ -101,7 +126,7 @@ class TestCreateSandboxCodeServer:
         monkeypatch.setattr(
             SandboxManager,
             "_resolve_and_setup_tunnels",
-            AsyncMock(return_value=("https://cs.example.com", None, None)),
+            AsyncMock(return_value=(None, "https://ttyd.example.com", None)),
         )
 
         manager = SandboxManager()
@@ -110,22 +135,18 @@ class TestCreateSandboxCodeServer:
             repo_name="repo",
             control_plane_url="https://cp.example.com",
             sandbox_auth_token="token-123",
-            code_server_enabled=True,
+            code_server_enabled=False,
+            settings={"terminalEnabled": True},
         )
 
         handle = await manager.create_sandbox(config)
 
-        assert handle.code_server_url == "https://cs.example.com"
-        assert handle.code_server_password is not None
-        assert len(handle.code_server_password) > 0
-        # Password should be injected into sandbox env vars
-        assert captured["env"]["CODE_SERVER_PASSWORD"] == handle.code_server_password
-        # Code-server port should be in encrypted_ports
-        assert captured["encrypted_ports"] == [CODE_SERVER_PORT]
+        assert handle.ttyd_url == "https://ttyd.example.com"
+        assert captured["env"]["TERMINAL_ENABLED"] == "true"
+        assert TTYD_PROXY_PORT in captured["encrypted_ports"]
 
     @pytest.mark.asyncio
-    async def test_code_server_skipped_when_disabled(self, monkeypatch):
-        """When code_server_enabled=False, no password, ports, or tunnel."""
+    async def test_ttyd_skipped_when_disabled(self, monkeypatch):
         captured = {}
 
         async def fake_create_aio(*args, **kwargs):
@@ -156,17 +177,16 @@ class TestCreateSandboxCodeServer:
 
         handle = await manager.create_sandbox(config)
 
-        assert handle.code_server_url is None
-        assert handle.code_server_password is None
-        assert "CODE_SERVER_PASSWORD" not in captured["env"]
+        assert handle.ttyd_url is None
+        assert "TERMINAL_ENABLED" not in captured["env"]
         assert captured["encrypted_ports"] is None
 
 
-class TestRestoreSandboxCodeServer:
-    """restore_from_snapshot populates code-server fields on the returned handle."""
+class TestRestoreSandboxTerminal:
+    """restore_from_snapshot populates ttyd fields on the returned handle."""
 
     @pytest.mark.asyncio
-    async def test_handle_contains_code_server_fields(self, monkeypatch):
+    async def test_handle_contains_ttyd_url(self, monkeypatch):
         captured = {}
 
         class FakeImage:
@@ -192,7 +212,7 @@ class TestRestoreSandboxCodeServer:
         monkeypatch.setattr(
             SandboxManager,
             "_resolve_and_setup_tunnels",
-            AsyncMock(return_value=("https://cs-restored.example.com", None, None)),
+            AsyncMock(return_value=(None, "https://ttyd-restored.example.com", None)),
         )
 
         manager = SandboxManager()
@@ -207,17 +227,16 @@ class TestRestoreSandboxCodeServer:
             },
             control_plane_url="https://cp.example.com",
             sandbox_auth_token="token-456",
-            code_server_enabled=True,
+            code_server_enabled=False,
+            settings={"terminalEnabled": True},
         )
 
-        assert handle.code_server_url == "https://cs-restored.example.com"
-        assert handle.code_server_password is not None
-        assert captured["env"]["CODE_SERVER_PASSWORD"] == handle.code_server_password
-        assert captured["encrypted_ports"] == [CODE_SERVER_PORT]
+        assert handle.ttyd_url == "https://ttyd-restored.example.com"
+        assert captured["env"]["TERMINAL_ENABLED"] == "true"
+        assert TTYD_PROXY_PORT in captured["encrypted_ports"]
 
     @pytest.mark.asyncio
-    async def test_code_server_skipped_when_disabled(self, monkeypatch):
-        """When code_server_enabled=False, restore skips code-server setup."""
+    async def test_ttyd_skipped_when_disabled(self, monkeypatch):
         captured = {}
 
         class FakeImage:
@@ -258,7 +277,6 @@ class TestRestoreSandboxCodeServer:
             code_server_enabled=False,
         )
 
-        assert handle.code_server_url is None
-        assert handle.code_server_password is None
-        assert "CODE_SERVER_PASSWORD" not in captured["env"]
+        assert handle.ttyd_url is None
+        assert "TERMINAL_ENABLED" not in captured["env"]
         assert captured["encrypted_ports"] is None

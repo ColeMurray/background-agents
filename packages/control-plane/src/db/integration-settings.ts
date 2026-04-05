@@ -294,6 +294,9 @@ export class IntegrationSettingsStore {
   }
 
   private validateSandboxSettings(settings: SandboxSettings): SandboxSettings {
+    if (settings.terminalEnabled !== undefined && typeof settings.terminalEnabled !== "boolean") {
+      throw new IntegrationSettingsValidationError("terminalEnabled must be a boolean");
+    }
     if (settings.tunnelPorts !== undefined) {
       if (!Array.isArray(settings.tunnelPorts)) {
         throw new IntegrationSettingsValidationError("tunnelPorts must be an array of numbers");

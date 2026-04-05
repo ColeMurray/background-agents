@@ -35,6 +35,7 @@ import {
 import { extractProviderAndModel } from "../../utils/models";
 import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
+import { mintJwt } from "../../auth/jwt";
 
 const log = createLogger("lifecycle-manager");
 
@@ -92,6 +93,10 @@ export interface SandboxStorage {
   updateSandboxTunnelUrls(urls: Record<string, string>): void | Promise<void>;
   /** Clear stale tunnel URLs (e.g. on sandbox teardown) */
   clearSandboxTunnelUrls(): void;
+  /** Update ttyd proxy URL and (encrypted) JWT token on the sandbox row */
+  updateSandboxTtyd(url: string, token: string): void | Promise<void>;
+  /** Clear stale ttyd URL and token (e.g. on sandbox teardown) */
+  clearSandboxTtyd(): void;
 }
 
 /**
@@ -408,6 +413,14 @@ export class SandboxLifecycleManager {
         await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
       }
       await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
+      if (result.ttydUrl) {
+        await this.storeAndBroadcastTtyd(
+          result.ttydUrl,
+          sandboxAuthToken,
+          sessionId,
+          expectedSandboxId
+        );
+      }
 
       this.storage.updateSandboxStatus("connecting");
       this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
@@ -536,6 +549,14 @@ export class SandboxLifecycleManager {
           await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
         }
         await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
+        if (result.ttydUrl) {
+          await this.storeAndBroadcastTtyd(
+            result.ttydUrl,
+            sandboxAuthToken,
+            session.session_name || session.id,
+            expectedSandboxId
+          );
+        }
 
         this.storage.updateSandboxStatus("connecting");
         this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
@@ -700,6 +721,7 @@ export class SandboxLifecycleManager {
       this.storage.updateSandboxStatus("failed");
       this.storage.clearSandboxCodeServer();
       this.storage.clearSandboxTunnelUrls();
+      this.storage.clearSandboxTtyd();
       this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
       this.broadcaster.broadcast({
         type: "sandbox_error",
@@ -731,6 +753,7 @@ export class SandboxLifecycleManager {
       this.storage.updateSandboxStatus("stale");
       this.storage.clearSandboxCodeServer();
       this.storage.clearSandboxTunnelUrls();
+      this.storage.clearSandboxTtyd();
       this.broadcaster.broadcast({ type: "sandbox_status", status: "stale" });
 
       // Best-effort shutdown: tell sandbox to exit cleanly (connection may already be dead).
@@ -768,6 +791,7 @@ export class SandboxLifecycleManager {
         this.storage.updateSandboxStatus("stopped");
         this.storage.clearSandboxCodeServer();
         this.storage.clearSandboxTunnelUrls();
+        this.storage.clearSandboxTtyd();
         this.broadcaster.broadcast({ type: "sandbox_status", status: "stopped" });
 
         // Take snapshot
@@ -918,6 +942,31 @@ export class SandboxLifecycleManager {
     this.log.info("Storing and broadcasting tunnel URLs", { ports: Object.keys(urls) });
     await this.storage.updateSandboxTunnelUrls(urls);
     this.broadcaster.broadcast({ type: "tunnel_urls", urls });
+  }
+
+  /**
+   * Mint a terminal JWT, persist the ttyd proxy URL + token, and broadcast to clients.
+   * The storage adapter encrypts the token before persisting (same pattern as code-server).
+   */
+  private async storeAndBroadcastTtyd(
+    url: string,
+    sandboxAuthToken: string,
+    sessionId: string,
+    sandboxId: string
+  ): Promise<void> {
+    const token = await mintJwt(
+      {
+        sub: sessionId,
+        sid: sandboxId,
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 86400, // 24 hours
+      },
+      sandboxAuthToken
+    );
+
+    this.log.info("Storing and broadcasting ttyd info", { url });
+    await this.storage.updateSandboxTtyd(url, token);
+    this.broadcaster.broadcast({ type: "ttyd_info", url, token });
   }
 
   /**

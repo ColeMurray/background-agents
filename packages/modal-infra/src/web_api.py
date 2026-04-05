@@ -195,6 +195,7 @@ async def api_create_sandbox(
                 "created_at": handle.created_at,
                 "code_server_url": handle.code_server_url,
                 "code_server_password": handle.code_server_password,
+                "ttyd_url": handle.ttyd_url,
                 "tunnel_urls": handle.tunnel_urls,
             },
         }
@@ -551,6 +552,7 @@ async def api_restore_sandbox(
                 "status": handle.status.value,
                 "code_server_url": handle.code_server_url,
                 "code_server_password": handle.code_server_password,
+                "ttyd_url": handle.ttyd_url,
                 "tunnel_urls": handle.tunnel_urls,
             },
         }

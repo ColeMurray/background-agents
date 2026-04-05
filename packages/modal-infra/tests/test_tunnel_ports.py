@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from sandbox_runtime.constants import TTYD_PROXY_PORT
 from src.sandbox.manager import CODE_SERVER_PORT, SandboxManager
 
 
@@ -79,10 +80,13 @@ class TestResolveAndSetupTunnels:
     """SandboxManager._resolve_and_setup_tunnels tests."""
 
     @pytest.mark.asyncio
-    async def test_returns_none_none_for_no_ports(self):
+    async def test_returns_none_none_none_for_no_ports(self):
         sandbox = MagicMock()
-        cs_url, extra = await SandboxManager._resolve_and_setup_tunnels(sandbox, "sb-1", False, [])
+        cs_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
+            sandbox, "sb-1", False, False, []
+        )
         assert cs_url is None
+        assert ttyd_url is None
         assert extra is None
 
     @pytest.mark.asyncio
@@ -96,11 +100,12 @@ class TestResolveAndSetupTunnels:
             new_callable=AsyncMock,
             return_value=tunnel_urls,
         ):
-            cs_url, extra = await SandboxManager._resolve_and_setup_tunnels(
-                sandbox, "sb-1", False, [3000]
+            cs_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
+                sandbox, "sb-1", False, False, [3000]
             )
 
         assert cs_url is None
+        assert ttyd_url is None
         assert extra == {3000: "https://tunnel-3000.example.com"}
 
     @pytest.mark.asyncio
@@ -118,11 +123,12 @@ class TestResolveAndSetupTunnels:
             new_callable=AsyncMock,
             return_value=resolved,
         ):
-            cs_url, extra = await SandboxManager._resolve_and_setup_tunnels(
-                sandbox, "sb-1", True, [3000]
+            cs_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
+                sandbox, "sb-1", True, False, [3000]
             )
 
         assert cs_url == "https://cs.example.com"
+        assert ttyd_url is None
         assert extra == {3000: "https://tunnel-3000.example.com"}
 
 
@@ -130,30 +136,44 @@ class TestCollectExposedPorts:
     """SandboxManager._collect_exposed_ports tests."""
 
     def test_no_ports_when_no_settings(self):
-        exposed, tunnel = SandboxManager._collect_exposed_ports(False, None)
+        exposed, tunnel = SandboxManager._collect_exposed_ports(False, False, None)
         assert exposed == []
         assert tunnel == []
 
     def test_code_server_only(self):
-        exposed, tunnel = SandboxManager._collect_exposed_ports(True, None)
+        exposed, tunnel = SandboxManager._collect_exposed_ports(True, False, None)
         assert exposed == [CODE_SERVER_PORT]
         assert tunnel == []
 
     def test_tunnel_ports_only(self):
         exposed, tunnel = SandboxManager._collect_exposed_ports(
-            False, {"tunnelPorts": [3000, 5173]}
+            False, False, {"tunnelPorts": [3000, 5173]}
         )
         assert exposed == [3000, 5173]
         assert tunnel == [3000, 5173]
 
     def test_combined_code_server_and_tunnels(self):
-        exposed, tunnel = SandboxManager._collect_exposed_ports(True, {"tunnelPorts": [3000]})
+        exposed, tunnel = SandboxManager._collect_exposed_ports(
+            True, False, {"tunnelPorts": [3000]}
+        )
         assert exposed == [CODE_SERVER_PORT, 3000]
+        assert tunnel == [3000]
+
+    def test_terminal_only(self):
+        exposed, tunnel = SandboxManager._collect_exposed_ports(False, True, None)
+        assert exposed == [TTYD_PROXY_PORT]
+        assert tunnel == []
+
+    def test_deduplicates_ttyd_port_from_tunnels(self):
+        exposed, tunnel = SandboxManager._collect_exposed_ports(
+            False, True, {"tunnelPorts": [TTYD_PROXY_PORT, 3000]}
+        )
+        assert exposed == [TTYD_PROXY_PORT, 3000]
         assert tunnel == [3000]
 
     def test_deduplicates_code_server_port_from_tunnels(self):
         exposed, tunnel = SandboxManager._collect_exposed_ports(
-            True, {"tunnelPorts": [CODE_SERVER_PORT, 3000]}
+            True, False, {"tunnelPorts": [CODE_SERVER_PORT, 3000]}
         )
         assert exposed == [CODE_SERVER_PORT, 3000]
         assert tunnel == [3000]

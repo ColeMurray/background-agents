@@ -85,6 +85,7 @@ export class ModalSandboxProvider implements SandboxProvider {
         createdAt: result.createdAt,
         codeServerUrl: result.codeServerUrl,
         codeServerPassword: result.codeServerPassword,
+        ttydUrl: result.ttydUrl,
         tunnelUrls: result.tunnelUrls,
       };
     } catch (error) {
@@ -124,6 +125,7 @@ export class ModalSandboxProvider implements SandboxProvider {
           providerObjectId: result.modalObjectId,
           codeServerUrl: result.codeServerUrl,
           codeServerPassword: result.codeServerPassword,
+          ttydUrl: result.ttydUrl,
           tunnelUrls: result.tunnelUrls,
         };
       }
