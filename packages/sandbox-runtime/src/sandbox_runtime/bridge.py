@@ -391,8 +391,8 @@ class AgentBridge:
                 just_flushed = await self._flush_event_buffer()
                 await self._flush_pending_acks(skip_ack_ids=just_flushed)
 
-                # Emit skill catalog after connection is established.
-                await self._emit_skills_discovered()
+                # Emit skill catalog in the background — retries until plugins are installed.
+                asyncio.create_task(self._emit_skills_discovered())
 
                 heartbeat_task = asyncio.create_task(self._heartbeat_loop())
                 background_tasks: set[asyncio.Task[None]] = set()
@@ -501,43 +501,63 @@ class AgentBridge:
         return just_added
 
     async def _emit_skills_discovered(self) -> None:
-        """Scan for skills and emit a skills_discovered event."""
-        try:
-            # Determine the workspace (repo) directory.
-            workspace = Path("/workspace")
-            repo_name = os.environ.get("REPO_NAME", "")
-            if repo_name:
-                repo_dir = workspace / repo_name
-                if repo_dir.exists() and (repo_dir / ".git").exists():
-                    workspace = repo_dir
+        """Scan for skills and emit a skills_discovered event.
 
-            # OpenCode plugin cache — check common locations.
-            plugin_cache_dir: Path | None = None
-            for candidate in [
-                Path.home() / ".local" / "share" / "opencode" / "plugins",
-                Path.home() / ".config" / "opencode" / "plugins",
-            ]:
-                if candidate.exists():
-                    plugin_cache_dir = candidate
-                    break
+        OpenCode installs plugins asynchronously after startup. The health
+        endpoint may return 200 before plugin installation completes, so we
+        retry the scan a few times with a delay to give plugins time to land.
+        """
+        workspace = Path("/workspace")
+        repo_name = os.environ.get("REPO_NAME", "")
+        if repo_name:
+            repo_dir = workspace / repo_name
+            if repo_dir.exists() and (repo_dir / ".git").exists():
+                workspace = repo_dir
 
-            skills = scan_skills(
-                workspace=workspace,
-                plugin_cache_dir=plugin_cache_dir,
-            )
+        max_attempts = 6
+        delay_seconds = 5  # 6 attempts × 5s = 30s max wait
 
-            if skills:
-                await self._send_event(
-                    {
-                        "type": "skills_discovered",
-                        "skills": skills,
-                    }
+        for attempt in range(max_attempts):
+            try:
+                # OpenCode plugin cache — check common locations.
+                plugin_cache_dir: Path | None = None
+                for candidate in [
+                    Path.home() / ".local" / "share" / "opencode" / "plugins",
+                    Path.home() / ".config" / "opencode" / "plugins",
+                ]:
+                    if candidate.exists():
+                        plugin_cache_dir = candidate
+                        break
+
+                skills = scan_skills(
+                    workspace=workspace,
+                    plugin_cache_dir=plugin_cache_dir,
                 )
-                self.log.info("skills.emitted", count=len(skills))
-            else:
-                self.log.info("skills.none_found")
-        except Exception as e:
-            self.log.warn("skills.scan_error", exc=str(e))
+
+                if skills:
+                    await self._send_event(
+                        {
+                            "type": "skills_discovered",
+                            "skills": skills,
+                        }
+                    )
+                    self.log.info("skills.emitted", count=len(skills), attempt=attempt + 1)
+                    return
+
+                # No skills found yet — plugins may still be installing.
+                if attempt < max_attempts - 1:
+                    self.log.debug(
+                        "skills.not_found_yet",
+                        attempt=attempt + 1,
+                        retry_in=delay_seconds,
+                    )
+                    await asyncio.sleep(delay_seconds)
+                else:
+                    self.log.info("skills.none_found", attempts=max_attempts)
+            except Exception as e:
+                self.log.warn("skills.scan_error", exc=str(e), attempt=attempt + 1)
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(delay_seconds)
 
     def _buffer_event(self, event: dict[str, Any]) -> None:
         """Buffer an event for later delivery after WS reconnect."""
