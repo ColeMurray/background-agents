@@ -147,6 +147,16 @@ export interface SkillInfo {
   path?: string;
 }
 
+/** Image attached to a tool call event (e.g. screenshot from agent-browser). */
+export interface ToolCallImage {
+  /** base64-encoded image data (no data URI prefix) */
+  base64: string;
+  /** MIME type (e.g. "image/png") */
+  mimeType: string;
+  /** Original filename if available */
+  filename?: string;
+}
+
 // Sandbox events (from Modal / control-plane synthesized)
 export type SandboxEvent =
   | { type: "heartbeat"; sandboxId: string; status: string; timestamp: number }
@@ -164,6 +174,7 @@ export type SandboxEvent =
       callId: string;
       status?: string;
       output?: string;
+      images?: ToolCallImage[];
       messageId: string;
       sandboxId: string;
       timestamp: number;
