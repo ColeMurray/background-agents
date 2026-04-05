@@ -4,3 +4,4 @@ export { MetadataSection } from "./metadata-section";
 export { TasksSection } from "./tasks-section";
 export { FilesChangedSection } from "./files-changed-section";
 export { CodeServerSection } from "./code-server-section";
+export { SkillsTimelineSection } from "./skills-timeline-section";
