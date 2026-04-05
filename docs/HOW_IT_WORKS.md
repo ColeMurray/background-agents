@@ -72,7 +72,8 @@ high performance even with hundreds of concurrent sessions.
 
 ## Architecture
 
-Open-Inspect uses a three-tier architecture spanning multiple cloud providers:
+Open-Inspect runs entirely on Cloudflare, with both the control plane and sandboxes on the same
+platform:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -101,15 +102,15 @@ Open-Inspect uses a three-tier architecture spanning multiple cloud providers:
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                       Data Plane (Modal)                                 │
+│               Data Plane (Cloudflare Containers)                                 │
 │  ┌────────────────────────────────────────────────────────────────────┐ │
-│  │                        Session Sandbox                              │ │
+│  │                 Sandbox (Durable Object + Container)                              │ │
 │  │  ┌────────────┐    ┌────────────┐    ┌────────────┐               │ │
 │  │  │ Supervisor │───▶│  OpenCode  │───▶│   Bridge   │───────────────┼─┼──▶ Control Plane
 │  │  └────────────┘    └────────────┘    └────────────┘               │ │
 │  │                           │                                        │ │
 │  │                    Full Dev Environment                            │ │
-│  │              (Node.js, Python, git, Playwright)                    │ │
+│  │        (Node.js 22, Python 3.10, git, code-server, Chromium)      │ │
 │  └────────────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -129,24 +130,71 @@ The control plane is the coordinator. It doesn't execute code—it manages state
 **Why Cloudflare?** Durable Objects provide per-session isolation with SQLite storage. Each session
 gets its own lightweight database that can handle hundreds of events per second without impacting
 other sessions. The WebSocket Hibernation API keeps connections alive during idle periods without
-incurring compute costs.
+incurring compute costs. Cloudflare Containers run sandboxes on the same platform, eliminating
+cross-provider networking complexity.
 
-### Data Plane (Modal Sandboxes)
+### Data Plane (Cloudflare Containers)
 
-The data plane is where code actually runs. Each session gets an isolated sandbox with a full
-development environment.
+The data plane is where code actually runs. Each session gets an isolated sandbox backed by a
+Cloudflare Container (Durable Object + Docker container).
 
 **What's in a sandbox:**
 
-- Debian Linux with common dev tools
-- Node.js 22, Python 3.12, git, curl
-- Package managers: npm, pnpm, pip, uv
-- agent-browser CLI + headless Chrome (for browser automation)
-- OpenCode (the coding agent)
+- Base image: `cloudflare/sandbox:0.7.18` (Debian with Python 3.10, Node.js 20)
+- Node.js 22 LTS, pnpm, yarn, Bun
+- Python 3.10 with uv, httpx, websockets, pydantic
+- OpenCode (`opencode-ai@latest`) — the coding agent, running in serve mode
+- code-server (browser-based VS Code)
+- agent-browser + headless Chromium
+- GitHub CLI
 
-**Why Modal?** Modal sandboxes start near-instantly and support filesystem snapshots. This lets us
-freeze a sandbox's state after setup, then restore it later in seconds instead of re-cloning and
-reinstalling dependencies.
+**Why Cloudflare Containers?** Running sandboxes on the same platform as the control plane
+eliminates cross-provider networking. The `@cloudflare/sandbox` SDK manages container lifecycle
+(start, sleep, destroy) automatically. Containers sleep after inactivity and wake on the next
+operation, keeping costs low.
+
+**How sandboxes connect to OpenCode:**
+
+The sandbox uses a three-process architecture managed by a Python supervisor (`entrypoint.py`):
+
+1. **OpenCode** runs in `serve` mode on port 4096, exposing an HTTP/SSE API
+2. **Bridge** connects to the control plane via WebSocket, forwards prompts to OpenCode, and streams
+   events back
+3. **code-server** (optional) provides browser-based editing on port 5656
+
+### LLM Provider Configuration
+
+OpenCode inside the sandbox is configured via `.opencode/opencode.json`, written at startup by the
+supervisor. This supports custom LLM providers through npm packages.
+
+**Fuelix proxy example** (used when `ANTHROPIC_BASE_URL` is set):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "fuelix": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "FuelIX",
+      "options": {
+        "baseURL": "https://api.fuelix.ai",
+        "apiKey": "<key>"
+      },
+      "models": {
+        "claude-sonnet-4-6": { "name": "Claude Sonnet 4.6" },
+        "claude-sonnet-4-5": { "name": "Claude Sonnet 4.5" }
+      }
+    }
+  },
+  "model": "fuelix/claude-sonnet-4-6"
+}
+```
+
+When no proxy is configured, OpenCode uses its built-in Anthropic provider with `ANTHROPIC_API_KEY`.
+
+**Why a custom provider instead of the built-in Anthropic provider?** OpenCode's built-in Anthropic
+provider hardcodes the `x-api-key` header, but proxies like Fuelix require `Authorization: Bearer`.
+The `@ai-sdk/openai-compatible` provider handles Bearer auth natively.
 
 ### Clients
 
@@ -182,7 +230,7 @@ When you create a session for a repo without an existing snapshot:
                             .openinspect/setup.sh   .openinspect/start.sh
 ```
 
-1. **Sandbox created**: Modal spins up a new container from the base image
+1. **Sandbox created**: Cloudflare starts a container from the sandbox image
 2. **Git sync**: Clones your repository using GitHub App credentials
 3. **Setup script**: Runs `.openinspect/setup.sh` for provisioning (if present)
 4. **Start script**: Runs `.openinspect/start.sh` for runtime startup (if present)
@@ -200,7 +248,7 @@ When restoring from a previous snapshot:
 └─────────────┘    └────────────┘    └─────────────┘    └───────┘
 ```
 
-1. **Restore snapshot**: Modal restores the filesystem from a saved image
+1. **Restore snapshot**: Container restores from a saved image
 2. **Quick sync**: Pulls latest changes (usually just a few commits)
 3. **Start script**: Runs `.openinspect/start.sh` for runtime startup (if present)
 4. **Ready**: Sandbox is ready almost instantly
@@ -371,29 +419,18 @@ Without optimization, starting a session would require:
 
 That's potentially minutes before the agent can start working.
 
-### How Snapshots Solve This
+### How Cloudflare Containers Help
 
-Modal's filesystem snapshots let us capture a sandbox's state after setup:
+Cloudflare Containers sleep after inactivity and wake automatically on the next SDK call. The
+`gitCheckout()` call triggers container start, and `setEnvVars()` configures the environment before
+the entrypoint runs. This means:
 
-```
-First session:  Clone ─▶ Install/Build ─▶ Start Runtime ─▶ [Snapshot] ─▶ Work
-                              (slow)
+- **No cold start penalty for subsequent prompts**: The container stays warm between messages
+- **Automatic cleanup**: Containers sleep after 1 hour of inactivity
+- **Same-platform networking**: No cross-provider latency between control plane and sandbox
 
-Later sessions: [Restore Snapshot] ─▶ Quick sync ─▶ Start Runtime ─▶ Work
-                     (fast)
-```
-
-The first session for a repo pays the setup cost. Subsequent sessions restore in seconds.
-
-### Image Prebuilding
-
-For frequently-used repositories, images can be prebuilt on a schedule:
-
-- Clone repo, install dependencies, run initial build
-- Save as a snapshot
-- Sessions start from this snapshot, only syncing recent changes
-
-This means even "cold" sessions (no previous snapshot) start from a recent baseline.
+The first prompt for a session pays the container start + git clone cost (~5-10s). Follow-up prompts
+in the same session are near-instant since the container is already running.
 
 ---
 
