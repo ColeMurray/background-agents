@@ -6,8 +6,9 @@ import { mutate } from "swr";
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { useSidebarContext } from "@/components/sidebar-layout";
-import { useWarmSkills } from "@/hooks/use-warm-skills";
 import { SkillPalette } from "@/components/skill-palette";
+import { mergeSkills } from "@/lib/default-skills";
+import { useWarmSkills } from "@/hooks/use-warm-skills";
 import { formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
@@ -53,6 +54,7 @@ export default function Home() {
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const [selectedSkill, setSelectedSkill] = useState<string | null>(null);
   const warmSkills = useWarmSkills(pendingSessionId);
+  const skills = mergeSkills(warmSkills.length > 0 ? warmSkills : undefined);
   const sessionCreationPromise = useRef<Promise<string | null> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const pendingConfigRef = useRef<{ repo: string; model: string; branch: string } | null>(null);
@@ -293,7 +295,7 @@ export default function Home() {
       error={error}
       handleSubmit={handleSubmit}
       modelOptions={enabledModelOptions}
-      skills={warmSkills}
+      skills={skills}
       selectedSkill={selectedSkill}
       setSelectedSkill={setSelectedSkill}
     />
@@ -432,18 +434,8 @@ function HomeContent({
 
               <div className="border border-border bg-input">
                 {/* Text input area */}
+                {/* Text input area */}
                 <div className="relative">
-                  {/* Skill palette overlay */}
-                  <SkillPalette
-                    skills={skills}
-                    isOpen={isPaletteOpen}
-                    filterQuery={paletteFilter}
-                    onSelect={handleSkillSelect}
-                    onClose={() => handlePromptChange("")}
-                    loading={skills.length === 0}
-                  />
-
-                  {/* Input area with optional skill pill */}
                   <div className="flex items-start px-4 pt-4 pb-12">
                     {selectedSkill && (
                       <button
@@ -468,7 +460,6 @@ function HomeContent({
                       rows={3}
                     />
                   </div>
-
                   {/* Submit button */}
                   <div className="absolute bottom-3 right-3 flex items-center gap-2">
                     {isCreatingSession && (
@@ -489,6 +480,15 @@ function HomeContent({
                     </button>
                   </div>
                 </div>
+
+                {/* Skill palette — renders inside the input container, below the text area */}
+                <SkillPalette
+                  skills={skills}
+                  isOpen={isPaletteOpen}
+                  filterQuery={paletteFilter}
+                  onSelect={handleSkillSelect}
+                  onClose={() => handlePromptChange("")}
+                />
 
                 {/* Footer row with repo and model selectors */}
                 <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">

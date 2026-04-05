@@ -10,8 +10,6 @@ interface SkillPaletteProps {
   filterQuery: string;
   onSelect: (skillName: string) => void;
   onClose: () => void;
-  /** Show a loading indicator when skills haven't arrived yet. */
-  loading?: boolean;
 }
 
 /**
@@ -31,7 +29,6 @@ function fuzzyMatch(query: string, target: string): boolean {
 function fuzzyScore(query: string, target: string): number {
   const q = query.toLowerCase();
   const t = target.toLowerCase();
-  // Prefer prefix matches
   if (t.startsWith(q)) return 2;
   if (t.includes(q)) return 1;
   return 0;
@@ -43,12 +40,10 @@ export function SkillPalette({
   filterQuery,
   onSelect,
   onClose,
-  loading,
 }: SkillPaletteProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Filter and sort skills, grouped by source
   const { orderedSkills, containerSkills, repoSkills } = useMemo(() => {
     const filtered = skills
       .filter((s) => !filterQuery || fuzzyMatch(filterQuery, s.name))
@@ -56,7 +51,6 @@ export function SkillPalette({
         if (filterQuery) {
           return fuzzyScore(filterQuery, b.name) - fuzzyScore(filterQuery, a.name);
         }
-        // Default: container first, then repo, alphabetical within
         if (a.source !== b.source) return a.source === "container" ? -1 : 1;
         return a.name.localeCompare(b.name);
       });
@@ -66,15 +60,13 @@ export function SkillPalette({
     return { orderedSkills: [...container, ...repo], containerSkills: container, repoSkills: repo };
   }, [skills, filterQuery]);
 
-  // Reset selection when filter changes
   useEffect(() => {
     setSelectedIndex(0);
   }, [filterQuery]);
 
-  // Keyboard navigation
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      if (!isOpen) return;
+      if (!isOpen || orderedSkills.length === 0) return;
 
       switch (e.key) {
         case "ArrowDown":
@@ -105,40 +97,23 @@ export function SkillPalette({
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
 
-  // Scroll selected item into view
   useEffect(() => {
     const list = listRef.current;
     if (!list) return;
-    const selected = list.children[selectedIndex] as HTMLElement | undefined;
+    const selected = list.querySelector("[data-selected=true]") as HTMLElement | undefined;
     selected?.scrollIntoView({ block: "nearest" });
   }, [selectedIndex]);
 
-  if (!isOpen) return null;
-
-  // Show loading state when skills haven't arrived yet
-  if (orderedSkills.length === 0) {
-    if (!loading) return null;
-    return (
-      <div className="absolute bottom-full left-0 right-0 mb-1 bg-card border border-border-muted rounded-lg shadow-lg z-[100] p-4">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <div className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
-          Loading skills...
-        </div>
-      </div>
-    );
-  }
+  if (!isOpen || orderedSkills.length === 0) return null;
 
   let flatIndex = 0;
 
   return (
-    <div
-      ref={listRef}
-      className="absolute bottom-full left-0 right-0 mb-1 max-h-64 overflow-y-auto bg-card border border-border-muted rounded-lg shadow-lg z-[100]"
-    >
+    <div ref={listRef} className="border-t border-border-muted max-h-52 overflow-y-auto">
       {containerSkills.length > 0 && (
         <>
-          <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-            Container
+          <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground sticky top-0 bg-card">
+            Skills
           </div>
           {containerSkills.map((skill) => {
             const idx = flatIndex++;
@@ -156,7 +131,7 @@ export function SkillPalette({
       {repoSkills.length > 0 && (
         <>
           {containerSkills.length > 0 && <div className="border-t border-border-muted" />}
-          <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+          <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground sticky top-0 bg-card">
             Repo
           </div>
           {repoSkills.map((skill) => {
@@ -188,6 +163,7 @@ function SkillOption({
   return (
     <button
       type="button"
+      data-selected={isSelected}
       onClick={onClick}
       className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors ${
         isSelected ? "bg-accent/10" : "hover:bg-accent/5"
@@ -198,11 +174,11 @@ function SkillOption({
           skill.source === "container" ? "text-accent" : "text-purple-400"
         }`}
       />
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         <div className="text-sm text-foreground font-medium">/{skill.name}</div>
         <div className="text-xs text-muted-foreground truncate">{skill.description}</div>
       </div>
-      {isSelected && <span className="ml-auto text-xs text-muted-foreground flex-shrink-0">↵</span>}
+      {isSelected && <span className="text-xs text-muted-foreground flex-shrink-0">↵</span>}
     </button>
   );
 }

@@ -42,6 +42,7 @@ import {
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { SkillTransitionHeader } from "@/components/skill-transition-header";
 import { SkillPalette } from "@/components/skill-palette";
+import { mergeSkills } from "@/lib/default-skills";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 import type { SessionItem } from "@/components/session-sidebar";
@@ -503,7 +504,7 @@ function SessionContent({
   // Skill palette derived state
   const isPaletteOpen = !selectedSkill && prompt.startsWith("/");
   const paletteFilter = isPaletteOpen ? prompt.slice(1) : "";
-  const skills = sessionState?.skills ?? [];
+  const skills = mergeSkills(sessionState?.skills);
   const resolvedRepoOwner = sessionState?.repoOwner ?? fallbackSessionInfo.repoOwner;
   const resolvedRepoName = sessionState?.repoName ?? fallbackSessionInfo.repoName;
   const fallbackRepoLabel =
@@ -951,18 +952,6 @@ function SessionContent({
           <div className="border border-border bg-input">
             {/* Text input area with floating send button */}
             <div className="relative">
-              {/* Skill palette overlay */}
-              <SkillPalette
-                skills={skills}
-                isOpen={isPaletteOpen}
-                filterQuery={paletteFilter}
-                onSelect={onSkillSelect}
-                onClose={() => {
-                  /* handled by handleInputChange */
-                }}
-                loading={skills.length === 0}
-              />
-
               {/* Input area with optional skill pill */}
               <div className="flex items-start px-4 pt-4 pb-12">
                 {selectedSkill && (
@@ -1026,6 +1015,17 @@ function SessionContent({
                 </button>
               </div>
             </div>
+
+            {/* Skill palette — renders inside input container, below text area */}
+            <SkillPalette
+              skills={skills}
+              isOpen={isPaletteOpen}
+              filterQuery={paletteFilter}
+              onSelect={onSkillSelect}
+              onClose={() => {
+                /* handled by handleInputChange */
+              }}
+            />
 
             {/* Footer row with model selector, reasoning pills, and agent label */}
             <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">
