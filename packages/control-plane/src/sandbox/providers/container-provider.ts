@@ -64,6 +64,13 @@ export class CloudflareContainerProvider implements SandboxProvider {
       });
       console.log("[sandbox] gitCheckout done");
 
+      // Diagnostic: log which secrets are available
+      console.log("[sandbox] secrets check", {
+        hasApiKey: !!this.secrets.anthropicApiKey,
+        hasBaseUrl: !!this.secrets.anthropicBaseUrl,
+        baseUrl: this.secrets.anthropicBaseUrl?.substring(0, 30),
+      });
+
       // Set env vars via setEnvVars() — this works reliably when the SDK
       // version matches the container version (both 0.7.18). The working
       // c3po codebase uses this same pattern successfully.
