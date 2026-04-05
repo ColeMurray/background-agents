@@ -41,6 +41,7 @@ type SessionsResponse = { sessions: SessionItem[] };
 
 export const MOBILE_LONG_PRESS_MS = 450;
 const MOBILE_LONG_PRESS_MOVE_THRESHOLD_PX = 10;
+const COLLAPSED_REPOS_KEY = "open-inspect-sidebar-collapsed-repos";
 
 export function buildSessionHref(session: SessionItem) {
   return {
@@ -67,16 +68,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const [hasMorePages, setHasMorePages] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  const COLLAPSED_REPOS_KEY = "open-inspect:sidebar-collapsed-repos";
-
-  const [collapsedRepos, setCollapsedRepos] = useState<Record<string, boolean>>(() => {
-    try {
-      const stored = localStorage.getItem(COLLAPSED_REPOS_KEY);
-      return stored ? (JSON.parse(stored) as Record<string, boolean>) : {};
-    } catch {
-      return {};
-    }
-  });
+  const [collapsedRepos, setCollapsedRepos] = useState<Record<string, boolean>>({});
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const offsetRef = useRef(0);
@@ -109,6 +101,17 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
     prevDataRef.current = data;
     effectiveExtraSessions = [];
   }
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(COLLAPSED_REPOS_KEY);
+      if (stored) {
+        setCollapsedRepos(JSON.parse(stored) as Record<string, boolean>);
+      }
+    } catch {
+      // localStorage unavailable
+    }
+  }, []);
 
   useEffect(() => {
     if (!data) return;
