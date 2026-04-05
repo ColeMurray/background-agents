@@ -38,7 +38,13 @@ export function extractSkillTimeline(events: SandboxEvent[]): SkillPhase[] {
     const toolEvent = event as ToolCallEvent;
     if (toolEvent.tool?.toLowerCase() !== "skill") continue;
 
-    const skillName = typeof toolEvent.args?.skill === "string" ? toolEvent.args.skill : null;
+    // OpenCode's Skill tool uses "name" as the input field.
+    const skillName =
+      typeof toolEvent.args?.name === "string"
+        ? toolEvent.args.name
+        : typeof toolEvent.args?.skill === "string"
+          ? toolEvent.args.skill
+          : null;
     if (!skillName) continue;
 
     const description = typeof toolEvent.args?.args === "string" ? toolEvent.args.args : undefined;
