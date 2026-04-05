@@ -180,10 +180,11 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
 
     case "bash": {
       const command = getStringArg(args, "command");
+      const isScreenshot = command?.includes("agent-browser") && command?.includes("screenshot");
       return {
         toolName: "Bash",
-        summary: truncate(command, 50),
-        icon: "terminal",
+        summary: isScreenshot ? "agent-browser screenshot" : truncate(command, 50),
+        icon: isScreenshot ? "camera" : "terminal",
         getDetails: () => ({ args, output }),
       };
     }

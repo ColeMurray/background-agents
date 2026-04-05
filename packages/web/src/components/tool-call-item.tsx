@@ -14,6 +14,7 @@ import {
   GlobeIcon,
   BoltIcon,
 } from "@/components/ui/icons";
+import { ScreenshotImage } from "./screenshot-image";
 
 interface ToolCallItemProps {
   event: Extract<SandboxEvent, { type: "tool_call" }>;
@@ -46,6 +47,23 @@ function ToolIcon({ name }: { name: string | null }) {
       return <GlobeIcon className={iconClass} />;
     case "bolt":
       return <BoltIcon className={iconClass} />;
+    case "camera":
+      return (
+        <svg
+          className={iconClass}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"
+          />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>
+      );
     default:
       return null;
   }
@@ -58,6 +76,7 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
     hour: "2-digit",
     minute: "2-digit",
   });
+  const images = event.images;
 
   const { args, output } = formatted.getDetails();
   const patchText = isApplyPatch && typeof args?.patchText === "string" ? args.patchText : null;
@@ -113,9 +132,23 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
               </pre>
             </div>
           )}
-          {!hasNonPatchArgs && !patchText && !output && (
+          {!hasNonPatchArgs && !patchText && !output && (!images || images.length === 0) && (
             <span className="text-secondary-foreground">No details available</span>
           )}
+        </div>
+      )}
+
+      {/* Screenshots always visible, even when collapsed */}
+      {images && images.length > 0 && (
+        <div className="ml-5">
+          {images.map((img, i) => (
+            <ScreenshotImage
+              key={i}
+              base64={img.base64}
+              mimeType={img.mimeType}
+              filename={img.filename}
+            />
+          ))}
         </div>
       )}
     </div>
