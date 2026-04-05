@@ -37,10 +37,13 @@ entirely.
 ## Collapse State
 
 - State shape: `Record<string, boolean>` keyed by `"${repoOwner}/${repoName}"`.
-- Persisted in `localStorage` under key `open-inspect:sidebar-collapsed-repos`.
+- Persisted in `localStorage` under key `open-inspect-sidebar-collapsed-repos` (hyphens, matching
+  the project's existing convention for `open-inspect-sidebar-open`).
 - Default for any repo group not present in storage: **expanded**.
-- Initialized via `useState` with a lazy initializer that reads from `localStorage` on mount.
-- On toggle: update React state and write to `localStorage` synchronously.
+- Initialized via `useState({})` + a `useEffect` hydration step (SSR-safe, matches `use-sidebar.ts`
+  pattern).
+- On toggle: update React state; a separate persist `useEffect` with an `isCollapsedHydrated` guard
+  writes to `localStorage`.
 - No server round-trip, no new React context, no new hook file.
 
 ## UI / Rendering
