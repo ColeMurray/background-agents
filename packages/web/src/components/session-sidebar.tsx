@@ -737,14 +737,6 @@ function ChildSessionListItem({
   );
 }
 
-function ChevronIcon({ collapsed }: { collapsed: boolean }) {
-  return (
-    <ChevronRightIcon
-      className={`w-3 h-3 transition-transform duration-150 ${collapsed ? "" : "rotate-90"}`}
-    />
-  );
-}
-
 function RepoGroupHeader({
   repoKey,
   count,
@@ -759,10 +751,12 @@ function RepoGroupHeader({
   return (
     <button
       type="button"
+      aria-label={`${collapsed ? "Expand" : "Collapse"} ${repoKey}`}
+      aria-expanded={!collapsed}
       onClick={onToggle}
       className="w-full flex items-center gap-1.5 px-3 py-1.5 mt-1 text-left text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition"
     >
-      <ChevronIcon collapsed={collapsed} />
+      <ChevronRightIcon className={`w-3 h-3 transition ${collapsed ? "" : "rotate-90"}`} />
       <span className="truncate flex-1">{repoKey}</span>
       <span className="shrink-0 text-xs tabular-nums">{count}</span>
     </button>
