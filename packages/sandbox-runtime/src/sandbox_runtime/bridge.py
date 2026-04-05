@@ -831,36 +831,37 @@ class AgentBridge:
             else:
                 provider_id, model_id = "anthropic", model
 
-            # Apply provider remap (e.g. anthropic → fuelix for LLM proxies)
-            if provider_id in self.provider_remap:
-                provider_id = self.provider_remap[provider_id]
-            model_spec: dict[str, Any] = {
-                "providerID": provider_id,
-                "modelID": model_id,
-            }
+            # When using a proxy (provider_remap active), don't send model
+            # in the request — let OpenCode use the default from .opencode.json.
+            # The config already has the correct fuelix/model-id.
+            if provider_id not in self.provider_remap:
+                model_spec: dict[str, Any] = {
+                    "providerID": provider_id,
+                    "modelID": model_id,
+                }
 
-            if reasoning_effort:
-                if provider_id == "anthropic":
-                    if model_id in self.ANTHROPIC_ADAPTIVE_THINKING_MODELS:
-                        anthropic_options: dict[str, Any] = {
-                            "thinking": {"type": "adaptive"},
-                        }
-                        if reasoning_effort in self.ANTHROPIC_ADAPTIVE_EFFORTS:
-                            anthropic_options["outputConfig"] = {"effort": reasoning_effort}
-                        model_spec["options"] = anthropic_options
-                    else:
-                        budget = self.ANTHROPIC_THINKING_BUDGETS.get(reasoning_effort)
-                        if budget is not None:
-                            model_spec["options"] = {
-                                "thinking": {"type": "enabled", "budgetTokens": budget}
+                if reasoning_effort:
+                    if provider_id == "anthropic":
+                        if model_id in self.ANTHROPIC_ADAPTIVE_THINKING_MODELS:
+                            anthropic_options: dict[str, Any] = {
+                                "thinking": {"type": "adaptive"},
                             }
-                elif provider_id == "openai":
-                    model_spec["options"] = {
-                        "reasoningEffort": reasoning_effort,
-                        "reasoningSummary": "auto",
-                    }
+                            if reasoning_effort in self.ANTHROPIC_ADAPTIVE_EFFORTS:
+                                anthropic_options["outputConfig"] = {"effort": reasoning_effort}
+                            model_spec["options"] = anthropic_options
+                        else:
+                            budget = self.ANTHROPIC_THINKING_BUDGETS.get(reasoning_effort)
+                            if budget is not None:
+                                model_spec["options"] = {
+                                    "thinking": {"type": "enabled", "budgetTokens": budget}
+                                }
+                    elif provider_id == "openai":
+                        model_spec["options"] = {
+                            "reasoningEffort": reasoning_effort,
+                            "reasoningSummary": "auto",
+                        }
 
-            request_body["model"] = model_spec
+                request_body["model"] = model_spec
 
         return request_body
 
