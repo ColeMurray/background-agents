@@ -12,6 +12,7 @@ import {
   FolderIcon,
   BoxIcon,
   GlobeIcon,
+  BoltIcon,
 } from "@/components/ui/icons";
 
 interface ToolCallItemProps {
@@ -43,6 +44,8 @@ function ToolIcon({ name }: { name: string | null }) {
       return <BoxIcon className={iconClass} />;
     case "globe":
       return <GlobeIcon className={iconClass} />;
+    case "bolt":
+      return <BoltIcon className={iconClass} />;
     default:
       return null;
   }

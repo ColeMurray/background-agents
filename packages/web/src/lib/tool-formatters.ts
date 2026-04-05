@@ -278,6 +278,16 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
       };
     }
 
+    case "skill": {
+      const skillName = getStringArg(args, "skill");
+      return {
+        toolName: "Skill",
+        summary: skillName || "skill",
+        icon: "bolt",
+        getDetails: () => ({ args, output }),
+      };
+    }
+
     default:
       return {
         toolName: tool || "Unknown",
