@@ -445,8 +445,23 @@ class SandboxSupervisor:
         config_path.write_text(json.dumps(opencode_config, indent=2))
         self.log.info("opencode.config_written", path=str(config_path))
 
+        # Install the custom provider npm package in the workspace so OpenCode
+        # serve mode can find it (serve mode doesn't auto-install like TUI does).
+        if llm_proxy_url:
+            install_proc = await asyncio.create_subprocess_exec(
+                "npm", "install", "--no-save", "@ai-sdk/openai-compatible",
+                cwd=workdir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await install_proc.communicate()
+            self.log.info(
+                "opencode.npm_install",
+                exit_code=install_proc.returncode,
+                output=stdout.decode()[:200] if stdout else "",
+            )
+
         # Deploy codex auth proxy plugin if OpenAI OAuth is configured
-        opencode_dir = workdir / ".opencode"
         plugin_source = Path("/app/sandbox_runtime/plugins/codex-auth-plugin.ts")
         if plugin_source.exists() and os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN"):
             plugin_dir = opencode_dir / "plugins"
