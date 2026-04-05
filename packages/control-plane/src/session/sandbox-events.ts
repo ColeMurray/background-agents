@@ -75,15 +75,37 @@ export class SessionSandboxEventProcessor {
 
     if (event.type === "tool_call") {
       this.deps.updateLastActivity(now);
+
+      // Strip oversized image data before persisting to SQLite.
+      // Images > 750KB base64 are replaced with a placeholder.
+      const MAX_IMAGE_BASE64_LENGTH = 750_000;
+      const eventForStorage = { ...event };
+      if (
+        "images" in eventForStorage &&
+        Array.isArray((eventForStorage as Record<string, unknown>).images)
+      ) {
+        const images = (eventForStorage as Record<string, unknown>).images as Array<{
+          base64: string;
+          mimeType: string;
+          filename?: string;
+        }>;
+        (eventForStorage as Record<string, unknown>).images = images.map((img) =>
+          img.base64.length > MAX_IMAGE_BASE64_LENGTH
+            ? { ...img, base64: "", truncated: true }
+            : img
+        );
+      }
+
       if (shouldPersistToolCallEvent(event.status)) {
         this.deps.repository.createEvent({
           id: generateId(),
           type: event.type,
-          data: JSON.stringify(event),
+          data: JSON.stringify(eventForStorage),
           messageId,
           createdAt: now,
         });
       }
+      // Broadcast the full event (with images) to live WebSocket clients
       this.deps.broadcast({ type: "sandbox_event", event });
 
       if (messageId && event.status === "running") {
