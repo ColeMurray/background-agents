@@ -22,6 +22,7 @@ import {
   SettingsIcon,
   AutomationsIcon,
   BranchIcon,
+  ChevronRightIcon,
 } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -733,5 +734,79 @@ function ChildSessionListItem({
         <span className="truncate font-medium text-foreground">{displayTitle}</span>
       </div>
     </Link>
+  );
+}
+
+function ChevronIcon({ collapsed }: { collapsed: boolean }) {
+  return (
+    <ChevronRightIcon
+      className={`w-3 h-3 transition-transform duration-150 ${collapsed ? "" : "rotate-90"}`}
+    />
+  );
+}
+
+function RepoGroupHeader({
+  repoKey,
+  count,
+  collapsed,
+  onToggle,
+}: {
+  repoKey: string;
+  count: number;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="w-full flex items-center gap-1.5 px-3 py-1.5 mt-1 text-left text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition"
+    >
+      <ChevronIcon collapsed={collapsed} />
+      <span className="truncate flex-1">{repoKey}</span>
+      <span className="shrink-0 text-xs tabular-nums">{count}</span>
+    </button>
+  );
+}
+
+function RepoGroup({
+  repoKey,
+  sessions,
+  childrenMap,
+  currentSessionId,
+  isMobile,
+  onSessionSelect,
+  collapsed,
+  onToggle,
+}: {
+  repoKey: string;
+  sessions: SessionItem[];
+  childrenMap: Map<string, SessionItem[]>;
+  currentSessionId: string | null;
+  isMobile: boolean;
+  onSessionSelect?: () => void;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div>
+      <RepoGroupHeader
+        repoKey={repoKey}
+        count={sessions.length}
+        collapsed={collapsed}
+        onToggle={onToggle}
+      />
+      {!collapsed &&
+        sessions.map((session) => (
+          <SessionWithChildren
+            key={session.id}
+            session={session}
+            childSessions={childrenMap.get(session.id)}
+            currentSessionId={currentSessionId}
+            isMobile={isMobile}
+            onSessionSelect={onSessionSelect}
+          />
+        ))}
+    </div>
   );
 }
