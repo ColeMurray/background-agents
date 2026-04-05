@@ -138,6 +138,8 @@ export class SessionDO extends DurableObject<Env> {
   private _alarmHandler: AlarmHandler | null = null;
   // Sandbox event processor (lazily initialized)
   private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
+  /** Skill catalog from the most recent skills_discovered event. */
+  private skills: import("@open-inspect/shared").SkillInfo[] = [];
 
   // Internal HTTP route table (transport wiring only; handlers remain on SessionDO).
   private readonly routes = createSessionInternalRoutes({
@@ -501,6 +503,9 @@ export class SessionDO extends DurableObject<Env> {
         updateLastActivity: (timestamp) => this.updateLastActivity(timestamp),
         scheduleInactivityCheck: () => this.scheduleInactivityCheck(),
         processMessageQueue: () => this.messageQueue.processMessageQueue(),
+        updateSkills: (skills) => {
+          this.skills = skills;
+        },
       });
     }
 
@@ -1481,6 +1486,7 @@ export class SessionDO extends DurableObject<Env> {
       parentSessionId: session?.parent_session_id ?? null,
       codeServerUrl: sandbox?.code_server_url ?? null,
       codeServerPassword,
+      skills: this.skills.length > 0 ? this.skills : undefined,
     };
   }
 

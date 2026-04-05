@@ -36,6 +36,8 @@ function createProcessor() {
   const getIsProcessing = vi.fn(() => false);
   const waitUntil = vi.fn();
 
+  const updateSkills = vi.fn();
+
   const processor = new SessionSandboxEventProcessor({
     ctx: { waitUntil } as unknown as DurableObjectState,
     log: {
@@ -55,6 +57,7 @@ function createProcessor() {
     updateLastActivity,
     scheduleInactivityCheck,
     processMessageQueue,
+    updateSkills,
   });
 
   return {
@@ -68,6 +71,7 @@ function createProcessor() {
     scheduleInactivityCheck,
     processMessageQueue,
     updateLastActivity,
+    updateSkills,
     waitUntil,
   };
 }

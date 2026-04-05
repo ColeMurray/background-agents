@@ -22,6 +22,7 @@ interface SessionSandboxEventProcessorDeps {
   updateLastActivity: (timestamp: number) => void;
   scheduleInactivityCheck: () => Promise<void>;
   processMessageQueue: () => Promise<void>;
+  updateSkills: (skills: import("@open-inspect/shared").SkillInfo[]) => void;
 }
 
 /** Event types that require delivery acknowledgement. */
@@ -165,6 +166,12 @@ export class SessionSandboxEventProcessor {
       await this.deps.scheduleInactivityCheck();
       await this.deps.processMessageQueue();
       this.sendAck(ackId);
+      return;
+    }
+
+    if (event.type === "skills_discovered") {
+      this.deps.updateSkills(event.skills);
+      this.deps.broadcast({ type: "sandbox_event", event });
       return;
     }
 
