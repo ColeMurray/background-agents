@@ -40,6 +40,7 @@ import {
   ErrorIcon,
 } from "@/components/ui/icons";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
+import { SkillTransitionHeader } from "@/components/skill-transition-header";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 import type { SessionItem } from "@/components/session-sidebar";
@@ -78,11 +79,19 @@ function groupEvents(events: SandboxEvent[]): EventGroup[] {
 
   for (const event of events) {
     if (event.type === "tool_call") {
-      // Check if same tool as current group
-      if (currentToolGroup.length > 0 && currentToolGroup[0].tool === event.tool) {
+      const isSkillCall = event.tool?.toLowerCase() === "skill";
+
+      if (isSkillCall) {
+        // Skill calls always break groups and render as standalone
+        flushToolGroup();
+        groups.push({
+          type: "single",
+          event,
+          id: `skill-${event.callId || event.timestamp}-${groupIndex++}`,
+        });
+      } else if (currentToolGroup.length > 0 && currentToolGroup[0].tool === event.tool) {
         currentToolGroup.push(event);
       } else {
-        // Flush previous group and start new one
         flushToolGroup();
         currentToolGroup = [event];
       }
@@ -1244,9 +1253,16 @@ const EventItem = memo(function EventItem({
       );
     }
 
-    case "tool_call":
-      // Tool calls are handled by ToolCallGroup component
+    case "tool_call": {
+      // Skill calls render as transition headers
+      if (event.tool?.toLowerCase() === "skill") {
+        const skillName = typeof event.args?.skill === "string" ? event.args.skill : "Skill";
+        const description = typeof event.args?.args === "string" ? event.args.args : undefined;
+        return <SkillTransitionHeader skillName={skillName} description={description} />;
+      }
+      // Other tool calls are handled by ToolCallGroup
       return null;
+    }
 
     case "tool_result":
       // Tool results are now shown inline with tool calls
