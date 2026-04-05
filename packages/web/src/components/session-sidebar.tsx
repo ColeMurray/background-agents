@@ -66,11 +66,35 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const [extraSessions, setExtraSessions] = useState<SessionItem[]>([]);
   const [hasMorePages, setHasMorePages] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+
+  const COLLAPSED_REPOS_KEY = "open-inspect:sidebar-collapsed-repos";
+
+  const [collapsedRepos, setCollapsedRepos] = useState<Record<string, boolean>>(() => {
+    try {
+      const stored = localStorage.getItem(COLLAPSED_REPOS_KEY);
+      return stored ? (JSON.parse(stored) as Record<string, boolean>) : {};
+    } catch {
+      return {};
+    }
+  });
+
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const offsetRef = useRef(0);
   const hasMoreRef = useRef(false);
   const loadingMoreRef = useRef(false);
   const isMobile = useIsMobile();
+
+  const toggleRepoCollapsed = useCallback((repoKey: string) => {
+    setCollapsedRepos((prev) => {
+      const next = { ...prev, [repoKey]: !prev[repoKey] };
+      try {
+        localStorage.setItem(COLLAPSED_REPOS_KEY, JSON.stringify(next));
+      } catch {
+        // localStorage unavailable (e.g. SSR or private browsing quota)
+      }
+      return next;
+    });
+  }, []);
 
   const { data, isLoading: loading } = useSWR<SessionListResponse>(
     authSession ? SIDEBAR_SESSIONS_KEY : null
