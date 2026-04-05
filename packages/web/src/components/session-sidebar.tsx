@@ -69,6 +69,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const [loadingMore, setLoadingMore] = useState(false);
 
   const [collapsedRepos, setCollapsedRepos] = useState<Record<string, boolean>>({});
+  const [isCollapsedHydrated, setIsCollapsedHydrated] = useState(false);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const offsetRef = useRef(0);
@@ -77,15 +78,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const isMobile = useIsMobile();
 
   const toggleRepoCollapsed = useCallback((repoKey: string) => {
-    setCollapsedRepos((prev) => {
-      const next = { ...prev, [repoKey]: !prev[repoKey] };
-      try {
-        localStorage.setItem(COLLAPSED_REPOS_KEY, JSON.stringify(next));
-      } catch {
-        // localStorage unavailable (e.g. SSR or private browsing quota)
-      }
-      return next;
-    });
+    setCollapsedRepos((prev) => ({ ...prev, [repoKey]: !prev[repoKey] }));
   }, []);
 
   const { data, isLoading: loading } = useSWR<SessionListResponse>(
@@ -111,7 +104,17 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
     } catch {
       // localStorage unavailable
     }
+    setIsCollapsedHydrated(true);
   }, []);
+
+  useEffect(() => {
+    if (!isCollapsedHydrated) return;
+    try {
+      localStorage.setItem(COLLAPSED_REPOS_KEY, JSON.stringify(collapsedRepos));
+    } catch {
+      // localStorage unavailable (e.g. private browsing or storage quota exceeded)
+    }
+  }, [collapsedRepos, isCollapsedHydrated]);
 
   useEffect(() => {
     if (!data) return;
