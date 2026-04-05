@@ -1325,7 +1325,12 @@ const EventItem = memo(function EventItem({
     case "tool_call": {
       // Skill calls render as transition headers
       if (event.tool?.toLowerCase() === "skill") {
-        const skillName = typeof event.args?.skill === "string" ? event.args.skill : "Skill";
+        const skillName =
+          typeof event.args?.name === "string"
+            ? event.args.name
+            : typeof event.args?.skill === "string"
+              ? event.args.skill
+              : "Skill";
         const description = typeof event.args?.args === "string" ? event.args.args : undefined;
         return <SkillTransitionHeader skillName={skillName} description={description} />;
       }

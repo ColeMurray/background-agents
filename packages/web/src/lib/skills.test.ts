@@ -8,7 +8,7 @@ function makeSkillCall(overrides: Partial<ToolCallEvent> = {}): ToolCallEvent {
   return {
     type: "tool_call",
     tool: "Skill",
-    args: { skill: "brainstorming" },
+    args: { name: "brainstorming" },
     callId: "call-1",
     messageId: "msg-1",
     sandboxId: "sandbox-1",
@@ -49,7 +49,7 @@ describe("extractSkillTimeline", () => {
 
   it("marks single skill as active when no execution_complete", () => {
     const events: SandboxEvent[] = [
-      makeSkillCall({ timestamp: 1000, args: { skill: "brainstorming" } }),
+      makeSkillCall({ timestamp: 1000, args: { name: "brainstorming" } }),
     ];
     const result = extractSkillTimeline(events);
     expect(result).toEqual([{ name: "brainstorming", status: "active", startedAt: 1000 }]);
@@ -57,8 +57,8 @@ describe("extractSkillTimeline", () => {
 
   it("marks all skills completed after execution_complete", () => {
     const events: SandboxEvent[] = [
-      makeSkillCall({ timestamp: 1000, callId: "c1", args: { skill: "brainstorming" } }),
-      makeSkillCall({ timestamp: 2000, callId: "c2", args: { skill: "writing-plans" } }),
+      makeSkillCall({ timestamp: 1000, callId: "c1", args: { name: "brainstorming" } }),
+      makeSkillCall({ timestamp: 2000, callId: "c2", args: { name: "writing-plans" } }),
       makeExecComplete(3000),
     ];
     const result = extractSkillTimeline(events);
@@ -70,9 +70,9 @@ describe("extractSkillTimeline", () => {
 
   it("marks earlier skills completed, last skill active", () => {
     const events: SandboxEvent[] = [
-      makeSkillCall({ timestamp: 1000, callId: "c1", args: { skill: "brainstorming" } }),
-      makeSkillCall({ timestamp: 2000, callId: "c2", args: { skill: "writing-plans" } }),
-      makeSkillCall({ timestamp: 3000, callId: "c3", args: { skill: "executing-plans" } }),
+      makeSkillCall({ timestamp: 1000, callId: "c1", args: { name: "brainstorming" } }),
+      makeSkillCall({ timestamp: 2000, callId: "c2", args: { name: "writing-plans" } }),
+      makeSkillCall({ timestamp: 3000, callId: "c3", args: { name: "executing-plans" } }),
     ];
     const result = extractSkillTimeline(events);
     expect(result).toEqual([
@@ -86,7 +86,7 @@ describe("extractSkillTimeline", () => {
     const events: SandboxEvent[] = [
       makeSkillCall({
         timestamp: 1000,
-        args: { skill: "brainstorming", args: "design the auth system" },
+        args: { name: "brainstorming", args: "design the auth system" },
       }),
     ];
     const result = extractSkillTimeline(events);
@@ -102,7 +102,7 @@ describe("extractSkillTimeline", () => {
 
   it("ignores non-tool_call events interspersed", () => {
     const events: SandboxEvent[] = [
-      makeSkillCall({ timestamp: 1000, callId: "c1", args: { skill: "tdd" } }),
+      makeSkillCall({ timestamp: 1000, callId: "c1", args: { name: "tdd" } }),
       {
         type: "token",
         content: "some text",
