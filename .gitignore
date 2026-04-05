@@ -1,5 +1,8 @@
 # Dependencies
 node_modules/
+
+# Superpowers brainstorm sessions
+.superpowers/
 .pnpm-store/
 packages/*/package-lock.json
 
