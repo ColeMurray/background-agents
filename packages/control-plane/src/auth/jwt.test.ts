@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { mintJwt } from "./jwt";
 
+function decodeBase64url(value: string): string {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+  return atob(padded);
+}
+
 describe("mintJwt", () => {
   it("produces a valid 3-part base64url JWT", async () => {
     const token = await mintJwt({ sub: "test", iat: 1000 }, "secret");
@@ -15,7 +21,7 @@ describe("mintJwt", () => {
   it("encodes the correct header", async () => {
     const token = await mintJwt({ sub: "test" }, "secret");
     const [headerB64] = token.split(".");
-    const header = JSON.parse(atob(headerB64.replace(/-/g, "+").replace(/_/g, "/")));
+    const header = JSON.parse(decodeBase64url(headerB64));
     expect(header).toEqual({ alg: "HS256", typ: "JWT" });
   });
 
@@ -23,7 +29,7 @@ describe("mintJwt", () => {
     const payload = { sub: "sess-1", sid: "sb-1", iat: 1000, exp: 2000 };
     const token = await mintJwt(payload, "secret");
     const [, bodyB64] = token.split(".");
-    const body = JSON.parse(atob(bodyB64.replace(/-/g, "+").replace(/_/g, "/")));
+    const body = JSON.parse(decodeBase64url(bodyB64));
     expect(body).toEqual(payload);
   });
 
@@ -41,10 +47,7 @@ describe("mintJwt", () => {
       ["verify"]
     );
 
-    const sigBytes = Uint8Array.from(
-      atob(sig.replace(/-/g, "+").replace(/_/g, "/") + "==".slice(0, (4 - (sig.length % 4)) % 4)),
-      (c) => c.charCodeAt(0)
-    );
+    const sigBytes = Uint8Array.from(decodeBase64url(sig), (c) => c.charCodeAt(0));
     const data = new TextEncoder().encode(`${header}.${payload}`);
     const valid = await crypto.subtle.verify("HMAC", key, sigBytes, data);
     expect(valid).toBe(true);

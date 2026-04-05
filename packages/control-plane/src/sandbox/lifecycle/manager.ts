@@ -39,6 +39,9 @@ import { mintJwt } from "../../auth/jwt";
 
 const log = createLogger("lifecycle-manager");
 
+/** TTL for terminal auth JWTs (24 hours, matching typical sandbox lifetime). */
+const TERMINAL_TOKEN_TTL_SECONDS = 86400;
+
 // ==================== Dependency Interfaces ====================
 
 /**
@@ -920,15 +923,22 @@ export class SandboxLifecycleManager {
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
 
       const settings = parsed as Record<string, unknown>;
+      const result: SandboxSettings = {};
+
       // Validate tunnelPorts at the boundary — data may come from untrusted callers
       if (settings.tunnelPorts !== undefined) {
         if (!Array.isArray(settings.tunnelPorts)) return {};
         const valid = settings.tunnelPorts.filter(
           (p: unknown) => typeof p === "number" && Number.isInteger(p) && p >= 1 && p <= 65535
         );
-        return { tunnelPorts: valid.slice(0, MAX_TUNNEL_PORTS) };
+        result.tunnelPorts = valid.slice(0, MAX_TUNNEL_PORTS);
       }
-      return settings as SandboxSettings;
+
+      if (typeof settings.terminalEnabled === "boolean") {
+        result.terminalEnabled = settings.terminalEnabled;
+      }
+
+      return result;
     } catch {
       this.log.warn("Failed to parse sandbox_settings, using defaults");
       return {};
@@ -959,7 +969,7 @@ export class SandboxLifecycleManager {
         sub: sessionId,
         sid: sandboxId,
         iat: Math.floor(Date.now() / 1000),
-        exp: Math.floor(Date.now() / 1000) + 86400, // 24 hours
+        exp: Math.floor(Date.now() / 1000) + TERMINAL_TOKEN_TTL_SECONDS,
       },
       sandboxAuthToken
     );

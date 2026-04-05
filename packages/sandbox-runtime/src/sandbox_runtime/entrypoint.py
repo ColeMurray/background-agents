@@ -50,6 +50,7 @@ class SandboxSupervisor:
     DEFAULT_SETUP_TIMEOUT_SECONDS = 300
     DEFAULT_START_TIMEOUT_SECONDS = 120
     CLONE_DEPTH_COMMITS = 100
+    SIDECAR_TIMEOUT_SECONDS = 5
 
     def __init__(self):
         self.opencode_process: asyncio.subprocess.Process | None = None
@@ -409,7 +410,7 @@ class SandboxSupervisor:
             cwd=workdir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            env={**os.environ, "HOME": workdir},
+            env=os.environ.copy(),
         )
 
         asyncio.create_task(self._forward_ttyd_logs())
@@ -456,7 +457,8 @@ class SandboxSupervisor:
         except Exception as e:
             self.log.warn("ttyd_proxy.log_forward_error", exc=e)
 
-    async def _wait_for_port(self, port: int, timeout_seconds: float = 5) -> bool:
+    async def _wait_for_port(self, port: int, timeout_seconds: float | None = None) -> bool:
+        timeout_seconds = timeout_seconds or self.SIDECAR_TIMEOUT_SECONDS
         """Wait for a service to start listening on a port. Returns True if ready."""
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout_seconds
@@ -1031,11 +1033,23 @@ class SandboxSupervisor:
                 await self.shutdown_event.wait()
                 return
 
-            # Phase 3.5: Start optional services (non-blocking, no health check needed)
-            await asyncio.gather(self.start_code_server(), self.start_ttyd())
+            # Phase 3.5: Start optional sidecars (best-effort, non-fatal)
+            for sidecar_name, starter in (
+                ("code_server", self.start_code_server),
+                ("ttyd", self.start_ttyd),
+            ):
+                try:
+                    await starter()
+                except Exception as e:
+                    self.log.warn(f"{sidecar_name}.start_failed", exc=e)
+
             if self.ttyd_process is not None:
-                await self._wait_for_port(TTYD_PORT, timeout_seconds=5)
-            await self.start_ttyd_proxy()
+                ttyd_ready = await self._wait_for_port(TTYD_PORT, timeout_seconds=self.SIDECAR_TIMEOUT_SECONDS)
+                if ttyd_ready:
+                    try:
+                        await self.start_ttyd_proxy()
+                    except Exception as e:
+                        self.log.warn("ttyd_proxy.start_failed", exc=e)
 
             # Phase 4: Start OpenCode server (in repo directory)
             await self.start_opencode()
@@ -1101,7 +1115,7 @@ class SandboxSupervisor:
             self.log.info("ttyd_proxy.terminating")
             self.ttyd_proxy_process.terminate()
             try:
-                await asyncio.wait_for(self.ttyd_proxy_process.wait(), timeout=5)
+                await asyncio.wait_for(self.ttyd_proxy_process.wait(), timeout=self.SIDECAR_TIMEOUT_SECONDS)
             except TimeoutError:
                 self.ttyd_proxy_process.kill()
 
@@ -1110,7 +1124,7 @@ class SandboxSupervisor:
             self.log.info("ttyd.terminating")
             self.ttyd_process.terminate()
             try:
-                await asyncio.wait_for(self.ttyd_process.wait(), timeout=5)
+                await asyncio.wait_for(self.ttyd_process.wait(), timeout=self.SIDECAR_TIMEOUT_SECONDS)
             except TimeoutError:
                 self.ttyd_process.kill()
 

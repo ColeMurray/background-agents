@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from sandbox_runtime.constants import TTYD_PORT
 from src.sandbox.manager import (
     CODE_SERVER_PORT,
     TTYD_PROXY_PORT,
@@ -20,8 +21,8 @@ class TestCollectExposedPortsTerminal:
             code_server_enabled=False, terminal_enabled=True, settings=None
         )
         assert TTYD_PROXY_PORT in exposed
-        # ttyd raw port (7681) should NOT be exposed
-        assert 7681 not in exposed
+        # ttyd raw port should NOT be exposed (only the proxy port)
+        assert TTYD_PORT not in exposed
 
     def test_terminal_disabled_excludes_proxy_port(self):
         exposed, _extra = SandboxManager._collect_exposed_ports(

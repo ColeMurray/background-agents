@@ -6,8 +6,10 @@
  */
 
 function base64url(input: string | ArrayBuffer): string {
-  const str =
-    typeof input === "string" ? btoa(input) : btoa(String.fromCharCode(...new Uint8Array(input)));
+  const bytes = typeof input === "string" ? new TextEncoder().encode(input) : new Uint8Array(input);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  const str = btoa(binary);
   return str.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 

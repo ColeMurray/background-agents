@@ -70,6 +70,7 @@ async function verifyJwt(token: string): Promise<boolean> {
 // --- WebSocket proxy state ---
 
 const upstreamSockets = new WeakMap<object, WebSocket>();
+const pendingMessages = new WeakMap<object, (string | ArrayBuffer)[]>();
 
 // --- Server ---
 
@@ -138,8 +139,14 @@ Bun.serve({
       // Connect to ttyd's WebSocket on localhost
       const upstream = new WebSocket(`ws://127.0.0.1:${TTYD_PORT}/ws`);
       upstreamSockets.set(ws, upstream);
+      pendingMessages.set(ws, []);
 
       upstream.binaryType = "arraybuffer";
+      upstream.onopen = () => {
+        const pending = pendingMessages.get(ws) || [];
+        for (const msg of pending) upstream.send(msg);
+        pendingMessages.delete(ws);
+      };
       upstream.onmessage = (event) => ws.send(event.data);
       upstream.onclose = () => ws.close();
       upstream.onerror = () => ws.close();
@@ -148,12 +155,15 @@ Bun.serve({
       const upstream = upstreamSockets.get(ws);
       if (upstream?.readyState === WebSocket.OPEN) {
         upstream.send(message);
+      } else if (upstream?.readyState === WebSocket.CONNECTING) {
+        pendingMessages.get(ws)?.push(message);
       }
     },
     close(ws) {
       const upstream = upstreamSockets.get(ws);
       upstream?.close();
       upstreamSockets.delete(ws);
+      pendingMessages.delete(ws);
     },
   },
 });

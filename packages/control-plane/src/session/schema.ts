@@ -106,6 +106,8 @@ CREATE TABLE IF NOT EXISTS sandbox (
   code_server_url TEXT,                             -- Code-server tunnel URL (rotates on wake/restore)
   code_server_password TEXT,                        -- Code-server password (rotates on each wake/restore)
   tunnel_urls TEXT,                                 -- JSON mapping of port -> tunnel URL for extra ports
+  ttyd_url TEXT,                                    -- ttyd proxy tunnel URL
+  ttyd_token TEXT,                                  -- Encrypted JWT token for ttyd auth
   created_at INTEGER NOT NULL
 );
 

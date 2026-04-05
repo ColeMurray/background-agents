@@ -30,6 +30,7 @@ AGENT_BROWSER_VERSION = "0.21.2"
 
 # ttyd version to install (pinned for reproducible images)
 TTYD_VERSION = "1.7.7"
+TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 
 # Cache buster - change this to force Modal image rebuild
 # v45: add ttyd web terminal
@@ -126,6 +127,7 @@ base_image = (
         f"curl -fsSL -o /usr/local/bin/ttyd"
         f" https://github.com/tsl0922/ttyd/releases/download/{TTYD_VERSION}"
         f"/ttyd.x86_64",
+        f'echo "{TTYD_SHA256}  /usr/local/bin/ttyd" | sha256sum -c -',
         "chmod +x /usr/local/bin/ttyd",
         "ttyd --version",
     )
