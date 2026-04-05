@@ -331,6 +331,26 @@ class SandboxSupervisor:
                     except Exception as e:
                         self.log.warn("opencode.skill_symlink_error", exc=e)
 
+        # Symlink container-level skills from /app/skills/ (e.g. agent-browser)
+        container_skills = Path("/app/skills")
+        if container_skills.exists() and container_skills.is_dir():
+            opencode_skills = opencode_dir / "skills"
+            opencode_skills.mkdir(parents=True, exist_ok=True)
+            for skill_dir in container_skills.iterdir():
+                if not skill_dir.is_dir():
+                    continue
+                target = opencode_skills / skill_dir.name
+                if not target.exists():
+                    try:
+                        target.symlink_to(skill_dir.resolve())
+                        self.log.info(
+                            "opencode.skill_symlink",
+                            source=str(skill_dir),
+                            target=str(target),
+                        )
+                    except Exception as e:
+                        self.log.warn("opencode.skill_symlink_error", exc=e)
+
     def _setup_openai_oauth(self) -> None:
         """Write OpenCode auth.json for ChatGPT OAuth if refresh token is configured."""
         refresh_token = os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN")

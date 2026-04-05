@@ -85,6 +85,13 @@ RUN npm install -g agent-browser@0.21.2 \
  && agent-browser install \
  && agent-browser --version
 
+# ── agent-browser skill for OpenCode ────────────────────────────────────────
+# Copy the bundled skill so OpenCode knows how to use agent-browser.
+# The entrypoint symlinks /app/skills/* into .opencode/skills/ at boot.
+RUN mkdir -p /app/skills/agent-browser \
+ && SKILL_DIR=$(npm root -g)/agent-browser/skills/agent-browser \
+ && if [ -d "$SKILL_DIR" ]; then cp -r "$SKILL_DIR"/* /app/skills/agent-browser/; fi
+
 # ── Working directories ─────────────────────────────────────────────────────
 RUN mkdir -p /workspace /app/plugins /tmp/opencode \
  && echo 'Image: Dockerfile.sandbox' > /app/image-version.txt
