@@ -24,6 +24,7 @@ export type {
   MessageStatus,
   ParticipantRole,
   ParticipantPresence,
+  SkillInfo,
   SpawnSource,
   SandboxEvent,
   SandboxStatus,

@@ -3,9 +3,7 @@
 import textwrap
 from pathlib import Path
 
-import pytest
-
-from sandbox_runtime.skill_scanner import scan_skills, parse_skill_frontmatter
+from sandbox_runtime.skill_scanner import parse_skill_frontmatter, scan_skills
 
 
 class TestParseSkillFrontmatter:

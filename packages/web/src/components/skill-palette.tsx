@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { BoltIcon } from "@/components/ui/icons";
 import type { SkillInfo } from "@open-inspect/shared";
 
@@ -45,22 +45,23 @@ export function SkillPalette({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Filter and sort skills
-  const filtered = skills
-    .filter((s) => !filterQuery || fuzzyMatch(filterQuery, s.name))
-    .sort((a, b) => {
-      if (filterQuery) {
-        return fuzzyScore(filterQuery, b.name) - fuzzyScore(filterQuery, a.name);
-      }
-      // Default: container first, then repo, alphabetical within
-      if (a.source !== b.source) return a.source === "container" ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
+  // Filter and sort skills, grouped by source
+  const { orderedSkills, containerSkills, repoSkills } = useMemo(() => {
+    const filtered = skills
+      .filter((s) => !filterQuery || fuzzyMatch(filterQuery, s.name))
+      .sort((a, b) => {
+        if (filterQuery) {
+          return fuzzyScore(filterQuery, b.name) - fuzzyScore(filterQuery, a.name);
+        }
+        // Default: container first, then repo, alphabetical within
+        if (a.source !== b.source) return a.source === "container" ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
 
-  // Group by source
-  const containerSkills = filtered.filter((s) => s.source === "container");
-  const repoSkills = filtered.filter((s) => s.source === "repo");
-  const orderedSkills = [...containerSkills, ...repoSkills];
+    const container = filtered.filter((s) => s.source === "container");
+    const repo = filtered.filter((s) => s.source === "repo");
+    return { orderedSkills: [...container, ...repo], containerSkills: container, repoSkills: repo };
+  }, [skills, filterQuery]);
 
   // Reset selection when filter changes
   useEffect(() => {

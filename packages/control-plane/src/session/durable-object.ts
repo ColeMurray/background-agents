@@ -45,6 +45,7 @@ import type {
   SessionState,
   SessionStatus,
   SandboxStatus,
+  SkillInfo,
 } from "../types";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
@@ -139,7 +140,7 @@ export class SessionDO extends DurableObject<Env> {
   // Sandbox event processor (lazily initialized)
   private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
   /** Skill catalog from the most recent skills_discovered event. */
-  private skills: import("@open-inspect/shared").SkillInfo[] = [];
+  private skills: SkillInfo[] = [];
 
   // Internal HTTP route table (transport wiring only; handlers remain on SessionDO).
   private readonly routes = createSessionInternalRoutes({
