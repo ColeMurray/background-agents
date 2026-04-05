@@ -434,15 +434,14 @@ function HomeContent({
                 {/* Text input area */}
                 <div className="relative">
                   {/* Skill palette overlay */}
-                  {skills.length > 0 && (
-                    <SkillPalette
-                      skills={skills}
-                      isOpen={isPaletteOpen}
-                      filterQuery={paletteFilter}
-                      onSelect={handleSkillSelect}
-                      onClose={() => handlePromptChange("")}
-                    />
-                  )}
+                  <SkillPalette
+                    skills={skills}
+                    isOpen={isPaletteOpen}
+                    filterQuery={paletteFilter}
+                    onSelect={handleSkillSelect}
+                    onClose={() => handlePromptChange("")}
+                    loading={skills.length === 0}
+                  />
 
                   {/* Input area with optional skill pill */}
                   <div className="flex items-start px-4 pt-4 pb-12">

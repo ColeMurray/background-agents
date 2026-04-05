@@ -88,23 +88,46 @@ def _scan_directory(
     return skills
 
 
+# Superpowers skills baked into every container via the OpenCode plugin config.
+# OpenCode installs plugins to an internal cache whose path varies by version,
+# making filesystem scanning unreliable. This static manifest is the source of
+# truth for container-level skills. Update when the superpowers plugin changes.
+SUPERPOWERS_SKILLS: list[dict[str, Any]] = [
+    {"name": "brainstorming", "description": "Explore user intent, requirements and design before implementation", "source": "container", "plugin": "superpowers"},
+    {"name": "dispatching-parallel-agents", "description": "Dispatch 2+ independent tasks without shared state", "source": "container", "plugin": "superpowers"},
+    {"name": "executing-plans", "description": "Execute an implementation plan with review checkpoints", "source": "container", "plugin": "superpowers"},
+    {"name": "finishing-a-development-branch", "description": "Guide completion of development work — merge, PR, or cleanup", "source": "container", "plugin": "superpowers"},
+    {"name": "receiving-code-review", "description": "Handle code review feedback with technical rigor", "source": "container", "plugin": "superpowers"},
+    {"name": "requesting-code-review", "description": "Verify work meets requirements before merging", "source": "container", "plugin": "superpowers"},
+    {"name": "subagent-driven-development", "description": "Execute plan tasks via independent subagents", "source": "container", "plugin": "superpowers"},
+    {"name": "systematic-debugging", "description": "Investigate bugs and test failures before proposing fixes", "source": "container", "plugin": "superpowers"},
+    {"name": "test-driven-development", "description": "Write tests before implementation code", "source": "container", "plugin": "superpowers"},
+    {"name": "using-git-worktrees", "description": "Isolate feature work in git worktrees", "source": "container", "plugin": "superpowers"},
+    {"name": "verification-before-completion", "description": "Run verification commands before claiming success", "source": "container", "plugin": "superpowers"},
+    {"name": "writing-plans", "description": "Create implementation plans from specs or requirements", "source": "container", "plugin": "superpowers"},
+    {"name": "writing-skills", "description": "Create or edit agent skills", "source": "container", "plugin": "superpowers"},
+]
+
+
 def scan_skills(
     *,
     workspace: Path,
-    plugin_cache_dir: Path | None,
+    plugin_cache_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
-    """Discover all available skills from repo dirs and plugin cache.
+    """Discover all available skills from the static manifest and repo dirs.
 
     Args:
         workspace: The repo working directory (e.g. /workspace/my-repo).
-        plugin_cache_dir: OpenCode's plugin cache directory, or None to skip.
+        plugin_cache_dir: Legacy parameter, kept for API compatibility. The
+            static SUPERPOWERS_SKILLS manifest is now used for container skills.
 
     Returns:
-        List of skill info dicts. Repo skills override plugin skills with
+        List of skill info dicts. Repo skills override container skills with
         the same name (repo takes precedence in the cascade).
     """
-    # Start with plugin (container) skills — repo skills override these.
-    container_skills: list[dict[str, Any]] = []
+    container_skills = list(SUPERPOWERS_SKILLS)
+
+    # Also scan plugin cache if provided (for any non-superpowers plugins).
     if plugin_cache_dir and plugin_cache_dir.exists():
         for plugin_dir in sorted(plugin_cache_dir.iterdir()):
             if not plugin_dir.is_dir():

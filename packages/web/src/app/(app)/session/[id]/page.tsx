@@ -952,17 +952,16 @@ function SessionContent({
             {/* Text input area with floating send button */}
             <div className="relative">
               {/* Skill palette overlay */}
-              {skills.length > 0 && (
-                <SkillPalette
-                  skills={skills}
-                  isOpen={isPaletteOpen}
-                  filterQuery={paletteFilter}
-                  onSelect={onSkillSelect}
-                  onClose={() => {
-                    /* handled by handleInputChange */
-                  }}
-                />
-              )}
+              <SkillPalette
+                skills={skills}
+                isOpen={isPaletteOpen}
+                filterQuery={paletteFilter}
+                onSelect={onSkillSelect}
+                onClose={() => {
+                  /* handled by handleInputChange */
+                }}
+                loading={skills.length === 0}
+              />
 
               {/* Input area with optional skill pill */}
               <div className="flex items-start px-4 pt-4 pb-12">

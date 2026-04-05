@@ -10,6 +10,8 @@ interface SkillPaletteProps {
   filterQuery: string;
   onSelect: (skillName: string) => void;
   onClose: () => void;
+  /** Show a loading indicator when skills haven't arrived yet. */
+  loading?: boolean;
 }
 
 /**
@@ -41,6 +43,7 @@ export function SkillPalette({
   filterQuery,
   onSelect,
   onClose,
+  loading,
 }: SkillPaletteProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
@@ -110,14 +113,27 @@ export function SkillPalette({
     selected?.scrollIntoView({ block: "nearest" });
   }, [selectedIndex]);
 
-  if (!isOpen || orderedSkills.length === 0) return null;
+  if (!isOpen) return null;
+
+  // Show loading state when skills haven't arrived yet
+  if (orderedSkills.length === 0) {
+    if (!loading) return null;
+    return (
+      <div className="absolute bottom-full left-0 right-0 mb-1 bg-card border border-border-muted rounded-lg shadow-lg z-[100] p-4">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <div className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+          Loading skills...
+        </div>
+      </div>
+    );
+  }
 
   let flatIndex = 0;
 
   return (
     <div
       ref={listRef}
-      className="absolute bottom-full left-0 right-0 mb-1 max-h-64 overflow-y-auto bg-card border border-border-muted rounded-lg shadow-lg z-50"
+      className="absolute bottom-full left-0 right-0 mb-1 max-h-64 overflow-y-auto bg-card border border-border-muted rounded-lg shadow-lg z-[100]"
     >
       {containerSkills.length > 0 && (
         <>
