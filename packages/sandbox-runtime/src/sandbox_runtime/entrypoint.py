@@ -412,6 +412,7 @@ class SandboxSupervisor:
 
         if llm_proxy_url and llm_proxy_key:
             opencode_config = {
+                "$schema": "https://opencode.ai/config.json",
                 "provider": {
                     "fuelix": {
                         "npm": "@ai-sdk/openai-compatible",
@@ -421,7 +422,9 @@ class SandboxSupervisor:
                             "apiKey": llm_proxy_key,
                         },
                         "models": {
-                            model: {"name": model},
+                            "claude-sonnet-4-6": {"name": "Claude Sonnet 4.6"},
+                            "claude-sonnet-4-5": {"name": "Claude Sonnet 4.5"},
+                            "claude-haiku-4-5": {"name": "Claude Haiku 4.5"},
                         },
                     },
                 },
@@ -435,9 +438,10 @@ class SandboxSupervisor:
                 "permission": {"*": {"*": "allow"}},
             }
 
-        # Write config to .opencode.json in the workspace (file-based config
-        # supports custom providers; OPENCODE_CONFIG_CONTENT does not).
-        config_path = workdir / ".opencode.json"
+        # Write config to .opencode/opencode.json (OpenCode's expected path).
+        opencode_dir = workdir / ".opencode"
+        opencode_dir.mkdir(parents=True, exist_ok=True)
+        config_path = opencode_dir / "opencode.json"
         config_path.write_text(json.dumps(opencode_config, indent=2))
         self.log.info("opencode.config_written", path=str(config_path))
 
