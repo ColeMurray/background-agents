@@ -78,6 +78,8 @@ function createMockSandbox(
     code_server_url: null,
     code_server_password: null,
     tunnel_urls: null,
+    ttyd_url: null,
+    ttyd_token: null,
     created_at: Date.now() - 60000,
     spawn_failure_count: 0,
     last_spawn_failure: 0,
@@ -183,6 +185,20 @@ function createMockStorage(
       calls.push("clearSandboxTunnelUrls");
       if (sandbox) {
         sandbox.tunnel_urls = null;
+      }
+    }),
+    updateSandboxTtyd: vi.fn(async (url: string, token: string) => {
+      calls.push("updateSandboxTtyd");
+      if (sandbox) {
+        sandbox.ttyd_url = url;
+        sandbox.ttyd_token = token;
+      }
+    }),
+    clearSandboxTtyd: vi.fn(() => {
+      calls.push("clearSandboxTtyd");
+      if (sandbox) {
+        sandbox.ttyd_url = null;
+        sandbox.ttyd_token = null;
       }
     }),
   };

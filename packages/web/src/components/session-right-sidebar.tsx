@@ -11,6 +11,8 @@ import {
   TunnelUrlsSection,
 } from "./sidebar";
 import { ChildSessionsSection } from "./sidebar/child-sessions-section";
+import { TerminalIcon, LinkIcon } from "@/components/ui/icons";
+import { buildAuthenticatedUrl } from "@/lib/urls";
 import { extractLatestTasks } from "@/lib/tasks";
 import { extractChangedFiles } from "@/lib/files";
 import type { Artifact, SandboxEvent } from "@/types/session";
@@ -21,6 +23,8 @@ interface SessionRightSidebarProps {
   participants: ParticipantPresence[];
   events: SandboxEvent[];
   artifacts: Artifact[];
+  terminalOpen?: boolean;
+  onToggleTerminal?: () => void;
 }
 
 export type SessionRightSidebarContentProps = SessionRightSidebarProps;
@@ -30,9 +34,15 @@ export function SessionRightSidebarContent({
   participants,
   events,
   artifacts,
+  terminalOpen,
+  onToggleTerminal,
 }: SessionRightSidebarContentProps) {
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
   const filesChanged = useMemo(() => extractChangedFiles(events), [events]);
+  const terminalUrl = useMemo(
+    () => buildAuthenticatedUrl(sessionState?.ttydUrl, sessionState?.ttydToken),
+    [sessionState?.ttydUrl, sessionState?.ttydToken]
+  );
 
   if (!sessionState) {
     return (
@@ -76,6 +86,34 @@ export function SessionRightSidebarContent({
             password={sessionState.codeServerPassword ?? null}
             sandboxStatus={sessionState.sandboxStatus}
           />
+        </div>
+      )}
+
+      {/* Terminal */}
+      {sessionState.ttydUrl && terminalUrl && (
+        <div className="px-4 py-4 border-b border-border-muted">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <TerminalIcon className="h-4 w-4" />
+              <span className="font-medium">Terminal</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <a
+                href={terminalUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="p-1 text-muted-foreground hover:text-foreground transition"
+                title="Open in new tab"
+              >
+                <LinkIcon className="h-3.5 w-3.5" />
+              </a>
+              {onToggleTerminal && (
+                <button onClick={onToggleTerminal} className="text-xs text-accent hover:underline">
+                  {terminalOpen ? "Hide" : "Show"}
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
@@ -123,6 +161,8 @@ export function SessionRightSidebar({
   participants,
   events,
   artifacts,
+  terminalOpen,
+  onToggleTerminal,
 }: SessionRightSidebarProps) {
   return (
     <aside className="w-80 border-l border-border-muted overflow-y-auto hidden lg:block">
@@ -131,6 +171,8 @@ export function SessionRightSidebar({
         participants={participants}
         events={events}
         artifacts={artifacts}
+        terminalOpen={terminalOpen}
+        onToggleTerminal={onToggleTerminal}
       />
     </aside>
   );

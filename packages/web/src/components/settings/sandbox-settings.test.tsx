@@ -167,7 +167,10 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
         expect.objectContaining({
           method: "PUT",
           body: JSON.stringify({
-            settings: { defaults: { tunnelPorts: [8080] }, enabledRepos: ["acme/app"] },
+            settings: {
+              defaults: { tunnelPorts: [8080], terminalEnabled: false },
+              enabledRepos: ["acme/app"],
+            },
           }),
         })
       );
@@ -213,7 +216,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
         SETTINGS_KEY,
         expect.objectContaining({
           body: JSON.stringify({
-            settings: { defaults: { tunnelPorts: [3000] } },
+            settings: { defaults: { tunnelPorts: [3000], terminalEnabled: false } },
           }),
         })
       );

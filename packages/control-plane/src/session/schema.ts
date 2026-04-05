@@ -367,6 +367,14 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
       runMigration(sql, `ALTER TABLE sandbox ADD COLUMN tunnel_urls TEXT`);
     },
   },
+  {
+    id: 29,
+    description: "Add ttyd_url and ttyd_token to sandbox",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN ttyd_url TEXT`);
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN ttyd_token TEXT`);
+    },
+  },
 ];
 
 /**

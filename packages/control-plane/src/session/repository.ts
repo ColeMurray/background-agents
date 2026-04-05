@@ -405,6 +405,20 @@ export class SessionRepository {
     );
   }
 
+  updateSandboxTtyd(url: string, encryptedToken: string): void {
+    this.sql.exec(
+      `UPDATE sandbox SET ttyd_url = ?, ttyd_token = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      url,
+      encryptedToken
+    );
+  }
+
+  clearSandboxTtyd(): void {
+    this.sql.exec(
+      `UPDATE sandbox SET ttyd_url = NULL, ttyd_token = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
+    );
+  }
+
   resetCircuitBreaker(): void {
     this.sql.exec(
       `UPDATE sandbox SET spawn_failure_count = 0 WHERE id = (SELECT id FROM sandbox LIMIT 1)`

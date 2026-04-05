@@ -296,6 +296,8 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
                   codeServerUrl: undefined,
                   codeServerPassword: undefined,
                   tunnelUrls: undefined,
+                  ttydUrl: undefined,
+                  ttydToken: undefined,
                 }
               : null
           );
@@ -313,6 +315,8 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
                     codeServerUrl: undefined,
                     codeServerPassword: undefined,
                     tunnelUrls: undefined,
+                    ttydUrl: undefined,
+                    ttydToken: undefined,
                   }),
                 }
               : null
@@ -323,6 +327,12 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
         case "code_server_info":
           setSessionState((prev) =>
             prev ? { ...prev, codeServerUrl: data.url, codeServerPassword: data.password } : null
+          );
+          break;
+
+        case "ttyd_info":
+          setSessionState((prev) =>
+            prev ? { ...prev, ttydUrl: data.url, ttydToken: data.token } : null
           );
           break;
 

@@ -303,6 +303,7 @@ export type ServerMessage =
       title: string | null;
     }
   | { type: "code_server_info"; url: string; password: string }
+  | { type: "ttyd_info"; url: string; token: string }
   | { type: "tunnel_urls"; urls: Record<string, string> }
   | { type: "error"; code: string; message: string };
 
@@ -325,6 +326,8 @@ export interface SessionState {
   codeServerUrl?: string | null;
   codeServerPassword?: string | null;
   tunnelUrls?: Record<string, string> | null;
+  ttydUrl?: string | null;
+  ttydToken?: string | null;
 }
 
 // Participant presence info

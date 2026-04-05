@@ -51,10 +51,18 @@ function SandboxSettingsEditor({
     ? ((data as GlobalSettingsResponse)?.settings?.defaults?.tunnelPorts ?? [])
     : ((data as RepoSettingsResponse)?.settings?.tunnelPorts ?? []);
 
+  const currentTerminalEnabled: boolean = isGlobal
+    ? ((data as GlobalSettingsResponse)?.settings?.defaults?.terminalEnabled ?? false)
+    : ((data as RepoSettingsResponse)?.settings?.terminalEnabled ?? false);
+
   const [portRows, setPortRows] = useState<string[] | null>(null);
+  const [terminalEnabled, setTerminalEnabled] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+
+  // Resolve terminal toggle: local edit or server state
+  const resolvedTerminalEnabled = terminalEnabled ?? currentTerminalEnabled;
 
   // Use server state unless user is editing
   const rows = portRows ?? currentPorts.map(String);
@@ -100,9 +108,10 @@ function SandboxSettingsEditor({
       const existingEnabledRepos = isGlobal
         ? (data as GlobalSettingsResponse)?.settings?.enabledRepos
         : undefined;
+      const settingsPayload = { tunnelPorts: ports, terminalEnabled: resolvedTerminalEnabled };
       const body = isGlobal
-        ? { settings: { defaults: { tunnelPorts: ports }, enabledRepos: existingEnabledRepos } }
-        : { settings: { tunnelPorts: ports } };
+        ? { settings: { defaults: settingsPayload, enabledRepos: existingEnabledRepos } }
+        : { settings: settingsPayload };
 
       const res = await fetch(apiUrl, {
         method: "PUT",
@@ -117,6 +126,7 @@ function SandboxSettingsEditor({
 
       await mutate();
       setPortRows(null);
+      setTerminalEnabled(null);
       setSuccess(true);
       setTimeout(() => setSuccess(false), 2000);
     } catch (e) {
@@ -124,11 +134,13 @@ function SandboxSettingsEditor({
     } finally {
       setSaving(false);
     }
-  }, [rows, isGlobal, apiUrl, mutate, data]);
+  }, [rows, isGlobal, apiUrl, mutate, data, resolvedTerminalEnabled]);
 
-  const hasChanges =
+  const hasPortChanges =
     portRows !== null &&
     JSON.stringify(normalizePorts(portRows).ports) !== JSON.stringify(currentPorts);
+  const hasTerminalChange = terminalEnabled !== null && terminalEnabled !== currentTerminalEnabled;
+  const hasChanges = hasPortChanges || hasTerminalChange;
 
   if (isLoading) {
     return <p className="text-sm text-muted-foreground">Loading...</p>;
@@ -136,6 +148,33 @@ function SandboxSettingsEditor({
 
   return (
     <div className="space-y-4">
+      {/* Web Terminal toggle */}
+      <div className="max-w-sm">
+        <div className="flex items-center justify-between">
+          <div>
+            <label className="block text-sm font-medium text-foreground">Web Terminal</label>
+            <p className="text-xs text-muted-foreground">
+              Enable a browser-based terminal in sandbox sessions.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={resolvedTerminalEnabled}
+            onClick={() => setTerminalEnabled(!resolvedTerminalEnabled)}
+            className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+              resolvedTerminalEnabled ? "bg-accent" : "bg-muted"
+            }`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${
+                resolvedTerminalEnabled ? "translate-x-4" : "translate-x-0"
+              }`}
+            />
+          </button>
+        </div>
+      </div>
+
       <div>
         <div className="flex items-center justify-between max-w-sm mb-1.5">
           <label className="block text-sm font-medium text-foreground">Tunnel Ports</label>

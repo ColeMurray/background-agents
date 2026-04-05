@@ -43,6 +43,8 @@ export const MAX_TUNNEL_PORTS = 10;
 export interface SandboxSettings {
   /** Extra ports to expose via tunnels (e.g., dev server ports 3000, 5173). */
   tunnelPorts?: number[];
+  /** Enable a browser-based terminal (ttyd) in sandbox sessions. */
+  terminalEnabled?: boolean;
 }
 
 /** Maps each integration ID to its global and per-repo settings types. */
