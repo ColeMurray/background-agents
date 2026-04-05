@@ -159,8 +159,8 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   );
 
   // Sort sessions by updatedAt (most recent first), filter by search query,
-  // and group children under their parent sessions
-  const { activeSessions, inactiveSessions, childrenMap } = useMemo(() => {
+  // and group children under their parent sessions, then group top-level sessions by repo
+  const { repoGroups, childrenMap } = useMemo(() => {
     const filtered = sessions
       .filter((session) => session.status !== "archived")
       .filter((session) => {
@@ -171,7 +171,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
         return title.includes(query) || repo.includes(query);
       });
 
-    // Sort by updatedAt descending
+    // Sort all sessions by updatedAt descending
     const sorted = [...filtered].sort((a, b) => {
       const aTime = a.updatedAt || a.createdAt;
       const bTime = b.updatedAt || b.createdAt;
@@ -181,36 +181,39 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
     // Build set of visible session IDs for orphan detection
     const visibleIds = new Set(sorted.map((s) => s.id));
 
-    // Group children by parent ID
+    // Group children by parent ID; collect top-level sessions
     const children = new Map<string, SessionItem[]>();
     const topLevel: SessionItem[] = [];
 
     for (const session of sorted) {
       const parentId = session.parentSessionId;
       if (parentId && visibleIds.has(parentId)) {
-        // Parent is visible — nest under it
         const siblings = children.get(parentId) ?? [];
         siblings.push(session);
         children.set(parentId, siblings);
       } else {
-        // Top-level session (or orphan child whose parent is filtered out)
         topLevel.push(session);
       }
     }
 
-    const active: SessionItem[] = [];
-    const inactive: SessionItem[] = [];
-
+    // Group top-level sessions by repo key
+    const groupMap = new Map<string, SessionItem[]>();
     for (const session of topLevel) {
-      const timestamp = session.updatedAt || session.createdAt;
-      if (isInactiveSession(timestamp)) {
-        inactive.push(session);
-      } else {
-        active.push(session);
-      }
+      const key = `${session.repoOwner}/${session.repoName}`;
+      const group = groupMap.get(key) ?? [];
+      group.push(session);
+      groupMap.set(key, group);
     }
 
-    return { activeSessions: active, inactiveSessions: inactive, childrenMap: children };
+    // Sort groups by the updatedAt of their most-recent session (already sorted above)
+    const groups = Array.from(groupMap.entries()).map(([key, groupSessions]) => ({
+      key,
+      sessions: groupSessions, // already sorted by updatedAt descending
+    }));
+    // groups are naturally ordered by insertion order into groupMap, which follows
+    // the sorted topLevel array — so the first group always has the most-recent session.
+
+    return { repoGroups: groups, childrenMap: children };
   }, [sessions, searchQuery]);
 
   const currentSessionId = pathname?.startsWith("/session/") ? pathname.split("/")[2] : null;
