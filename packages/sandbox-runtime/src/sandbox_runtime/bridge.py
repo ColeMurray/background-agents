@@ -192,12 +192,14 @@ class AgentBridge:
         control_plane_url: str,
         auth_token: str,
         opencode_port: int = 4096,
+        provider_remap: dict[str, str] | None = None,
     ):
         self.sandbox_id = sandbox_id
         self.session_id = session_id
         self.control_plane_url = control_plane_url
         self.auth_token = auth_token
         self.opencode_port = opencode_port
+        self.provider_remap = provider_remap or {}
         self.opencode_base_url = f"http://localhost:{opencode_port}"
 
         # Logger
@@ -829,11 +831,9 @@ class AgentBridge:
             else:
                 provider_id, model_id = "anthropic", model
 
-            # When using an LLM proxy (Fuelix), remap to the custom provider
-            # so OpenCode uses the .opencode.json provider config instead of
-            # its built-in Anthropic provider (which has hardcoded model IDs).
-            if provider_id == "anthropic" and os.environ.get("ANTHROPIC_BASE_URL"):
-                provider_id = "fuelix"
+            # Apply provider remap (e.g. anthropic → fuelix for LLM proxies)
+            if provider_id in self.provider_remap:
+                provider_id = self.provider_remap[provider_id]
             model_spec: dict[str, Any] = {
                 "providerID": provider_id,
                 "modelID": model_id,
@@ -1772,8 +1772,21 @@ async def main():
     parser.add_argument("--control-plane", required=True, help="Control plane URL")
     parser.add_argument("--token", required=True, help="Auth token")
     parser.add_argument("--opencode-port", type=int, default=4096, help="OpenCode port")
+    parser.add_argument(
+        "--provider-remap",
+        default="",
+        help="Remap provider IDs (e.g. 'anthropic=fuelix')",
+    )
 
     args = parser.parse_args()
+
+    # Parse provider remap (e.g. "anthropic=fuelix")
+    provider_remap: dict[str, str] = {}
+    if args.provider_remap:
+        for mapping in args.provider_remap.split(","):
+            if "=" in mapping:
+                src, dst = mapping.split("=", 1)
+                provider_remap[src.strip()] = dst.strip()
 
     bridge = AgentBridge(
         sandbox_id=args.sandbox_id,
@@ -1781,6 +1794,7 @@ async def main():
         control_plane_url=args.control_plane,
         auth_token=args.token,
         opencode_port=args.opencode_port,
+        provider_remap=provider_remap,
     )
 
     await bridge.run()

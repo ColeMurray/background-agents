@@ -534,8 +534,8 @@ class SandboxSupervisor:
             self.log.info("bridge.skip", reason="no_session_id")
             return
 
-        # Run bridge as a module (works with relative imports)
-        self.bridge_process = await asyncio.create_subprocess_exec(
+        # Build bridge CLI args
+        bridge_args = [
             sys.executable,
             "-m",
             "sandbox_runtime.bridge",
@@ -549,6 +549,16 @@ class SandboxSupervisor:
             self.sandbox_token,
             "--opencode-port",
             str(self.OPENCODE_PORT),
+        ]
+
+        # When using an LLM proxy, tell the bridge to remap the provider
+        llm_proxy_url = os.environ.get("ANTHROPIC_BASE_URL", "")
+        if llm_proxy_url:
+            bridge_args += ["--provider-remap", "anthropic=fuelix"]
+            self.log.info("bridge.provider_remap", remap="anthropic=fuelix")
+
+        self.bridge_process = await asyncio.create_subprocess_exec(
+            *bridge_args,
             env=os.environ,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
