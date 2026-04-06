@@ -110,11 +110,23 @@ function toUiSandboxEvent(event: SharedSandboxEvent): SandboxEvent {
   };
 }
 
+function isPrState(value: unknown): value is NonNullable<Artifact["metadata"]>["prState"] {
+  return value === "open" || value === "merged" || value === "closed" || value === "draft";
+}
+
+function isPreviewStatus(
+  value: unknown
+): value is NonNullable<Artifact["metadata"]>["previewStatus"] {
+  return value === "active" || value === "outdated" || value === "stopped";
+}
+
 function toUiArtifact(artifact: SessionArtifact): Artifact {
   const rawMetadata = artifact.metadata;
   let metadata: Artifact["metadata"] | undefined;
 
   if (rawMetadata && typeof rawMetadata === "object") {
+    // Persisted PR artifacts use `number`/`state`; the web UI expects
+    // `prNumber`/`prState`. Other metadata fields already align.
     const nextMetadata: NonNullable<Artifact["metadata"]> = {};
 
     if (typeof rawMetadata.prNumber === "number") {
@@ -123,45 +135,27 @@ function toUiArtifact(artifact: SessionArtifact): Artifact {
       nextMetadata.prNumber = rawMetadata.number;
     }
 
-    if (
-      rawMetadata.prState === "open" ||
-      rawMetadata.prState === "merged" ||
-      rawMetadata.prState === "closed" ||
-      rawMetadata.prState === "draft"
-    ) {
-      nextMetadata.prState = rawMetadata.prState;
-    } else if (
-      rawMetadata.state === "open" ||
-      rawMetadata.state === "merged" ||
-      rawMetadata.state === "closed" ||
-      rawMetadata.state === "draft"
-    ) {
-      nextMetadata.prState = rawMetadata.state;
+    const prState = isPrState(rawMetadata.prState)
+      ? rawMetadata.prState
+      : isPrState(rawMetadata.state)
+        ? rawMetadata.state
+        : undefined;
+    if (prState) {
+      nextMetadata.prState = prState;
     }
 
     if (rawMetadata.mode === "manual_pr") {
       nextMetadata.mode = "manual_pr";
     }
-    if (typeof rawMetadata.createPrUrl === "string") {
-      nextMetadata.createPrUrl = rawMetadata.createPrUrl;
+
+    for (const key of ["createPrUrl", "head", "base", "provider", "filename"] as const) {
+      const value = rawMetadata[key];
+      if (typeof value === "string") {
+        nextMetadata[key] = value;
+      }
     }
-    if (typeof rawMetadata.head === "string") {
-      nextMetadata.head = rawMetadata.head;
-    }
-    if (typeof rawMetadata.base === "string") {
-      nextMetadata.base = rawMetadata.base;
-    }
-    if (typeof rawMetadata.provider === "string") {
-      nextMetadata.provider = rawMetadata.provider;
-    }
-    if (typeof rawMetadata.filename === "string") {
-      nextMetadata.filename = rawMetadata.filename;
-    }
-    if (
-      rawMetadata.previewStatus === "active" ||
-      rawMetadata.previewStatus === "outdated" ||
-      rawMetadata.previewStatus === "stopped"
-    ) {
+
+    if (isPreviewStatus(rawMetadata.previewStatus)) {
       nextMetadata.previewStatus = rawMetadata.previewStatus;
     }
 
@@ -175,6 +169,15 @@ function toUiArtifact(artifact: SessionArtifact): Artifact {
     createdAt: artifact.createdAt,
     metadata,
   };
+}
+
+function upsertArtifact(artifacts: Artifact[], nextArtifact: Artifact): Artifact[] {
+  const existingIndex = artifacts.findIndex((artifact) => artifact.id === nextArtifact.id);
+  if (existingIndex === -1) {
+    return [nextArtifact, ...artifacts];
+  }
+
+  return artifacts.map((artifact, index) => (index === existingIndex ? nextArtifact : artifact));
 }
 
 export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
@@ -399,17 +402,11 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           break;
 
         case "artifact_created":
-          setArtifacts((prev) => {
-            const nextArtifact = toUiArtifact(data.artifact);
-            const existing = prev.find((a) => a.id === data.artifact.id);
-            if (existing) {
-              return prev.map((a) => (a.id === data.artifact.id ? nextArtifact : a));
-            }
-            return [nextArtifact, ...prev];
-          });
+          setArtifacts((prev) => upsertArtifact(prev, toUiArtifact(data.artifact)));
           break;
 
         case "session_branch":
+          // Branch updates apply only to the active session detail view.
           setSessionState((prev) => (prev ? { ...prev, branchName: data.branchName } : null));
           break;
 
