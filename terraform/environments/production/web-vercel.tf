@@ -10,10 +10,15 @@ module "web_app" {
   team_id      = var.vercel_team_id
   framework    = "nextjs"
 
-  # No git_repository - deploy via CLI/CI instead of auto-deploy on push
   root_directory  = "packages/web"
   install_command = "cd ../.. && npm install && npm run build -w @open-inspect/shared"
   build_command   = "next build"
+
+  git_repository = var.enable_auto_deploy ? {
+    type              = var.auto_deploy_source
+    repo              = var.auto_deploy_git_repository
+    production_branch = var.auto_deploy_git_branch
+  } : null
 
   environment_variables = [
     # GitHub OAuth

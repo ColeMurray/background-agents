@@ -111,6 +111,14 @@ linear_webhook_secret = ""   # Webhook Signing Secret from the application confi
 anthropic_api_key = ""
 
 # =============================================================================
+# Vercel - auto-deploy
+# =============================================================================
+enable_auto_deploy = false
+auto_deploy_git_repository = ""
+auto_deploy_git_branch = ""
+auto_deploy_source = "github"
+
+# =============================================================================
 # Security Secrets
 # =============================================================================
 # Generate these with: openssl rand -base64 32

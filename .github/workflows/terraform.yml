@@ -212,6 +212,10 @@ jobs:
           TF_VAR_linear_client_secret: ${{ secrets.LINEAR_CLIENT_SECRET }}
           TF_VAR_linear_webhook_secret: ${{ secrets.LINEAR_WEBHOOK_SECRET }}
           TF_VAR_web_platform: "${{ secrets.WEB_PLATFORM || 'vercel' }}"
+          TF_VAR_auto_deploy_enabled: "${{ secrets.AUTO_DEPLOY_ENABLED || 'false' }}"
+          TF_VAR_auto_deploy_git_repository: ${{ secrets.AUTO_DEPLOY_GIT_REPOSITORY }}
+          TF_VAR_auto_deploy_git_branch: ${{ secrets.AUTO_DEPLOY_GIT_BRANCH }}
+          TF_VAR_auto_deploy_source: ${{ secrets.AUTO_DEPLOY_SOURCE }}
           TF_VAR_enable_durable_object_bindings: "${{ secrets.ENABLE_DURABLE_OBJECT_BINDINGS || 'true' }}"
 
       - name: Post Plan Results
@@ -339,6 +343,10 @@ jobs:
           TF_VAR_linear_webhook_secret: ${{ secrets.LINEAR_WEBHOOK_SECRET }}
           TF_VAR_web_platform: "${{ secrets.WEB_PLATFORM || 'vercel' }}"
           TF_VAR_enable_durable_object_bindings: "${{ secrets.ENABLE_DURABLE_OBJECT_BINDINGS || 'true' }}"
+          TF_VAR_auto_deploy_enabled: "${{ secrets.AUTO_DEPLOY_ENABLED || 'false' }}"
+          TF_VAR_auto_deploy_git_repository: ${{ secrets.AUTO_DEPLOY_GIT_REPOSITORY }}
+          TF_VAR_auto_deploy_git_branch: ${{ secrets.AUTO_DEPLOY_GIT_BRANCH }}
+          TF_VAR_auto_deploy_source: ${{ secrets.AUTO_DEPLOY_SOURCE }}
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 
