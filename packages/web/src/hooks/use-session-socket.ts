@@ -110,51 +110,54 @@ function toUiSandboxEvent(event: SharedSandboxEvent): SandboxEvent {
   };
 }
 
-function toUiArtifact(artifact: SessionArtifact): Artifact {
-  const rawMetadata = artifact.metadata;
-  const metadata =
-    rawMetadata && typeof rawMetadata === "object"
-      ? {
-          prNumber:
-            typeof rawMetadata.prNumber === "number"
-              ? rawMetadata.prNumber
-              : typeof rawMetadata.number === "number"
-                ? rawMetadata.number
-                : undefined,
-          prState:
-            rawMetadata.prState === "open" ||
-            rawMetadata.prState === "merged" ||
-            rawMetadata.prState === "closed" ||
-            rawMetadata.prState === "draft"
-              ? rawMetadata.prState
-              : rawMetadata.state === "open" ||
-                  rawMetadata.state === "merged" ||
-                  rawMetadata.state === "closed" ||
-                  rawMetadata.state === "draft"
-                ? rawMetadata.state
-                : undefined,
-          mode: rawMetadata.mode === "manual_pr" ? "manual_pr" : undefined,
-          createPrUrl:
-            typeof rawMetadata.createPrUrl === "string" ? rawMetadata.createPrUrl : undefined,
-          head: typeof rawMetadata.head === "string" ? rawMetadata.head : undefined,
-          base: typeof rawMetadata.base === "string" ? rawMetadata.base : undefined,
-          provider: typeof rawMetadata.provider === "string" ? rawMetadata.provider : undefined,
-          filename: typeof rawMetadata.filename === "string" ? rawMetadata.filename : undefined,
-          previewStatus:
-            rawMetadata.previewStatus === "active" ||
-            rawMetadata.previewStatus === "outdated" ||
-            rawMetadata.previewStatus === "stopped"
-              ? rawMetadata.previewStatus
-              : undefined,
-        }
-      : undefined;
+function parsePrState(value: unknown): Artifact["metadata"]["prState"] | undefined {
+  return value === "open" || value === "merged" || value === "closed" || value === "draft"
+    ? value
+    : undefined;
+}
 
+function parsePreviewStatus(value: unknown): Artifact["metadata"]["previewStatus"] | undefined {
+  return value === "active" || value === "outdated" || value === "stopped" ? value : undefined;
+}
+
+function parseOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function toUiArtifactMetadata(
+  rawMetadata: SessionArtifact["metadata"]
+): Artifact["metadata"] | undefined {
+  if (!rawMetadata || typeof rawMetadata !== "object") {
+    return undefined;
+  }
+
+  const prNumber =
+    typeof rawMetadata.prNumber === "number"
+      ? rawMetadata.prNumber
+      : typeof rawMetadata.number === "number"
+        ? rawMetadata.number
+        : undefined;
+
+  return {
+    prNumber,
+    prState: parsePrState(rawMetadata.prState) ?? parsePrState(rawMetadata.state),
+    mode: rawMetadata.mode === "manual_pr" ? "manual_pr" : undefined,
+    createPrUrl: parseOptionalString(rawMetadata.createPrUrl),
+    head: parseOptionalString(rawMetadata.head),
+    base: parseOptionalString(rawMetadata.base),
+    provider: parseOptionalString(rawMetadata.provider),
+    filename: parseOptionalString(rawMetadata.filename),
+    previewStatus: parsePreviewStatus(rawMetadata.previewStatus),
+  };
+}
+
+function toUiArtifact(artifact: SessionArtifact): Artifact {
   return {
     id: artifact.id,
     type: artifact.type as Artifact["type"],
     url: artifact.url,
     createdAt: artifact.createdAt,
-    metadata,
+    metadata: toUiArtifactMetadata(artifact.metadata),
   };
 }
 
