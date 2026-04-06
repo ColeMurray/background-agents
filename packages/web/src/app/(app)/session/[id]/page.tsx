@@ -479,8 +479,8 @@ function SessionContent({
 
   // Terminal panel state
   const [terminalOpen, setTerminalOpen] = useState(() => {
-    if (typeof window === "undefined") return true;
-    return localStorage.getItem("terminal-visible") !== "false";
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem("terminal-visible") === "true";
   });
   const toggleTerminal = useCallback(() => {
     setTerminalOpen((prev) => {
