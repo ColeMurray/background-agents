@@ -7,6 +7,8 @@ export interface Artifact {
   type: "pr" | "screenshot" | "preview" | "branch";
   url: string | null;
   metadata?: {
+    number?: number;
+    state?: "open" | "merged" | "closed" | "draft";
     prNumber?: number;
     prState?: "open" | "merged" | "closed" | "draft";
     mode?: "manual_pr";
@@ -16,7 +18,7 @@ export interface Artifact {
     provider?: string;
     filename?: string;
     previewStatus?: "active" | "outdated" | "stopped";
-  };
+  } & Record<string, unknown>;
   createdAt: number;
 }
 

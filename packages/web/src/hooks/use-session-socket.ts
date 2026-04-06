@@ -110,64 +110,16 @@ function toUiSandboxEvent(event: SharedSandboxEvent): SandboxEvent {
   };
 }
 
-function isPrState(value: unknown): value is NonNullable<Artifact["metadata"]>["prState"] {
-  return value === "open" || value === "merged" || value === "closed" || value === "draft";
-}
-
-function isPreviewStatus(
-  value: unknown
-): value is NonNullable<Artifact["metadata"]>["previewStatus"] {
-  return value === "active" || value === "outdated" || value === "stopped";
-}
-
 function toUiArtifact(artifact: SessionArtifact): Artifact {
-  const rawMetadata = artifact.metadata;
-  let metadata: Artifact["metadata"] | undefined;
-
-  if (rawMetadata && typeof rawMetadata === "object") {
-    // Persisted PR artifacts use `number`/`state`; the web UI expects
-    // `prNumber`/`prState`. Other metadata fields already align.
-    const nextMetadata: NonNullable<Artifact["metadata"]> = {};
-
-    if (typeof rawMetadata.prNumber === "number") {
-      nextMetadata.prNumber = rawMetadata.prNumber;
-    } else if (typeof rawMetadata.number === "number") {
-      nextMetadata.prNumber = rawMetadata.number;
-    }
-
-    const prState = isPrState(rawMetadata.prState)
-      ? rawMetadata.prState
-      : isPrState(rawMetadata.state)
-        ? rawMetadata.state
-        : undefined;
-    if (prState) {
-      nextMetadata.prState = prState;
-    }
-
-    if (rawMetadata.mode === "manual_pr") {
-      nextMetadata.mode = "manual_pr";
-    }
-
-    for (const key of ["createPrUrl", "head", "base", "provider", "filename"] as const) {
-      const value = rawMetadata[key];
-      if (typeof value === "string") {
-        nextMetadata[key] = value;
-      }
-    }
-
-    if (isPreviewStatus(rawMetadata.previewStatus)) {
-      nextMetadata.previewStatus = rawMetadata.previewStatus;
-    }
-
-    metadata = Object.keys(nextMetadata).length > 0 ? nextMetadata : undefined;
-  }
-
   return {
     id: artifact.id,
     type: artifact.type as Artifact["type"],
     url: artifact.url,
     createdAt: artifact.createdAt,
-    metadata,
+    metadata:
+      artifact.metadata && typeof artifact.metadata === "object"
+        ? (artifact.metadata as Artifact["metadata"])
+        : undefined,
   };
 }
 
@@ -260,7 +212,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           console.log("WebSocket subscribed to session");
           subscribedRef.current = true;
           // Replace local artifacts with the subscribed snapshot so reconnects
-          // still clear stale state while hydrating persisted artifacts.
+          // still clear stale state instead of merging stale client data.
           setArtifacts(data.artifacts.map(toUiArtifact));
           pendingTextRef.current = null;
           if (data.state) {

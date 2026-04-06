@@ -48,8 +48,10 @@ export function MetadataSection({
   const manualPrArtifact = artifacts.find(
     (a) => a.type === "branch" && (a.metadata?.mode === "manual_pr" || a.metadata?.createPrUrl)
   );
-  const prNumber = prArtifact?.metadata?.prNumber;
-  const prState = prArtifact?.metadata?.prState;
+  // Shared hydrated/live artifacts may use `number`/`state`; older local callers may still use
+  // `prNumber`/`prState`.
+  const prNumber = prArtifact?.metadata?.number ?? prArtifact?.metadata?.prNumber;
+  const prState = prArtifact?.metadata?.state ?? prArtifact?.metadata?.prState;
   const prUrl = getSafeExternalUrl(
     prArtifact?.url || manualPrArtifact?.metadata?.createPrUrl || manualPrArtifact?.url
   );
