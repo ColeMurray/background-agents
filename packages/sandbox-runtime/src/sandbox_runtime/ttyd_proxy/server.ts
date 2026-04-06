@@ -136,8 +136,9 @@ Bun.serve({
 
   websocket: {
     open(ws) {
-      // Connect to ttyd's WebSocket on localhost
-      const upstream = new WebSocket(`ws://127.0.0.1:${TTYD_PORT}/ws`);
+      // Connect to ttyd's WebSocket on localhost — must request the "tty"
+      // subprotocol so libwebsockets routes to the terminal handler.
+      const upstream = new WebSocket(`ws://127.0.0.1:${TTYD_PORT}/ws`, ["tty"]);
       upstreamSockets.set(ws, upstream);
       pendingMessages.set(ws, []);
 
