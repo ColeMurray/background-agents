@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Logger } from "../logger";
 import type { SourceControlProvider } from "../source-control";
+import * as branchResolution from "../source-control/branch-resolution";
 import type { ArtifactRow, SessionRow } from "./types";
 import {
   SessionPullRequestService,
@@ -101,11 +102,11 @@ function createTestHarness() {
 
   const repository: PullRequestRepository = {
     getSession: () => session,
-    updateSessionBranch: (sessionId, branchName) => {
+    updateSessionBranch: vi.fn((sessionId: string, branchName: string) => {
       if (session && session.id === sessionId) {
         session = { ...session, branch_name: branchName };
       }
-    },
+    }),
     listArtifacts: () => [...artifacts],
     createArtifact: (data) => {
       artifacts.unshift({
@@ -125,6 +126,7 @@ function createTestHarness() {
     log,
     generateId: () => `id-${++idCounter}`,
     pushBranchToRemote: vi.fn(async () => ({ success: true as const })),
+    broadcastSessionBranch: vi.fn(),
     broadcastArtifactCreated: vi.fn(),
   };
 
@@ -191,6 +193,7 @@ describe("SessionPullRequestService", () => {
       status: 500,
       error: "Failed to push branch: timeout",
     });
+    expect(harness.deps.broadcastSessionBranch).not.toHaveBeenCalled();
   });
 
   it("creates PR with app auth when prompting auth is unavailable", async () => {
@@ -206,6 +209,11 @@ describe("SessionPullRequestService", () => {
       .calls[0];
     expect(createPrCall[0]).toEqual({ authType: "app", token: "app-token" });
     expect(harness.deps.broadcastArtifactCreated).toHaveBeenCalledTimes(1);
+    expect(harness.deps.repository.updateSessionBranch).toHaveBeenCalledWith(
+      "session-1",
+      "open-inspect/session-name-1"
+    );
+    expect(harness.deps.broadcastSessionBranch).toHaveBeenCalledWith("open-inspect/session-name-1");
   });
 
   it("creates PR with OAuth token and stores PR artifact", async () => {
@@ -230,8 +238,66 @@ describe("SessionPullRequestService", () => {
       id: "id-1",
       type: "pr",
       url: "https://github.com/acme/web/pull/42",
-      prNumber: 42,
+      metadata: {
+        number: 42,
+        state: "open",
+        head: "open-inspect/session-name-1",
+        base: "main",
+      },
+      createdAt: expect.any(Number),
     });
+  });
+
+  it("syncs the branch after push and before PR creation", async () => {
+    await harness.service.createPullRequest(createInput());
+
+    const pushOrder = vi.mocked(harness.deps.pushBranchToRemote).mock.invocationCallOrder[0];
+    const syncOrder = vi.mocked(harness.deps.broadcastSessionBranch).mock.invocationCallOrder[0];
+    const createPrOrder = (harness.provider.createPullRequest as ReturnType<typeof vi.fn>).mock
+      .invocationCallOrder[0];
+
+    expect(pushOrder).toBeLessThan(syncOrder);
+    expect(syncOrder).toBeLessThan(createPrOrder);
+  });
+
+  it("returns 400 when the resolved branch name is invalid after sanitization", async () => {
+    const resolveHeadBranchForPrSpy = vi
+      .spyOn(branchResolution, "resolveHeadBranchForPr")
+      .mockReturnValue({
+        headBranch: "feature invalid",
+        source: "request",
+      });
+
+    const result = await harness.service.createPullRequest(
+      createInput({ headBranch: "feature invalid" })
+    );
+
+    expect(result).toEqual({
+      kind: "error",
+      status: 400,
+      error: "headBranch must be a valid branch name",
+    });
+    expect(harness.provider.createPullRequest).not.toHaveBeenCalled();
+    expect(harness.deps.broadcastSessionBranch).not.toHaveBeenCalled();
+
+    resolveHeadBranchForPrSpy.mockRestore();
+  });
+
+  it("skips branch writes when the sanitized branch is unchanged but still broadcasts", async () => {
+    harness.setSession(createSession({ branch_name: "feature/test" }));
+
+    const result = await harness.service.createPullRequest(
+      createInput({ headBranch: " Feature/Test " })
+    );
+
+    expect(result).toEqual({
+      kind: "created",
+      prNumber: 42,
+      prUrl: "https://github.com/acme/web/pull/42",
+      state: "open",
+    });
+    expect(harness.deps.repository.updateSessionBranch).not.toHaveBeenCalled();
+    expect(harness.deps.broadcastSessionBranch).toHaveBeenCalledWith("feature/test");
   });
 
   it("ignores prior manual branch artifact and creates PR", async () => {

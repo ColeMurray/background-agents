@@ -126,6 +126,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
 
     const subscribed = messages!.find((m) => m.type === "subscribed") as Record<string, unknown>;
     expect(subscribed).toBeDefined();
+    expect(subscribed.artifacts).toEqual([]);
     const replay = subscribed.replay as { events: unknown[]; hasMore: boolean; cursor: unknown };
     expect(replay).toBeDefined();
     expect(replay.hasMore).toBe(false);
@@ -164,6 +165,48 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     expect(replay.events).toHaveLength(2);
     expect(replay.events[0].type).toBe("tool_call");
     expect(replay.events[1].type).toBe("tool_result");
+
+    ws.close();
+  });
+
+  it("subscribe hydrates persisted PR artifacts with parsed metadata and createdAt", async () => {
+    const name = `ws-client-artifacts-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    const createdAt = Date.now() - 1000;
+
+    await queryDO(
+      stub,
+      "INSERT INTO artifacts (id, type, url, metadata, created_at) VALUES (?, ?, ?, ?, ?)",
+      "artifact-pr-1",
+      "pr",
+      "https://github.com/acme/web-app/pull/42",
+      JSON.stringify({
+        number: 42,
+        state: "open",
+        head: "feature/test",
+        base: "main",
+      }),
+      createdAt
+    );
+
+    const { ws, messages } = await openClientWs(name, { subscribe: true });
+
+    const subscribed = messages!.find((m) => m.type === "subscribed") as Record<string, unknown>;
+    expect(subscribed).toBeDefined();
+    expect(subscribed.artifacts).toEqual([
+      {
+        id: "artifact-pr-1",
+        type: "pr",
+        url: "https://github.com/acme/web-app/pull/42",
+        metadata: {
+          number: 42,
+          state: "open",
+          head: "feature/test",
+          base: "main",
+        },
+        createdAt,
+      },
+    ]);
 
     ws.close();
   });

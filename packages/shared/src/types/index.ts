@@ -261,6 +261,7 @@ export type ServerMessage =
       type: "subscribed";
       sessionId: string;
       state: SessionState;
+      artifacts: SessionArtifact[];
       participantId: string;
       participant?: { participantId: string; name: string; avatar?: string };
       replay?: {
@@ -280,10 +281,8 @@ export type ServerMessage =
   | { type: "sandbox_status"; status: SandboxStatus }
   | { type: "sandbox_ready" }
   | { type: "sandbox_error"; error: string }
-  | {
-      type: "artifact_created";
-      artifact: { id: string; type: string; url: string; prNumber?: number };
-    }
+  | { type: "artifact_created"; artifact: SessionArtifact }
+  | { type: "session_branch"; branchName: string }
   | { type: "snapshot_saved"; imageId: string; reason: string }
   | { type: "sandbox_restored"; message: string }
   | { type: "sandbox_warning"; message: string }

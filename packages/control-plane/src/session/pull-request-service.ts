@@ -1,6 +1,6 @@
-import { generateBranchName } from "@open-inspect/shared";
+import { generateBranchName, type SessionArtifact } from "@open-inspect/shared";
 import type { Logger } from "../logger";
-import { resolveHeadBranchForPr } from "../source-control/branch-resolution";
+import { resolveHeadBranchForPr, sanitizeBranchName } from "../source-control/branch-resolution";
 import {
   SourceControlProviderError,
   type SourceControlProvider,
@@ -59,12 +59,8 @@ export interface PullRequestServiceDeps {
   log: Logger;
   generateId: () => string;
   pushBranchToRemote: (headBranch: string, pushSpec: GitPushSpec) => Promise<PushBranchResult>;
-  broadcastArtifactCreated: (artifact: {
-    id: string;
-    type: "pr" | "branch";
-    url: string;
-    prNumber?: number;
-  }) => void;
+  broadcastSessionBranch: (branchName: string) => void;
+  broadcastArtifactCreated: (artifact: SessionArtifact) => void;
 }
 
 /**
@@ -157,7 +153,19 @@ export class SessionPullRequestService {
         return { kind: "error", status: 500, error: pushResult.error };
       }
 
-      this.deps.repository.updateSessionBranch(session.id, headBranch);
+      const sanitizedHeadBranch = sanitizeBranchName(headBranch);
+      if (!sanitizedHeadBranch) {
+        return {
+          kind: "error",
+          status: 400,
+          error: "headBranch must be a valid branch name",
+        };
+      }
+
+      if (session.branch_name !== sanitizedHeadBranch) {
+        this.deps.repository.updateSessionBranch(session.id, sanitizedHeadBranch);
+      }
+      this.deps.broadcastSessionBranch(sanitizedHeadBranch);
 
       const latestArtifacts = this.deps.repository.listArtifacts();
       const latestPrArtifact = latestArtifacts.find((artifact) => artifact.type === "pr");
@@ -179,22 +187,23 @@ export class SessionPullRequestService {
         repository: repoInfo,
         title: input.title,
         body: fullBody,
-        sourceBranch: headBranch,
+        sourceBranch: sanitizedHeadBranch,
         targetBranch: baseBranch,
       });
 
       const artifactId = this.deps.generateId();
       const now = Date.now();
+      const artifactMetadata = {
+        number: prResult.id,
+        state: prResult.state,
+        head: sanitizedHeadBranch,
+        base: baseBranch,
+      };
       this.deps.repository.createArtifact({
         id: artifactId,
         type: "pr",
         url: prResult.webUrl,
-        metadata: JSON.stringify({
-          number: prResult.id,
-          state: prResult.state,
-          head: headBranch,
-          base: baseBranch,
-        }),
+        metadata: JSON.stringify(artifactMetadata),
         createdAt: now,
       });
 
@@ -202,7 +211,8 @@ export class SessionPullRequestService {
         id: artifactId,
         type: "pr",
         url: prResult.webUrl,
-        prNumber: prResult.id,
+        metadata: artifactMetadata,
+        createdAt: now,
       });
 
       return {

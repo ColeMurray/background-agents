@@ -8,6 +8,7 @@ import type {
   ParticipantPresence,
   SandboxEvent as SharedSandboxEvent,
   ServerMessage,
+  SessionArtifact,
   SessionState as SharedSessionState,
 } from "@open-inspect/shared";
 
@@ -109,18 +110,51 @@ function toUiSandboxEvent(event: SharedSandboxEvent): SandboxEvent {
   };
 }
 
-function toUiArtifact(artifact: {
-  id: string;
-  type: string;
-  url: string;
-  prNumber?: number;
-}): Artifact {
+function toUiArtifact(artifact: SessionArtifact): Artifact {
+  const rawMetadata = artifact.metadata;
+  const metadata =
+    rawMetadata && typeof rawMetadata === "object"
+      ? {
+          prNumber:
+            typeof rawMetadata.prNumber === "number"
+              ? rawMetadata.prNumber
+              : typeof rawMetadata.number === "number"
+                ? rawMetadata.number
+                : undefined,
+          prState:
+            rawMetadata.prState === "open" ||
+            rawMetadata.prState === "merged" ||
+            rawMetadata.prState === "closed" ||
+            rawMetadata.prState === "draft"
+              ? rawMetadata.prState
+              : rawMetadata.state === "open" ||
+                  rawMetadata.state === "merged" ||
+                  rawMetadata.state === "closed" ||
+                  rawMetadata.state === "draft"
+                ? rawMetadata.state
+                : undefined,
+          mode: rawMetadata.mode === "manual_pr" ? "manual_pr" : undefined,
+          createPrUrl:
+            typeof rawMetadata.createPrUrl === "string" ? rawMetadata.createPrUrl : undefined,
+          head: typeof rawMetadata.head === "string" ? rawMetadata.head : undefined,
+          base: typeof rawMetadata.base === "string" ? rawMetadata.base : undefined,
+          provider: typeof rawMetadata.provider === "string" ? rawMetadata.provider : undefined,
+          filename: typeof rawMetadata.filename === "string" ? rawMetadata.filename : undefined,
+          previewStatus:
+            rawMetadata.previewStatus === "active" ||
+            rawMetadata.previewStatus === "outdated" ||
+            rawMetadata.previewStatus === "stopped"
+              ? rawMetadata.previewStatus
+              : undefined,
+        }
+      : undefined;
+
   return {
     id: artifact.id,
     type: artifact.type as Artifact["type"],
     url: artifact.url,
-    createdAt: Date.now(),
-    metadata: artifact.prNumber ? { prNumber: artifact.prNumber } : undefined,
+    createdAt: artifact.createdAt,
+    metadata,
   };
 }
 
@@ -203,8 +237,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
         case "subscribed": {
           console.log("WebSocket subscribed to session");
           subscribedRef.current = true;
-          // Clear existing state since we're about to receive fresh history
-          setArtifacts([]);
+          setArtifacts(data.artifacts.map(toUiArtifact));
           pendingTextRef.current = null;
           if (data.state) {
             setSessionState({
@@ -346,13 +379,17 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
 
         case "artifact_created":
           setArtifacts((prev) => {
-            // Avoid duplicates
+            const nextArtifact = toUiArtifact(data.artifact);
             const existing = prev.find((a) => a.id === data.artifact.id);
             if (existing) {
-              return prev.map((a) => (a.id === data.artifact.id ? toUiArtifact(data.artifact) : a));
+              return prev.map((a) => (a.id === data.artifact.id ? nextArtifact : a));
             }
-            return [...prev, toUiArtifact(data.artifact)];
+            return [nextArtifact, ...prev];
           });
+          break;
+
+        case "session_branch":
+          setSessionState((prev) => (prev ? { ...prev, branchName: data.branchName } : null));
           break;
 
         case "session_title":
