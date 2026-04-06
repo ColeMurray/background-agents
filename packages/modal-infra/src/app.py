@@ -39,12 +39,9 @@ function_image = (
     .add_local_dir(str(_SANDBOX_RUNTIME_DIR), remote_path="/root/sandbox_runtime")
 )
 
-# Secrets for LLM API keys - defined in Modal dashboard or CLI
-# These are injected into sandboxes but never stored in snapshots
-llm_secrets = modal.Secret.from_name(
-    "llm-api-keys",
-    required_keys=["ANTHROPIC_API_KEY"],
-)
+# Volume for Claude OAuth credentials (.credentials.json)
+# Mounted at /root/.claude in sandboxes — Claude Code reads tokens from here.
+claude_auth_volume = modal.Volume.from_name("claude-auth-vol", create_if_missing=True)
 
 # Secrets for GitHub App - used for git operations (clone, push)
 # These are used to generate installation tokens, NOT injected into sandboxes
