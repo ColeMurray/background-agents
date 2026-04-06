@@ -168,6 +168,42 @@ describe("useSessionSocket", () => {
     });
   });
 
+  it("replaces stale artifacts with the subscribed snapshot", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1"));
+
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(
+        createSubscribedMessage([
+          {
+            id: "artifact-pr-1",
+            type: "pr",
+            url: "https://github.com/acme/web-app/pull/42",
+            metadata: { number: 42, state: "open" },
+            createdAt: 1234,
+          },
+        ])
+      );
+    });
+
+    await waitFor(() => {
+      expect(result.current.artifacts).toHaveLength(1);
+    });
+
+    act(() => {
+      socket.receive(createSubscribedMessage());
+    });
+
+    await waitFor(() => {
+      expect(result.current.artifacts).toEqual([]);
+    });
+  });
+
   it("updates sessionState.branchName from session_branch without mutating the sidebar cache", async () => {
     const { result } = renderHook(() => useSessionSocket("session-1"));
 

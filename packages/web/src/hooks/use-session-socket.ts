@@ -110,54 +110,70 @@ function toUiSandboxEvent(event: SharedSandboxEvent): SandboxEvent {
   };
 }
 
-function parsePrState(value: unknown): Artifact["metadata"]["prState"] | undefined {
-  return value === "open" || value === "merged" || value === "closed" || value === "draft"
-    ? value
-    : undefined;
-}
+function toUiArtifact(artifact: SessionArtifact): Artifact {
+  const rawMetadata = artifact.metadata;
+  let metadata: Artifact["metadata"] | undefined;
 
-function parsePreviewStatus(value: unknown): Artifact["metadata"]["previewStatus"] | undefined {
-  return value === "active" || value === "outdated" || value === "stopped" ? value : undefined;
-}
+  if (rawMetadata && typeof rawMetadata === "object") {
+    const nextMetadata: NonNullable<Artifact["metadata"]> = {};
 
-function parseOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
+    if (typeof rawMetadata.prNumber === "number") {
+      nextMetadata.prNumber = rawMetadata.prNumber;
+    } else if (typeof rawMetadata.number === "number") {
+      nextMetadata.prNumber = rawMetadata.number;
+    }
 
-function toUiArtifactMetadata(
-  rawMetadata: SessionArtifact["metadata"]
-): Artifact["metadata"] | undefined {
-  if (!rawMetadata || typeof rawMetadata !== "object") {
-    return undefined;
+    if (
+      rawMetadata.prState === "open" ||
+      rawMetadata.prState === "merged" ||
+      rawMetadata.prState === "closed" ||
+      rawMetadata.prState === "draft"
+    ) {
+      nextMetadata.prState = rawMetadata.prState;
+    } else if (
+      rawMetadata.state === "open" ||
+      rawMetadata.state === "merged" ||
+      rawMetadata.state === "closed" ||
+      rawMetadata.state === "draft"
+    ) {
+      nextMetadata.prState = rawMetadata.state;
+    }
+
+    if (rawMetadata.mode === "manual_pr") {
+      nextMetadata.mode = "manual_pr";
+    }
+    if (typeof rawMetadata.createPrUrl === "string") {
+      nextMetadata.createPrUrl = rawMetadata.createPrUrl;
+    }
+    if (typeof rawMetadata.head === "string") {
+      nextMetadata.head = rawMetadata.head;
+    }
+    if (typeof rawMetadata.base === "string") {
+      nextMetadata.base = rawMetadata.base;
+    }
+    if (typeof rawMetadata.provider === "string") {
+      nextMetadata.provider = rawMetadata.provider;
+    }
+    if (typeof rawMetadata.filename === "string") {
+      nextMetadata.filename = rawMetadata.filename;
+    }
+    if (
+      rawMetadata.previewStatus === "active" ||
+      rawMetadata.previewStatus === "outdated" ||
+      rawMetadata.previewStatus === "stopped"
+    ) {
+      nextMetadata.previewStatus = rawMetadata.previewStatus;
+    }
+
+    metadata = Object.keys(nextMetadata).length > 0 ? nextMetadata : undefined;
   }
 
-  const prNumber =
-    typeof rawMetadata.prNumber === "number"
-      ? rawMetadata.prNumber
-      : typeof rawMetadata.number === "number"
-        ? rawMetadata.number
-        : undefined;
-
-  return {
-    prNumber,
-    prState: parsePrState(rawMetadata.prState) ?? parsePrState(rawMetadata.state),
-    mode: rawMetadata.mode === "manual_pr" ? "manual_pr" : undefined,
-    createPrUrl: parseOptionalString(rawMetadata.createPrUrl),
-    head: parseOptionalString(rawMetadata.head),
-    base: parseOptionalString(rawMetadata.base),
-    provider: parseOptionalString(rawMetadata.provider),
-    filename: parseOptionalString(rawMetadata.filename),
-    previewStatus: parsePreviewStatus(rawMetadata.previewStatus),
-  };
-}
-
-function toUiArtifact(artifact: SessionArtifact): Artifact {
   return {
     id: artifact.id,
     type: artifact.type as Artifact["type"],
     url: artifact.url,
     createdAt: artifact.createdAt,
-    metadata: toUiArtifactMetadata(artifact.metadata),
+    metadata,
   };
 }
 
@@ -240,6 +256,8 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
         case "subscribed": {
           console.log("WebSocket subscribed to session");
           subscribedRef.current = true;
+          // Replace local artifacts with the subscribed snapshot so reconnects
+          // still clear stale state while hydrating persisted artifacts.
           setArtifacts(data.artifacts.map(toUiArtifact));
           pendingTextRef.current = null;
           if (data.state) {
