@@ -123,15 +123,6 @@ function toUiArtifact(artifact: SessionArtifact): Artifact {
   };
 }
 
-function upsertArtifact(artifacts: Artifact[], nextArtifact: Artifact): Artifact[] {
-  const existingIndex = artifacts.findIndex((artifact) => artifact.id === nextArtifact.id);
-  if (existingIndex === -1) {
-    return [nextArtifact, ...artifacts];
-  }
-
-  return artifacts.map((artifact, index) => (index === existingIndex ? nextArtifact : artifact));
-}
-
 export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   const wsRef = useRef<WebSocket | null>(null);
   const connectingRef = useRef(false);
@@ -354,7 +345,17 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           break;
 
         case "artifact_created":
-          setArtifacts((prev) => upsertArtifact(prev, toUiArtifact(data.artifact)));
+          setArtifacts((prev) => {
+            const nextArtifact = toUiArtifact(data.artifact);
+            const existingIndex = prev.findIndex((artifact) => artifact.id === nextArtifact.id);
+            if (existingIndex === -1) {
+              return [nextArtifact, ...prev];
+            }
+
+            return prev.map((artifact, index) =>
+              index === existingIndex ? nextArtifact : artifact
+            );
+          });
           break;
 
         case "session_branch":

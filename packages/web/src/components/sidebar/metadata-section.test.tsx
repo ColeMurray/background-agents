@@ -5,8 +5,14 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { MetadataSection } from "./metadata-section";
+import type { Artifact } from "@/types/session";
 
 expect.extend(matchers);
+
+type SharedPrMetadata = NonNullable<Artifact["metadata"]> & {
+  number?: number;
+  state?: NonNullable<Artifact["metadata"]>["prState"];
+};
 
 vi.mock("next/link", () => ({
   default: ({ children, href, ...props }: React.ComponentProps<"a">) => (
@@ -30,7 +36,7 @@ describe("MetadataSection", () => {
             metadata: {
               number: 42,
               state: "open",
-            },
+            } as SharedPrMetadata,
             createdAt: 1234,
           },
         ]}
