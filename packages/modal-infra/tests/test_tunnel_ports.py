@@ -210,6 +210,31 @@ class TestResolveAndSetupTunnels:
         # Should still return the URLs despite the write failure
         assert extra == {3000: "https://tunnel-3000.example.com"}
 
+    @pytest.mark.asyncio
+    async def test_tunnel_file_wait_failure_does_not_raise(self):
+        """If proc.wait raises after exec succeeds, it should log a warning but not raise."""
+        tunnel_urls = {3000: "https://tunnel-3000.example.com"}
+
+        proc = AsyncMock()
+        proc.wait.aio = AsyncMock(side_effect=Exception("wait failed"))
+        sandbox = MagicMock()
+        sandbox.exec = MagicMock()
+        sandbox.exec.aio = AsyncMock(return_value=proc)
+
+        with patch.object(
+            SandboxManager,
+            "_resolve_tunnels",
+            new_callable=AsyncMock,
+            return_value=tunnel_urls,
+        ):
+            _cs_url, _ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
+                sandbox, "sb-1", False, False, [3000]
+            )
+
+        # Should still return the URLs despite the wait failure
+        assert extra == {3000: "https://tunnel-3000.example.com"}
+        sandbox.exec.aio.assert_called_once()
+
 
 class TestCollectExposedPorts:
     """SandboxManager._collect_exposed_ports tests."""
