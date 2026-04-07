@@ -149,7 +149,7 @@ nextauth_secret = ""
 
 # Sandbox backend for session execution
 # - "modal": existing Modal-based sandboxes with filesystem snapshot restore
-# - "daytona": externally deployed Daytona shim service with stop/start resume
+# - "daytona": direct Daytona REST API integration with stop/start resume
 sandbox_provider = "modal"
 
 # Unique deployment name (used in resource names and URLs)

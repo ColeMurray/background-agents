@@ -67,10 +67,10 @@ describe("DaytonaRestClient", () => {
       );
     });
 
-    it("strips trailing slashes from apiUrl", () => {
+    it("strips trailing slashes from apiUrl", async () => {
       const client = new DaytonaRestClient({ ...defaultConfig, apiUrl: "https://api.test///" });
       fetchSpy.mockResolvedValue(jsonResponse({ id: "sb-1", state: "started" }));
-      client.getSandbox("sb-1");
+      await client.getSandbox("sb-1");
       expect(fetchSpy).toHaveBeenCalledWith("https://api.test/sandbox/sb-1", expect.anything());
     });
   });

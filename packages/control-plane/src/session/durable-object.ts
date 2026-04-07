@@ -561,19 +561,26 @@ export class SessionDO extends DurableObject<Env> {
               ),
             });
 
+            const scmProvider = (this.env.SCM_PROVIDER as "github" | "gitlab") || "github";
             const appConfig = getGitHubAppConfig(this.env);
+
+            const getCloneToken: () => Promise<string | null> =
+              scmProvider === "gitlab"
+                ? () => Promise.resolve(this.env.GITLAB_ACCESS_TOKEN ?? null)
+                : appConfig
+                  ? () => getCachedInstallationToken(appConfig, this.env)
+                  : () => Promise.resolve(null);
+
             return createDaytonaProvider(
               daytonaClient,
               {
-                scmProvider: (this.env.SCM_PROVIDER as "github" | "gitlab") || "github",
+                scmProvider,
                 gitlabAccessToken: this.env.GITLAB_ACCESS_TOKEN,
                 // Reuses API key as HMAC secret for code-server password derivation
                 // (distinct message prefix prevents collision with auth use)
                 codeServerPasswordSecret: this.env.DAYTONA_API_KEY,
               },
-              appConfig
-                ? () => getCachedInstallationToken(appConfig, this.env)
-                : () => Promise.resolve(null)
+              getCloneToken
             );
           })()
         : (() => {
