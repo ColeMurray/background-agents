@@ -35,13 +35,21 @@ vercel_api_token = ""
 vercel_team_id = ""  # e.g., "team_xxxxxxxxxxxxxxxxxxxx"
 
 # Modal API token
+# Only required when sandbox_provider = "modal"
 # Create at: https://modal.com/settings
 modal_token_id = ""
 modal_token_secret = ""
 
 # Modal workspace name (used in endpoint URLs)
+# Only required when sandbox_provider = "modal"
 # This is your Modal username/workspace (e.g., "myworkspace" in "https://myworkspace--app.modal.run")
 modal_workspace = ""
+
+# Daytona shim service
+# Only required when sandbox_provider = "daytona"
+# This repo does not Terraform-deploy the shim. Deploy packages/daytona-infra separately.
+daytona_service_url = ""
+daytona_service_secret = ""
 
 # =============================================================================
 # GitHub App Credentials
@@ -125,6 +133,7 @@ repo_secrets_encryption_key = ""
 internal_callback_secret = ""
 
 # Modal API secret (for control plane -> Modal authentication)
+# Only required when sandbox_provider = "modal"
 # Generate with: openssl rand -hex 32
 modal_api_secret = ""
 
@@ -134,6 +143,11 @@ nextauth_secret = ""
 # =============================================================================
 # Configuration
 # =============================================================================
+
+# Sandbox backend for session execution
+# - "modal": existing Modal-based sandboxes with filesystem snapshot restore
+# - "daytona": externally deployed Daytona shim service with stop/start resume
+sandbox_provider = "modal"
 
 # Unique deployment name (used in resource names and URLs)
 # IMPORTANT: This must be globally unique for Vercel URLs.

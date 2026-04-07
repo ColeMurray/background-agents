@@ -325,6 +325,117 @@ describe("evaluateSpawnDecision", () => {
     expect(DEFAULT_SPAWN_CONFIG.cooldownMs).toBe(30000);
     expect(DEFAULT_SPAWN_CONFIG.readyWaitMs).toBe(60000);
   });
+
+  // ---- Persistent resume (Daytona-style) ----
+
+  it('returns "resume" when provider supports persistent resume and sandbox is stopped with providerObjectId', () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "stopped",
+      createdAt: now - 120000,
+      providerObjectId: "daytona-abc123",
+      snapshotImageId: null,
+      hasActiveWebSocket: false,
+    };
+
+    const decision = evaluateSpawnDecision(state, config, now, false, true);
+
+    expect(decision.action).toBe("resume");
+    if (decision.action === "resume") {
+      expect(decision.providerObjectId).toBe("daytona-abc123");
+    }
+  });
+
+  it('returns "resume" when provider supports persistent resume and sandbox is stale with providerObjectId', () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "stale",
+      createdAt: now - 120000,
+      providerObjectId: "daytona-abc123",
+      snapshotImageId: null,
+      hasActiveWebSocket: false,
+    };
+
+    const decision = evaluateSpawnDecision(state, config, now, false, true);
+
+    expect(decision.action).toBe("resume");
+  });
+
+  it("resume takes priority over restore when both available", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "stopped",
+      createdAt: now - 120000,
+      providerObjectId: "daytona-abc123",
+      snapshotImageId: "img-abc123",
+      hasActiveWebSocket: false,
+    };
+
+    const decision = evaluateSpawnDecision(state, config, now, false, true);
+
+    expect(decision.action).toBe("resume");
+  });
+
+  it('falls back to "restore" when supportsPersistentResume but no providerObjectId', () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "stopped",
+      createdAt: now - 120000,
+      providerObjectId: null,
+      snapshotImageId: "img-abc123",
+      hasActiveWebSocket: false,
+    };
+
+    const decision = evaluateSpawnDecision(state, config, now, false, true);
+
+    expect(decision.action).toBe("restore");
+  });
+
+  it('falls back to "spawn" when supportsPersistentResume but no providerObjectId and no snapshot', () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "stopped",
+      createdAt: now - 120000,
+      providerObjectId: null,
+      snapshotImageId: null,
+      hasActiveWebSocket: false,
+    };
+
+    const decision = evaluateSpawnDecision(state, config, now, false, true);
+
+    expect(decision.action).toBe("spawn");
+  });
+
+  it("does not resume when supportsPersistentResume is false even with providerObjectId", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "stopped",
+      createdAt: now - 120000,
+      providerObjectId: "daytona-abc123",
+      snapshotImageId: null,
+      hasActiveWebSocket: false,
+    };
+
+    const decision = evaluateSpawnDecision(state, config, now, false, false);
+
+    expect(decision.action).toBe("spawn");
+  });
+
+  it("does not resume for failed status even with providerObjectId", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "failed",
+      createdAt: now - 120000,
+      providerObjectId: "daytona-abc123",
+      snapshotImageId: null,
+      hasActiveWebSocket: false,
+    };
+
+    const decision = evaluateSpawnDecision(state, config, now, false, true);
+
+    // "failed" is not a resume-eligible status — should fall through to spawn
+    expect(decision.action).toBe("spawn");
+  });
 });
 
 // ==================== Inactivity Timeout Tests ====================

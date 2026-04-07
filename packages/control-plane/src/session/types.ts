@@ -93,7 +93,7 @@ export interface ArtifactRow {
 export interface SandboxRow {
   id: string;
   modal_sandbox_id: string | null; // Our generated sandbox ID
-  modal_object_id: string | null; // Modal's internal object ID (for snapshot API)
+  modal_object_id: string | null; // Legacy column: provider object ID (Modal object ID or Daytona handle)
   snapshot_id: string | null;
   snapshot_image_id: string | null; // Modal Image ID for filesystem snapshot restoration
   auth_token: string | null;

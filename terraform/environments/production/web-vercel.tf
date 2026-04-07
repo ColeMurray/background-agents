@@ -55,6 +55,12 @@ module "web_app" {
       targets   = ["production", "preview"]
       sensitive = false
     },
+    {
+      key       = "NEXT_PUBLIC_SANDBOX_PROVIDER"
+      value     = var.sandbox_provider
+      targets   = ["production", "preview"]
+      sensitive = false
+    },
     # Internal
     {
       key       = "INTERNAL_CALLBACK_SECRET"

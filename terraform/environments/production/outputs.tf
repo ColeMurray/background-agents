@@ -76,6 +76,11 @@ output "web_app_platform" {
   value       = var.web_platform
 }
 
+output "sandbox_provider" {
+  description = "Sandbox backend selected for this deployment"
+  value       = var.sandbox_provider
+}
+
 output "web_app_project_id" {
   description = "Vercel project ID (null when using Cloudflare)"
   value       = var.web_platform == "vercel" ? module.web_app[0].project_id : null
@@ -84,12 +89,12 @@ output "web_app_project_id" {
 # Modal
 output "modal_app_name" {
   description = "Modal app name"
-  value       = module.modal_app.app_name
+  value       = local.use_modal_backend ? module.modal_app[0].app_name : null
 }
 
 output "modal_health_url" {
   description = "Modal health check endpoint"
-  value       = module.modal_app.api_health_url
+  value       = local.use_modal_backend ? module.modal_app[0].api_health_url : null
 }
 
 # =============================================================================
@@ -103,8 +108,8 @@ output "verification_commands" {
     # 1. Health check control plane
     curl ${module.control_plane_worker.worker_url}/health
 
-    # 2. Health check Modal
-    curl ${module.modal_app.api_health_url}
+    # 2. Health check sandbox backend
+    ${local.use_modal_backend ? "curl ${module.modal_app[0].api_health_url}" : "# Verify your external Daytona shim service at ${var.daytona_service_url}/health"}
 
     # 3. Verify web app deployment
     curl ${local.web_app_url}

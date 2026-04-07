@@ -50,6 +50,7 @@ const TERMINAL_TOKEN_TTL_SECONDS = 86400;
 export interface SandboxCircuitBreakerInfo {
   status: string;
   created_at: number;
+  modal_object_id: string | null;
   snapshot_image_id: string | null;
   spawn_failure_count: number | null;
   last_spawn_failure: number | null;
@@ -76,6 +77,8 @@ export interface SandboxStorage {
     authTokenHash: string;
     modalSandboxId: string;
   }): void;
+  /** Update sandbox state for in-place resume without rotating auth/token identity */
+  updateSandboxForResume?(data: { status: SandboxStatus; createdAt: number }): void;
   /** Update sandbox Modal object ID (for snapshot API) */
   updateSandboxModalObjectId(modalObjectId: string): void;
   /** Update sandbox snapshot image ID */
@@ -92,6 +95,8 @@ export interface SandboxStorage {
   updateSandboxCodeServer(url: string, password: string): void | Promise<void>;
   /** Clear stale code-server URL and password (e.g. on sandbox teardown) */
   clearSandboxCodeServer(): void;
+  /** Clear the code-server URL while preserving the stored password */
+  clearSandboxCodeServerUrl?(): void;
   /** Update tunnel URLs for extra ports on the sandbox row */
   updateSandboxTunnelUrls(urls: Record<string, string>): void | Promise<void>;
   /** Clear stale tunnel URLs (e.g. on sandbox teardown) */
@@ -273,6 +278,7 @@ export class SandboxLifecycleManager {
     const spawnState = {
       status: (sandboxState?.status || "pending") as SandboxStatus,
       createdAt: sandboxState?.created_at || 0,
+      providerObjectId: sandboxState?.modal_object_id || null,
       snapshotImageId: sandboxState?.snapshot_image_id || null,
       hasActiveWebSocket: this.wsManager.getSandboxWebSocket() !== null,
     };
@@ -281,7 +287,8 @@ export class SandboxLifecycleManager {
       spawnState,
       this.config.spawn,
       now,
-      this.isSpawningSandbox
+      this.isSpawningSandbox,
+      !!this.provider.capabilities.supportsPersistentResume
     );
 
     switch (spawnDecision.action) {
@@ -304,6 +311,13 @@ export class SandboxLifecycleManager {
           snapshot_image_id: spawnDecision.snapshotImageId,
         });
         await this.restoreFromSnapshot(spawnDecision.snapshotImageId);
+        return;
+
+      case "resume":
+        this.log.info("Spawn decision: resume", {
+          provider_object_id: spawnDecision.providerObjectId,
+        });
+        await this.resumeSandbox(spawnDecision.providerObjectId);
         return;
 
       case "spawn":
@@ -606,6 +620,88 @@ export class SandboxLifecycleManager {
   }
 
   /**
+   * Resume a provider-managed sandbox in place without rotating the logical sandbox ID.
+   */
+  private async resumeSandbox(providerObjectId: string): Promise<void> {
+    if (!this.provider.resumeSandbox) {
+      await this.doSpawn();
+      return;
+    }
+
+    this.isSpawningSandbox = true;
+
+    try {
+      const session = this.storage.getSession();
+      const sandbox = this.storage.getSandbox();
+      if (!session || !sandbox?.modal_sandbox_id) {
+        this.log.error("Cannot resume sandbox: missing session or logical sandbox ID");
+        return;
+      }
+
+      const now = Date.now();
+      this.storage.setLastSpawnError(null, null);
+      this.storage.updateSandboxForResume?.({
+        status: "connecting",
+        createdAt: now,
+      });
+      if (!this.storage.updateSandboxForResume) {
+        this.storage.updateSandboxStatus("connecting");
+      }
+      this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
+
+      const timeoutSeconds =
+        session.spawn_source === "agent" ? CHILD_SANDBOX_TIMEOUT_SECONDS : undefined;
+
+      const result = await this.provider.resumeSandbox({
+        providerObjectId,
+        sessionId: session.session_name || session.id,
+        sandboxId: sandbox.modal_sandbox_id,
+        timeoutSeconds,
+        codeServerEnabled: session.code_server_enabled === 1,
+        sandboxSettings: this.parseSandboxSettings(session),
+      });
+
+      if (!result.success) {
+        if (result.shouldSpawnFresh) {
+          this.log.info("Resume fell back to fresh spawn", {
+            provider_object_id: providerObjectId,
+            error: result.error,
+          });
+          await this.doSpawn();
+          return;
+        }
+
+        throw new Error(result.error || "Failed to resume sandbox");
+      }
+
+      if (result.providerObjectId && result.providerObjectId !== providerObjectId) {
+        this.storage.updateSandboxModalObjectId(result.providerObjectId);
+      }
+
+      if (result.codeServerUrl && result.codeServerPassword) {
+        await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
+      }
+
+      await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
+      await this.alarmScheduler.scheduleAlarm(Date.now() + this.config.connectingTimeout.timeoutMs);
+      this.storage.resetCircuitBreaker();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to resume sandbox";
+      this.storage.setLastSpawnError(errorMessage, Date.now());
+      this.storage.updateSandboxStatus("failed");
+      this.broadcaster.broadcast({
+        type: "sandbox_error",
+        error: errorMessage,
+      });
+      this.log.error("Sandbox resume failed", {
+        error: error instanceof Error ? error : String(error),
+      });
+    } finally {
+      this.isSpawningSandbox = false;
+    }
+  }
+
+  /**
    * Trigger a filesystem snapshot of the sandbox.
    */
   async triggerSnapshot(reason: string): Promise<void> {
@@ -681,6 +777,58 @@ export class SandboxLifecycleManager {
   }
 
   /**
+   * Whether the active provider owns stop/resume of long-lived sandboxes.
+   */
+  private usesProviderManagedStop(): boolean {
+    return !!this.provider.capabilities.supportsExplicitStop && !!this.provider.stopSandbox;
+  }
+
+  /**
+   * Clear preview URLs after a sandbox is no longer reachable.
+   *
+   * Daytona resumes preserve the code-server password, so only the URL is
+   * cleared. Modal-style snapshots rotate the password on restore, so both
+   * values are removed.
+   */
+  private clearSandboxAccessState(): void {
+    if (this.usesProviderManagedStop() && this.storage.clearSandboxCodeServerUrl) {
+      this.storage.clearSandboxCodeServerUrl();
+      this.storage.clearSandboxTunnelUrls();
+      this.storage.clearSandboxTtyd();
+      return;
+    }
+
+    this.storage.clearSandboxCodeServer();
+    this.storage.clearSandboxTunnelUrls();
+    this.storage.clearSandboxTtyd();
+  }
+
+  /**
+   * Stop a provider-managed sandbox via its API.
+   */
+  private async stopProviderSandbox(reason: string): Promise<void> {
+    if (!this.provider.stopSandbox) {
+      return;
+    }
+
+    const sandbox = this.storage.getSandbox();
+    const session = this.storage.getSession();
+    if (!sandbox?.modal_object_id || !session) {
+      return;
+    }
+
+    const result = await this.provider.stopSandbox({
+      providerObjectId: sandbox.modal_object_id,
+      sessionId: session.session_name || session.id,
+      reason,
+    });
+
+    if (!result.success) {
+      throw new Error(result.error || "Failed to stop provider sandbox");
+    }
+  }
+
+  /**
    * Handle alarm for inactivity and heartbeat monitoring.
    */
   async handleAlarm(): Promise<void> {
@@ -722,9 +870,16 @@ export class SandboxLifecycleManager {
       });
       await this.callbacks.onSandboxTerminating?.();
       this.storage.updateSandboxStatus("failed");
-      this.storage.clearSandboxCodeServer();
-      this.storage.clearSandboxTunnelUrls();
-      this.storage.clearSandboxTtyd();
+      this.clearSandboxAccessState();
+      if (this.usesProviderManagedStop()) {
+        try {
+          await this.stopProviderSandbox("connecting_timeout");
+        } catch (error) {
+          this.log.warn("Provider stop failed after connecting timeout", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
       this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
       this.broadcaster.broadcast({
         type: "sandbox_error",
@@ -749,20 +904,28 @@ export class SandboxLifecycleManager {
       });
       // Fail any stuck processing message before terminating
       await this.callbacks.onSandboxTerminating?.();
-      // Fire-and-forget snapshot so status broadcast isn't delayed
-      this.triggerSnapshot("heartbeat_timeout").catch((e) =>
-        this.log.error("Heartbeat snapshot failed", { error: e instanceof Error ? e : String(e) })
-      );
       this.storage.updateSandboxStatus("stale");
-      this.storage.clearSandboxCodeServer();
-      this.storage.clearSandboxTunnelUrls();
-      this.storage.clearSandboxTtyd();
+      this.clearSandboxAccessState();
       this.broadcaster.broadcast({ type: "sandbox_status", status: "stale" });
 
-      // Best-effort shutdown: tell sandbox to exit cleanly (connection may already be dead).
-      // Unlike the inactivity path, we don't await the snapshot first — heartbeat stale means
-      // the connection is likely already lost, so we prioritize status broadcast over sequencing.
-      this.wsManager.sendToSandbox({ type: "shutdown" });
+      if (this.usesProviderManagedStop()) {
+        try {
+          await this.stopProviderSandbox("heartbeat_timeout");
+        } catch (error) {
+          this.log.warn("Provider stop failed after heartbeat timeout", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      } else {
+        // Fire-and-forget snapshot so status broadcast isn't delayed.
+        this.triggerSnapshot("heartbeat_timeout").catch((e) =>
+          this.log.error("Heartbeat snapshot failed", {
+            error: e instanceof Error ? e : String(e),
+          })
+        );
+        this.wsManager.sendToSandbox({ type: "shutdown" });
+      }
+
       this.wsManager.closeSandboxWebSocket(1000, "Heartbeat stale");
       return;
     }
@@ -792,21 +955,29 @@ export class SandboxLifecycleManager {
         await this.callbacks.onSandboxTerminating?.();
         // Set status to stopped FIRST to block reconnection attempts
         this.storage.updateSandboxStatus("stopped");
-        this.storage.clearSandboxCodeServer();
-        this.storage.clearSandboxTunnelUrls();
-        this.storage.clearSandboxTtyd();
+        this.clearSandboxAccessState();
         this.broadcaster.broadcast({ type: "sandbox_status", status: "stopped" });
 
-        // Take snapshot
-        await this.triggerSnapshot("inactivity_timeout");
+        if (this.usesProviderManagedStop()) {
+          try {
+            await this.stopProviderSandbox("inactivity_timeout");
+          } catch (error) {
+            this.log.error("Provider stop failed after inactivity timeout", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        } else {
+          await this.triggerSnapshot("inactivity_timeout");
+          this.wsManager.sendToSandbox({ type: "shutdown" });
+        }
 
-        // Send shutdown command and close WebSocket
-        this.wsManager.sendToSandbox({ type: "shutdown" });
         this.wsManager.closeSandboxWebSocket(1000, "Inactivity timeout");
 
         this.broadcaster.broadcast({
           type: "sandbox_warning",
-          message: "Sandbox stopped due to inactivity, snapshot saved",
+          message: this.usesProviderManagedStop()
+            ? "Sandbox stopped due to inactivity"
+            : "Sandbox stopped due to inactivity, snapshot saved",
         });
         return;
 

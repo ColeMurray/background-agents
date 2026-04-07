@@ -2,8 +2,16 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
+import { supportsRepoImages } from "@/lib/sandbox-provider";
 
 export async function GET() {
+  if (!supportsRepoImages()) {
+    return NextResponse.json(
+      { error: "Repo images are only available when SANDBOX_PROVIDER=modal" },
+      { status: 501 }
+    );
+  }
+
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
