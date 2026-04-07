@@ -14,7 +14,10 @@ import { timingSafeEqual } from "@open-inspect/shared";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { getGitHubAppConfig } from "../auth/github-app";
 import { createModalClient } from "../sandbox/client";
+import { createDaytonaServiceClient } from "../sandbox/daytona-service-client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
+import { createDaytonaProvider } from "../sandbox/providers/daytona-provider";
+import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import {
@@ -528,14 +531,36 @@ export class SessionDO extends DurableObject<Env> {
    * Create the lifecycle manager with all required adapters.
    */
   private createLifecycleManager(): SandboxLifecycleManager {
-    // Verify Modal configuration
-    if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {
-      throw new Error("MODAL_API_SECRET and MODAL_WORKSPACE are required for lifecycle manager");
-    }
+    const sandboxBackend = resolveSandboxBackendName(this.env.SANDBOX_PROVIDER);
 
-    // Create Modal provider
-    const modalClient = createModalClient(this.env.MODAL_API_SECRET, this.env.MODAL_WORKSPACE);
-    const provider = createModalProvider(modalClient);
+    const provider =
+      sandboxBackend === "daytona"
+        ? (() => {
+            if (!this.env.DAYTONA_SERVICE_URL || !this.env.DAYTONA_SERVICE_SECRET) {
+              throw new Error(
+                "DAYTONA_SERVICE_URL and DAYTONA_SERVICE_SECRET are required when SANDBOX_PROVIDER=daytona"
+              );
+            }
+
+            const daytonaClient = createDaytonaServiceClient(
+              this.env.DAYTONA_SERVICE_URL,
+              this.env.DAYTONA_SERVICE_SECRET
+            );
+            return createDaytonaProvider(daytonaClient);
+          })()
+        : (() => {
+            if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {
+              throw new Error(
+                "MODAL_API_SECRET and MODAL_WORKSPACE are required when SANDBOX_PROVIDER=modal"
+              );
+            }
+
+            const modalClient = createModalClient(
+              this.env.MODAL_API_SECRET,
+              this.env.MODAL_WORKSPACE
+            );
+            return createModalProvider(modalClient);
+          })();
 
     // Storage adapter
     const storage: SandboxStorage = {
@@ -545,6 +570,7 @@ export class SessionDO extends DurableObject<Env> {
       getUserEnvVars: () => this.getUserEnvVars(),
       updateSandboxStatus: (status) => this.updateSandboxStatus(status),
       updateSandboxForSpawn: (data) => this.repository.updateSandboxForSpawn(data),
+      updateSandboxForResume: (data) => this.repository.updateSandboxForResume(data),
       updateSandboxModalObjectId: (id) => this.repository.updateSandboxModalObjectId(id),
       updateSandboxSnapshotImageId: (sandboxId, imageId) =>
         this.repository.updateSandboxSnapshotImageId(sandboxId, imageId),
@@ -562,6 +588,7 @@ export class SessionDO extends DurableObject<Env> {
         this.repository.updateSandboxCodeServer(url, encrypted);
       },
       clearSandboxCodeServer: () => this.repository.clearSandboxCodeServer(),
+      clearSandboxCodeServerUrl: () => this.repository.clearSandboxCodeServerUrl(),
       updateSandboxTunnelUrls: (urls) => this.repository.updateSandboxTunnelUrls(urls),
       clearSandboxTunnelUrls: () => this.repository.clearSandboxTunnelUrls(),
       updateSandboxTtyd: async (url, token) => {
@@ -629,7 +656,7 @@ export class SessionDO extends DurableObject<Env> {
 
     // Create repo image lookup if D1 is available
     let repoImageLookup: RepoImageLookup | undefined;
-    if (this.env.DB) {
+    if (this.env.DB && sandboxBackend === "modal") {
       const repoImageStore = new RepoImageStore(this.env.DB);
       repoImageLookup = {
         getLatestReady: (repoOwner, repoName, baseBranch) =>

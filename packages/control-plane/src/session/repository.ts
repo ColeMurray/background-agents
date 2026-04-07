@@ -47,6 +47,7 @@ export interface WsClientMappingResult {
 export interface SandboxCircuitBreakerState {
   status: string;
   created_at: number;
+  modal_object_id: string | null;
   snapshot_image_id: string | null;
   spawn_failure_count: number | null;
   last_spawn_failure: number | null;
@@ -194,6 +195,11 @@ export interface SpawnSandboxData {
   modalSandboxId: string;
 }
 
+export interface ResumeSandboxData {
+  status: SandboxStatus;
+  createdAt: number;
+}
+
 /**
  * SqlStorage interface matching Cloudflare's SqlStorage.
  * Used to allow mock injection for testing.
@@ -298,7 +304,7 @@ export class SessionRepository {
 
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerState | null {
     const result = this.sql.exec(
-      `SELECT status, created_at, snapshot_image_id, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
+      `SELECT status, created_at, modal_object_id, snapshot_image_id, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
     );
     const rows = this.rows<SandboxCircuitBreakerState>(result);
     return rows[0] ?? null;
@@ -335,6 +341,18 @@ export class SessionRepository {
       data.createdAt,
       data.authTokenHash,
       data.modalSandboxId
+    );
+  }
+
+  updateSandboxForResume(data: ResumeSandboxData): void {
+    this.sql.exec(
+      `UPDATE sandbox SET
+         status = ?,
+         created_at = ?,
+         last_heartbeat = NULL
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      data.status,
+      data.createdAt
     );
   }
 
@@ -389,6 +407,12 @@ export class SessionRepository {
   clearSandboxCodeServer(): void {
     this.sql.exec(
       `UPDATE sandbox SET code_server_url = NULL, code_server_password = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
+    );
+  }
+
+  clearSandboxCodeServerUrl(): void {
+    this.sql.exec(
+      `UPDATE sandbox SET code_server_url = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
     );
   }
 
