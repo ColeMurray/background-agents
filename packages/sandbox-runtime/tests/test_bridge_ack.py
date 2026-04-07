@@ -23,7 +23,6 @@ def bridge() -> AgentBridge:
         control_plane_url="http://localhost:8787",
         auth_token="test-token",
     )
-    b.opencode_session_id = "oc-session-123"
     return b
 
 
