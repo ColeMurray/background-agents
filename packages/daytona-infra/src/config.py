@@ -29,7 +29,7 @@ def load_config() -> DaytonaBootstrapConfig:
         raise RuntimeError("DAYTONA_BASE_SNAPSHOT is required")
 
     repo_root = Path(
-        os.environ.get("OPEN_INSPECT_REPO_ROOT", Path(__file__).resolve().parents[2])
+        os.environ.get("OPEN_INSPECT_REPO_ROOT", Path(__file__).resolve().parents[3])
     )
 
     return DaytonaBootstrapConfig(

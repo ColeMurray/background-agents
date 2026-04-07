@@ -561,7 +561,7 @@ export class SessionDO extends DurableObject<Env> {
               ),
             });
 
-            const scmProvider = (this.env.SCM_PROVIDER as "github" | "gitlab") || "github";
+            const scmProvider = resolveScmProviderFromEnv(this.env.SCM_PROVIDER);
             const appConfig = getGitHubAppConfig(this.env);
 
             const getCloneToken: () => Promise<string | null> =
