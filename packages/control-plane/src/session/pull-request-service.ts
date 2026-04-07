@@ -139,20 +139,6 @@ export class SessionPullRequestService {
         resolution_source: branchResolution.source,
         base_branch: baseBranch,
       });
-      const pushSpec = this.deps.sourceControlProvider.buildGitPushSpec({
-        owner: session.repo_owner,
-        name: session.repo_name,
-        sourceRef: "HEAD",
-        targetBranch: headBranch,
-        auth: pushAuth,
-        force: true,
-      });
-
-      const pushResult = await this.deps.pushBranchToRemote(headBranch, pushSpec);
-      if (!pushResult.success) {
-        return { kind: "error", status: 500, error: pushResult.error };
-      }
-
       const sanitizedHeadBranch = sanitizeBranchName(headBranch);
       if (!sanitizedHeadBranch) {
         return {
@@ -160,6 +146,20 @@ export class SessionPullRequestService {
           status: 400,
           error: "headBranch must be a valid branch name",
         };
+      }
+
+      const pushSpec = this.deps.sourceControlProvider.buildGitPushSpec({
+        owner: session.repo_owner,
+        name: session.repo_name,
+        sourceRef: "HEAD",
+        targetBranch: sanitizedHeadBranch,
+        auth: pushAuth,
+        force: true,
+      });
+
+      const pushResult = await this.deps.pushBranchToRemote(sanitizedHeadBranch, pushSpec);
+      if (!pushResult.success) {
+        return { kind: "error", status: 500, error: pushResult.error };
       }
 
       if (session.branch_name !== sanitizedHeadBranch) {

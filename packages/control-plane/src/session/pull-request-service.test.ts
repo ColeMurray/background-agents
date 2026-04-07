@@ -216,6 +216,42 @@ describe("SessionPullRequestService", () => {
     expect(harness.deps.broadcastSessionBranch).toHaveBeenCalledWith("open-inspect/session-name-1");
   });
 
+  it("uses the sanitized branch for push, PR creation, and branch sync", async () => {
+    const result = await harness.service.createPullRequest(
+      createInput({ headBranch: " Feature/Test " })
+    );
+
+    expect(result).toEqual({
+      kind: "created",
+      prNumber: 42,
+      prUrl: "https://github.com/acme/web/pull/42",
+      state: "open",
+    });
+    expect(harness.provider.buildGitPushSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetBranch: "feature/test",
+      })
+    );
+    expect(harness.deps.pushBranchToRemote).toHaveBeenCalledWith(
+      "feature/test",
+      expect.objectContaining({
+        targetBranch: "feature/test",
+        refspec: "HEAD:refs/heads/feature/test",
+      })
+    );
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        sourceBranch: "feature/test",
+      })
+    );
+    expect(harness.deps.repository.updateSessionBranch).toHaveBeenCalledWith(
+      "session-1",
+      "feature/test"
+    );
+    expect(harness.deps.broadcastSessionBranch).toHaveBeenCalledWith("feature/test");
+  });
+
   it("creates PR with OAuth token and stores PR artifact", async () => {
     const result = await harness.service.createPullRequest(
       createInput({ promptingAuth: { authType: "oauth", token: "user-token" } })
@@ -277,6 +313,8 @@ describe("SessionPullRequestService", () => {
       status: 400,
       error: "headBranch must be a valid branch name",
     });
+    expect(harness.provider.buildGitPushSpec).not.toHaveBeenCalled();
+    expect(harness.deps.pushBranchToRemote).not.toHaveBeenCalled();
     expect(harness.provider.createPullRequest).not.toHaveBeenCalled();
     expect(harness.deps.broadcastSessionBranch).not.toHaveBeenCalled();
 
@@ -297,6 +335,18 @@ describe("SessionPullRequestService", () => {
       state: "open",
     });
     expect(harness.deps.repository.updateSessionBranch).not.toHaveBeenCalled();
+    expect(harness.provider.buildGitPushSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetBranch: "feature/test",
+      })
+    );
+    expect(harness.deps.pushBranchToRemote).toHaveBeenCalledWith(
+      "feature/test",
+      expect.objectContaining({
+        targetBranch: "feature/test",
+        refspec: "HEAD:refs/heads/feature/test",
+      })
+    );
     expect(harness.deps.broadcastSessionBranch).toHaveBeenCalledWith("feature/test");
   });
 
