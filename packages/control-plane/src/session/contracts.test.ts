@@ -22,7 +22,6 @@ describe("session internal endpoint contracts", () => {
       "participants",
       "messages",
       "createPr",
-      "openaiTokenRefresh",
       "wsToken",
       "archive",
       "unarchive",

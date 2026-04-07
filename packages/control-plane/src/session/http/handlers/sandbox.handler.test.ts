@@ -11,8 +11,6 @@ function createHandler() {
   const getSandbox = vi.fn<() => SandboxRow | null>();
   const isValidSandboxToken = vi.fn();
   const getSession = vi.fn<() => SessionRow | null>();
-  const refreshOpenAIToken = vi.fn();
-  const isOpenAISecretsConfigured = vi.fn();
   const generateId = vi.fn(() => "participant-1");
   const now = vi.fn(() => 1234);
 
@@ -30,8 +28,6 @@ function createHandler() {
     getSandbox,
     isValidSandboxToken,
     getSession,
-    refreshOpenAIToken,
-    isOpenAISecretsConfigured,
     generateId,
     now,
     getLog: () => log,
@@ -44,8 +40,6 @@ function createHandler() {
     getSandbox,
     isValidSandboxToken,
     getSession,
-    refreshOpenAIToken,
-    isOpenAISecretsConfigured,
     generateId,
     now,
     log,
@@ -206,65 +200,5 @@ describe("createSandboxHandler", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ valid: true });
     expect(log.info).toHaveBeenCalledWith("Sandbox token verified successfully");
-  });
-
-  it("returns 404 when openai token refresh has no session", async () => {
-    const { handler, getSession } = createHandler();
-    getSession.mockReturnValue(null);
-
-    const response = await handler.openaiTokenRefresh();
-
-    expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: "No session" });
-  });
-
-  it("returns 500 when openai secrets are not configured", async () => {
-    const { handler, getSession, isOpenAISecretsConfigured } = createHandler();
-    getSession.mockReturnValue({} as SessionRow);
-    isOpenAISecretsConfigured.mockReturnValue(false);
-
-    const response = await handler.openaiTokenRefresh();
-
-    expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: "Secrets not configured" });
-  });
-
-  it("returns mapped service error from openai token refresh", async () => {
-    const { handler, getSession, isOpenAISecretsConfigured, refreshOpenAIToken } = createHandler();
-    getSession.mockReturnValue({ id: "session-1" } as SessionRow);
-    isOpenAISecretsConfigured.mockReturnValue(true);
-    refreshOpenAIToken.mockResolvedValue({
-      ok: false,
-      status: 502,
-      error: "OpenAI token refresh failed",
-    });
-
-    const response = await handler.openaiTokenRefresh();
-
-    expect(response.status).toBe(502);
-    expect(await response.json()).toEqual({ error: "OpenAI token refresh failed" });
-  });
-
-  it("returns openai access token payload on success", async () => {
-    const { handler, getSession, isOpenAISecretsConfigured, refreshOpenAIToken } = createHandler();
-    const session = { id: "session-1" } as SessionRow;
-    getSession.mockReturnValue(session);
-    isOpenAISecretsConfigured.mockReturnValue(true);
-    refreshOpenAIToken.mockResolvedValue({
-      ok: true,
-      accessToken: "access-token",
-      expiresIn: 3600,
-      accountId: "acct_123",
-    });
-
-    const response = await handler.openaiTokenRefresh();
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      access_token: "access-token",
-      expires_in: 3600,
-      account_id: "acct_123",
-    });
-    expect(refreshOpenAIToken).toHaveBeenCalledWith(session);
   });
 });

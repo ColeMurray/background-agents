@@ -15,14 +15,6 @@ export const VALID_MODELS = [
   "anthropic/claude-sonnet-4-6",
   "anthropic/claude-opus-4-5",
   "anthropic/claude-opus-4-6",
-  "openai/gpt-5.2",
-  "openai/gpt-5.4",
-  "openai/gpt-5.2-codex",
-  "openai/gpt-5.3-codex",
-  "openai/gpt-5.3-codex-spark",
-  "opencode/kimi-k2.5",
-  "opencode/minimax-m2.5",
-  "opencode/glm-5",
 ] as const;
 
 export type ValidModel = (typeof VALID_MODELS)[number];
@@ -33,13 +25,12 @@ export type ValidModel = (typeof VALID_MODELS)[number];
 export const DEFAULT_MODEL: ValidModel = "anthropic/claude-sonnet-4-6";
 
 /**
- * Reasoning effort levels supported across providers.
+ * Reasoning effort levels supported by Claude models.
  *
- * - "none": No reasoning (OpenAI only)
- * - "low"/"medium"/"high"/"xhigh": Progressive reasoning depth
- * - "max": Maximum reasoning budget (Anthropic extended thinking)
+ * - "low"/"medium"/"high": Progressive reasoning depth
+ * - "max": Maximum reasoning budget (extended thinking)
  */
-export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ReasoningEffort = "low" | "medium" | "high" | "max";
 
 export interface ModelReasoningConfig {
   efforts: ReasoningEffort[];
@@ -56,11 +47,6 @@ export const MODEL_REASONING_CONFIG: Partial<Record<ValidModel, ModelReasoningCo
   "anthropic/claude-sonnet-4-6": { efforts: ["low", "medium", "high", "max"], default: "high" },
   "anthropic/claude-opus-4-5": { efforts: ["high", "max"], default: "max" },
   "anthropic/claude-opus-4-6": { efforts: ["low", "medium", "high", "max"], default: "high" },
-  "openai/gpt-5.2": { efforts: ["none", "low", "medium", "high", "xhigh"], default: undefined },
-  "openai/gpt-5.4": { efforts: ["none", "low", "medium", "high", "xhigh"], default: undefined },
-  "openai/gpt-5.2-codex": { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
-  "openai/gpt-5.3-codex": { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
-  "openai/gpt-5.3-codex-spark": { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
 };
 
 export interface ModelDisplayInfo {
@@ -108,28 +94,6 @@ export const MODEL_OPTIONS: ModelCategory[] = [
       },
     ],
   },
-  {
-    category: "OpenAI",
-    models: [
-      { id: "openai/gpt-5.2", name: "GPT 5.2", description: "400K context, fast" },
-      { id: "openai/gpt-5.4", name: "GPT 5.4", description: "Latest flagship model" },
-      { id: "openai/gpt-5.2-codex", name: "GPT 5.2 Codex", description: "Optimized for code" },
-      { id: "openai/gpt-5.3-codex", name: "GPT 5.3 Codex", description: "Latest codex" },
-      {
-        id: "openai/gpt-5.3-codex-spark",
-        name: "GPT 5.3 Codex Spark",
-        description: "Low-latency codex variant",
-      },
-    ],
-  },
-  {
-    category: "OpenCode Zen",
-    models: [
-      { id: "opencode/kimi-k2.5", name: "Kimi K2.5", description: "Moonshot AI" },
-      { id: "opencode/minimax-m2.5", name: "MiniMax M2.5", description: "MiniMax" },
-      { id: "opencode/glm-5", name: "GLM 5", description: "Z.ai 744B MoE" },
-    ],
-  },
 ];
 
 /**
@@ -142,25 +106,18 @@ export const DEFAULT_ENABLED_MODELS: ValidModel[] = [
   "anthropic/claude-sonnet-4-6",
   "anthropic/claude-opus-4-5",
   "anthropic/claude-opus-4-6",
-  "openai/gpt-5.2",
-  "openai/gpt-5.4",
-  "openai/gpt-5.2-codex",
-  "openai/gpt-5.3-codex",
-  "openai/gpt-5.3-codex-spark",
 ];
 
 // === Normalization ===
 
 /**
  * Normalize a model ID to canonical "provider/model" format.
- * Adds "anthropic/" prefix to bare Claude model names and "openai/" prefix
- * to bare GPT model names for backward compat with existing data in D1,
- * SQLite, and Slack KV.
+ * Adds "anthropic/" prefix to bare Claude model names for backward compat
+ * with existing data in D1, SQLite, and Slack KV.
  */
 export function normalizeModelId(modelId: string): string {
   if (modelId.includes("/")) return modelId;
   if (modelId.startsWith("claude-")) return `anthropic/${modelId}`;
-  if (modelId.startsWith("gpt-")) return `openai/${modelId}`;
   return modelId;
 }
 
@@ -214,7 +171,6 @@ export function isValidReasoningEffort(model: string, effort: string): boolean {
  * @example
  * extractProviderAndModel("anthropic/claude-haiku-4-5") // { provider: "anthropic", model: "claude-haiku-4-5" }
  * extractProviderAndModel("claude-haiku-4-5") // { provider: "anthropic", model: "claude-haiku-4-5" }
- * extractProviderAndModel("openai/gpt-5.2-codex") // { provider: "openai", model: "gpt-5.2-codex" }
  */
 export function extractProviderAndModel(modelId: string): { provider: string; model: string } {
   const normalized = normalizeModelId(modelId);

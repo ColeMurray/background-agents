@@ -54,7 +54,6 @@ import { SessionPullRequestService } from "./pull-request-service";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
-import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { ParticipantService, getAvatarUrl } from "./participant-service";
 import { UserScmTokenStore } from "../db/user-scm-tokens";
 import { CallbackNotificationService } from "./callback-notification-service";
@@ -158,7 +157,6 @@ export class SessionDO extends DurableObject<Env> {
     archive: (request) => this.sessionLifecycleHandler.archive(request),
     unarchive: (request) => this.sessionLifecycleHandler.unarchive(request),
     verifySandboxToken: (request) => this.sandboxHandler.verifySandboxToken(request),
-    openaiTokenRefresh: () => this.sandboxHandler.openaiTokenRefresh(),
     spawnContext: () => this.childSessionsHandler.getSpawnContext(),
     childSummary: () => this.childSessionsHandler.getChildSummary(),
     cancel: () => this.sessionLifecycleHandler.cancel(),
@@ -359,17 +357,6 @@ export class SessionDO extends DurableObject<Env> {
         getSandbox: () => this.getSandbox(),
         isValidSandboxToken: (token, sandbox) => this.isValidSandboxToken(token, sandbox),
         getSession: () => this.getSession(),
-        refreshOpenAIToken: async (session) => {
-          const service = new OpenAITokenRefreshService(
-            this.env.DB!,
-            this.env.REPO_SECRETS_ENCRYPTION_KEY!,
-            (sessionRow) => this.ensureRepoId(sessionRow),
-            this.log
-          );
-          return service.refresh(session);
-        },
-        isOpenAISecretsConfigured: () =>
-          Boolean(this.env.DB && this.env.REPO_SECRETS_ENCRYPTION_KEY),
         generateId: () => generateId(),
         now: () => Date.now(),
         getLog: () => this.log,

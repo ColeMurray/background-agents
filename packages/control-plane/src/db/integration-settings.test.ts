@@ -739,14 +739,14 @@ describe("IntegrationSettingsStore", () => {
 
     it("round-trips linear repo settings", async () => {
       await store.setRepoSettings("linear", "acme/platform", {
-        model: "openai/gpt-5.3-codex",
+        model: "anthropic/claude-sonnet-4-6",
         reasoningEffort: "high",
         allowLabelModelOverride: false,
       });
 
       const result = await store.getRepoSettings("linear", "acme/platform");
       expect(result).toEqual({
-        model: "openai/gpt-5.3-codex",
+        model: "anthropic/claude-sonnet-4-6",
         reasoningEffort: "high",
         allowLabelModelOverride: false,
       });

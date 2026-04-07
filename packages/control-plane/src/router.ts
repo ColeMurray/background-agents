@@ -168,7 +168,6 @@ const PUBLIC_ROUTES: RegExp[] = [
  */
 const SANDBOX_AUTH_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/pr$/, // PR creation from sandbox
-  /^\/sessions\/[^/]+\/openai-token-refresh$/, // OpenAI token refresh from sandbox
   /^\/sessions\/[^/]+\/children$/, // POST spawn, GET list
   /^\/sessions\/[^/]+\/children\/[^/]+$/, // GET child detail
   /^\/sessions\/[^/]+\/children\/[^/]+\/cancel$/, // POST cancel child
@@ -440,11 +439,6 @@ const routes: Route[] = [
     method: "POST",
     pattern: parsePattern("/sessions/:id/pr"),
     handler: handleCreatePR,
-  },
-  {
-    method: "POST",
-    pattern: parsePattern("/sessions/:id/openai-token-refresh"),
-    handler: handleOpenAITokenRefresh,
   },
   {
     method: "POST",
@@ -1098,24 +1092,6 @@ async function handleCreatePR(
   );
 
   return response;
-}
-
-async function handleOpenAITokenRefresh(
-  _request: Request,
-  env: Env,
-  match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
-  const stub = getSessionStub(env, match);
-  if (!stub) return error("Session ID required");
-
-  return stub.fetch(
-    internalRequest(
-      buildSessionInternalUrl(SessionInternalPaths.openaiTokenRefresh),
-      { method: "POST" },
-      ctx
-    )
-  );
 }
 
 async function handleSessionWsToken(

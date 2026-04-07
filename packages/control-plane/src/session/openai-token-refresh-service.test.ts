@@ -80,7 +80,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     branch_name: null,
     base_sha: null,
     current_sha: null,
-    opencode_session_id: null,
+    agent_session_id: null,
     model: "openai/gpt-5.1",
     reasoning_effort: null,
     status: "active",

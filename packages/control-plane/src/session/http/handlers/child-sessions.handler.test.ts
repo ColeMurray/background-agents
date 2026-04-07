@@ -14,7 +14,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     branch_name: "feature/test",
     base_sha: null,
     current_sha: null,
-    opencode_session_id: null,
+    agent_session_id: null,
     model: "anthropic/claude-haiku-4-5",
     reasoning_effort: null,
     status: "active",

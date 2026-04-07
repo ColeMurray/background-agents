@@ -29,8 +29,8 @@ export interface SessionRow {
   branch_name: string | null;
   base_sha: string | null;
   current_sha: string | null;
-  opencode_session_id: string | null;
-  model: string; // LLM model to use (e.g., "anthropic/claude-haiku-4-5")
+  agent_session_id: string | null;
+  model: string; // LLM model to use (e.g., "anthropic/claude-sonnet-4-6")
   reasoning_effort: string | null; // Reasoning effort level (e.g., "high", "max")
   status: SessionStatus;
   parent_session_id: string | null;
@@ -163,7 +163,7 @@ export interface SessionUpdate {
   branchName?: string;
   baseSha?: string;
   currentSha?: string;
-  opencodeSessionId?: string;
+  agentSessionId?: string;
   status?: SessionStatus;
 }
 

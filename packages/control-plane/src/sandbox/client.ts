@@ -30,8 +30,7 @@ export interface CreateSandboxRequest {
   controlPlaneUrl: string;
   sandboxAuthToken: string;
   snapshotId?: string;
-  opencodeSessionId?: string;
-  provider?: string;
+  agentSessionId?: string;
   model?: string;
   userEnvVars?: Record<string, string>;
   repoImageId?: string | null;
@@ -60,7 +59,6 @@ export interface RestoreSandboxRequest {
   controlPlaneUrl: string;
   repoOwner: string;
   repoName: string;
-  provider: string;
   model: string;
   userEnvVars?: Record<string, string>;
   timeoutSeconds?: number;
@@ -246,8 +244,7 @@ export class ModalClient {
           control_plane_url: request.controlPlaneUrl,
           sandbox_auth_token: request.sandboxAuthToken,
           snapshot_id: request.snapshotId || null,
-          opencode_session_id: request.opencodeSessionId || null,
-          provider: request.provider || "anthropic",
+          agent_session_id: request.agentSessionId || null,
           model: request.model || "claude-sonnet-4-6",
           user_env_vars: request.userEnvVars || null,
           repo_image_id: request.repoImageId || null,
@@ -328,7 +325,6 @@ export class ModalClient {
             session_id: request.sessionId,
             repo_owner: request.repoOwner,
             repo_name: request.repoName,
-            provider: request.provider,
             model: request.model,
             branch: request.branch || null,
           },

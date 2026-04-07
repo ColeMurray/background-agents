@@ -18,8 +18,8 @@ CREATE TABLE IF NOT EXISTS session (
   branch_name TEXT,                                 -- Working branch (set after first commit)
   base_sha TEXT,                                    -- SHA of base branch at session start
   current_sha TEXT,                                 -- Current HEAD SHA
-  opencode_session_id TEXT,                         -- OpenCode session ID (for 1:1 mapping)
-  model TEXT DEFAULT 'anthropic/claude-haiku-4-5',   -- LLM model to use
+  agent_session_id TEXT,                             -- Agent session ID (for 1:1 mapping)
+  model TEXT DEFAULT 'anthropic/claude-sonnet-4-6',  -- LLM model to use
   reasoning_effort TEXT,                            -- Session-level reasoning effort default
   status TEXT DEFAULT 'created',                    -- 'created', 'active', 'completed', 'failed', 'archived', 'cancelled'
   parent_session_id TEXT,                           -- Parent session ID (NULL for top-level)
@@ -365,6 +365,21 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     run: (sql) => {
       runMigration(sql, `ALTER TABLE session ADD COLUMN sandbox_settings TEXT DEFAULT NULL`);
       runMigration(sql, `ALTER TABLE sandbox ADD COLUMN tunnel_urls TEXT`);
+    },
+  },
+  {
+    id: 29,
+    description: "Rename opencode_session_id to agent_session_id in session",
+    run: (sql) => {
+      const columns = sql.exec("PRAGMA table_info(session)").toArray() as Array<{
+        name: string;
+      }>;
+      const columnNames = new Set(columns.map((c) => c.name));
+      if (columnNames.has("opencode_session_id") && !columnNames.has("agent_session_id")) {
+        sql.exec(`ALTER TABLE session RENAME COLUMN opencode_session_id TO agent_session_id`);
+      } else if (!columnNames.has("agent_session_id")) {
+        runMigration(sql, `ALTER TABLE session ADD COLUMN agent_session_id TEXT`);
+      }
     },
   },
 ];

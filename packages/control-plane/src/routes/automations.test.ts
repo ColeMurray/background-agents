@@ -334,21 +334,26 @@ describe("automation route handlers", () => {
     });
 
     it("clears incompatible reasoning effort when model changes", async () => {
-      mockStore.getById.mockResolvedValue({ ...sampleRow, reasoning_effort: "max" });
+      // "low" is valid for claude-sonnet-4-6 but NOT for claude-haiku-4-5
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        model: "anthropic/claude-sonnet-4-6",
+        reasoning_effort: "low",
+      });
       mockStore.update.mockResolvedValue({
         ...sampleRow,
-        model: "openai/gpt-5.4",
+        model: "anthropic/claude-haiku-4-5",
         reasoning_effort: null,
       });
 
       const res = await callRoute("PUT", "/automations/auto-1", {
-        body: { model: "openai/gpt-5.4" },
+        body: { model: "anthropic/claude-haiku-4-5" },
       });
 
       expect(res.status).toBe(200);
       expect(mockStore.update).toHaveBeenCalledWith(
         "auto-1",
-        expect.objectContaining({ model: "openai/gpt-5.4", reasoning_effort: null })
+        expect.objectContaining({ model: "anthropic/claude-haiku-4-5", reasoning_effort: null })
       );
     });
 

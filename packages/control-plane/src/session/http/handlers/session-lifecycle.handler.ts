@@ -171,7 +171,7 @@ export function createSessionLifecycleHandler(
         branchName: session.branch_name,
         baseSha: session.base_sha,
         currentSha: session.current_sha,
-        opencodeSessionId: session.opencode_session_id,
+        agentSessionId: session.agent_session_id,
         status: session.status,
         model: session.model,
         reasoningEffort: session.reasoning_effort ?? undefined,

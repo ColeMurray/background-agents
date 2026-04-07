@@ -18,8 +18,8 @@ describe("extractModelFromLabels", () => {
     expect(extractModelFromLabels([{ name: "Model:Sonnet" }])).toBe("anthropic/claude-sonnet-4-5");
   });
 
-  it("returns GPT 5.4 for model:gpt-5.4 label", () => {
-    expect(extractModelFromLabels([{ name: "model:gpt-5.4" }])).toBe("openai/gpt-5.4");
+  it("returns null for unknown gpt model label", () => {
+    expect(extractModelFromLabels([{ name: "model:gpt-5.4" }])).toBeNull();
   });
 
   it("returns null for unknown model label", () => {
@@ -73,7 +73,7 @@ describe("resolveSessionModelSettings", () => {
       configReasoningEffort: "high",
       allowUserPreferenceOverride: false,
       allowLabelModelOverride: false,
-      userModel: "openai/gpt-5.3-codex",
+      userModel: "anthropic/claude-opus-4-5",
       labelModel: "anthropic/claude-opus-4-6",
     });
 
@@ -88,12 +88,12 @@ describe("resolveSessionModelSettings", () => {
       configReasoningEffort: null,
       allowUserPreferenceOverride: true,
       allowLabelModelOverride: false,
-      userModel: "openai/gpt-5.3-codex",
-      userReasoningEffort: "xhigh",
+      userModel: "anthropic/claude-opus-4-5",
+      userReasoningEffort: "max",
     });
 
-    expect(result.model).toBe("openai/gpt-5.3-codex");
-    expect(result.reasoningEffort).toBe("xhigh");
+    expect(result.model).toBe("anthropic/claude-opus-4-5");
+    expect(result.reasoningEffort).toBe("max");
   });
 
   it("does not let config effort override user effort when user model wins", () => {
@@ -103,42 +103,44 @@ describe("resolveSessionModelSettings", () => {
       configReasoningEffort: "low",
       allowUserPreferenceOverride: true,
       allowLabelModelOverride: false,
-      userModel: "openai/gpt-5.3-codex",
-      userReasoningEffort: "xhigh",
+      userModel: "anthropic/claude-opus-4-5",
+      userReasoningEffort: "max",
     });
 
-    expect(result.model).toBe("openai/gpt-5.3-codex");
-    expect(result.reasoningEffort).toBe("xhigh");
+    expect(result.model).toBe("anthropic/claude-opus-4-5");
+    expect(result.reasoningEffort).toBe("max");
   });
 
   it("applies label override over user preference when enabled", () => {
+    // "low" is valid for opus-4-6 but NOT for haiku-4-5, so effort is cleared to default
     const result = resolveSessionModelSettings({
-      envDefaultModel: "anthropic/claude-haiku-4-5",
+      envDefaultModel: "anthropic/claude-sonnet-4-6",
       configModel: null,
       configReasoningEffort: null,
       allowUserPreferenceOverride: true,
       allowLabelModelOverride: true,
-      userModel: "openai/gpt-5.3-codex",
-      labelModel: "anthropic/claude-opus-4-6",
-      userReasoningEffort: "xhigh",
+      userModel: "anthropic/claude-opus-4-6",
+      labelModel: "anthropic/claude-haiku-4-5",
+      userReasoningEffort: "low",
     });
 
-    expect(result.model).toBe("anthropic/claude-opus-4-6");
-    expect(result.reasoningEffort).toBe("high");
+    expect(result.model).toBe("anthropic/claude-haiku-4-5");
+    expect(result.reasoningEffort).toBe("max");
   });
 
   it("falls back to model default reasoning effort when invalid", () => {
+    // "low" is NOT valid for haiku-4-5 (only supports "high", "max")
     const result = resolveSessionModelSettings({
       envDefaultModel: "anthropic/claude-haiku-4-5",
-      configModel: "anthropic/claude-opus-4-6",
-      configReasoningEffort: "xhigh",
+      configModel: "anthropic/claude-haiku-4-5",
+      configReasoningEffort: "max",
       allowUserPreferenceOverride: true,
       allowLabelModelOverride: false,
-      userReasoningEffort: "xhigh",
+      userReasoningEffort: "low",
     });
 
-    expect(result.model).toBe("anthropic/claude-opus-4-6");
-    expect(result.reasoningEffort).toBe("high");
+    expect(result.model).toBe("anthropic/claude-haiku-4-5");
+    expect(result.reasoningEffort).toBe("max");
   });
 
   it("uses config reasoning effort when config model is selected", () => {

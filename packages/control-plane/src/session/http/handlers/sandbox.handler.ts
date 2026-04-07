@@ -1,6 +1,5 @@
 import type { Logger } from "../../../logger";
 import type { ParticipantRole, SandboxEvent } from "../../../types";
-import type { OpenAITokenRefreshResult } from "../../openai-token-refresh-service";
 import type { SessionRepository } from "../../repository";
 import type { SandboxRow, SessionRow } from "../../types";
 
@@ -18,8 +17,6 @@ export interface SandboxHandlerDeps {
   getSandbox: () => SandboxRow | null;
   isValidSandboxToken: (token: string | null, sandbox: SandboxRow | null) => Promise<boolean>;
   getSession: () => SessionRow | null;
-  refreshOpenAIToken: (session: SessionRow) => Promise<OpenAITokenRefreshResult>;
-  isOpenAISecretsConfigured: () => boolean;
   generateId: () => string;
   now: () => number;
   getLog: () => Logger;
@@ -29,7 +26,6 @@ export interface SandboxHandler {
   sandboxEvent: (request: Request) => Promise<Response>;
   addParticipant: (request: Request) => Promise<Response>;
   verifySandboxToken: (request: Request) => Promise<Response>;
-  openaiTokenRefresh: () => Promise<Response>;
 }
 
 function jsonResponse(body: unknown, status: number): Response {
@@ -94,31 +90,6 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
 
       deps.getLog().info("Sandbox token verified successfully");
       return jsonResponse({ valid: true }, 200);
-    },
-
-    async openaiTokenRefresh(): Promise<Response> {
-      const session = deps.getSession();
-      if (!session) {
-        return jsonResponse({ error: "No session" }, 404);
-      }
-
-      if (!deps.isOpenAISecretsConfigured()) {
-        return jsonResponse({ error: "Secrets not configured" }, 500);
-      }
-
-      const result = await deps.refreshOpenAIToken(session);
-      if (!result.ok) {
-        return jsonResponse({ error: result.error }, result.status);
-      }
-
-      return jsonResponse(
-        {
-          access_token: result.accessToken,
-          expires_in: result.expiresIn,
-          account_id: result.accountId,
-        },
-        200
-      );
     },
   };
 }

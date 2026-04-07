@@ -114,6 +114,5 @@ class SessionConfig(BaseModel):
     repo_name: str
     branch: str | None = None
     base_sha: str | None = None
-    opencode_session_id: str | None = None
-    provider: str = "anthropic"
+    agent_session_id: str | None = None
     model: str = "claude-sonnet-4-6"

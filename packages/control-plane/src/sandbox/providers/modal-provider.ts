@@ -64,7 +64,7 @@ export class ModalSandboxProvider implements SandboxProvider {
           repoName: config.repoName,
           controlPlaneUrl: config.controlPlaneUrl,
           sandboxAuthToken: config.sandboxAuthToken,
-          opencodeSessionId: config.opencodeSessionId,
+          agentSessionId: config.agentSessionId,
           provider: config.provider,
           model: config.model,
           userEnvVars: config.userEnvVars,

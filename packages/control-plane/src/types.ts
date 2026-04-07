@@ -106,7 +106,7 @@ export interface SessionResponse {
   branchName: string | null;
   baseSha: string | null;
   currentSha: string | null;
-  opencodeSessionId: string | null;
+  agentSessionId: string | null;
   status: SessionStatus;
   createdAt: number;
   updatedAt: number;

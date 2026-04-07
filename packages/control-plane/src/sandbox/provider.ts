@@ -46,8 +46,8 @@ export interface CreateSandboxConfig {
   model: string;
   /** User-provided environment variables (repo secrets) */
   userEnvVars?: Record<string, string>;
-  /** OpenCode session ID for resumption */
-  opencodeSessionId?: string;
+  /** Agent session ID for resumption */
+  agentSessionId?: string;
   /** Correlation context for downstream tracing */
   correlation?: CorrelationContext;
   /** Opaque provider image ID of a pre-built repo image */
