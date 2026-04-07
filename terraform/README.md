@@ -185,8 +185,7 @@ GH_APP_INSTALLATION_ID
 SLACK_BOT_TOKEN
 SLACK_SIGNING_SECRET
 
-# API Keys
-ANTHROPIC_API_KEY
+# Claude Auth (via Modal Volume, not secrets — see docs/CLAUDE_OAUTH.md)
 
 # Security Secrets
 TOKEN_ENCRYPTION_KEY
