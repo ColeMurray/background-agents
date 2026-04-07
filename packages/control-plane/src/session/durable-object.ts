@@ -567,6 +567,8 @@ export class SessionDO extends DurableObject<Env> {
               {
                 scmProvider: (this.env.SCM_PROVIDER as "github" | "gitlab") || "github",
                 gitlabAccessToken: this.env.GITLAB_ACCESS_TOKEN,
+                // Reuses API key as HMAC secret for code-server password derivation
+                // (distinct message prefix prevents collision with auth use)
                 codeServerPasswordSecret: this.env.DAYTONA_API_KEY,
               },
               appConfig

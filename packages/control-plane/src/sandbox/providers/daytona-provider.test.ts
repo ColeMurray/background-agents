@@ -42,10 +42,11 @@ function createMockClient(
       port: number,
       expiry: number
     ) => Promise<DaytonaSignedPreviewUrlResponse>;
-  }> = {}
+  }> = {},
+  configOverrides: Partial<DaytonaRestConfig> = {}
 ): DaytonaRestClient {
   return {
-    config: defaultRestConfig,
+    config: { ...defaultRestConfig, ...configOverrides },
     createSandbox: vi.fn(
       async (): Promise<DaytonaSandboxResponse> => ({
         id: "daytona-sandbox-id",
@@ -264,6 +265,34 @@ describe("DaytonaSandboxProvider", () => {
         openinspect_repo: "testowner/testrepo",
         openinspect_expected_sandbox_id: "sandbox-456",
       });
+    });
+
+    it("passes target to create params when set", async () => {
+      const client = createMockClient({}, { target: "us-east-1" });
+      const provider = new DaytonaSandboxProvider(
+        client,
+        defaultProviderConfig,
+        defaultGetCloneToken
+      );
+
+      await provider.createSandbox(baseCreateConfig);
+
+      const createCall = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(createCall.target).toBe("us-east-1");
+    });
+
+    it("omits target from create params when not set", async () => {
+      const client = createMockClient();
+      const provider = new DaytonaSandboxProvider(
+        client,
+        defaultProviderConfig,
+        defaultGetCloneToken
+      );
+
+      await provider.createSandbox(baseCreateConfig);
+
+      const createCall = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(createCall.target).toBeUndefined();
     });
 
     it("handles null clone token gracefully", async () => {

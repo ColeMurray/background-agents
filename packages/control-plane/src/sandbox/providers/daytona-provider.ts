@@ -128,6 +128,8 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       if ((state === "error" || state === "build_failed") && sandbox.recoverable) {
         await this.client.recoverSandbox(config.providerObjectId);
       } else if (state !== "started") {
+        // Covers stopped, archived, and non-recoverable error states —
+        // Daytona's start endpoint handles the state transition internally.
         await this.client.startSandbox(config.providerObjectId);
       }
 
