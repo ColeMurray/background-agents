@@ -165,6 +165,8 @@ export class SessionPullRequestService {
       if (session.branch_name !== sanitizedHeadBranch) {
         this.deps.repository.updateSessionBranch(session.id, sanitizedHeadBranch);
       }
+      // Broadcast even when the stored branch is already current so connected clients converge
+      // after missed or out-of-order updates.
       this.deps.broadcastSessionBranch(sanitizedHeadBranch);
 
       const latestArtifacts = this.deps.repository.listArtifacts();

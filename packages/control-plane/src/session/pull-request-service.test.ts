@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Logger } from "../logger";
 import type { SourceControlProvider } from "../source-control";
 import * as branchResolution from "../source-control/branch-resolution";
@@ -150,6 +150,10 @@ describe("SessionPullRequestService", () => {
     harness = createTestHarness();
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("returns 404 when session is missing", async () => {
     harness.setSession(null);
 
@@ -297,12 +301,10 @@ describe("SessionPullRequestService", () => {
   });
 
   it("returns 400 when the resolved branch name is invalid after sanitization", async () => {
-    const resolveHeadBranchForPrSpy = vi
-      .spyOn(branchResolution, "resolveHeadBranchForPr")
-      .mockReturnValue({
-        headBranch: "feature invalid",
-        source: "request",
-      });
+    vi.spyOn(branchResolution, "resolveHeadBranchForPr").mockReturnValue({
+      headBranch: "feature invalid",
+      source: "request",
+    });
 
     const result = await harness.service.createPullRequest(
       createInput({ headBranch: "feature invalid" })
@@ -317,8 +319,6 @@ describe("SessionPullRequestService", () => {
     expect(harness.deps.pushBranchToRemote).not.toHaveBeenCalled();
     expect(harness.provider.createPullRequest).not.toHaveBeenCalled();
     expect(harness.deps.broadcastSessionBranch).not.toHaveBeenCalled();
-
-    resolveHeadBranchForPrSpy.mockRestore();
   });
 
   it("skips branch writes when the sanitized branch is unchanged but still broadcasts", async () => {

@@ -7,8 +7,8 @@ export interface Artifact {
   type: "pr" | "screenshot" | "preview" | "branch";
   url: string | null;
   metadata?: {
-    prNumber?: number;
-    prState?: "open" | "merged" | "closed" | "draft";
+    number?: number;
+    state?: "open" | "merged" | "closed" | "draft";
     mode?: "manual_pr";
     createPrUrl?: string;
     head?: string;

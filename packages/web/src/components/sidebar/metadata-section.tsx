@@ -31,11 +31,6 @@ interface MetadataSectionProps {
   parentSessionId?: string | null;
 }
 
-type PrMetadata = NonNullable<Artifact["metadata"]> & {
-  number?: number;
-  state?: NonNullable<Artifact["metadata"]>["prState"];
-};
-
 export function MetadataSection({
   createdAt,
   model,
@@ -53,11 +48,8 @@ export function MetadataSection({
   const manualPrArtifact = artifacts.find(
     (a) => a.type === "branch" && (a.metadata?.mode === "manual_pr" || a.metadata?.createPrUrl)
   );
-  const prMetadata = prArtifact?.metadata as PrMetadata | undefined;
-  // Shared hydrated/live artifacts may use `number`/`state`; older local callers may still use
-  // `prNumber`/`prState`.
-  const prNumber = prMetadata?.number ?? prMetadata?.prNumber;
-  const prState = prMetadata?.state ?? prMetadata?.prState;
+  const prNumber = prArtifact?.metadata?.number;
+  const prState = prArtifact?.metadata?.state;
   const prUrl = getSafeExternalUrl(
     prArtifact?.url || manualPrArtifact?.metadata?.createPrUrl || manualPrArtifact?.url
   );
