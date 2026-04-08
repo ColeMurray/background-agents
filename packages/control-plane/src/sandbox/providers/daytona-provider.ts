@@ -7,6 +7,7 @@
 
 import { computeHmacHex, MAX_TUNNEL_PORTS, type SandboxSettings } from "@open-inspect/shared";
 import { createLogger } from "../../logger";
+import type { SourceControlProviderName } from "../../source-control";
 import type { DaytonaRestClient, DaytonaCreateSandboxParams } from "../daytona-rest-client";
 import { DaytonaApiError, DaytonaNotFoundError } from "../daytona-rest-client";
 import {
@@ -35,7 +36,7 @@ const DEFAULT_PREVIEW_EXPIRY_SECONDS = 3900;
 // ---------------------------------------------------------------------------
 
 export interface DaytonaProviderConfig {
-  scmProvider: "github" | "gitlab";
+  scmProvider: SourceControlProviderName;
   gitlabAccessToken?: string;
   /** Secret used for HMAC derivation of code-server passwords */
   codeServerPasswordSecret: string;
