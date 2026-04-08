@@ -36,16 +36,14 @@ export {
 export { ModalSandboxProvider, createModalProvider } from "./providers/modal-provider";
 export { DaytonaSandboxProvider, createDaytonaProvider } from "./providers/daytona-provider";
 export {
-  DaytonaServiceClient,
-  DaytonaServiceApiError,
-  createDaytonaServiceClient,
-  type DaytonaCreateSandboxRequest,
-  type DaytonaCreateSandboxResponse,
-  type DaytonaResumeSandboxRequest,
-  type DaytonaResumeSandboxResponse,
-  type DaytonaStopSandboxRequest,
-  type DaytonaStopSandboxResponse,
-} from "./daytona-service-client";
+  DaytonaRestClient,
+  DaytonaNotFoundError,
+  DaytonaApiError,
+  createDaytonaRestClient,
+  type DaytonaRestConfig,
+  type DaytonaSandboxResponse,
+  type DaytonaCreateSandboxParams,
+} from "./daytona-rest-client";
 export {
   resolveSandboxBackendName,
   isModalSandboxBackend,

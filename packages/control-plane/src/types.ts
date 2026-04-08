@@ -57,7 +57,7 @@ export interface Env {
   MODAL_TOKEN_ID?: string;
   MODAL_TOKEN_SECRET?: string;
   MODAL_API_SECRET?: string; // Shared secret for authenticating with Modal endpoints
-  DAYTONA_SERVICE_SECRET?: string; // Shared secret for authenticating with Daytona shim service
+  DAYTONA_API_KEY?: string; // Daytona REST API key (Bearer auth + HMAC derivation)
   INTERNAL_CALLBACK_SECRET?: string; // For signing callbacks to slack-bot
 
   // GitHub App secrets (for git operations)
@@ -77,9 +77,11 @@ export interface Env {
   CF_ACCOUNT_ID?: string; // Cloudflare account ID
   SANDBOX_PROVIDER?: string; // "modal" (default) or "daytona"
   MODAL_WORKSPACE?: string; // Modal workspace name (used in Modal endpoint URLs)
-  DAYTONA_SERVICE_URL?: string; // Base URL for the Daytona shim service
+  DAYTONA_API_URL?: string; // Daytona REST API base URL
   DAYTONA_BASE_SNAPSHOT?: string; // Named Daytona snapshot used for fresh sandbox creation
-  DAYTONA_AUTO_STOP_INTERVAL_MINUTES?: string; // Fallback Daytona idle stop interval in minutes
+  DAYTONA_AUTO_STOP_INTERVAL_MINUTES?: string; // Daytona idle stop interval in minutes
+  DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES?: string; // Daytona archive interval in minutes
+  DAYTONA_TARGET?: string; // Optional Daytona target name
 
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)

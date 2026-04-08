@@ -1,42 +1,28 @@
-# Open-Inspect Daytona Infrastructure
+# Open-Inspect Daytona Snapshot Tooling
 
-Thin Daytona shim service for Open-Inspect.
+Standalone scripts for seeding and managing Daytona base snapshots used by Open-Inspect sandboxes.
 
-The control plane talks to Daytona through this HTTP service because the published TypeScript SDK
-does not bundle cleanly for the Cloudflare Worker target used by `packages/control-plane`.
+The control plane communicates with the Daytona REST API directly — these scripts are for one-time
+snapshot setup, not runtime operations.
 
-## What it does
+## Scripts
 
-- Creates Open-Inspect sandboxes from a named Daytona base snapshot
-- Resumes stopped sandboxes with the same logical sandbox ID and auth token
-- Stops sandboxes explicitly on inactivity or stale heartbeat
-- Generates signed preview URLs for code-server and extra tunnel ports
-- Seeds the Daytona base snapshot from the repo-local sandbox runtime
+- **`src/bootstrap.py`** — Seeds the named Daytona base snapshot from the repo-local sandbox runtime
+- **`src/toolchain.py`** — Toolchain management utilities for snapshot images
 
 ## Environment
 
-- `DAYTONA_API_KEY`
+- `DAYTONA_API_KEY` (required)
 - `DAYTONA_API_URL`
 - `DAYTONA_TARGET`
-- `DAYTONA_SERVICE_SECRET`
-- `DAYTONA_BASE_SNAPSHOT`
-- `DAYTONA_AUTO_STOP_INTERVAL_MINUTES`
-- `ALLOWED_CONTROL_PLANE_HOSTS`
-- `SCM_PROVIDER`
-- `GITHUB_APP_ID`
-- `GITHUB_APP_PRIVATE_KEY`
-- `GITHUB_APP_INSTALLATION_ID`
-- `GITLAB_ACCESS_TOKEN`
-- `OPEN_INSPECT_REPO_ROOT`
+- `DAYTONA_BASE_SNAPSHOT` (required)
 
-## Local usage
+## Usage
 
 ```bash
 cd packages/daytona-infra
-uv sync --extra dev
-uv run python -m src.bootstrap --force
-uv run uvicorn src.app:app --host 0.0.0.0 --port 8788
+pip install daytona  # or: uv pip install daytona
+python -m src.bootstrap --force
 ```
 
-The bootstrap command rebuilds the named Daytona base snapshot from the current repo contents.
-Re-run it whenever `packages/sandbox-runtime` or the sandbox toolchain changes.
+Re-run `bootstrap` whenever `packages/sandbox-runtime` or the sandbox toolchain changes.

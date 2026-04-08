@@ -254,27 +254,44 @@ variable "modal_api_secret" {
   }
 }
 
-variable "daytona_service_url" {
-  description = "Base URL for the externally deployed Daytona shim service"
+variable "daytona_api_url" {
+  description = "Base URL for the Daytona REST API (e.g. https://app.daytona.io/api)"
   type        = string
   default     = ""
 
   validation {
-    condition     = var.sandbox_provider != "daytona" || length(var.daytona_service_url) > 0
-    error_message = "daytona_service_url must be set when sandbox_provider = 'daytona'."
+    condition     = var.sandbox_provider != "daytona" || length(var.daytona_api_url) > 0
+    error_message = "daytona_api_url must be set when sandbox_provider = 'daytona'."
   }
 }
 
-variable "daytona_service_secret" {
-  description = "Shared secret for authenticating control plane requests to the Daytona shim service"
+variable "daytona_api_key" {
+  description = "API key for Daytona REST API (Bearer auth)"
   type        = string
   sensitive   = true
   default     = ""
 
   validation {
-    condition     = var.sandbox_provider != "daytona" || length(var.daytona_service_secret) > 0
-    error_message = "daytona_service_secret must be set when sandbox_provider = 'daytona'."
+    condition     = var.sandbox_provider != "daytona" || length(var.daytona_api_key) > 0
+    error_message = "daytona_api_key must be set when sandbox_provider = 'daytona'."
   }
+}
+
+variable "daytona_base_snapshot" {
+  description = "Named Daytona snapshot used for fresh sandbox creation"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "daytona" || length(var.daytona_base_snapshot) > 0
+    error_message = "daytona_base_snapshot must be set when sandbox_provider = 'daytona'."
+  }
+}
+
+variable "daytona_target" {
+  description = "Optional Daytona target name"
+  type        = string
+  default     = ""
 }
 
 variable "nextauth_secret" {

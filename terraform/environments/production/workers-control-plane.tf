@@ -63,7 +63,13 @@ module "control_plane_worker" {
       { name = "SANDBOX_PROVIDER", value = var.sandbox_provider },
     ],
     local.use_modal_backend ? [{ name = "MODAL_WORKSPACE", value = var.modal_workspace }] : [],
-    local.use_daytona_backend ? [{ name = "DAYTONA_SERVICE_URL", value = var.daytona_service_url }] : []
+    local.use_daytona_backend ? [
+      { name = "DAYTONA_API_URL", value = var.daytona_api_url },
+      { name = "DAYTONA_BASE_SNAPSHOT", value = var.daytona_base_snapshot },
+    ] : [],
+    local.use_daytona_backend && var.daytona_target != "" ? [
+      { name = "DAYTONA_TARGET", value = var.daytona_target },
+    ] : []
   )
 
   secrets = concat(
@@ -83,7 +89,7 @@ module "control_plane_worker" {
       { name = "MODAL_API_SECRET", value = var.modal_api_secret },
     ] : [],
     local.use_daytona_backend ? [
-      { name = "DAYTONA_SERVICE_SECRET", value = var.daytona_service_secret },
+      { name = "DAYTONA_API_KEY", value = var.daytona_api_key },
     ] : []
   )
 
