@@ -623,6 +623,10 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `VERCEL_API_TOKEN`            | Vercel API token _(only if `web_platform = "vercel"`)_                        |
 | `VERCEL_TEAM_ID`              | Vercel team/account ID _(only if `web_platform = "vercel"`)_                  |
 | `VERCEL_PROJECT_ID`           | Vercel project ID _(only if `web_platform = "vercel"`)_                       |
+| `ENABLE_AUTO_DEPLOY`          | `true` to enable auto deploy, `false` to skip (default: `false`)              |
+| `AUTO_DEPLOY_GIT_REPOSITORY`  | Git repository _(only if `enable_auto_deploy = "true"`)_                      |
+| `AUTO_DEPLOY_GIT_BRANCH`      | Git branch _(only if `enable_auto_deploy = "true"`)_                          |
+| `AUTO_DEPLOY_SOURCE`          | Git source (e.g. `github`) _(only if `enable_auto_deploy = "true"`)_          |
 | `NEXTAUTH_URL`                | Your web app URL                                                              |
 | `MODAL_TOKEN_ID`              | Modal token ID                                                                |
 | `MODAL_TOKEN_SECRET`          | Modal token secret                                                            |

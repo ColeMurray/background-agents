@@ -368,6 +368,49 @@ variable "project_root" {
 }
 
 # =============================================================================
+# Vercel - auto-deploy
+# =============================================================================
+
+variable "enable_auto_deploy" {
+  description = "Enable auto-deploy for Vercel"
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = var.enable_auto_deploy == false || (length(var.auto_deploy_git_repository) > 0 && length(var.auto_deploy_git_branch) > 0)
+    error_message = "When enable_auto_deploy is true, auto_deploy_git_repository and auto_deploy_git_branch must be non-empty."
+  }
+}
+
+variable "auto_deploy_git_repository" {
+  description = "Git repository for auto-deploy"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.auto_deploy_git_repository == "" || contains(var.auto_deploy_git_repository, "/")
+    error_message = "auto_deploy_git_repository must include / if specified"
+  }
+}
+
+variable "auto_deploy_git_branch" {
+  description = "Git branch for auto-deploy"
+  type        = string
+  default     = ""
+}
+
+variable "auto_deploy_source" {
+  description = "Source for auto-deploy"
+  type        = string
+  default     = "github"
+
+  validation {
+    condition     = contains(["github", "gitlab", "bitbucket"], var.auto_deploy_source)
+    error_message = "auto_deploy_source must be 'github', 'gitlab', or 'bitbucket'."
+  }
+}
+
+# =============================================================================
 # Access Control
 # =============================================================================
 
