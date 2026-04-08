@@ -60,10 +60,10 @@ export interface DaytonaSignedPreviewUrlResponse {
 export interface DaytonaCreateSandboxParams {
   name: string;
   snapshot: string;
-  env_vars?: Record<string, string>;
+  env?: Record<string, string>;
   labels?: Record<string, string>;
-  auto_stop_interval?: number;
-  auto_archive_interval?: number;
+  autoStopInterval?: number;
+  autoArchiveInterval?: number;
   public?: boolean;
   target?: string;
 }
