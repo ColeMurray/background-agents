@@ -75,10 +75,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       const params: DaytonaCreateSandboxParams = {
         name: config.sandboxId,
         snapshot: this.client.config.baseSnapshot,
-        env_vars: envVars,
+        env: envVars,
         labels,
-        auto_stop_interval: this.client.config.autoStopIntervalMinutes,
-        auto_archive_interval: this.client.config.autoArchiveIntervalMinutes,
+        autoStopInterval: this.client.config.autoStopIntervalMinutes,
+        autoArchiveInterval: this.client.config.autoArchiveIntervalMinutes,
         public: false,
       };
       if (this.client.config.target) {

@@ -100,10 +100,10 @@ describe("DaytonaRestClient", () => {
       const params = {
         name: "sandbox-123",
         snapshot: "base-snapshot-v1",
-        env_vars: { FOO: "bar" },
+        env: { FOO: "bar" },
         labels: { key: "value" },
-        auto_stop_interval: 120,
-        auto_archive_interval: 10080,
+        autoStopInterval: 120,
+        autoArchiveInterval: 10080,
         public: false,
       };
 

@@ -150,8 +150,8 @@ describe("DaytonaSandboxProvider", () => {
       const createCall = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0];
       expect(createCall.name).toBe("sandbox-456");
       expect(createCall.snapshot).toBe("base-snapshot-v1");
-      expect(createCall.auto_stop_interval).toBe(120);
-      expect(createCall.auto_archive_interval).toBe(10080);
+      expect(createCall.autoStopInterval).toBe(120);
+      expect(createCall.autoArchiveInterval).toBe(10080);
       expect(createCall.public).toBe(false);
     });
 
@@ -166,7 +166,7 @@ describe("DaytonaSandboxProvider", () => {
       await provider.createSandbox(baseCreateConfig);
 
       const createCall = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      const envVars = createCall.env_vars;
+      const envVars = createCall.env;
 
       expect(envVars.PYTHONUNBUFFERED).toBe("1");
       expect(envVars.SANDBOX_ID).toBe("sandbox-456");
@@ -205,7 +205,7 @@ describe("DaytonaSandboxProvider", () => {
 
       await provider.createSandbox(baseCreateConfig);
 
-      const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env_vars;
+      const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env;
       expect(envVars.VCS_HOST).toBe("gitlab.com");
       expect(envVars.VCS_CLONE_USERNAME).toBe("oauth2");
       expect(envVars.VCS_CLONE_TOKEN).toBe("glpat-test-token");
@@ -224,7 +224,7 @@ describe("DaytonaSandboxProvider", () => {
 
       await provider.createSandbox({ ...baseCreateConfig, branch: "feature/test" });
 
-      const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env_vars;
+      const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env;
       const sessionConfig = JSON.parse(envVars.SESSION_CONFIG);
       expect(sessionConfig.branch).toBe("feature/test");
     });
@@ -242,7 +242,7 @@ describe("DaytonaSandboxProvider", () => {
         userEnvVars: { MY_SECRET: "value123", SANDBOX_ID: "should-be-overridden" },
       });
 
-      const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env_vars;
+      const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env;
       expect(envVars.MY_SECRET).toBe("value123");
       // System var overrides user-provided duplicate
       expect(envVars.SANDBOX_ID).toBe("sandbox-456");
@@ -302,7 +302,7 @@ describe("DaytonaSandboxProvider", () => {
 
       await provider.createSandbox(baseCreateConfig);
 
-      const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env_vars;
+      const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env;
       expect(envVars.VCS_CLONE_TOKEN).toBeUndefined();
       expect(envVars.GITHUB_APP_TOKEN).toBeUndefined();
     });
@@ -364,7 +364,7 @@ describe("DaytonaSandboxProvider", () => {
         codeServerEnabled: true,
       });
 
-      const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env_vars;
+      const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env;
       const expectedDigest = await computeHmacHex("code-server:sandbox-456", "test-secret-key");
       expect(envVars.CODE_SERVER_PASSWORD).toBe(expectedDigest.slice(0, 32));
       expect(envVars.CODE_SERVER_PASSWORD).toHaveLength(32);
@@ -380,7 +380,7 @@ describe("DaytonaSandboxProvider", () => {
 
       await provider.createSandbox(baseCreateConfig);
 
-      const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env_vars;
+      const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env;
       expect(envVars.CODE_SERVER_PASSWORD).toBeUndefined();
     });
   });
