@@ -45,11 +45,14 @@ modal_token_secret = ""
 # This is your Modal username/workspace (e.g., "myworkspace" in "https://myworkspace--app.modal.run")
 modal_workspace = ""
 
-# Daytona shim service
+# Daytona REST API
 # Only required when sandbox_provider = "daytona"
-# This repo does not Terraform-deploy the shim. Deploy packages/daytona-infra separately.
-daytona_service_url = ""
-daytona_service_secret = ""
+# Create an API key at https://app.daytona.io and seed the base snapshot
+# with packages/daytona-infra/src/bootstrap.py before enabling.
+daytona_api_url = ""           # e.g., "https://app.daytona.io/api"
+daytona_api_key = ""
+daytona_base_snapshot = ""     # Name of the seeded Daytona snapshot
+# daytona_target = ""          # Optional Daytona target name
 
 # =============================================================================
 # GitHub App Credentials
@@ -154,7 +157,7 @@ nextauth_secret = ""
 
 # Sandbox backend for session execution
 # - "modal": existing Modal-based sandboxes with filesystem snapshot restore
-# - "daytona": externally deployed Daytona shim service with stop/start resume
+# - "daytona": direct Daytona REST API integration with stop/start resume
 sandbox_provider = "modal"
 
 # Unique deployment name (used in resource names and URLs)

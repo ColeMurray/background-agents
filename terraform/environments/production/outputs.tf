@@ -109,7 +109,7 @@ output "verification_commands" {
     curl ${module.control_plane_worker.worker_url}/health
 
     # 2. Health check sandbox backend
-    ${local.use_modal_backend ? "curl ${module.modal_app[0].api_health_url}" : "# Verify your external Daytona shim service at ${var.daytona_service_url}/health"}
+    ${local.use_modal_backend ? "curl ${module.modal_app[0].api_health_url}" : "# Daytona sandboxes use the REST API directly — no health endpoint to check"}
 
     # 3. Verify web app deployment
     curl ${local.web_app_url}

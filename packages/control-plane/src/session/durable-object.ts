@@ -12,9 +12,9 @@ import { initSchema } from "./schema";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
 import { timingSafeEqual } from "@open-inspect/shared";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
-import { getGitHubAppConfig } from "../auth/github-app";
+import { getGitHubAppConfig, getCachedInstallationToken } from "../auth/github-app";
 import { createModalClient } from "../sandbox/client";
-import { createDaytonaServiceClient } from "../sandbox/daytona-service-client";
+import { createDaytonaRestClient } from "../sandbox/daytona-rest-client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
 import { createDaytonaProvider } from "../sandbox/providers/daytona-provider";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
@@ -536,17 +536,52 @@ export class SessionDO extends DurableObject<Env> {
     const provider =
       sandboxBackend === "daytona"
         ? (() => {
-            if (!this.env.DAYTONA_SERVICE_URL || !this.env.DAYTONA_SERVICE_SECRET) {
+            if (
+              !this.env.DAYTONA_API_URL ||
+              !this.env.DAYTONA_API_KEY ||
+              !this.env.DAYTONA_BASE_SNAPSHOT
+            ) {
               throw new Error(
-                "DAYTONA_SERVICE_URL and DAYTONA_SERVICE_SECRET are required when SANDBOX_PROVIDER=daytona"
+                "DAYTONA_API_URL, DAYTONA_API_KEY, and DAYTONA_BASE_SNAPSHOT are required when SANDBOX_PROVIDER=daytona"
               );
             }
 
-            const daytonaClient = createDaytonaServiceClient(
-              this.env.DAYTONA_SERVICE_URL,
-              this.env.DAYTONA_SERVICE_SECRET
+            const daytonaClient = createDaytonaRestClient({
+              apiUrl: this.env.DAYTONA_API_URL,
+              apiKey: this.env.DAYTONA_API_KEY,
+              target: this.env.DAYTONA_TARGET,
+              baseSnapshot: this.env.DAYTONA_BASE_SNAPSHOT,
+              autoStopIntervalMinutes: parseInt(
+                this.env.DAYTONA_AUTO_STOP_INTERVAL_MINUTES || "120",
+                10
+              ),
+              autoArchiveIntervalMinutes: parseInt(
+                this.env.DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES || "10080",
+                10
+              ),
+            });
+
+            const scmProvider = resolveScmProviderFromEnv(this.env.SCM_PROVIDER);
+            const appConfig = getGitHubAppConfig(this.env);
+
+            const getCloneToken: () => Promise<string | null> =
+              scmProvider === "gitlab"
+                ? () => Promise.resolve(this.env.GITLAB_ACCESS_TOKEN ?? null)
+                : appConfig
+                  ? () => getCachedInstallationToken(appConfig, this.env)
+                  : () => Promise.resolve(null);
+
+            return createDaytonaProvider(
+              daytonaClient,
+              {
+                scmProvider,
+                gitlabAccessToken: this.env.GITLAB_ACCESS_TOKEN,
+                // Reuses API key as HMAC secret for code-server password derivation
+                // (distinct message prefix prevents collision with auth use)
+                codeServerPasswordSecret: this.env.DAYTONA_API_KEY,
+              },
+              getCloneToken
             );
-            return createDaytonaProvider(daytonaClient);
           })()
         : (() => {
             if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {
