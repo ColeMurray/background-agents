@@ -19,7 +19,7 @@ Open-Inspect uses Terraform to automate deployment across three cloud providers:
 | -------------------------------------- | -------------------------------- | ----------------------------------------------------------------- |
 | **Cloudflare**                         | Control plane, session state     | Workers, KV namespaces, Durable Objects, D1 Database              |
 | **Vercel** _or_ **Cloudflare Workers** | Web application                  | Project + env vars (Vercel) _or_ Worker via OpenNext (Cloudflare) |
-| **Modal**                              | Sandbox execution infrastructure | App deployment, secrets, volumes                                  |
+| **Modal** _or_ **Daytona**             | Sandbox execution infrastructure | Modal app deployment _or_ control-plane config for Daytona API    |
 
 > **Web platform choice**: Set `web_platform` in your `terraform.tfvars` to `"vercel"` (default) or
 > `"cloudflare"`. The Cloudflare option deploys the Next.js app as a Cloudflare Worker using
@@ -40,7 +40,8 @@ Create accounts on these services before continuing:
 | ------------------------------------------------ | -------------------------------------------------------------- |
 | [Cloudflare](https://dash.cloudflare.com)        | Control plane hosting (+ web app if using Cloudflare platform) |
 | [Vercel](https://vercel.com) _(optional)_        | Web application hosting (only if `web_platform = "vercel"`)    |
-| [Modal](https://modal.com)                       | Sandbox infrastructure                                         |
+| [Modal](https://modal.com) _(optional)_          | Sandbox infrastructure when `sandbox_provider = "modal"`       |
+| [Daytona](https://app.daytona.io) _(optional)_   | Sandbox infrastructure when `sandbox_provider = "daytona"`     |
 | [GitHub](https://github.com/settings/developers) | OAuth + repository access                                      |
 | [Anthropic](https://console.anthropic.com)       | Claude API                                                     |
 | [Slack](https://api.slack.com/apps) _(optional)_ | Slack bot integration                                          |
@@ -55,7 +56,8 @@ brew install terraform
 # Node.js (22+)
 brew install node@22
 
-# Python 3.12+ and Modal CLI
+# Python 3.12+, uv, and Modal CLI
+brew install python@3.12 uv
 pipx install modal
 modal setup
 
@@ -122,7 +124,10 @@ Create an R2 API Token:
 
 ### Vercel (only if `web_platform = "vercel"`)
 
-> Skip this section if you're deploying the web app to Cloudflare Workers.
+> Skip this section if you're deploying the web app to Cloudflare Workers. **Important**: Do not set
+> `vercel_api_token` or `vercel_team_id` to empty strings in your `terraform.tfvars` — leave them
+> unset so the dummy defaults are used. The Vercel Terraform provider validates the token on init
+> even when no Vercel resources are created.
 
 1. Go to [Vercel Account Settings → Tokens](https://vercel.com/account/tokens)
 2. Create a new token with full access
@@ -133,10 +138,33 @@ Create an R2 API Token:
 
 ### Modal
 
+> Only required when `sandbox_provider = "modal"`.
+
 1. Go to [Modal Settings](https://modal.com/settings)
 2. **Create a new API token**: Settings -> API Tokens -> New Token
 3. Note the **Token ID** and **Token Secret**
 4. Note your **Workspace name** (visible in your Modal dashboard URL)
+
+### Daytona
+
+> Only required when `sandbox_provider = "daytona"`.
+
+1. Create a [Daytona](https://app.daytona.io) account and generate an **API key**
+2. Note the **API URL** (e.g., `https://app.daytona.io/api`) and optional **target**
+3. Seed the named base snapshot before pointing traffic at Daytona:
+   ```bash
+   cd packages/daytona-infra
+   pip install daytona   # or: uv pip install daytona
+   python -m src.bootstrap --force
+   ```
+4. Set `sandbox_provider = "daytona"` in `terraform.tfvars`
+5. Set `daytona_api_url`, `daytona_api_key`, and `daytona_base_snapshot` in `terraform.tfvars`
+
+The control plane calls the Daytona REST API directly — no shim service to deploy.
+
+> **Important**: Unlike Modal, the Daytona provider does not automatically inject LLM API keys into
+> sandboxes. If you plan to use Claude models, add `ANTHROPIC_API_KEY` as a **global secret** in
+> Settings > Secrets after deploying. See [Secrets Management](SECRETS.md) for details.
 
 ### Anthropic
 
@@ -225,6 +253,8 @@ Skip this step if you don't need Slack integration.
    - `channels:read`
    - `groups:history`
    - `groups:read`
+   - `im:history`
+   - `im:read`
    - `reactions:write`
 3. Click **"Install to Workspace"**
 4. Note the **Bot Token** (`xoxb-...`)
@@ -308,11 +338,17 @@ cloudflare_worker_subdomain = "your-subdomain"  # e.g., "twilight-unit-b2cf" (wi
 web_platform                = "vercel"
 
 # Vercel (only required when web_platform = "vercel")
+# If using Cloudflare, do NOT set these — leave them out so the dummy defaults are used.
 vercel_api_token            = "your-vercel-token"
 vercel_team_id              = "team_xxxxx"       # Your Vercel ID (even personal accounts have one)
 modal_token_id              = "your-modal-token-id"
 modal_token_secret          = "your-modal-token-secret"
 modal_workspace             = "your-modal-workspace"
+
+# Daytona (only required when sandbox_provider = "daytona")
+# daytona_api_url           = "https://app.daytona.io/api"
+# daytona_api_key           = "your-daytona-api-key"
+# daytona_base_snapshot     = "your-snapshot-name"
 
 # GitHub App (used for both OAuth and repository access)
 github_client_id     = "Iv1.abc123..."           # From GitHub App settings
@@ -444,6 +480,7 @@ The App Home provides a settings interface where users can configure their prefe
    - `app_home_opened` (required for App Home settings)
    - `app_mention`
    - `message.channels` (optional - if you want the bot to see all channel messages)
+   - `message.im` (enables direct message support)
 6. Click **Save Changes**
 
 ### Configure Interactivity
@@ -754,6 +791,28 @@ If the bot doesn't see the original message when tagged in a thread reply:
 4. Check that `github_bot_username` matches your App's bot login (e.g., `my-app[bot]`)
 5. For PR reviews, ensure the bot is assigned as a reviewer (not just mentioned)
 6. For comment actions, ensure the bot is @mentioned in a **PR** comment (not an issue)
+
+### "Model not found" errors (Daytona provider)
+
+If sessions fail with "Model not found" when using `sandbox_provider = "daytona"`, the required LLM
+API key is likely missing. Unlike Modal (which injects keys automatically), Daytona requires you to
+add them as global secrets:
+
+1. Go to **Settings > Secrets** in the web app
+2. Select **All Repositories (Global)** from the scope dropdown
+3. Add the key for your chosen provider (e.g., `ANTHROPIC_API_KEY` for Claude models)
+4. Click **Save**
+
+See [Secrets Management](SECRETS.md) for more on global and repository secrets.
+
+### Vercel provider error when using `web_platform = "cloudflare"`
+
+The Vercel Terraform provider validates its API token on initialization, even when no Vercel
+resources are created. If you set `vercel_api_token = ""` in your `terraform.tfvars`, the provider
+will reject it. **Fix**: Remove the `vercel_api_token` and `vercel_team_id` lines from your
+`terraform.tfvars` entirely — the built-in defaults (`"unused"`) satisfy the provider's non-empty
+validation. This is a known Terraform limitation (providers validate credentials on init regardless
+of whether any resources use them).
 
 ### Durable Objects / Service Binding errors
 

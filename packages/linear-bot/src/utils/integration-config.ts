@@ -1,5 +1,5 @@
 import type { Env } from "../types";
-import { generateInternalToken } from "./internal";
+import { buildInternalAuthHeaders } from "./internal";
 
 export interface ResolvedLinearConfig {
   model: string | null;
@@ -31,13 +31,13 @@ export async function getLinearConfig(env: Env, repo: string): Promise<ResolvedL
     return DEFAULT_CONFIG;
   }
 
-  const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
+  const headers = await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET);
 
   let response: Response;
   try {
     response = await env.CONTROL_PLANE.fetch(
       `https://internal/integration-settings/linear/resolved/${owner}/${name}`,
-      { headers: { Authorization: `Bearer ${token}` } }
+      { headers }
     );
   } catch {
     return DEFAULT_CONFIG;

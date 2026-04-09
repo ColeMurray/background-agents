@@ -4,7 +4,7 @@
  */
 
 import type { Env, RepoConfig, ControlPlaneRepo, ControlPlaneReposResponse } from "../types";
-import { generateInternalToken } from "../utils/internal";
+import { buildInternalAuthHeaders } from "../utils/internal";
 import { createLogger } from "../logger";
 
 const log = createLogger("repos");
@@ -28,6 +28,8 @@ function toRepoConfig(repo: ControlPlaneRepo): RepoConfig {
     description: repo.metadata?.description || repo.description || repo.name,
     defaultBranch: repo.defaultBranch,
     private: repo.private,
+    language: repo.language,
+    topics: repo.topics,
     aliases: repo.metadata?.aliases,
     keywords: repo.metadata?.keywords,
   };
@@ -40,12 +42,10 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
 
   const startTime = Date.now();
   try {
-    const headers: Record<string, string> = { Accept: "application/json" };
-    if (env.INTERNAL_CALLBACK_SECRET) {
-      const authToken = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
-      headers["Authorization"] = `Bearer ${authToken}`;
-    }
-    if (traceId) headers["x-trace-id"] = traceId;
+    const headers: Record<string, string> = {
+      Accept: "application/json",
+      ...(await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId)),
+    };
 
     const response = await env.CONTROL_PLANE.fetch("https://internal/repos", { headers });
 
@@ -121,6 +121,8 @@ export async function buildRepoDescriptions(env: Env, traceId?: string): Promise
     .map(
       (repo) => `- **${repo.id}** (${repo.fullName})
   - Description: ${repo.description}
+  - Language: ${repo.language || "N/A"}
+  - Topics: ${repo.topics?.join(", ") || "N/A"}
   - Also known as: ${repo.aliases?.join(", ") || "N/A"}
   - Keywords: ${repo.keywords?.join(", ") || "N/A"}
   - Default branch: ${repo.defaultBranch}

@@ -148,7 +148,7 @@ Guide user:
 
 1. https://api.slack.com/apps → "Create New App" → "From scratch"
 2. OAuth & Permissions → Add scopes: `app_mentions:read`, `chat:write`, `channels:history`,
-   `channels:read`, `groups:history`, `groups:read`, `reactions:write`
+   `channels:read`, `groups:history`, `groups:read`, `im:history`, `im:read`, `reactions:write`
 3. Install to Workspace, note **Bot Token** (`xoxb-...`)
 4. Basic Information → note **Signing Secret**
 5. **App Home and Event Subscriptions configured AFTER deployment** (worker must be running for URL
@@ -231,7 +231,7 @@ The App Home provides a settings interface where users can configure their prefe
 1. Event Subscriptions → Enable → Request URL:
    `https://open-inspect-slack-bot-{deployment_name}.{subdomain}.workers.dev/events`
 2. Wait for "Verified" checkmark
-3. Subscribe to bot events: `app_home_opened`, `app_mention`
+3. Subscribe to bot events: `app_home_opened`, `app_mention`, `message.im`
 
 ### Configure Interactivity
 

@@ -8,9 +8,9 @@ from src.sandbox.manager import SandboxManager
 
 
 def _fake_sandbox_create(captured):
-    """Return a fake Sandbox.create that captures kwargs."""
+    """Return a fake Sandbox.create that supports .aio and captures kwargs."""
 
-    def fake_create(*args, **kwargs):
+    async def fake_create_aio(*args, **kwargs):
         captured["args"] = args
         captured["kwargs"] = kwargs
         captured["env"] = kwargs.get("env")
@@ -24,7 +24,8 @@ def _fake_sandbox_create(captured):
 
         return FakeSandbox()
 
-    return fake_create
+    fake_create_aio.aio = fake_create_aio
+    return fake_create_aio
 
 
 @pytest.mark.asyncio

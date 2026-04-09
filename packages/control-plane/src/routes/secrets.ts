@@ -6,7 +6,6 @@ import { RepoSecretsStore } from "../db/repo-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { SecretsValidationError, normalizeKey, validateKey } from "../db/secrets-validation";
 import type { Env } from "../types";
-import { SourceControlProviderError } from "../source-control";
 import { createLogger } from "../logger";
 import {
   type Route,
@@ -14,8 +13,9 @@ import {
   parsePattern,
   json,
   error,
-  createRouteSourceControlProvider,
-  resolveInstalledRepo,
+  parseJsonBody,
+  extractRepoParams,
+  resolveRepoOrError,
 } from "./shared";
 
 const logger = createLogger("router:secrets");
@@ -36,39 +36,15 @@ async function handleSetRepoSecrets(
     return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
   }
 
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-  if (!owner || !name) {
-    return error("Owner and name are required");
-  }
+  const params = extractRepoParams(match);
+  if (params instanceof Response) return params;
+  const { owner, name } = params;
 
-  let resolved;
-  try {
-    const provider = createRouteSourceControlProvider(env);
-    resolved = await resolveInstalledRepo(provider, owner, name);
-    if (!resolved) {
-      return error("Repository is not installed for the GitHub App", 404);
-    }
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    logger.error("Failed to resolve repository for secrets", {
-      error: message,
-      repo_owner: owner,
-      repo_name: name,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    const isConfigError =
-      e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus;
-    return error(isConfigError ? message : "Failed to resolve repository", 500);
-  }
+  const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
+  if (resolved instanceof Response) return resolved;
 
-  let body: { secrets?: Record<string, string> };
-  try {
-    body = (await request.json()) as { secrets?: Record<string, string> };
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
+  const body = await parseJsonBody<{ secrets?: Record<string, string> }>(request);
+  if (body instanceof Response) return body;
 
   if (!body?.secrets || typeof body.secrets !== "object") {
     return error("Request body must include secrets object", 400);
@@ -135,32 +111,12 @@ async function handleListRepoSecrets(
     return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
   }
 
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-  if (!owner || !name) {
-    return error("Owner and name are required");
-  }
+  const params = extractRepoParams(match);
+  if (params instanceof Response) return params;
+  const { owner, name } = params;
 
-  let resolved;
-  try {
-    const provider = createRouteSourceControlProvider(env);
-    resolved = await resolveInstalledRepo(provider, owner, name);
-    if (!resolved) {
-      return error("Repository is not installed for the GitHub App", 404);
-    }
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    logger.error("Failed to resolve repository for secrets list", {
-      error: message,
-      repo_owner: owner,
-      repo_name: name,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    const isConfigError =
-      e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus;
-    return error(isConfigError ? message : "Failed to resolve repository", 500);
-  }
+  const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
+  if (resolved instanceof Response) return resolved;
 
   const store = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
   const globalStore = new GlobalSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
@@ -221,33 +177,17 @@ async function handleDeleteRepoSecret(
     return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
   }
 
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
+  const params = extractRepoParams(match);
+  if (params instanceof Response) return params;
+  const { owner, name } = params;
+
   const key = match.groups?.key;
-  if (!owner || !name || !key) {
+  if (!key) {
     return error("Owner, name, and key are required");
   }
 
-  let resolved;
-  try {
-    const provider = createRouteSourceControlProvider(env);
-    resolved = await resolveInstalledRepo(provider, owner, name);
-    if (!resolved) {
-      return error("Repository is not installed for the GitHub App", 404);
-    }
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    logger.error("Failed to resolve repository for secrets delete", {
-      error: message,
-      repo_owner: owner,
-      repo_name: name,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    const isConfigError =
-      e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus;
-    return error(isConfigError ? message : "Failed to resolve repository", 500);
-  }
+  const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
+  if (resolved instanceof Response) return resolved;
 
   const store = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
 
@@ -303,12 +243,8 @@ async function handleSetGlobalSecrets(
     return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
   }
 
-  let body: { secrets?: Record<string, string> };
-  try {
-    body = (await request.json()) as { secrets?: Record<string, string> };
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
+  const body = await parseJsonBody<{ secrets?: Record<string, string> }>(request);
+  if (body instanceof Response) return body;
 
   if (!body?.secrets || typeof body.secrets !== "object") {
     return error("Request body must include secrets object", 400);

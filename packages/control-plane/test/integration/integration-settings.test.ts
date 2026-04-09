@@ -518,6 +518,77 @@ describe("Integration settings API", () => {
     });
   });
 
+  describe("sandbox settings API", () => {
+    it("GET /integration-settings/sandbox returns null settings when unconfigured", async () => {
+      const headers = await authHeaders();
+      const response = await SELF.fetch("https://test.local/integration-settings/sandbox", {
+        headers,
+      });
+      expect(response.status).toBe(200);
+      const body = await response.json<{ integrationId: string; settings: unknown }>();
+      expect(body.integrationId).toBe("sandbox");
+      expect(body.settings).toBeNull();
+    });
+
+    it("PUT + GET /integration-settings/sandbox global round-trip", async () => {
+      const headers = await authHeaders();
+
+      const putRes = await SELF.fetch("https://test.local/integration-settings/sandbox", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          settings: {
+            defaults: { tunnelPorts: [3000] },
+          },
+        }),
+      });
+      expect(putRes.status).toBe(200);
+
+      const getRes = await SELF.fetch("https://test.local/integration-settings/sandbox", {
+        headers,
+      });
+      expect(getRes.status).toBe(200);
+      const body = await getRes.json<{
+        settings: {
+          defaults: { tunnelPorts: number[] };
+        };
+      }>();
+      expect(body.settings.defaults.tunnelPorts).toEqual([3000]);
+    });
+
+    it("PUT /integration-settings/sandbox with invalid tunnelPorts returns 400", async () => {
+      const headers = await authHeaders();
+      const response = await SELF.fetch(
+        "https://test.local/integration-settings/sandbox/repos/acme/widgets",
+        {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({ settings: { tunnelPorts: "not-an-array" } }),
+        }
+      );
+      expect(response.status).toBe(400);
+      const body = await response.json<{ error: string }>();
+      expect(body.error).toContain("tunnelPorts must be an array");
+    });
+
+    it("GET /integration-settings/sandbox/resolved returns default empty tunnelPorts when unconfigured", async () => {
+      const headers = await authHeaders();
+      const res = await SELF.fetch(
+        "https://test.local/integration-settings/sandbox/resolved/testowner/testrepo",
+        { headers }
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json<{
+        config: {
+          tunnelPorts: number[];
+          enabledRepos: string[] | null;
+        };
+      }>();
+      expect(body.config.tunnelPorts).toEqual([]);
+      expect(body.config.enabledRepos).toBeNull();
+    });
+  });
+
   describe("code-server CRUD", () => {
     it("GET returns null settings when unconfigured", async () => {
       const headers = await authHeaders();

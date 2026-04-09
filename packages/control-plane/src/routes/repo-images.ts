@@ -14,6 +14,7 @@ import { GlobalSecretsStore } from "../db/global-secrets";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
 import { createModalClient } from "../sandbox/client";
+import { isModalSandboxBackend } from "../sandbox/provider-name";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
 import {
@@ -22,11 +23,21 @@ import {
   parsePattern,
   json,
   error,
+  parseJsonBody,
+  extractRepoParams,
   createRouteSourceControlProvider,
   resolveInstalledRepo,
 } from "./shared";
 
 const logger = createLogger("router:repo-images");
+
+function requireModalRepoImages(env: Env): Response | null {
+  if (isModalSandboxBackend(env.SANDBOX_PROVIDER)) {
+    return null;
+  }
+
+  return error("Repo images are only available when SANDBOX_PROVIDER=modal", 501);
+}
 
 /**
  * POST /repo-images/build-complete
@@ -38,21 +49,20 @@ async function handleBuildComplete(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
+  const providerError = requireModalRepoImages(env);
+  if (providerError) return providerError;
+
   if (!env.DB) {
     return error("Database not configured", 503);
   }
 
-  let body: {
+  const body = await parseJsonBody<{
     build_id?: string;
     provider_image_id?: string;
     base_sha?: string;
     build_duration_seconds?: number;
-  };
-  try {
-    body = (await request.json()) as typeof body;
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
+  }>(request);
+  if (body instanceof Response) return body;
 
   const buildId = body.build_id;
   const providerImageId = body.provider_image_id;
@@ -121,16 +131,15 @@ async function handleBuildFailed(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
+  const providerError = requireModalRepoImages(env);
+  if (providerError) return providerError;
+
   if (!env.DB) {
     return error("Database not configured", 503);
   }
 
-  let body: { build_id?: string; error?: string };
-  try {
-    body = (await request.json()) as typeof body;
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
+  const body = await parseJsonBody<{ build_id?: string; error?: string }>(request);
+  if (body instanceof Response) return body;
 
   const buildId = body.build_id;
   if (!buildId) {
@@ -171,6 +180,9 @@ async function handleTriggerBuild(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
+  const providerError = requireModalRepoImages(env);
+  if (providerError) return providerError;
+
   if (!env.DB) {
     return error("Database not configured", 503);
   }
@@ -181,11 +193,9 @@ async function handleTriggerBuild(
     return error("WORKER_URL not configured", 503);
   }
 
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-  if (!owner || !name) {
-    return error("Owner and name are required", 400);
-  }
+  const params = extractRepoParams(match);
+  if (params instanceof Response) return params;
+  const { owner, name } = params;
 
   const store = new RepoImageStore(env.DB);
   const now = Date.now();
@@ -295,6 +305,9 @@ async function handleGetStatus(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
+  const providerError = requireModalRepoImages(env);
+  if (providerError) return providerError;
+
   if (!env.DB) {
     return error("Database not configured", 503);
   }
@@ -334,6 +347,9 @@ async function handleMarkStale(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
+  const providerError = requireModalRepoImages(env);
+  if (providerError) return providerError;
+
   if (!env.DB) {
     return error("Database not configured", 503);
   }
@@ -381,6 +397,9 @@ async function handleCleanup(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
+  const providerError = requireModalRepoImages(env);
+  if (providerError) return providerError;
+
   if (!env.DB) {
     return error("Database not configured", 503);
   }
@@ -428,22 +447,19 @@ async function handleToggleImageBuild(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
+  const providerError = requireModalRepoImages(env);
+  if (providerError) return providerError;
+
   if (!env.DB) {
     return error("Database not configured", 503);
   }
 
-  const owner = match.groups?.owner;
-  const name = match.groups?.name;
-  if (!owner || !name) {
-    return error("Owner and name are required", 400);
-  }
+  const params = extractRepoParams(match);
+  if (params instanceof Response) return params;
+  const { owner, name } = params;
 
-  let body: { enabled?: unknown };
-  try {
-    body = (await request.json()) as typeof body;
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
+  const body = await parseJsonBody<{ enabled?: unknown }>(request);
+  if (body instanceof Response) return body;
 
   if (typeof body.enabled !== "boolean") {
     return error("enabled must be a boolean", 400);
@@ -485,6 +501,9 @@ async function handleGetEnabledRepos(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
+  const providerError = requireModalRepoImages(env);
+  if (providerError) return providerError;
+
   if (!env.DB) {
     return error("Database not configured", 503);
   }

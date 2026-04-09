@@ -7,7 +7,7 @@
  * URL-based fetch for Vercel / local development.
  */
 
-import { generateInternalToken } from "@open-inspect/shared";
+import { buildInternalAuthHeaders } from "@open-inspect/shared";
 
 /**
  * Get the control plane URL from environment.
@@ -42,11 +42,9 @@ function getInternalSecret(): string {
  */
 async function getControlPlaneHeaders(): Promise<HeadersInit> {
   const secret = getInternalSecret();
-  const token = await generateInternalToken(secret);
-
   return {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${token}`,
+    ...(await buildInternalAuthHeaders(secret)),
   };
 }
 
@@ -71,6 +69,15 @@ function isServiceBinding(value: unknown): value is ServiceBinding {
  * Returns null when not running on Cloudflare Workers.
  */
 async function getServiceBinding(): Promise<ServiceBinding | null> {
+  // In local development, always use URL-based fetch — the service binding
+  // resolves to a local wrangler proxy that won't be running.
+  // In local development (next dev), always use URL-based fetch. When
+  // @opennextjs/cloudflare is loaded in a Node.js dev server it can return a
+  // stub service binding whose fetch fails with a "no local dev session" error.
+  if (process.env.NODE_ENV === "development") {
+    return null;
+  }
+
   try {
     const { getCloudflareContext } = await import("@opennextjs/cloudflare");
     const ctx = await getCloudflareContext({ async: true });

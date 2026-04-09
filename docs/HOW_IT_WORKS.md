@@ -131,7 +131,7 @@ gets its own lightweight database that can handle hundreds of events per second 
 other sessions. The WebSocket Hibernation API keeps connections alive during idle periods without
 incurring compute costs.
 
-### Data Plane (Modal Sandboxes)
+### Data Plane (Sandbox Backends)
 
 The data plane is where code actually runs. Each session gets an isolated sandbox with a full
 development environment.
@@ -144,9 +144,14 @@ development environment.
 - agent-browser CLI + headless Chrome (for browser automation)
 - OpenCode (the coding agent)
 
-**Why Modal?** Modal sandboxes start near-instantly and support filesystem snapshots. This lets us
-freeze a sandbox's state after setup, then restore it later in seconds instead of re-cloning and
-reinstalling dependencies.
+Open-Inspect supports two backend patterns:
+
+- **Modal**: near-instant startup plus filesystem snapshot restore
+- **Daytona**: persistent stop/start sandboxes via direct REST API calls
+
+Modal is still the only backend with repo-image builds and live filesystem snapshot restore. Daytona
+uses persistent sandboxes instead: the control plane stops the sandbox on inactivity or stale
+heartbeat, then resumes that same sandbox later with the same logical sandbox ID and auth token.
 
 ### Clients
 
@@ -156,7 +161,7 @@ can make HTTP requests and maintain WebSocket connections can participate.
 **Current clients:**
 
 - **Web**: Next.js app with real-time streaming, session management, and settings
-- **Slack**: Bot that responds to @mentions, classifies repos, and posts results
+- **Slack**: Bot that responds to @mentions and direct messages, classifies repos, and posts results
 
 All clients see the same session state. Send a prompt from Slack, watch the results on web. This
 works because state lives in the control plane, not the client.
@@ -423,13 +428,20 @@ was built for internal use where all employees have access to company repositori
 | Sandbox Auth Token | Authenticate sandbox → control plane | Single session                   |
 | WebSocket Token    | Authenticate client connections      | Single session                   |
 
-### Repo-Scoped Secrets
+### Secrets
 
-You can configure environment variables (API keys, credentials) per repository:
+You can configure environment variables (API keys, credentials) at global or per-repository scope:
 
+- **Global secrets** apply to all repositories (e.g., `ANTHROPIC_API_KEY`)
+- **Repository secrets** apply to a single repo and override global secrets with the same key
 - Stored encrypted (AES-256-GCM) in D1 database
 - Injected into sandboxes at startup
 - Never exposed to clients (only key names are visible)
+
+> **Daytona users**: LLM API keys (e.g., `ANTHROPIC_API_KEY` for Claude models) must be added as
+> global secrets. Modal injects these automatically via its own secrets mechanism.
+
+See [Secrets Management](./SECRETS.md) for setup instructions.
 
 ### Deployment Recommendations
 

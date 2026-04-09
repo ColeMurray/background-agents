@@ -17,7 +17,7 @@ import {
   updateAgentSession,
   getRepoSuggestions,
 } from "./utils/linear-client";
-import { generateInternalToken } from "./utils/internal";
+import { buildInternalAuthHeaders } from "./utils/internal";
 import { classifyRepo } from "./classifier";
 import { getAvailableRepos } from "./classifier/repos";
 import { getLinearConfig } from "./utils/integration-config";
@@ -122,13 +122,10 @@ export function buildFollowUpPrompt(params: {
 }
 
 async function getAuthHeaders(env: Env, traceId?: string): Promise<Record<string, string>> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (env.INTERNAL_CALLBACK_SECRET) {
-    const authToken = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
-    headers["Authorization"] = `Bearer ${authToken}`;
-  }
-  if (traceId) headers["x-trace-id"] = traceId;
-  return headers;
+  return {
+    "Content-Type": "application/json",
+    ...(await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId)),
+  };
 }
 
 // ─── Sub-handlers ────────────────────────────────────────────────────────────
@@ -387,6 +384,8 @@ async function handleNewSession(
       issue.description,
       labelNames,
       projectInfo?.name,
+      issue.team?.name ?? null,
+      issue.team?.key ?? null,
       comment?.body,
       traceId
     );
@@ -398,7 +397,7 @@ async function handleNewSession(
 
       await emitAgentActivity(client, agentSessionId, {
         type: "elicitation",
-        body: `I couldn't determine which repository to work on.\n\n${classification.reasoning}\n\n**Available repositories:**\n${altList || "None available"}\n\nPlease reply with the repository name, or configure a project→repo mapping.`,
+        body: `I couldn't determine which repository to work on.\n\n${classification.reasoning}\n\n**Available repositories:**\n${altList || "None available"}\n\nPlease reply with the repository name (e.g., \`owner/repo\`).`,
       });
 
       log.warn("agent_session.classification_uncertain", {
@@ -419,7 +418,7 @@ async function handleNewSession(
   if (!repoOwner || !repoName || !repoFullName) {
     await emitAgentActivity(client, agentSessionId, {
       type: "elicitation",
-      body: "I couldn't determine which repository to work on. Please configure a project→repo or team→repo mapping and try again.",
+      body: "I couldn't determine which repository to work on. Please reply with the repository name (e.g., `owner/repo`).",
     });
     log.warn("agent_session.repo_resolution_failed", {
       trace_id: traceId,

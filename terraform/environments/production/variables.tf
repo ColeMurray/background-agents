@@ -25,14 +25,14 @@ variable "cloudflare_worker_subdomain" {
 }
 
 variable "vercel_api_token" {
-  description = "Vercel API token (required only when web_platform = 'vercel')"
+  description = "Vercel API token (required only when web_platform = 'vercel'). Do NOT set to empty string — the Vercel provider validates this on init even when no Vercel resources are created. Leave unset to use the dummy default."
   type        = string
   sensitive   = true
   default     = "unused"
 }
 
 variable "vercel_team_id" {
-  description = "Vercel team ID (required only when web_platform = 'vercel')"
+  description = "Vercel team ID (required only when web_platform = 'vercel'). Leave unset when using Cloudflare."
   type        = string
   default     = "unused"
 }
@@ -41,17 +41,35 @@ variable "modal_token_id" {
   description = "Modal API token ID"
   type        = string
   sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "modal" || length(var.modal_token_id) > 0
+    error_message = "modal_token_id must be set when sandbox_provider = 'modal'."
+  }
 }
 
 variable "modal_token_secret" {
   description = "Modal API token secret"
   type        = string
   sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "modal" || length(var.modal_token_secret) > 0
+    error_message = "modal_token_secret must be set when sandbox_provider = 'modal'."
+  }
 }
 
 variable "modal_workspace" {
   description = "Modal workspace name (used in endpoint URLs)"
   type        = string
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "modal" || length(var.modal_workspace) > 0
+    error_message = "modal_workspace must be set when sandbox_provider = 'modal'."
+  }
 }
 
 # =============================================================================
@@ -228,6 +246,52 @@ variable "modal_api_secret" {
   description = "Shared secret for authenticating control plane to Modal API calls (generate with: openssl rand -hex 32)"
   type        = string
   sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "modal" || length(var.modal_api_secret) > 0
+    error_message = "modal_api_secret must be set when sandbox_provider = 'modal'."
+  }
+}
+
+variable "daytona_api_url" {
+  description = "Base URL for the Daytona REST API (e.g. https://app.daytona.io/api)"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "daytona" || length(var.daytona_api_url) > 0
+    error_message = "daytona_api_url must be set when sandbox_provider = 'daytona'."
+  }
+}
+
+variable "daytona_api_key" {
+  description = "API key for Daytona REST API (Bearer auth)"
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "daytona" || length(var.daytona_api_key) > 0
+    error_message = "daytona_api_key must be set when sandbox_provider = 'daytona'."
+  }
+}
+
+variable "daytona_base_snapshot" {
+  description = "Named Daytona snapshot used for fresh sandbox creation"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "daytona" || length(var.daytona_base_snapshot) > 0
+    error_message = "daytona_base_snapshot must be set when sandbox_provider = 'daytona'."
+  }
+}
+
+variable "daytona_target" {
+  description = "Optional Daytona target name"
+  type        = string
+  default     = ""
 }
 
 variable "nextauth_secret" {
@@ -239,6 +303,17 @@ variable "nextauth_secret" {
 # =============================================================================
 # Configuration
 # =============================================================================
+
+variable "sandbox_provider" {
+  description = "Sandbox backend for session execution: 'modal' or 'daytona'"
+  type        = string
+  default     = "modal"
+
+  validation {
+    condition     = contains(["modal", "daytona"], var.sandbox_provider)
+    error_message = "sandbox_provider must be 'modal' or 'daytona'."
+  }
+}
 
 variable "web_platform" {
   description = "Platform for the web app deployment: 'vercel' or 'cloudflare' (OpenNext)"

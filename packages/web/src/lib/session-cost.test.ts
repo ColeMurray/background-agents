@@ -10,6 +10,14 @@ describe("formatSessionCost", () => {
     expect(formatSessionCost(1.5)).toBe("$1.50");
   });
 
+  it("formats exactly one dollar with two decimals", () => {
+    expect(formatSessionCost(1)).toBe("$1.00");
+  });
+
+  it("formats exactly one cent with four decimals", () => {
+    expect(formatSessionCost(0.01)).toBe("$0.0100");
+  });
+
   it("formats tiny costs with precision instead of rounding to zero", () => {
     expect(formatSessionCost(0.00001)).toBe("$0.000010");
   });

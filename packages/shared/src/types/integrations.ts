@@ -1,6 +1,6 @@
 // Integration settings types
 
-export type IntegrationId = "github" | "linear" | "code-server";
+export type IntegrationId = "github" | "linear" | "code-server" | "sandbox";
 
 /** Enforces the common shape for all integration configurations. */
 export interface IntegrationEntry<TRepo extends object = Record<string, unknown>> {
@@ -36,17 +36,30 @@ export interface CodeServerSettings {
   enabled?: boolean;
 }
 
+/** Maximum number of tunnel ports a user can configure per sandbox. */
+export const MAX_TUNNEL_PORTS = 10;
+
+/** Sandbox environment settings. Provider-agnostic: describes what the user wants, not how it's done. */
+export interface SandboxSettings {
+  /** Extra ports to expose via tunnels (e.g., dev server ports 3000, 5173). */
+  tunnelPorts?: number[];
+  /** Enable a browser-based terminal (ttyd) in sandbox sessions. */
+  terminalEnabled?: boolean;
+}
+
 /** Maps each integration ID to its global and per-repo settings types. */
 export interface IntegrationSettingsMap {
   github: IntegrationEntry<GitHubBotSettings>;
   linear: IntegrationEntry<LinearBotSettings>;
   "code-server": IntegrationEntry<CodeServerSettings>;
+  sandbox: IntegrationEntry<SandboxSettings>;
 }
 
 /** Derived type for the GitHub bot global config. */
 export type GitHubGlobalConfig = IntegrationSettingsMap["github"]["global"];
 export type LinearGlobalConfig = IntegrationSettingsMap["linear"]["global"];
 export type CodeServerGlobalConfig = IntegrationSettingsMap["code-server"]["global"];
+export type SandboxGlobalConfig = IntegrationSettingsMap["sandbox"]["global"];
 
 export const INTEGRATION_DEFINITIONS: {
   id: IntegrationId;
@@ -67,5 +80,10 @@ export const INTEGRATION_DEFINITIONS: {
     id: "code-server",
     name: "Code Server",
     description: "Browser-based VS Code editor attached to sandbox sessions",
+  },
+  {
+    id: "sandbox",
+    name: "Sandbox",
+    description: "Sandbox environment settings (tunnel ports, timeouts, etc.)",
   },
 ];

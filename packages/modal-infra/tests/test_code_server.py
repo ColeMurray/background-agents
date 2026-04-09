@@ -22,7 +22,7 @@ class TestGenerateCodeServerPassword:
 
 
 class TestResolveCodeServerTunnel:
-    """SandboxManager._resolve_code_server_tunnel tests."""
+    """SandboxManager._resolve_tunnels tests for code-server port."""
 
     @pytest.mark.asyncio
     async def test_returns_tunnel_url_on_success(self):
@@ -32,31 +32,31 @@ class TestResolveCodeServerTunnel:
         sandbox = MagicMock()
         sandbox.tunnels.return_value = {CODE_SERVER_PORT: tunnel}
 
-        url = await SandboxManager._resolve_code_server_tunnel(sandbox, "sb-123")
-        assert url == "https://tunnel.example.com"
+        resolved = await SandboxManager._resolve_tunnels(sandbox, "sb-123", [CODE_SERVER_PORT])
+        assert resolved.get(CODE_SERVER_PORT) == "https://tunnel.example.com"
 
     @pytest.mark.asyncio
-    async def test_returns_none_on_exception_after_retries(self):
+    async def test_returns_empty_on_exception_after_retries(self):
         sandbox = MagicMock()
         sandbox.tunnels.side_effect = Exception("tunnel unavailable")
 
         with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
-            url = await SandboxManager._resolve_code_server_tunnel(
-                sandbox, "sb-123", retries=2, backoff=0.0
+            resolved = await SandboxManager._resolve_tunnels(
+                sandbox, "sb-123", [CODE_SERVER_PORT], retries=2, backoff=0.0
             )
-        assert url is None
+        assert resolved == {}
         assert sandbox.tunnels.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_returns_none_when_port_missing_after_retries(self):
+    async def test_returns_empty_when_port_missing_after_retries(self):
         sandbox = MagicMock()
         sandbox.tunnels.return_value = {}  # no entry for CODE_SERVER_PORT
 
         with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
-            url = await SandboxManager._resolve_code_server_tunnel(
-                sandbox, "sb-123", retries=2, backoff=0.0
+            resolved = await SandboxManager._resolve_tunnels(
+                sandbox, "sb-123", [CODE_SERVER_PORT], retries=2, backoff=0.0
             )
-        assert url is None
+        assert resolved == {}
 
     @pytest.mark.asyncio
     async def test_retries_then_succeeds(self):
@@ -70,10 +70,10 @@ class TestResolveCodeServerTunnel:
         ]
 
         with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
-            url = await SandboxManager._resolve_code_server_tunnel(
-                sandbox, "sb-123", retries=3, backoff=0.0
+            resolved = await SandboxManager._resolve_tunnels(
+                sandbox, "sb-123", [CODE_SERVER_PORT], retries=3, backoff=0.0
             )
-        assert url == "https://tunnel.example.com"
+        assert resolved.get(CODE_SERVER_PORT) == "https://tunnel.example.com"
         assert sandbox.tunnels.call_count == 2
 
 
@@ -100,8 +100,8 @@ class TestCreateSandboxCodeServer:
 
         monkeypatch.setattr(
             SandboxManager,
-            "_resolve_code_server_tunnel",
-            AsyncMock(return_value="https://cs.example.com"),
+            "_resolve_and_setup_tunnels",
+            AsyncMock(return_value=("https://cs.example.com", None, None)),
         )
 
         manager = SandboxManager()
@@ -142,8 +142,8 @@ class TestCreateSandboxCodeServer:
         fake_create.aio = fake_create_aio
         monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
 
-        tunnel_mock = AsyncMock(return_value="https://cs.example.com")
-        monkeypatch.setattr(SandboxManager, "_resolve_code_server_tunnel", tunnel_mock)
+        tunnel_mock = AsyncMock(return_value=(None, None, None))
+        monkeypatch.setattr(SandboxManager, "_resolve_and_setup_tunnels", tunnel_mock)
 
         manager = SandboxManager()
         config = SandboxConfig(
@@ -160,7 +160,6 @@ class TestCreateSandboxCodeServer:
         assert handle.code_server_password is None
         assert "CODE_SERVER_PASSWORD" not in captured["env"]
         assert captured["encrypted_ports"] is None
-        tunnel_mock.assert_not_called()
 
 
 class TestRestoreSandboxCodeServer:
@@ -192,8 +191,8 @@ class TestRestoreSandboxCodeServer:
         monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
         monkeypatch.setattr(
             SandboxManager,
-            "_resolve_code_server_tunnel",
-            AsyncMock(return_value="https://cs-restored.example.com"),
+            "_resolve_and_setup_tunnels",
+            AsyncMock(return_value=("https://cs-restored.example.com", None, None)),
         )
 
         manager = SandboxManager()
@@ -241,8 +240,8 @@ class TestRestoreSandboxCodeServer:
         fake_create.aio = fake_create_aio
         monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", fake_from_id)
         monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
-        tunnel_mock = AsyncMock(return_value="https://cs.example.com")
-        monkeypatch.setattr(SandboxManager, "_resolve_code_server_tunnel", tunnel_mock)
+        tunnel_mock = AsyncMock(return_value=(None, None, None))
+        monkeypatch.setattr(SandboxManager, "_resolve_and_setup_tunnels", tunnel_mock)
 
         manager = SandboxManager()
         handle = await manager.restore_from_snapshot(
@@ -263,4 +262,3 @@ class TestRestoreSandboxCodeServer:
         assert handle.code_server_password is None
         assert "CODE_SERVER_PASSWORD" not in captured["env"]
         assert captured["encrypted_ports"] is None
-        tunnel_mock.assert_not_called()

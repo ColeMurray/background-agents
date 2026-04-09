@@ -8,6 +8,7 @@ import type {
   ParticipantPresence,
   SandboxEvent as SharedSandboxEvent,
   ServerMessage,
+  SessionArtifact,
   SessionState as SharedSessionState,
 } from "@open-inspect/shared";
 
@@ -109,18 +110,37 @@ function toUiSandboxEvent(event: SharedSandboxEvent): SandboxEvent {
   };
 }
 
-function toUiArtifact(artifact: {
-  id: string;
-  type: string;
-  url: string;
-  prNumber?: number;
-}): Artifact {
+type PrState = NonNullable<NonNullable<Artifact["metadata"]>["prState"]>;
+const PR_STATES = new Set<string>(["open", "merged", "closed", "draft"]);
+
+function toUiArtifact(artifact: SessionArtifact): Artifact {
+  const meta = artifact.metadata as Record<string, unknown> | null;
   return {
     id: artifact.id,
     type: artifact.type as Artifact["type"],
     url: artifact.url,
-    createdAt: Date.now(),
-    metadata: artifact.prNumber ? { prNumber: artifact.prNumber } : undefined,
+    createdAt: artifact.createdAt,
+    metadata: meta
+      ? {
+          prNumber: typeof meta.number === "number" ? meta.number : undefined,
+          prState:
+            typeof meta.state === "string" && PR_STATES.has(meta.state)
+              ? (meta.state as PrState)
+              : undefined,
+          mode: meta.mode === "manual_pr" ? "manual_pr" : undefined,
+          createPrUrl: typeof meta.createPrUrl === "string" ? meta.createPrUrl : undefined,
+          head: typeof meta.head === "string" ? meta.head : undefined,
+          base: typeof meta.base === "string" ? meta.base : undefined,
+          provider: typeof meta.provider === "string" ? meta.provider : undefined,
+          filename: typeof meta.filename === "string" ? meta.filename : undefined,
+          previewStatus:
+            meta.previewStatus === "active" ||
+            meta.previewStatus === "outdated" ||
+            meta.previewStatus === "stopped"
+              ? meta.previewStatus
+              : undefined,
+        }
+      : undefined,
   };
 }
 
@@ -219,8 +239,9 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
         case "subscribed": {
           console.log("WebSocket subscribed to session");
           subscribedRef.current = true;
-          // Clear existing state since we're about to receive fresh history
-          setArtifacts([]);
+          // Replace local artifacts with the subscribed snapshot so reconnects
+          // still clear stale state instead of merging stale client data.
+          setArtifacts(data.artifacts.map(toUiArtifact));
           pendingTextRef.current = null;
           if (data.state) {
             setSessionState({
@@ -312,6 +333,9 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
                   sandboxStatus: "spawning",
                   codeServerUrl: undefined,
                   codeServerPassword: undefined,
+                  tunnelUrls: undefined,
+                  ttydUrl: undefined,
+                  ttydToken: undefined,
                 }
               : null
           );
@@ -325,7 +349,13 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
               ? {
                   ...prev,
                   sandboxStatus: data.status,
-                  ...(isTerminal && { codeServerUrl: undefined, codeServerPassword: undefined }),
+                  ...(isTerminal && {
+                    codeServerUrl: undefined,
+                    codeServerPassword: undefined,
+                    tunnelUrls: undefined,
+                    ttydUrl: undefined,
+                    ttydToken: undefined,
+                  }),
                 }
               : null
           );
@@ -338,19 +368,37 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           );
           break;
 
+        case "ttyd_info":
+          setSessionState((prev) =>
+            prev ? { ...prev, ttydUrl: data.url, ttydToken: data.token } : null
+          );
+          break;
+
+        case "tunnel_urls":
+          setSessionState((prev) => (prev ? { ...prev, tunnelUrls: data.urls } : null));
+          break;
+
         case "sandbox_ready":
           setSessionState((prev) => (prev ? { ...prev, sandboxStatus: "ready" } : null));
           break;
 
         case "artifact_created":
           setArtifacts((prev) => {
-            // Avoid duplicates
-            const existing = prev.find((a) => a.id === data.artifact.id);
-            if (existing) {
-              return prev.map((a) => (a.id === data.artifact.id ? toUiArtifact(data.artifact) : a));
+            const nextArtifact = toUiArtifact(data.artifact);
+            const existingIndex = prev.findIndex((artifact) => artifact.id === nextArtifact.id);
+            if (existingIndex === -1) {
+              return [nextArtifact, ...prev];
             }
-            return [...prev, toUiArtifact(data.artifact)];
+
+            return prev.map((artifact, index) =>
+              index === existingIndex ? nextArtifact : artifact
+            );
           });
+          break;
+
+        case "session_branch":
+          // Branch updates apply only to the active session detail view.
+          setSessionState((prev) => (prev ? { ...prev, branchName: data.branchName } : null));
           break;
 
         case "session_title":

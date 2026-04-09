@@ -4,6 +4,21 @@ function normalizeHostname(hostname: string): string {
   return hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
 }
 
+/**
+ * Build an external URL with a token query parameter (used for ttyd terminal auth).
+ * Returns null if the URL is invalid or the token is missing.
+ */
+export function buildAuthenticatedUrl(
+  url: string | null | undefined,
+  token: string | null | undefined
+): string | null {
+  const safeUrl = getSafeExternalUrl(url ?? null);
+  if (!safeUrl || !token) return null;
+  const parsed = new URL(safeUrl);
+  parsed.searchParams.set("token", token);
+  return parsed.toString();
+}
+
 export function getSafeExternalUrl(url: string | null | undefined): string | null {
   if (!url) {
     return null;

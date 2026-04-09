@@ -1,18 +1,8 @@
 /**
- * Shared HMAC-SHA256 primitive used by webhook verification and callback signatures.
+ * Re-export shared HMAC-SHA256 primitive.
+ *
+ * The canonical implementation lives in @open-inspect/shared.
+ * This module re-exports it for backward compatibility with existing imports.
  */
 
-export async function computeHmacHex(data: string, secret: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(data));
-  return Array.from(new Uint8Array(sig))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
+export { computeHmacHex } from "@open-inspect/shared";

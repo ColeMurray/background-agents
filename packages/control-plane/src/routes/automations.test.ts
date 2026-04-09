@@ -40,11 +40,10 @@ vi.mock("./shared", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
-    createRouteSourceControlProvider: vi.fn(() => ({
-      checkRepositoryAccess: vi.fn(),
-    })),
-    resolveInstalledRepo: vi.fn().mockResolvedValue({
+    resolveRepoOrError: vi.fn().mockResolvedValue({
       repoId: 12345,
+      repoOwner: "acme",
+      repoName: "web-app",
       defaultBranch: "main",
     }),
   };

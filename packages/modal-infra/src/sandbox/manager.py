@@ -16,10 +16,11 @@ import os
 import secrets
 import time
 from dataclasses import dataclass
+from typing import Any
 
 import modal
 
-from sandbox_runtime.constants import CODE_SERVER_PORT
+from sandbox_runtime.constants import CODE_SERVER_PORT, TTYD_PROXY_PORT
 from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.types import SandboxStatus, SessionConfig
 
@@ -29,6 +30,7 @@ from ..images.base import base_image
 log = get_logger("manager")
 
 DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200  # 2 hours
+MAX_TUNNEL_PORTS = 10
 
 
 @dataclass
@@ -48,6 +50,9 @@ class SandboxConfig:
     repo_image_id: str | None = None  # Pre-built repo image ID from provider
     repo_image_sha: str | None = None  # Git SHA the repo image was built from
     code_server_enabled: bool = False  # Whether to start code-server in the sandbox
+    settings: dict[str, Any] | None = (
+        None  # Sandbox settings (tunnelPorts, etc.) from control plane
+    )
 
 
 @dataclass
@@ -62,6 +67,8 @@ class SandboxHandle:
     modal_object_id: str | None = None  # Modal's internal sandbox ID for API calls
     code_server_url: str | None = None
     code_server_password: str | None = None
+    ttyd_url: str | None = None  # proxy tunnel URL (not ttyd directly)
+    tunnel_urls: dict[int, str] | None = None  # port -> tunnel URL mapping for extra ports
 
     def get_logs(self) -> str:
         """Get sandbox logs."""
@@ -69,7 +76,7 @@ class SandboxHandle:
 
     async def terminate(self) -> None:
         """Terminate the sandbox."""
-        await self.modal_sandbox.terminate()
+        self.modal_sandbox.terminate()
 
 
 class SandboxManager:
@@ -83,7 +90,7 @@ class SandboxManager:
     - Maintain warm pools for high-volume repos
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._warm_pools: dict[str, list[SandboxHandle]] = {}
 
     def _get_repo_key(self, repo_owner: str, repo_name: str) -> str:
@@ -96,29 +103,103 @@ class SandboxManager:
         return secrets.token_urlsafe(16)
 
     @staticmethod
-    async def _resolve_code_server_tunnel(
-        sandbox: modal.Sandbox, sandbox_id: str, retries: int = 3, backoff: float = 1.0
-    ) -> str | None:
-        """Resolve the code-server tunnel URL from Modal, retrying on failure."""
+    async def _resolve_tunnels(
+        sandbox: modal.Sandbox,
+        sandbox_id: str,
+        ports: list[int],
+        retries: int = 3,
+        backoff: float = 1.0,
+    ) -> dict[int, str]:
+        """Resolve tunnel URLs for the given ports from Modal, retrying on failure."""
+        resolved: dict[int, str] = {}
         for attempt in range(retries):
             try:
                 loop = asyncio.get_running_loop()
                 tunnels = await loop.run_in_executor(None, sandbox.tunnels)
-                tunnel = tunnels[CODE_SERVER_PORT]
-                log.info("code_server.tunnel", sandbox_id=sandbox_id, url=tunnel.url)
-                return tunnel.url
+                for port in ports:
+                    if port in tunnels and port not in resolved:
+                        resolved[port] = tunnels[port].url
+                        log.info(
+                            "tunnel.resolved",
+                            sandbox_id=sandbox_id,
+                            port=port,
+                            url=tunnels[port].url,
+                        )
+                if len(resolved) == len(ports):
+                    return resolved
             except Exception as e:
                 log.warn(
-                    "code_server.tunnel_error",
+                    "tunnel.resolve_error",
                     sandbox_id=sandbox_id,
                     attempt=attempt + 1,
                     retries=retries,
                     error=type(e).__name__,
                     exc=e,
                 )
-                if attempt < retries - 1:
-                    await asyncio.sleep(backoff * (attempt + 1))
-        return None
+            if attempt < retries - 1:
+                await asyncio.sleep(backoff * (attempt + 1))
+        return resolved
+
+    @staticmethod
+    def _validate_ports(raw: list) -> list[int]:
+        """Validate and sanitize tunnel ports: must be int, 1-65535, max MAX_TUNNEL_PORTS."""
+        ports: list[int] = []
+        for p in raw:
+            if isinstance(p, int) and 1 <= p <= 65535:
+                ports.append(p)
+            if len(ports) >= MAX_TUNNEL_PORTS:
+                break
+        return ports
+
+    @staticmethod
+    def _collect_exposed_ports(
+        code_server_enabled: bool,
+        terminal_enabled: bool,
+        settings: dict[str, Any] | None,
+    ) -> tuple[list[int], list[int]]:
+        """Return (all_exposed_ports, extra_tunnel_ports) from settings and feature flags."""
+        reserved: set[int] = set()
+        exposed: list[int] = []
+        if code_server_enabled:
+            exposed.append(CODE_SERVER_PORT)
+            reserved.add(CODE_SERVER_PORT)
+        if terminal_enabled:
+            exposed.append(TTYD_PROXY_PORT)
+            reserved.add(TTYD_PROXY_PORT)
+
+        raw_ports = (settings or {}).get("tunnelPorts", [])
+        tunnel_ports = SandboxManager._validate_ports(raw_ports) if raw_ports else []
+        # Remove reserved ports from tunnel_ports to avoid duplicates
+        tunnel_ports = [p for p in tunnel_ports if p not in reserved]
+        exposed.extend(tunnel_ports)
+        return exposed, tunnel_ports
+
+    @staticmethod
+    async def _resolve_and_setup_tunnels(
+        sandbox: modal.Sandbox,
+        sandbox_id: str,
+        code_server_enabled: bool,
+        terminal_enabled: bool,
+        extra_ports: list[int],
+    ) -> tuple[str | None, str | None, dict[int, str] | None]:
+        """Resolve all tunnels in a single pass. Returns (code_server_url, ttyd_url, extra_urls)."""
+        all_ports: list[int] = []
+        if code_server_enabled:
+            all_ports.append(CODE_SERVER_PORT)
+        if terminal_enabled:
+            all_ports.append(TTYD_PROXY_PORT)
+        all_ports.extend(extra_ports)
+
+        if not all_ports:
+            return None, None, None
+
+        resolved = await SandboxManager._resolve_tunnels(sandbox, sandbox_id, all_ports)
+
+        code_server_url = resolved.pop(CODE_SERVER_PORT, None)
+        ttyd_url = resolved.pop(TTYD_PROXY_PORT, None)
+        extra_urls = resolved if resolved else None
+
+        return code_server_url, ttyd_url, extra_urls
 
     @staticmethod
     def _inject_vcs_env_vars(env_vars: dict[str, str], clone_token: str | None) -> None:
@@ -127,6 +208,9 @@ class SandboxManager:
         if scm_provider == "bitbucket":
             env_vars["VCS_HOST"] = "bitbucket.org"
             env_vars["VCS_CLONE_USERNAME"] = "x-token-auth"
+        elif scm_provider == "gitlab":
+            env_vars["VCS_HOST"] = "gitlab.com"
+            env_vars["VCS_CLONE_USERNAME"] = "oauth2"
         else:
             env_vars["VCS_HOST"] = "github.com"
             env_vars["VCS_CLONE_USERNAME"] = "x-access-token"
@@ -186,6 +270,10 @@ class SandboxManager:
             code_server_password = self._generate_code_server_password()
             env_vars["CODE_SERVER_PASSWORD"] = code_server_password
 
+        terminal_enabled = bool((config.settings or {}).get("terminalEnabled", False))
+        if terminal_enabled:
+            env_vars["TERMINAL_ENABLED"] = "true"
+
         if config.session_config:
             env_vars["SESSION_CONFIG"] = config.session_config.model_dump_json()
 
@@ -209,8 +297,11 @@ class SandboxManager:
             "workdir": "/workspace",
             "env": env_vars,
         }
-        if config.code_server_enabled:
-            create_kwargs["encrypted_ports"] = [CODE_SERVER_PORT]
+        exposed_ports, tunnel_ports = self._collect_exposed_ports(
+            config.code_server_enabled, terminal_enabled, config.settings
+        )
+        if exposed_ports:
+            create_kwargs["encrypted_ports"] = exposed_ports
 
         sandbox = await modal.Sandbox.create.aio(
             "python",
@@ -219,11 +310,10 @@ class SandboxManager:
             **create_kwargs,
         )
 
-        # Get Modal's internal object ID for API calls (snapshot, etc.)
         modal_object_id = sandbox.object_id
-        code_server_url: str | None = None
-        if config.code_server_enabled:
-            code_server_url = await self._resolve_code_server_tunnel(sandbox, sandbox_id)
+        code_server_url, ttyd_url, extra_tunnel_urls = await self._resolve_and_setup_tunnels(
+            sandbox, sandbox_id, config.code_server_enabled, terminal_enabled, tunnel_ports
+        )
 
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -245,6 +335,8 @@ class SandboxManager:
             modal_object_id=modal_object_id,
             code_server_url=code_server_url,
             code_server_password=code_server_password,
+            ttyd_url=ttyd_url,
+            tunnel_urls=extra_tunnel_urls,
         )
 
     async def create_build_sandbox(
@@ -437,6 +529,7 @@ class SandboxManager:
         user_env_vars: dict[str, str] | None = None,
         timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS,
         code_server_enabled: bool = False,
+        settings: dict[str, Any] | None = None,
     ) -> SandboxHandle:
         """
         Create a new sandbox from a filesystem snapshot Image.
@@ -515,6 +608,10 @@ class SandboxManager:
             code_server_password = self._generate_code_server_password()
             env_vars["CODE_SERVER_PASSWORD"] = code_server_password
 
+        terminal_enabled = bool((settings or {}).get("terminalEnabled", False))
+        if terminal_enabled:
+            env_vars["TERMINAL_ENABLED"] = "true"
+
         # Create the sandbox from the snapshot image
         create_kwargs: dict = {
             "image": image,  # Use the snapshot image directly
@@ -524,8 +621,11 @@ class SandboxManager:
             "workdir": "/workspace",
             "env": env_vars,
         }
-        if code_server_enabled:
-            create_kwargs["encrypted_ports"] = [CODE_SERVER_PORT]
+        exposed_ports, tunnel_ports = self._collect_exposed_ports(
+            code_server_enabled, terminal_enabled, settings
+        )
+        if exposed_ports:
+            create_kwargs["encrypted_ports"] = exposed_ports
 
         sandbox = await modal.Sandbox.create.aio(
             "python",
@@ -535,9 +635,9 @@ class SandboxManager:
         )
 
         modal_object_id = sandbox.object_id
-        code_server_url: str | None = None
-        if code_server_enabled:
-            code_server_url = await self._resolve_code_server_tunnel(sandbox, sandbox_id)
+        code_server_url, ttyd_url, extra_tunnel_urls = await self._resolve_and_setup_tunnels(
+            sandbox, sandbox_id, code_server_enabled, terminal_enabled, tunnel_ports
+        )
 
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -560,6 +660,8 @@ class SandboxManager:
             modal_object_id=modal_object_id,
             code_server_url=code_server_url,
             code_server_password=code_server_password,
+            ttyd_url=ttyd_url,
+            tunnel_urls=extra_tunnel_urls,
         )
 
     async def maintain_warm_pool(

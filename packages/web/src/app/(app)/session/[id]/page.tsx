@@ -21,6 +21,8 @@ import {
   SessionRightSidebar,
   SessionRightSidebarContent,
 } from "@/components/session-right-sidebar";
+import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
+import { TerminalPanel } from "@/components/terminal-panel";
 import { ActionBar } from "@/components/action-bar";
 import { copyToClipboard, formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
@@ -475,6 +477,26 @@ function SessionContent({
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
   const sheetTouchStartYRef = useRef<number | null>(null);
 
+  // Terminal panel state
+  const [terminalOpen, setTerminalOpen] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem("terminal-visible") === "true";
+  });
+  const toggleTerminal = useCallback(() => {
+    setTerminalOpen((prev) => {
+      const next = !prev;
+      localStorage.setItem("terminal-visible", String(next));
+      return next;
+    });
+  }, []);
+  const closeTerminal = useCallback(() => {
+    setTerminalOpen(false);
+    localStorage.setItem("terminal-visible", "false");
+  }, []);
+  const ttydUrl = sessionState?.ttydUrl;
+  const ttydToken = sessionState?.ttydToken;
+  const showTerminal = !!(ttydUrl && ttydToken && terminalOpen && !isBelowLg);
+
   // Scroll pagination refs
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
@@ -762,37 +784,53 @@ function SessionContent({
 
       {/* Main content */}
       <main className="flex-1 flex overflow-hidden">
-        {/* Event timeline */}
-        <div
-          ref={scrollContainerRef}
-          onScroll={handleScroll}
-          className="flex-1 overflow-y-auto overflow-x-hidden p-4"
-        >
-          <div className="max-w-3xl mx-auto space-y-2">
-            {/* Scroll sentinel for loading older history */}
-            <div ref={topSentinelRef} className="h-1" />
-            {loadingHistory && (
-              <div className="text-center text-muted-foreground text-sm py-2">Loading...</div>
-            )}
-            {showTimelineSkeleton ? (
-              <TimelineSkeleton />
-            ) : (
-              groupedEvents.map((group) =>
-                group.type === "tool_group" ? (
-                  <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />
-                ) : (
-                  <EventItem
-                    key={group.id}
-                    event={group.event}
-                    currentParticipantId={currentParticipantId}
-                  />
-                )
-              )
-            )}
-            {isProcessing && <ThinkingIndicator />}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <PanelGroup orientation="vertical" id="session-terminal">
+            {/* Chat / Event Timeline */}
+            <Panel defaultSize={showTerminal ? "70%" : "100%"} minSize="30%">
+              <div
+                ref={scrollContainerRef}
+                onScroll={handleScroll}
+                className="h-full overflow-y-auto overflow-x-hidden p-4"
+              >
+                <div className="max-w-3xl mx-auto space-y-2">
+                  {/* Scroll sentinel for loading older history */}
+                  <div ref={topSentinelRef} className="h-1" />
+                  {loadingHistory && (
+                    <div className="text-center text-muted-foreground text-sm py-2">Loading...</div>
+                  )}
+                  {showTimelineSkeleton ? (
+                    <TimelineSkeleton />
+                  ) : (
+                    groupedEvents.map((group) =>
+                      group.type === "tool_group" ? (
+                        <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />
+                      ) : (
+                        <EventItem
+                          key={group.id}
+                          event={group.event}
+                          currentParticipantId={currentParticipantId}
+                        />
+                      )
+                    )
+                  )}
+                  {isProcessing && <ThinkingIndicator />}
 
-            <div ref={messagesEndRef} />
-          </div>
+                  <div ref={messagesEndRef} />
+                </div>
+              </div>
+            </Panel>
+
+            {/* Terminal panel — only rendered when URL + token available and open */}
+            {showTerminal && (
+              <>
+                <PanelResizeHandle className="h-1.5 bg-border-muted hover:bg-accent transition-colors cursor-row-resize" />
+                <Panel defaultSize="30%" minSize="15%" maxSize="70%">
+                  <TerminalPanel url={ttydUrl!} token={ttydToken!} onClose={closeTerminal} />
+                </Panel>
+              </>
+            )}
+          </PanelGroup>
         </div>
 
         {/* Right sidebar */}
@@ -801,6 +839,8 @@ function SessionContent({
           participants={participants}
           events={events}
           artifacts={artifacts}
+          terminalOpen={terminalOpen}
+          onToggleTerminal={toggleTerminal}
         />
       </main>
 
@@ -852,6 +892,8 @@ function SessionContent({
                   participants={participants}
                   events={events}
                   artifacts={artifacts}
+                  terminalOpen={terminalOpen}
+                  onToggleTerminal={toggleTerminal}
                 />
               </div>
             </div>
@@ -880,6 +922,8 @@ function SessionContent({
                   participants={participants}
                   events={events}
                   artifacts={artifacts}
+                  terminalOpen={terminalOpen}
+                  onToggleTerminal={toggleTerminal}
                 />
               </div>
             </div>

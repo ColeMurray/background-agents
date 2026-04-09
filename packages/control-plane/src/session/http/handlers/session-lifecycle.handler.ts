@@ -1,5 +1,6 @@
 import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
+import type { SandboxSettings } from "@open-inspect/shared";
 import type { SandboxStatus, ServerMessage, SessionStatus, SpawnSource } from "../../../types";
 import type { SessionRepository } from "../../repository";
 import { getValidModelOrDefault, isValidModel } from "../../../utils/models";
@@ -29,6 +30,7 @@ interface InitRequest {
   spawnSource?: SpawnSource;
   spawnDepth?: number;
   codeServerEnabled?: boolean;
+  sandboxSettings?: SandboxSettings;
 }
 
 export interface SessionLifecycleHandlerDeps {
@@ -118,6 +120,7 @@ export function createSessionLifecycleHandler(
         spawnSource: body.spawnSource ?? "user",
         spawnDepth: body.spawnDepth ?? 0,
         codeServerEnabled: body.codeServerEnabled ?? false,
+        sandboxSettings: body.sandboxSettings ? JSON.stringify(body.sandboxSettings) : null,
         createdAt: now,
         updatedAt: now,
       });

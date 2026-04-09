@@ -2,6 +2,8 @@
  * Slack client utilities.
  */
 
+import { computeHmacHex, timingSafeEqual } from "@open-inspect/shared";
+
 /**
  * Verify Slack request signature using Web Crypto API.
  *
@@ -30,34 +32,11 @@ export async function verifySlackSignature(
   // Build the signature base string
   const baseString = `v0:${timestamp}:${body}`;
 
-  // Compute HMAC-SHA256
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(signingSecret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-
-  const signatureBytes = await crypto.subtle.sign("HMAC", key, encoder.encode(baseString));
-
-  // Convert to hex
-  const hashArray = Array.from(new Uint8Array(signatureBytes));
-  const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+  // Compute HMAC-SHA256 and format as Slack expects: v0=<hex>
+  const hashHex = await computeHmacHex(baseString, signingSecret);
   const expectedSignature = `v0=${hashHex}`;
 
-  // Timing-safe comparison
-  if (signature.length !== expectedSignature.length) {
-    return false;
-  }
-
-  let result = 0;
-  for (let i = 0; i < signature.length; i++) {
-    result |= signature.charCodeAt(i) ^ expectedSignature.charCodeAt(i);
-  }
-
-  return result === 0;
+  return timingSafeEqual(signature, expectedSignature);
 }
 
 /**
@@ -298,6 +277,26 @@ export async function publishView(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ user_id: userId, view }),
+  });
+
+  return response.json() as Promise<{ ok: boolean; error?: string }>;
+}
+
+/**
+ * Open a modal view in Slack.
+ */
+export async function openView(
+  token: string,
+  triggerId: string,
+  view: Record<string, unknown>
+): Promise<{ ok: boolean; error?: string }> {
+  const response = await fetch("https://slack.com/api/views.open", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ trigger_id: triggerId, view }),
   });
 
   return response.json() as Promise<{ ok: boolean; error?: string }>;

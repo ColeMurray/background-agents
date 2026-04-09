@@ -122,6 +122,40 @@ describe("SessionSandboxEventProcessor", () => {
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
   });
 
+  it("does not add session cost for step_finish with NaN cost", async () => {
+    const h = createProcessor();
+    const event: SandboxEvent = {
+      type: "step_finish",
+      messageId: "msg-1",
+      sandboxId: "sb-1",
+      timestamp: 1000,
+      cost: Number.NaN,
+    };
+
+    await h.processor.processSandboxEvent(event);
+
+    expect(h.repository.addSessionCost).not.toHaveBeenCalled();
+    expect(h.repository.createEvent).not.toHaveBeenCalled();
+    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+  });
+
+  it("does not add session cost for step_finish with Infinity cost", async () => {
+    const h = createProcessor();
+    const event: SandboxEvent = {
+      type: "step_finish",
+      messageId: "msg-1",
+      sandboxId: "sb-1",
+      timestamp: 1000,
+      cost: Number.POSITIVE_INFINITY,
+    };
+
+    await h.processor.processSandboxEvent(event);
+
+    expect(h.repository.addSessionCost).not.toHaveBeenCalled();
+    expect(h.repository.createEvent).not.toHaveBeenCalled();
+    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+  });
+
   it("completes processing message and schedules post-completion work", async () => {
     const h = createProcessor();
     h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });

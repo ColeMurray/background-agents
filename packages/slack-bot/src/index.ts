@@ -6,7 +6,15 @@
  */
 
 import { Hono } from "hono";
-import type { Env, RepoConfig, CallbackContext, ThreadSession, UserPreferences } from "./types";
+import type {
+  Env,
+  RepoConfig,
+  CallbackContext,
+  ThreadSession,
+  UserPreferences,
+  SlackInteractionPayload,
+} from "./types";
+import { stripMentions, isDmDispatchable } from "./dm-utils";
 import {
   verifySlackSignature,
   postMessage,
@@ -15,13 +23,31 @@ import {
   getChannelInfo,
   getThreadMessages,
   publishView,
+  openView,
 } from "./utils/slack-client";
 import { resolveUserNames } from "./utils/resolve-users";
 import { createClassifier } from "./classifier";
 import { getAvailableRepos } from "./classifier/repos";
 import { callbacksRouter } from "./callbacks";
-import { generateInternalToken } from "./utils/internal";
+import { buildInternalAuthHeaders } from "./utils/internal";
 import { createLogger } from "./logger";
+import {
+  BRANCH_MODAL_CALLBACK_ID,
+  REPO_BRANCH_MODAL_CALLBACK_ID,
+  BRANCH_INPUT_BLOCK_ID,
+  BRANCH_INPUT_ACTION_ID,
+  REPO_BRANCH_SELECTOR_ACTION_ID,
+  CLEAR_REPO_BRANCH_ACTION_ID,
+  getUserRepoBranchPreference,
+  getUserRepoBranchPreferences,
+  saveUserRepoBranchPreference,
+  normalizeBranchPreference,
+  isValidBranchName,
+  getValidatedBranch,
+  isBranchModalCallbackId,
+  getSubmittedBranch,
+  getBranchSubmissionValidationError,
+} from "./branch-preferences";
 import {
   MODEL_OPTIONS,
   DEFAULT_MODEL,
@@ -35,24 +61,16 @@ import {
 
 const log = createLogger("handler");
 
+const MAX_REPO_SUGGESTION_OPTIONS = 100;
+
 /**
  * Build authenticated headers for control plane requests.
  */
 async function getAuthHeaders(env: Env, traceId?: string): Promise<Record<string, string>> {
-  const headers: Record<string, string> = {
+  return {
     "Content-Type": "application/json",
+    ...(await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId)),
   };
-
-  if (env.INTERNAL_CALLBACK_SECRET) {
-    const authToken = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
-    headers["Authorization"] = `Bearer ${authToken}`;
-  }
-
-  if (traceId) {
-    headers["x-trace-id"] = traceId;
-  }
-
-  return headers;
 }
 
 /**
@@ -64,6 +82,7 @@ async function createSession(
   title: string | undefined,
   model: string,
   reasoningEffort: string | undefined,
+  branch: string | undefined,
   traceId?: string
 ): Promise<{ sessionId: string; status: string } | null> {
   const startTime = Date.now();
@@ -73,6 +92,7 @@ async function createSession(
     repo_name: repo.name,
     model,
     reasoning_effort: reasoningEffort,
+    branch,
   };
   try {
     const headers = await getAuthHeaders(env, traceId);
@@ -85,6 +105,7 @@ async function createSession(
         title: title || `Slack: ${repo.name}`,
         model,
         reasoningEffort,
+        branch,
       }),
     });
 
@@ -307,10 +328,12 @@ function isValidUserPreferences(data: unknown): data is UserPreferences {
     return false;
   }
   const obj = data as Record<string, unknown>;
+  const branchValid = obj.branch === undefined || typeof obj.branch === "string";
   return (
     typeof obj.userId === "string" &&
     typeof obj.model === "string" &&
-    typeof obj.updatedAt === "number"
+    typeof obj.updatedAt === "number" &&
+    branchValid
   );
 }
 
@@ -343,14 +366,24 @@ async function saveUserPreferences(
   env: Env,
   userId: string,
   model: string,
-  reasoningEffort?: string
+  reasoningEffort?: string,
+  branch?: string
 ): Promise<boolean> {
   try {
     const key = getUserPreferencesKey(userId);
+    const normalizedBranch = normalizeBranchPreference(branch);
+    if (normalizedBranch && !isValidBranchName(normalizedBranch)) {
+      log.warn("slack.branch_pref.invalid", {
+        user_id: userId,
+        branch: normalizedBranch,
+      });
+      return false;
+    }
     const prefs: UserPreferences = {
       userId,
       model,
       reasoningEffort,
+      branch: normalizedBranch,
       updatedAt: Date.now(),
     };
     // No TTL - preferences persist indefinitely
@@ -364,6 +397,49 @@ async function saveUserPreferences(
     });
     return false;
   }
+}
+
+/**
+ * Build Slack select options for repositories with optional branch labels.
+ */
+function buildRepoBranchSelectOptions(
+  repos: RepoConfig[],
+  repoBranchPreferences: Map<string, string>
+): Array<{ text: { type: "plain_text"; text: string }; value: string }> {
+  return repos.map((repo) => {
+    const repoBranch = repoBranchPreferences.get(repo.id);
+    const label = repoBranch ? `${repo.fullName} → ${repoBranch}` : repo.fullName;
+    return {
+      text: {
+        type: "plain_text" as const,
+        text: label.slice(0, 75),
+      },
+      value: repo.id,
+    };
+  });
+}
+
+/**
+ * Build searchable repository options for Slack external_select.
+ */
+async function getRepoBranchSuggestionOptions(
+  env: Env,
+  userId: string,
+  query: string | undefined,
+  traceId?: string
+): Promise<Array<{ text: { type: "plain_text"; text: string }; value: string }>> {
+  const repos = await getAvailableRepos(env, traceId);
+  const repoBranchPreferences = await getUserRepoBranchPreferences(env, userId);
+  const normalizedQuery = query?.trim().toLowerCase();
+
+  const filteredRepos = normalizedQuery
+    ? repos.filter((repo) => repo.fullName.toLowerCase().includes(normalizedQuery))
+    : repos;
+
+  return buildRepoBranchSelectOptions(filteredRepos, repoBranchPreferences).slice(
+    0,
+    MAX_REPO_SUGGESTION_OPTIONS
+  );
 }
 
 /**
@@ -384,6 +460,10 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
     prefs?.reasoningEffort && isValidReasoningEffort(currentModel, prefs.reasoningEffort)
       ? prefs.reasoningEffort
       : getDefaultReasoningEffort(currentModel);
+  const currentBranch = getValidatedBranch(prefs?.branch);
+
+  const repos = await getAvailableRepos(env);
+  const repoBranchPreferences = await getUserRepoBranchPreferences(env, userId);
 
   const reasoningOptions = reasoningConfig
     ? reasoningConfig.efforts.map((effort) => ({
@@ -460,17 +540,132 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
   }
 
   blocks.push(
-    { type: "divider" },
+    {
+      type: "divider",
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "*Branch (optional)*\nSet a default branch for new Slack sessions. Leave empty to use each repository default branch.",
+      },
+      accessory: {
+        type: "button",
+        action_id: "open_branch_modal",
+        text: { type: "plain_text", text: currentBranch ? "Edit branch" : "Set branch" },
+        value: "open_branch_modal",
+      },
+    },
     {
       type: "context",
       elements: [
         {
           type: "mrkdwn",
-          text: `Currently using: *${currentModelInfo.label}*${currentEffort ? ` · ${currentEffort}` : ""}`,
+          text: currentBranch
+            ? `Branch override: *${currentBranch}*`
+            : "Branch override: *(repo default)*",
         },
       ],
     }
   );
+
+  if (currentBranch) {
+    blocks.push({
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          action_id: "clear_branch_preference",
+          text: { type: "plain_text", text: "Clear branch override" },
+          style: "danger",
+          value: "clear_branch_preference",
+        },
+      ],
+    });
+  }
+
+  if (repos.length > 0) {
+    const configuredRepoOverrides = repos
+      .map((repo) => ({ repo, branch: repoBranchPreferences.get(repo.id) }))
+      .filter((entry): entry is { repo: RepoConfig; branch: string } => Boolean(entry.branch));
+
+    blocks.push(
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "*Branch by repository*\nChoose a repository to set a repo-specific branch override.",
+        },
+      },
+      {
+        type: "actions",
+        block_id: "repo_branch_selection",
+        elements: [
+          {
+            type: "external_select",
+            action_id: REPO_BRANCH_SELECTOR_ACTION_ID,
+            placeholder: { type: "plain_text", text: "Search repository" },
+            min_query_length: 0,
+          },
+        ],
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: "Priority: repo-specific override → global override → repository default branch.",
+          },
+        ],
+      }
+    );
+
+    if (configuredRepoOverrides.length > 0) {
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "*Configured repo overrides*",
+        },
+      });
+
+      for (const { repo, branch } of configuredRepoOverrides) {
+        blocks.push({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `\`${repo.fullName}\` → *${branch}*`,
+          },
+          accessory: {
+            type: "button",
+            action_id: CLEAR_REPO_BRANCH_ACTION_ID,
+            text: { type: "plain_text", text: "Delete" },
+            style: "danger",
+            value: repo.id,
+            confirm: {
+              title: { type: "plain_text", text: "Delete override?" },
+              text: {
+                type: "mrkdwn",
+                text: `Remove branch override for *${repo.fullName}*?`,
+              },
+              confirm: { type: "plain_text", text: "Delete" },
+              deny: { type: "plain_text", text: "Cancel" },
+            },
+          },
+        });
+      }
+    }
+  }
+
+  blocks.push({
+    type: "context",
+    elements: [
+      {
+        type: "mrkdwn",
+        text: `Currently using: *${currentModelInfo.label}*${currentEffort ? ` · ${currentEffort}` : ""}${currentBranch ? ` · branch:${currentBranch}` : ""}`,
+      },
+    ],
+  });
 
   const view = {
     type: "home",
@@ -480,6 +675,137 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
   const result = await publishView(env.SLACK_BOT_TOKEN, userId, view);
   if (!result.ok) {
     log.error("slack.app_home", { user_id: userId, outcome: "error", slack_error: result.error });
+  }
+}
+
+/**
+ * Open a modal to set or clear a user's branch preference.
+ */
+async function openBranchPreferenceModal(
+  env: Env,
+  userId: string,
+  triggerId: string,
+  currentBranch?: string
+): Promise<void> {
+  const view = {
+    type: "modal",
+    callback_id: BRANCH_MODAL_CALLBACK_ID,
+    title: {
+      type: "plain_text",
+      text: "Branch Preference",
+    },
+    submit: {
+      type: "plain_text",
+      text: "Save",
+    },
+    close: {
+      type: "plain_text",
+      text: "Cancel",
+    },
+    private_metadata: JSON.stringify({ userId }),
+    blocks: [
+      {
+        type: "input",
+        block_id: BRANCH_INPUT_BLOCK_ID,
+        optional: true,
+        label: {
+          type: "plain_text",
+          text: "Default branch for new Slack sessions",
+        },
+        element: {
+          type: "plain_text_input",
+          action_id: BRANCH_INPUT_ACTION_ID,
+          initial_value: currentBranch || "",
+          placeholder: {
+            type: "plain_text",
+            text: "e.g. main, staging, release/2026-03",
+          },
+        },
+        hint: {
+          type: "plain_text",
+          text: "Leave empty to use each repository's default branch.",
+        },
+      },
+    ],
+  };
+
+  const result = await openView(env.SLACK_BOT_TOKEN, triggerId, view);
+  if (!result.ok) {
+    log.error("slack.open_branch_modal", {
+      user_id: userId,
+      outcome: "error",
+      slack_error: result.error,
+    });
+  }
+}
+
+/**
+ * Open a modal to set or clear a user's branch preference for a specific repository.
+ */
+async function openRepoBranchPreferenceModal(
+  env: Env,
+  userId: string,
+  triggerId: string,
+  repo: RepoConfig,
+  currentBranch?: string
+): Promise<void> {
+  const view = {
+    type: "modal",
+    callback_id: REPO_BRANCH_MODAL_CALLBACK_ID,
+    title: {
+      type: "plain_text",
+      text: "Repo Branch",
+    },
+    submit: {
+      type: "plain_text",
+      text: "Save",
+    },
+    close: {
+      type: "plain_text",
+      text: "Cancel",
+    },
+    private_metadata: JSON.stringify({ userId, repoId: repo.id }),
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `Repository: *${repo.fullName}*`,
+        },
+      },
+      {
+        type: "input",
+        block_id: BRANCH_INPUT_BLOCK_ID,
+        optional: true,
+        label: {
+          type: "plain_text",
+          text: "Branch override",
+        },
+        element: {
+          type: "plain_text_input",
+          action_id: BRANCH_INPUT_ACTION_ID,
+          initial_value: currentBranch || "",
+          placeholder: {
+            type: "plain_text",
+            text: "e.g. main, staging, release/2026-03",
+          },
+        },
+        hint: {
+          type: "plain_text",
+          text: "Leave empty to clear this repository override.",
+        },
+      },
+    ],
+  };
+
+  const result = await openView(env.SLACK_BOT_TOKEN, triggerId, view);
+  if (!result.ok) {
+    log.error("slack.open_repo_branch_modal", {
+      user_id: userId,
+      repo_id: repo.id,
+      outcome: "error",
+      slack_error: result.error,
+    });
   }
 }
 
@@ -554,14 +880,18 @@ async function startSessionAndSendPrompt(
     userPrefs?.reasoningEffort && isValidReasoningEffort(model, userPrefs.reasoningEffort)
       ? userPrefs.reasoningEffort
       : getDefaultReasoningEffort(model);
+  const globalBranch = getValidatedBranch(userPrefs?.branch);
+  const repoBranch = await getUserRepoBranchPreference(env, userId, repo.id);
+  const branch = repoBranch ?? globalBranch;
 
-  // Create session via control plane with user's preferred model and reasoning effort
+  // Create session via control plane with user's preferred model, reasoning effort, and branch
   const session = await createSession(
     env,
     repo,
     messageText.slice(0, 100),
     model,
     reasoningEffort,
+    branch,
     traceId
   );
 
@@ -753,18 +1083,89 @@ app.post("/interactions", async (c) => {
   }
 
   const payloadStr = new URLSearchParams(body).get("payload") || "{}";
-  const payload = JSON.parse(payloadStr);
+  const payload = JSON.parse(payloadStr) as SlackInteractionPayload;
 
-  c.executionCtx.waitUntil(handleSlackInteraction(payload, c.env, traceId));
+  if (payload.type === "block_suggestion") {
+    const suggestionActionId = payload.action_id;
+    const suggestionUserId = payload.user?.id;
+
+    if (suggestionActionId === REPO_BRANCH_SELECTOR_ACTION_ID && suggestionUserId) {
+      const options = await getRepoBranchSuggestionOptions(
+        c.env,
+        suggestionUserId,
+        payload.value,
+        traceId
+      );
+
+      log.info("http.request", {
+        trace_id: traceId,
+        http_method: "POST",
+        http_path: "/interactions",
+        http_status: 200,
+        interaction_type: payload.type,
+        action_id: suggestionActionId,
+        option_count: options.length,
+        duration_ms: Date.now() - startTime,
+      });
+
+      return c.json({ options });
+    }
+
+    return c.json({ options: [] });
+  }
+
+  const submittedBranch = getSubmittedBranch(payload);
+  const branchValidationError = getBranchSubmissionValidationError(payload);
+
+  if (branchValidationError) {
+    log.warn("slack.branch_pref.invalid", {
+      trace_id: traceId,
+      user_id: payload.user?.id,
+      branch: submittedBranch ?? "",
+    });
+    log.info("http.request", {
+      trace_id: traceId,
+      http_method: "POST",
+      http_path: "/interactions",
+      http_status: 200,
+      interaction_type: payload.type,
+      callback_id: payload.view?.callback_id,
+      outcome: "validation_error",
+      duration_ms: Date.now() - startTime,
+    });
+    return c.json({
+      response_action: "errors",
+      errors: {
+        [BRANCH_INPUT_BLOCK_ID]: branchValidationError,
+      },
+    });
+  }
+
+  const actionId = payload.actions?.[0]?.action_id ?? payload.action_id;
+  const isViewSubmission = payload.type === "view_submission";
+  const shouldOpenModalInline =
+    actionId === "open_branch_modal" || actionId === REPO_BRANCH_SELECTOR_ACTION_ID;
+
+  if (shouldOpenModalInline) {
+    await handleSlackInteraction(payload, c.env, traceId);
+  } else {
+    c.executionCtx.waitUntil(handleSlackInteraction(payload, c.env, traceId));
+  }
 
   log.info("http.request", {
     trace_id: traceId,
     http_method: "POST",
     http_path: "/interactions",
     http_status: 200,
-    action_id: payload.actions?.[0]?.action_id,
+    interaction_type: payload.type,
+    action_id: actionId,
+    callback_id: payload.view?.callback_id,
     duration_ms: Date.now() - startTime,
   });
+
+  if (isViewSubmission && isBranchModalCallbackId(payload.view?.callback_id)) {
+    return c.json({ response_action: "clear" });
+  }
 
   return c.json({ ok: true });
 });
@@ -787,6 +1188,16 @@ async function handleSlackEvent(
       thread_ts?: string;
       bot_id?: string;
       tab?: string;
+      channel_type?: string; // "im" for direct messages, "channel" for public channels, etc.
+      subtype?: string; // e.g. "bot_message", "message_changed", etc.
+      attachments?: Array<{
+        text?: string;
+        pretext?: string;
+        author_name?: string;
+        from_url?: string;
+        channel_name?: string;
+        footer?: string;
+      }>;
     };
   },
   env: Env,
@@ -809,6 +1220,24 @@ async function handleSlackEvent(
     return;
   }
 
+  // Handle direct messages (DMs) to the bot
+  if (isDmDispatchable(event)) {
+    await handleDirectMessage(
+      {
+        type: event.type,
+        text: event.text!,
+        user: event.user!,
+        channel: event.channel!,
+        ts: event.ts!,
+        thread_ts: event.thread_ts,
+        channel_type: event.channel_type,
+      },
+      env,
+      traceId
+    );
+    return;
+  }
+
   // Handle app_mention events
   if (event.type === "app_mention" && event.text && event.channel && event.ts) {
     await handleAppMention(event as Required<typeof event>, env, traceId);
@@ -816,31 +1245,50 @@ async function handleSlackEvent(
 }
 
 /**
- * Handle app_mention events.
+ * Parameters for the shared incoming message handler.
  */
-async function handleAppMention(
-  event: {
-    type: string;
-    text: string;
-    user: string;
-    channel: string;
-    ts: string;
-    thread_ts?: string;
-  },
-  env: Env,
-  traceId?: string
-): Promise<void> {
-  const { text, channel, ts, thread_ts } = event;
+interface IncomingMessageParams {
+  text: string; // Already cleaned message text
+  user: string;
+  channel: string;
+  ts: string;
+  threadTs?: string;
+  channelName?: string;
+  channelDescription?: string;
+  env: Env;
+  traceId?: string;
+}
 
-  // Remove the bot mention from the text
-  const messageText = text.replace(/<@[A-Z0-9]+>/g, "").trim();
+/**
+ * Shared logic for handling incoming messages (both @mentions and DMs).
+ *
+ * Handles:
+ * - Thread context fetch
+ * - Existing session lookup + prompt
+ * - Repo classification
+ * - Clarification / repo selection UI
+ * - Ack message + session creation
+ * - Session started message
+ */
+async function handleIncomingMessage(params: IncomingMessageParams): Promise<void> {
+  const {
+    text: messageText,
+    user,
+    channel,
+    ts,
+    threadTs,
+    channelName,
+    channelDescription,
+    env,
+    traceId,
+  } = params;
 
   if (!messageText) {
     await postMessage(
       env.SLACK_BOT_TOKEN,
       channel,
       "Hi! Please include a message with your request.",
-      { thread_ts: thread_ts || ts }
+      { thread_ts: threadTs || ts }
     );
     return;
   }
@@ -848,9 +1296,9 @@ async function handleAppMention(
   // Get thread context if in a thread (include bot messages for better context)
   // Fetched early so it's available for both existing session prompts and new sessions
   let previousMessages: string[] | undefined;
-  if (thread_ts) {
+  if (threadTs) {
     try {
-      const threadResult = await getThreadMessages(env.SLACK_BOT_TOKEN, channel, thread_ts, 10);
+      const threadResult = await getThreadMessages(env.SLACK_BOT_TOKEN, channel, threadTs, 10);
       if (threadResult.ok && threadResult.messages) {
         const filtered = threadResult.messages.filter((m) => m.ts !== ts);
         // Resolve unique user IDs to display names for attribution
@@ -869,27 +1317,14 @@ async function handleAppMention(
     }
   }
 
-  // Get channel context (fetched early so it's available for all paths)
-  let channelName: string | undefined;
-  let channelDescription: string | undefined;
-
-  try {
-    const channelInfo = await getChannelInfo(env.SLACK_BOT_TOKEN, channel);
-    if (channelInfo.ok && channelInfo.channel) {
-      channelName = channelInfo.channel.name;
-      channelDescription = channelInfo.channel.topic?.value || channelInfo.channel.purpose?.value;
-    }
-  } catch {
-    // Channel info not available
-  }
-
-  if (thread_ts) {
-    const existingSession = await lookupThreadSession(env, channel, thread_ts);
+  // Check for existing session in this thread
+  if (threadTs) {
+    const existingSession = await lookupThreadSession(env, channel, threadTs);
     if (existingSession) {
       const callbackContext: CallbackContext = {
         source: "slack",
         channel,
-        threadTs: thread_ts,
+        threadTs,
         repoFullName: existingSession.repoFullName,
         model: existingSession.model,
         reasoningEffort: existingSession.reasoningEffort,
@@ -906,7 +1341,7 @@ async function handleAppMention(
         env,
         existingSession.sessionId,
         promptContent,
-        `slack:${event.user}`,
+        `slack:${user}`,
         callbackContext,
         traceId
       );
@@ -929,9 +1364,9 @@ async function handleAppMention(
         trace_id: traceId,
         session_id: existingSession.sessionId,
         channel,
-        thread_ts,
+        thread_ts: threadTs,
       });
-      await clearThreadSession(env, channel, thread_ts);
+      await clearThreadSession(env, channel, threadTs);
     }
   }
 
@@ -943,7 +1378,7 @@ async function handleAppMention(
       channelId: channel,
       channelName,
       channelDescription,
-      threadTs: thread_ts,
+      threadTs,
       previousMessages,
     },
     traceId
@@ -959,18 +1394,18 @@ async function handleAppMention(
         env.SLACK_BOT_TOKEN,
         channel,
         "Sorry, no repositories are currently available. Please check that the GitHub App is installed and configured.",
-        { thread_ts: thread_ts || ts }
+        { thread_ts: threadTs || ts }
       );
       return;
     }
 
     // Store original message in KV for later retrieval when user selects a repo
-    const pendingKey = `pending:${channel}:${thread_ts || ts}`;
+    const pendingKey = `pending:${channel}:${threadTs || ts}`;
     await env.SLACK_KV.put(
       pendingKey,
       JSON.stringify({
         message: messageText,
-        userId: event.user,
+        userId: user,
         previousMessages,
         channelName,
         channelDescription,
@@ -996,7 +1431,7 @@ async function handleAppMention(
       channel,
       `I couldn't determine which repository you're referring to. ${result.reasoning}`,
       {
-        thread_ts: thread_ts || ts,
+        thread_ts: threadTs || ts,
         blocks: [
           {
             type: "section",
@@ -1029,6 +1464,7 @@ async function handleAppMention(
 
   // We have a confident repo match - acknowledge and start session
   const { repo } = result;
+  const threadKey = threadTs || ts;
 
   // Post initial acknowledgment
   const ackResult = await postMessage(
@@ -1036,7 +1472,7 @@ async function handleAppMention(
     channel,
     `Working on *${repo.fullName}*...`,
     {
-      thread_ts: thread_ts || ts,
+      thread_ts: threadKey,
       blocks: [
         {
           type: "section",
@@ -1050,7 +1486,6 @@ async function handleAppMention(
   );
 
   const ackTs = ackResult.ts;
-  const threadKey = thread_ts || ts;
 
   // Create session and send prompt using shared logic
   const sessionResult = await startSessionAndSendPrompt(
@@ -1059,7 +1494,7 @@ async function handleAppMention(
     channel,
     threadKey,
     messageText,
-    event.user,
+    user,
     previousMessages,
     channelName,
     channelDescription,
@@ -1101,6 +1536,84 @@ async function handleAppMention(
 
   // Post that the agent is working
   await postSessionStartedMessage(env, channel, threadKey, sessionResult.sessionId);
+}
+
+/**
+ * Handle app_mention events.
+ */
+async function handleAppMention(
+  event: {
+    type: string;
+    text: string;
+    user: string;
+    channel: string;
+    ts: string;
+    thread_ts?: string;
+  },
+  env: Env,
+  traceId?: string
+): Promise<void> {
+  // Remove the bot mention from the text
+  const messageText = stripMentions(event.text);
+
+  // Get channel context
+  let channelName: string | undefined;
+  let channelDescription: string | undefined;
+
+  try {
+    const channelInfo = await getChannelInfo(env.SLACK_BOT_TOKEN, event.channel);
+    if (channelInfo.ok && channelInfo.channel) {
+      channelName = channelInfo.channel.name;
+      channelDescription = channelInfo.channel.topic?.value || channelInfo.channel.purpose?.value;
+    }
+  } catch {
+    // Channel info not available
+  }
+
+  await handleIncomingMessage({
+    text: messageText,
+    user: event.user,
+    channel: event.channel,
+    ts: event.ts,
+    threadTs: event.thread_ts,
+    channelName,
+    channelDescription,
+    env,
+    traceId,
+  });
+}
+
+/**
+ * Handle direct messages (DMs) to the bot.
+ * Users don't need to @mention the bot in DMs.
+ */
+async function handleDirectMessage(
+  event: {
+    type: string;
+    text: string;
+    user: string;
+    channel: string;
+    ts: string;
+    thread_ts?: string;
+    channel_type?: string;
+  },
+  env: Env,
+  traceId?: string
+): Promise<void> {
+  log.info("slack.dm.received", { trace_id: traceId, user: event.user, channel: event.channel });
+
+  // Strip any @mentions (users may type "@Bot <request>" in DMs)
+  const messageText = stripMentions(event.text);
+
+  await handleIncomingMessage({
+    text: messageText,
+    user: event.user,
+    channel: event.channel,
+    ts: event.ts,
+    threadTs: event.thread_ts,
+    env,
+    traceId,
+  });
 }
 
 /**
@@ -1192,19 +1705,90 @@ async function handleRepoSelection(
  * Handle Slack interactions (buttons, select menus, etc.)
  */
 async function handleSlackInteraction(
-  payload: {
-    type: string;
-    actions?: Array<{
-      action_id: string;
-      selected_option?: { value: string };
-    }>;
-    channel?: { id: string };
-    message?: { ts: string; thread_ts?: string };
-    user?: { id: string };
-  },
+  payload: SlackInteractionPayload,
   env: Env,
   traceId?: string
 ): Promise<void> {
+  const userId = payload.user?.id;
+
+  if (payload.type === "view_submission") {
+    if (!isBranchModalCallbackId(payload.view?.callback_id) || !userId) {
+      return;
+    }
+
+    const branchRaw =
+      payload.view?.state?.values?.[BRANCH_INPUT_BLOCK_ID]?.[BRANCH_INPUT_ACTION_ID]?.value;
+    const branch = normalizeBranchPreference(branchRaw);
+
+    if (branch && !isValidBranchName(branch)) {
+      log.warn("slack.branch_pref.invalid", {
+        trace_id: traceId,
+        user_id: userId,
+        branch,
+      });
+      return;
+    }
+
+    if (payload.view?.callback_id === BRANCH_MODAL_CALLBACK_ID) {
+      const currentPrefs = await getUserPreferences(env, userId);
+      const model = getValidModelOrDefault(
+        currentPrefs?.model ?? env.DEFAULT_MODEL ?? DEFAULT_MODEL
+      );
+      const reasoningEffort =
+        currentPrefs?.reasoningEffort && isValidReasoningEffort(model, currentPrefs.reasoningEffort)
+          ? currentPrefs.reasoningEffort
+          : getDefaultReasoningEffort(model);
+
+      await saveUserPreferences(env, userId, model, reasoningEffort, branch);
+      await publishAppHome(env, userId);
+      return;
+    }
+
+    const metadataRaw = payload.view?.private_metadata;
+    let repoId: string | undefined;
+
+    if (metadataRaw) {
+      try {
+        const metadata = JSON.parse(metadataRaw) as { repoId?: string; userId?: string };
+        if (metadata.userId && metadata.userId !== userId) {
+          log.warn("slack.repo_branch_pref.user_mismatch", {
+            trace_id: traceId,
+            user_id: userId,
+            metadata_user_id: metadata.userId,
+          });
+        }
+        repoId = metadata.repoId;
+      } catch (error) {
+        log.warn("slack.repo_branch_pref.bad_metadata", {
+          trace_id: traceId,
+          user_id: userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    if (!repoId) {
+      log.warn("slack.repo_branch_pref.missing_repo", { trace_id: traceId, user_id: userId });
+      await publishAppHome(env, userId);
+      return;
+    }
+
+    const availableRepos = await getAvailableRepos(env, traceId);
+    if (!availableRepos.some((repo) => repo.id === repoId)) {
+      log.warn("slack.repo_branch_pref.unknown_repo", {
+        trace_id: traceId,
+        user_id: userId,
+        repo_id: repoId,
+      });
+      await publishAppHome(env, userId);
+      return;
+    }
+
+    await saveUserRepoBranchPreference(env, userId, repoId, branch);
+    await publishAppHome(env, userId);
+    return;
+  }
+
   if (payload.type !== "block_actions" || !payload.actions?.length) {
     return;
   }
@@ -1213,7 +1797,6 @@ async function handleSlackInteraction(
   const channel = payload.channel?.id;
   const messageTs = payload.message?.ts;
   const threadTs = payload.message?.thread_ts;
-  const userId = payload.user?.id;
 
   switch (action.action_id) {
     case "select_model": {
@@ -1221,9 +1804,11 @@ async function handleSlackInteraction(
       const selectedModel = action.selected_option?.value;
       // Validate the selected model before saving
       if (selectedModel && userId && isValidModel(selectedModel)) {
+        const currentPrefs = await getUserPreferences(env, userId);
+        const preservedBranch = getValidatedBranch(currentPrefs?.branch);
         // Reset reasoning effort to new model's default when model changes
         const newDefault = getDefaultReasoningEffort(selectedModel);
-        await saveUserPreferences(env, userId, selectedModel, newDefault);
+        await saveUserPreferences(env, userId, selectedModel, newDefault, preservedBranch);
         await publishAppHome(env, userId);
       }
       break;
@@ -1237,11 +1822,67 @@ async function handleSlackInteraction(
         const currentModel = getValidModelOrDefault(
           currentPrefs?.model ?? env.DEFAULT_MODEL ?? DEFAULT_MODEL
         );
+        const preservedBranch = getValidatedBranch(currentPrefs?.branch);
         if (isValidReasoningEffort(currentModel, selectedEffort)) {
-          await saveUserPreferences(env, userId, currentModel, selectedEffort);
+          await saveUserPreferences(env, userId, currentModel, selectedEffort, preservedBranch);
           await publishAppHome(env, userId);
         }
       }
+      break;
+    }
+
+    case "open_branch_modal": {
+      if (!userId || !payload.trigger_id) return;
+      const currentPrefs = await getUserPreferences(env, userId);
+      const currentBranch = getValidatedBranch(currentPrefs?.branch);
+      await openBranchPreferenceModal(env, userId, payload.trigger_id, currentBranch);
+      break;
+    }
+
+    case REPO_BRANCH_SELECTOR_ACTION_ID: {
+      if (!userId || !payload.trigger_id) return;
+      const repoId = action.selected_option?.value;
+      if (!repoId) return;
+
+      const repos = await getAvailableRepos(env, traceId);
+      const repo = repos.find((item) => item.id === repoId);
+      if (!repo) {
+        log.warn("slack.repo_branch_pref.repo_not_found", {
+          trace_id: traceId,
+          user_id: userId,
+          repo_id: repoId,
+        });
+        await publishAppHome(env, userId);
+        return;
+      }
+
+      const currentRepoBranch = await getUserRepoBranchPreference(env, userId, repo.id);
+      await openRepoBranchPreferenceModal(env, userId, payload.trigger_id, repo, currentRepoBranch);
+      break;
+    }
+
+    case CLEAR_REPO_BRANCH_ACTION_ID: {
+      if (!userId) return;
+      const repoId = action.value ?? action.selected_option?.value;
+      if (!repoId) return;
+
+      await saveUserRepoBranchPreference(env, userId, repoId, undefined);
+      await publishAppHome(env, userId);
+      break;
+    }
+
+    case "clear_branch_preference": {
+      if (!userId) return;
+      const currentPrefs = await getUserPreferences(env, userId);
+      const model = getValidModelOrDefault(
+        currentPrefs?.model ?? env.DEFAULT_MODEL ?? DEFAULT_MODEL
+      );
+      const reasoningEffort =
+        currentPrefs?.reasoningEffort && isValidReasoningEffort(model, currentPrefs.reasoningEffort)
+          ? currentPrefs.reasoningEffort
+          : getDefaultReasoningEffort(model);
+      await saveUserPreferences(env, userId, model, reasoningEffort, undefined);
+      await publishAppHome(env, userId);
       break;
     }
 

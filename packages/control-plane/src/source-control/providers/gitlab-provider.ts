@@ -64,7 +64,6 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
   private headers(token: string): Record<string, string> {
     return {
       Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
       "User-Agent": USER_AGENT,
     };
   }
@@ -148,7 +147,7 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
       `${GITLAB_API_BASE}/projects/${projectPath}/merge_requests`,
       {
         method: "POST",
-        headers: this.headers(auth.token),
+        headers: { ...this.headers(auth.token), "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
       }
     );

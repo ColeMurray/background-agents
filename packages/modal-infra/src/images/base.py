@@ -28,9 +28,13 @@ CODE_SERVER_VERSION = "4.109.5"
 # agent-browser version to install (pinned for reproducible images)
 AGENT_BROWSER_VERSION = "0.21.2"
 
+# ttyd version to install (pinned for reproducible images)
+TTYD_VERSION = "1.7.7"
+TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
+
 # Cache buster - change this to force Modal image rebuild
-# v44: replace Playwright with agent-browser for browser automation
-CACHE_BUSTER = "v44-agent-browser"
+# v45: add ttyd web terminal
+CACHE_BUSTER = "v45-ttyd"
 
 # Base image with all development tools
 base_image = (
@@ -117,6 +121,15 @@ base_image = (
         "dpkg -i /tmp/code-server.deb",
         "rm /tmp/code-server.deb",
         "code-server --version",
+    )
+    # Install ttyd web terminal (direct binary from GitHub releases)
+    .run_commands(
+        f"curl -fsSL -o /usr/local/bin/ttyd"
+        f" https://github.com/tsl0922/ttyd/releases/download/{TTYD_VERSION}"
+        f"/ttyd.x86_64",
+        f'echo "{TTYD_SHA256}  /usr/local/bin/ttyd" | sha256sum -c -',
+        "chmod +x /usr/local/bin/ttyd",
+        "ttyd --version",
     )
     # Install agent-browser CLI and download Chromium
     .run_commands(

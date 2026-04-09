@@ -184,6 +184,7 @@ Wide events use `outcome` to indicate result:
 | Event                             | Level       | Key Fields                                                                                    | Description                      |
 | --------------------------------- | ----------- | --------------------------------------------------------------------------------------------- | -------------------------------- |
 | `http.request`                    | info, warn  | `trace_id`, `http_method`, `http_path`, `http_status`, `event_type`, `outcome`, `duration_ms` | One per /events or /interactions |
+| `slack.dm.received`               | info        | `trace_id`, `user`, `channel`                                                                 | Direct message received          |
 | `slack.event.duplicate`           | debug       | `trace_id`, `event_id`                                                                        | Deduplicated Slack event         |
 | `thread_session.stale`            | warn        | `trace_id`, `session_id`, `channel`, `thread_ts`                                              | Stale session in thread          |
 | `control_plane.create_session`    | info, error | `trace_id`, `repo_owner`, `repo_name`, `model`, `session_id`, `http_status`, `duration_ms`    | Session creation call            |

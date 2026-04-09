@@ -21,6 +21,7 @@ import {
   isValidReasoningEffort,
   VALID_MODELS,
   type CodeServerSettings,
+  type SandboxSettings,
   type SessionStatus,
   type CallbackContext,
   type SpawnChildSessionRequest,
@@ -34,8 +35,7 @@ import {
   parsePattern,
   json,
   error,
-  createRouteSourceControlProvider,
-  resolveInstalledRepo,
+  resolveRepoOrError,
 } from "./routes/shared";
 import { integrationSettingsRoutes } from "./routes/integration-settings";
 import { modelPreferencesRoutes } from "./routes/model-preferences";
@@ -76,6 +76,30 @@ async function resolveCodeServerEnabled(
       error: e instanceof Error ? e.message : String(e),
     });
     return false;
+  }
+}
+
+/**
+ * Resolve sandbox settings for a given repo, merging global defaults with per-repo overrides.
+ */
+async function resolveSandboxSettings(
+  db: D1Database | undefined,
+  repoOwner: string,
+  repoName: string
+): Promise<SandboxSettings> {
+  if (!db) return {};
+  const repo = `${repoOwner}/${repoName}`;
+  try {
+    const store = new IntegrationSettingsStore(db);
+    const { enabledRepos, settings } = await store.getResolvedConfig("sandbox", repo);
+    // enabledRepos: null → all repos, [] → none, [...] → allowlist
+    if (enabledRepos !== null && !enabledRepos.includes(repo)) return {};
+    return settings as SandboxSettings;
+  } catch (e) {
+    logger.warn("Failed to resolve sandbox settings, using defaults", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return {};
   }
 }
 
@@ -670,27 +694,10 @@ async function handleCreateSession(
   const repoOwner = body.repoOwner.toLowerCase();
   const repoName = body.repoName.toLowerCase();
 
-  let repoId: number;
-  let defaultBranch: string;
-  try {
-    const provider = createRouteSourceControlProvider(env);
-    const resolved = await resolveInstalledRepo(provider, repoOwner, repoName);
-    if (!resolved) {
-      return error("Repository is not installed for the GitHub App", 404);
-    }
-    repoId = resolved.repoId;
-    defaultBranch = resolved.defaultBranch;
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    logger.error("Failed to resolve repository", {
-      error: message,
-      repo_owner: repoOwner,
-      repo_name: repoName,
-    });
-    const isConfigError =
-      e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus;
-    return error(isConfigError ? message : "Failed to resolve repository", 500);
-  }
+  const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
+  if (resolved instanceof Response) return resolved;
+
+  const { repoId, defaultBranch } = resolved;
 
   const userId = body.userId || "anonymous";
   const scmLogin = body.scmLogin;
@@ -739,8 +746,11 @@ async function handleCreateSession(
       ? body.reasoningEffort
       : null;
 
-  // Resolve code-server integration setting for this repo
-  const codeServerEnabled = await resolveCodeServerEnabled(env.DB, repoOwner, repoName);
+  // Resolve code-server integration setting and sandbox settings for this repo
+  const [codeServerEnabled, sandboxSettings] = await Promise.all([
+    resolveCodeServerEnabled(env.DB, repoOwner, repoName),
+    resolveSandboxSettings(env.DB, repoOwner, repoName),
+  ]);
 
   // Initialize session with user info and optional encrypted token
   const initResponse = await stub.fetch(
@@ -768,6 +778,7 @@ async function handleCreateSession(
           scmTokenExpiresAt,
           scmUserId,
           codeServerEnabled,
+          sandboxSettings,
         }),
       },
       ctx
@@ -1443,12 +1454,11 @@ async function handleSpawnChild(
     model,
   });
 
-  // Resolve code-server integration setting for child (same repo as parent)
-  const childCodeServerEnabled = await resolveCodeServerEnabled(
-    env.DB,
-    spawnContext.repoOwner,
-    spawnContext.repoName
-  );
+  // Resolve code-server integration setting and sandbox settings for child (same repo as parent)
+  const [childCodeServerEnabled, childSandboxSettings] = await Promise.all([
+    resolveCodeServerEnabled(env.DB, spawnContext.repoOwner, spawnContext.repoName),
+    resolveSandboxSettings(env.DB, spawnContext.repoOwner, spawnContext.repoName),
+  ]);
 
   // Initialize child DO
   const initResponse = await childStub.fetch(
@@ -1478,6 +1488,7 @@ async function handleSpawnChild(
           spawnSource: "agent",
           spawnDepth: childDepth,
           codeServerEnabled: childCodeServerEnabled,
+          sandboxSettings: childSandboxSettings,
         }),
       },
       ctx

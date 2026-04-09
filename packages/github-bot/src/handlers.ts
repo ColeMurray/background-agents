@@ -8,7 +8,7 @@ import type {
 import type { Logger } from "./logger";
 import { generateInstallationToken, postReaction, checkSenderPermission } from "./github-auth";
 import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
-import { generateInternalToken } from "./utils/internal";
+import { buildInternalAuthHeaders } from "./utils/internal";
 import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
 
 export type HandlerResult =
@@ -16,11 +16,9 @@ export type HandlerResult =
   | { outcome: "skipped"; skip_reason: string };
 
 async function getAuthHeaders(env: Env, traceId: string): Promise<Record<string, string>> {
-  const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
   return {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${token}`,
-    "x-trace-id": traceId,
+    ...(await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId)),
   };
 }
 
