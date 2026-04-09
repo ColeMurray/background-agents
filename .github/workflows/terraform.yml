@@ -213,6 +213,10 @@ jobs:
           TF_VAR_linear_webhook_secret: ${{ secrets.LINEAR_WEBHOOK_SECRET }}
           TF_VAR_web_platform: "${{ secrets.WEB_PLATFORM || 'vercel' }}"
           TF_VAR_enable_durable_object_bindings: "${{ secrets.ENABLE_DURABLE_OBJECT_BINDINGS || 'true' }}"
+          TF_VAR_sandbox_provider: "${{ secrets.SANDBOX_PROVIDER || 'modal' }}"
+          TF_VAR_daytona_api_url: ${{ secrets.DAYTONA_API_URL }}
+          TF_VAR_daytona_api_key: ${{ secrets.DAYTONA_API_KEY }}
+          TF_VAR_daytona_base_snapshot: ${{ secrets.DAYTONA_BASE_SNAPSHOT }}
 
       - name: Post Plan Results
         uses: actions/github-script@v7
@@ -339,6 +343,10 @@ jobs:
           TF_VAR_linear_webhook_secret: ${{ secrets.LINEAR_WEBHOOK_SECRET }}
           TF_VAR_web_platform: "${{ secrets.WEB_PLATFORM || 'vercel' }}"
           TF_VAR_enable_durable_object_bindings: "${{ secrets.ENABLE_DURABLE_OBJECT_BINDINGS || 'true' }}"
+          TF_VAR_sandbox_provider: "${{ secrets.SANDBOX_PROVIDER || 'modal' }}"
+          TF_VAR_daytona_api_url: ${{ secrets.DAYTONA_API_URL }}
+          TF_VAR_daytona_api_key: ${{ secrets.DAYTONA_API_KEY }}
+          TF_VAR_daytona_base_snapshot: ${{ secrets.DAYTONA_BASE_SNAPSHOT }}
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 
