@@ -162,9 +162,9 @@ Create an R2 API Token:
 
 The control plane calls the Daytona REST API directly — no shim service to deploy.
 
-> **Important**: Unlike Modal, the Daytona provider does not automatically inject your Anthropic API
-> key into sandboxes. After deploying, you must add `ANTHROPIC_API_KEY` as a **global secret** in
-> Settings > Secrets. See [Secrets Management](SECRETS.md) for details.
+> **Important**: Unlike Modal, the Daytona provider does not automatically inject LLM API keys into
+> sandboxes. If you plan to use Claude models, add `ANTHROPIC_API_KEY` as a **global secret** in
+> Settings > Secrets after deploying. See [Secrets Management](SECRETS.md) for details.
 
 ### Anthropic
 
@@ -794,16 +794,16 @@ If the bot doesn't see the original message when tagged in a thread reply:
 
 ### "Model not found" errors (Daytona provider)
 
-If sessions fail with "Model not found" when using `sandbox_provider = "daytona"`, you need to add
-your `ANTHROPIC_API_KEY` as a global secret:
+If sessions fail with "Model not found" when using `sandbox_provider = "daytona"`, the required LLM
+API key is likely missing. Unlike Modal (which injects keys automatically), Daytona requires you to
+add them as global secrets:
 
 1. Go to **Settings > Secrets** in the web app
 2. Select **All Repositories (Global)** from the scope dropdown
-3. Add `ANTHROPIC_API_KEY` with your Anthropic API key value
+3. Add the key for your chosen provider (e.g., `ANTHROPIC_API_KEY` for Claude models)
 4. Click **Save**
 
-Unlike Modal (which injects the key automatically), Daytona requires this manual step. See
-[Secrets Management](SECRETS.md) for more on global and repository secrets.
+See [Secrets Management](SECRETS.md) for more on global and repository secrets.
 
 ### Vercel provider error when using `web_platform = "cloudflare"`
 

@@ -38,8 +38,8 @@ The most common example:
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `ANTHROPIC_API_KEY` | Required for Claude models when using the **Daytona** sandbox provider (Modal injects this automatically via its own secrets mechanism) |
 
-> **Daytona users**: You must add `ANTHROPIC_API_KEY` as a global secret after deploying. Without
-> it, sessions will fail with "Model not found." See
+> **Daytona users**: If you plan to use Claude models, you must add `ANTHROPIC_API_KEY` as a global
+> secret after deploying. Without it, Claude sessions will fail with "Model not found." See
 > [Getting Started — Daytona](GETTING_STARTED.md#daytona) for details.
 
 ### When to use repository secrets
@@ -125,9 +125,9 @@ If you try to save a reserved key, the UI will show a validation error.
 
 ### "Model not found" errors (Daytona provider)
 
-If you're using `sandbox_provider = "daytona"` and see "Model not found" errors, add your
-`ANTHROPIC_API_KEY` as a global secret in Settings. Unlike Modal, the Daytona provider requires this
-key to be configured manually.
+If you're using `sandbox_provider = "daytona"` with Claude models and see "Model not found" errors,
+add your `ANTHROPIC_API_KEY` as a global secret in Settings. Unlike Modal, the Daytona provider does
+not inject LLM API keys automatically.
 
 ### Secret not appearing in sandbox
 

@@ -438,8 +438,8 @@ You can configure environment variables (API keys, credentials) at global or per
 - Injected into sandboxes at startup
 - Never exposed to clients (only key names are visible)
 
-> **Daytona users**: `ANTHROPIC_API_KEY` must be added as a global secret for Claude models to work.
-> Modal injects this key automatically via its own secrets mechanism.
+> **Daytona users**: LLM API keys (e.g., `ANTHROPIC_API_KEY` for Claude models) must be added as
+> global secrets. Modal injects these automatically via its own secrets mechanism.
 
 See [Secrets Management](./SECRETS.md) for setup instructions.
 
