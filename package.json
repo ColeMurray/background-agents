@@ -49,8 +49,8 @@
       "prettier --write"
     ],
     "packages/modal-infra/**/*.py": [
-      "ruff check --fix",
-      "ruff format"
+      "packages/modal-infra/.venv/bin/ruff check --fix",
+      "packages/modal-infra/.venv/bin/ruff format"
     ]
   }
 }
