@@ -17,7 +17,7 @@ vi.mock("next/link", () => ({
 }));
 
 describe("MetadataSection", () => {
-  it("renders PR badge data from shared artifact metadata keys", () => {
+  it("renders PR badge data from artifact metadata keys", () => {
     render(
       <MetadataSection
         createdAt={Date.now()}
@@ -28,8 +28,8 @@ describe("MetadataSection", () => {
             type: "pr",
             url: "https://github.com/acme/web-app/pull/42",
             metadata: {
-              number: 42,
-              state: "open",
+              prNumber: 42,
+              prState: "open",
             },
             createdAt: 1234,
           },

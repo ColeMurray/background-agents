@@ -110,16 +110,37 @@ function toUiSandboxEvent(event: SharedSandboxEvent): SandboxEvent {
   };
 }
 
+type PrState = NonNullable<NonNullable<Artifact["metadata"]>["prState"]>;
+const PR_STATES = new Set<string>(["open", "merged", "closed", "draft"]);
+
 function toUiArtifact(artifact: SessionArtifact): Artifact {
+  const meta = artifact.metadata as Record<string, unknown> | null;
   return {
     id: artifact.id,
     type: artifact.type as Artifact["type"],
     url: artifact.url,
     createdAt: artifact.createdAt,
-    metadata:
-      artifact.metadata && typeof artifact.metadata === "object"
-        ? (artifact.metadata as Artifact["metadata"])
-        : undefined,
+    metadata: meta
+      ? {
+          prNumber: typeof meta.number === "number" ? meta.number : undefined,
+          prState:
+            typeof meta.state === "string" && PR_STATES.has(meta.state)
+              ? (meta.state as PrState)
+              : undefined,
+          mode: meta.mode === "manual_pr" ? "manual_pr" : undefined,
+          createPrUrl: typeof meta.createPrUrl === "string" ? meta.createPrUrl : undefined,
+          head: typeof meta.head === "string" ? meta.head : undefined,
+          base: typeof meta.base === "string" ? meta.base : undefined,
+          provider: typeof meta.provider === "string" ? meta.provider : undefined,
+          filename: typeof meta.filename === "string" ? meta.filename : undefined,
+          previewStatus:
+            meta.previewStatus === "active" ||
+            meta.previewStatus === "outdated" ||
+            meta.previewStatus === "stopped"
+              ? meta.previewStatus
+              : undefined,
+        }
+      : undefined,
   };
 }
 

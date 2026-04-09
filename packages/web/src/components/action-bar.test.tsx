@@ -24,8 +24,8 @@ describe("ActionBar", () => {
             type: "pr",
             url: "https://github.com/acme/web-app/pull/42",
             metadata: {
-              number: 42,
-              state: "open",
+              prNumber: 42,
+              prState: "open",
               head: "feature/test",
               base: "main",
             },

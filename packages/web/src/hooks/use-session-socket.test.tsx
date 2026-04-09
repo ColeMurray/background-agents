@@ -151,12 +151,12 @@ describe("useSessionSocket", () => {
           id: "artifact-pr-1",
           type: "pr",
           url: "https://github.com/acme/web-app/pull/42",
-          metadata: {
-            number: 42,
-            state: "open",
+          metadata: expect.objectContaining({
+            prNumber: 42,
+            prState: "open",
             head: "feature/test",
             base: "main",
-          },
+          }),
           createdAt: 1234,
         },
       ]);
@@ -284,20 +284,20 @@ describe("useSessionSocket", () => {
           id: "artifact-pr-2",
           type: "pr",
           url: "https://github.com/acme/web-app/pull/2",
-          metadata: {
-            number: 2,
-            state: "draft",
-          },
+          metadata: expect.objectContaining({
+            prNumber: 2,
+            prState: "draft",
+          }),
           createdAt: 200,
         },
         {
           id: "artifact-pr-1",
           type: "pr",
           url: "https://github.com/acme/web-app/pull/1-updated",
-          metadata: {
-            number: 1,
-            state: "closed",
-          },
+          metadata: expect.objectContaining({
+            prNumber: 1,
+            prState: "closed",
+          }),
           createdAt: 300,
         },
       ]);
