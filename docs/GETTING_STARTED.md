@@ -124,7 +124,10 @@ Create an R2 API Token:
 
 ### Vercel (only if `web_platform = "vercel"`)
 
-> Skip this section if you're deploying the web app to Cloudflare Workers.
+> Skip this section if you're deploying the web app to Cloudflare Workers. **Important**: Do not set
+> `vercel_api_token` or `vercel_team_id` to empty strings in your `terraform.tfvars` — leave them
+> unset so the dummy defaults are used. The Vercel Terraform provider validates the token on init
+> even when no Vercel resources are created.
 
 1. Go to [Vercel Account Settings → Tokens](https://vercel.com/account/tokens)
 2. Create a new token with full access
@@ -331,6 +334,7 @@ cloudflare_worker_subdomain = "your-subdomain"  # e.g., "twilight-unit-b2cf" (wi
 web_platform                = "vercel"
 
 # Vercel (only required when web_platform = "vercel")
+# If using Cloudflare, do NOT set these — leave them out so the dummy defaults are used.
 vercel_api_token            = "your-vercel-token"
 vercel_team_id              = "team_xxxxx"       # Your Vercel ID (even personal accounts have one)
 modal_token_id              = "your-modal-token-id"
@@ -778,6 +782,15 @@ If the bot doesn't see the original message when tagged in a thread reply:
 4. Check that `github_bot_username` matches your App's bot login (e.g., `my-app[bot]`)
 5. For PR reviews, ensure the bot is assigned as a reviewer (not just mentioned)
 6. For comment actions, ensure the bot is @mentioned in a **PR** comment (not an issue)
+
+### Vercel provider error when using `web_platform = "cloudflare"`
+
+The Vercel Terraform provider validates its API token on initialization, even when no Vercel
+resources are created. If you set `vercel_api_token = ""` in your `terraform.tfvars`, the provider
+will reject it. **Fix**: Remove the `vercel_api_token` and `vercel_team_id` lines from your
+`terraform.tfvars` entirely — the built-in defaults (`"unused"`) satisfy the provider's non-empty
+validation. This is a known Terraform limitation (providers validate credentials on init regardless
+of whether any resources use them).
 
 ### Durable Objects / Service Binding errors
 
