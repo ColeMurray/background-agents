@@ -27,12 +27,16 @@ cloudflare_account_id = ""
 cloudflare_worker_subdomain = ""
 
 # Vercel API token
+# Only required when web_platform = "vercel"
 # Create at: https://vercel.com/account/tokens
-vercel_api_token = ""
+# NOTE: Due to a Terraform provider limitation, the Vercel provider validates this
+# token even when web_platform = "cloudflare". If you're not using Vercel, leave
+# these commented out to use the built-in dummy defaults.
+# vercel_api_token = ""
 
 # Vercel team/account ID (found in Account Settings -> "Your ID")
 # Even personal accounts have an ID (usually starts with "team_")
-vercel_team_id = ""  # e.g., "team_xxxxxxxxxxxxxxxxxxxx"
+# vercel_team_id = ""  # e.g., "team_xxxxxxxxxxxxxxxxxxxx"
 
 # Modal API token
 # Only required when sandbox_provider = "modal"

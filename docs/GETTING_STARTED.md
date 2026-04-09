@@ -124,7 +124,10 @@ Create an R2 API Token:
 
 ### Vercel (only if `web_platform = "vercel"`)
 
-> Skip this section if you're deploying the web app to Cloudflare Workers.
+> Skip this section if you're deploying the web app to Cloudflare Workers. **Important**: Do not set
+> `vercel_api_token` or `vercel_team_id` to empty strings in your `terraform.tfvars` — leave them
+> unset so the dummy defaults are used. The Vercel Terraform provider validates the token on init
+> even when no Vercel resources are created.
 
 1. Go to [Vercel Account Settings → Tokens](https://vercel.com/account/tokens)
 2. Create a new token with full access
@@ -158,6 +161,10 @@ Create an R2 API Token:
 5. Set `daytona_api_url`, `daytona_api_key`, and `daytona_base_snapshot` in `terraform.tfvars`
 
 The control plane calls the Daytona REST API directly — no shim service to deploy.
+
+> **Important**: Unlike Modal, the Daytona provider does not automatically inject LLM API keys into
+> sandboxes. If you plan to use Claude models, add `ANTHROPIC_API_KEY` as a **global secret** in
+> Settings > Secrets after deploying. See [Secrets Management](SECRETS.md) for details.
 
 ### Anthropic
 
@@ -331,11 +338,17 @@ cloudflare_worker_subdomain = "your-subdomain"  # e.g., "twilight-unit-b2cf" (wi
 web_platform                = "vercel"
 
 # Vercel (only required when web_platform = "vercel")
+# If using Cloudflare, do NOT set these — leave them out so the dummy defaults are used.
 vercel_api_token            = "your-vercel-token"
 vercel_team_id              = "team_xxxxx"       # Your Vercel ID (even personal accounts have one)
 modal_token_id              = "your-modal-token-id"
 modal_token_secret          = "your-modal-token-secret"
 modal_workspace             = "your-modal-workspace"
+
+# Daytona (only required when sandbox_provider = "daytona")
+# daytona_api_url           = "https://app.daytona.io/api"
+# daytona_api_key           = "your-daytona-api-key"
+# daytona_base_snapshot     = "your-snapshot-name"
 
 # GitHub App (used for both OAuth and repository access)
 github_client_id     = "Iv1.abc123..."           # From GitHub App settings
@@ -778,6 +791,28 @@ If the bot doesn't see the original message when tagged in a thread reply:
 4. Check that `github_bot_username` matches your App's bot login (e.g., `my-app[bot]`)
 5. For PR reviews, ensure the bot is assigned as a reviewer (not just mentioned)
 6. For comment actions, ensure the bot is @mentioned in a **PR** comment (not an issue)
+
+### "Model not found" errors (Daytona provider)
+
+If sessions fail with "Model not found" when using `sandbox_provider = "daytona"`, the required LLM
+API key is likely missing. Unlike Modal (which injects keys automatically), Daytona requires you to
+add them as global secrets:
+
+1. Go to **Settings > Secrets** in the web app
+2. Select **All Repositories (Global)** from the scope dropdown
+3. Add the key for your chosen provider (e.g., `ANTHROPIC_API_KEY` for Claude models)
+4. Click **Save**
+
+See [Secrets Management](SECRETS.md) for more on global and repository secrets.
+
+### Vercel provider error when using `web_platform = "cloudflare"`
+
+The Vercel Terraform provider validates its API token on initialization, even when no Vercel
+resources are created. If you set `vercel_api_token = ""` in your `terraform.tfvars`, the provider
+will reject it. **Fix**: Remove the `vercel_api_token` and `vercel_team_id` lines from your
+`terraform.tfvars` entirely — the built-in defaults (`"unused"`) satisfy the provider's non-empty
+validation. This is a known Terraform limitation (providers validate credentials on init regardless
+of whether any resources use them).
 
 ### Durable Objects / Service Binding errors
 

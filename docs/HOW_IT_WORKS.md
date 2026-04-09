@@ -147,7 +147,7 @@ development environment.
 Open-Inspect supports two backend patterns:
 
 - **Modal**: near-instant startup plus filesystem snapshot restore
-- **Daytona**: persistent stop/start sandboxes resumed through an external shim service
+- **Daytona**: persistent stop/start sandboxes via direct REST API calls
 
 Modal is still the only backend with repo-image builds and live filesystem snapshot restore. Daytona
 uses persistent sandboxes instead: the control plane stops the sandbox on inactivity or stale
@@ -428,13 +428,20 @@ was built for internal use where all employees have access to company repositori
 | Sandbox Auth Token | Authenticate sandbox → control plane | Single session                   |
 | WebSocket Token    | Authenticate client connections      | Single session                   |
 
-### Repo-Scoped Secrets
+### Secrets
 
-You can configure environment variables (API keys, credentials) per repository:
+You can configure environment variables (API keys, credentials) at global or per-repository scope:
 
+- **Global secrets** apply to all repositories (e.g., `ANTHROPIC_API_KEY`)
+- **Repository secrets** apply to a single repo and override global secrets with the same key
 - Stored encrypted (AES-256-GCM) in D1 database
 - Injected into sandboxes at startup
 - Never exposed to clients (only key names are visible)
+
+> **Daytona users**: LLM API keys (e.g., `ANTHROPIC_API_KEY` for Claude models) must be added as
+> global secrets. Modal injects these automatically via its own secrets mechanism.
+
+See [Secrets Management](./SECRETS.md) for setup instructions.
 
 ### Deployment Recommendations
 
