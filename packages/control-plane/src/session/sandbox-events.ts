@@ -68,6 +68,13 @@ export class SessionSandboxEventProcessor {
 
     if (event.type === "step_start" || event.type === "step_finish") {
       this.deps.updateLastActivity(now);
+      if (
+        event.type === "step_finish" &&
+        typeof event.cost === "number" &&
+        Number.isFinite(event.cost)
+      ) {
+        this.deps.repository.addSessionCost(event.cost);
+      }
       this.deps.broadcast({ type: "sandbox_event", event });
       return;
     }

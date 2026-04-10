@@ -75,6 +75,7 @@ export function SessionRightSidebarContent({
           repoName={sessionState.repoName}
           artifacts={artifacts}
           parentSessionId={sessionState.parentSessionId}
+          totalCost={sessionState.totalCost}
         />
       </div>
 

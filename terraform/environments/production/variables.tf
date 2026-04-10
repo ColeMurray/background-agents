@@ -25,14 +25,14 @@ variable "cloudflare_worker_subdomain" {
 }
 
 variable "vercel_api_token" {
-  description = "Vercel API token (required only when web_platform = 'vercel')"
+  description = "Vercel API token (required only when web_platform = 'vercel'). Do NOT set to empty string — the Vercel provider validates this on init even when no Vercel resources are created. Leave unset to use the dummy default."
   type        = string
   sensitive   = true
   default     = "unused"
 }
 
 variable "vercel_team_id" {
-  description = "Vercel team ID (required only when web_platform = 'vercel')"
+  description = "Vercel team ID (required only when web_platform = 'vercel'). Leave unset when using Cloudflare."
   type        = string
   default     = "unused"
 }

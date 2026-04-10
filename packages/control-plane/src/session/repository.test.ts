@@ -152,6 +152,16 @@ describe("SessionRepository", () => {
     });
   });
 
+  describe("addSessionCost", () => {
+    it("increments total_cost for the current session", () => {
+      repo.addSessionCost(0.0123);
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("SET total_cost = total_cost + ?");
+      expect(mock.calls[0].params).toEqual([0.0123]);
+    });
+  });
+
   // === SANDBOX ===
 
   describe("getSandbox", () => {

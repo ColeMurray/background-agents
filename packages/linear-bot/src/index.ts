@@ -48,9 +48,10 @@ function isAgentSessionWebhookPayload(payload: unknown): payload is AgentSession
   const type = readStringField(payload, "type");
   const action = readStringField(payload, "action");
   const organizationId = readStringField(payload, "organizationId");
+  const webhookId = readStringField(payload, "webhookId");
   const agentSession = payload.agentSession;
 
-  if (!type || !action || !organizationId || !isObjectRecord(agentSession)) {
+  if (!type || !action || !organizationId || !isObjectRecord(agentSession) || !webhookId) {
     return false;
   }
 
@@ -128,24 +129,20 @@ app.post("/webhook", async (c) => {
   const action = readStringField(payload, "action") ?? "unknown";
 
   if (eventType === "AgentSessionEvent") {
-    // Deduplicate: use agentSession.id + action as key
-    const agentSession = isObjectRecord(payload.agentSession) ? payload.agentSession : undefined;
-    if (agentSession) {
-      const agentSessionId = readStringField(agentSession, "id");
-      if (!agentSessionId) {
-        log.warn("webhook.invalid_payload", {
-          trace_id: traceId,
-          reason: "missing_agent_session_id",
-        });
-        return c.json({ error: "Invalid payload" }, 400);
-      }
+    // Deduplicate by Linear webhook delivery ID.
+    const webhookId = readStringField(payload, "webhookId");
+    if (!webhookId) {
+      log.warn("webhook.invalid_payload", {
+        trace_id: traceId,
+        reason: "missing_webhook_id",
+      });
+      return c.json({ error: "Invalid payload" }, 400);
+    }
 
-      const eventKey = `${agentSessionId}:${action}`;
-      const isDuplicate = await isDuplicateEvent(c.env, eventKey);
-      if (isDuplicate) {
-        log.info("webhook.deduplicated", { trace_id: traceId, event_key: eventKey });
-        return c.json({ ok: true, skipped: true, reason: "duplicate" });
-      }
+    const isDuplicate = await isDuplicateEvent(c.env, webhookId);
+    if (isDuplicate) {
+      log.info("webhook.deduplicated", { trace_id: traceId, event_key: webhookId });
+      return c.json({ ok: true, skipped: true, reason: "duplicate" });
     }
 
     if (!isAgentSessionWebhookPayload(payload)) {

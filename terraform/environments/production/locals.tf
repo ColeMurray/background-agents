@@ -1,6 +1,6 @@
 locals {
-  name_suffix = var.deployment_name
-  use_modal_backend = var.sandbox_provider == "modal"
+  name_suffix         = var.deployment_name
+  use_modal_backend   = var.sandbox_provider == "modal"
   use_daytona_backend = var.sandbox_provider == "daytona"
 
   # URLs for cross-service configuration

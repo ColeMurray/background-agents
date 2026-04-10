@@ -16,7 +16,7 @@ resource "null_resource" "web_app_cloudflare_build" {
 
     environment = {
       # NEXT_PUBLIC_* vars must be set at build time (inlined into client bundle)
-      NEXT_PUBLIC_WS_URL          = local.ws_url
+      NEXT_PUBLIC_WS_URL           = local.ws_url
       NEXT_PUBLIC_SANDBOX_PROVIDER = var.sandbox_provider
     }
   }

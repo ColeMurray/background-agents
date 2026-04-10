@@ -195,8 +195,9 @@ async function handleFollowUp(
   const existingSession = await lookupIssueSession(env, issue.id);
   if (!existingSession) return;
 
-  const followUpContent = agentActivity?.body || comment?.body || "Follow-up on the issue.";
-  const followUpMetadata = agentActivity?.body
+  const followUpContent =
+    agentActivity?.content?.body || comment?.body || "Follow-up on the issue.";
+  const followUpMetadata = agentActivity?.content?.body
     ? { followUpSource: "linear_agent_activity", followUpAuthor: "linear" }
     : { followUpSource: "linear_comment", followUpAuthor: "unknown" };
 
