@@ -130,6 +130,36 @@ describe("normalizeSentryEvent", () => {
     expect(normalizeSentryEvent(warningPayload)).toBeNull();
   });
 
+  it("returns null for resolved issue action", () => {
+    const resolvedPayload = {
+      ...issueAlertPayload,
+      action: "resolved",
+    };
+    expect(normalizeSentryEvent(resolvedPayload)).toBeNull();
+  });
+
+  it("returns null for issue with resolved status", () => {
+    const resolvedPayload = {
+      ...issueAlertPayload,
+      data: {
+        ...issueAlertPayload.data,
+        issue: { ...issueAlertPayload.data.issue, status: "resolved" },
+      },
+    };
+    expect(normalizeSentryEvent(resolvedPayload)).toBeNull();
+  });
+
+  it("returns null for issue with ignored status", () => {
+    const ignoredPayload = {
+      ...issueAlertPayload,
+      data: {
+        ...issueAlertPayload.data,
+        issue: { ...issueAlertPayload.data.issue, status: "ignored" },
+      },
+    };
+    expect(normalizeSentryEvent(ignoredPayload)).toBeNull();
+  });
+
   it("returns null for unrecognized payload shapes", () => {
     expect(normalizeSentryEvent({ action: "unknown" })).toBeNull();
     expect(normalizeSentryEvent({})).toBeNull();

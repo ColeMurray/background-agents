@@ -80,6 +80,12 @@ export function normalizeSentryEvent(
   if (isIssueAlertPayload(payload)) {
     const p = payload as unknown as SentryIssueAlertPayload;
     const issue = p.data.issue;
+
+    // Skip resolved/ignored issues — only act on new or regressed issues
+    if (p.action === "resolved" || issue.status === "resolved" || issue.status === "ignored") {
+      return null;
+    }
+
     const isRegression = p.action === "regression" || issue.status === "regressed";
     const eventType = isRegression ? "issue.regression" : "issue.created";
     const triggerKey = isRegression
