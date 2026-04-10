@@ -153,12 +153,13 @@ describe("SessionRepository", () => {
   });
 
   describe("addSessionCost", () => {
-    it("increments total_cost for the current session", () => {
-      repo.addSessionCost(0.0123);
+    it("increments total_cost and updates updated_at for the current session", () => {
+      repo.addSessionCost(0.0123, 5000);
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("SET total_cost = total_cost + ?");
-      expect(mock.calls[0].params).toEqual([0.0123]);
+      expect(mock.calls[0].query).toContain("updated_at = ?");
+      expect(mock.calls[0].params).toEqual([0.0123, 5000]);
     });
   });
 

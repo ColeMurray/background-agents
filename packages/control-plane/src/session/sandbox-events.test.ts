@@ -117,7 +117,7 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.addSessionCost).toHaveBeenCalledWith(0.0123);
+    expect(h.repository.addSessionCost).toHaveBeenCalledWith(0.0123, expect.any(Number));
     expect(h.repository.createEvent).not.toHaveBeenCalled();
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
   });
@@ -136,6 +136,22 @@ describe("SessionSandboxEventProcessor", () => {
 
     expect(h.repository.addSessionCost).not.toHaveBeenCalled();
     expect(h.repository.createEvent).not.toHaveBeenCalled();
+    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+  });
+
+  it("does not add session cost for step_finish with negative cost", async () => {
+    const h = createProcessor();
+    const event: SandboxEvent = {
+      type: "step_finish",
+      messageId: "msg-1",
+      sandboxId: "sb-1",
+      timestamp: 1000,
+      cost: -0.05,
+    };
+
+    await h.processor.processSandboxEvent(event);
+
+    expect(h.repository.addSessionCost).not.toHaveBeenCalled();
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
   });
 
