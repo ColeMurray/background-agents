@@ -80,7 +80,6 @@ jobs:
         id: fmt
         run: terraform fmt -check -recursive
         working-directory: terraform
-        continue-on-error: true
 
       - name: Terraform Init
         id: init
