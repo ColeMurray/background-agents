@@ -41,7 +41,7 @@ concurrency:
   cancel-in-progress: false # Don't cancel terraform operations
 
 env:
-  TF_VERSION: "1.9.0"
+  TF_VERSION: "1.14.8"
   TF_WORKING_DIR: terraform/environments/production
 
 jobs:
