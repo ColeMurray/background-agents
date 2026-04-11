@@ -186,7 +186,9 @@ class AgentBridge:
         # Session state
         self.opencode_session_id: str | None = None
         self.session_id_file = Path(tempfile.gettempdir()) / "opencode-session-id"
-        self.current_message_id_file = Path(tempfile.gettempdir()) / "openinspect-current-message-id"
+        self.current_message_id_file = (
+            Path(tempfile.gettempdir()) / "openinspect-current-message-id"
+        )
         self.repo_path = Path("/workspace")
 
         # HTTP client for OpenCode API
