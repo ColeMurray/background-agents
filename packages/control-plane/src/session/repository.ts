@@ -292,12 +292,13 @@ export class SessionRepository {
     );
   }
 
-  addSessionCost(cost: number): void {
+  addSessionCost(cost: number, updatedAt: number): void {
     this.sql.exec(
       `UPDATE session
-       SET total_cost = total_cost + ?
+       SET total_cost = total_cost + ?, updated_at = ?
        WHERE id = (SELECT id FROM session LIMIT 1)`,
-      cost
+      cost,
+      updatedAt
     );
   }
 

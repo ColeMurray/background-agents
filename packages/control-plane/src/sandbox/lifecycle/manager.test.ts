@@ -51,6 +51,7 @@ function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
     spawn_source: "user" as const,
     spawn_depth: 0,
     code_server_enabled: 0,
+    total_cost: 0,
     sandbox_settings: null,
     created_at: Date.now() - 60000,
     updated_at: Date.now(),

@@ -219,7 +219,8 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
     if (
       event.type === "step_finish" &&
       typeof event.cost === "number" &&
-      Number.isFinite(event.cost)
+      Number.isFinite(event.cost) &&
+      event.cost > 0
     ) {
       const stepCost = event.cost;
       setSessionState((prev) =>
