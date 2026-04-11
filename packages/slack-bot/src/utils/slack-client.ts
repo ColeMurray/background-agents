@@ -198,6 +198,7 @@ export async function getThreadMessages(
     text: string;
     user?: string;
     bot_id?: string;
+    attachments?: Array<{ text?: string }>;
   }>;
   error?: string;
 }> {
@@ -217,6 +218,7 @@ export async function getThreadMessages(
       text: string;
       user?: string;
       bot_id?: string;
+      attachments?: Array<{ text?: string }>;
     }>;
     error?: string;
   }>;
@@ -237,6 +239,7 @@ export async function getUserInfo(
     profile?: {
       display_name?: string;
       real_name?: string;
+      email?: string;
     };
   };
   error?: string;
@@ -256,10 +259,71 @@ export async function getUserInfo(
       profile?: {
         display_name?: string;
         real_name?: string;
+        email?: string;
       };
     };
     error?: string;
   }>;
+}
+
+/**
+ * Download a file from Slack using the bot token for authentication.
+ *
+ * @param token - Slack bot token
+ * @param urlPrivateDownload - The url_private_download from a Slack file object
+ * @param maxSizeBytes - Maximum allowed file size in bytes
+ * @returns Object with file content and size, or null if the file is too large or download fails
+ */
+export async function downloadSlackFile(
+  token: string,
+  urlPrivateDownload: string,
+  maxSizeBytes: number
+): Promise<{ data: ArrayBuffer; size: number } | null> {
+  const response = await fetch(urlPrivateDownload, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  // Early reject via Content-Length header when available
+  const contentLength = response.headers.get("content-length");
+  if (contentLength && parseInt(contentLength, 10) > maxSizeBytes) {
+    return null;
+  }
+
+  // Stream-read with size cap to avoid buffering oversized files into memory
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return null;
+  }
+
+  const chunks: Uint8Array[] = [];
+  let totalSize = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalSize += value.byteLength;
+    if (totalSize > maxSizeBytes) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+
+  // Concatenate chunks into a single ArrayBuffer
+  const result = new Uint8Array(totalSize);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return { data: result.buffer, size: totalSize };
 }
 
 /**
