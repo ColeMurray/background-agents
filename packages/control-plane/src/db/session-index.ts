@@ -14,6 +14,11 @@ export interface SessionEntry {
   spawnDepth?: number;
   automationId?: string | null;
   automationRunId?: string | null;
+  scmLogin?: string | null;
+  totalCost?: number;
+  activeDurationMs?: number;
+  messageCount?: number;
+  prCount?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -32,6 +37,11 @@ interface SessionRow {
   spawn_depth: number;
   automation_id: string | null;
   automation_run_id: string | null;
+  scm_login: string | null;
+  total_cost: number;
+  active_duration_ms: number;
+  message_count: number;
+  pr_count: number;
   created_at: number;
   updated_at: number;
 }
@@ -66,6 +76,11 @@ function toEntry(row: SessionRow): SessionEntry {
     spawnDepth: row.spawn_depth,
     automationId: row.automation_id,
     automationRunId: row.automation_run_id,
+    scmLogin: row.scm_login,
+    totalCost: row.total_cost,
+    activeDurationMs: row.active_duration_ms,
+    messageCount: row.message_count,
+    prCount: row.pr_count,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -77,8 +92,8 @@ export class SessionIndexStore {
   async create(session: SessionEntry): Promise<void> {
     await this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         session.id,
@@ -94,6 +109,7 @@ export class SessionIndexStore {
         session.spawnDepth ?? 0,
         session.automationId ?? null,
         session.automationRunId ?? null,
+        session.scmLogin ?? null,
         session.createdAt,
         session.updatedAt
       )
@@ -176,6 +192,25 @@ export class SessionIndexStore {
       .bind(status, updatedAt, id, updatedAt)
       .run();
 
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  async updateMetrics(
+    id: string,
+    metrics: {
+      totalCost: number;
+      activeDurationMs: number;
+      messageCount: number;
+      prCount: number;
+    }
+  ): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE sessions SET total_cost = ?, active_duration_ms = ?, message_count = ?, pr_count = ?
+         WHERE id = ?`
+      )
+      .bind(metrics.totalCost, metrics.activeDurationMs, metrics.messageCount, metrics.prCount, id)
+      .run();
     return (result.meta?.changes ?? 0) > 0;
   }
 

@@ -819,6 +819,7 @@ async function handleCreateSession(
     reasoningEffort,
     baseBranch: body.branch || defaultBranch || "main",
     status: "created",
+    scmLogin: scmLogin || null,
     createdAt: now,
     updatedAt: now,
   });
@@ -1513,6 +1514,7 @@ async function handleSpawnChild(
     parentSessionId: parentId,
     spawnSource: "agent",
     spawnDepth: childDepth,
+    scmLogin: spawnContext.owner.scmLogin || null,
     createdAt: now,
     updatedAt: now,
   });
