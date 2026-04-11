@@ -199,6 +199,25 @@ class SandboxManager:
         ttyd_url = resolved.pop(TTYD_PROXY_PORT, None)
         extra_urls = resolved if resolved else None
 
+        # Write tunnel URLs into the sandbox so the coding agent can discover them
+        if extra_urls:
+            lines = [f"{port} {url}" for port, url in sorted(extra_urls.items())]
+            content = "\n".join(lines) + "\n"
+            try:
+                proc = await sandbox.exec.aio(
+                    "bash",
+                    "-c",
+                    f"cat > /workspace/.tunnel-urls << 'EOF'\n{content}EOF",
+                )
+                await proc.wait.aio()
+                log.info(
+                    "tunnel.urls_written",
+                    sandbox_id=sandbox_id,
+                    ports=list(extra_urls.keys()),
+                )
+            except Exception as e:
+                log.warn("tunnel.urls_write_failed", sandbox_id=sandbox_id, exc=e)
+
         return code_server_url, ttyd_url, extra_urls
 
     @staticmethod
