@@ -1465,7 +1465,7 @@ export class SessionDO extends DurableObject<Env> {
     this.ctx.waitUntil(
       sessionStore
         .updateMetrics(sessionId, {
-          totalCost: session.total_cost,
+          totalCost: session.total_cost ?? 0,
           activeDurationMs,
           messageCount,
           prCount,
