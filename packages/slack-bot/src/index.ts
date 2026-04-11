@@ -1241,6 +1241,36 @@ async function handleSlackEvent(
   // Handle app_mention events
   if (event.type === "app_mention" && event.text && event.channel && event.ts) {
     await handleAppMention(event as Required<typeof event>, env, traceId);
+    return;
+  }
+
+  // Handle thread replies in channels without @mention — if the bot has an active session
+  // for this thread, treat it as a follow-up message so users don't need to @mention every time.
+  // Skip messages containing @mentions (e.g., "<@U...>") since those are already handled
+  // by the app_mention event above and would otherwise be processed twice.
+  if (
+    event.type === "message" &&
+    !event.subtype &&
+    event.thread_ts &&
+    event.text &&
+    event.channel &&
+    event.ts &&
+    event.user &&
+    event.channel_type !== "im" && // DMs are already handled above
+    !/<@[^>]+>/.test(event.text) // Skip @mentions — handled by app_mention event
+  ) {
+    const existingSession = await lookupThreadSession(env, event.channel, event.thread_ts);
+    if (existingSession) {
+      await handleIncomingMessage({
+        text: stripMentions(event.text),
+        user: event.user,
+        channel: event.channel,
+        ts: event.ts,
+        threadTs: event.thread_ts,
+        env,
+        traceId,
+      });
+    }
   }
 }
 
