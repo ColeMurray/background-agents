@@ -16,6 +16,11 @@ type SessionRow = {
   spawn_depth: number;
   automation_id: string | null;
   automation_run_id: string | null;
+  scm_login: string | null;
+  total_cost: number;
+  active_duration_ms: number;
+  message_count: number;
+  pr_count: number;
   created_at: number;
   updated_at: number;
 };
@@ -28,6 +33,7 @@ const QUERY_PATTERNS = {
   UPDATE_STATUS: /^UPDATE sessions SET status = \?/,
   UPDATE_UPDATED_AT: /^UPDATE sessions SET updated_at = \?/,
   UPDATE_TITLE: /^UPDATE sessions SET title = \?/,
+  UPDATE_METRICS: /^UPDATE sessions SET total_cost = \?/,
   DELETE_SESSION: /^DELETE FROM sessions WHERE id = \?$/,
   SELECT_BY_PARENT:
     /^SELECT \* FROM sessions WHERE parent_session_id = \? ORDER BY created_at DESC$/,
@@ -127,6 +133,7 @@ class FakeD1Database {
         spawnDepth,
         automationId,
         automationRunId,
+        scmLogin,
         createdAt,
         updatedAt,
       ] = args as [
@@ -141,6 +148,7 @@ class FakeD1Database {
         string | null,
         "user" | "agent" | "automation",
         number,
+        string | null,
         string | null,
         string | null,
         number,
@@ -162,6 +170,11 @@ class FakeD1Database {
           spawn_depth: spawnDepth,
           automation_id: automationId,
           automation_run_id: automationRunId,
+          scm_login: scmLogin,
+          total_cost: 0,
+          active_duration_ms: 0,
+          message_count: 0,
+          pr_count: 0,
           created_at: createdAt,
           updated_at: updatedAt,
         });
@@ -195,6 +208,25 @@ class FakeD1Database {
       const id = args[0] as string;
       const existed = this.rows.delete(id);
       return { meta: { changes: existed ? 1 : 0 } };
+    }
+
+    if (QUERY_PATTERNS.UPDATE_METRICS.test(normalized)) {
+      const [totalCost, activeDurationMs, messageCount, prCount, id] = args as [
+        number,
+        number,
+        number,
+        number,
+        string,
+      ];
+      const row = this.rows.get(id);
+      if (row) {
+        row.total_cost = totalCost;
+        row.active_duration_ms = activeDurationMs;
+        row.message_count = messageCount;
+        row.pr_count = prCount;
+        return { meta: { changes: 1 } };
+      }
+      return { meta: { changes: 0 } };
     }
 
     if (QUERY_PATTERNS.UPDATE_UPDATED_AT.test(normalized)) {
@@ -320,6 +352,11 @@ describe("SessionIndexStore", () => {
         spawnDepth: 0,
         automationId: null,
         automationRunId: null,
+        scmLogin: null,
+        totalCost: 0,
+        activeDurationMs: 0,
+        messageCount: 0,
+        prCount: 0,
       });
     });
 

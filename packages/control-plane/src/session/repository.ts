@@ -565,6 +565,15 @@ export class SessionRepository {
 
   // === MESSAGES ===
 
+  getActiveDurationMs(): number {
+    const result = this.sql.exec(
+      `SELECT COALESCE(SUM(completed_at - started_at), 0) as duration_ms
+       FROM messages
+       WHERE started_at IS NOT NULL AND completed_at IS NOT NULL`
+    );
+    return (result.one() as { duration_ms: number }).duration_ms;
+  }
+
   getMessageCount(): number {
     const result = this.sql.exec(`SELECT COUNT(*) as count FROM messages`);
     return (result.one() as { count: number }).count;

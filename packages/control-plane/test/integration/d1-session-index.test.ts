@@ -117,6 +117,141 @@ describe("D1 SessionIndexStore", () => {
     expect(session!.reasoningEffort).toBeNull();
   });
 
+  it("stores and retrieves scmLogin", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+
+    await store.create({
+      id: "session-with-login",
+      title: null,
+      repoOwner: "acme",
+      repoName: "api",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "created",
+      scmLogin: "testuser",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const session = await store.get("session-with-login");
+    expect(session).not.toBeNull();
+    expect(session!.scmLogin).toBe("testuser");
+  });
+
+  it("defaults scmLogin to null when omitted", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+
+    await store.create({
+      id: "session-no-login",
+      title: null,
+      repoOwner: "acme",
+      repoName: "api",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "created",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const session = await store.get("session-no-login");
+    expect(session).not.toBeNull();
+    expect(session!.scmLogin).toBeNull();
+  });
+
+  it("updates and retrieves session metrics", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+
+    await store.create({
+      id: "session-metrics",
+      title: null,
+      repoOwner: "acme",
+      repoName: "api",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "created",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // Verify defaults
+    const before = await store.get("session-metrics");
+    expect(before!.totalCost).toBe(0);
+    expect(before!.activeDurationMs).toBe(0);
+    expect(before!.messageCount).toBe(0);
+    expect(before!.prCount).toBe(0);
+
+    // Update metrics
+    const updated = await store.updateMetrics("session-metrics", {
+      totalCost: 1.25,
+      activeDurationMs: 120000,
+      messageCount: 5,
+      prCount: 1,
+    });
+    expect(updated).toBe(true);
+
+    // Verify updated values
+    const after = await store.get("session-metrics");
+    expect(after!.totalCost).toBe(1.25);
+    expect(after!.activeDurationMs).toBe(120000);
+    expect(after!.messageCount).toBe(5);
+    expect(after!.prCount).toBe(1);
+  });
+
+  it("updateMetrics overwrites on repeated calls (last write wins)", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+
+    await store.create({
+      id: "session-metrics-overwrite",
+      title: null,
+      repoOwner: "acme",
+      repoName: "api",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "created",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await store.updateMetrics("session-metrics-overwrite", {
+      totalCost: 0.5,
+      activeDurationMs: 60000,
+      messageCount: 3,
+      prCount: 0,
+    });
+
+    await store.updateMetrics("session-metrics-overwrite", {
+      totalCost: 1.75,
+      activeDurationMs: 180000,
+      messageCount: 8,
+      prCount: 2,
+    });
+
+    const session = await store.get("session-metrics-overwrite");
+    expect(session!.totalCost).toBe(1.75);
+    expect(session!.activeDurationMs).toBe(180000);
+    expect(session!.messageCount).toBe(8);
+    expect(session!.prCount).toBe(2);
+  });
+
+  it("updateMetrics returns false for non-existent session", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const result = await store.updateMetrics("nonexistent", {
+      totalCost: 1,
+      activeDurationMs: 1000,
+      messageCount: 1,
+      prCount: 0,
+    });
+    expect(result).toBe(false);
+  });
+
   it("deletes a session", async () => {
     const store = new SessionIndexStore(env.DB);
     const now = Date.now();

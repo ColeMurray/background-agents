@@ -103,6 +103,9 @@ const WS_AUTH_TIMEOUT_MS = 30000; // 30 seconds
  */
 const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+/** Statuses that indicate a session is finished — metrics are synced to D1 on these transitions. */
+const TERMINAL_STATUSES: SessionStatus[] = ["completed", "failed", "cancelled"];
+
 export class SessionDO extends DurableObject<Env> {
   private sql: SqlStorage;
   private repository: SessionRepository;
@@ -1447,6 +1450,35 @@ export class SessionDO extends DurableObject<Env> {
     );
   }
 
+  private syncSessionMetrics(sessionId: string): void {
+    if (!this.env.DB) return;
+
+    const session = this.repository.getSession();
+    if (!session) return;
+
+    const messageCount = this.repository.getMessageCount();
+    const activeDurationMs = this.repository.getActiveDurationMs();
+    const artifacts = this.repository.listArtifacts();
+    const prCount = artifacts.filter((a) => a.type === "pr").length;
+
+    const sessionStore = new SessionIndexStore(this.env.DB);
+    this.ctx.waitUntil(
+      sessionStore
+        .updateMetrics(sessionId, {
+          totalCost: session.total_cost,
+          activeDurationMs,
+          messageCount,
+          prCount,
+        })
+        .catch((error) => {
+          this.log.error("session_index.update_metrics.background_error", {
+            session_id: sessionId,
+            error,
+          });
+        })
+    );
+  }
+
   private async transitionSessionStatus(status: SessionStatus): Promise<boolean> {
     const session = this.getSession();
     if (!session) return false;
@@ -1454,6 +1486,9 @@ export class SessionDO extends DurableObject<Env> {
     const publicSessionId = this.getPublicSessionId(session);
     if (session.status === status) {
       this.syncSessionIndexStatus(publicSessionId, status, session.updated_at);
+      if (TERMINAL_STATUSES.includes(status)) {
+        this.syncSessionMetrics(publicSessionId);
+      }
       return false;
     }
 
@@ -1462,6 +1497,10 @@ export class SessionDO extends DurableObject<Env> {
     this.syncSessionIndexStatus(publicSessionId, status, updatedAt);
 
     this.broadcast({ type: "session_status", status });
+
+    if (TERMINAL_STATUSES.includes(status)) {
+      this.syncSessionMetrics(publicSessionId);
+    }
 
     // Notify parent session (if this is a child) so its UI can refresh
     this.notifyParentOfStatusChange(session, publicSessionId, status);
