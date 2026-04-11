@@ -286,10 +286,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Modal CLI and dependencies
+      - name: Install uv, Modal CLI and dependencies
         run: |
-          pip install -e packages/sandbox-runtime
-          pip install modal fastapi pydantic httpx PyJWT
+          pip install uv
+          uv pip install --system -e packages/sandbox-runtime
+          uv pip install --system modal fastapi pydantic httpx PyJWT
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
