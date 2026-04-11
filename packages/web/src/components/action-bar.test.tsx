@@ -38,4 +38,39 @@ describe("ActionBar", () => {
     const link = screen.getByRole("link", { name: /view pr/i });
     expect(link).toHaveAttribute("href", "https://github.com/acme/web-app/pull/42");
   });
+
+  it("renders a screenshot count indicator when screenshots exist", () => {
+    render(
+      <ActionBar
+        sessionId="session-1"
+        sessionStatus="active"
+        artifacts={[
+          {
+            id: "artifact-shot-1",
+            type: "screenshot",
+            url: "sessions/session-1/media/artifact-shot-1.png",
+            metadata: {
+              objectKey: "sessions/session-1/media/artifact-shot-1.png",
+              mimeType: "image/png",
+              sizeBytes: 128,
+            },
+            createdAt: 1234,
+          },
+          {
+            id: "artifact-shot-2",
+            type: "screenshot",
+            url: "sessions/session-1/media/artifact-shot-2.png",
+            metadata: {
+              objectKey: "sessions/session-1/media/artifact-shot-2.png",
+              mimeType: "image/png",
+              sizeBytes: 256,
+            },
+            createdAt: 1235,
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByText("Screenshots (2)")).toBeInTheDocument();
+  });
 });

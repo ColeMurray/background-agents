@@ -124,6 +124,26 @@ export interface ManualPullRequestArtifactMetadata {
   provider?: string;
 }
 
+/** Metadata stored on screenshot artifacts. */
+export interface ScreenshotArtifactMetadata {
+  /** R2 object key */
+  objectKey: string;
+  /** MIME type: image/png, image/jpeg, image/webp */
+  mimeType: string;
+  /** File size in bytes */
+  sizeBytes: number;
+  /** Viewport dimensions at capture time */
+  viewport?: { width: number; height: number };
+  /** URL that was screenshotted */
+  sourceUrl?: string;
+  /** Whether this is a full-page screenshot */
+  fullPage?: boolean;
+  /** Whether element annotations are overlaid */
+  annotated?: boolean;
+  /** Caption or description provided by the agent */
+  caption?: string;
+}
+
 // Pull request info
 export interface PullRequest {
   number: number;
@@ -209,8 +229,10 @@ export type SandboxEvent =
   | {
       type: "artifact";
       artifactType: string;
+      artifactId?: string;
       url: string;
       metadata?: Record<string, unknown>;
+      messageId?: string;
       sandboxId: string;
       timestamp: number;
     }

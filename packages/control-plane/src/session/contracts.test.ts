@@ -17,6 +17,7 @@ describe("session internal endpoint contracts", () => {
       "state",
       "prompt",
       "stop",
+      "createMediaArtifact",
       "events",
       "artifacts",
       "participants",

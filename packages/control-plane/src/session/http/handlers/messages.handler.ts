@@ -17,6 +17,7 @@ const VALID_EVENT_TYPES = [
   "heartbeat",
   "push_complete",
   "push_error",
+  "artifact",
   "user_message",
 ] as const;
 

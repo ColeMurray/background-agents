@@ -50,6 +50,7 @@ export function ActionBar({
 
   const prArtifact = artifacts.find((a) => a.type === "pr");
   const previewArtifact = artifacts.find((a) => a.type === "preview");
+  const screenshotCount = artifacts.filter((artifact) => artifact.type === "screenshot").length;
   const previewUrl = getSafeExternalUrl(previewArtifact?.url);
   const prUrl = getSafeExternalUrl(prArtifact?.url);
 
@@ -122,6 +123,12 @@ export function ActionBar({
           <ArchiveIcon className="w-4 h-4" />
           <span>{isArchived ? "Unarchive" : "Archive"}</span>
         </Button>
+
+        {screenshotCount > 0 && (
+          <div className="inline-flex items-center rounded-md border border-border-muted px-3 text-sm text-muted-foreground">
+            Screenshots ({screenshotCount})
+          </div>
+        )}
 
         {/* More menu */}
         <DropdownMenu>

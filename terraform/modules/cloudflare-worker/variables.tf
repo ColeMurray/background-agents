@@ -46,6 +46,15 @@ variable "d1_databases" {
   default = []
 }
 
+variable "r2_buckets" {
+  description = "List of R2 bucket bindings"
+  type = list(object({
+    binding_name = string
+    bucket_name  = string
+  }))
+  default = []
+}
+
 variable "plain_text_bindings" {
   description = "List of plain text environment variable bindings"
   type = list(object({

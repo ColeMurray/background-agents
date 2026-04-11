@@ -1,4 +1,7 @@
-import type { SandboxEvent as SharedSandboxEvent } from "@open-inspect/shared";
+import type {
+  SandboxEvent as SharedSandboxEvent,
+  ScreenshotArtifactMetadata,
+} from "@open-inspect/shared";
 
 // Session-related type definitions
 
@@ -6,7 +9,7 @@ export interface Artifact {
   id: string;
   type: "pr" | "screenshot" | "preview" | "branch";
   url: string | null;
-  metadata?: {
+  metadata?: Partial<ScreenshotArtifactMetadata> & {
     prNumber?: number;
     prState?: "open" | "merged" | "closed" | "draft";
     mode?: "manual_pr";

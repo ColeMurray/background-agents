@@ -23,13 +23,19 @@ def _make_supervisor() -> SandboxSupervisor:
 
 
 @contextmanager
-def _patch_paths(legacy: Path | str, tools: Path | str, modules: Path | str = "/nonexistent"):
+def _patch_paths(
+    legacy: Path | str,
+    tools: Path | str,
+    modules: Path | str = "/nonexistent",
+    skills: Path | str = "/nonexistent",
+):
     """Patch Path() calls inside _install_tools to redirect to test paths."""
     with patch("sandbox_runtime.entrypoint.Path") as MockPath:
         MockPath.side_effect = lambda p: Path(
             str(p)
             .replace("/app/sandbox_runtime/plugins/inspect-plugin.js", str(legacy))
             .replace("/app/sandbox_runtime/tools", str(tools))
+            .replace("/app/sandbox_runtime/skills", str(skills))
             .replace("/usr/lib/node_modules", str(modules))
         )
         yield
@@ -176,3 +182,25 @@ class TestInstallTools:
         assert (tool_dest / "_bridge-client.js").exists()
         js_files = list(tool_dest.glob("*.js"))
         assert len(js_files) == 3
+
+    def test_skills_dir_files_copied(self, tmp_path):
+        """Bundled Skills should be copied into .opencode/skills."""
+        sup = _make_supervisor()
+        workdir = tmp_path / "workspace"
+        workdir.mkdir()
+
+        skills_dir = tmp_path / "app" / "sandbox" / "skills"
+        agent_browser_dir = skills_dir / "agent-browser"
+        agent_browser_dir.mkdir(parents=True)
+        (agent_browser_dir / "SKILL.md").write_text("# agent-browser")
+
+        with _patch_paths(
+            legacy=tmp_path / "no-legacy",
+            tools=tmp_path / "no-tools",
+            skills=skills_dir,
+        ):
+            sup._install_skills(workdir)
+
+        skill_dest = workdir / ".opencode" / "skills" / "agent-browser" / "SKILL.md"
+        assert skill_dest.exists()
+        assert skill_dest.read_text() == "# agent-browser"

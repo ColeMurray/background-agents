@@ -49,6 +49,9 @@ export interface Env {
   // D1 database
   DB: D1Database;
 
+  // R2 buckets
+  MEDIA_BUCKET: R2Bucket;
+
   // Secrets
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
@@ -59,6 +62,8 @@ export interface Env {
   MODAL_API_SECRET?: string; // Shared secret for authenticating with Modal endpoints
   DAYTONA_API_KEY?: string; // Daytona REST API key (Bearer auth + HMAC derivation)
   INTERNAL_CALLBACK_SECRET?: string; // For signing callbacks to slack-bot
+  R2_ACCESS_KEY_ID?: string; // R2 S3-compatible access key ID for presigned reads
+  R2_SECRET_ACCESS_KEY?: string; // R2 S3-compatible secret access key for presigned reads
 
   // GitHub App secrets (for git operations)
   GITHUB_APP_ID?: string;
@@ -82,6 +87,8 @@ export interface Env {
   DAYTONA_AUTO_STOP_INTERVAL_MINUTES?: string; // Daytona idle stop interval in minutes
   DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES?: string; // Daytona archive interval in minutes
   DAYTONA_TARGET?: string; // Optional Daytona target name
+  R2_BUCKET_NAME?: string; // Bound media bucket name used for presigned URLs
+  R2_ACCOUNT_ID?: string; // Cloudflare account ID used for R2 S3 endpoint
 
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)

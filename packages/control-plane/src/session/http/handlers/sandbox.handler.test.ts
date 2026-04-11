@@ -6,6 +6,9 @@ import { createSandboxHandler } from "./sandbox.handler";
 function createHandler() {
   const repository = {
     createParticipant: vi.fn(),
+    createArtifact: vi.fn(),
+    createEvent: vi.fn(),
+    getProcessingMessage: vi.fn(),
   };
   const processSandboxEvent = vi.fn();
   const getSandbox = vi.fn<() => SandboxRow | null>();
@@ -13,6 +16,7 @@ function createHandler() {
   const getSession = vi.fn<() => SessionRow | null>();
   const refreshOpenAIToken = vi.fn();
   const isOpenAISecretsConfigured = vi.fn();
+  const broadcast = vi.fn();
   const generateId = vi.fn(() => "participant-1");
   const now = vi.fn(() => 1234);
 
@@ -32,6 +36,7 @@ function createHandler() {
     getSession,
     refreshOpenAIToken,
     isOpenAISecretsConfigured,
+    broadcast,
     generateId,
     now,
     getLog: () => log,
@@ -46,6 +51,7 @@ function createHandler() {
     getSession,
     refreshOpenAIToken,
     isOpenAISecretsConfigured,
+    broadcast,
     generateId,
     now,
     log,
@@ -98,6 +104,127 @@ describe("createSandboxHandler", () => {
       role: "member",
       joinedAt: 1234,
     });
+  });
+
+  it("creates a media artifact row and matching timeline event", async () => {
+    const { handler, getSandbox, repository, broadcast, generateId } = createHandler();
+    getSandbox.mockReturnValue({
+      id: "sandbox-row-1",
+      modal_sandbox_id: "sandbox-1",
+    } as SandboxRow);
+    repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
+    generateId.mockReturnValueOnce("event-1");
+
+    const response = await handler.createMediaArtifact(
+      new Request("http://internal/internal/create-media-artifact", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          artifactId: "artifact-1",
+          artifactType: "screenshot",
+          objectKey: "sessions/session-1/media/artifact-1.png",
+          messageId: "msg-1",
+          metadata: {
+            objectKey: "sessions/session-1/media/artifact-1.png",
+            mimeType: "image/png",
+            sizeBytes: 128,
+          },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "ok", artifactId: "artifact-1" });
+    expect(repository.createArtifact).toHaveBeenCalledWith({
+      id: "artifact-1",
+      type: "screenshot",
+      url: "sessions/session-1/media/artifact-1.png",
+      metadata: JSON.stringify({
+        objectKey: "sessions/session-1/media/artifact-1.png",
+        mimeType: "image/png",
+        sizeBytes: 128,
+      }),
+      createdAt: 1234,
+    });
+    expect(repository.createEvent).toHaveBeenCalledWith({
+      id: "event-1",
+      type: "artifact",
+      data: JSON.stringify({
+        type: "artifact",
+        artifactType: "screenshot",
+        artifactId: "artifact-1",
+        url: "sessions/session-1/media/artifact-1.png",
+        metadata: {
+          objectKey: "sessions/session-1/media/artifact-1.png",
+          mimeType: "image/png",
+          sizeBytes: 128,
+        },
+        messageId: "msg-1",
+        sandboxId: "sandbox-1",
+        timestamp: 1.234,
+      }),
+      messageId: "msg-1",
+      createdAt: 1234,
+    });
+    expect(broadcast).toHaveBeenNthCalledWith(1, {
+      type: "artifact_created",
+      artifact: {
+        id: "artifact-1",
+        type: "screenshot",
+        url: "sessions/session-1/media/artifact-1.png",
+        metadata: {
+          objectKey: "sessions/session-1/media/artifact-1.png",
+          mimeType: "image/png",
+          sizeBytes: 128,
+        },
+        createdAt: 1234,
+      },
+    });
+    expect(broadcast).toHaveBeenNthCalledWith(2, {
+      type: "sandbox_event",
+      event: {
+        type: "artifact",
+        artifactType: "screenshot",
+        artifactId: "artifact-1",
+        url: "sessions/session-1/media/artifact-1.png",
+        metadata: {
+          objectKey: "sessions/session-1/media/artifact-1.png",
+          mimeType: "image/png",
+          sizeBytes: 128,
+        },
+        messageId: "msg-1",
+        sandboxId: "sandbox-1",
+        timestamp: 1.234,
+      },
+    });
+  });
+
+  it("rejects media artifacts for stale or foreign prompts", async () => {
+    const { handler, getSandbox, repository, broadcast } = createHandler();
+    getSandbox.mockReturnValue({
+      id: "sandbox-row-1",
+      modal_sandbox_id: "sandbox-1",
+    } as SandboxRow);
+    repository.getProcessingMessage.mockReturnValue({ id: "msg-active" });
+
+    const response = await handler.createMediaArtifact(
+      new Request("http://internal/internal/create-media-artifact", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          artifactId: "artifact-1",
+          artifactType: "screenshot",
+          objectKey: "sessions/session-1/media/artifact-1.png",
+          messageId: "msg-stale",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "messageId must match the active prompt" });
+    expect(repository.createArtifact).not.toHaveBeenCalled();
+    expect(repository.createEvent).not.toHaveBeenCalled();
+    expect(broadcast).not.toHaveBeenCalled();
   });
 
   it("returns 400 when sandbox token is missing", async () => {

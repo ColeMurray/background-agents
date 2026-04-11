@@ -153,6 +153,7 @@ export class SessionDO extends DurableObject<Env> {
     prompt: (request) => this.messagesHandler.enqueuePrompt(request),
     stop: () => this.messagesHandler.stop(),
     sandboxEvent: (request) => this.sandboxHandler.sandboxEvent(request),
+    createMediaArtifact: (request) => this.sandboxHandler.createMediaArtifact(request),
     listParticipants: () => this.participantsHandler.listParticipants(),
     addParticipant: (request) => this.sandboxHandler.addParticipant(request),
     listEvents: (_request, url) => this.messagesHandler.listEvents(url),
@@ -376,6 +377,7 @@ export class SessionDO extends DurableObject<Env> {
         },
         isOpenAISecretsConfigured: () =>
           Boolean(this.env.DB && this.env.REPO_SECRETS_ENCRYPTION_KEY),
+        broadcast: (message) => this.broadcast(message),
         generateId: () => generateId(),
         now: () => Date.now(),
         getLog: () => this.log,

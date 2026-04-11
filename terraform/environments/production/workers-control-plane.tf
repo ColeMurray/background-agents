@@ -37,6 +37,13 @@ module "control_plane_worker" {
     }
   ]
 
+  r2_buckets = [
+    {
+      binding_name = "MEDIA_BUCKET"
+      bucket_name  = cloudflare_r2_bucket.media.name
+    }
+  ]
+
   service_bindings = concat(
     var.enable_slack_bot ? [
       {
@@ -61,6 +68,8 @@ module "control_plane_worker" {
       { name = "WORKER_URL", value = local.control_plane_url },
       { name = "DEPLOYMENT_NAME", value = var.deployment_name },
       { name = "SANDBOX_PROVIDER", value = var.sandbox_provider },
+      { name = "R2_BUCKET_NAME", value = cloudflare_r2_bucket.media.name },
+      { name = "R2_ACCOUNT_ID", value = var.cloudflare_account_id },
     ],
     local.use_modal_backend ? [{ name = "MODAL_WORKSPACE", value = var.modal_workspace }] : [],
     local.use_daytona_backend ? [
@@ -82,6 +91,8 @@ module "control_plane_worker" {
       { name = "GITHUB_APP_ID", value = var.github_app_id },
       { name = "GITHUB_APP_PRIVATE_KEY", value = var.github_app_private_key },
       { name = "GITHUB_APP_INSTALLATION_ID", value = var.github_app_installation_id },
+      { name = "R2_ACCESS_KEY_ID", value = cloudflare_account_token.control_plane_media_read.id },
+      { name = "R2_SECRET_ACCESS_KEY", value = sha256(cloudflare_account_token.control_plane_media_read.value) },
     ],
     local.use_modal_backend ? [
       { name = "MODAL_TOKEN_ID", value = var.modal_token_id },
@@ -108,5 +119,11 @@ module "control_plane_worker" {
 
   cron_triggers = ["* * * * *"]
 
-  depends_on = [null_resource.control_plane_build, module.session_index_kv, null_resource.d1_migrations, module.linear_bot_worker]
+  depends_on = [
+    null_resource.control_plane_build,
+    module.session_index_kv,
+    null_resource.d1_migrations,
+    module.linear_bot_worker,
+    cloudflare_r2_bucket_cors.media,
+  ]
 }

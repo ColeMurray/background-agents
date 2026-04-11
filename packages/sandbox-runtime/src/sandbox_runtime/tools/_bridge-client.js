@@ -29,11 +29,13 @@ export async function bridgeFetch(path, options = {}) {
   }
 
   const url = `${BRIDGE_URL}/sessions/${sessionId}${path}`;
-  const headers = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${BRIDGE_TOKEN}`,
-    ...options.headers,
-  };
+  const headers = new Headers(options.headers || {});
+  headers.set("Authorization", `Bearer ${BRIDGE_TOKEN}`);
+
+  const isFormDataBody = typeof FormData !== "undefined" && options.body instanceof FormData;
+  if (!isFormDataBody && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
 
   return fetch(url, { ...options, headers });
 }

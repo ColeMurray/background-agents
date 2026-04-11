@@ -22,6 +22,12 @@ locals {
       name = db.binding_name
       id   = db.database_id
     }],
+    # R2 bucket bindings
+    [for r2 in var.r2_buckets : {
+      type        = "r2_bucket"
+      name        = r2.binding_name
+      bucket_name = r2.bucket_name
+    }],
     # Plain text bindings (environment variables)
     [for pt in var.plain_text_bindings : {
       type = "plain_text"

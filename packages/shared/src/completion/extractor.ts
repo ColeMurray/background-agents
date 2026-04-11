@@ -196,12 +196,14 @@ async function fetchSessionArtifacts(
     }
 
     const data = (await response.json()) as ListArtifactsResponse;
-    return data.artifacts.map((artifact) => ({
-      type: artifact.type,
-      url: artifact.url ? String(artifact.url) : "",
-      label: getArtifactLabelFromArtifact(artifact.type, artifact.metadata),
-      metadata: artifact.metadata ?? null,
-    }));
+    return data.artifacts
+      .filter((artifact) => artifact.type !== "screenshot")
+      .map((artifact) => ({
+        type: artifact.type,
+        url: artifact.url ? String(artifact.url) : "",
+        label: getArtifactLabelFromArtifact(artifact.type, artifact.metadata),
+        metadata: artifact.metadata ?? null,
+      }));
   } catch (error) {
     log.error("control_plane.fetch_artifacts", {
       ...base,
@@ -277,7 +279,7 @@ export function getArtifactLabelFromArtifact(
  */
 export function toEventArtifactInfo(data: Record<string, unknown>): ArtifactInfo | null {
   const type = toArtifactType(data.artifactType);
-  if (!type) return null;
+  if (!type || type === "screenshot") return null;
 
   return {
     type,

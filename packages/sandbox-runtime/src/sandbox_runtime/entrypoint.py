@@ -83,6 +83,7 @@ class SandboxSupervisor:
         self.workspace_path = Path("/workspace")
         self.repo_path = self.workspace_path / self.repo_name
         self.session_id_file = Path("/tmp/opencode-session-id")
+        self.current_message_id_file = Path("/tmp/openinspect-current-message-id")
 
         # Logger
         session_id = self.session_config.get("session_id", "")
@@ -310,6 +311,28 @@ class SandboxSupervisor:
         if not package_json.exists():
             package_json.write_text('{"name": "opencode-tools", "type": "module"}')
 
+    def _install_skills(self, workdir: Path) -> None:
+        """Copy bundled Skills into the .opencode/skills directory."""
+        skills_dir = Path("/app/sandbox_runtime/skills")
+        if not skills_dir.exists():
+            return
+
+        skills_dest = workdir / ".opencode" / "skills"
+        installed_any = False
+
+        for skill_dir in skills_dir.iterdir():
+            skill_file = skill_dir / "SKILL.md"
+            if not skill_dir.is_dir() or not skill_file.exists():
+                continue
+
+            dest_dir = skills_dest / skill_dir.name
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy(skill_file, dest_dir / "SKILL.md")
+            installed_any = True
+
+        if installed_any:
+            self.log.info("opencode.skills_installed", skills_path=str(skills_dest))
+
     def _setup_openai_oauth(self) -> None:
         """Write OpenCode auth.json for ChatGPT OAuth if refresh token is configured."""
         refresh_token = os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN")
@@ -503,6 +526,7 @@ class SandboxSupervisor:
             workdir = self.repo_path
 
         self._install_tools(workdir)
+        self._install_skills(workdir)
 
         # Deploy codex auth proxy plugin if OpenAI OAuth is configured
         opencode_dir = workdir / ".opencode"
@@ -522,6 +546,7 @@ class SandboxSupervisor:
             # this, the session hangs until the SSE inactivity timeout (120s).
             # See: https://github.com/anomalyco/opencode/blob/19b1222cd/packages/opencode/src/tool/registry.ts#L100
             "OPENCODE_CLIENT": "serve",
+            "OPENINSPECT_CURRENT_MESSAGE_ID_FILE": str(self.current_message_id_file),
         }
 
         # Start OpenCode server in the repo directory

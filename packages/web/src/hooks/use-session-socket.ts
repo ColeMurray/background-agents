@@ -133,6 +133,23 @@ function toUiArtifact(artifact: SessionArtifact): Artifact {
           base: typeof meta.base === "string" ? meta.base : undefined,
           provider: typeof meta.provider === "string" ? meta.provider : undefined,
           filename: typeof meta.filename === "string" ? meta.filename : undefined,
+          objectKey: typeof meta.objectKey === "string" ? meta.objectKey : undefined,
+          mimeType: typeof meta.mimeType === "string" ? meta.mimeType : undefined,
+          sizeBytes: typeof meta.sizeBytes === "number" ? meta.sizeBytes : undefined,
+          viewport:
+            meta.viewport &&
+            typeof meta.viewport === "object" &&
+            typeof (meta.viewport as { width?: unknown }).width === "number" &&
+            typeof (meta.viewport as { height?: unknown }).height === "number"
+              ? {
+                  width: (meta.viewport as { width: number }).width,
+                  height: (meta.viewport as { height: number }).height,
+                }
+              : undefined,
+          sourceUrl: typeof meta.sourceUrl === "string" ? meta.sourceUrl : undefined,
+          fullPage: typeof meta.fullPage === "boolean" ? meta.fullPage : undefined,
+          annotated: typeof meta.annotated === "boolean" ? meta.annotated : undefined,
+          caption: typeof meta.caption === "string" ? meta.caption : undefined,
           previewStatus:
             meta.previewStatus === "active" ||
             meta.previewStatus === "outdated" ||

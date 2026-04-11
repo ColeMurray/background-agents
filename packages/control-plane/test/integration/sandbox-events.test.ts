@@ -69,6 +69,55 @@ describe("POST /internal/sandbox-event", () => {
     expect(matching.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("stores artifact events in both artifacts and events tables", async () => {
+    const { stub } = await initSession();
+
+    const res = await stub.fetch("http://internal/internal/sandbox-event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "artifact",
+        artifactType: "screenshot",
+        url: "sessions/session-1/media/artifact-1.png",
+        metadata: {
+          objectKey: "sessions/session-1/media/artifact-1.png",
+          mimeType: "image/png",
+          sizeBytes: 256,
+        },
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: Date.now() / 1000,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+
+    const artifacts = await queryDO<{ type: string; url: string; metadata: string }>(
+      stub,
+      "SELECT type, url, metadata FROM artifacts WHERE type = 'screenshot'"
+    );
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].url).toBe("sessions/session-1/media/artifact-1.png");
+    expect(JSON.parse(artifacts[0].metadata)).toMatchObject({
+      objectKey: "sessions/session-1/media/artifact-1.png",
+      mimeType: "image/png",
+      sizeBytes: 256,
+    });
+
+    const events = await queryDO<{ type: string; message_id: string; data: string }>(
+      stub,
+      "SELECT type, message_id, data FROM events WHERE type = 'artifact'"
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0].message_id).toBe("msg-1");
+    expect(JSON.parse(events[0].data)).toMatchObject({
+      artifactType: "screenshot",
+      artifactId: expect.any(String),
+      messageId: "msg-1",
+      url: "sessions/session-1/media/artifact-1.png",
+    });
+  });
+
   it("heartbeat updates last_heartbeat without storing event", async () => {
     const { stub } = await initSession();
 

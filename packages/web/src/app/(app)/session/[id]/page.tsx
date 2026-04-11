@@ -16,6 +16,8 @@ import {
 import { useSessionSocket } from "@/hooks/use-session-socket";
 import { SafeMarkdown } from "@/components/safe-markdown";
 import { ToolCallGroup } from "@/components/tool-call-group";
+import { ScreenshotArtifactCard } from "@/components/screenshot-artifact-card";
+import { MediaLightbox } from "@/components/media-lightbox";
 import { useSidebarContext } from "@/components/sidebar-layout";
 import {
   SessionRightSidebar,
@@ -31,7 +33,7 @@ import { useMediaQuery } from "@/hooks/use-media-query";
 import { DEFAULT_MODEL, getDefaultReasoningEffort, type ModelCategory } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
-import type { SandboxEvent } from "@/types/session";
+import type { Artifact, SandboxEvent } from "@/types/session";
 import {
   SidebarIcon,
   ModelIcon,
@@ -293,6 +295,7 @@ function SessionPageContent() {
   );
 
   const [prompt, setPrompt] = useState("");
+  const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
     getDefaultReasoningEffort(DEFAULT_MODEL)
@@ -390,6 +393,9 @@ function SessionPageContent() {
       loadOlderEvents={loadOlderEvents}
       modelOptions={enabledModelOptions}
       fallbackSessionInfo={fallbackSessionInfo}
+      sessionId={sessionId}
+      selectedMediaArtifactId={selectedMediaArtifactId}
+      setSelectedMediaArtifactId={setSelectedMediaArtifactId}
     />
   );
 }
@@ -425,6 +431,9 @@ function SessionContent({
   loadOlderEvents,
   modelOptions,
   fallbackSessionInfo,
+  sessionId,
+  selectedMediaArtifactId,
+  setSelectedMediaArtifactId,
 }: {
   sessionState: SessionState;
   connected: boolean;
@@ -456,6 +465,9 @@ function SessionContent({
   loadOlderEvents: () => void;
   modelOptions: ModelCategory[];
   fallbackSessionInfo: FallbackSessionInfo;
+  sessionId: string;
+  selectedMediaArtifactId: string | null;
+  setSelectedMediaArtifactId: (artifactId: string | null) => void;
 }) {
   const { isOpen, toggle } = useSidebarContext();
   const isBelowLg = useMediaQuery("(max-width: 1023px)");
@@ -685,6 +697,14 @@ function SessionContent({
 
   // Deduplicate and group events for rendering
   const groupedEvents = useMemo(() => dedupeAndGroupEvents(events), [events]);
+  const screenshotArtifacts = useMemo(
+    () => artifacts.filter((artifact) => artifact.type === "screenshot"),
+    [artifacts]
+  );
+  const selectedMediaArtifact = useMemo(
+    () => screenshotArtifacts.find((artifact) => artifact.id === selectedMediaArtifactId) ?? null,
+    [screenshotArtifacts, selectedMediaArtifactId]
+  );
 
   const sessionDisplayInfo = useMemo(
     () => resolveSessionDisplayInfo(sessionState, fallbackSessionInfo),
@@ -809,7 +829,9 @@ function SessionContent({
                         <EventItem
                           key={group.id}
                           event={group.event}
+                          sessionId={sessionId}
                           currentParticipantId={currentParticipantId}
+                          onOpenMedia={setSelectedMediaArtifactId}
                         />
                       )
                     )
@@ -835,12 +857,14 @@ function SessionContent({
 
         {/* Right sidebar */}
         <SessionRightSidebar
+          sessionId={sessionId}
           sessionState={sessionState}
           participants={participants}
           events={events}
           artifacts={artifacts}
           terminalOpen={terminalOpen}
           onToggleTerminal={toggleTerminal}
+          onOpenMedia={setSelectedMediaArtifactId}
         />
       </main>
 
@@ -888,12 +912,14 @@ function SessionContent({
               </div>
               <div className="overflow-y-auto">
                 <SessionRightSidebarContent
+                  sessionId={sessionId}
                   sessionState={sessionState}
                   participants={participants}
                   events={events}
                   artifacts={artifacts}
                   terminalOpen={terminalOpen}
                   onToggleTerminal={toggleTerminal}
+                  onOpenMedia={setSelectedMediaArtifactId}
                 />
               </div>
             </div>
@@ -918,18 +944,31 @@ function SessionContent({
               </div>
               <div className="flex-1 overflow-y-auto">
                 <SessionRightSidebarContent
+                  sessionId={sessionId}
                   sessionState={sessionState}
                   participants={participants}
                   events={events}
                   artifacts={artifacts}
                   terminalOpen={terminalOpen}
                   onToggleTerminal={toggleTerminal}
+                  onOpenMedia={setSelectedMediaArtifactId}
                 />
               </div>
             </div>
           )}
         </div>
       )}
+
+      <MediaLightbox
+        sessionId={sessionId}
+        artifact={selectedMediaArtifact}
+        open={selectedMediaArtifactId !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelectedMediaArtifactId(null);
+          }
+        }}
+      />
 
       {/* Input */}
       <footer className="border-t border-border-muted flex-shrink-0">
@@ -1182,10 +1221,14 @@ function ParticipantsList({
 
 const EventItem = memo(function EventItem({
   event,
+  sessionId,
   currentParticipantId,
+  onOpenMedia,
 }: {
   event: SandboxEvent;
+  sessionId: string;
   currentParticipantId: string | null;
+  onOpenMedia: (artifactId: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1310,6 +1353,26 @@ const EventItem = memo(function EventItem({
           <span className="w-2 h-2 rounded-full bg-accent" />
           Git sync: {event.status}
           <span className="text-xs">{time}</span>
+        </div>
+      );
+
+    case "artifact":
+      if (event.artifactType !== "screenshot" || !event.artifactId) {
+        return null;
+      }
+
+      return (
+        <div className="space-y-2 border border-border-muted bg-card p-4">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">Screenshot</span>
+            <span className="text-xs text-secondary-foreground">{time}</span>
+          </div>
+          <ScreenshotArtifactCard
+            sessionId={sessionId}
+            artifactId={event.artifactId}
+            metadata={event.metadata as Artifact["metadata"] | undefined}
+            onOpen={onOpenMedia}
+          />
         </div>
       );
 

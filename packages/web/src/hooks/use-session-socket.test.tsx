@@ -163,6 +163,63 @@ describe("useSessionSocket", () => {
     });
   });
 
+  it("hydrates screenshot metadata from subscribed artifacts", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1"));
+
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+    });
+
+    act(() => {
+      socket.receive(
+        createSubscribedMessage([
+          {
+            id: "artifact-shot-1",
+            type: "screenshot",
+            url: "sessions/session-1/media/artifact-shot-1.png",
+            metadata: {
+              objectKey: "sessions/session-1/media/artifact-shot-1.png",
+              mimeType: "image/png",
+              sizeBytes: 512,
+              caption: "Dashboard after fix",
+              sourceUrl: "http://127.0.0.1:3000",
+              fullPage: true,
+              annotated: false,
+              viewport: { width: 1440, height: 900 },
+            },
+            createdAt: 1234,
+          },
+        ])
+      );
+    });
+
+    await waitFor(() => {
+      expect(result.current.artifacts).toEqual([
+        {
+          id: "artifact-shot-1",
+          type: "screenshot",
+          url: "sessions/session-1/media/artifact-shot-1.png",
+          metadata: expect.objectContaining({
+            objectKey: "sessions/session-1/media/artifact-shot-1.png",
+            mimeType: "image/png",
+            sizeBytes: 512,
+            caption: "Dashboard after fix",
+            sourceUrl: "http://127.0.0.1:3000",
+            fullPage: true,
+            annotated: false,
+            viewport: { width: 1440, height: 900 },
+          }),
+          createdAt: 1234,
+        },
+      ]);
+    });
+  });
+
   it("replaces stale artifacts with the subscribed snapshot", async () => {
     const { result } = renderHook(() => useSessionSocket("session-1"));
 
