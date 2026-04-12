@@ -1,11 +1,6 @@
 ---
 name: visual-verification
 description: Verify application UI changes with uploaded screenshot artifacts
-license: MIT
-compatibility: opencode
-metadata:
-  audience: maintainers
-  workflow: ui-verification
 ---
 
 # visual-verification
