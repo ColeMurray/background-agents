@@ -95,10 +95,8 @@ class ArtifactEvent(SandboxEvent):
 
     type: str = "artifact"
     artifact_type: str
-    artifact_id: str | None = None
     url: str
     metadata: dict[str, Any] = {}
-    message_id: str | None = None
 
 
 class GitUser(BaseModel):
