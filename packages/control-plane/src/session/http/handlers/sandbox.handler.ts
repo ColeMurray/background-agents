@@ -36,7 +36,6 @@ interface CreateMediaArtifactRequest {
   artifactType: string;
   objectKey: string;
   metadata?: Record<string, unknown>;
-  messageId: string;
 }
 
 export interface SandboxHandler {
@@ -62,16 +61,13 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         return Response.json({ error: "No sandbox" }, { status: 404 });
       }
 
-      if (!body.artifactId || !body.objectKey || !body.messageId) {
-        return Response.json(
-          { error: "artifactId, objectKey, and messageId are required" },
-          { status: 400 }
-        );
+      if (!body.artifactId || !body.objectKey) {
+        return Response.json({ error: "artifactId and objectKey are required" }, { status: 400 });
       }
 
       const processingMessage = deps.repository.getProcessingMessage();
-      if (!processingMessage || processingMessage.id !== body.messageId) {
-        return Response.json({ error: "messageId must match the active prompt" }, { status: 409 });
+      if (!processingMessage) {
+        return Response.json({ error: "No active prompt" }, { status: 409 });
       }
 
       const artifactType = assertArtifactType(body.artifactType);
@@ -99,7 +95,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         artifactId: artifact.id,
         url: body.objectKey,
         metadata: artifact.metadata ?? undefined,
-        messageId: body.messageId,
+        messageId: processingMessage.id,
         sandboxId: sandbox.modal_sandbox_id ?? sandbox.id,
         timestamp: timestampSeconds,
       };
@@ -108,7 +104,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         id: deps.generateId(),
         type: event.type,
         data: JSON.stringify(event),
-        messageId: body.messageId,
+        messageId: processingMessage.id,
         createdAt: now,
       });
 

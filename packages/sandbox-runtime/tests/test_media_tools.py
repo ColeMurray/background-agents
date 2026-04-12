@@ -46,42 +46,15 @@ def test_upload_media_rejects_non_file_paths(tmp_path: Path) -> None:
     assert "requires a path to a file" in result.stderr
 
 
-def test_upload_media_requires_active_prompt_message_id(tmp_path: Path) -> None:
-    screenshot = tmp_path / "shot.png"
-    screenshot.write_bytes(b"\x89PNG\r\n\x1a\n")
-
-    result = subprocess.run(
-        [NODE_BINARY, str(UPLOAD_MEDIA_SCRIPT), str(screenshot)],
-        capture_output=True,
-        text=True,
-        env=_tool_env(
-            {
-                "OPENINSPECT_CURRENT_MESSAGE_ID_FILE": str(tmp_path / "missing-message-id"),
-            }
-        ),
-        check=False,
-        timeout=TOOL_SUBPROCESS_TIMEOUT_SECONDS,
-    )
-
-    assert result.returncode == 1
-    assert "No active prompt messageId found" in result.stderr
-
-
 def test_upload_media_rejects_unsupported_extensions(tmp_path: Path) -> None:
     unsupported = tmp_path / "shot.gif"
     unsupported.write_bytes(b"GIF89a")
-    message_id_file = tmp_path / "message-id"
-    message_id_file.write_text("msg-1")
 
     result = subprocess.run(
         [NODE_BINARY, str(UPLOAD_MEDIA_SCRIPT), str(unsupported)],
         capture_output=True,
         text=True,
-        env=_tool_env(
-            {
-                "OPENINSPECT_CURRENT_MESSAGE_ID_FILE": str(message_id_file),
-            }
-        ),
+        env=_tool_env(),
         check=False,
         timeout=TOOL_SUBPROCESS_TIMEOUT_SECONDS,
     )

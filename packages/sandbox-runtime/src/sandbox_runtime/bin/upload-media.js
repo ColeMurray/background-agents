@@ -5,8 +5,6 @@ import path from "node:path";
 
 const BRIDGE_URL = process.env.CONTROL_PLANE_URL || "http://localhost:8787";
 const BRIDGE_TOKEN = process.env.SANDBOX_AUTH_TOKEN;
-const CURRENT_MESSAGE_ID_FILE =
-  process.env.OPENINSPECT_CURRENT_MESSAGE_ID_FILE || "/tmp/openinspect-current-message-id";
 
 if (!BRIDGE_TOKEN) {
   console.error("SANDBOX_AUTH_TOKEN not set");
@@ -55,7 +53,6 @@ async function main() {
     throw new Error("upload-media.js requires a path to a file");
   }
 
-  const messageId = await readCurrentMessageId();
   const fileBytes = await readFile(resolvedFilePath);
   const mimeType = getMimeType(resolvedFilePath);
 
@@ -70,7 +67,6 @@ async function main() {
     path.basename(resolvedFilePath)
   );
   formData.append("artifactType", "screenshot");
-  formData.append("messageId", messageId);
 
   if (parsed.caption) formData.append("caption", parsed.caption);
   if (parsed.sourceUrl) formData.append("sourceUrl", parsed.sourceUrl);
@@ -138,20 +134,6 @@ function requireValue(args, index, flagName) {
     throw new Error(`${flagName} requires a value`);
   }
   return value;
-}
-
-async function readCurrentMessageId() {
-  try {
-    const value = (await readFile(CURRENT_MESSAGE_ID_FILE, "utf8")).trim();
-    if (!value) {
-      throw new Error("empty file");
-    }
-    return value;
-  } catch {
-    throw new Error(
-      "No active prompt messageId found. upload-media.js can only run while a prompt is executing."
-    );
-  }
 }
 
 function getMimeType(filePath) {

@@ -83,7 +83,6 @@ class SandboxSupervisor:
         self.workspace_path = Path("/workspace")
         self.repo_path = self.workspace_path / self.repo_name
         self.session_id_file = Path("/tmp/opencode-session-id")
-        self.current_message_id_file = Path("/tmp/openinspect-current-message-id")
 
         # Logger
         session_id = self.session_config.get("session_id", "")
@@ -565,7 +564,6 @@ class SandboxSupervisor:
             # this, the session hangs until the SSE inactivity timeout (120s).
             # See: https://github.com/anomalyco/opencode/blob/19b1222cd/packages/opencode/src/tool/registry.ts#L100
             "OPENCODE_CLIENT": "serve",
-            "OPENINSPECT_CURRENT_MESSAGE_ID_FILE": str(self.current_message_id_file),
         }
 
         # Start OpenCode server in the repo directory

@@ -44,7 +44,6 @@ describe("session media routes", () => {
     const formData = new FormData();
     formData.append("file", new File([PNG_SIGNATURE], "shot.png", { type: "image/png" }));
     formData.append("artifactType", "screenshot");
-    formData.append("messageId", "msg-1");
 
     const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/media`, {
       method: "POST",
@@ -69,7 +68,6 @@ describe("session media routes", () => {
     const formData = new FormData();
     formData.append("file", new File([PNG_SIGNATURE], "shot.png", { type: "image/png" }));
     formData.append("artifactType", "screenshot");
-    formData.append("messageId", "msg-1");
     formData.append("caption", "Dashboard after fix");
     formData.append("fullPage", "true");
 
@@ -124,8 +122,8 @@ describe("session media routes", () => {
     });
   });
 
-  it("rejects uploads without a messageId", async () => {
-    const sessionName = `media-missing-message-${Date.now()}`;
+  it("rejects uploads when no prompt is active", async () => {
+    const sessionName = `media-no-prompt-${Date.now()}`;
     const { stub } = await initNamedSession(sessionName);
     await seedSandboxAuthHash(stub, {
       authToken: "sandbox-upload-token-2",
@@ -144,36 +142,8 @@ describe("session media routes", () => {
       body: formData,
     });
 
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "messageId is required" });
-  });
-
-  it("rejects uploads for stale or foreign message ids", async () => {
-    const sessionName = `media-stale-message-${Date.now()}`;
-    const { stub } = await initNamedSession(sessionName);
-    await seedSandboxAuthHash(stub, {
-      authToken: "sandbox-upload-token-stale",
-      sandboxId: "sandbox-1",
-    });
-    await seedProcessingMessage(stub, "msg-active");
-
-    const formData = new FormData();
-    formData.append("file", new File([PNG_SIGNATURE], "shot.png", { type: "image/png" }));
-    formData.append("artifactType", "screenshot");
-    formData.append("messageId", "msg-stale");
-
-    const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/media`, {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer sandbox-upload-token-stale",
-      },
-      body: formData,
-    });
-
     expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toEqual({
-      error: "messageId must match the active prompt",
-    });
+    await expect(response.json()).resolves.toEqual({ error: "No active prompt" });
 
     const artifacts = await queryDO<{ id: string }>(stub, "SELECT id FROM artifacts");
     expect(artifacts).toHaveLength(0);
@@ -197,7 +167,6 @@ describe("session media routes", () => {
     const uploadForm = new FormData();
     uploadForm.append("file", new File([PNG_SIGNATURE], "shot.png", { type: "image/png" }));
     uploadForm.append("artifactType", "screenshot");
-    uploadForm.append("messageId", "msg-1");
 
     const uploadResponse = await SELF.fetch(`https://test.local/sessions/${sessionName}/media`, {
       method: "POST",
@@ -236,7 +205,6 @@ describe("session media routes", () => {
     const uploadForm = new FormData();
     uploadForm.append("file", new File([PNG_SIGNATURE], "shot.png", { type: "image/png" }));
     uploadForm.append("artifactType", "screenshot");
-    uploadForm.append("messageId", "msg-1");
 
     const uploadResponse = await SELF.fetch(`https://test.local/sessions/${sessionName}/media`, {
       method: "POST",
@@ -279,7 +247,6 @@ describe("session media routes", () => {
           artifactId: "artifact-legacy",
           artifactType: "screenshot",
           objectKey,
-          messageId: "msg-1",
           metadata: {
             objectKey,
             sizeBytes: PNG_SIGNATURE.byteLength,
@@ -317,7 +284,6 @@ describe("session media routes", () => {
           artifactId: "artifact-branch",
           artifactType: "branch",
           objectKey: "sessions/session-1/media/artifact-branch.txt",
-          messageId: "msg-1",
         }),
       }
     );

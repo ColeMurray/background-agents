@@ -123,7 +123,6 @@ describe("createSandboxHandler", () => {
           artifactId: "artifact-1",
           artifactType: "screenshot",
           objectKey: "sessions/session-1/media/artifact-1.png",
-          messageId: "msg-1",
           metadata: {
             objectKey: "sessions/session-1/media/artifact-1.png",
             mimeType: "image/png",
@@ -199,13 +198,13 @@ describe("createSandboxHandler", () => {
     });
   });
 
-  it("rejects media artifacts for stale or foreign prompts", async () => {
+  it("rejects media artifacts when no prompt is active", async () => {
     const { handler, getSandbox, repository, broadcast } = createHandler();
     getSandbox.mockReturnValue({
       id: "sandbox-row-1",
       modal_sandbox_id: "sandbox-1",
     } as SandboxRow);
-    repository.getProcessingMessage.mockReturnValue({ id: "msg-active" });
+    repository.getProcessingMessage.mockReturnValue(null);
 
     const response = await handler.createMediaArtifact(
       new Request("http://internal/internal/create-media-artifact", {
@@ -215,13 +214,12 @@ describe("createSandboxHandler", () => {
           artifactId: "artifact-1",
           artifactType: "screenshot",
           objectKey: "sessions/session-1/media/artifact-1.png",
-          messageId: "msg-stale",
         }),
       })
     );
 
     expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({ error: "messageId must match the active prompt" });
+    expect(await response.json()).toEqual({ error: "No active prompt" });
     expect(repository.createArtifact).not.toHaveBeenCalled();
     expect(repository.createEvent).not.toHaveBeenCalled();
     expect(broadcast).not.toHaveBeenCalled();

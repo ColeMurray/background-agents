@@ -32,8 +32,6 @@ upload-media /tmp/current.png \
   --viewport '{"width":1440,"height":900}'
 ```
 
-`upload-media` is prompt-scoped. Run it while the current prompt is still executing.
-
 ## Working Pattern
 
 1. Capture the current state with `agent-browser screenshot`.

@@ -1103,9 +1103,6 @@ async function handleMediaUpload(
     return error("Only screenshot uploads are supported", 400);
   }
 
-  const messageIdField = getRequiredFormString(formData.get("messageId"), "messageId");
-  if (messageIdField instanceof Response) return messageIdField;
-
   if (fileEntry.size <= 0) {
     return error("Uploaded file is empty", 400);
   }
@@ -1200,7 +1197,6 @@ async function handleMediaUpload(
           artifactType: "screenshot",
           objectKey,
           metadata,
-          messageId: messageIdField,
         }),
       },
       ctx

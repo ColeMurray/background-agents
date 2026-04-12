@@ -186,9 +186,6 @@ class AgentBridge:
         # Session state
         self.opencode_session_id: str | None = None
         self.session_id_file = Path(tempfile.gettempdir()) / "opencode-session-id"
-        self.current_message_id_file = (
-            Path(tempfile.gettempdir()) / "openinspect-current-message-id"
-        )
         self.repo_path = Path("/workspace")
 
         # HTTP client for OpenCode API
@@ -206,7 +203,6 @@ class AgentBridge:
 
         # Tracks the message ID of the currently executing prompt
         self._inflight_message_id: str | None = None
-        self._clear_current_message_id_file(log_errors=False)
 
     @property
     def ws_url(self) -> str:
@@ -598,7 +594,6 @@ class AgentBridge:
         """Handle prompt command - send to OpenCode and stream response."""
         message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
         self._inflight_message_id = message_id
-        self._write_current_message_id_file(message_id)
         content = cmd.get("content", "")
         model = cmd.get("model")
         reasoning_effort = cmd.get("reasoningEffort")
@@ -662,7 +657,6 @@ class AgentBridge:
         finally:
             if self._inflight_message_id == message_id:
                 self._inflight_message_id = None
-            self._clear_current_message_id_file(expected_message_id=message_id)
             duration_ms = int((time.time() - start_time) * 1000)
             self.log.info(
                 "prompt.run",
@@ -1666,35 +1660,6 @@ class AgentBridge:
                 self.session_id_file.write_text(self.opencode_session_id)
             except Exception as e:
                 self.log.error("opencode.session.save_error", exc=e)
-
-    def _write_current_message_id_file(self, message_id: str) -> None:
-        """Persist the active control-plane message ID for prompt-scoped helper tools."""
-        try:
-            self.current_message_id_file.write_text(message_id)
-        except Exception as e:
-            self.log.error("prompt.message_id_file_write_error", exc=e, message_id=message_id)
-
-    def _clear_current_message_id_file(
-        self, expected_message_id: str | None = None, *, log_errors: bool = True
-    ) -> None:
-        """Remove the active message ID file if it belongs to the completed prompt."""
-        try:
-            if not self.current_message_id_file.exists():
-                return
-
-            if expected_message_id is not None:
-                current_message_id = self.current_message_id_file.read_text().strip()
-                if current_message_id and current_message_id != expected_message_id:
-                    return
-
-            self.current_message_id_file.unlink(missing_ok=True)
-        except Exception as e:
-            if log_errors:
-                self.log.warn(
-                    "prompt.message_id_file_cleanup_error",
-                    exc=e,
-                    expected_message_id=expected_message_id,
-                )
 
     async def _request_opencode_stop(self, reason: str) -> bool:
         if not self.http_client or not self.opencode_session_id:
