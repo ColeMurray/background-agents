@@ -145,8 +145,12 @@ variable "enable_slack_bot" {
   default     = true
 
   validation {
-    condition     = var.enable_slack_bot == false || (length(var.slack_bot_token) > 0 && length(var.slack_signing_secret) > 0)
-    error_message = "When enable_slack_bot is true, slack_bot_token and slack_signing_secret must be non-empty."
+    condition = var.enable_slack_bot == false || (
+      length(var.slack_bot_token) > 0 &&
+      length(var.slack_signing_secret) > 0 &&
+      length(var.slack_investigate_reaction) > 0
+    )
+    error_message = "When enable_slack_bot is true, slack_bot_token, slack_signing_secret, and slack_investigate_reaction must be non-empty."
   }
 }
 
@@ -161,6 +165,12 @@ variable "slack_signing_secret" {
   description = "Slack app signing secret"
   type        = string
   sensitive   = true
+  default     = ""
+}
+
+variable "slack_investigate_reaction" {
+  description = "Single Slack emoji name used to trigger investigations (without surrounding colons)"
+  type        = string
   default     = ""
 }
 

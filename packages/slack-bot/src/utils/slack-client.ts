@@ -223,6 +223,56 @@ export async function getThreadMessages(
 }
 
 /**
+ * Fetch a single message by channel and timestamp.
+ */
+export async function getMessageByTimestamp(
+  token: string,
+  channelId: string,
+  messageTs: string
+): Promise<{
+  ok: boolean;
+  message?: {
+    ts: string;
+    text?: string;
+    thread_ts?: string;
+    user?: string;
+    bot_id?: string;
+  } | null;
+  error?: string;
+}> {
+  const params = new URLSearchParams({
+    channel: channelId,
+    oldest: messageTs,
+    latest: messageTs,
+    inclusive: "true",
+    limit: "1",
+  });
+  const response = await fetch(`https://slack.com/api/conversations.history?${params.toString()}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  const result = (await response.json()) as {
+    ok: boolean;
+    messages?: Array<{
+      ts: string;
+      text?: string;
+      thread_ts?: string;
+      user?: string;
+      bot_id?: string;
+    }>;
+    error?: string;
+  };
+
+  return {
+    ok: result.ok,
+    message: result.messages?.find((message) => message.ts === messageTs) ?? null,
+    error: result.error,
+  };
+}
+
+/**
  * Get user profile info.
  */
 export async function getUserInfo(

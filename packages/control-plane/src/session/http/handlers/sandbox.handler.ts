@@ -3,7 +3,7 @@ import type { SessionArtifact } from "@open-inspect/shared";
 import type { ParticipantRole, SandboxEvent, ServerMessage } from "../../../types";
 import type { OpenAITokenRefreshResult } from "../../openai-token-refresh-service";
 import type { SessionRepository } from "../../repository";
-import type { SandboxRow, SessionRow } from "../../types";
+import type { SandboxEventWithAck, SandboxRow, SessionRow } from "../../types";
 import { assertArtifactType } from "../../artifacts";
 
 interface AddParticipantRequest {
@@ -19,7 +19,7 @@ export interface SandboxHandlerDeps {
     SessionRepository,
     "createParticipant" | "createArtifact" | "createEvent" | "getProcessingMessage"
   >;
-  processSandboxEvent: (event: SandboxEvent) => Promise<void>;
+  processSandboxEvent: (event: SandboxEventWithAck) => Promise<void>;
   getSandbox: () => SandboxRow | null;
   isValidSandboxToken: (token: string | null, sandbox: SandboxRow | null) => Promise<boolean>;
   getSession: () => SessionRow | null;
@@ -49,7 +49,7 @@ export interface SandboxHandler {
 export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
   return {
     async sandboxEvent(request: Request): Promise<Response> {
-      const event = (await request.json()) as SandboxEvent;
+      const event = (await request.json()) as SandboxEventWithAck;
       await deps.processSandboxEvent(event);
       return Response.json({ status: "ok" });
     },

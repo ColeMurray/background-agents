@@ -4,6 +4,7 @@
 
 import type {
   Attachment,
+  SandboxEvent,
   SessionStatus,
   SandboxStatus,
   GitSyncStatus,
@@ -15,6 +16,8 @@ import type {
   EventType,
 } from "../types";
 import type { GitPushSpec } from "../source-control";
+
+export type SandboxEventWithAck = SandboxEvent & { ackId?: string };
 
 // Database row types (match SQLite schema)
 

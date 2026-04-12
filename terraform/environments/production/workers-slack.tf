@@ -48,6 +48,7 @@ module "slack_bot_worker" {
     { name = "DEPLOYMENT_NAME", value = var.deployment_name },
     { name = "DEFAULT_MODEL", value = "claude-haiku-4-5" },
     { name = "CLASSIFICATION_MODEL", value = "claude-haiku-4-5" },
+    { name = "SLACK_INVESTIGATE_REACTION", value = var.slack_investigate_reaction },
   ]
 
   secrets = [

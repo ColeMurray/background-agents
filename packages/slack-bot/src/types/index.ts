@@ -18,6 +18,7 @@ export interface Env {
   WEB_APP_URL: string;
   DEFAULT_MODEL: string;
   CLASSIFICATION_MODEL: string;
+  SLACK_INVESTIGATE_REACTION?: string;
 
   // Secrets
   SLACK_BOT_TOKEN: string;
@@ -68,10 +69,35 @@ export interface SlackEvent {
     ts?: string;
     thread_ts?: string;
     bot_id?: string;
+    reaction?: string;
+    item?: {
+      type?: string;
+      channel?: string;
+      ts?: string;
+    };
+    item_user?: string;
+    tab?: string;
+    channel_type?: string;
+    subtype?: string;
   };
   event_id: string;
   event_time: number;
   team_id: string;
+}
+
+export interface SlackReactionItem {
+  type: "message";
+  channel: string;
+  ts: string;
+}
+
+export interface SlackReactionAddedEvent {
+  type: "reaction_added";
+  user: string;
+  reaction: string;
+  item: SlackReactionItem;
+  item_user?: string;
+  event_ts?: string;
 }
 
 /**
@@ -123,6 +149,26 @@ export type SlackInteractionPayload = {
     };
   };
 };
+
+export interface PendingMessageSelection {
+  kind: "message";
+  message: string;
+  userId: string;
+  previousMessages?: string[];
+  channelName?: string;
+  channelDescription?: string;
+}
+
+export interface PendingReactionSelection {
+  kind: "reaction";
+  userId: string;
+  promptContent: string;
+  sessionTitle: string;
+  reactionMessageTs: string;
+  rootThreadTs: string;
+}
+
+export type PendingRepoSelection = PendingMessageSelection | PendingReactionSelection;
 
 /**
  * Callback context passed with prompts for follow-up notifications.

@@ -459,6 +459,7 @@ describe("POST /interactions", () => {
     await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
       "pending:C123:111.222",
       JSON.stringify({
+        kind: "message",
         message: "Please handle this",
         userId: "U123",
       })

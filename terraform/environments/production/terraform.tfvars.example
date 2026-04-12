@@ -106,6 +106,7 @@ enable_slack_bot = false
 
 slack_bot_token = ""       # e.g., "xoxb-..."
 slack_signing_secret = ""
+slack_investigate_reaction = "inspect-investigate"
 
 # Linear Agent (Optional)
 # Create an OAuth Application at: https://linear.app/settings/api/applications/new

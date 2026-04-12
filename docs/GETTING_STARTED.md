@@ -255,7 +255,9 @@ Skip this step if you don't need Slack integration.
    - `groups:read`
    - `im:history`
    - `im:read`
+   - `reactions:read`
    - `reactions:write`
+   - `users:read`
 3. Click **"Install to Workspace"**
 4. Note the **Bot Token** (`xoxb-...`)
 
@@ -366,6 +368,7 @@ EOF
 enable_slack_bot     = false
 slack_bot_token      = ""
 slack_signing_secret = ""
+slack_investigate_reaction = "inspect-investigate"
 
 # GitHub Bot (set enable_github_bot = true to deploy the webhook worker)
 enable_github_bot      = false
@@ -479,6 +482,7 @@ The App Home provides a settings interface where users can configure their prefe
 5. Under **Subscribe to bot events**, add:
    - `app_home_opened` (required for App Home settings)
    - `app_mention`
+   - `reaction_added`
    - `message.channels` (optional - if you want the bot to see all channel messages)
    - `message.im` (enables direct message support)
 6. Click **Save Changes**
@@ -501,6 +505,13 @@ In Slack, for each channel where you want the bot to respond:
 - Click the channel name → Integrations → Add apps
 
 The bot only responds to @mentions in channels it has been invited to.
+
+### Configure Reaction Investigations
+
+1. Create the custom emoji `inspect-investigate` in your Slack workspace.
+2. Set `slack_investigate_reaction = "inspect-investigate"` in `terraform.tfvars`.
+3. Invite the bot to each channel where you want reaction-triggered investigations to work so it can
+   read the reacted message and reply in-thread.
 
 ---
 
@@ -648,6 +659,7 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `ENABLE_SLACK_BOT`            | `true` to deploy Slack bot, `false` to skip (default: `true`)                 |
 | `SLACK_BOT_TOKEN`             | Slack bot token (required if enabled)                                         |
 | `SLACK_SIGNING_SECRET`        | Slack signing secret (required if enabled)                                    |
+| `SLACK_INVESTIGATE_REACTION`  | Single emoji name that starts investigations, e.g. `inspect-investigate`      |
 | `ANTHROPIC_API_KEY`           | Anthropic API key                                                             |
 | `TOKEN_ENCRYPTION_KEY`        | Generated encryption key (OAuth tokens)                                       |
 | `REPO_SECRETS_ENCRYPTION_KEY` | Generated encryption key (repo secrets)                                       |
