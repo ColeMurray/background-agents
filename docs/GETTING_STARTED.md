@@ -99,9 +99,30 @@ npm run build -w @open-inspect/shared
 3. **Note your Workers subdomain**: Go to Workers & Pages → Overview, look in the **bottom-right**
    of the panel for `*.YOUR-SUBDOMAIN.workers.dev`
 4. **Create API Token** at [API Tokens](https://dash.cloudflare.com/profile/api-tokens):
-   - Use template: "Edit Cloudflare Workers"
-   - Add permissions: Workers KV Storage (Edit), Workers R2 Storage (Edit)
+   - Create a **user-owned** API token. Do not use an account-owned token for
+     `cloudflare_api_token`.
+   - Add account permissions:
+     - Workers Scripts: **Edit**
+     - Workers KV Storage: **Edit**
+     - Workers R2 Storage: **Edit**
+     - D1: **Edit**
+     - Account API Tokens: **Write**
+   - Add user permissions:
+     - API Tokens: **Read** `API Tokens: Write` also works if you already use that broader
+       permission.
+   - If you deploy routes/custom domains through Cloudflare, also add:
+     - Workers Routes: **Edit**
+   - The user creating this token must be a **Super Administrator** on the Cloudflare account,
+     because Terraform creates an account-owned token for control-plane media reads.
 5. **Enable R2**: Must add payment info, but first 10 GB/month is free
+
+> **Why the token needs API token permissions**: Terraform creates the screenshot/media R2 bucket
+> and then creates a dedicated **account-owned** Cloudflare token that the control plane uses for
+> presigned R2 reads. That requires:
+>
+> - `API Tokens Read` (or `API Tokens Write`) to look up the permission-group ID
+> - `Account API Tokens Write` to create the account-owned token
+> - Super Administrator access on the account
 
 ### Cloudflare R2 (Terraform State Backend)
 
