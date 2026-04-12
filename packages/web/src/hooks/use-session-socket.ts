@@ -135,12 +135,21 @@ function toUiArtifact(artifact: SessionArtifact): Artifact {
           filename: typeof meta.filename === "string" ? meta.filename : undefined,
           objectKey: typeof meta.objectKey === "string" ? meta.objectKey : undefined,
           mimeType: typeof meta.mimeType === "string" ? meta.mimeType : undefined,
-          sizeBytes: typeof meta.sizeBytes === "number" ? meta.sizeBytes : undefined,
+          sizeBytes:
+            typeof meta.sizeBytes === "number" &&
+            Number.isFinite(meta.sizeBytes) &&
+            meta.sizeBytes >= 0
+              ? meta.sizeBytes
+              : undefined,
           viewport:
             meta.viewport &&
             typeof meta.viewport === "object" &&
             typeof (meta.viewport as { width?: unknown }).width === "number" &&
-            typeof (meta.viewport as { height?: unknown }).height === "number"
+            Number.isFinite((meta.viewport as { width: number }).width) &&
+            (meta.viewport as { width: number }).width > 0 &&
+            typeof (meta.viewport as { height?: unknown }).height === "number" &&
+            Number.isFinite((meta.viewport as { height: number }).height) &&
+            (meta.viewport as { height: number }).height > 0
               ? {
                   width: (meta.viewport as { width: number }).width,
                   height: (meta.viewport as { height: number }).height,

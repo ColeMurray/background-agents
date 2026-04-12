@@ -24,11 +24,15 @@ export function MediaLightbox({ sessionId, artifact, open, onOpenChange }: Media
         </DialogDescription>
 
         <div className="max-h-[80vh] overflow-auto bg-muted">
-          {artifact && url ? (
+          {!artifact ? (
+            <div className="flex min-h-[320px] items-center justify-center text-sm text-muted-foreground">
+              No screenshot selected
+            </div>
+          ) : url ? (
             <img src={url} alt={caption} className="mx-auto h-auto max-w-full object-contain" />
           ) : (
             <div className="flex min-h-[320px] items-center justify-center text-sm text-muted-foreground">
-              {isLoading ? "Loading screenshot..." : "No screenshot selected"}
+              {isLoading ? "Loading screenshot..." : "Preview unavailable"}
             </div>
           )}
         </div>

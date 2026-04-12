@@ -220,6 +220,55 @@ describe("useSessionSocket", () => {
     });
   });
 
+  it("drops invalid numeric screenshot metadata from subscribed artifacts", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1"));
+
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+    });
+
+    act(() => {
+      socket.receive(
+        createSubscribedMessage([
+          {
+            id: "artifact-shot-invalid",
+            type: "screenshot",
+            url: "sessions/session-1/media/artifact-shot-invalid.png",
+            metadata: {
+              objectKey: "sessions/session-1/media/artifact-shot-invalid.png",
+              mimeType: "image/png",
+              sizeBytes: -1,
+              viewport: { width: 0, height: -100 },
+            },
+            createdAt: 1234,
+          },
+        ])
+      );
+    });
+
+    await waitFor(() => {
+      expect(result.current.artifacts).toEqual([
+        {
+          id: "artifact-shot-invalid",
+          type: "screenshot",
+          url: "sessions/session-1/media/artifact-shot-invalid.png",
+          metadata: expect.objectContaining({
+            objectKey: "sessions/session-1/media/artifact-shot-invalid.png",
+            mimeType: "image/png",
+            sizeBytes: undefined,
+            viewport: undefined,
+          }),
+          createdAt: 1234,
+        },
+      ]);
+    });
+  });
+
   it("replaces stale artifacts with the subscribed snapshot", async () => {
     const { result } = renderHook(() => useSessionSocket("session-1"));
 

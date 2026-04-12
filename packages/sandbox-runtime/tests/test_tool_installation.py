@@ -204,3 +204,22 @@ class TestInstallTools:
         skill_dest = workdir / ".opencode" / "skills" / "agent-browser" / "SKILL.md"
         assert skill_dest.exists()
         assert skill_dest.read_text() == "# agent-browser"
+
+    def test_skills_dir_non_directory_is_ignored(self, tmp_path):
+        """A non-directory skills path should not raise or copy files."""
+        sup = _make_supervisor()
+        workdir = tmp_path / "workspace"
+        workdir.mkdir()
+
+        skills_file = tmp_path / "app" / "sandbox" / "skills"
+        skills_file.parent.mkdir(parents=True)
+        skills_file.write_text("not a directory")
+
+        with _patch_paths(
+            legacy=tmp_path / "no-legacy",
+            tools=tmp_path / "no-tools",
+            skills=skills_file,
+        ):
+            sup._install_skills(workdir)
+
+        assert not (workdir / ".opencode" / "skills").exists()

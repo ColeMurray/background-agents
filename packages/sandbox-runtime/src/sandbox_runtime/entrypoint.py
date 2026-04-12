@@ -314,7 +314,7 @@ class SandboxSupervisor:
     def _install_skills(self, workdir: Path) -> None:
         """Copy bundled Skills into the .opencode/skills directory."""
         skills_dir = Path("/app/sandbox_runtime/skills")
-        if not skills_dir.exists():
+        if not skills_dir.is_dir():
             return
 
         skills_dest = workdir / ".opencode" / "skills"

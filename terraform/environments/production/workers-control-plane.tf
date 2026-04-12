@@ -92,7 +92,7 @@ module "control_plane_worker" {
       { name = "GITHUB_APP_PRIVATE_KEY", value = var.github_app_private_key },
       { name = "GITHUB_APP_INSTALLATION_ID", value = var.github_app_installation_id },
       { name = "R2_ACCESS_KEY_ID", value = cloudflare_account_token.control_plane_media_read.id },
-      { name = "R2_SECRET_ACCESS_KEY", value = sha256(cloudflare_account_token.control_plane_media_read.value) },
+      { name = "R2_SECRET_ACCESS_KEY", value = cloudflare_account_token.control_plane_media_read.value },
     ],
     local.use_modal_backend ? [
       { name = "MODAL_TOKEN_ID", value = var.modal_token_id },

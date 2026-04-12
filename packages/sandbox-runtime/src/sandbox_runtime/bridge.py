@@ -696,13 +696,14 @@ class AgentBridge:
         await self._save_session_id()
 
     @staticmethod
-    def _extract_error_message(error: Any) -> str | None:
+    def _extract_error_message(error: object) -> str | None:
         """Extract message from OpenCode NamedError: { "name": "...", "data": { "message": "..." } }."""
         if isinstance(error, dict):
             data = error.get("data")
             if isinstance(data, dict) and "message" in data:
-                return data["message"]
-            return error.get("message") or error.get("name")
+                return str(data["message"])
+            message = error.get("message") or error.get("name")
+            return str(message) if message else None
         return str(error) if error else None
 
     def _transform_part_to_event(
@@ -1759,7 +1760,7 @@ class AgentBridge:
         return value
 
 
-async def main():
+async def main() -> None:
     """Entry point for bridge process."""
     parser = argparse.ArgumentParser(description="Open-Inspect Agent Bridge")
     parser.add_argument("--sandbox-id", required=True, help="Sandbox ID")

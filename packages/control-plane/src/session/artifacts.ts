@@ -1,3 +1,4 @@
+import type { SessionArtifact } from "@open-inspect/shared";
 import type { ArtifactType } from "../types";
 
 const VALID_ARTIFACT_TYPES: ReadonlySet<ArtifactType> = new Set([
@@ -21,7 +22,7 @@ export function buildSessionArtifact(args: {
   url: string | null;
   metadata: Record<string, unknown> | null;
   createdAt: number;
-}) {
+}): SessionArtifact {
   return {
     id: args.id,
     type: args.type,

@@ -73,4 +73,10 @@ describe("ActionBar", () => {
 
     expect(screen.getByText("Screenshots (2)")).toBeInTheDocument();
   });
+
+  it("does not render a screenshot count indicator when no screenshots exist", () => {
+    render(<ActionBar sessionId="session-1" sessionStatus="active" artifacts={[]} />);
+
+    expect(screen.queryByText(/Screenshots/)).not.toBeInTheDocument();
+  });
 });

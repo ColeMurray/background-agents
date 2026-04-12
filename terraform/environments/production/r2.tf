@@ -15,7 +15,7 @@ resource "cloudflare_r2_bucket_cors" "media" {
   rules = [{
     allowed = {
       origins = [local.web_app_url]
-      methods = ["GET"]
+      methods = ["GET", "HEAD"]
       headers = ["*"]
     }
     expose = {
