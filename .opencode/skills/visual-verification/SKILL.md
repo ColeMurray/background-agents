@@ -1,3 +1,13 @@
+---
+name: visual-verification
+description: Verify application UI changes with uploaded screenshot artifacts
+license: MIT
+compatibility: opencode
+metadata:
+  audience: maintainers
+  workflow: ui-verification
+---
+
 # visual-verification
 
 Use this skill when the goal is to verify UI changes inside the application and return visual
