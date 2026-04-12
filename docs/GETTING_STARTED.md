@@ -99,13 +99,8 @@ npm run build -w @open-inspect/shared
 3. **Note your Workers subdomain**: Go to Workers & Pages → Overview, look in the **bottom-right**
    of the panel for `*.YOUR-SUBDOMAIN.workers.dev`
 4. **Create API Token** at [API Tokens](https://dash.cloudflare.com/profile/api-tokens):
-   - Add account permissions:
-     - Workers Scripts: **Edit**
-     - Workers KV Storage: **Edit**
-     - Workers R2 Storage: **Edit**
-     - D1: **Edit**
-   - If you deploy routes/custom domains through Cloudflare, also add:
-     - Workers Routes: **Edit**
+   - Use template: "Edit Cloudflare Workers"
+   - Add permissions: Workers KV Storage (Edit), Workers R2 Storage (Edit)
 5. **Enable R2**: Must add payment info, but first 10 GB/month is free
 
 ### Cloudflare R2 (Terraform State Backend)
