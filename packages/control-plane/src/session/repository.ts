@@ -825,8 +825,8 @@ export class SessionRepository {
 
   getArtifactById(artifactId: string): ArtifactRow | null {
     const result = this.sql.exec(`SELECT * FROM artifacts WHERE id = ?`, artifactId);
-    const artifact = result.one() as ArtifactRow | null;
-    return artifact ?? null;
+    const rows = this.rows<ArtifactRow>(result);
+    return rows[0] ?? null;
   }
 
   // === WS CLIENT MAPPING ===

@@ -14,35 +14,29 @@ describe("media helpers", () => {
     );
   });
 
-  it("detects PNG screenshots by magic bytes", () => {
-    const bytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-    expect(detectScreenshotFileType(bytes)).toEqual({
-      mimeType: "image/png",
-      extension: "png",
-    });
-  });
-
-  it("detects JPEG screenshots by magic bytes", () => {
-    const bytes = Uint8Array.from([0xff, 0xd8, 0xff, 0x00]);
-    expect(detectScreenshotFileType(bytes)).toEqual({
-      mimeType: "image/jpeg",
-      extension: "jpg",
-    });
-  });
-
-  it("detects WEBP screenshots by RIFF container bytes", () => {
-    const bytes = Uint8Array.from([
-      0x52, 0x49, 0x46, 0x46, 0x01, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
-    ]);
-    expect(detectScreenshotFileType(bytes)).toEqual({
-      mimeType: "image/webp",
-      extension: "webp",
-    });
-  });
-
-  it("returns null for unsupported screenshot bytes", () => {
-    expect(detectScreenshotFileType(Uint8Array.from([0x00, 0x01, 0x02]))).toBeNull();
-  });
+  it.each([
+    [
+      "PNG",
+      Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      { mimeType: "image/png", extension: "png" },
+    ],
+    [
+      "JPEG",
+      Uint8Array.from([0xff, 0xd8, 0xff, 0x00]),
+      { mimeType: "image/jpeg", extension: "jpg" },
+    ],
+    [
+      "WEBP",
+      Uint8Array.from([0x52, 0x49, 0x46, 0x46, 0x01, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50]),
+      { mimeType: "image/webp", extension: "webp" },
+    ],
+    ["unsupported", Uint8Array.from([0x00, 0x01, 0x02]), null],
+  ] satisfies [string, Uint8Array, ReturnType<typeof detectScreenshotFileType>][])(
+    "detects %s screenshots by magic bytes",
+    (_label, bytes, expected) => {
+      expect(detectScreenshotFileType(bytes)).toEqual(expected);
+    }
+  );
 
   it("parses optional booleans with whitespace and casing", () => {
     expect(parseOptionalBoolean(" TRUE ")).toBe(true);

@@ -29,7 +29,7 @@ def _patch_paths(
     modules: Path | str = "/nonexistent",
     skills: Path | str = "/nonexistent",
 ):
-    """Patch Path() calls inside _install_tools to redirect to test paths."""
+    """Patch entrypoint Path() calls to redirect legacy, tools, modules, and skills paths."""
     with patch("sandbox_runtime.entrypoint.Path") as MockPath:
         MockPath.side_effect = lambda p: Path(
             str(p)

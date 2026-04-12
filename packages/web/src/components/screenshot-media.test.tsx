@@ -139,6 +139,16 @@ describe("MediaLightbox", () => {
 });
 
 describe("MediaSection", () => {
+  it("renders nothing when there are no screenshots", () => {
+    const onOpenMedia = vi.fn();
+    const { container } = render(
+      <MediaSection sessionId="session-1" screenshots={[]} onOpenMedia={onOpenMedia} />
+    );
+
+    expect(container.firstChild).toBeNull();
+    expect(onOpenMedia).not.toHaveBeenCalled();
+  });
+
   it("renders one card per screenshot and hides source URLs in compact mode", () => {
     mockUseMediaArtifactUrl.mockReturnValue({
       url: "https://media.example.com/sidebar.png",
