@@ -201,8 +201,6 @@ class AgentBridge:
         # Keyed by ackId, re-sent on reconnect until the DO confirms receipt.
         self._pending_acks: dict[str, dict[str, Any]] = {}
 
-        # Tracks the message ID of the currently executing prompt
-        self._inflight_message_id: str | None = None
 
     @property
     def ws_url(self) -> str:
@@ -593,7 +591,6 @@ class AgentBridge:
     async def _handle_prompt(self, cmd: dict[str, Any]) -> None:
         """Handle prompt command - send to OpenCode and stream response."""
         message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
-        self._inflight_message_id = message_id
         content = cmd.get("content", "")
         model = cmd.get("model")
         reasoning_effort = cmd.get("reasoningEffort")
@@ -655,8 +652,6 @@ class AgentBridge:
                 }
             )
         finally:
-            if self._inflight_message_id == message_id:
-                self._inflight_message_id = None
             duration_ms = int((time.time() - start_time) * 1000)
             self.log.info(
                 "prompt.run",

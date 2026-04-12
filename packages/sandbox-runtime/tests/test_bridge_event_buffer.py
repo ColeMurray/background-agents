@@ -320,25 +320,6 @@ class TestPromptTaskDecoupling:
         assert parsed["messageId"] == "msg-1"
         assert parsed["success"] is True
 
-    @pytest.mark.asyncio
-    async def test_inflight_message_id_lifecycle(self, bridge: AgentBridge):
-        """_handle_prompt should set and clear _inflight_message_id around the prompt."""
-
-        async def fake_stream(message_id, content, model, reasoning_effort):
-            assert bridge._inflight_message_id == "msg-42"
-            yield {"type": "token", "content": "hello", "messageId": message_id}
-
-        bridge._stream_opencode_response_sse = fake_stream
-
-        await bridge._handle_command({"type": "prompt", "messageId": "msg-42", "content": "test"})
-        task = bridge._current_prompt_task
-        assert task is not None
-
-        await task
-        await asyncio.sleep(0)
-
-        assert bridge._inflight_message_id is None
-
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
