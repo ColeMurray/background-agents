@@ -2,10 +2,50 @@
 
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { bridgeFetch, extractError } from "./_bridge-client.js";
 
+const BRIDGE_URL = process.env.CONTROL_PLANE_URL || "http://localhost:8787";
+const BRIDGE_TOKEN = process.env.SANDBOX_AUTH_TOKEN;
 const CURRENT_MESSAGE_ID_FILE =
   process.env.OPENINSPECT_CURRENT_MESSAGE_ID_FILE || "/tmp/openinspect-current-message-id";
+
+if (!BRIDGE_TOKEN) {
+  console.error("SANDBOX_AUTH_TOKEN not set");
+  process.exit(1);
+}
+
+function getSessionId() {
+  try {
+    const config = JSON.parse(process.env.SESSION_CONFIG || "{}");
+    return config.sessionId || config.session_id || "";
+  } catch {
+    return "";
+  }
+}
+
+async function bridgeFetch(urlPath, options = {}) {
+  const sessionId = getSessionId();
+  if (!sessionId) {
+    throw new Error("Session ID not found in SESSION_CONFIG environment variable");
+  }
+  const url = `${BRIDGE_URL}/sessions/${sessionId}${urlPath}`;
+  const headers = new Headers(options.headers || {});
+  headers.set("Authorization", `Bearer ${BRIDGE_TOKEN}`);
+  const isFormDataBody = typeof FormData !== "undefined" && options.body instanceof FormData;
+  if (!isFormDataBody && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  return fetch(url, { ...options, headers });
+}
+
+async function extractError(response) {
+  const text = await response.text();
+  try {
+    const json = JSON.parse(text);
+    return json.error || json.message || text;
+  } catch {
+    return text;
+  }
+}
 
 async function main() {
   const parsed = parseArgs(process.argv.slice(2));
@@ -132,7 +172,7 @@ function getMimeType(filePath) {
 function printUsageAndExit(exitCode) {
   const usage = `
 Usage:
-  node .opencode/tool/upload-media.js <file-path> [--caption "..."] [--source-url "..."] [--full-page] [--annotated] [--viewport '{"width":1280,"height":720}']
+  upload-media <file-path> [--caption "..."] [--source-url "..."] [--full-page] [--annotated] [--viewport '{"width":1280,"height":720}']
 `;
   if (exitCode === 0) {
     console.log(usage.trim());

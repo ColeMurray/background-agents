@@ -291,7 +291,7 @@ class SandboxSupervisor:
         if legacy_tool.exists():
             shutil.copy(legacy_tool, tool_dest / "create-pull-request.js")
 
-        # Copy all .js files from tools/ (including _-prefixed internal modules)
+        # Copy all .js files from tools/ — these must export tool() for OpenCode
         if tools_dir.exists():
             for tool_file in tools_dir.iterdir():
                 if tool_file.is_file() and tool_file.suffix == ".js":
@@ -310,6 +310,24 @@ class SandboxSupervisor:
         package_json = opencode_dir / "package.json"
         if not package_json.exists():
             package_json.write_text('{"name": "opencode-tools", "type": "module"}')
+
+    def _install_bin_scripts(self) -> None:
+        """Install standalone CLI scripts into /usr/local/bin.
+
+        Scripts in bin/ are standalone CLIs (not OpenCode tool plugins) and must
+        NOT be placed in .opencode/tool/ — OpenCode would import() them during
+        tool discovery, executing module-level code with the parent process argv.
+        """
+        bin_dir = Path("/app/sandbox_runtime/bin")
+        if not bin_dir.is_dir():
+            return
+
+        for script in bin_dir.iterdir():
+            if script.is_file() and script.suffix == ".js":
+                dest = Path("/usr/local/bin") / script.stem
+                shutil.copy(script, dest)
+                dest.chmod(0o755)
+                self.log.info("bin.installed", script=script.stem)
 
     def _install_skills(self, workdir: Path) -> None:
         """Copy bundled Skills into the .opencode/skills directory."""
@@ -527,6 +545,7 @@ class SandboxSupervisor:
 
         self._install_tools(workdir)
         self._install_skills(workdir)
+        self._install_bin_scripts()
 
         # Deploy codex auth proxy plugin if OpenAI OAuth is configured
         opencode_dir = workdir / ".opencode"

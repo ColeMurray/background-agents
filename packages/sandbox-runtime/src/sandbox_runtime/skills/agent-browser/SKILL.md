@@ -24,19 +24,19 @@ Prefer `--json` when you need machine-readable output such as a saved path.
 Screenshots only appear in the Open-Inspect session after upload.
 
 ```bash
-node .opencode/tool/upload-media.js /tmp/current.png --caption "Dashboard after fix"
-node .opencode/tool/upload-media.js /tmp/full-page.png --full-page
-node .opencode/tool/upload-media.js /tmp/annotated.png --annotated
-node .opencode/tool/upload-media.js /tmp/current.png \
+upload-media /tmp/current.png --caption "Dashboard after fix"
+upload-media /tmp/full-page.png --full-page
+upload-media /tmp/annotated.png --annotated
+upload-media /tmp/current.png \
   --source-url "http://127.0.0.1:3000" \
   --viewport '{"width":1440,"height":900}'
 ```
 
-`upload-media.js` is prompt-scoped. Run it while the current prompt is still executing.
+`upload-media` is prompt-scoped. Run it while the current prompt is still executing.
 
 ## Working Pattern
 
 1. Capture the current state with `agent-browser screenshot`.
 2. Make or verify the UI change.
-3. Upload the screenshot with `upload-media.js`.
+3. Upload the screenshot with `upload-media`.
 4. When useful, upload before/after/diff images as separate artifacts.

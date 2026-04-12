@@ -9,9 +9,9 @@ from pathlib import Path
 import pytest
 
 NODE_BINARY = shutil.which("node")
-TOOLS_DIR = Path(__file__).resolve().parents[1] / "src" / "sandbox_runtime" / "tools"
-UPLOAD_MEDIA_SCRIPT = TOOLS_DIR / "upload-media.js"
-BRIDGE_CLIENT_MODULE = TOOLS_DIR / "_bridge-client.js"
+RUNTIME_DIR = Path(__file__).resolve().parents[1] / "src" / "sandbox_runtime"
+UPLOAD_MEDIA_SCRIPT = RUNTIME_DIR / "bin" / "upload-media.js"
+BRIDGE_CLIENT_MODULE = RUNTIME_DIR / "tools" / "_bridge-client.js"
 TOOL_SUBPROCESS_TIMEOUT_SECONDS = 10
 
 
