@@ -1,3 +1,4 @@
+import type { SessionArtifact } from "@open-inspect/shared";
 import { generateId } from "../auth/crypto";
 import type { Logger } from "../logger";
 import type { GitPushSpec } from "../source-control";
@@ -74,7 +75,7 @@ export class SessionSandboxEventProcessor {
         artifactId,
         messageId: messageId ?? undefined,
       };
-      const artifact = {
+      const artifact: SessionArtifact = {
         id: artifactId,
         type: artifactType,
         url: event.url,
