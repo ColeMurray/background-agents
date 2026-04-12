@@ -201,7 +201,6 @@ class AgentBridge:
         # Keyed by ackId, re-sent on reconnect until the DO confirms receipt.
         self._pending_acks: dict[str, dict[str, Any]] = {}
 
-
     @property
     def ws_url(self) -> str:
         """WebSocket URL for control plane connection."""
