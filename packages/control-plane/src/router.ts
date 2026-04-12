@@ -1037,6 +1037,31 @@ async function listSessionArtifactsFromDo(
   return data.artifacts;
 }
 
+async function getSessionArtifactFromDo(
+  stub: DurableObjectStub,
+  artifactId: string,
+  ctx: RequestContext
+): Promise<ArtifactResponse | null | Response> {
+  const response = await stub.fetch(
+    internalRequest(
+      buildSessionInternalUrl(
+        SessionInternalPaths.artifacts,
+        `?artifactId=${encodeURIComponent(artifactId)}`
+      ),
+      undefined,
+      ctx
+    )
+  );
+  if (!response.ok) {
+    return response.status === 404
+      ? error("Session not found", 404)
+      : error("Failed to fetch session artifact", 500);
+  }
+
+  const data = (await response.json()) as { artifact: ArtifactResponse | null };
+  return data.artifact;
+}
+
 async function handleMediaUpload(
   request: Request,
   env: Env,
@@ -1229,6 +1254,9 @@ async function handleMediaGet(
   if (!sessionId || !artifactId) {
     return error("Session ID and artifact ID are required", 400);
   }
+  if (!/^[A-Za-z0-9-]+$/.test(artifactId)) {
+    return error("Invalid artifact ID", 400);
+  }
 
   if (
     !env.R2_ACCESS_KEY_ID ||
@@ -1247,10 +1275,8 @@ async function handleMediaGet(
 
   const doId = env.SESSION.idFromName(sessionId);
   const stub = env.SESSION.get(doId);
-  const artifactsResult = await listSessionArtifactsFromDo(stub, ctx);
-  if (artifactsResult instanceof Response) return artifactsResult;
-
-  const artifact = artifactsResult.find((candidate) => candidate.id === artifactId);
+  const artifact = await getSessionArtifactFromDo(stub, artifactId, ctx);
+  if (artifact instanceof Response) return artifact;
   if (!artifact || artifact.type !== "screenshot" || !artifact.url) {
     return error("Media artifact not found", 404);
   }

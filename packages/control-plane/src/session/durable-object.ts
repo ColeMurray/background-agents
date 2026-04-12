@@ -157,7 +157,7 @@ export class SessionDO extends DurableObject<Env> {
     listParticipants: () => this.participantsHandler.listParticipants(),
     addParticipant: (request) => this.sandboxHandler.addParticipant(request),
     listEvents: (_request, url) => this.messagesHandler.listEvents(url),
-    listArtifacts: () => this.messagesHandler.listArtifacts(),
+    listArtifacts: (_request, url) => this.messagesHandler.listArtifacts(url),
     listMessages: (_request, url) => this.messagesHandler.listMessages(url),
     createPr: (request) => this.pullRequestHandler.createPr(request),
     wsToken: (request) => this.wsTokenHandler.generateWsToken(request),

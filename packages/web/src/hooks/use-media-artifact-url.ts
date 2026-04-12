@@ -31,7 +31,11 @@ export function useMediaArtifactUrl(sessionId: string, artifactId: string | null
     }
 
     const refreshAtMs = data.expiresAt * 1000 - MEDIA_URL_REFRESH_BUFFER_MS;
-    const delayMs = Math.max(refreshAtMs - Date.now(), 0);
+    const delayMs = refreshAtMs - Date.now();
+    if (delayMs <= 0) {
+      return;
+    }
+
     const timeoutId = window.setTimeout(() => {
       void mutate();
     }, delayMs);

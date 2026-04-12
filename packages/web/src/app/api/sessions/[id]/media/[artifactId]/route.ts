@@ -3,6 +3,8 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
 
+const ARTIFACT_ID_PATTERN = /^[A-Za-z0-9-]+$/;
+
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string; artifactId: string }> }
@@ -13,6 +15,9 @@ export async function GET(
   }
 
   const { id: sessionId, artifactId } = await params;
+  if (!ARTIFACT_ID_PATTERN.test(artifactId)) {
+    return NextResponse.json({ error: "Invalid artifact ID" }, { status: 400 });
+  }
 
   try {
     const response = await controlPlaneFetch(`/sessions/${sessionId}/media/${artifactId}`);

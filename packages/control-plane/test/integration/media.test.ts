@@ -37,6 +37,26 @@ async function seedProcessingMessage(
 }
 
 describe("session media routes", () => {
+  it("rejects uploads without authentication", async () => {
+    const sessionName = `media-unauthorized-${Date.now()}`;
+    await initNamedSession(sessionName);
+
+    const formData = new FormData();
+    formData.append("file", new File([PNG_SIGNATURE], "shot.png", { type: "image/png" }));
+    formData.append("artifactType", "screenshot");
+    formData.append("messageId", "msg-1");
+
+    const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/media`, {
+      method: "POST",
+      body: formData,
+    });
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: "Unauthorized: Missing sandbox token",
+    });
+  });
+
   it("uploads a screenshot, stores it in R2, and persists artifact + event rows", async () => {
     const sessionName = `media-upload-${Date.now()}`;
     const { stub } = await initNamedSession(sessionName);

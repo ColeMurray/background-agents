@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { bridgeFetch, extractError } from "./_bridge-client.js";
 
@@ -9,9 +9,15 @@ const CURRENT_MESSAGE_ID_FILE =
 
 async function main() {
   const parsed = parseArgs(process.argv.slice(2));
+  const resolvedFilePath = path.resolve(parsed.filePath);
+  const fileStats = await stat(resolvedFilePath);
+  if (!fileStats.isFile()) {
+    throw new Error("upload-media.js requires a path to a file");
+  }
+
   const messageId = await readCurrentMessageId();
-  const fileBytes = await readFile(parsed.filePath);
-  const mimeType = getMimeType(parsed.filePath);
+  const fileBytes = await readFile(resolvedFilePath);
+  const mimeType = getMimeType(resolvedFilePath);
 
   if (!mimeType) {
     throw new Error("upload-media.js only supports .png, .jpg, .jpeg, and .webp files");
@@ -21,7 +27,7 @@ async function main() {
   formData.append(
     "file",
     new Blob([fileBytes], { type: mimeType }),
-    path.basename(parsed.filePath)
+    path.basename(resolvedFilePath)
   );
   formData.append("artifactType", "screenshot");
   formData.append("messageId", messageId);

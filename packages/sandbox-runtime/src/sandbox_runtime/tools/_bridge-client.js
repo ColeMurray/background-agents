@@ -6,7 +6,11 @@
  */
 
 const BRIDGE_URL = process.env.CONTROL_PLANE_URL || "http://localhost:8787";
-const BRIDGE_TOKEN = process.env.SANDBOX_AUTH_TOKEN || "";
+const BRIDGE_TOKEN = process.env.SANDBOX_AUTH_TOKEN;
+
+if (!BRIDGE_TOKEN) {
+  throw new Error("SANDBOX_AUTH_TOKEN not set");
+}
 
 let _cachedSessionId = null;
 

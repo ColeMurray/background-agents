@@ -8,6 +8,7 @@ function createService() {
   const repository = {
     listEvents: vi.fn(),
     listArtifacts: vi.fn(),
+    getArtifactById: vi.fn(),
     listMessages: vi.fn(),
   } as unknown as SessionRepository;
 
@@ -112,6 +113,41 @@ describe("MessageService", () => {
       ],
     });
     expect(parseArtifactMetadata).toHaveBeenCalledWith(artifacts[0]);
+  });
+
+  it("returns a single mapped artifact by id", () => {
+    const { service, repository, parseArtifactMetadata } = createService();
+    const artifact: ArtifactRow = {
+      id: "artifact-1",
+      type: "screenshot",
+      url: "sessions/session-1/media/artifact-1.png",
+      metadata: '{"mimeType":"image/png"}',
+      created_at: 1000,
+    };
+    vi.mocked(repository.getArtifactById).mockReturnValue(artifact);
+    vi.mocked(parseArtifactMetadata).mockReturnValue({ mimeType: "image/png" });
+
+    const result = service.getArtifact("artifact-1");
+
+    expect(result).toEqual({
+      artifact: {
+        id: "artifact-1",
+        type: "screenshot",
+        url: "sessions/session-1/media/artifact-1.png",
+        metadata: { mimeType: "image/png" },
+        createdAt: 1000,
+      },
+    });
+    expect(repository.getArtifactById).toHaveBeenCalledWith("artifact-1");
+    expect(parseArtifactMetadata).toHaveBeenCalledWith(artifact);
+  });
+
+  it("returns null when a requested artifact does not exist", () => {
+    const { service, repository, parseArtifactMetadata } = createService();
+    vi.mocked(repository.getArtifactById).mockReturnValue(null);
+
+    expect(service.getArtifact("missing")).toEqual({ artifact: null });
+    expect(parseArtifactMetadata).not.toHaveBeenCalled();
   });
 
   it("paginates messages with hasMore and cursor", () => {

@@ -823,6 +823,18 @@ describe("SessionRepository", () => {
     });
   });
 
+  describe("getArtifactById", () => {
+    it("queries by artifact id", () => {
+      repo.getArtifactById("art-1");
+      expect(mock.calls[0].query).toContain("SELECT * FROM artifacts WHERE id = ?");
+      expect(mock.calls[0].params).toEqual(["art-1"]);
+    });
+
+    it("returns null when the artifact is missing", () => {
+      expect(repo.getArtifactById("missing")).toBeNull();
+    });
+  });
+
   // === WS CLIENT MAPPING ===
 
   describe("upsertWsClientMapping", () => {

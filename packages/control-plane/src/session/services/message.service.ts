@@ -88,6 +88,31 @@ export class MessageService {
     };
   }
 
+  getArtifact(artifactId: string): {
+    artifact: {
+      id: string;
+      type: ArtifactRow["type"];
+      url: string | null;
+      metadata: Record<string, unknown> | null;
+      createdAt: number;
+    } | null;
+  } {
+    const artifact = this.deps.repository.getArtifactById(artifactId);
+    if (!artifact) {
+      return { artifact: null };
+    }
+
+    return {
+      artifact: {
+        id: artifact.id,
+        type: artifact.type,
+        url: artifact.url,
+        metadata: this.deps.parseArtifactMetadata(artifact),
+        createdAt: artifact.created_at,
+      },
+    };
+  }
+
   listMessages(request: ListMessagesRequest): {
     messages: MessageRow[];
     cursor: string | undefined;

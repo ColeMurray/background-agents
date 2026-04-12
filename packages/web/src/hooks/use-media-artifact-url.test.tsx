@@ -74,4 +74,82 @@ describe("useMediaArtifactUrl", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result.current.url).toBe("https://media.example.com/second");
   });
+
+  it("does not fetch when no artifactId is provided", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useMediaArtifactUrl("session-1", null), {
+      wrapper: createWrapper(),
+    });
+
+    await flushMicrotasks();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.current.url).toBeNull();
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it("surfaces fetch errors from the media URL endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ error: "boom" }, { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useMediaArtifactUrl("session-1", "artifact-1"), {
+      wrapper: createWrapper(),
+    });
+
+    await flushMicrotasks();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.current.url).toBeNull();
+    expect(result.current.error).toBeInstanceOf(Error);
+    expect(result.current.error?.message).toContain("500");
+  });
+
+  it("does not schedule an immediate refresh when the URL is already within the refresh buffer", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        url: "https://media.example.com/current",
+        expiresAt: Math.floor(Date.now() / 1000) - 1,
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderHook(() => useMediaArtifactUrl("session-1", "artifact-1"), {
+      wrapper: createWrapper(),
+    });
+
+    await flushMicrotasks();
+
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the scheduled refresh timer on unmount", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        url: "https://media.example.com/current",
+        expiresAt: Math.floor(Date.now() / 1000) + 61,
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { unmount } = renderHook(() => useMediaArtifactUrl("session-1", "artifact-1"), {
+      wrapper: createWrapper(),
+    });
+
+    await flushMicrotasks();
+    unmount();
+
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

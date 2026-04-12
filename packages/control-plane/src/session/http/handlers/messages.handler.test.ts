@@ -9,6 +9,7 @@ function createHandler() {
     stop: vi.fn(),
     listEvents: vi.fn(),
     listArtifacts: vi.fn(),
+    getArtifact: vi.fn(),
     listMessages: vi.fn(),
   } as unknown as MessageService;
 
@@ -125,7 +126,7 @@ describe("createMessagesHandler", () => {
       ],
     });
 
-    const response = handler.listArtifacts();
+    const response = handler.listArtifacts(new URL("http://internal/internal/artifacts"));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       artifacts: [
@@ -138,6 +139,36 @@ describe("createMessagesHandler", () => {
         },
       ],
     });
+  });
+
+  it("returns a single artifact when artifactId is provided", async () => {
+    const { handler, messageService } = createHandler();
+    vi.mocked(messageService.getArtifact).mockReturnValue({
+      artifact: {
+        id: "artifact-1",
+        type: "screenshot",
+        url: "sessions/session-1/media/artifact-1.png",
+        metadata: { mimeType: "image/png" },
+        createdAt: 1000,
+      },
+    });
+
+    const response = handler.listArtifacts(
+      new URL("http://internal/internal/artifacts?artifactId=artifact-1")
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      artifact: {
+        id: "artifact-1",
+        type: "screenshot",
+        url: "sessions/session-1/media/artifact-1.png",
+        metadata: { mimeType: "image/png" },
+        createdAt: 1000,
+      },
+    });
+    expect(messageService.getArtifact).toHaveBeenCalledWith("artifact-1");
+    expect(messageService.listArtifacts).not.toHaveBeenCalled();
   });
 
   it("returns 400 for invalid message status", async () => {
