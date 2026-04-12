@@ -1,7 +1,8 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type { Artifact } from "@/types/session";
-import { useMediaArtifactUrl } from "@/hooks/use-media-artifact-url";
+import { buildSessionMediaUrl } from "@/lib/media";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 
 interface MediaLightboxProps {
@@ -12,8 +13,15 @@ interface MediaLightboxProps {
 }
 
 export function MediaLightbox({ sessionId, artifact, open, onOpenChange }: MediaLightboxProps) {
-  const { url, isLoading } = useMediaArtifactUrl(sessionId, artifact?.id ?? null);
   const caption = artifact?.metadata?.caption || "Screenshot";
+  const mediaUrl = artifact ? buildSessionMediaUrl(sessionId, artifact.id) : null;
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    setIsLoaded(false);
+    setHasError(false);
+  }, [mediaUrl, open]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -28,12 +36,26 @@ export function MediaLightbox({ sessionId, artifact, open, onOpenChange }: Media
             <div className="flex min-h-[320px] items-center justify-center text-sm text-muted-foreground">
               No screenshot selected
             </div>
-          ) : url ? (
-            <img src={url} alt={caption} className="mx-auto h-auto max-w-full object-contain" />
           ) : (
-            <div className="flex min-h-[320px] items-center justify-center text-sm text-muted-foreground">
-              {isLoading ? "Loading screenshot..." : "Preview unavailable"}
-            </div>
+            <>
+              {!hasError && mediaUrl && (
+                <img
+                  src={mediaUrl}
+                  alt={caption}
+                  className={isLoaded ? "mx-auto h-auto max-w-full object-contain" : "invisible"}
+                  onLoad={() => setIsLoaded(true)}
+                  onError={() => {
+                    setHasError(true);
+                    setIsLoaded(false);
+                  }}
+                />
+              )}
+              {!isLoaded && (
+                <div className="flex min-h-[320px] items-center justify-center text-sm text-muted-foreground">
+                  {hasError ? "Preview unavailable" : "Loading screenshot..."}
+                </div>
+              )}
+            </>
           )}
         </div>
       </DialogContent>

@@ -1,6 +1,5 @@
 export const SCREENSHOT_MAX_BYTES = 10 * 1024 * 1024;
 export const SCREENSHOT_UPLOAD_LIMIT_PER_SESSION = 100;
-export const MEDIA_PRESIGN_TTL_SECONDS = 15 * 60;
 
 const SCREENSHOT_EXTENSIONS = {
   "image/png": "png",
@@ -53,73 +52,6 @@ export function buildMediaObjectKey(
   extension: string
 ): string {
   return `sessions/${sessionId}/media/${artifactId}.${extension}`;
-}
-
-export function buildR2ObjectUrl(accountId: string, bucketName: string, objectKey: string): URL {
-  const encodedPath = objectKey
-    .split("/")
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
-
-  return new URL(`https://${accountId}.r2.cloudflarestorage.com/${bucketName}/${encodedPath}`);
-}
-
-export async function createPresignedR2GetUrl(args: {
-  accountId: string;
-  bucketName: string;
-  objectKey: string;
-  accessKeyId: string;
-  secretAccessKey: string;
-  expiresInSeconds?: number;
-  now?: Date;
-}): Promise<{ url: string; expiresAt: number }> {
-  const now = args.now ?? new Date();
-  const expiresInSeconds = args.expiresInSeconds ?? MEDIA_PRESIGN_TTL_SECONDS;
-  const host = `${args.accountId}.r2.cloudflarestorage.com`;
-  const url = buildR2ObjectUrl(args.accountId, args.bucketName, args.objectKey);
-  const amzDate = formatAmzDate(now);
-  const dateStamp = amzDate.slice(0, 8);
-  const credentialScope = `${dateStamp}/auto/s3/aws4_request`;
-
-  const queryEntries: Array<[string, string]> = [
-    ["X-Amz-Algorithm", "AWS4-HMAC-SHA256"],
-    ["X-Amz-Credential", `${args.accessKeyId}/${credentialScope}`],
-    ["X-Amz-Date", amzDate],
-    ["X-Amz-Expires", String(expiresInSeconds)],
-    ["X-Amz-SignedHeaders", "host"],
-  ];
-
-  const canonicalQueryString = buildCanonicalQueryString(queryEntries);
-  const canonicalRequest = [
-    "GET",
-    url.pathname,
-    canonicalQueryString,
-    `host:${host}\n`,
-    "host",
-    "UNSIGNED-PAYLOAD",
-  ].join("\n");
-
-  const stringToSign = [
-    "AWS4-HMAC-SHA256",
-    amzDate,
-    credentialScope,
-    await sha256Hex(canonicalRequest),
-  ].join("\n");
-
-  const signingKey = await deriveAwsV4SigningKey(args.secretAccessKey, dateStamp, "auto", "s3");
-  const signature = await hmacHex(signingKey, stringToSign);
-
-  const signedQueryString = buildCanonicalQueryString([
-    ...queryEntries,
-    ["X-Amz-Signature", signature],
-  ]);
-
-  url.search = signedQueryString;
-
-  return {
-    url: url.toString(),
-    expiresAt: Math.floor(now.getTime() / 1000) + expiresInSeconds,
-  };
 }
 
 export function isMultipartFile(value: MultipartFieldValue | null): value is MultipartFileLike {
@@ -182,73 +114,4 @@ export function parseOptionalViewport(
 
 function hasPrefix(bytes: Uint8Array, prefix: number[]): boolean {
   return prefix.every((value, index) => bytes[index] === value);
-}
-
-function formatAmzDate(value: Date): string {
-  return value.toISOString().replace(/[:-]|\.\d{3}/g, "");
-}
-
-function buildCanonicalQueryString(entries: Array<[string, string]>): string {
-  return [...entries]
-    .sort(([aKey, aValue], [bKey, bValue]) => {
-      if (aKey === bKey) {
-        return aValue.localeCompare(bValue);
-      }
-      return aKey.localeCompare(bKey);
-    })
-    .map(([key, value]) => `${awsPercentEncode(key)}=${awsPercentEncode(value)}`)
-    .join("&");
-}
-
-function awsPercentEncode(value: string): string {
-  return encodeURIComponent(value).replace(
-    /[!'()*]/g,
-    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`
-  );
-}
-
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return bytesToHex(new Uint8Array(digest));
-}
-
-async function deriveAwsV4SigningKey(
-  secretAccessKey: string,
-  dateStamp: string,
-  region: string,
-  service: string
-): Promise<CryptoKey> {
-  const kDate = await hmacBytes(`AWS4${secretAccessKey}`, dateStamp);
-  const kRegion = await hmacBytes(kDate, region);
-  const kService = await hmacBytes(kRegion, service);
-  const kSigning = await hmacBytes(kService, "aws4_request");
-
-  return crypto.subtle.importKey("raw", kSigning, { name: "HMAC", hash: "SHA-256" }, false, [
-    "sign",
-  ]);
-}
-
-async function hmacBytes(key: string | Uint8Array, value: string): Promise<Uint8Array> {
-  const keyBytes = typeof key === "string" ? new TextEncoder().encode(key) : key;
-  const cryptoKey = await crypto.subtle.importKey(
-    "raw",
-    keyBytes,
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-
-  const signature = await crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(value));
-  return new Uint8Array(signature);
-}
-
-async function hmacHex(key: CryptoKey, value: string): Promise<string> {
-  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value));
-  return bytesToHex(new Uint8Array(signature));
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
 }

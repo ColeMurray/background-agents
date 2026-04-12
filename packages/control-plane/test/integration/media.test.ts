@@ -185,8 +185,8 @@ describe("session media routes", () => {
     expect(events).toHaveLength(0);
   });
 
-  it("returns a presigned URL for a stored screenshot artifact", async () => {
-    const sessionName = `media-presign-${Date.now()}`;
+  it("streams a stored screenshot artifact from the worker", async () => {
+    const sessionName = `media-stream-${Date.now()}`;
     const { stub } = await initNamedSession(sessionName);
     await seedSandboxAuthHash(stub, {
       authToken: "sandbox-upload-token-3",
@@ -216,11 +216,121 @@ describe("session media routes", () => {
     );
 
     expect(response.status).toBe(200);
-    const body = await response.json<{ url: string; expiresAt: number }>();
-    expect(body.url).toContain(
-      `${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${env.R2_BUCKET_NAME}/${uploadBody.objectKey}`
+    expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(response.headers.get("Content-Length")).toBe(String(PNG_SIGNATURE.byteLength));
+    expect(response.headers.get("ETag")).toBeTruthy();
+    expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual(
+      Array.from(PNG_SIGNATURE)
     );
-    expect(body.url).toContain("X-Amz-Signature=");
-    expect(body.expiresAt).toBeGreaterThan(Math.floor(Date.now() / 1000));
+  });
+
+  it("returns 404 when the screenshot object is missing from R2", async () => {
+    const sessionName = `media-missing-object-${Date.now()}`;
+    const { stub } = await initNamedSession(sessionName);
+    await seedSandboxAuthHash(stub, {
+      authToken: "sandbox-upload-token-4",
+      sandboxId: "sandbox-1",
+    });
+    await seedProcessingMessage(stub, "msg-1");
+
+    const uploadForm = new FormData();
+    uploadForm.append("file", new File([PNG_SIGNATURE], "shot.png", { type: "image/png" }));
+    uploadForm.append("artifactType", "screenshot");
+    uploadForm.append("messageId", "msg-1");
+
+    const uploadResponse = await SELF.fetch(`https://test.local/sessions/${sessionName}/media`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer sandbox-upload-token-4",
+      },
+      body: uploadForm,
+    });
+    const uploadBody = await uploadResponse.json<{ artifactId: string; objectKey: string }>();
+
+    await env.MEDIA_BUCKET.delete(uploadBody.objectKey);
+
+    const response = await SELF.fetch(
+      `https://test.local/sessions/${sessionName}/media/${uploadBody.artifactId}`,
+      {
+        headers: await internalAuthHeaders(),
+      }
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "Media artifact not found" });
+  });
+
+  it("falls back to the R2 object's content type when artifact metadata is incomplete", async () => {
+    const sessionName = `media-object-metadata-${Date.now()}`;
+    const { stub } = await initNamedSession(sessionName);
+    await seedProcessingMessage(stub, "msg-1");
+
+    const objectKey = `sessions/${sessionName}/media/artifact-legacy.png`;
+    await env.MEDIA_BUCKET.put(objectKey, PNG_SIGNATURE, {
+      httpMetadata: { contentType: "image/png" },
+    });
+
+    const createArtifactResponse = await stub.fetch(
+      "http://internal/internal/create-media-artifact",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          artifactId: "artifact-legacy",
+          artifactType: "screenshot",
+          objectKey,
+          messageId: "msg-1",
+          metadata: {
+            objectKey,
+            sizeBytes: PNG_SIGNATURE.byteLength,
+          },
+        }),
+      }
+    );
+    expect(createArtifactResponse.status).toBe(200);
+
+    const response = await SELF.fetch(
+      `https://test.local/sessions/${sessionName}/media/artifact-legacy`,
+      {
+        headers: await internalAuthHeaders(),
+      }
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual(
+      Array.from(PNG_SIGNATURE)
+    );
+  });
+
+  it("returns 404 for non-screenshot artifacts", async () => {
+    const sessionName = `media-wrong-type-${Date.now()}`;
+    const { stub } = await initNamedSession(sessionName);
+    await seedProcessingMessage(stub, "msg-1");
+
+    const createArtifactResponse = await stub.fetch(
+      "http://internal/internal/create-media-artifact",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          artifactId: "artifact-branch",
+          artifactType: "branch",
+          objectKey: "sessions/session-1/media/artifact-branch.txt",
+          messageId: "msg-1",
+        }),
+      }
+    );
+    expect(createArtifactResponse.status).toBe(200);
+
+    const response = await SELF.fetch(
+      `https://test.local/sessions/${sessionName}/media/artifact-branch`,
+      {
+        headers: await internalAuthHeaders(),
+      }
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "Media artifact not found" });
   });
 });

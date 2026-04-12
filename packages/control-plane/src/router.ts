@@ -7,9 +7,9 @@ import { generateId, encryptToken } from "./auth/crypto";
 import { verifyInternalToken } from "./auth/internal";
 import {
   buildMediaObjectKey,
-  createPresignedR2GetUrl,
   detectScreenshotFileType,
   isMultipartFile,
+  isSupportedScreenshotMimeType,
   type MultipartFieldValue,
   parseOptionalBoolean,
   parseOptionalViewport,
@@ -1062,6 +1062,20 @@ async function getSessionArtifactFromDo(
   return data.artifact;
 }
 
+function getScreenshotMimeType(
+  artifact: Pick<ArtifactResponse, "metadata">
+): "image/png" | "image/jpeg" | "image/webp" | null {
+  const mimeType = artifact.metadata?.mimeType;
+  return typeof mimeType === "string" && isSupportedScreenshotMimeType(mimeType) ? mimeType : null;
+}
+
+function getContentTypeFromHeaders(
+  headers: Headers
+): "image/png" | "image/jpeg" | "image/webp" | null {
+  const contentType = headers.get("Content-Type");
+  return contentType && isSupportedScreenshotMimeType(contentType) ? contentType : null;
+}
+
 async function handleMediaUpload(
   request: Request,
   env: Env,
@@ -1258,21 +1272,6 @@ async function handleMediaGet(
     return error("Invalid artifact ID", 400);
   }
 
-  if (
-    !env.R2_ACCESS_KEY_ID ||
-    !env.R2_SECRET_ACCESS_KEY ||
-    !env.R2_BUCKET_NAME ||
-    !env.R2_ACCOUNT_ID
-  ) {
-    logger.error("media.presign.misconfigured", {
-      session_id: sessionId,
-      artifact_id: artifactId,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Media URL signing is not configured", 500);
-  }
-
   const doId = env.SESSION.idFromName(sessionId);
   const stub = env.SESSION.get(doId);
   const artifact = await getSessionArtifactFromDo(stub, artifactId, ctx);
@@ -1281,15 +1280,37 @@ async function handleMediaGet(
     return error("Media artifact not found", 404);
   }
 
-  const presigned = await createPresignedR2GetUrl({
-    accountId: env.R2_ACCOUNT_ID,
-    bucketName: env.R2_BUCKET_NAME,
-    objectKey: artifact.url,
-    accessKeyId: env.R2_ACCESS_KEY_ID,
-    secretAccessKey: env.R2_SECRET_ACCESS_KEY,
-  });
+  const object = await env.MEDIA_BUCKET.get(artifact.url);
+  if (!object) {
+    logger.warn("media.stream.object_missing", {
+      session_id: sessionId,
+      artifact_id: artifactId,
+      object_key: artifact.url,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Media artifact not found", 404);
+  }
 
-  return json(presigned);
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  const contentType = getContentTypeFromHeaders(headers) ?? getScreenshotMimeType(artifact);
+  if (!contentType) {
+    logger.error("media.stream.invalid_metadata", {
+      session_id: sessionId,
+      artifact_id: artifactId,
+      object_key: artifact.url,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Media artifact is invalid", 500);
+  }
+
+  headers.set("Content-Type", contentType);
+  headers.set("ETag", object.httpEtag);
+  headers.set("Content-Length", String(object.size));
+
+  return new Response(object.body, { headers });
 }
 
 async function handleSessionParticipants(

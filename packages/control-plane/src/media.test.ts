@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMediaObjectKey,
-  createPresignedR2GetUrl,
   detectScreenshotFileType,
+  isSupportedScreenshotMimeType,
   parseOptionalBoolean,
   parseOptionalViewport,
 } from "./media";
@@ -12,6 +12,13 @@ describe("media helpers", () => {
     expect(buildMediaObjectKey("session-1", "artifact-1", "png")).toBe(
       "sessions/session-1/media/artifact-1.png"
     );
+  });
+
+  it("accepts only supported screenshot mime types", () => {
+    expect(isSupportedScreenshotMimeType("image/png")).toBe(true);
+    expect(isSupportedScreenshotMimeType("image/jpeg")).toBe(true);
+    expect(isSupportedScreenshotMimeType("image/webp")).toBe(true);
+    expect(isSupportedScreenshotMimeType("image/gif")).toBe(false);
   });
 
   it.each([
@@ -69,33 +76,5 @@ describe("media helpers", () => {
     expect(() => parseOptionalViewport('{"width":0,"height":100}')).toThrow(
       "viewport must include positive width and height"
     );
-  });
-
-  it("creates deterministic presigned R2 GET URLs", async () => {
-    const now = new Date("2026-04-11T12:00:00.000Z");
-
-    const result = await createPresignedR2GetUrl({
-      accountId: "account-123",
-      bucketName: "media-bucket",
-      objectKey: "sessions/session 1/media/artifact-1.png",
-      accessKeyId: "access-key",
-      secretAccessKey: "secret-key",
-      expiresInSeconds: 120,
-      now,
-    });
-
-    expect(result.expiresAt).toBe(Math.floor(now.getTime() / 1000) + 120);
-
-    const url = new URL(result.url);
-    expect(url.origin).toBe("https://account-123.r2.cloudflarestorage.com");
-    expect(url.pathname).toBe("/media-bucket/sessions/session%201/media/artifact-1.png");
-    expect(url.searchParams.get("X-Amz-Algorithm")).toBe("AWS4-HMAC-SHA256");
-    expect(url.searchParams.get("X-Amz-Credential")).toBe(
-      "access-key/20260411/auto/s3/aws4_request"
-    );
-    expect(url.searchParams.get("X-Amz-Date")).toBe("20260411T120000Z");
-    expect(url.searchParams.get("X-Amz-Expires")).toBe("120");
-    expect(url.searchParams.get("X-Amz-SignedHeaders")).toBe("host");
-    expect(url.searchParams.get("X-Amz-Signature")).toMatch(/^[a-f0-9]{64}$/);
   });
 });

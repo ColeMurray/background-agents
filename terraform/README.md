@@ -62,19 +62,13 @@ brew install node@22
 ### 2. Cloudflare Setup
 
 1. **Create API Token** at [Cloudflare Dashboard](https://dash.cloudflare.com/profile/api-tokens)
-   - Create a **user-owned** API token for `cloudflare_api_token`
    - Required account permissions:
      - Workers Scripts: **Edit**
      - Workers KV Storage: **Edit**
      - Workers R2 Storage: **Edit**
      - D1: **Edit**
-     - Account API Tokens: **Write**
-   - Required user permissions:
-     - API Tokens: **Read** `API Tokens: Write` also works if you already use the broader
-       permission.
    - If you manage Cloudflare routes/custom domains through Terraform, also add:
      - Workers Routes: **Edit**
-   - The user behind this token must be a **Super Administrator** on the Cloudflare account.
 
 2. **Create R2 Bucket** for Terraform state:
    - Bucket name: `open-inspect-terraform-state`
@@ -410,9 +404,11 @@ variables.
 1. Build workers first: `npm run build -w @open-inspect/control-plane`
 2. Check script exists: `ls packages/control-plane/dist/index.js`
 3. Verify Cloudflare API token permissions:
-   - `API Tokens Read` or `API Tokens Write` for the user-level permission-group lookup
-   - `Account API Tokens Write` for Terraform-managed account token creation
-   - Super Administrator access on the target Cloudflare account
+   - `Workers Scripts: Edit`
+   - `Workers KV Storage: Edit`
+   - `Workers R2 Storage: Edit`
+   - `D1: Edit`
+   - `Workers Routes: Edit` if you manage routes/custom domains through Terraform
 
 ## Adding New Environments
 

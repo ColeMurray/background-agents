@@ -12,20 +12,14 @@
 # Provider Authentication
 # =============================================================================
 
-# User-owned Cloudflare API token.
+# Cloudflare API token.
 # Required account permissions:
 #   - Workers Scripts: Edit
 #   - Workers KV Storage: Edit
 #   - Workers R2 Storage: Edit
 #   - D1: Edit
-#   - Account API Tokens: Write
-# Required user permissions:
-#   - API Tokens: Read
-#     (API Tokens: Write also works if you already use the broader permission)
 # Optional if you manage Cloudflare routes/custom domains:
 #   - Workers Routes: Edit
-# The user must be a Super Administrator on the Cloudflare account because Terraform
-# creates an account-owned token for control-plane media reads.
 # Create at: https://dash.cloudflare.com/profile/api-tokens
 cloudflare_api_token = ""
 

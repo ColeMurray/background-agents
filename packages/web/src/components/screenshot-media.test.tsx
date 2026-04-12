@@ -5,14 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 
-const { mockUseMediaArtifactUrl } = vi.hoisted(() => ({
-  mockUseMediaArtifactUrl: vi.fn(),
-}));
-
-vi.mock("@/hooks/use-media-artifact-url", () => ({
-  useMediaArtifactUrl: mockUseMediaArtifactUrl,
-}));
-
 import { MediaLightbox } from "./media-lightbox";
 import { ScreenshotArtifactCard } from "./screenshot-artifact-card";
 import { MediaSection } from "./sidebar/media-section";
@@ -26,10 +18,6 @@ afterEach(() => {
 
 describe("ScreenshotArtifactCard", () => {
   it("renders the screenshot preview and opens the selected artifact", () => {
-    mockUseMediaArtifactUrl.mockReturnValue({
-      url: "https://media.example.com/artifact.png",
-      isLoading: false,
-    });
     const onOpen = vi.fn();
 
     render(
@@ -44,9 +32,11 @@ describe("ScreenshotArtifactCard", () => {
       />
     );
 
-    expect(screen.getByRole("img", { name: "Dashboard after fix" })).toHaveAttribute(
+    const image = screen.getByAltText("Dashboard after fix");
+    fireEvent.load(image);
+    expect(screen.getByAltText("Dashboard after fix")).toHaveAttribute(
       "src",
-      "https://media.example.com/artifact.png"
+      "/api/sessions/session-1/media/artifact-1"
     );
     expect(screen.getByText("https://app.example.com/dashboard")).toBeInTheDocument();
 
@@ -54,12 +44,7 @@ describe("ScreenshotArtifactCard", () => {
     expect(onOpen).toHaveBeenCalledWith("artifact-1");
   });
 
-  it("renders an unavailable state when no URL is returned", () => {
-    mockUseMediaArtifactUrl.mockReturnValue({
-      url: null,
-      isLoading: false,
-    });
-
+  it("renders an unavailable state when the preview fails to load", () => {
     render(
       <ScreenshotArtifactCard
         sessionId="session-1"
@@ -69,17 +54,13 @@ describe("ScreenshotArtifactCard", () => {
       />
     );
 
+    fireEvent.error(screen.getByAltText("Screenshot"));
     expect(screen.getByText("Preview unavailable")).toBeInTheDocument();
   });
 });
 
 describe("MediaLightbox", () => {
   it("renders the selected screenshot preview", () => {
-    mockUseMediaArtifactUrl.mockReturnValue({
-      url: "https://media.example.com/lightbox.png",
-      isLoading: false,
-    });
-
     render(
       <MediaLightbox
         sessionId="session-1"
@@ -98,21 +79,18 @@ describe("MediaLightbox", () => {
       />
     );
 
+    const image = screen.getByAltText("Checkout page");
+    fireEvent.load(image);
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByText("Checkout page")).toBeInTheDocument();
     expect(screen.getByText("https://app.example.com/checkout")).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "Checkout page" })).toHaveAttribute(
+    expect(screen.getByAltText("Checkout page")).toHaveAttribute(
       "src",
-      "https://media.example.com/lightbox.png"
+      "/api/sessions/session-1/media/artifact-1"
     );
   });
 
   it("renders loading and empty states distinctly", () => {
-    mockUseMediaArtifactUrl.mockReturnValue({
-      url: null,
-      isLoading: true,
-    });
-
     const { rerender } = render(
       <MediaLightbox sessionId="session-1" artifact={null} open={true} onOpenChange={vi.fn()} />
     );
@@ -136,6 +114,26 @@ describe("MediaLightbox", () => {
 
     expect(screen.getByText("Loading screenshot...")).toBeInTheDocument();
   });
+
+  it("renders an unavailable state when the preview fails to load", () => {
+    render(
+      <MediaLightbox
+        sessionId="session-1"
+        artifact={{
+          id: "artifact-1",
+          type: "screenshot",
+          url: null,
+          metadata: { caption: "Broken shot" },
+          createdAt: 1234,
+        }}
+        open={true}
+        onOpenChange={vi.fn()}
+      />
+    );
+
+    fireEvent.error(screen.getByAltText("Broken shot"));
+    expect(screen.getByText("Preview unavailable")).toBeInTheDocument();
+  });
 });
 
 describe("MediaSection", () => {
@@ -150,10 +148,6 @@ describe("MediaSection", () => {
   });
 
   it("renders one card per screenshot and hides source URLs in compact mode", () => {
-    mockUseMediaArtifactUrl.mockReturnValue({
-      url: "https://media.example.com/sidebar.png",
-      isLoading: false,
-    });
     const onOpenMedia = vi.fn();
 
     render(
@@ -175,6 +169,7 @@ describe("MediaSection", () => {
       />
     );
 
+    fireEvent.load(screen.getByAltText("Sidebar shot"));
     fireEvent.click(screen.getByRole("button", { name: "Sidebar shot" }));
     expect(onOpenMedia).toHaveBeenCalledWith("artifact-1");
     expect(screen.queryByText("https://app.example.com/sidebar")).not.toBeInTheDocument();

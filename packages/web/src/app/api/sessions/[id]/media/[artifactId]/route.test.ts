@@ -53,14 +53,35 @@ describe("session media API route", () => {
     expect(controlPlaneFetch).not.toHaveBeenCalled();
   });
 
-  it("proxies successful media URL responses with no-store caching", async () => {
+  it("rejects invalid session IDs before proxying to the control plane", async () => {
     vi.mocked(getServerSession).mockResolvedValue({
       user: { id: "user-1" },
     } as never);
+
+    const response = await GET(new Request("http://localhost/api/sessions/bad/media/a1"), {
+      params: Promise.resolve({
+        id: "../admin",
+        artifactId: "artifact-1",
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid session ID" });
+    expect(controlPlaneFetch).not.toHaveBeenCalled();
+  });
+
+  it("proxies successful media streams with private no-store caching", async () => {
+    vi.mocked(getServerSession).mockResolvedValue({
+      user: { id: "user-1" },
+    } as never);
+    const upstreamBody = Uint8Array.from([0x89, 0x50, 0x4e, 0x47]);
     vi.mocked(controlPlaneFetch).mockResolvedValue(
-      Response.json({
-        url: "https://media.example.com/artifact.png",
-        expiresAt: 1234,
+      new Response(upstreamBody, {
+        headers: {
+          "Content-Type": "image/png",
+          "Content-Length": String(upstreamBody.byteLength),
+          ETag: '"artifact-etag"',
+        },
       })
     );
 
@@ -73,11 +94,14 @@ describe("session media API route", () => {
 
     expect(controlPlaneFetch).toHaveBeenCalledWith("/sessions/session-1/media/artifact-1");
     expect(response.status).toBe(200);
-    expect(response.headers.get("Cache-Control")).toBe("no-store");
-    await expect(response.json()).resolves.toEqual({
-      url: "https://media.example.com/artifact.png",
-      expiresAt: 1234,
-    });
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(response.headers.get("Vary")).toBe("Cookie");
+    expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(response.headers.get("Content-Length")).toBe(String(upstreamBody.byteLength));
+    expect(response.headers.get("ETag")).toBe('"artifact-etag"');
+    expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual(
+      Array.from(upstreamBody)
+    );
   });
 
   it("passes through upstream error statuses", async () => {
@@ -98,7 +122,7 @@ describe("session media API route", () => {
     });
 
     expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toEqual({ error: "Failed to fetch media URL" });
+    await expect(response.json()).resolves.toEqual({ error: "Failed to fetch media" });
   });
 
   it("returns 500 when the control plane request throws", async () => {
@@ -115,6 +139,6 @@ describe("session media API route", () => {
     });
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: "Failed to fetch media URL" });
+    await expect(response.json()).resolves.toEqual({ error: "Failed to fetch media" });
   });
 });

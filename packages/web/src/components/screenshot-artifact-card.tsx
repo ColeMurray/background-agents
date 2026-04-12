@@ -1,7 +1,8 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type { Artifact } from "@/types/session";
-import { useMediaArtifactUrl } from "@/hooks/use-media-artifact-url";
+import { buildSessionMediaUrl } from "@/lib/media";
 import { cn } from "@/lib/utils";
 
 interface ScreenshotArtifactCardProps {
@@ -21,8 +22,15 @@ export function ScreenshotArtifactCard({
   className,
   compact = false,
 }: ScreenshotArtifactCardProps) {
-  const { url, isLoading } = useMediaArtifactUrl(sessionId, artifactId);
+  const mediaUrl = buildSessionMediaUrl(sessionId, artifactId);
   const caption = metadata?.caption || "Screenshot";
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    setIsLoaded(false);
+    setHasError(false);
+  }, [mediaUrl]);
 
   return (
     <div className={cn("overflow-hidden border border-border-muted bg-card", className)}>
@@ -33,16 +41,25 @@ export function ScreenshotArtifactCard({
         aria-label={caption}
       >
         <div className="relative aspect-[16/10] overflow-hidden bg-muted">
-          {url ? (
+          {!hasError && (
             <img
-              src={url}
+              src={mediaUrl}
               alt={caption}
-              className="h-full w-full object-cover transition-transform duration-200 hover:scale-[1.01]"
+              className={cn(
+                "h-full w-full object-cover transition-transform duration-200 hover:scale-[1.01]",
+                !isLoaded && "invisible"
+              )}
               loading="lazy"
+              onLoad={() => setIsLoaded(true)}
+              onError={() => {
+                setHasError(true);
+                setIsLoaded(false);
+              }}
             />
-          ) : (
+          )}
+          {!isLoaded && (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-              {isLoading ? "Loading screenshot..." : "Preview unavailable"}
+              {hasError ? "Preview unavailable" : "Loading screenshot..."}
             </div>
           )}
         </div>

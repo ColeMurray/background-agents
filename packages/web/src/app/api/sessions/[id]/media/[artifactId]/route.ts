@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
 
 const ARTIFACT_ID_PATTERN = /^[A-Za-z0-9-]+$/;
+const SESSION_ID_PATTERN = /^[A-Za-z0-9-]+$/;
 
 export async function GET(
   _request: Request,
@@ -15,6 +16,9 @@ export async function GET(
   }
 
   const { id: sessionId, artifactId } = await params;
+  if (!SESSION_ID_PATTERN.test(sessionId)) {
+    return NextResponse.json({ error: "Invalid session ID" }, { status: 400 });
+  }
   if (!ARTIFACT_ID_PATTERN.test(artifactId)) {
     return NextResponse.json({ error: "Invalid artifact ID" }, { status: 400 });
   }
@@ -23,18 +27,28 @@ export async function GET(
     const response = await controlPlaneFetch(`/sessions/${sessionId}/media/${artifactId}`);
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`Failed to fetch media URL: ${errorText}`);
-      return NextResponse.json({ error: "Failed to fetch media URL" }, { status: response.status });
+      console.error(`Failed to fetch media: ${errorText}`);
+      return NextResponse.json({ error: "Failed to fetch media" }, { status: response.status });
     }
 
-    const body = await response.json();
-    return NextResponse.json(body, {
-      headers: {
-        "Cache-Control": "no-store",
-      },
+    const headers = new Headers({
+      "Cache-Control": "private, no-store",
+      Vary: "Cookie",
+    });
+
+    for (const headerName of ["Content-Type", "Content-Length", "ETag"]) {
+      const headerValue = response.headers.get(headerName);
+      if (headerValue) {
+        headers.set(headerName, headerValue);
+      }
+    }
+
+    return new Response(response.body, {
+      status: response.status,
+      headers,
     });
   } catch (error) {
-    console.error("Failed to fetch media URL:", error);
-    return NextResponse.json({ error: "Failed to fetch media URL" }, { status: 500 });
+    console.error("Failed to fetch media:", error);
+    return NextResponse.json({ error: "Failed to fetch media" }, { status: 500 });
   }
 }
