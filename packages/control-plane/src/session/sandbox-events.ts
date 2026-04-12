@@ -3,12 +3,13 @@ import type { Logger } from "../logger";
 import type { GitPushSpec } from "../source-control";
 import type { SandboxEvent, ServerMessage } from "../types";
 import { shouldPersistToolCallEvent } from "./event-persistence";
-import { assertArtifactType, buildSessionArtifact } from "./artifacts";
+import { assertArtifactType } from "./artifacts";
 import type { SessionRepository } from "./repository";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { SessionWebSocketManager } from "./websocket-manager";
 
 type PushResolver = { resolve: () => void; reject: (err: Error) => void };
+type SandboxEventWithAck = SandboxEvent & { ackId?: string };
 
 interface SessionSandboxEventProcessorDeps {
   ctx: DurableObjectState;
@@ -39,7 +40,7 @@ export class SessionSandboxEventProcessor {
 
   constructor(private readonly deps: SessionSandboxEventProcessorDeps) {}
 
-  async processSandboxEvent(event: SandboxEvent): Promise<void> {
+  async processSandboxEvent(event: SandboxEventWithAck): Promise<void> {
     if (event.type === "heartbeat" || event.type === "token") {
       this.deps.log.debug("Sandbox event", { event_type: event.type });
     } else if (event.type !== "execution_complete") {
@@ -48,7 +49,7 @@ export class SessionSandboxEventProcessor {
     const now = Date.now();
 
     // Extract ackId from the raw event (attached by bridge for critical events)
-    const ackId = (event as Record<string, unknown>).ackId as string | undefined;
+    const ackId = event.ackId;
 
     if (event.type === "heartbeat") {
       this.deps.repository.updateSandboxHeartbeat(now);
@@ -73,13 +74,13 @@ export class SessionSandboxEventProcessor {
         artifactId,
         messageId: messageId ?? undefined,
       };
-      const artifact = buildSessionArtifact({
+      const artifact = {
         id: artifactId,
         type: artifactType,
         url: event.url,
         metadata: event.metadata ?? null,
         createdAt: now,
-      });
+      };
 
       this.deps.repository.createArtifact({
         id: artifact.id,

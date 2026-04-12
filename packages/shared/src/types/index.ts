@@ -129,7 +129,7 @@ export interface ScreenshotArtifactMetadata {
   /** R2 object key */
   objectKey: string;
   /** MIME type: image/png, image/jpeg, image/webp */
-  mimeType: string;
+  mimeType: "image/png" | "image/jpeg" | "image/webp";
   /** File size in bytes */
   sizeBytes: number;
   /** Viewport dimensions at capture time */

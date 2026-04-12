@@ -137,7 +137,7 @@ export function parseOptionalBoolean(value: MultipartFieldValue | null): boolean
   if (typeof value !== "string") {
     throw new Error("Boolean fields must be strings");
   }
-  const normalized = String(value).trim().toLowerCase();
+  const normalized = value.trim().toLowerCase();
   if (normalized === "true") return true;
   if (normalized === "false") return false;
   throw new Error("Boolean fields must be 'true' or 'false'");
@@ -153,7 +153,7 @@ export function parseOptionalViewport(
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(String(value));
+    parsed = JSON.parse(value);
   } catch {
     throw new Error("viewport must be valid JSON");
   }
