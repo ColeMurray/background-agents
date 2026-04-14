@@ -71,10 +71,10 @@ jobs:
     needs: [check-secrets]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
@@ -96,7 +96,7 @@ jobs:
 
       - name: Post Validation Results
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const hasSecrets = '${{ needs.check-secrets.outputs.has-secrets }}' === 'true';
@@ -138,10 +138,10 @@ jobs:
     if: github.event_name == 'pull_request' && needs.check-secrets.outputs.has-secrets == 'true'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
           cache: "npm"
@@ -158,7 +158,7 @@ jobs:
           npm run build -w @open-inspect/linear-bot
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
@@ -221,7 +221,7 @@ jobs:
           TF_VAR_daytona_target: ${{ secrets.DAYTONA_TARGET }}
 
       - name: Post Plan Results
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const planOutcome = '${{ steps.plan.outcome }}';
@@ -265,10 +265,10 @@ jobs:
     environment: production
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
           cache: "npm"
@@ -285,7 +285,7 @@ jobs:
           npm run build -w @open-inspect/linear-bot
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -295,7 +295,7 @@ jobs:
           pip install modal fastapi pydantic httpx PyJWT
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TF_VERSION }}
 

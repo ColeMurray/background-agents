@@ -55,6 +55,7 @@ import { reposRoutes } from "./routes/repos";
 import { repoImageRoutes } from "./routes/repo-images";
 import { secretsRoutes } from "./routes/secrets";
 import { automationRoutes } from "./routes/automations";
+import { analyticsRoutes } from "./routes/analytics";
 import { webhookRoutes } from "./webhooks";
 
 const logger = createLogger("router");
@@ -241,6 +242,10 @@ function isSandboxAuthRoute(path: string): boolean {
   return SANDBOX_AUTH_ROUTES.some((pattern) => pattern.test(path));
 }
 
+function isScmAgnosticRoute(path: string): boolean {
+  return /^\/analytics\/(summary|timeseries|breakdown)$/.test(path);
+}
+
 function enforceImplementedScmProvider(
   path: string,
   env: Env,
@@ -248,7 +253,7 @@ function enforceImplementedScmProvider(
 ): Response | null {
   try {
     const provider = resolveDeploymentScmProvider(env);
-    if (provider !== "github" && !isPublicRoute(path)) {
+    if (provider !== "github" && !isPublicRoute(path) && !isScmAgnosticRoute(path)) {
       logger.warn("SCM provider not implemented", {
         event: "scm.provider_not_implemented",
         scm_provider: provider,
@@ -529,6 +534,9 @@ const routes: Route[] = [
 
   // Automations
   ...automationRoutes,
+
+  // Analytics
+  ...analyticsRoutes,
 
   // Webhooks (public routes — auth handled per-route)
   ...webhookRoutes,

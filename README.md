@@ -8,11 +8,14 @@ An open-source background agents coding system inspired by
 Open-Inspect provides a hosted background coding agent that can:
 
 - Work on tasks in the background while you focus on other things
-- Access full development environments with all tools engineers have
-- Support multiple clients (web, Slack, Chrome extension)
-- Enable multiplayer sessions where multiple people can collaborate
-- Create PRs with proper commit attribution
-- Use your choice of AI model — Anthropic Claude or OpenAI Codex via your ChatGPT subscription
+- Access full development environments (Node.js, Python, git, browser automation, VS Code)
+- Connect from anywhere — web UI, Slack, GitHub PRs, Linear issues, or webhooks
+- Enable multiplayer sessions where multiple people can collaborate in real time
+- Create PRs with proper commit attribution to the prompting user
+- Run on a schedule — cron jobs, Sentry alerts, and webhook-triggered automations
+- Spawn parallel sub-tasks that work in separate sandboxes simultaneously
+- Use your choice of AI model — Anthropic Claude, OpenAI Codex (via ChatGPT subscription), or
+  OpenCode Zen
 
 ## Security Model (Single-Tenant Only)
 
@@ -66,9 +69,9 @@ built for internal use where all employees are trusted and have access to compan
                                     ┌──────────────────┐
                                     │     Clients      │
                                     │ ┌──────────────┐ │
-                                    │ │     Web      │ │
-                                    │ │    Slack     │ │
-                                    │ │   Extension  │ │
+                                    │ │  Web / Slack │ │
+                                    │ │ GitHub / Lin.│ │
+                                    │ │   Webhooks   │ │
                                     │ └──────────────┘ │
                                     └────────┬─────────┘
                                              │
@@ -97,19 +100,22 @@ built for internal use where all employees are trusted and have access to compan
 │  │  └───────────┘  └───────────┘  └───────────┘                 │  │
 │  │                      │                                       │  │
 │  │              Full Dev Environment                            │  │
-│  │        (Node.js, Python, git, Playwright)                    │  │
+│  │      (Node.js, Python, git, agent-browser)                   │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Packages
 
-| Package                                 | Description                          |
-| --------------------------------------- | ------------------------------------ |
-| [modal-infra](packages/modal-infra)     | Modal sandbox infrastructure         |
-| [control-plane](packages/control-plane) | Cloudflare Workers + Durable Objects |
-| [web](packages/web)                     | Next.js web client                   |
-| [shared](packages/shared)               | Shared types and utilities           |
+| Package                                 | Description                                 |
+| --------------------------------------- | ------------------------------------------- |
+| [modal-infra](packages/modal-infra)     | Modal sandbox infrastructure                |
+| [control-plane](packages/control-plane) | Cloudflare Workers + Durable Objects        |
+| [web](packages/web)                     | Next.js web client                          |
+| [slack-bot](packages/slack-bot)         | Slack integration (sessions from messages)  |
+| [github-bot](packages/github-bot)       | GitHub integration (auto-review, @mention)  |
+| [linear-bot](packages/linear-bot)       | Linear integration (issue → coding session) |
+| [shared](packages/shared)               | Shared types and utilities                  |
 
 ## Getting Started
 
@@ -127,11 +133,14 @@ To set up recurring scheduled tasks, see **[docs/AUTOMATIONS.md](docs/AUTOMATION
 
 ### Fast Startup
 
-Sessions start near-instantly using Modal filesystem snapshots:
+Sessions start near-instantly through multiple layers of warming:
 
-- Images rebuilt every 30 minutes with latest code
-- Dependencies pre-installed and cached
-- Sandboxes warmed proactively when user starts typing
+- **Filesystem snapshots** — After each prompt, sandbox state is saved; follow-up sessions restore
+  instead of re-cloning
+- **Pre-built repo images** — Toggle per-repo in Settings; rebuilt every 30 minutes with latest
+  commits and dependencies
+- **Proactive warming** — Sandbox begins spinning up as soon as you start typing, before you hit
+  Enter
 
 ### Multiplayer Sessions
 
@@ -155,15 +164,63 @@ await configureGitIdentity({
 
 ### Multi-Provider Model Support
 
-Choose the AI model that fits your task — Anthropic Claude or OpenAI Codex:
+Choose the AI model that fits your task, with per-session reasoning effort controls:
 
-| Provider  | Models                                |
-| --------- | ------------------------------------- |
-| Anthropic | Claude Haiku, Sonnet, Opus            |
-| OpenAI    | GPT 5.2, GPT 5.2 Codex, GPT 5.3 Codex |
+| Provider     | Models                                                      |
+| ------------ | ----------------------------------------------------------- |
+| Anthropic    | Claude Haiku 4.5, Sonnet 4.5/4.6, Opus 4.5/4.6              |
+| OpenAI       | GPT 5.2, GPT 5.4, GPT 5.2 Codex, 5.3 Codex, 5.3 Codex Spark |
+| OpenCode Zen | Kimi K2.5, MiniMax M2.5, GLM 5 (opt-in)                     |
 
-OpenAI models work with your existing ChatGPT subscription — no separate API key needed. See
-**[docs/OPENAI_MODELS.md](docs/OPENAI_MODELS.md)** for setup instructions.
+OpenAI models work with your existing ChatGPT subscription via OAuth — no separate API key needed.
+See **[docs/OPENAI_MODELS.md](docs/OPENAI_MODELS.md)** for setup instructions.
+
+### Client Integrations
+
+Interact with agents from wherever your team already works:
+
+- **Web UI** — Full session management with real-time streaming, model/reasoning selectors, terminal
+  panel, and multiplayer presence
+- **Slack Bot** — @mention or DM to start a session; replies thread back with results. Per-user
+  model and branch preferences via App Home
+- **GitHub Bot** — Auto-review on PR open, respond to @mentions in PR comments, or trigger on
+  reviewer assignment. Configurable per-repo
+- **Linear Bot** — Assign an issue to the agent and it creates a coding session, posts progress
+  activities, and links the resulting PR
+- **Webhooks** — Trigger sessions from any external system via authenticated HTTP POST
+
+### Automations
+
+Schedule recurring tasks or react to external events — no human in the loop:
+
+- **Cron schedules** — Hourly, daily, weekly, monthly, or custom 5-field cron with timezone support
+- **Sentry alerts** — Auto-triage on new errors, regressions, or critical metric alerts
+- **Inbound webhooks** — JSONPath condition filters to gate which payloads spawn sessions
+- Auto-pause after 3 consecutive failures, manual trigger button, full run history
+
+See **[docs/AUTOMATIONS.md](docs/AUTOMATIONS.md)** for setup instructions.
+
+### Sandbox Environment
+
+Every session runs in an isolated Modal sandbox with a full development environment:
+
+- **Pre-installed:** Node.js 22, Python 3.12, Bun, git, GitHub CLI, build-essential
+- **Browser automation:** agent-browser CLI with headless Chromium for screenshots, visual diffs,
+  and UI verification
+- **Code-server:** Optional browser-based VS Code connected to the session workspace
+- **Web terminal:** ttyd-powered terminal accessible from the session UI
+- **Port tunneling:** Expose up to 10 dev server ports via encrypted tunnels
+- **Repo secrets:** AES-256-GCM encrypted, scoped per-repo or globally, injected as env vars at
+  spawn time. Supports bulk `.env` paste import
+
+### Sub-Task Spawning
+
+Agents can decompose work into parallel child sessions:
+
+- `spawn-task` creates a child session in its own sandbox and returns immediately
+- Parent continues working while children run in parallel on separate branches
+- `get-task-status` and `cancel-task` for coordination
+- Depth limits and per-repo guardrails enforced
 
 ### Repository Lifecycle Scripts
 
