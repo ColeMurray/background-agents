@@ -11,6 +11,7 @@ on:
       - "packages/github-bot/**"
       - "packages/linear-bot/**"
       - "packages/modal-infra/**"
+      - "packages/daytona-infra/**"
       - "packages/sandbox-runtime/**"
       - "packages/shared/**"
       - "packages/web/**" # Web app deployed via Terraform when web_platform = "cloudflare"
@@ -25,6 +26,7 @@ on:
       - "packages/github-bot/**"
       - "packages/linear-bot/**"
       - "packages/modal-infra/**"
+      - "packages/daytona-infra/**"
       - "packages/sandbox-runtime/**"
       - "packages/shared/**"
       - "packages/web/**"
@@ -217,6 +219,7 @@ jobs:
           TF_VAR_daytona_api_url: ${{ secrets.DAYTONA_API_URL }}
           TF_VAR_daytona_api_key: ${{ secrets.DAYTONA_API_KEY }}
           TF_VAR_daytona_base_snapshot: ${{ secrets.DAYTONA_BASE_SNAPSHOT }}
+          TF_VAR_daytona_target: ${{ secrets.DAYTONA_TARGET }}
 
       - name: Post Plan Results
         uses: actions/github-script@v7
@@ -348,6 +351,7 @@ jobs:
           TF_VAR_daytona_api_url: ${{ secrets.DAYTONA_API_URL }}
           TF_VAR_daytona_api_key: ${{ secrets.DAYTONA_API_KEY }}
           TF_VAR_daytona_base_snapshot: ${{ secrets.DAYTONA_BASE_SNAPSHOT }}
+          TF_VAR_daytona_target: ${{ secrets.DAYTONA_TARGET }}
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 

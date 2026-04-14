@@ -120,5 +120,6 @@ module "control_plane_worker" {
     module.session_index_kv,
     null_resource.d1_migrations,
     module.linear_bot_worker,
+    module.daytona_infra,
   ]
 }
