@@ -12,7 +12,7 @@ snapshot setup, not runtime operations.
 
 ## Environment
 
-- `DAYTONA_API_KEY` (required) — must have **snapshot create** and **snapshot delete** permissions
+- `DAYTONA_API_KEY` (required) — must have **Snapshots: Read, Write, Delete** permissions
 - `DAYTONA_API_URL`
 - `DAYTONA_TARGET`
 - `DAYTONA_BASE_SNAPSHOT` (required)

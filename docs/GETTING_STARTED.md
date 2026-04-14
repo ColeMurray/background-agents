@@ -151,9 +151,8 @@ Create an R2 API Token:
 
 1. Create a [Daytona](https://app.daytona.io) account and generate an **API key** with the following
    permissions:
-   - **Sandbox**: create, read, start, stop, recover (for runtime sandbox management)
-   - **Snapshot**: create, delete (for automated snapshot builds via Terraform)
-   - **Preview URLs**: read (for tunnel URL generation)
+   - **Sandboxes**: Read, Write (runtime sandbox management and preview URLs)
+   - **Snapshots**: Read, Write, Delete (automated snapshot builds via Terraform)
 2. Note the **API URL** (e.g., `https://app.daytona.io/api`) and optional **target**
 3. Seed the named base snapshot before pointing traffic at Daytona:
    ```bash
