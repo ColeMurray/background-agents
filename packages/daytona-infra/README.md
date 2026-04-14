@@ -12,7 +12,7 @@ snapshot setup, not runtime operations.
 
 ## Environment
 
-- `DAYTONA_API_KEY` (required)
+- `DAYTONA_API_KEY` (required) — must have **snapshot create** and **snapshot delete** permissions
 - `DAYTONA_API_URL`
 - `DAYTONA_TARGET`
 - `DAYTONA_BASE_SNAPSHOT` (required)
@@ -26,3 +26,7 @@ python -m src.bootstrap --force
 ```
 
 Re-run `bootstrap` whenever `packages/sandbox-runtime` or the sandbox toolchain changes.
+
+> **Note**: Snapshot builds are automated via Terraform when `sandbox_provider = "daytona"`. The
+> `daytona-infra` Terraform module triggers a rebuild whenever source files change. Manual runs are
+> only needed for initial setup or debugging.
