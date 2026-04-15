@@ -268,9 +268,9 @@ export class SessionSandboxEventProcessor {
       timeoutId = setTimeout(() => {
         if (this.pendingPushResolvers.has(normalizedBranch)) {
           this.pendingPushResolvers.delete(normalizedBranch);
-          reject(new Error("Push operation timed out after 180 seconds"));
+          reject(new Error("Push operation timed out after 360 seconds"));
         }
-      }, 180000);
+      }, 360000);
     });
 
     this.deps.log.info("Sending push command", { branch_name: branchName });
