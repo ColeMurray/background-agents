@@ -153,6 +153,22 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     const sandbox = this.repository.getSandbox();
     const expectedSandboxId = sandbox?.modal_sandbox_id;
 
+    // If the sandbox is in a terminal state, don't re-adopt stale WebSockets.
+    // After inactivity timeout or heartbeat stale, the DO closes the WS and sets
+    // status to stopped/stale, but the close handshake may not complete before
+    // hibernation. On wake, the zombie WS still appears OPEN — skip it.
+    const terminalStatuses = ["stopped", "failed", "stale"];
+    if (sandbox && terminalStatuses.includes(sandbox.status)) {
+      // Close any lingering sandbox WebSockets so they don't persist
+      for (const ws of this.ctx.getWebSockets()) {
+        const parsed = this.classify(ws);
+        if (parsed.kind === "sandbox") {
+          this.close(ws, 1000, "Sandbox terminated");
+        }
+      }
+      return null;
+    }
+
     for (const ws of this.ctx.getWebSockets()) {
       const parsed = this.classify(ws);
       if (parsed.kind !== "sandbox" || ws.readyState !== WebSocket.OPEN) continue;
