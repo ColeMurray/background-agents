@@ -91,7 +91,10 @@ class TestCodexAuthPluginSetup:
             patch.dict("os.environ", {"OPENAI_OAUTH_REFRESH_TOKEN": "rt_real_secret"}, clear=False),
             patch("sandbox_runtime.entrypoint.Path") as mock_path,
             patch("sandbox_runtime.entrypoint.shutil.copy") as mock_copy,
-            patch("sandbox_runtime.entrypoint.asyncio.create_subprocess_exec", AsyncMock(return_value=fake_proc)),
+            patch(
+                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                AsyncMock(return_value=fake_proc),
+            ),
             patch(
                 "sandbox_runtime.entrypoint.asyncio.create_task",
                 side_effect=lambda coro: coro.close(),
