@@ -296,19 +296,20 @@ class SandboxSupervisor:
                 if tool_file.is_file() and tool_file.suffix == ".js":
                     shutil.copy(tool_file, tool_dest / tool_file.name)
 
-        # Node modules symlink
-        node_modules = opencode_dir / "node_modules"
-        global_modules = Path("/usr/lib/node_modules")
-        if not node_modules.exists() and global_modules.exists():
-            try:
-                node_modules.symlink_to(global_modules)
-            except Exception as e:
-                self.log.warn("opencode.symlink_error", exc=e)
-
-        # Minimal package.json
-        package_json = opencode_dir / "package.json"
-        if not package_json.exists():
-            package_json.write_text('{"name": "opencode-tools", "type": "module"}')
+        # Copy pre-built deps (package.json, package-lock.json, node_modules)
+        # from the image staging directory.  This gives OpenCode a lockfile
+        # that matches the declared dependencies so Npm.install() finds
+        # everything in sync and skips arborist reify() entirely.
+        deps_cache = Path("/app/opencode-deps")
+        for name in ("package.json", "package-lock.json"):
+            src = deps_cache / name
+            dest = opencode_dir / name
+            if src.exists() and not dest.exists():
+                shutil.copy2(src, dest)
+        cached_modules = deps_cache / "node_modules"
+        local_modules = opencode_dir / "node_modules"
+        if cached_modules.is_dir() and not local_modules.exists():
+            shutil.copytree(cached_modules, local_modules, symlinks=True)
 
     def _install_bin_scripts(self) -> None:
         """Install standalone CLI scripts into /usr/local/bin.
