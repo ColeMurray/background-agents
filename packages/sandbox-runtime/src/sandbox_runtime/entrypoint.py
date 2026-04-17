@@ -548,11 +548,11 @@ class SandboxSupervisor:
 
         # Deploy codex auth proxy plugin if OpenAI OAuth is configured
         opencode_dir = workdir / ".opencode"
-        plugin_source = Path("/app/sandbox_runtime/plugins/codex-auth-plugin.ts")
+        plugin_source = Path("/app/sandbox_runtime/plugins/codex-auth-plugin.js")
         if plugin_source.exists() and os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN"):
             plugin_dir = opencode_dir / "plugins"
             plugin_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy(plugin_source, plugin_dir / "codex-auth-plugin.ts")
+            shutil.copy(plugin_source, plugin_dir / "codex-auth-plugin.js")
             self.log.info("openai_oauth.plugin_deployed")
 
         env = {

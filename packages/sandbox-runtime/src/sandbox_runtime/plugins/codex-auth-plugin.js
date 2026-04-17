@@ -6,10 +6,9 @@
  * refresh tokens are persisted centrally in D1 rather than being lost when
  * ephemeral sandboxes terminate.
  *
- * Auto-loaded from .opencode/plugins/ — OpenCode discovers project plugins
+ * Auto-loaded from .opencode/plugins/ - OpenCode discovers project plugins
  * and deduplicates by provider ID (last wins), so this replaces the built-in.
  */
-import type { Plugin } from "@opencode-ai/plugin";
 
 const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
 const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key";
@@ -26,12 +25,12 @@ const ALLOWED_MODELS = new Set([
   "gpt-5.1-codex",
 ]);
 
-// In-memory token cache (reset on sandbox restart — fresh refresh via bridge)
-let cachedAccessToken: string | null = null;
-let cachedAccountId: string | null = null;
+// In-memory token cache (reset on sandbox restart - fresh refresh via bridge)
+let cachedAccessToken = null;
+let cachedAccountId = null;
 let cachedExpiresAt = 0;
 
-function getSessionId(): string {
+function getSessionId() {
   try {
     const config = JSON.parse(process.env.SESSION_CONFIG || "{}");
     return config.sessionId || config.session_id || "";
@@ -40,11 +39,7 @@ function getSessionId(): string {
   }
 }
 
-async function refreshViaControlPlane(): Promise<{
-  access_token: string;
-  expires_in?: number;
-  account_id?: string;
-}> {
+async function refreshViaControlPlane() {
   const controlPlaneUrl = process.env.CONTROL_PLANE_URL;
   const authToken = process.env.SANDBOX_AUTH_TOKEN;
   const sessionId = getSessionId();
@@ -77,18 +72,7 @@ async function refreshViaControlPlane(): Promise<{
   return response.json();
 }
 
-interface OpenAIAuthState {
-  type: string;
-  refresh: string;
-  access: string;
-  expires: number;
-  accountId?: string;
-}
-
-async function ensureAccessToken(
-  getAuth: () => Promise<OpenAIAuthState>,
-  setAuth: (body: OpenAIAuthState) => Promise<void>
-): Promise<{ accessToken: string; accountId: string | null }> {
+async function ensureAccessToken(getAuth, setAuth) {
   const now = Date.now();
 
   // Return cached token if still fresh
@@ -120,7 +104,7 @@ async function ensureAccessToken(
   return { accessToken: cachedAccessToken, accountId: cachedAccountId };
 }
 
-export const CodexAuthProxy: Plugin = async (input) => {
+export const CodexAuthProxy = async (input) => {
   return {
     auth: {
       provider: "openai",
@@ -172,13 +156,13 @@ export const CodexAuthProxy: Plugin = async (input) => {
           };
         }
 
-        const setAuth = async (body: OpenAIAuthState) => {
+        const setAuth = async (body) => {
           await input.client.auth.set({ path: { id: "openai" }, body });
         };
 
         return {
           apiKey: OAUTH_DUMMY_KEY,
-          async fetch(requestInput: RequestInfo | URL, init?: RequestInit) {
+          async fetch(requestInput, init) {
             // Remove dummy API key authorization header
             if (init?.headers) {
               if (init.headers instanceof Headers) {
@@ -189,8 +173,8 @@ export const CodexAuthProxy: Plugin = async (input) => {
                   ([key]) => key.toLowerCase() !== "authorization"
                 );
               } else {
-                delete (init.headers as Record<string, string>)["authorization"];
-                delete (init.headers as Record<string, string>)["Authorization"];
+                delete init.headers["authorization"];
+                delete init.headers["Authorization"];
               }
             }
 
@@ -210,7 +194,7 @@ export const CodexAuthProxy: Plugin = async (input) => {
                   if (value !== undefined) headers.set(key, String(value));
                 }
               } else {
-                for (const [key, value] of Object.entries(init.headers as Record<string, string>)) {
+                for (const [key, value] of Object.entries(init.headers)) {
                   if (value !== undefined) headers.set(key, String(value));
                 }
               }
