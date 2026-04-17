@@ -33,8 +33,8 @@ TTYD_VERSION = "1.7.7"
 TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 
 # Cache buster - change this to force Modal image rebuild
-# v45: add ttyd web terminal
-CACHE_BUSTER = "v45-ttyd"
+# v46: pre-build OpenCode plugin deps to avoid first-prompt reify
+CACHE_BUSTER = "v46-prebuilt-deps"
 
 # Base image with all development tools
 base_image = (
