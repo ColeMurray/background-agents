@@ -113,6 +113,18 @@ base_image = (
         # This ensures tools can import the plugin without needing to run bun add
         "npm install -g @opencode-ai/plugin@latest zod",
     )
+    # Pre-build OpenCode plugin deps into a staging directory.
+    # At boot, _install_tools() copies these into .opencode/ so that
+    # OpenCode's Npm.install() finds package-lock.json in sync and skips
+    # the slow arborist reify() call (2-22s) that would otherwise block
+    # the first prompt and exceed the bridge's HTTP timeout.
+    .run_commands(
+        "mkdir -p /app/opencode-deps",
+        'echo \'{"name":"opencode-tools","type":"module",'
+        '"dependencies":{"@opencode-ai/plugin":"*"}}\''
+        " > /app/opencode-deps/package.json",
+        "cd /app/opencode-deps && npm install --ignore-scripts --no-audit --no-fund",
+    )
     # Install code-server for browser-based VS Code editing (direct .deb from GitHub releases)
     .run_commands(
         f"curl -fsSL -o /tmp/code-server.deb"
