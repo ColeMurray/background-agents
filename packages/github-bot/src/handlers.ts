@@ -40,6 +40,7 @@ async function createSession(
     title: params.title,
     model: params.model,
     scmLogin: params.scmLogin,
+    spawnSource: "github-bot",
   };
   if (params.reasoningEffort) {
     body.reasoningEffort = params.reasoningEffort;

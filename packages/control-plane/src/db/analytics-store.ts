@@ -61,7 +61,8 @@ export class AnalyticsStore {
            COALESCE(SUM(CASE WHEN status = 'archived' THEN 1 ELSE 0 END), 0) AS archived_count,
            COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) AS cancelled_count
          FROM sessions
-         WHERE created_at >= ? AND created_at < ?`
+         WHERE created_at >= ? AND created_at < ?
+           AND spawn_source = 'user'`
       )
       .bind(filters.startAt, filters.endAt)
       .first<SummaryRow>();
@@ -95,6 +96,7 @@ export class AnalyticsStore {
            COUNT(*) AS count
          FROM sessions
          WHERE created_at >= ? AND created_at < ?
+           AND spawn_source = 'user'
          GROUP BY date, group_key
          ORDER BY date ASC, group_key ASC`
       )
@@ -145,6 +147,7 @@ export class AnalyticsStore {
            MAX(updated_at) AS last_active
          FROM sessions
          WHERE created_at >= ? AND created_at < ?
+           AND spawn_source = 'user'
          GROUP BY key
          ORDER BY sessions DESC, key ASC`
       )

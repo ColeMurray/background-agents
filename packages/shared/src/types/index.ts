@@ -41,7 +41,7 @@ export type EventType =
   | "push_error"
   | "user_message";
 export type ParticipantRole = "owner" | "member";
-export type SpawnSource = "user" | "agent" | "automation";
+export type SpawnSource = "user" | "agent" | "automation" | "github-bot";
 export type ConfidenceLevel = "high" | "medium" | "low";
 
 // Participant in a session

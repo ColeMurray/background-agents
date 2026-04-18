@@ -2,7 +2,13 @@
  * API router for Open-Inspect Control Plane.
  */
 
-import type { ArtifactResponse, Env, CreateSessionRequest, CreateSessionResponse } from "./types";
+import type {
+  ArtifactResponse,
+  Env,
+  CreateSessionRequest,
+  CreateSessionResponse,
+  SpawnSource,
+} from "./types";
 import { generateId, encryptToken } from "./auth/crypto";
 import { verifyInternalToken } from "./auth/internal";
 import {
@@ -710,6 +716,7 @@ async function handleCreateSession(
     scmLogin?: string;
     scmName?: string;
     scmEmail?: string;
+    spawnSource?: SpawnSource;
   };
 
   if (!body.repoOwner || !body.repoName) {
@@ -810,6 +817,7 @@ async function handleCreateSession(
           scmUserId,
           codeServerEnabled,
           sandboxSettings,
+          spawnSource: body.spawnSource,
         }),
       },
       ctx
@@ -850,6 +858,7 @@ async function handleCreateSession(
     reasoningEffort,
     baseBranch: body.branch || defaultBranch || "main",
     status: "created",
+    spawnSource: body.spawnSource,
     scmLogin: scmLogin || null,
     createdAt: now,
     updatedAt: now,
