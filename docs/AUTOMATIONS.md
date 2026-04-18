@@ -4,15 +4,15 @@ Automations let you run coding agents either on a recurring schedule or when an 
 arrives. Define the repository, branch, model, and instructions once, then Open-Inspect starts a new
 session whenever the trigger fires.
 
-Current trigger types:
+Trigger types:
 
-| Trigger Type        | Description                               |
-| ------------------- | ----------------------------------------- |
-| **Schedule**        | Run on a cron schedule                    |
-| **Inbound Webhook** | Trigger from any system with an HTTP POST |
-| **Sentry Alert**    | Trigger from a Sentry Custom Integration  |
-| **GitHub Event**    | Planned                                   |
-| **Linear Event**    | Planned                                   |
+| Trigger Type        | Description                               | Availability |
+| ------------------- | ----------------------------------------- | ------------ |
+| **Schedule**        | Run on a cron schedule                    | Available    |
+| **Inbound Webhook** | Trigger from any system with an HTTP POST | Available    |
+| **Sentry Alert**    | Trigger from a Sentry Custom Integration  | Available    |
+| **GitHub Event**    | Trigger on GitHub activity                | Planned      |
+| **Linear Event**    | Trigger on Linear activity                | Planned      |
 
 Common use cases include nightly dependency updates, reacting to deploy or incident events, triaging
 new Sentry issues, and recurring report generation.
@@ -164,6 +164,9 @@ event. Re-sending the same `idempotencyKey` will not create duplicate runs.
 The `idempotencyKey` remains in the stored webhook body, but it is omitted from the context block
 shown to the agent.
 
+If you do not provide an `idempotencyKey`, each webhook delivery gets its own concurrency key. That
+means separate deliveries for the same automation can run at the same time.
+
 ### Responses
 
 Successful requests return JSON in this shape:
@@ -293,8 +296,13 @@ Automations display one of three statuses:
 
 ## Concurrent Runs
 
-Only one run per automation can be active at a time. If a trigger fires while a previous run is
-still in progress, the new run is recorded as **Skipped** with reason "concurrent run active".
+For scheduled and manual triggers, only one run per automation can be active at a time. If one of
+those triggers fires while a previous run is still in progress, the new run is recorded as
+**Skipped** with reason "concurrent run active".
+
+Event-driven automations use concurrency keys instead. For inbound webhooks, retries with the same
+`idempotencyKey` are treated as the same event, but separate deliveries without a shared
+`idempotencyKey` can overlap.
 
 This prevents overlapping sessions from interfering with each other on the same repository.
 
@@ -318,12 +326,12 @@ auto-pause threshold.
 
 ## Limits
 
-| Limit                                  | Value             |
-| -------------------------------------- | ----------------- |
-| Automation name length                 | 200 characters    |
-| Instructions length                    | 10,000 characters |
-| Minimum schedule interval              | 15 minutes        |
-| Webhook payload size                   | 64 KB             |
-| Concurrent runs per automation         | 1                 |
-| Consecutive failures before auto-pause | 3                 |
-| Run execution timeout                  | 90 minutes        |
+| Limit                                  | Value                                |
+| -------------------------------------- | ------------------------------------ |
+| Automation name length                 | 200 characters                       |
+| Instructions length                    | 10,000 characters                    |
+| Minimum schedule interval              | 15 minutes                           |
+| Webhook payload size                   | 64 KB                                |
+| Concurrent runs per automation         | 1 for scheduled/manual triggers only |
+| Consecutive failures before auto-pause | 3                                    |
+| Run execution timeout                  | 90 minutes                           |
