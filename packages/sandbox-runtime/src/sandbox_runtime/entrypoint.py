@@ -486,7 +486,7 @@ class SandboxSupervisor:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(
+            _stdout, stderr = await asyncio.wait_for(
                 proc.communicate(), timeout=self.MCP_PACKAGE_INSTALL_TIMEOUT_SECONDS
             )
             if proc.returncode == 0:
