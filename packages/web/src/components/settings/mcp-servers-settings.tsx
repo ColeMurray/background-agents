@@ -44,7 +44,7 @@ type FormState = {
 
 const emptyForm: FormState = {
   name: "",
-  type: "remote",
+  type: "local",
   command: "",
   url: "",
   env: "",
@@ -143,17 +143,6 @@ function McpServerForm({
         <Label className="mb-1">Type</Label>
         <div className="flex gap-2">
           <button
-            onClick={() => setForm({ ...form, type: "remote" })}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-sm border transition ${
-              form.type === "remote"
-                ? "border-foreground/30 text-foreground bg-muted"
-                : "border-border text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            <GlobeIcon className="w-3.5 h-3.5" />
-            Remote
-          </button>
-          <button
             onClick={() => setForm({ ...form, type: "local" })}
             className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-sm border transition ${
               form.type === "local"
@@ -163,6 +152,17 @@ function McpServerForm({
           >
             <TerminalIcon className="w-3.5 h-3.5" />
             Local
+          </button>
+          <button
+            onClick={() => setForm({ ...form, type: "remote" })}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-sm border transition ${
+              form.type === "remote"
+                ? "border-foreground/30 text-foreground bg-muted"
+                : "border-border text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <GlobeIcon className="w-3.5 h-3.5" />
+            Remote
           </button>
         </div>
       </div>
