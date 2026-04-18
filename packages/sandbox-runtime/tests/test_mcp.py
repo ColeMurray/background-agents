@@ -2,7 +2,7 @@
 
 import json
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -49,78 +49,87 @@ class TestResolveMcpServers:
 
 
 class TestInstallMcpPackages:
-    def test_extracts_package_from_npx_command(self):
+    def _mock_proc(self, returncode=0):
+        """Create a mock async subprocess with the given return code."""
+        proc = AsyncMock()
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        proc.returncode = returncode
+        proc.kill = MagicMock()
+        proc.wait = AsyncMock()
+        return proc
+
+    async def test_extracts_package_from_npx_command(self):
         sup = _make_supervisor()
         servers = [{"type": "local", "command": ["npx", "-y", "@playwright/mcp"]}]
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            sup._install_mcp_packages(servers)
-            mock_run.assert_called_once()
-            args = mock_run.call_args[0][0]
-            assert args == ["npm", "install", "-g", "@playwright/mcp"]
+        mock_proc = self._mock_proc()
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+            await sup._install_mcp_packages(servers)
+            mock_exec.assert_called_once()
+            args = mock_exec.call_args[0]
+            assert list(args) == ["npm", "install", "-g", "@playwright/mcp"]
 
-    def test_extracts_package_from_npx_p_flag(self):
+    async def test_extracts_package_from_npx_p_flag(self):
         sup = _make_supervisor()
         servers = [{"type": "local", "command": ["npx", "-p", "@scope/pkg", "binary"]}]
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            sup._install_mcp_packages(servers)
-            args = mock_run.call_args[0][0]
-            assert args == ["npm", "install", "-g", "@scope/pkg"]
+        mock_proc = self._mock_proc()
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+            await sup._install_mcp_packages(servers)
+            args = mock_exec.call_args[0]
+            assert list(args) == ["npm", "install", "-g", "@scope/pkg"]
 
-    def test_skips_remote_servers(self):
+    async def test_skips_remote_servers(self):
         sup = _make_supervisor()
         servers = [{"type": "remote", "url": "https://mcp.example.com", "command": ["npx", "x"]}]
-        with patch("subprocess.run") as mock_run:
-            sup._install_mcp_packages(servers)
-            mock_run.assert_not_called()
+        with patch("asyncio.create_subprocess_exec") as mock_exec:
+            await sup._install_mcp_packages(servers)
+            mock_exec.assert_not_called()
 
-    def test_skips_servers_without_npx(self):
+    async def test_skips_servers_without_npx(self):
         sup = _make_supervisor()
         servers = [{"type": "local", "command": ["node", "server.js"]}]
-        with patch("subprocess.run") as mock_run:
-            sup._install_mcp_packages(servers)
-            mock_run.assert_not_called()
+        with patch("asyncio.create_subprocess_exec") as mock_exec:
+            await sup._install_mcp_packages(servers)
+            mock_exec.assert_not_called()
 
-    def test_skips_servers_without_command(self):
+    async def test_skips_servers_without_command(self):
         sup = _make_supervisor()
         servers = [{"type": "local"}]
-        with patch("subprocess.run") as mock_run:
-            sup._install_mcp_packages(servers)
-            mock_run.assert_not_called()
+        with patch("asyncio.create_subprocess_exec") as mock_exec:
+            await sup._install_mcp_packages(servers)
+            mock_exec.assert_not_called()
 
-    def test_rejects_invalid_package_names(self):
+    async def test_rejects_invalid_package_names(self):
         sup = _make_supervisor()
         servers = [{"type": "local", "command": ["npx", "../../../etc/passwd"]}]
-        with patch("subprocess.run") as mock_run:
-            sup._install_mcp_packages(servers)
-            mock_run.assert_not_called()
+        with patch("asyncio.create_subprocess_exec") as mock_exec:
+            await sup._install_mcp_packages(servers)
+            mock_exec.assert_not_called()
 
-    def test_rejects_shell_metacharacters(self):
+    async def test_rejects_shell_metacharacters(self):
         sup = _make_supervisor()
         servers = [{"type": "local", "command": ["npx", "pkg; rm -rf /"]}]
-        with patch("subprocess.run") as mock_run:
-            sup._install_mcp_packages(servers)
-            mock_run.assert_not_called()
+        with patch("asyncio.create_subprocess_exec") as mock_exec:
+            await sup._install_mcp_packages(servers)
+            mock_exec.assert_not_called()
 
-    def test_deduplicates_packages(self):
+    async def test_deduplicates_packages(self):
         sup = _make_supervisor()
         servers = [
             {"type": "local", "command": ["npx", "-y", "@playwright/mcp"]},
             {"type": "local", "command": ["npx", "@playwright/mcp"]},
         ]
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            sup._install_mcp_packages(servers)
-            args = mock_run.call_args[0][0]
+        mock_proc = self._mock_proc()
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+            await sup._install_mcp_packages(servers)
+            args = mock_exec.call_args[0]
             # Should only have one instance of @playwright/mcp
-            assert args == ["npm", "install", "-g", "@playwright/mcp"]
+            assert list(args) == ["npm", "install", "-g", "@playwright/mcp"]
 
-    def test_noop_when_no_servers(self):
+    async def test_noop_when_no_servers(self):
         sup = _make_supervisor()
-        with patch("subprocess.run") as mock_run:
-            sup._install_mcp_packages([])
-            mock_run.assert_not_called()
+        with patch("asyncio.create_subprocess_exec") as mock_exec:
+            await sup._install_mcp_packages([])
+            mock_exec.assert_not_called()
 
 
 # ─── _build_mcp_config ──────────────────────────────────────────────────────
