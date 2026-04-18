@@ -101,7 +101,7 @@ function SessionsCell({ entry }: { entry: AnalyticsBreakdownEntry }) {
 
 function CompletionRateCell({ entry }: { entry: AnalyticsBreakdownEntry }) {
   const ratio = getCompletionRate(entry);
-  const width = ratio > 0 ? Math.max(Math.round(ratio * 100), 10) : 0;
+  const width = Math.min(100, Math.max(0, Math.round(ratio * 100)));
 
   return (
     <div className="ml-auto flex w-24 flex-col items-end">

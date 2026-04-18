@@ -35,6 +35,12 @@ export default function AnalyticsPage() {
     () => (userEntries ? sortAnalyticsUserEntries(userEntries, sortKey, sortDirection) : undefined),
     [sortDirection, sortKey, userEntries]
   );
+  const hasCachedData = Boolean(
+    summary ||
+    timeseries?.series?.length ||
+    repoBreakdown?.entries?.length ||
+    sortedUserEntries?.length
+  );
 
   function handleSort(nextKey: AnalyticsUserSortKey) {
     if (nextKey === sortKey) {
@@ -142,20 +148,24 @@ export default function AnalyticsPage() {
             </div>
           ) : null}
 
-          <AnalyticsSummaryCards days={days} summary={summary} loading={loading} />
+          {!error || hasCachedData ? (
+            <>
+              <AnalyticsSummaryCards days={days} summary={summary} loading={loading} />
 
-          <div className="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,1fr)]">
-            <AnalyticsTimeseriesChart series={timeseries?.series} loading={loading} />
-            <AnalyticsRepoBarChart entries={repoBreakdown?.entries} loading={loading} />
-          </div>
+              <div className="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,1fr)]">
+                <AnalyticsTimeseriesChart series={timeseries?.series} loading={loading} />
+                <AnalyticsRepoBarChart entries={repoBreakdown?.entries} loading={loading} />
+              </div>
 
-          <AnalyticsUserTable
-            entries={sortedUserEntries}
-            loading={loading}
-            sortKey={sortKey}
-            sortDirection={sortDirection}
-            onSort={handleSort}
-          />
+              <AnalyticsUserTable
+                entries={sortedUserEntries}
+                loading={loading}
+                sortKey={sortKey}
+                sortDirection={sortDirection}
+                onSort={handleSort}
+              />
+            </>
+          ) : null}
         </div>
       </div>
     </div>

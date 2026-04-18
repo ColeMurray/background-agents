@@ -189,4 +189,28 @@ describe("AnalyticsPage", () => {
     expect(within(rows[0]).getByText("zoe")).toBeInTheDocument();
     expect(within(rows[1]).getByText("mike")).toBeInTheDocument();
   });
+
+  it("shows the alert without rendering widgets when loading fails with no cached data", () => {
+    mockUseSidebarContext.mockReturnValue({
+      isOpen: true,
+      toggle: vi.fn(),
+    });
+
+    mockUseAnalyticsDashboard.mockImplementation(() => ({
+      summary: undefined,
+      timeseries: undefined,
+      repoBreakdown: undefined,
+      userBreakdown: undefined,
+      loading: false,
+      error: new Error("request failed"),
+    }));
+
+    render(<AnalyticsPage />);
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByTestId("analytics-summary-cards")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("analytics-timeseries-chart")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("analytics-repo-chart")).not.toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
 });
