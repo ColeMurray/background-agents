@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, type ClipboardEvent } from "react";
 import { toast } from "sonner";
 import type { McpServerConfig, McpServerMetadata } from "@open-inspect/shared";
 import {
@@ -10,10 +10,10 @@ import {
   deleteMcpServer,
 } from "@/hooks/use-mcp-servers";
 import { useRepos } from "@/hooks/use-repos";
+import { parseMaybeEnvContent } from "@/lib/env-paste";
 import { PlusIcon, TerminalIcon, GlobeIcon, ChevronRightIcon } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { RadioCard } from "@/components/ui/form-controls";
@@ -31,12 +31,27 @@ import {
 
 type ScopeMode = "global" | "selected";
 
+type EnvRow = { id: string; key: string; value: string };
+
+function createEnvRow(init?: { key: string; value: string }): EnvRow {
+  return { id: crypto.randomUUID(), key: init?.key ?? "", value: init?.value ?? "" };
+}
+
+function envRowsToRecord(rows: EnvRow[]): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const row of rows) {
+    const k = row.key.trim();
+    if (k && row.value) result[k] = row.value;
+  }
+  return result;
+}
+
 type FormState = {
   name: string;
   type: "local" | "remote";
   command: string;
   url: string;
-  env: string;
+  envRows: EnvRow[];
   repoScopes: string[];
   scopeMode: ScopeMode;
   enabled: boolean;
@@ -47,7 +62,7 @@ const emptyForm: FormState = {
   type: "local",
   command: "",
   url: "",
-  env: "",
+  envRows: [createEnvRow()],
   repoScopes: [],
   scopeMode: "global",
   enabled: true,
@@ -64,24 +79,11 @@ function metadataToForm(metadata: McpServerMetadata): FormState {
         )
         .join(" ") ?? "",
     url: metadata.url ?? "",
-    env: "",
+    envRows: [createEnvRow()],
     repoScopes: metadata.repoScopes ?? [],
     scopeMode: metadata.repoScopes?.length ? "selected" : "global",
     enabled: metadata.enabled,
   };
-}
-
-function parseEnv(envStr: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const line of envStr.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const eqIdx = trimmed.indexOf("=");
-    if (eqIdx > 0) {
-      result[trimmed.slice(0, eqIdx)] = trimmed.slice(eqIdx + 1);
-    }
-  }
-  return result;
 }
 
 /** Minimal shell-quote aware parser: respects "..." and '...' grouping. */
@@ -109,6 +111,147 @@ function parseCommand(cmd: string): string[] {
   }
   if (current) tokens.push(current);
   return tokens;
+}
+
+function EnvRowsEditor({
+  form,
+  setForm,
+  hasExistingCredentials,
+}: {
+  form: FormState;
+  setForm: (form: FormState) => void;
+  hasExistingCredentials?: boolean;
+}) {
+  const isRemote = form.type === "remote";
+  const label = isRemote ? "HTTP Headers" : "Environment Variables";
+  const keyPlaceholder = isRemote ? "Header-Name" : "KEY_NAME";
+  const valuePlaceholder = isRemote ? "value" : "value";
+
+  const updateRow = useCallback(
+    (id: string, field: "key" | "value", val: string) => {
+      setForm({
+        ...form,
+        envRows: form.envRows.map((r) => (r.id === id ? { ...r, [field]: val } : r)),
+      });
+    },
+    [form, setForm]
+  );
+
+  const removeRow = useCallback(
+    (id: string) => {
+      const next = form.envRows.filter((r) => r.id !== id);
+      setForm({ ...form, envRows: next.length > 0 ? next : [createEnvRow()] });
+    },
+    [form, setForm]
+  );
+
+  const addRow = useCallback(() => {
+    setForm({ ...form, envRows: [...form.envRows, createEnvRow()] });
+  }, [form, setForm]);
+
+  const handlePaste = useCallback(
+    (event: ClipboardEvent<HTMLInputElement>) => {
+      const text = event.clipboardData.getData("text");
+      const parsed = parseMaybeEnvContent(text);
+      if (parsed.length === 0) return;
+
+      event.preventDefault();
+
+      const next = [...form.envRows];
+      const keyToIndex = new Map<string, number>();
+      next.forEach((row, i) => {
+        if (row.key.trim()) keyToIndex.set(row.key.trim(), i);
+      });
+
+      for (const entry of parsed) {
+        const existing = keyToIndex.get(entry.key);
+        if (existing !== undefined) {
+          next[existing] = { ...next[existing], key: entry.key, value: entry.value };
+          continue;
+        }
+        const emptyIdx = next.findIndex(
+          (r) => !keyToIndex.has(r.key.trim()) && !r.key.trim() && !r.value.trim()
+        );
+        if (emptyIdx >= 0) {
+          next[emptyIdx] = { ...next[emptyIdx], key: entry.key, value: entry.value };
+          keyToIndex.set(entry.key, emptyIdx);
+        } else {
+          next.push(createEnvRow({ key: entry.key, value: entry.value }));
+          keyToIndex.set(entry.key, next.length - 1);
+        }
+      }
+
+      setForm({ ...form, envRows: next });
+      toast.success(
+        `Imported ${parsed.length} entr${parsed.length === 1 ? "y" : "ies"} from paste`
+      );
+    },
+    [form, setForm]
+  );
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <Label>
+          {label} <span className="text-muted-foreground font-normal">(optional)</span>
+        </Label>
+        <button
+          type="button"
+          onClick={addRow}
+          className="text-xs text-muted-foreground hover:text-foreground transition"
+        >
+          + Add
+        </button>
+      </div>
+      {hasExistingCredentials && form.envRows.every((r) => !r.value.trim()) && (
+        <p className="text-xs text-muted-foreground mb-1">
+          Credentials are configured. Enter new values to replace them, or leave empty to keep
+          existing.
+        </p>
+      )}
+      <div className="space-y-1.5">
+        {form.envRows.map((row) => (
+          <div key={row.id} className="flex gap-1.5">
+            <Input
+              value={row.key}
+              onChange={(e) => updateRow(row.id, "key", e.target.value)}
+              onPaste={handlePaste}
+              placeholder={keyPlaceholder}
+              className="flex-1 min-w-[140px] font-mono text-xs h-8"
+            />
+            <Input
+              type="password"
+              value={row.value}
+              onChange={(e) => updateRow(row.id, "value", e.target.value)}
+              onPaste={handlePaste}
+              placeholder={valuePlaceholder}
+              className="flex-1 min-w-[180px] font-mono text-xs h-8"
+            />
+            <button
+              type="button"
+              onClick={() => removeRow(row.id)}
+              className="px-1.5 text-muted-foreground hover:text-red-400 transition"
+              aria-label="Remove"
+            >
+              <svg
+                className="w-3.5 h-3.5"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        ))}
+      </div>
+      <p className="text-xs text-muted-foreground mt-1">
+        Paste a <code className="text-[11px]">.env</code> block into any field to import multiple
+        entries.
+      </p>
+    </div>
+  );
 }
 
 interface McpServerFormProps {
@@ -191,31 +334,11 @@ function McpServerForm({
         </div>
       )}
 
-      <div>
-        <Label className="mb-1">
-          {form.type === "remote" ? "HTTP Headers" : "Environment Variables"}{" "}
-          <span className="text-muted-foreground font-normal">(optional)</span>
-        </Label>
-        {hasExistingCredentials && !form.env && (
-          <p className="text-xs text-muted-foreground mb-1">
-            Credentials are configured. Enter new values below to replace them, or leave empty to
-            keep existing.
-          </p>
-        )}
-        <Textarea
-          value={form.env}
-          onChange={(e) => setForm({ ...form, env: e.target.value })}
-          placeholder={
-            hasExistingCredentials
-              ? "Enter new values to replace existing credentials"
-              : form.type === "remote"
-                ? "Authorization=Bearer <token>\nX-Custom-Header=value"
-                : "KEY=value\nANOTHER_KEY=value"
-          }
-          rows={3}
-          className="font-mono"
-        />
-      </div>
+      <EnvRowsEditor
+        form={form}
+        setForm={setForm}
+        hasExistingCredentials={hasExistingCredentials}
+      />
 
       <div>
         <Label className="mb-2">Availability</Label>
@@ -364,15 +487,18 @@ export function McpServersSettings() {
           form.scopeMode === "selected" && form.repoScopes.length > 0 ? form.repoScopes : null,
       };
 
+      const envRecord = envRowsToRecord(form.envRows);
+      const hasEnvValues = Object.keys(envRecord).length > 0;
+
       if (form.type === "remote") {
         payload.url = form.url.trim();
-        if (form.env.trim() || editing === "new") {
-          payload.headers = parseEnv(form.env);
+        if (hasEnvValues || editing === "new") {
+          payload.headers = envRecord;
         }
       } else {
         payload.command = parseCommand(form.command);
-        if (form.env.trim() || editing === "new") {
-          payload.env = parseEnv(form.env);
+        if (hasEnvValues || editing === "new") {
+          payload.env = envRecord;
         }
       }
 
