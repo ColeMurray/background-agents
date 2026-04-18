@@ -51,6 +51,7 @@ class SandboxSupervisor:
     DEFAULT_START_TIMEOUT_SECONDS = 120
     CLONE_DEPTH_COMMITS = 100
     SIDECAR_TIMEOUT_SECONDS = 5
+    MCP_PACKAGE_INSTALL_TIMEOUT_SECONDS = 180
 
     def __init__(self):
         self.opencode_process: asyncio.subprocess.Process | None = None
@@ -439,7 +440,7 @@ class SandboxSupervisor:
     # removing the check — the package name comes from user-supplied config.
     _NPM_PKG_RE = re.compile(r"^(@[\w.-]+/)?[\w][\w.-]*(@[\w.-]+)?$")
 
-    def _install_mcp_packages(self, servers: list[dict]) -> None:
+    async def _install_mcp_packages(self, servers: list[dict]) -> None:
         """Pre-install npm packages for local MCP servers that use npx."""
         packages: list[str] = []
         for server in servers:
@@ -476,23 +477,33 @@ class SandboxSupervisor:
             return
 
         self.log.info("mcp.install_packages", packages=packages)
-        import subprocess
-
         try:
-            result = subprocess.run(
-                ["npm", "install", "-g", *packages],
-                capture_output=True,
-                text=True,
-                timeout=180,
+            proc = await asyncio.create_subprocess_exec(
+                "npm",
+                "install",
+                "-g",
+                *packages,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            if result.returncode == 0:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=self.MCP_PACKAGE_INSTALL_TIMEOUT_SECONDS
+            )
+            if proc.returncode == 0:
                 self.log.info("mcp.packages_installed", packages=packages)
             else:
                 self.log.warn(
                     "mcp.packages_install_failed",
                     packages=packages,
-                    stderr=result.stderr[:500],
+                    stderr=(stderr or b"").decode()[:500],
                 )
+        except TimeoutError:
+            self.log.warn(
+                "mcp.packages_install_timeout",
+                packages=packages,
+                timeout_seconds=self.MCP_PACKAGE_INSTALL_TIMEOUT_SECONDS,
+            )
+            proc.kill()
         except Exception as e:
             self.log.warn("mcp.packages_install_error", packages=packages, exc=str(e))
 
@@ -627,7 +638,7 @@ class SandboxSupervisor:
         # Inject MCP servers
         mcp_servers = self._resolve_mcp_servers()
         if mcp_servers:
-            self._install_mcp_packages(mcp_servers)
+            await self._install_mcp_packages(mcp_servers)
             mcp_config = self._build_mcp_config(mcp_servers)
             if mcp_config:
                 opencode_config["mcp"] = mcp_config
