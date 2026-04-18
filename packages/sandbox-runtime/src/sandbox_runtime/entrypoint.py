@@ -504,6 +504,7 @@ class SandboxSupervisor:
                 timeout_seconds=self.MCP_PACKAGE_INSTALL_TIMEOUT_SECONDS,
             )
             proc.kill()
+            await proc.wait()
         except Exception as e:
             self.log.warn("mcp.packages_install_error", packages=packages, exc=str(e))
 
