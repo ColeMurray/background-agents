@@ -64,6 +64,9 @@ async function handleCreateMcpServer(
   } catch {
     return error("Invalid JSON body", 400);
   }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return error("Request body must be a JSON object", 400);
+  }
 
   if (!body.name || typeof body.name !== "string") {
     return error("name is required", 400);
@@ -76,6 +79,14 @@ async function handleCreateMcpServer(
     (!Array.isArray(body.command) || !body.command.every((c: unknown) => typeof c === "string"))
   ) {
     return error("command must be an array of strings", 400);
+  }
+  if (
+    body.repoScopes !== undefined &&
+    body.repoScopes !== null &&
+    (!Array.isArray(body.repoScopes) ||
+      !body.repoScopes.every((s: unknown) => typeof s === "string"))
+  ) {
+    return error("repoScopes must be an array of strings", 400);
   }
 
   try {
@@ -122,12 +133,30 @@ async function handleUpdateMcpServer(
   } catch {
     return error("Invalid JSON body", 400);
   }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return error("Request body must be a JSON object", 400);
+  }
+
+  if (
+    body.name !== undefined &&
+    (!body.name || typeof body.name !== "string" || !body.name.trim())
+  ) {
+    return error("name must be a non-empty string", 400);
+  }
 
   if (
     body.command !== undefined &&
     (!Array.isArray(body.command) || !body.command.every((c: unknown) => typeof c === "string"))
   ) {
     return error("command must be an array of strings", 400);
+  }
+  if (
+    body.repoScopes !== undefined &&
+    body.repoScopes !== null &&
+    (!Array.isArray(body.repoScopes) ||
+      !body.repoScopes.every((s: unknown) => typeof s === "string"))
+  ) {
+    return error("repoScopes must be an array of strings", 400);
   }
 
   try {

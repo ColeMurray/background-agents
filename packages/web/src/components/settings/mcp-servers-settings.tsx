@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, type ClipboardEvent } from "react";
+import { useState, useCallback, type ClipboardEvent } from "react";
 import { toast } from "sonner";
 import type { McpServerConfig, McpServerMetadata } from "@open-inspect/shared";
 import {
@@ -427,14 +427,6 @@ export function McpServersSettings() {
   const [form, setForm] = useState<FormState>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-
-  // Sync SWR background refreshes into the open edit form (non-credential fields only)
-  useEffect(() => {
-    if (editing && editing !== "new") {
-      const current = servers.find((s) => s.id === editing);
-      if (current) setForm(metadataToForm(current));
-    }
-  }, [servers, editing]);
 
   function startNew() {
     setExpanded(null);

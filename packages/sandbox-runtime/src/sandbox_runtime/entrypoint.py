@@ -436,7 +436,7 @@ class SandboxSupervisor:
     # Rejects anything with shell metacharacters or path traversal sequences.
     # NOTE: if a legitimate package is rejected, widen this regex rather than
     # removing the check — the package name comes from user-supplied config.
-    _NPM_PKG_RE = re.compile(r"^(@[\w.-]+/)?[\w.-]+(@[\w.-]+)?$")
+    _NPM_PKG_RE = re.compile(r"^(@[\w.-]+/)?[\w][\w.-]*(@[\w.-]+)?$")
 
     def _install_mcp_packages(self, servers: list[dict]) -> None:
         """Pre-install npm packages for local MCP servers that use npx."""

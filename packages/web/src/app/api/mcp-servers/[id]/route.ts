@@ -28,8 +28,13 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
   }
 
   const { id } = await params;
+  let body: unknown;
   try {
-    const body = await request.json();
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+  try {
     const response = await controlPlaneFetch(`/mcp-servers/${id}`, {
       method: "PUT",
       body: JSON.stringify(body),

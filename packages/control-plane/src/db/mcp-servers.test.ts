@@ -241,7 +241,10 @@ describe("McpServerStore", () => {
 
       const store = new McpServerStore(db);
       // Attempt to patch id (not in the allowed type, but simulate via cast)
-      const result = await store.update("abc123", { name: "updated" });
+      const result = await store.update("abc123", {
+        id: "malicious-id",
+        name: "updated",
+      } as unknown as Parameters<typeof store.update>[1]);
       // id should still be the original
       expect(result!.id).toBe("abc123");
     });
