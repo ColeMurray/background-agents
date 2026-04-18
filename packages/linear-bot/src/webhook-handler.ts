@@ -494,6 +494,7 @@ async function handleNewSession(
       title: `${issue.identifier}: ${issue.title}`,
       model,
       reasoningEffort,
+      spawnSource: "linear-bot",
     }),
   });
 

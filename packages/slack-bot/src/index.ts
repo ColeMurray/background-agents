@@ -106,6 +106,7 @@ async function createSession(
         model,
         reasoningEffort,
         branch,
+        spawnSource: "slack-bot",
       }),
     });
 
