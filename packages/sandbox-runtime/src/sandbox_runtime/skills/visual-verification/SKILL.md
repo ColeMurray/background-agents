@@ -11,6 +11,11 @@ evidence in the Open-Inspect session.
 `agent-browser` remains the low-level browser tool. This skill defines the workflow contract for
 using it reliably.
 
+## Key Fact
+
+`upload-media` is a **bash command** installed on PATH. Run it with your Bash tool, not as an MCP
+tool or tool binding. Example: `upload-media /tmp/screenshot.png --caption "..."`.
+
 ## When To Use It
 
 - Verify a UI change after editing code
@@ -51,6 +56,23 @@ The task is not complete until all of these are true:
   report it.
 - If the screenshot is intended to prove a fix, prefer stating exactly what was checked, not only
   that a screenshot was taken.
+
+## Using Screenshots From Other Sources
+
+If the screenshot already exists as a file — for example, captured via Playwright MCP
+(`playwright_browser_take_screenshot`), a manual capture, or any other tool — skip the
+`agent-browser` steps and upload the file directly:
+
+```bash
+upload-media /path/to/existing-screenshot.png \
+  --caption "Description of what was captured" \
+  --source-url "$URL"
+```
+
+Add `--full-page` or `--viewport '{"width":1512,"height":982}'` as appropriate. The same reporting
+template and guardrails below still apply.
+
+For a dedicated upload-only workflow, see the `upload-screenshot` skill.
 
 ## Recommended Commands
 
