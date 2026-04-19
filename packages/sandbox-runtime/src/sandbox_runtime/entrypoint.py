@@ -1180,7 +1180,7 @@ class SandboxSupervisor:
                 git_sync_success = await self._update_existing_repo()
             else:
                 git_sync_success = await self.perform_git_sync()
-            if git_sync_success:
+            if image_build_mode and git_sync_success:
                 head_sha = await self._get_head_sha()
                 if head_sha:
                     self.log.info("git.sync_complete", head_sha=head_sha)
