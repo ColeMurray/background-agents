@@ -297,7 +297,7 @@ class SandboxSupervisor:
         staged_modules = stage_dir / "node_modules"
         local_modules = opencode_dir / "node_modules"
         if staged_modules.is_dir() and not local_modules.exists():
-            os.symlink(staged_modules, local_modules)
+            local_modules.symlink_to(staged_modules)
 
         # Copy package.json + package-lock.json (small files, needed alongside symlink)
         for name in ("package.json", "package-lock.json"):
