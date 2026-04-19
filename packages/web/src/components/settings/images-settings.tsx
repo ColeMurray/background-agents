@@ -5,6 +5,7 @@ import useSWR, { mutate } from "swr";
 import { useRepos } from "@/hooks/use-repos";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { RefreshIcon } from "@/components/ui/icons";
 import { formatRelativeTime } from "@/lib/time";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
@@ -238,9 +239,21 @@ function ImageStatus({ image, isEnabled }: { image: RepoImage | undefined; isEna
           <span className="text-xs text-foreground">Failed</span>
         </div>
         {image.error_message && (
-          <span className="text-xs text-muted-foreground truncate max-w-[200px] block">
-            {image.error_message}
-          </span>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  className="text-xs text-muted-foreground truncate max-w-[200px] block cursor-help"
+                  title={image.error_message}
+                >
+                  {image.error_message}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-md overflow-visible whitespace-pre-wrap break-words">
+                {image.error_message}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         )}
       </div>
     );
