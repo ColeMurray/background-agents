@@ -249,6 +249,26 @@ class SandboxSupervisor:
             self.log.error("git.update_error", exc=e)
             return False
 
+    async def _get_head_sha(self) -> str:
+        """Return the HEAD SHA of the repo, or empty string on failure."""
+        if not self.repo_path.exists():
+            return ""
+        try:
+            result = await asyncio.create_subprocess_exec(
+                "git",
+                "rev-parse",
+                "HEAD",
+                cwd=self.repo_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await result.communicate()
+            if result.returncode == 0:
+                return stdout.decode().strip()
+        except Exception as e:
+            self.log.warn("git.rev_parse_error", error=str(e))
+        return ""
+
     async def perform_git_sync(self) -> bool:
         """Clone repository if needed, then sync to the target branch.
 
@@ -1160,6 +1180,10 @@ class SandboxSupervisor:
                 git_sync_success = await self._update_existing_repo()
             else:
                 git_sync_success = await self.perform_git_sync()
+            if git_sync_success:
+                head_sha = await self._get_head_sha()
+                if head_sha:
+                    self.log.info("git.sync_complete", head_sha=head_sha)
             self.git_sync_complete.set()
 
             # Phase 2: Run setup script only for fresh or build boots.

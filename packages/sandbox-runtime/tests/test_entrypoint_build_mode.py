@@ -151,6 +151,42 @@ class TestImageBuildMode:
         supervisor.start_opencode.assert_not_called()
         supervisor.start_bridge.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_logs_git_sync_complete_with_head_sha(self, build_env, tmp_path):
+        """Build mode should log git.sync_complete with head_sha for the image builder."""
+        supervisor = _make_supervisor(build_env)
+        supervisor.repo_path = tmp_path  # Exists, so _get_head_sha proceeds
+
+        supervisor.perform_git_sync = AsyncMock(return_value=True)
+        supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.shutdown = AsyncMock()
+        supervisor.shutdown_event.set()
+        supervisor.log = MagicMock()
+
+        async def fake_subprocess(*args, **kwargs):
+            mock_proc = MagicMock()
+            mock_proc.communicate = AsyncMock(return_value=(b"abc123def456\n", b""))
+            mock_proc.returncode = 0
+            return mock_proc
+
+        with (
+            patch.dict(os.environ, build_env, clear=False),
+            patch(
+                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                side_effect=fake_subprocess,
+            ),
+        ):
+            await supervisor.run()
+
+        # Verify git.sync_complete was logged with the SHA
+        sync_calls = [
+            c
+            for c in supervisor.log.info.call_args_list
+            if c.args and c.args[0] == "git.sync_complete"
+        ]
+        assert len(sync_calls) == 1
+        assert sync_calls[0].kwargs["head_sha"] == "abc123def456"
+
 
 class TestFromRepoImage:
     """FROM_REPO_IMAGE=true: update repo + start hook, skip setup."""
