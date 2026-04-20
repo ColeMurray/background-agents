@@ -110,6 +110,8 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
             className={`fixed inset-0 z-30 bg-overlay transition-opacity duration-200 ${
               sidebar.isOpen ? "opacity-100" : "opacity-0 pointer-events-none"
             }`}
+            role="presentation"
+            aria-hidden="true"
             onClick={sidebar.close}
           />
         )}

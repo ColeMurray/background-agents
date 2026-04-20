@@ -361,6 +361,7 @@ function UserMenu({ user }: { user?: { name?: string | null; image?: string | nu
       <DropdownMenuTrigger asChild>
         <button
           className="w-7 h-7 rounded-full overflow-hidden focus:outline-none focus:ring-2 focus:ring-primary"
+          aria-label={`Signed in as ${user?.name || "User"}`}
           title={`Signed in as ${user?.name || "User"}`}
         >
           {user?.image ? (
@@ -663,6 +664,8 @@ function SessionListItem({
             <button
               type="button"
               aria-label="Session actions"
+              aria-hidden={isMobile ? "true" : undefined}
+              tabIndex={isMobile ? -1 : undefined}
               className={`h-6 w-6 items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition data-[state=open]:opacity-100 ${
                 isMobile
                   ? "pointer-events-none flex opacity-0"

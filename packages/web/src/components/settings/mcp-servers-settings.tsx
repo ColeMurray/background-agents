@@ -603,8 +603,9 @@ export function McpServersSettings() {
                 }`}
               >
                 {/* Header row */}
-                <div
-                  className="flex items-center justify-between px-4 py-3 cursor-pointer"
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between px-4 py-3 cursor-pointer text-left"
                   onClick={() => startEdit(server)}
                 >
                   <div className="flex items-center gap-3 min-w-0">
@@ -654,7 +655,7 @@ export function McpServersSettings() {
                       Delete
                     </button>
                   </div>
-                </div>
+                </button>
 
                 {/* Expanded edit form */}
                 {isExpanded && editing === server.id && (

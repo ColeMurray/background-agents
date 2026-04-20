@@ -185,9 +185,10 @@ function TagInput({
             <button
               type="button"
               onClick={() => removeValue(v)}
+              aria-label={`Remove ${v}`}
               className="text-muted-foreground hover:text-foreground"
             >
-              x
+              ×
             </button>
           </span>
         ))}
