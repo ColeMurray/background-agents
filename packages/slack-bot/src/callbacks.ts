@@ -6,7 +6,7 @@ import { computeHmacHex, timingSafeEqual } from "@open-inspect/shared";
 import { Hono } from "hono";
 import type { Env, CompletionCallback } from "./types";
 import { extractAgentResponse } from "./completion/extractor";
-import { buildCompletionBlocks, getFallbackText } from "./completion/blocks";
+import { buildCompletionBlocks, getFallbackText, truncateError } from "./completion/blocks";
 import { postMessage, removeReaction } from "./utils/slack-client";
 import { createLogger } from "./logger";
 
@@ -159,20 +159,18 @@ async function handleCompletionCallback(
     // Fetch events to build response (filtered by messageId directly)
     const agentResponse = await extractAgentResponse(env, sessionId, payload.messageId, traceId);
 
-    // Merge error from callback payload and extracted response
-    const errorMessage = agentResponse.error || payload.error;
-    if (errorMessage && !agentResponse.error) {
-      agentResponse.error = errorMessage;
-    }
+    // Fall back to the callback payload's error if the extractor didn't find one.
+    agentResponse.error = agentResponse.error || payload.error;
+    const errorMessage = agentResponse.error;
 
     // Check if extraction succeeded (has content or was explicitly successful)
     if (!agentResponse.textContent && agentResponse.toolCalls.length === 0 && !payload.success) {
-      const displayError = errorMessage || "Unknown error";
+      const displayError = truncateError(errorMessage || "Unknown error", 2000);
       log.error("callback.complete", {
         ...base,
         outcome: "error",
         error_message: "empty_agent_response",
-        agent_error: displayError,
+        agent_error: errorMessage || "Unknown error",
         duration_ms: Date.now() - startTime,
       });
       await postMessage(env.SLACK_BOT_TOKEN, context.channel, `The agent failed: ${displayError}`, {
