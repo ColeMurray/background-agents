@@ -157,6 +157,24 @@ describe("checkAccessAllowed", () => {
     });
   });
 
+  describe("when unsafeAllowAllUsers is true with populated allowlists", () => {
+    const config = {
+      allowedDomains: ["company.com"],
+      allowedUsers: ["specialuser"],
+      unsafeAllowAllUsers: true,
+    };
+
+    it("still enforces the allowlist for matching users", () => {
+      expect(checkAccessAllowed(config, { githubUsername: "specialuser" })).toBe(true);
+      expect(checkAccessAllowed(config, { email: "user@company.com" })).toBe(true);
+    });
+
+    it("denies users not in the allowlist", () => {
+      expect(checkAccessAllowed(config, { githubUsername: "randomuser" })).toBe(false);
+      expect(checkAccessAllowed(config, { email: "user@other.com" })).toBe(false);
+    });
+  });
+
   describe("multiple values in allowlists", () => {
     const config = {
       allowedDomains: ["company.com", "partner.org"],

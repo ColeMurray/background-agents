@@ -38,8 +38,7 @@ export function checkAccessAllowed(
   config: AccessControlConfig,
   params: AccessCheckParams
 ): boolean {
-  const { allowedDomains, allowedUsers } = config;
-  const { unsafeAllowAllUsers } = config;
+  const { allowedDomains, allowedUsers, unsafeAllowAllUsers } = config;
   const { githubUsername, email } = params;
 
   // Empty allowlists only permit sign-in when explicitly enabled.
