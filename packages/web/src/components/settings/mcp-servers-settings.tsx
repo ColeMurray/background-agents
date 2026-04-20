@@ -230,7 +230,7 @@ function EnvRowsEditor({
             <button
               type="button"
               onClick={() => removeRow(row.id)}
-              className="px-1.5 text-muted-foreground hover:text-red-400 transition"
+              className="px-1.5 text-muted-foreground hover:text-destructive transition"
               aria-label="Remove"
             >
               <svg
@@ -396,7 +396,7 @@ function McpServerForm({
               </div>
             )}
             {form.repoScopes.length === 0 && repos.length > 0 && (
-              <p className="text-xs text-amber-500 mt-1">
+              <p className="text-xs text-warning mt-1">
                 Select a repository or switch to &quot;All repositories&quot;.
               </p>
             )}
@@ -657,7 +657,7 @@ export function McpServersSettings() {
                     />
                     <button
                       onClick={() => setDeleteTarget(server.id)}
-                      className="px-2 py-1 text-xs text-red-400 hover:text-red-300 transition"
+                      className="px-2 py-1 text-xs text-destructive hover:text-destructive/80 transition"
                     >
                       Delete
                     </button>

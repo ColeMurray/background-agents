@@ -23,8 +23,8 @@ interface TimeseriesChartProps {
 
 const SERIES_COLORS = [
   "var(--accent)",
-  "#28c840",
-  "#3b82f6",
+  "var(--success)",
+  "var(--info)",
   "#c08429",
   "#ef4444",
   "#0f766e",

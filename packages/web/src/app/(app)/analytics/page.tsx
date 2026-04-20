@@ -8,6 +8,7 @@ import { AnalyticsTimeseriesChart } from "@/components/analytics/timeseries-char
 import { AnalyticsUserTable } from "@/components/analytics/user-table";
 import { useSidebarContext } from "@/components/sidebar-layout";
 import { Badge } from "@/components/ui/badge";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { SidebarIcon } from "@/components/ui/icons";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useAnalyticsDashboard } from "@/hooks/use-analytics";
@@ -140,12 +141,9 @@ export default function AnalyticsPage() {
           </div>
 
           {error ? (
-            <div
-              role="alert"
-              className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300"
-            >
+            <ErrorBanner role="alert">
               Analytics failed to load. The page will retry automatically, or you can refresh.
-            </div>
+            </ErrorBanner>
           ) : null}
 
           {!error || hasCachedData ? (

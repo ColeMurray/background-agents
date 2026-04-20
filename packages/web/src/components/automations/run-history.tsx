@@ -10,21 +10,13 @@ function runStatusBadge(status: AutomationRun["status"]) {
     case "starting":
       return <Badge className="bg-muted text-muted-foreground">Starting</Badge>;
     case "running":
-      return <Badge className="bg-blue-500/10 text-blue-600 dark:text-blue-400">Running</Badge>;
+      return <Badge variant="info">Running</Badge>;
     case "completed":
       return <Badge className="bg-success-muted text-success">Completed</Badge>;
     case "failed":
-      return (
-        <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
-          Failed
-        </Badge>
-      );
+      return <Badge className="bg-destructive-muted text-destructive">Failed</Badge>;
     case "skipped":
-      return (
-        <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-          Skipped
-        </Badge>
-      );
+      return <Badge className="bg-warning-muted text-warning">Skipped</Badge>;
   }
 }
 
@@ -91,10 +83,10 @@ export function RunHistory({ runs, total, loading, onLoadMore, hasMore }: RunHis
                 </div>
               </div>
               {run.failureReason && (
-                <p className="mt-1 text-xs text-red-500">{run.failureReason}</p>
+                <p className="mt-1 text-xs text-destructive">{run.failureReason}</p>
               )}
               {!run.failureReason && run.skipReason && (
-                <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{run.skipReason}</p>
+                <p className="mt-1 text-xs text-warning">{run.skipReason}</p>
               )}
             </div>
           );

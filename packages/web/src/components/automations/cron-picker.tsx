@@ -192,7 +192,7 @@ export function CronPicker({ value, onChange, timezone }: CronPickerProps) {
             className="font-mono placeholder:text-secondary-foreground"
           />
           {customValue && !isValidCron(customValue) && (
-            <p className="mt-1 text-xs text-red-500">
+            <p className="mt-1 text-xs text-destructive">
               Invalid cron expression. Use 5-field format (minute hour day month weekday).
             </p>
           )}

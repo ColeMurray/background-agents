@@ -72,6 +72,23 @@ pre code.hljs {
   --success: #28c840;
   --success-muted: rgba(40, 200, 64, 0.1);
 
+  /* Warning (amber) */
+  --warning: #d97706;
+  --warning-foreground: #ffffff;
+  --warning-muted: rgba(217, 119, 6, 0.1);
+
+  /* Info (blue) */
+  --info: #3b82f6;
+  --info-foreground: #ffffff;
+  --info-muted: rgba(59, 130, 246, 0.1);
+
+  /* Destructive muted (error banners) */
+  --destructive-muted: rgba(220, 38, 38, 0.08);
+  --destructive-border: rgba(220, 38, 38, 0.2);
+
+  /* Overlay */
+  --overlay: rgba(0, 0, 0, 0.5);
+
   /* Border radius */
   --radius: 0.25rem;
 }
@@ -113,6 +130,23 @@ pre code.hljs {
 
     --success: #28c840;
     --success-muted: rgba(40, 200, 64, 0.1);
+
+    /* Warning (amber) */
+    --warning: #f59e0b;
+    --warning-foreground: #ffffff;
+    --warning-muted: rgba(245, 158, 11, 0.15);
+
+    /* Info (blue) */
+    --info: #60a5fa;
+    --info-foreground: #ffffff;
+    --info-muted: rgba(96, 165, 250, 0.15);
+
+    /* Destructive muted (error banners) */
+    --destructive-muted: rgba(239, 68, 68, 0.15);
+    --destructive-border: rgba(239, 68, 68, 0.3);
+
+    /* Overlay */
+    --overlay: rgba(0, 0, 0, 0.5);
   }
 }
 
@@ -152,6 +186,23 @@ pre code.hljs {
 
   --success: #28c840;
   --success-muted: rgba(40, 200, 64, 0.1);
+
+  /* Warning (amber) */
+  --warning: #f59e0b;
+  --warning-foreground: #ffffff;
+  --warning-muted: rgba(245, 158, 11, 0.15);
+
+  /* Info (blue) */
+  --info: #60a5fa;
+  --info-foreground: #ffffff;
+  --info-muted: rgba(96, 165, 250, 0.15);
+
+  /* Destructive muted (error banners) */
+  --destructive-muted: rgba(239, 68, 68, 0.15);
+  --destructive-border: rgba(239, 68, 68, 0.3);
+
+  /* Overlay */
+  --overlay: rgba(0, 0, 0, 0.5);
 }
 
 html {

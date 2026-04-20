@@ -6,6 +6,7 @@ import { useSidebarContext } from "@/components/sidebar-layout";
 import { useAutomations } from "@/hooks/use-automations";
 import { AutomationsList } from "@/components/automations/automations-list";
 import { Button } from "@/components/ui/button";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { SidebarIcon, PlusIcon } from "@/components/ui/icons";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 
@@ -66,12 +67,9 @@ export default function AutomationsPage() {
           </div>
 
           {actionError && (
-            <div
-              role="alert"
-              className="mb-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md px-4 py-3 text-sm text-red-700 dark:text-red-400"
-            >
+            <ErrorBanner className="mb-4" role="alert">
               {actionError}
-            </div>
+            </ErrorBanner>
           )}
 
           {loading ? (

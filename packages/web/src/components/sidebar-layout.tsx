@@ -109,7 +109,7 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
         {/* Mobile: overlay backdrop */}
         {isMobile && (
           <div
-            className={`fixed inset-0 z-30 bg-black/50 transition-opacity duration-200 ${
+            className={`fixed inset-0 z-30 bg-overlay transition-opacity duration-200 ${
               sidebar.isOpen ? "opacity-100" : "opacity-0 pointer-events-none"
             }`}
             onClick={sidebar.close}

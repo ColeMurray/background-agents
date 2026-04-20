@@ -6,6 +6,7 @@ import { useRepos } from "@/hooks/use-repos";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { RefreshIcon } from "@/components/ui/icons";
 import { formatRelativeTime } from "@/lib/time";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
@@ -135,11 +136,7 @@ export function ImagesSettings() {
           when the default branch changes.
         </p>
 
-        {error && (
-          <div className="mb-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 px-4 py-3 border border-red-200 dark:border-red-800 text-sm">
-            {error}
-          </div>
-        )}
+        {error && <ErrorBanner className="mb-4">{error}</ErrorBanner>}
 
         <div className="space-y-2">
           {repos.map((repo) => {
@@ -212,7 +209,7 @@ function ImageStatus({ image, isEnabled }: { image: RepoImage | undefined; isEna
     return (
       <div className="text-right">
         <div className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
+          <span className="w-2 h-2 rounded-full bg-success flex-shrink-0" />
           <span className="text-xs text-foreground">
             Ready {formatRelativeTime(image.created_at)}
           </span>
@@ -225,7 +222,7 @@ function ImageStatus({ image, isEnabled }: { image: RepoImage | undefined; isEna
   if (image.status === "building") {
     return (
       <div className="flex items-center gap-1.5">
-        <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse flex-shrink-0" />
+        <span className="w-2 h-2 rounded-full bg-warning animate-pulse flex-shrink-0" />
         <span className="text-xs text-foreground">
           Building... {formatRelativeTime(image.created_at)}
         </span>
@@ -237,7 +234,7 @@ function ImageStatus({ image, isEnabled }: { image: RepoImage | undefined; isEna
     return (
       <div className="text-right">
         <div className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />
+          <span className="w-2 h-2 rounded-full bg-destructive flex-shrink-0" />
           <span className="text-xs text-foreground">Failed</span>
         </div>
         {image.error_message && (

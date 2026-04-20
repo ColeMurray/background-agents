@@ -208,7 +208,7 @@ function SandboxSettingsEditor({
                 <button
                   type="button"
                   onClick={() => handleRemoveRow(index)}
-                  className="text-xs px-2 py-1 border border-border-muted text-muted-foreground hover:text-red-500 hover:border-red-300 transition"
+                  className="text-xs px-2 py-1 border border-border-muted text-muted-foreground hover:text-destructive hover:border-destructive-border transition"
                 >
                   Remove
                 </button>

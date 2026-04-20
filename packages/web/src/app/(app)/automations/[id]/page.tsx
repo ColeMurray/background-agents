@@ -9,6 +9,7 @@ import { useAutomation, useAutomationRuns } from "@/hooks/use-automations";
 import { RunHistory } from "@/components/automations/run-history";
 import { AutomationStatusBadge } from "@/components/automations/automation-status-badge";
 import { Button } from "@/components/ui/button";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { SidebarIcon, BackIcon, PencilIcon } from "@/components/ui/icons";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { formatModelNameLower } from "@/lib/format";
@@ -113,12 +114,9 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
       <div className="flex-1 overflow-y-auto px-4 py-6 sm:p-8">
         <div className="max-w-3xl mx-auto">
           {actionError && (
-            <div
-              role="alert"
-              className="mb-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md px-4 py-3 text-sm text-red-700 dark:text-red-400"
-            >
+            <ErrorBanner className="mb-4" role="alert">
               {actionError}
-            </div>
+            </ErrorBanner>
           )}
 
           {/* Header */}

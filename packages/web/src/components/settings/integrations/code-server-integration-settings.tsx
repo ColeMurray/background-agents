@@ -258,7 +258,7 @@ function GlobalSettingsSection({
             )}
 
             {enabledRepos.length === 0 && availableRepos.length > 0 && (
-              <p className="text-xs text-amber-700 mt-1">
+              <p className="text-xs text-warning mt-1">
                 No repositories selected. Code-server will not be enabled for any sessions.
               </p>
             )}

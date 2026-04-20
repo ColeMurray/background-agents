@@ -2,6 +2,7 @@
 
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
+import { ErrorBanner } from "@/components/ui/error-banner";
 
 function AccessDeniedContent() {
   const searchParams = useSearchParams();
@@ -16,9 +17,7 @@ function AccessDeniedContent() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-6">
       <h1 className="text-4xl font-bold text-foreground">Access Denied</h1>
-      <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 px-6 py-4 text-red-700 dark:text-red-400 max-w-md text-center">
-        {message}
-      </div>
+      <ErrorBanner className="max-w-md px-6 py-4 text-center">{message}</ErrorBanner>
       <a href="/" className="text-accent hover:underline">
         Return to homepage
       </a>

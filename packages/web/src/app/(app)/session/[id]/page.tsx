@@ -791,11 +791,11 @@ function SessionContent({
 
       {/* Connection error banner */}
       {(authError || connectionError) && (
-        <div className="bg-red-50 dark:bg-red-900/20 border-b border-red-200 dark:border-red-800 px-4 py-3 flex items-center justify-between">
-          <p className="text-sm text-red-700 dark:text-red-400">{authError || connectionError}</p>
+        <div className="bg-destructive-muted border-b border-destructive-border px-4 py-3 flex items-center justify-between">
+          <p className="text-sm text-destructive">{authError || connectionError}</p>
           <button
             onClick={reconnect}
-            className="px-3 py-1.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 transition"
+            className="px-3 py-1.5 text-sm font-medium text-destructive-foreground bg-destructive hover:bg-destructive/90 transition"
           >
             Reconnect
           </button>
@@ -873,7 +873,7 @@ function SessionContent({
           className={`fixed inset-0 z-50 lg:hidden ${isDetailsOpen ? "" : "pointer-events-none"}`}
         >
           <div
-            className={`absolute inset-0 bg-black/50 transition-opacity duration-200 ${
+            className={`absolute inset-0 bg-overlay transition-opacity duration-200 ${
               isDetailsOpen ? "opacity-100" : "opacity-0"
             }`}
             onClick={closeDetails}
@@ -1000,13 +1000,13 @@ function SessionContent({
               {/* Floating action buttons */}
               <div className="absolute bottom-3 right-3 flex items-center gap-2">
                 {isProcessing && prompt.trim() && (
-                  <span className="text-xs text-amber-600 dark:text-amber-400">Waiting...</span>
+                  <span className="text-xs text-warning">Waiting...</span>
                 )}
                 {isProcessing && (
                   <button
                     type="button"
                     onClick={stopExecution}
-                    className="p-2 text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition"
+                    className="p-2 text-destructive hover:bg-destructive-muted transition"
                     title="Stop"
                   >
                     <StopIcon className="w-5 h-5" />
@@ -1082,8 +1082,8 @@ function SessionContent({
 function ConnectionStatus({ connected, connecting }: { connected: boolean; connecting: boolean }) {
   if (connecting) {
     return (
-      <span className="flex items-center gap-1 text-xs text-yellow-600 dark:text-yellow-500">
-        <span className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
+      <span className="flex items-center gap-1 text-xs text-warning">
+        <span className="w-2 h-2 rounded-full bg-warning animate-pulse" />
         Connecting...
       </span>
     );
@@ -1099,8 +1099,8 @@ function ConnectionStatus({ connected, connecting }: { connected: boolean; conne
   }
 
   return (
-    <span className="flex items-center gap-1 text-xs text-red-600 dark:text-red-500">
-      <span className="w-2 h-2 rounded-full bg-red-500" />
+    <span className="flex items-center gap-1 text-xs text-destructive">
+      <span className="w-2 h-2 rounded-full bg-destructive" />
       Disconnected
     </span>
   );
@@ -1111,12 +1111,12 @@ function SandboxStatus({ status }: { status?: string }) {
 
   const colors: Record<string, string> = {
     pending: "text-muted-foreground",
-    warming: "text-yellow-600 dark:text-yellow-500",
+    warming: "text-warning",
     syncing: "text-accent",
     ready: "text-success",
     running: "text-accent",
     stopped: "text-muted-foreground",
-    failed: "text-red-600 dark:text-red-500",
+    failed: "text-destructive",
   };
 
   return <span className={`text-xs ${colors[status] || colors.pending}`}>Sandbox: {status}</span>;
@@ -1136,17 +1136,17 @@ function CombinedStatusDot({
   let label: string;
 
   if (!connected && !connecting) {
-    color = "bg-red-500";
+    color = "bg-destructive";
     label = "Disconnected";
   } else if (connecting) {
-    color = "bg-yellow-500";
+    color = "bg-warning";
     pulse = true;
     label = "Connecting...";
   } else if (sandboxStatus === "failed") {
-    color = "bg-red-500";
+    color = "bg-destructive";
     label = `Connected \u00b7 Sandbox: ${sandboxStatus}`;
   } else if (["pending", "warming", "syncing"].includes(sandboxStatus || "")) {
-    color = "bg-yellow-500";
+    color = "bg-warning";
     label = `Connected \u00b7 Sandbox: ${sandboxStatus}`;
   } else {
     color = "bg-success";
@@ -1340,7 +1340,7 @@ const EventItem = memo(function EventItem({
       // Only show standalone results if they're errors
       if (!event.error) return null;
       return (
-        <div className="flex items-center gap-2 text-sm text-red-600 dark:text-red-400 py-1">
+        <div className="flex items-center gap-2 text-sm text-destructive py-1">
           <ErrorIcon className="w-4 h-4" />
           <span className="truncate">{event.error}</span>
           <span className="text-xs text-secondary-foreground ml-auto">{time}</span>
@@ -1378,8 +1378,8 @@ const EventItem = memo(function EventItem({
 
     case "error":
       return (
-        <div className="flex items-center gap-2 text-sm text-red-600 dark:text-red-400">
-          <span className="w-2 h-2 rounded-full bg-red-500" />
+        <div className="flex items-center gap-2 text-sm text-destructive">
+          <span className="w-2 h-2 rounded-full bg-destructive" />
           Error{event.error ? `: ${event.error}` : ""}
           <span className="text-xs text-secondary-foreground">{time}</span>
         </div>
@@ -1388,8 +1388,8 @@ const EventItem = memo(function EventItem({
     case "execution_complete":
       if (event.success === false) {
         return (
-          <div className="flex items-center gap-2 text-sm text-red-600 dark:text-red-400">
-            <span className="w-2 h-2 rounded-full bg-red-500" />
+          <div className="flex items-center gap-2 text-sm text-destructive">
+            <span className="w-2 h-2 rounded-full bg-destructive" />
             Execution failed{event.error ? `: ${event.error}` : ""}
             <span className="text-xs text-secondary-foreground">{time}</span>
           </div>

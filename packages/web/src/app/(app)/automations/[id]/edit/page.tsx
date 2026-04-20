@@ -9,6 +9,7 @@ import {
   AutomationForm,
   type AutomationFormValues,
 } from "@/components/automations/automation-form";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { SidebarIcon, BackIcon } from "@/components/ui/icons";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 
@@ -92,12 +93,9 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
           <h1 className="text-2xl font-semibold text-foreground mb-6">Edit Automation</h1>
 
           {error && (
-            <div
-              role="alert"
-              className="mb-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 px-4 py-3 border border-red-200 dark:border-red-800 text-sm"
-            >
+            <ErrorBanner className="mb-4" role="alert">
               {error}
-            </div>
+            </ErrorBanner>
           )}
 
           <AutomationForm

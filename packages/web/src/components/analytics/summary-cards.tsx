@@ -41,10 +41,10 @@ export function AnalyticsSummaryCards({ days, summary, loading }: SummaryCardsPr
 
   const statusTiles = [
     ["completed", summary.statusBreakdown.completed, "bg-success"],
-    ["active", summary.statusBreakdown.active, "bg-blue-500"],
+    ["active", summary.statusBreakdown.active, "bg-info"],
     ["created", summary.statusBreakdown.created, "bg-secondary-foreground"],
-    ["failed", summary.statusBreakdown.failed, "bg-red-600"],
-    ["cancelled", summary.statusBreakdown.cancelled, "bg-red-400"],
+    ["failed", summary.statusBreakdown.failed, "bg-destructive"],
+    ["cancelled", summary.statusBreakdown.cancelled, "bg-destructive/60"],
     ["archived", summary.statusBreakdown.archived, "bg-muted-foreground"],
   ] as const;
 
