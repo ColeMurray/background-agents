@@ -95,7 +95,7 @@ export function DataControlsSettings() {
             No archived sessions. Sessions you archive will appear here.
           </div>
         ) : (
-          <div className="border border-border rounded-md divide-y divide-border">
+          <div className="border border-border rounded-md divide-y divide-border-muted">
             {sessions.map((session) => (
               <ArchivedSessionRow
                 key={session.id}

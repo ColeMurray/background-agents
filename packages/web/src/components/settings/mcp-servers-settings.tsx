@@ -270,7 +270,7 @@ function McpServerForm({
   return (
     <>
       <div>
-        <Label className="mb-1">Name</Label>
+        <Label className="mb-1.5">Name</Label>
         <Input
           value={form.name}
           onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -279,7 +279,7 @@ function McpServerForm({
       </div>
 
       <div>
-        <Label className="mb-1">Type</Label>
+        <Label className="mb-1.5">Type</Label>
         <div className="flex gap-2">
           <button
             onClick={() => setForm({ ...form, type: "local" })}
@@ -308,7 +308,7 @@ function McpServerForm({
 
       {form.type === "remote" ? (
         <div>
-          <Label className="mb-1">URL</Label>
+          <Label className="mb-1.5">URL</Label>
           <Input
             type="url"
             value={form.url}
@@ -318,7 +318,7 @@ function McpServerForm({
         </div>
       ) : (
         <div>
-          <Label className="mb-1">Command</Label>
+          <Label className="mb-1.5">Command</Label>
           <Input
             value={form.command}
             onChange={(e) => setForm({ ...form, command: e.target.value })}
@@ -337,7 +337,7 @@ function McpServerForm({
       />
 
       <div>
-        <Label className="mb-2">Availability</Label>
+        <Label className="mb-1.5">Availability</Label>
         <div className="space-y-2 mb-2">
           <RadioCard
             name={`scope-mode-${radioPrefix}`}
@@ -658,7 +658,7 @@ export function McpServersSettings() {
 
                 {/* Expanded edit form */}
                 {isExpanded && editing === server.id && (
-                  <div className="px-4 pb-4 pt-3 border-t border-border space-y-4">
+                  <div className="px-4 pb-4 pt-3 border-t border-border-muted space-y-4">
                     <McpServerForm
                       form={form}
                       setForm={setForm}

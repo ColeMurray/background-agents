@@ -112,7 +112,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
         </header>
       )}
 
-      <div className="flex-1 overflow-y-auto px-4 py-6 sm:p-8">
+      <div className="flex-1 overflow-y-auto p-8">
         <div className="max-w-3xl mx-auto">
           {actionError && (
             <ErrorBanner className="mb-4" role="alert">

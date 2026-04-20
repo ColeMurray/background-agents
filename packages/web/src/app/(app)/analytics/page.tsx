@@ -8,6 +8,7 @@ import { AnalyticsTimeseriesChart } from "@/components/analytics/timeseries-char
 import { AnalyticsUserTable } from "@/components/analytics/user-table";
 import { useSidebarContext } from "@/components/sidebar-layout";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { SidebarIcon } from "@/components/ui/icons";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -61,19 +62,20 @@ export default function AnalyticsPage() {
       {!isOpen && (
         <header className="border-b border-border-muted flex-shrink-0">
           <div className="px-4 py-3">
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={toggle}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
               title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
               aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
             >
               <SidebarIcon className="w-4 h-4" />
-            </button>
+            </Button>
           </div>
         </header>
       )}
 
-      <div className="flex-1 overflow-y-auto p-6 sm:p-8">
+      <div className="flex-1 overflow-y-auto p-8">
         <div className="relative z-10 mx-auto max-w-7xl space-y-6">
           <div className="relative overflow-hidden rounded-xl border border-border-muted bg-card px-5 py-5 sm:px-6 sm:py-6">
             <div className="pointer-events-none absolute inset-y-0 right-0 w-1/3 bg-[linear-gradient(135deg,var(--accent-muted),transparent)] opacity-70" />

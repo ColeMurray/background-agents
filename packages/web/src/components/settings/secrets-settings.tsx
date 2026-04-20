@@ -30,7 +30,7 @@ export function SecretsSettings() {
       </p>
 
       {/* Repo selector */}
-      <div className="mb-4">
+      <div className="mb-6">
         <label className="block text-sm font-medium text-foreground mb-1.5">Repository</label>
         <Combobox
           value={selectedRepo}

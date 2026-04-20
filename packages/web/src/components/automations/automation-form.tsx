@@ -181,12 +181,12 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Trigger Type */}
       {mode === "create" ? (
         <div>
-          <label className="block text-sm font-medium text-foreground mb-2">Trigger Type</label>
+          <label className="block text-sm font-medium text-foreground mb-1.5">Trigger Type</label>
           <TriggerTypeSelector value={triggerType} onChange={setTriggerType} />
         </div>
       ) : (
         <div>
-          <label className="block text-sm font-medium text-foreground mb-1">Trigger Type</label>
+          <label className="block text-sm font-medium text-foreground mb-1.5">Trigger Type</label>
           <div className="text-sm text-muted-foreground px-3 py-2 border border-border-muted rounded-md bg-muted/30">
             {{
               schedule: "Schedule",
@@ -202,7 +202,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       {/* Name */}
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1">Name</label>
+        <label className="block text-sm font-medium text-foreground mb-1.5">Name</label>
         <Input
           type="text"
           value={name}
@@ -215,7 +215,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       {/* Repository */}
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1">Repository</label>
+        <label className="block text-sm font-medium text-foreground mb-1.5">Repository</label>
         <Combobox
           value={selectedRepo}
           onChange={handleRepoChange}
@@ -245,7 +245,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       {/* Branch */}
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1">Branch</label>
+        <label className="block text-sm font-medium text-foreground mb-1.5">Branch</label>
         <Combobox
           value={baseBranch}
           onChange={setBaseBranch}
@@ -270,7 +270,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       {/* Model */}
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1">Model</label>
+        <label className="block text-sm font-medium text-foreground mb-1.5">Model</label>
         <Combobox
           value={model}
           onChange={(nextModel) => {
@@ -299,7 +299,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1">Reasoning Effort</label>
+        <label className="block text-sm font-medium text-foreground mb-1.5">Reasoning Effort</label>
         <Select
           value={reasoningConfig ? reasoningEffort || DEFAULT_REASONING_VALUE : ""}
           onValueChange={(value) =>
@@ -327,11 +327,11 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {isSchedule && (
         <>
           <div>
-            <label className="block text-sm font-medium text-foreground mb-1">Schedule</label>
+            <label className="block text-sm font-medium text-foreground mb-1.5">Schedule</label>
             <CronPicker value={scheduleCron} onChange={setScheduleCron} timezone={scheduleTz} />
           </div>
           <div>
-            <label className="block text-sm font-medium text-foreground mb-1">Timezone</label>
+            <label className="block text-sm font-medium text-foreground mb-1.5">Timezone</label>
             <Combobox
               value={scheduleTz}
               onChange={setScheduleTz}
@@ -356,7 +356,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Event type selector (for Sentry) */}
       {triggerType === "sentry" && eventTypes.length > 0 && (
         <div>
-          <label className="block text-sm font-medium text-foreground mb-1">Event Type</label>
+          <label className="block text-sm font-medium text-foreground mb-1.5">Event Type</label>
           <Select value={eventType} onValueChange={setEventType}>
             <SelectTrigger className="w-full">
               <SelectValue placeholder="Select event type..." />
@@ -376,7 +376,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Sentry Client Secret (create mode only) */}
       {triggerType === "sentry" && mode === "create" && (
         <div>
-          <label className="block text-sm font-medium text-foreground mb-1">
+          <label className="block text-sm font-medium text-foreground mb-1.5">
             Sentry Client Secret
           </label>
           <Input
@@ -396,7 +396,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Conditions (for non-schedule types) */}
       {!isSchedule && TRIGGER_TYPE_TO_SOURCE[triggerType] && (
         <div>
-          <label className="block text-sm font-medium text-foreground mb-1">
+          <label className="block text-sm font-medium text-foreground mb-1.5">
             Conditions
             <span className="text-xs text-muted-foreground ml-1 font-normal">(optional)</span>
           </label>
@@ -410,7 +410,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       {/* Instructions */}
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1">Instructions</label>
+        <label className="block text-sm font-medium text-foreground mb-1.5">Instructions</label>
         <Textarea
           value={instructions}
           onChange={(e) => setInstructions(e.target.value)}
@@ -429,7 +429,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       </div>
 
       {/* Submit */}
-      <div className="flex justify-end gap-3">
+      <div className="flex justify-end gap-2">
         <Button
           type="submit"
           disabled={

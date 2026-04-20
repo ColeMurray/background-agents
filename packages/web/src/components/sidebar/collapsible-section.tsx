@@ -20,7 +20,7 @@ export function CollapsibleSection({
     <div className="border-b border-border-muted last:border-b-0">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center justify-between w-full px-4 py-3 text-sm font-medium text-foreground hover:bg-muted transition-colors"
+        className="flex items-center justify-between w-full px-4 py-4 text-sm font-medium text-foreground hover:bg-muted transition-colors"
       >
         <span>{title}</span>
         <ChevronDownIcon
