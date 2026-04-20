@@ -11,7 +11,7 @@ export function KeyboardShortcutsSettings() {
         Use shortcuts for quick navigation and sending prompts.
       </p>
 
-      <div className="border border-border rounded divide-y divide-border">
+      <div className="border border-border rounded-md divide-y divide-border">
         <ShortcutRow label="Send prompt" shortcut={SHORTCUT_LABELS.SEND_PROMPT} />
         <ShortcutRow label="Command menu" shortcut={SHORTCUT_LABELS.COMMAND_MENU} />
         <ShortcutRow label="New session" shortcut={SHORTCUT_LABELS.NEW_SESSION} />

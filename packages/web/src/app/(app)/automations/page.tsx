@@ -40,14 +40,15 @@ export default function AutomationsPage() {
       {!isOpen && (
         <header className="border-b border-border-muted flex-shrink-0">
           <div className="px-4 py-3">
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={toggle}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
               title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
               aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
             >
               <SidebarIcon className="w-4 h-4" />
-            </button>
+            </Button>
           </div>
         </header>
       )}
@@ -74,7 +75,7 @@ export default function AutomationsPage() {
 
           {loading ? (
             <div className="flex justify-center py-12">
-              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-muted-foreground" />
+              <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
             </div>
           ) : (
             <AutomationsList

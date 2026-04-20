@@ -76,7 +76,7 @@ export function ConditionBuilder({ conditions, onChange, triggerSource }: Condit
       {conditions.map((condition, index) => (
         <div
           key={index}
-          className="flex items-start gap-2 p-3 border border-border-muted rounded-md bg-background"
+          className="flex items-start gap-2 p-3 border border-border-muted rounded-md bg-card"
         >
           <div className="flex-1 space-y-2">
             <div className="text-xs font-medium text-muted-foreground">

@@ -68,7 +68,7 @@ export function AppearanceSettings() {
           Customize how code is displayed in sessions.
         </p>
 
-        <div className="border border-border rounded divide-y divide-border">
+        <div className="border border-border rounded-md divide-y divide-border">
           {/* Color scheme mode toggle */}
           <div className="flex items-center justify-between px-4 py-3">
             <div>

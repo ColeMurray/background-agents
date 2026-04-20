@@ -44,7 +44,7 @@ interface RunHistoryProps {
 export function RunHistory({ runs, total, loading, onLoadMore, hasMore }: RunHistoryProps) {
   if (!loading && runs.length === 0) {
     return (
-      <div className="border border-border-muted rounded-md bg-background p-6 text-center">
+      <div className="border border-border-muted rounded-md bg-card p-6 text-center">
         <p className="text-sm text-muted-foreground">No runs yet.</p>
       </div>
     );
@@ -52,7 +52,7 @@ export function RunHistory({ runs, total, loading, onLoadMore, hasMore }: RunHis
 
   return (
     <div>
-      <div className="border border-border-muted rounded-md bg-background divide-y divide-border-muted">
+      <div className="border border-border-muted rounded-md bg-card divide-y divide-border-muted">
         {runs.map((run) => {
           const duration = formatDuration(run.startedAt, run.completedAt);
           return (
@@ -95,7 +95,7 @@ export function RunHistory({ runs, total, loading, onLoadMore, hasMore }: RunHis
 
       {loading && (
         <div className="flex justify-center py-4">
-          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-muted-foreground" />
+          <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
         </div>
       )}
 

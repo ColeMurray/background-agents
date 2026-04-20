@@ -304,7 +304,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
       >
         {loading ? (
           <div className="flex justify-center py-8">
-            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-muted-foreground" />
+            <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
           </div>
         ) : sessions.length === 0 ? (
           <div className="px-4 py-8 text-center text-sm text-muted-foreground">No sessions yet</div>
@@ -345,7 +345,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
 
             {loadingMore && (
               <div className="flex justify-center py-3">
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-muted-foreground" />
+                <div className="animate-spin rounded-full h-4 w-4 border-2 border-current border-t-transparent text-muted-foreground" />
               </div>
             )}
           </>

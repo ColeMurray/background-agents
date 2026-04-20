@@ -4,6 +4,7 @@ import { useState, useCallback } from "react";
 import Link from "next/link";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 import { buildSessionHref, type SessionItem } from "@/components/session-sidebar";
 import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
 import { formatRelativeTime } from "@/lib/time";
@@ -87,14 +88,14 @@ export function DataControlsSettings() {
 
         {loading ? (
           <div className="flex justify-center py-8">
-            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-muted-foreground" />
+            <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
           </div>
         ) : sessions.length === 0 ? (
           <div className="py-8 text-center text-sm text-muted-foreground">
             No archived sessions. Sessions you archive will appear here.
           </div>
         ) : (
-          <div className="border border-border rounded divide-y divide-border">
+          <div className="border border-border rounded-md divide-y divide-border">
             {sessions.map((session) => (
               <ArchivedSessionRow
                 key={session.id}
@@ -106,13 +107,15 @@ export function DataControlsSettings() {
         )}
 
         {hasMore && !loading && (
-          <button
+          <Button
+            variant="outline"
+            size="sm"
             onClick={handleLoadMore}
             disabled={loadingMore}
-            className="mt-4 w-full py-2 text-sm text-muted-foreground hover:text-foreground border border-border rounded hover:bg-muted transition disabled:opacity-50"
+            className="mt-4 w-full"
           >
             {loadingMore ? "Loading..." : "Load more"}
-          </button>
+          </Button>
         )}
       </div>
     </div>
@@ -140,12 +143,14 @@ function ArchivedSessionRow({
           <span className="truncate">{repoInfo}</span>
         </div>
       </Link>
-      <button
+      <Button
+        variant="outline"
+        size="xs"
         onClick={() => onUnarchive(session.id)}
-        className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground border border-border rounded hover:bg-background transition opacity-0 group-hover:opacity-100"
+        className="flex-shrink-0 opacity-0 group-hover:opacity-100"
       >
         Unarchive
-      </button>
+      </Button>
     </div>
   );
 }

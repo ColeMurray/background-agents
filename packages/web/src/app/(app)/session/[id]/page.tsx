@@ -18,6 +18,7 @@ import { SafeMarkdown } from "@/components/safe-markdown";
 import { ToolCallGroup } from "@/components/tool-call-group";
 import { ScreenshotArtifactCard } from "@/components/screenshot-artifact-card";
 import { MediaLightbox } from "@/components/media-lightbox";
+import { Button } from "@/components/ui/button";
 import { useSidebarContext } from "@/components/sidebar-layout";
 import {
   SessionRightSidebar,
@@ -719,14 +720,15 @@ function SessionContent({
         <div className="px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             {!isOpen && (
-              <button
+              <Button
+                variant="ghost"
+                size="icon"
                 onClick={toggle}
-                className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
                 title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
                 aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
               >
                 <SidebarIcon className="w-4 h-4" />
-              </button>
+              </Button>
             )}
             <div>
               {isRenaming ? (

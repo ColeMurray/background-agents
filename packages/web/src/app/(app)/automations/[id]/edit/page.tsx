@@ -48,7 +48,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
   if (loading) {
     return (
       <div className="h-full flex items-center justify-center">
-        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-muted-foreground" />
+        <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
       </div>
     );
   }

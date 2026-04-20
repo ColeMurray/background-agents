@@ -195,13 +195,9 @@ function EnvRowsEditor({
         <Label>
           {label} <span className="text-muted-foreground font-normal">(optional)</span>
         </Label>
-        <button
-          type="button"
-          onClick={addRow}
-          className="text-xs text-muted-foreground hover:text-foreground transition"
-        >
+        <Button type="button" variant="subtle" size="xs" onClick={addRow}>
           + Add
-        </button>
+        </Button>
       </div>
       {hasExistingCredentials && form.envRows.every((r) => !r.value.trim()) && (
         <p className="text-xs text-muted-foreground mb-1">
@@ -556,11 +552,7 @@ export function McpServersSettings() {
         <div className="border border-border rounded-md p-4 mb-6 space-y-4">
           <div className="flex items-center justify-between mb-1">
             <h3 className="text-sm font-medium text-foreground">New MCP Server</h3>
-            <button
-              onClick={cancel}
-              className="p-1 text-muted-foreground hover:text-foreground transition"
-              aria-label="Close"
-            >
+            <Button variant="ghost" size="icon" onClick={cancel} aria-label="Close">
               <svg
                 className="w-4 h-4"
                 fill="none"
@@ -570,7 +562,7 @@ export function McpServersSettings() {
               >
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
-            </button>
+            </Button>
           </div>
           <McpServerForm
             form={form}
