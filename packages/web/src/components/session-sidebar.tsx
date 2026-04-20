@@ -216,6 +216,12 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
 
   const currentSessionId = pathname?.startsWith("/session/") ? pathname.split("/")[2] : null;
 
+  const handleNavigationSelect = useCallback(() => {
+    if (isMobile) {
+      onSessionSelect?.();
+    }
+  }, [isMobile, onSessionSelect]);
+
   return (
     <aside className="w-72 h-dvh flex flex-col border-r border-border-muted bg-background">
       {/* Header */}
@@ -230,7 +236,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           >
             <SidebarIcon className="w-4 h-4" />
           </Button>
-          <Link href="/" className="flex items-center gap-2">
+          <Link href="/" onClick={handleNavigationSelect} className="flex items-center gap-2">
             <InspectIcon className="w-5 h-5" />
             <span className="font-semibold text-foreground">Inspect</span>
           </Link>
@@ -247,6 +253,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           </Button>
           <Link
             href="/settings"
+            onClick={handleNavigationSelect}
             className={`p-1.5 transition ${
               pathname === "/settings"
                 ? "text-foreground bg-muted"
@@ -264,6 +271,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
       <div className="px-3 pt-2 pb-1 flex flex-col gap-0.5">
         <Link
           href="/automations"
+          onClick={handleNavigationSelect}
           className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-md transition ${
             pathname?.startsWith("/automations")
               ? "text-foreground bg-muted"
@@ -275,6 +283,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
         </Link>
         <Link
           href="/analytics"
+          onClick={handleNavigationSelect}
           className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-md transition ${
             pathname?.startsWith("/analytics")
               ? "text-foreground bg-muted"
