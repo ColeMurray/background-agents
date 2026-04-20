@@ -71,7 +71,11 @@ export function buildCompletionBlocks(
 
   // 4. Status footer
   const emoji = response.success ? STATUS_EMOJI.success : STATUS_EMOJI.warning;
-  const status = response.success ? "Done" : "Completed with issues";
+  const status = response.success
+    ? "Done"
+    : response.error
+      ? `Failed: ${response.error}`
+      : "Completed with issues";
   const effortSuffix = context.reasoningEffort ? ` (${context.reasoningEffort})` : "";
   blocks.push({
     type: "context",

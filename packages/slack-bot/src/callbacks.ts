@@ -159,42 +159,45 @@ async function handleCompletionCallback(
     // Fetch events to build response (filtered by messageId directly)
     const agentResponse = await extractAgentResponse(env, sessionId, payload.messageId, traceId);
 
+    // Merge error from callback payload and extracted response
+    const errorMessage = agentResponse.error || payload.error;
+    if (errorMessage && !agentResponse.error) {
+      agentResponse.error = errorMessage;
+    }
+
     // Check if extraction succeeded (has content or was explicitly successful)
     if (!agentResponse.textContent && agentResponse.toolCalls.length === 0 && !payload.success) {
+      const displayError = errorMessage || "Unknown error";
       log.error("callback.complete", {
         ...base,
         outcome: "error",
         error_message: "empty_agent_response",
+        agent_error: displayError,
         duration_ms: Date.now() - startTime,
       });
-      await postMessage(
-        env.SLACK_BOT_TOKEN,
-        context.channel,
-        "The agent completed but I couldn't retrieve the response. Please check the web UI for details.",
-        {
-          thread_ts: context.threadTs,
-          blocks: [
-            {
-              type: "section",
-              text: {
-                type: "mrkdwn",
-                text: ":warning: The agent completed but I couldn't retrieve the response.",
+      await postMessage(env.SLACK_BOT_TOKEN, context.channel, `The agent failed: ${displayError}`, {
+        thread_ts: context.threadTs,
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `:x: *Agent failed:* ${displayError}`,
+            },
+          },
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                text: { type: "plain_text", text: "View Session" },
+                url: `${env.WEB_APP_URL}/session/${sessionId}`,
+                action_id: "view_session",
               },
-            },
-            {
-              type: "actions",
-              elements: [
-                {
-                  type: "button",
-                  text: { type: "plain_text", text: "View Session" },
-                  url: `${env.WEB_APP_URL}/session/${sessionId}`,
-                  action_id: "view_session",
-                },
-              ],
-            },
-          ],
-        }
-      );
+            ],
+          },
+        ],
+      });
 
       if (context.reactionMessageTs) {
         await clearThinkingReaction(env, context.channel, context.reactionMessageTs, traceId);

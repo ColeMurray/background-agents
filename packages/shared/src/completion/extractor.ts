@@ -137,8 +137,13 @@ export async function extractAgentResponse(
     const artifacts = await fetchSessionArtifacts(deps, sessionId, headers, base);
     const finalArtifacts = artifacts.length > 0 ? artifacts : eventArtifacts;
 
-    // Check for completion event to get success status
+    // Check for completion event to get success status and error message.
+    // The error may be on execution_complete itself, or on a separate "error" event.
     const completionEvent = allEvents.find((e) => e.type === "execution_complete");
+    const errorEvent = allEvents.find((e) => e.type === "error");
+    const errorMessage =
+      (completionEvent?.data.error != null ? String(completionEvent.data.error) : undefined) ??
+      (errorEvent?.data.error != null ? String(errorEvent.data.error) : undefined);
 
     log.info("control_plane.fetch_events", {
       ...base,
@@ -147,6 +152,7 @@ export async function extractAgentResponse(
       tool_call_count: toolCalls.length,
       artifact_count: finalArtifacts.length,
       has_text: Boolean(textContent),
+      has_error: Boolean(errorMessage),
       duration_ms: Date.now() - startTime,
     });
 
@@ -155,6 +161,7 @@ export async function extractAgentResponse(
       toolCalls,
       artifacts: finalArtifacts,
       success: Boolean(completionEvent?.data.success),
+      error: errorMessage,
     };
   } catch (error) {
     log.error("control_plane.fetch_events", {

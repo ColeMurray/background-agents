@@ -468,6 +468,7 @@ export interface AgentResponse {
   toolCalls: ToolCallSummary[];
   artifacts: ArtifactInfo[];
   success: boolean;
+  error?: string;
 }
 
 export interface UserPreferences {

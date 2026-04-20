@@ -201,7 +201,7 @@ export class SessionSandboxEventProcessor {
           isProcessing: this.deps.getIsProcessing(),
         });
         this.deps.ctx.waitUntil(
-          this.deps.callbackService.notifyComplete(completionMessageId, event.success)
+          this.deps.callbackService.notifyComplete(completionMessageId, event.success, event.error)
         );
 
         await this.deps.reconcileSessionStatusAfterExecution(event.success);
