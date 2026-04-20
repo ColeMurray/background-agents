@@ -123,7 +123,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
           <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-2xl font-semibold text-foreground">{automation.name}</h1>
+                <h1 className="text-3xl font-semibold text-foreground">{automation.name}</h1>
                 <AutomationStatusBadge automation={automation} />
               </div>
               <p className="text-sm text-muted-foreground mt-1">
@@ -201,7 +201,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
 
           {/* Config section */}
           <div className="border border-border-muted rounded-md bg-background p-4 mb-8">
-            <h2 className="text-sm font-medium text-foreground mb-3">Configuration</h2>
+            <h2 className="text-lg font-medium text-foreground mb-3">Configuration</h2>
             <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
               <div>
                 <dt className="text-muted-foreground">Trigger</dt>

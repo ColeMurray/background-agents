@@ -90,7 +90,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
 
       <div className="flex-1 overflow-y-auto p-8">
         <div className="max-w-2xl mx-auto">
-          <h1 className="text-2xl font-semibold text-foreground mb-6">Edit Automation</h1>
+          <h1 className="text-3xl font-semibold text-foreground mb-6">Edit Automation</h1>
 
           {error && (
             <ErrorBanner className="mb-4" role="alert">

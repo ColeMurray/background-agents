@@ -749,7 +749,7 @@ function SessionContent({
                 />
               ) : (
                 <h1
-                  className="font-medium text-foreground max-w-40 truncate cursor-text"
+                  className="text-sm font-medium text-foreground max-w-40 truncate cursor-text"
                   onClick={handleStartRename}
                   title="Click to rename"
                 >

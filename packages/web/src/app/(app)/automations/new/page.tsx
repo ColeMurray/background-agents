@@ -83,7 +83,7 @@ export default function NewAutomationPage() {
 
         <div className="flex-1 overflow-y-auto p-8">
           <div className="max-w-2xl mx-auto">
-            <h1 className="text-2xl font-semibold text-foreground mb-2">Automation Created</h1>
+            <h1 className="text-3xl font-semibold text-foreground mb-2">Automation Created</h1>
             {webhookResult.sentryWebhookUrl ? (
               <>
                 <p className="text-sm text-muted-foreground mb-6">
@@ -145,7 +145,7 @@ export default function NewAutomationPage() {
 
       <div className="flex-1 overflow-y-auto p-8">
         <div className="max-w-2xl mx-auto">
-          <h1 className="text-2xl font-semibold text-foreground mb-6">Create Automation</h1>
+          <h1 className="text-3xl font-semibold text-foreground mb-6">Create Automation</h1>
 
           {error && (
             <ErrorBanner className="mb-4" role="alert">

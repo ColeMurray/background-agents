@@ -80,7 +80,7 @@ export default function AnalyticsPage() {
 
             <div className="relative flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
               <div className="space-y-3">
-                <div className="inline-flex items-center gap-2 rounded-full border border-border-muted bg-background px-3 py-1 text-xs uppercase tracking-[0.16em] text-secondary-foreground">
+                <div className="inline-flex items-center gap-2 rounded-full border border-border-muted bg-background px-3 py-1 text-xs uppercase tracking-wider text-secondary-foreground">
                   Usage analytics
                 </div>
                 <div>
@@ -106,7 +106,7 @@ export default function AnalyticsPage() {
 
               <div className="min-w-0 xl:w-[18rem]">
                 <div className="rounded-lg border border-border-muted bg-background p-4">
-                  <div className="text-xs uppercase tracking-[0.16em] text-secondary-foreground">
+                  <div className="text-xs uppercase tracking-wider text-secondary-foreground">
                     Time range
                   </div>
                   <div className="mt-3">

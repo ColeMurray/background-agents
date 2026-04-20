@@ -247,7 +247,7 @@ function EnvRowsEditor({
         ))}
       </div>
       <p className="text-xs text-muted-foreground mt-1">
-        Paste a <code className="text-[11px]">.env</code> block into any field to import multiple
+        Paste a <code className="text-xs">.env</code> block into any field to import multiple
         entries.
       </p>
     </div>

@@ -97,7 +97,7 @@ export function AnalyticsRepoBarChart({ entries, loading }: RepoBarChartProps) {
         </div>
         <div className="grid gap-2 sm:min-w-[15rem] sm:grid-cols-2">
           <div className="rounded-md border border-border-muted bg-background px-3 py-3">
-            <div className="text-[11px] uppercase tracking-[0.14em] text-secondary-foreground">
+            <div className="text-xs uppercase tracking-wider text-secondary-foreground">
               Tracked repos
             </div>
             <div className="mt-2 text-lg font-semibold text-foreground">
@@ -105,7 +105,7 @@ export function AnalyticsRepoBarChart({ entries, loading }: RepoBarChartProps) {
             </div>
           </div>
           <div className="rounded-md border border-border-muted bg-background px-3 py-3">
-            <div className="text-[11px] uppercase tracking-[0.14em] text-secondary-foreground">
+            <div className="text-xs uppercase tracking-wider text-secondary-foreground">
               Top repo
             </div>
             <div className="mt-2 truncate text-sm font-semibold text-foreground">

@@ -419,7 +419,7 @@ export function SecretsEditor({
                   </button>
                 </div>
                 {row.existing && (
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-xs text-muted-foreground">
                     To update, enter a new value and save.
                   </p>
                 )}
@@ -441,9 +441,7 @@ export function SecretsEditor({
                         overridden ? "opacity-40" : "opacity-70"
                       }`}
                     >
-                      <Badge variant="info" className="text-[10px]">
-                        Global
-                      </Badge>
+                      <Badge variant="info">Global</Badge>
                       <span className="text-xs text-foreground font-mono">{g.key}</span>
                       <Input
                         type="password"
@@ -453,9 +451,7 @@ export function SecretsEditor({
                         className="flex-1 min-w-[200px] h-auto px-2 py-1 text-xs"
                       />
                       {overridden && (
-                        <span className="text-[10px] text-muted-foreground">
-                          (overridden by repo)
-                        </span>
+                        <span className="text-xs text-muted-foreground">(overridden by repo)</span>
                       )}
                     </div>
                   );
@@ -475,7 +471,7 @@ export function SecretsEditor({
             >
               {saving ? "Saving..." : "Save secrets"}
             </button>
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-xs text-muted-foreground">
               Keys are automatically uppercased. Paste a `.env` block into either field to import.
             </span>
           </div>
