@@ -29,24 +29,6 @@ resource "null_resource" "modal_secrets" {
   }
 }
 
-# Create Modal volume
-resource "null_resource" "modal_volume" {
-  count = var.volume_name != null ? 1 : 0
-
-  triggers = {
-    volume_name = var.volume_name
-  }
-
-  provisioner "local-exec" {
-    command = "uv run --directory ${var.deploy_path} modal volume create ${var.volume_name} || echo 'Volume may already exist'"
-
-    environment = {
-      MODAL_TOKEN_ID     = var.modal_token_id
-      MODAL_TOKEN_SECRET = var.modal_token_secret
-    }
-  }
-}
-
 # Deploy Modal app
 resource "null_resource" "modal_deploy" {
   triggers = {
@@ -54,9 +36,8 @@ resource "null_resource" "modal_deploy" {
     source_hash = var.source_hash
     # Re-deploy when app name changes
     app_name = var.app_name
-    # Ensure secrets and volume are created first
+    # Ensure secrets are created first
     secrets_created = length(var.secrets) > 0 ? null_resource.modal_secrets[0].id : "no-secrets"
-    volume_created  = var.volume_name != null ? null_resource.modal_volume[0].id : "no-volume"
   }
 
   provisioner "local-exec" {
@@ -74,7 +55,6 @@ resource "null_resource" "modal_deploy" {
 
   depends_on = [
     null_resource.modal_secrets,
-    null_resource.modal_volume
   ]
 }
 

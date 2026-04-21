@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from .app import app, function_image, github_app_secrets, inspect_volume
+from .app import app, function_image, github_app_secrets
 
 if TYPE_CHECKING:
     from sandbox_runtime import McpServerConfig
@@ -31,7 +31,7 @@ def get_manager():
     return _manager
 
 
-@app.function(image=function_image, volumes={"/data": inspect_volume}, secrets=[github_app_secrets])
+@app.function(image=function_image, secrets=[github_app_secrets])
 async def create_sandbox(
     session_id: str,
     repo_owner: str,
@@ -121,7 +121,7 @@ async def create_sandbox(
     }
 
 
-@app.function(image=function_image, volumes={"/data": inspect_volume})
+@app.function(image=function_image)
 async def warm_sandbox(
     repo_owner: str,
     repo_name: str,
@@ -150,131 +150,6 @@ async def warm_sandbox(
     return {
         "sandbox_id": handle.sandbox_id,
         "status": handle.status.value,
-    }
-
-
-@app.function(image=function_image, volumes={"/data": inspect_volume})
-def get_latest_snapshot(repo_owner: str, repo_name: str) -> dict | None:
-    """
-    Get the latest snapshot for a repository.
-
-    Args:
-        repo_owner: GitHub repository owner
-        repo_name: GitHub repository name
-
-    Returns:
-        Snapshot info or None if no snapshot exists
-    """
-    # Lazy import to avoid pydantic at module load time
-    from .registry.store import SnapshotStore
-
-    store = SnapshotStore()
-    snapshot = store.get_latest_snapshot(repo_owner, repo_name)
-
-    if snapshot:
-        return snapshot.model_dump()
-    return None
-
-
-@app.function(image=function_image, volumes={"/data": inspect_volume})
-def list_snapshots(repo_owner: str, repo_name: str, limit: int = 10) -> list[dict]:
-    """
-    List recent snapshots for a repository.
-
-    Args:
-        repo_owner: GitHub repository owner
-        repo_name: GitHub repository name
-        limit: Maximum number of snapshots to return
-
-    Returns:
-        List of snapshot info dicts
-    """
-    # Lazy import to avoid pydantic at module load time
-    from .registry.store import SnapshotStore
-
-    store = SnapshotStore()
-    snapshots = store.list_snapshots(repo_owner, repo_name, limit=limit)
-    return [s.model_dump() for s in snapshots]
-
-
-@app.function(image=function_image, volumes={"/data": inspect_volume})
-def register_repository(
-    repo_owner: str,
-    repo_name: str,
-    default_branch: str = "main",
-    setup_commands: list[str] | None = None,
-    build_commands: list[str] | None = None,
-) -> dict:
-    """
-    Register a repository for scheduled image builds.
-
-    Args:
-        repo_owner: GitHub repository owner
-        repo_name: GitHub repository name
-        default_branch: Default branch to build from
-        setup_commands: Custom setup commands
-        build_commands: Custom build commands
-
-    Returns:
-        Repository configuration
-    """
-    # Lazy imports to avoid pydantic at module load time
-    from .registry.models import Repository
-    from .registry.store import SnapshotStore
-
-    store = SnapshotStore()
-
-    repo = Repository(
-        owner=repo_owner,
-        name=repo_name,
-        default_branch=default_branch,
-        setup_commands=setup_commands or [],
-        build_commands=build_commands or [],
-    )
-
-    store.save_repository(repo)
-
-    return repo.model_dump()
-
-
-@app.function(image=function_image, volumes={"/data": inspect_volume})
-def list_repositories() -> list[dict]:
-    """
-    List all registered repositories.
-
-    Returns:
-        List of repository configurations
-    """
-    # Lazy import to avoid pydantic at module load time
-    from .registry.store import SnapshotStore
-
-    store = SnapshotStore()
-    repos = store.list_repositories()
-    return [r.model_dump() for r in repos]
-
-
-@app.function(image=function_image, volumes={"/data": inspect_volume})
-def delete_repository(repo_owner: str, repo_name: str) -> dict:
-    """
-    Delete a repository from the registry.
-
-    Args:
-        repo_owner: GitHub repository owner
-        repo_name: GitHub repository name
-
-    Returns:
-        dict with success status
-    """
-    # Lazy import to avoid pydantic at module load time
-    from .registry.store import SnapshotStore
-
-    store = SnapshotStore()
-    deleted = store.delete_repository(repo_owner, repo_name)
-
-    return {
-        "deleted": deleted,
-        "repo_owner": repo_owner,
-        "repo_name": repo_name,
     }
 
 

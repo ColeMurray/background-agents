@@ -10,7 +10,6 @@ export {
   type CreateSandboxResponse,
   type WarmSandboxRequest,
   type WarmSandboxResponse,
-  type SnapshotInfo,
 } from "./client";
 
 // Provider interface

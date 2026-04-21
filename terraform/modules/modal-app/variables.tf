@@ -47,12 +47,6 @@ variable "secrets" {
   sensitive = true
 }
 
-variable "volume_name" {
-  description = "Name of the Modal volume to create"
-  type        = string
-  default     = null
-}
-
 variable "fetch_app_info" {
   description = "Whether to fetch app info after deployment"
   type        = bool
