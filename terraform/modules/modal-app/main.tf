@@ -23,6 +23,7 @@ resource "null_resource" "modal_secrets" {
     environment = {
       MODAL_TOKEN_ID     = var.modal_token_id
       MODAL_TOKEN_SECRET = var.modal_token_secret
+      DEPLOY_PATH        = var.deploy_path
       SECRETS_JSON       = local.secrets_json
     }
   }
@@ -37,7 +38,7 @@ resource "null_resource" "modal_volume" {
   }
 
   provisioner "local-exec" {
-    command = "modal volume create ${var.volume_name} || echo 'Volume may already exist'"
+    command = "uv run --directory ${var.deploy_path} modal volume create ${var.volume_name} || echo 'Volume may already exist'"
 
     environment = {
       MODAL_TOKEN_ID     = var.modal_token_id
