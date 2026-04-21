@@ -61,6 +61,9 @@ brew install python@3.12 uv
 pipx install modal
 modal setup
 
+# Install Python dependencies for Modal deployment
+cd packages/modal-infra && uv sync --frozen --extra dev && cd -
+
 # Wrangler CLI (for initial R2 bucket setup)
 npm install -g wrangler
 ```
@@ -425,11 +428,14 @@ enable_durable_object_bindings = false
 enable_service_bindings        = false
 ```
 
-**Important**: Build the workers before running Terraform (Terraform references the built bundles):
+**Important**: Build the workers and install Python dependencies before running Terraform:
 
 ```bash
-# From the repository root
+# From the repository root — build TypeScript workers (Terraform references the built bundles)
 npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot -w @open-inspect/github-bot
+
+# Install Python dependencies for Modal deployment (includes sandbox-runtime)
+cd packages/modal-infra && uv sync --frozen --extra dev && cd -
 ```
 
 Then run:
@@ -754,6 +760,20 @@ modal token show
 # View Modal logs
 modal app logs open-inspect
 ```
+
+### Modal deployment fails with "No module named 'sandbox_runtime'"
+
+The `sandbox_runtime` package is a sibling package that must be installed before deploying. From the
+repository root:
+
+```bash
+cd packages/modal-infra && uv sync --frozen --extra dev && cd -
+```
+
+This installs all Modal deployment dependencies including `sandbox_runtime` (resolved via
+`[tool.uv.sources]` in `pyproject.toml`). If you installed Modal via `pipx install modal` alone, it
+runs in an isolated environment that doesn't include project dependencies — the `uv sync` step is
+required.
 
 ### Worker deployment fails / "no such file or directory" for dist/index.js
 
