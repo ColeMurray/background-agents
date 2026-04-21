@@ -12,6 +12,7 @@ import type {
 } from "@open-inspect/shared";
 
 export type {
+  AvailableAgent,
   ArtifactType,
   Attachment,
   ClientMessage,

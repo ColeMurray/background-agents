@@ -23,6 +23,7 @@ export interface SessionInternalRouteHandlers {
   listEvents: SessionInternalRouteHandler;
   listArtifacts: SessionInternalRouteHandler;
   listMessages: SessionInternalRouteHandler;
+  listAgents: SessionInternalRouteHandler;
   createPr: SessionInternalRouteHandler;
   wsToken: SessionInternalRouteHandler;
   updateTitle: SessionInternalRouteHandler;
@@ -67,6 +68,7 @@ export function createSessionInternalRoutes(
     { method: "GET", path: SessionInternalPaths.events, handler: handlers.listEvents },
     { method: "GET", path: SessionInternalPaths.artifacts, handler: handlers.listArtifacts },
     { method: "GET", path: SessionInternalPaths.messages, handler: handlers.listMessages },
+    { method: "GET", path: SessionInternalPaths.agents, handler: handlers.listAgents },
     { method: "POST", path: SessionInternalPaths.createPr, handler: handlers.createPr },
     { method: "POST", path: SessionInternalPaths.wsToken, handler: handlers.wsToken },
     { method: "POST", path: SessionInternalPaths.updateTitle, handler: handlers.updateTitle },

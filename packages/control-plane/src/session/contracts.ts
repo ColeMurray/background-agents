@@ -14,6 +14,7 @@ export const SessionInternalPaths = {
   events: "/internal/events",
   artifacts: "/internal/artifacts",
   messages: "/internal/messages",
+  agents: "/internal/agents",
   createPr: "/internal/create-pr",
   wsToken: "/internal/ws-token",
   archive: "/internal/archive",

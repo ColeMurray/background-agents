@@ -462,6 +462,11 @@ const routes: Route[] = [
     handler: handleSessionMessages,
   },
   {
+    method: "GET",
+    pattern: parsePattern("/sessions/:id/agents"),
+    handler: handleSessionAgents,
+  },
+  {
     method: "POST",
     pattern: parsePattern("/sessions/:id/pr"),
     handler: handleCreatePR,
@@ -932,6 +937,7 @@ async function handleSessionPrompt(
     authorId?: string;
     source?: string;
     model?: string;
+    agent?: string;
     reasoningEffort?: string;
     attachments?: Array<{ type: string; name: string; url?: string }>;
     callbackContext?: CallbackContext;
@@ -955,6 +961,7 @@ async function handleSessionPrompt(
           authorId: body.authorId || "anonymous",
           source: body.source || "web",
           model: body.model,
+          agent: body.agent,
           reasoningEffort: body.reasoningEffort,
           attachments: body.attachments,
           callbackContext: body.callbackContext,
@@ -1024,6 +1031,20 @@ async function handleSessionArtifacts(
 
   return stub.fetch(
     internalRequest(buildSessionInternalUrl(SessionInternalPaths.artifacts), undefined, ctx)
+  );
+}
+
+async function handleSessionAgents(
+  _request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const stub = getSessionStub(env, match);
+  if (!stub) return error("Session ID required");
+
+  return stub.fetch(
+    internalRequest(buildSessionInternalUrl(SessionInternalPaths.agents), undefined, ctx)
   );
 }
 

@@ -26,6 +26,7 @@ import { getAvatarUrl } from "./participant-service";
 interface PromptMessageData {
   content: string;
   model?: string;
+  agent?: string;
   reasoningEffort?: string;
   attachments?: Array<{ type: string; name: string; url?: string; content?: string }>;
 }
@@ -55,6 +56,8 @@ interface StopExecutionOptions {
 }
 
 export class SessionMessageQueue {
+  private queuedAgentOverrides = new Map<string, string>();
+
   constructor(private readonly deps: MessageQueueDeps) {}
 
   async handlePromptMessage(ws: WebSocket, data: PromptMessageData): Promise<void> {
@@ -70,6 +73,10 @@ export class SessionMessageQueue {
 
     const messageId = generateId();
     const now = Date.now();
+
+    if (data.agent) {
+      this.queuedAgentOverrides.set(messageId, data.agent);
+    }
 
     let participant = this.deps.participantService.getByUserId(client.userId);
     if (!participant) {
@@ -188,12 +195,14 @@ export class SessionMessageQueue {
       message.reasoning_effort ??
       session?.reasoning_effort ??
       getDefaultReasoningEffort(resolvedModel);
+    const resolvedAgent = this.queuedAgentOverrides.get(message.id);
 
     const command: SandboxCommand = {
       type: "prompt",
       messageId: message.id,
       content: message.content,
       model: resolvedModel,
+      agent: resolvedAgent,
       reasoningEffort: resolvedEffort,
       author: {
         userId: author?.user_id ?? "unknown",
@@ -204,12 +213,16 @@ export class SessionMessageQueue {
     };
 
     const sent = this.deps.wsManager.send(sandboxWs, command);
+    if (sent) {
+      this.queuedAgentOverrides.delete(message.id);
+    }
 
     this.deps.log.info("prompt.dispatch", {
       event: "prompt.dispatch",
       message_id: message.id,
       outcome: sent ? "sent" : "send_failed",
       model: resolvedModel,
+      agent: resolvedAgent,
       reasoning_effort: resolvedEffort,
       author_id: message.author_id,
       user_id: author?.user_id ?? "unknown",
@@ -333,6 +346,7 @@ export class SessionMessageQueue {
     authorId: string;
     source: string;
     model?: string;
+    agent?: string;
     reasoningEffort?: string;
     attachments?: Array<{ type: string; name: string; url?: string }>;
     callbackContext?: Record<string, unknown>;
@@ -344,6 +358,10 @@ export class SessionMessageQueue {
 
     const messageId = generateId();
     const now = Date.now();
+
+    if (data.agent) {
+      this.queuedAgentOverrides.set(messageId, data.agent);
+    }
 
     let messageModel: string | null = null;
     if (data.model) {
@@ -386,6 +404,7 @@ export class SessionMessageQueue {
       author_id: participant.id,
       user_id: data.authorId,
       model: messageModel,
+      agent: data.agent,
       reasoning_effort: messageReasoningEffort,
       content_length: data.content.length,
       has_attachments: !!data.attachments?.length,

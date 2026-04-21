@@ -101,6 +101,11 @@ export interface Attachment {
   mimeType?: string;
 }
 
+export interface AvailableAgent {
+  name: string;
+  description?: string | null;
+}
+
 // Agent event
 export interface AgentEvent {
   id: string;
@@ -275,6 +280,7 @@ export type ClientMessage =
       type: "prompt";
       content: string;
       model?: string;
+      agent?: string;
       reasoningEffort?: string;
       attachments?: Attachment[];
     }

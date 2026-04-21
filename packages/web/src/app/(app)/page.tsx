@@ -2,7 +2,7 @@
 
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { mutate } from "swr";
+import useSWR, { mutate } from "swr";
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { useSidebarContext } from "@/components/sidebar-layout";
@@ -15,12 +15,14 @@ import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
   isValidReasoningEffort,
+  type AvailableAgent,
   type ModelCategory,
 } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { useRepos, type Repo } from "@/hooks/use-repos";
 import { useBranches } from "@/hooks/use-branches";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
+import { AgentPicker } from "@/components/agent-picker";
 import {
   SidebarIcon,
   RepoIcon,
@@ -41,6 +43,7 @@ export default function Home() {
   const { repos, loading: loadingRepos } = useRepos();
   const [selectedRepo, setSelectedRepo] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
+  const [selectedAgent, setSelectedAgent] = useState<string>("build");
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
     getDefaultReasoningEffort(DEFAULT_MODEL)
   );
@@ -58,7 +61,39 @@ export default function Home() {
   const selectedRepoOwner = selectedRepo.split("/")[0] ?? "";
   const selectedRepoName = selectedRepo.split("/")[1] ?? "";
   const { branches, loading: loadingBranches } = useBranches(selectedRepoOwner, selectedRepoName);
-
+  const { data: cachedAgentsData } = useSWR<{ agents: AvailableAgent[] }>(
+    selectedRepoOwner && selectedRepoName && selectedBranch
+      ? `/api/repos/${encodeURIComponent(selectedRepoOwner)}/${encodeURIComponent(selectedRepoName)}/agents?branch=${encodeURIComponent(selectedBranch)}`
+      : null,
+    (url: string) =>
+      fetch(url).then(async (response) => {
+        if (!response.ok) {
+          return { agents: [] };
+        }
+        return response.json();
+      }),
+    {
+      revalidateOnFocus: false,
+    }
+  );
+  const { data: agentsData } = useSWR<{ agents: AvailableAgent[] }>(
+    pendingSessionId ? `/api/sessions/${pendingSessionId}/agents` : null,
+    (url: string) =>
+      fetch(url).then(async (response) => {
+        if (!response.ok) {
+          return { agents: [] };
+        }
+        return response.json();
+      }),
+    {
+      revalidateOnFocus: false,
+      refreshInterval: pendingSessionId ? 2000 : 0,
+    }
+  );
+  const liveAgents = agentsData?.agents ?? [];
+  const cachedAgents = cachedAgentsData?.agents ?? [];
+  const availableAgents = liveAgents.length > 0 ? liveAgents : cachedAgents;
+  const hasFetchedAgents = agentsData !== undefined || cachedAgentsData !== undefined;
   // Auto-select repo when repos load
   useEffect(() => {
     if (repos.length > 0 && !selectedRepo) {
@@ -120,6 +155,17 @@ export default function Home() {
     sessionCreationPromise.current = null;
     pendingConfigRef.current = null;
   }, [selectedRepo, selectedModel, selectedBranch]);
+
+  useEffect(() => {
+    if (availableAgents.length === 0) {
+      setSelectedAgent("build");
+      return;
+    }
+
+    if (!selectedAgent || !availableAgents.some((agent) => agent.name === selectedAgent)) {
+      setSelectedAgent(availableAgents[0]?.name);
+    }
+  }, [availableAgents, selectedAgent]);
 
   const createSessionForWarming = useCallback(async () => {
     if (pendingSessionId) return pendingSessionId;
@@ -248,6 +294,7 @@ export default function Home() {
         body: JSON.stringify({
           content: prompt,
           model: selectedModel,
+          agent: selectedAgent,
           reasoningEffort,
         }),
       });
@@ -278,7 +325,11 @@ export default function Home() {
       branches={branches}
       loadingBranches={loadingBranches}
       selectedModel={selectedModel}
+      selectedAgent={selectedAgent}
+      availableAgents={availableAgents}
+      hasFetchedAgents={hasFetchedAgents}
       setSelectedModel={handleModelChange}
+      setSelectedAgent={setSelectedAgent}
       reasoningEffort={reasoningEffort}
       setReasoningEffort={setReasoningEffort}
       prompt={prompt}
@@ -303,7 +354,11 @@ function HomeContent({
   branches,
   loadingBranches,
   selectedModel,
+  selectedAgent,
+  availableAgents,
+  hasFetchedAgents,
   setSelectedModel,
+  setSelectedAgent,
   reasoningEffort,
   setReasoningEffort,
   prompt,
@@ -324,7 +379,11 @@ function HomeContent({
   branches: { name: string }[];
   loadingBranches: boolean;
   selectedModel: string;
+  selectedAgent: string;
+  availableAgents: AvailableAgent[];
+  hasFetchedAgents: boolean;
   setSelectedModel: (value: string) => void;
+  setSelectedAgent: (value: string) => void;
   reasoningEffort: string | undefined;
   setReasoningEffort: (value: string | undefined) => void;
   prompt: string;
@@ -337,7 +396,6 @@ function HomeContent({
 }) {
   const { isOpen, toggle } = useSidebarContext();
   const inputRef = useRef<HTMLTextAreaElement>(null);
-
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
 
@@ -422,9 +480,9 @@ function HomeContent({
                   </div>
                 </div>
 
-                {/* Footer row with repo and model selectors */}
+                {/* Footer row with repo/model/reasoning on the left and agent on the right */}
                 <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">
-                  {/* Left side - Repo selector + Model selector */}
+                  {/* Left side - Repo selector + Model selector + Reasoning */}
                   <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
                     {/* Repo selector */}
                     <Combobox
@@ -511,10 +569,13 @@ function HomeContent({
                     />
                   </div>
 
-                  {/* Right side - Agent label */}
-                  <span className="hidden sm:inline text-sm text-muted-foreground">
-                    build agent
-                  </span>
+                  <AgentPicker
+                    selectedAgent={selectedAgent}
+                    onSelect={setSelectedAgent}
+                    availableAgents={availableAgents}
+                    hasFetchedAgents={hasFetchedAgents}
+                    disabled={creating}
+                  />
                 </div>
               </div>
 

@@ -8,6 +8,7 @@ export interface EnqueuePromptRequest {
   authorId: string;
   source: string;
   model?: string;
+  agent?: string;
   reasoningEffort?: string;
   attachments?: Array<{ type: string; name: string; url?: string }>;
   callbackContext?: Record<string, unknown>;

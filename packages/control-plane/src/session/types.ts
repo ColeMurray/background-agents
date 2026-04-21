@@ -120,6 +120,7 @@ export interface PromptCommand {
   messageId: string;
   content: string;
   model?: string; // LLM model for per-message override
+  agent?: string; // OpenCode agent for per-message override
   reasoningEffort?: string; // Reasoning effort level
   author: {
     userId: string;
@@ -151,13 +152,19 @@ export interface PushCommand {
   pushSpec: GitPushSpec;
 }
 
+export interface ListAgentsCommand {
+  type: "list_agents";
+  requestId: string;
+}
+
 export type SandboxCommand =
   | PromptCommand
   | StopCommand
   | SnapshotCommand
   | ShutdownCommand
   | AckCommand
-  | PushCommand;
+  | PushCommand
+  | ListAgentsCommand;
 
 // Internal session update types
 

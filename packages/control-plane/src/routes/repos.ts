@@ -3,6 +3,7 @@
  */
 
 import { RepoMetadataStore } from "../db/repo-metadata";
+import { RepoAgentCacheStore } from "../db/repo-agent-cache";
 import type { Env } from "../types";
 import type {
   EnrichedRepository,
@@ -323,6 +324,25 @@ async function handleListBranches(
   }
 }
 
+async function handleGetRepoAgents(
+  request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  _ctx: RequestContext
+): Promise<Response> {
+  const params = extractRepoParams(match);
+  if (params instanceof Response) return params;
+  const { owner, name } = params;
+  const branch = new URL(request.url).searchParams.get("branch")?.trim();
+  if (!branch) {
+    return error("branch is required", 400);
+  }
+
+  const store = new RepoAgentCacheStore(env.DB);
+  const agents = await store.get(owner, name, branch);
+  return json({ agents: agents ?? [] });
+}
+
 export const reposRoutes: Route[] = [
   {
     method: "GET",
@@ -343,5 +363,10 @@ export const reposRoutes: Route[] = [
     method: "GET",
     pattern: parsePattern("/repos/:owner/:name/branches"),
     handler: handleListBranches,
+  },
+  {
+    method: "GET",
+    pattern: parsePattern("/repos/:owner/:name/agents"),
+    handler: handleGetRepoAgents,
   },
 ];

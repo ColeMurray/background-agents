@@ -34,6 +34,7 @@ import {
 import { RepoImageStore } from "../db/repo-images";
 import { McpServerStore } from "../db/mcp-servers";
 import { SessionIndexStore } from "../db/session-index";
+import { RepoAgentCacheStore } from "../db/repo-agent-cache";
 import { DEFAULT_EXECUTION_TIMEOUT_MS } from "../sandbox/lifecycle/decisions";
 import {
   createSourceControlProvider as createSourceControlProviderImpl,
@@ -43,6 +44,7 @@ import {
 } from "../source-control";
 import { DEFAULT_MODEL, isValidReasoningEffort } from "../utils/models";
 import type {
+  AvailableAgent,
   Env,
   ClientInfo,
   ClientMessage,
@@ -147,6 +149,14 @@ export class SessionDO extends DurableObject<Env> {
   private _alarmHandler: AlarmHandler | null = null;
   // Sandbox event processor (lazily initialized)
   private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
+  private pendingSandboxAgentRequests = new Map<
+    string,
+    {
+      resolve: (agents: AvailableAgent[]) => void;
+      reject: (error: Error) => void;
+      timeout: ReturnType<typeof setTimeout>;
+    }
+  >();
 
   // Internal HTTP route table (transport wiring only; handlers remain on SessionDO).
   private readonly routes = createSessionInternalRoutes({
@@ -161,6 +171,7 @@ export class SessionDO extends DurableObject<Env> {
     listEvents: (_request, url) => this.messagesHandler.listEvents(url),
     listArtifacts: (_request, url) => this.messagesHandler.listArtifacts(url),
     listMessages: (_request, url) => this.messagesHandler.listMessages(url),
+    listAgents: () => this.listAgents(),
     createPr: (request) => this.pullRequestHandler.createPr(request),
     wsToken: (request) => this.wsTokenHandler.generateWsToken(request),
     updateTitle: (request) => this.sessionLifecycleHandler.updateTitle(request),
@@ -968,6 +979,9 @@ export class SessionDO extends DurableObject<Env> {
 
     try {
       if (kind === "sandbox") {
+        this.rejectPendingSandboxAgentRequests(
+          new Error("Sandbox disconnected before returning agents")
+        );
         const wasActive = this.wsManager.clearSandboxSocketIfMatch(ws);
         if (!wasActive) {
           // sandboxWs points to a different socket — this close is for a replaced connection.
@@ -1051,7 +1065,11 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async handleSandboxMessage(ws: WebSocket, message: string): Promise<void> {
     try {
-      const event = JSON.parse(message) as SandboxEvent;
+      const payload = JSON.parse(message) as SandboxEvent | { type: string; requestId?: string };
+      if (this.handleSandboxControlMessage(payload)) {
+        return;
+      }
+      const event = payload as SandboxEvent;
       await this.processSandboxEvent(event);
     } catch (e) {
       this.log.error("Error processing sandbox message", {
@@ -1292,6 +1310,7 @@ export class SessionDO extends DurableObject<Env> {
     data: {
       content: string;
       model?: string;
+      agent?: string;
       reasoningEffort?: string;
       attachments?: Array<{ type: string; name: string; url?: string; content?: string }>;
     }
@@ -1371,6 +1390,100 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async processSandboxEvent(event: SandboxEvent): Promise<void> {
     await this.sandboxEventProcessor.processSandboxEvent(event);
+  }
+
+  private handleSandboxControlMessage(
+    payload:
+      | SandboxEvent
+      | { type: string; requestId?: string; agents?: AvailableAgent[]; error?: string }
+  ): boolean {
+    if (payload.type !== "agents_list" || !payload.requestId) {
+      return false;
+    }
+
+    const pending = this.pendingSandboxAgentRequests.get(payload.requestId);
+    if (!pending) {
+      return true;
+    }
+
+    clearTimeout(pending.timeout);
+    this.pendingSandboxAgentRequests.delete(payload.requestId);
+
+    if (payload.error) {
+      pending.reject(new Error(payload.error));
+      return true;
+    }
+
+    pending.resolve(Array.isArray(payload.agents) ? payload.agents : []);
+    return true;
+  }
+
+  private rejectPendingSandboxAgentRequests(error: Error): void {
+    for (const [requestId, pending] of this.pendingSandboxAgentRequests.entries()) {
+      clearTimeout(pending.timeout);
+      pending.reject(error);
+      this.pendingSandboxAgentRequests.delete(requestId);
+    }
+  }
+
+  private async getCachedAgentsForCurrentSession(): Promise<AvailableAgent[]> {
+    const session = this.getSession();
+    if (!session || !this.env.DB) return [];
+    const branch = session.branch_name ?? session.base_branch;
+    if (!branch) return [];
+    const store = new RepoAgentCacheStore(this.env.DB);
+    return (await store.get(session.repo_owner, session.repo_name, branch)) ?? [];
+  }
+
+  private async refreshAgentsCache(agents: AvailableAgent[]): Promise<void> {
+    const session = this.getSession();
+    if (!session || !this.env.DB) return;
+    const branch = session.branch_name ?? session.base_branch;
+    if (!branch) return;
+    const store = new RepoAgentCacheStore(this.env.DB);
+    await store.upsert(session.repo_owner, session.repo_name, branch, agents);
+  }
+
+  private async listAgents(): Promise<Response> {
+    const sandboxWs = this.wsManager.getSandboxSocket();
+    if (!sandboxWs) {
+      return Response.json({ agents: await this.getCachedAgentsForCurrentSession() });
+    }
+
+    const requestId = generateId();
+    const agentsPromise = new Promise<AvailableAgent[]>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingSandboxAgentRequests.delete(requestId);
+        reject(new Error("Timed out waiting for sandbox agents"));
+      }, 5000);
+
+      this.pendingSandboxAgentRequests.set(requestId, { resolve, reject, timeout });
+    });
+
+    const sent = this.wsManager.send(sandboxWs, { type: "list_agents", requestId });
+    if (!sent) {
+      const pending = this.pendingSandboxAgentRequests.get(requestId);
+      if (pending) {
+        clearTimeout(pending.timeout);
+        this.pendingSandboxAgentRequests.delete(requestId);
+      }
+      return Response.json({ agents: await this.getCachedAgentsForCurrentSession() });
+    }
+
+    try {
+      const agents = await agentsPromise;
+      await this.refreshAgentsCache(agents);
+      return Response.json({ agents });
+    } catch (error) {
+      const cachedAgents = await this.getCachedAgentsForCurrentSession();
+      if (cachedAgents.length > 0) {
+        return Response.json({ agents: cachedAgents, cached: true });
+      }
+      return Response.json(
+        { error: error instanceof Error ? error.message : "Failed to list agents", agents: [] },
+        { status: 504 }
+      );
+    }
   }
 
   /**

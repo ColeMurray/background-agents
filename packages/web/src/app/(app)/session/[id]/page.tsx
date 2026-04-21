@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { mutate } from "swr";
+import useSWR, { mutate } from "swr";
 import useSWRMutation from "swr/mutation";
 import {
   Suspense,
@@ -31,9 +31,15 @@ import { copyToClipboard, formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { DEFAULT_MODEL, getDefaultReasoningEffort, type ModelCategory } from "@open-inspect/shared";
+import {
+  DEFAULT_MODEL,
+  getDefaultReasoningEffort,
+  type AvailableAgent,
+  type ModelCategory,
+} from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
+import { AgentPicker } from "@/components/agent-picker";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import {
   SidebarIcon,
@@ -63,6 +69,7 @@ type FallbackSessionInfo = {
 };
 
 type SessionsResponse = { sessions: SessionItem[] };
+const SESSION_AGENT_STORAGE_KEY_PREFIX = "open-inspect-selected-agent:";
 
 // Group consecutive tool calls of the same type
 function groupEvents(events: SandboxEvent[]): EventGroup[] {
@@ -298,6 +305,7 @@ function SessionPageContent() {
   const [prompt, setPrompt] = useState("");
   const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
+  const [selectedAgent, setSelectedAgent] = useState<string>("build");
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
     getDefaultReasoningEffort(DEFAULT_MODEL)
   );
@@ -306,7 +314,22 @@ function SessionPageContent() {
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const { enabledModels, enabledModelOptions } = useEnabledModels();
-
+  const { data: agentsData } = useSWR<{ agents: AvailableAgent[] }>(
+    sessionState?.sandboxStatus === "ready" || sessionState?.sandboxStatus === "running"
+      ? `/api/sessions/${sessionId}/agents`
+      : null,
+    (url: string) =>
+      fetch(url).then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error ?? "Failed to load agents");
+        }
+        return data;
+      }),
+    { revalidateOnFocus: false }
+  );
+  const availableAgents = agentsData?.agents ?? [];
+  const hasFetchedAgents = agentsData !== undefined;
   const handleModelChange = useCallback((model: string) => {
     setSelectedModel(model);
     setReasoningEffort(getDefaultReasoningEffort(model));
@@ -331,11 +354,45 @@ function SessionPageContent() {
     }
   }, [sessionState?.model, sessionState?.reasoningEffort]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const storedAgent = window.sessionStorage.getItem(
+      `${SESSION_AGENT_STORAGE_KEY_PREFIX}${sessionId}`
+    );
+    if (storedAgent) {
+      setSelectedAgent(storedAgent);
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.sessionStorage.setItem(`${SESSION_AGENT_STORAGE_KEY_PREFIX}${sessionId}`, selectedAgent);
+  }, [selectedAgent, sessionId]);
+
+  useEffect(() => {
+    if (availableAgents.length === 0) {
+      return;
+    }
+
+    if (availableAgents.some((agent) => agent.name === selectedAgent)) {
+      return;
+    }
+
+    const buildAgent = availableAgents.find((agent) => agent.name === "build")?.name;
+    if (buildAgent) {
+      setSelectedAgent(buildAgent);
+      return;
+    }
+
+    setSelectedAgent(availableAgents[0]?.name ?? "build");
+  }, [availableAgents, selectedAgent]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!prompt.trim() || isProcessing) return;
 
-    sendPrompt(prompt, selectedModel, reasoningEffort);
+    sendPrompt(prompt, selectedModel, reasoningEffort, selectedAgent);
     setPrompt("");
     // Revalidate sidebar so this session bubbles to the top
     mutate(SIDEBAR_SESSIONS_KEY);
@@ -379,12 +436,16 @@ function SessionPageContent() {
       prompt={prompt}
       isProcessing={isProcessing}
       selectedModel={selectedModel}
+      selectedAgent={selectedAgent}
+      availableAgents={availableAgents}
+      hasFetchedAgents={hasFetchedAgents}
       reasoningEffort={reasoningEffort}
       inputRef={inputRef}
       handleSubmit={handleSubmit}
       handleInputChange={handleInputChange}
       handleKeyDown={handleKeyDown}
       setSelectedModel={handleModelChange}
+      setSelectedAgent={setSelectedAgent}
       setReasoningEffort={setReasoningEffort}
       stopExecution={stopExecution}
       handleArchive={handleArchive}
@@ -417,12 +478,16 @@ function SessionContent({
   prompt,
   isProcessing,
   selectedModel,
+  selectedAgent,
+  availableAgents,
+  hasFetchedAgents,
   reasoningEffort,
   inputRef,
   handleSubmit,
   handleInputChange,
   handleKeyDown,
   setSelectedModel,
+  setSelectedAgent,
   setReasoningEffort,
   stopExecution,
   handleArchive,
@@ -451,12 +516,16 @@ function SessionContent({
   prompt: string;
   isProcessing: boolean;
   selectedModel: string;
+  selectedAgent: string;
+  availableAgents: AvailableAgent[];
+  hasFetchedAgents: boolean;
   reasoningEffort: string | undefined;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
   handleSubmit: (e: React.FormEvent) => void;
   handleInputChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
   handleKeyDown: (e: React.KeyboardEvent) => void;
   setSelectedModel: (model: string) => void;
+  setSelectedAgent: (agent: string) => void;
   setReasoningEffort: (value: string | undefined) => void;
   stopExecution: () => void;
   handleArchive: () => void | Promise<void>;
@@ -1042,7 +1111,7 @@ function SessionContent({
               </div>
             </div>
 
-            {/* Footer row with model selector, reasoning pills, and agent label */}
+            {/* Footer row with model/reasoning on the left and agent on the right */}
             <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">
               {/* Left side - Model selector + Reasoning pills */}
               <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
@@ -1079,8 +1148,13 @@ function SessionContent({
                 />
               </div>
 
-              {/* Right side - Agent label */}
-              <span className="hidden sm:inline text-sm text-muted-foreground">build agent</span>
+              <AgentPicker
+                selectedAgent={selectedAgent}
+                onSelect={setSelectedAgent}
+                availableAgents={availableAgents}
+                hasFetchedAgents={hasFetchedAgents}
+                disabled={isProcessing}
+              />
             </div>
           </div>
         </form>
