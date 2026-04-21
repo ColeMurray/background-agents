@@ -30,34 +30,22 @@ cd "${DEPLOY_PATH}" || {
     exit 1
 }
 
-if ! command -v uv >/dev/null 2>&1; then
-    echo "Error: uv is required to deploy packages/modal-infra. Install uv, then run 'cd packages/modal-infra && uv sync --frozen --extra dev'."
-    exit 1
-fi
-
-if [[ ! -f "pyproject.toml" ]]; then
-    echo "Error: Expected pyproject.toml in ${DEPLOY_PATH}."
-    exit 1
-fi
-
-MODAL_CMD=(uv run modal)
-
 # Deploy using Modal CLI
 if [ "${DEPLOY_MODULE}" = "deploy" ]; then
     # Method 1: Use deploy.py wrapper (recommended)
-    "${MODAL_CMD[@]}" deploy deploy.py || {
+    modal deploy deploy.py || {
         echo "Error: Modal deployment failed for ${APP_NAME}"
         exit 1
     }
 elif [ "${DEPLOY_MODULE}" = "src" ]; then
     # Method 2: Deploy the src package directly
-    "${MODAL_CMD[@]}" deploy -m src || {
+    modal deploy -m src || {
         echo "Error: Modal deployment failed for ${APP_NAME}"
         exit 1
     }
 else
     # Generic deployment
-    "${MODAL_CMD[@]}" deploy "${DEPLOY_MODULE}" || {
+    modal deploy "${DEPLOY_MODULE}" || {
         echo "Error: Modal deployment failed for ${APP_NAME}"
         exit 1
     }
