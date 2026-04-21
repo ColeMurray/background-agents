@@ -56,10 +56,8 @@ brew install terraform
 # Node.js (22+)
 brew install node@22
 
-# Python 3.12+, uv, and Modal CLI
+# Python 3.12+ and uv (Modal CLI is installed via uv sync below)
 brew install python@3.12 uv
-pipx install modal
-modal setup
 
 # Wrangler CLI (for initial R2 bucket setup)
 npm install -g wrangler
@@ -80,6 +78,9 @@ npm install
 
 # Build the shared package (required before Terraform deployment)
 npm run build -w @open-inspect/shared
+
+# Install Python dependencies for Modal deployment (includes sandbox-runtime)
+cd packages/modal-infra && uv sync --frozen && cd -
 ```
 
 ---
@@ -748,12 +749,25 @@ URL to match your web app URL:
 ### Modal deployment fails
 
 ```bash
-# Check Modal CLI is working
-modal token show
+# Check Modal CLI is working (from packages/modal-infra)
+cd packages/modal-infra
+uv run modal token show
 
 # View Modal logs
-modal app logs open-inspect
+uv run modal app logs open-inspect
 ```
+
+### Modal deployment fails with "No module named 'sandbox_runtime'"
+
+The `sandbox_runtime` package is a sibling package that must be installed before deploying. From the
+repository root:
+
+```bash
+cd packages/modal-infra && uv sync --frozen && cd -
+```
+
+This installs all Modal deployment dependencies including `sandbox_runtime` (resolved via
+`[tool.uv.sources]` in `pyproject.toml`).
 
 ### Worker deployment fails / "no such file or directory" for dist/index.js
 

@@ -284,15 +284,12 @@ jobs:
           npm run build -w @open-inspect/github-bot
           npm run build -w @open-inspect/linear-bot
 
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
 
-      - name: Install Modal CLI and dependencies
-        run: |
-          pip install -e packages/sandbox-runtime
-          pip install modal fastapi pydantic httpx PyJWT
+      - name: Install Modal and Python dependencies
+        run: uv sync --frozen
+        working-directory: packages/modal-infra
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
