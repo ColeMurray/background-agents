@@ -109,7 +109,7 @@ const pullRequestOpenedPayload: PullRequestOpenedPayload = {
     draft: false,
   },
   repository: { owner: { login: "acme" }, name: "widgets", private: false },
-  sender: { login: "alice" },
+  sender: { login: "alice", id: 1001 },
 };
 
 const reviewRequestedPayload: ReviewRequestedPayload = {
@@ -124,7 +124,7 @@ const reviewRequestedPayload: ReviewRequestedPayload = {
   },
   requested_reviewer: { login: "test-bot[bot]" },
   repository: { owner: { login: "acme" }, name: "widgets", private: false },
-  sender: { login: "alice" },
+  sender: { login: "alice", id: 1001 },
 };
 
 const issueCommentPayload: IssueCommentPayload = {
@@ -140,7 +140,7 @@ const issueCommentPayload: IssueCommentPayload = {
     user: { login: "bob" },
   },
   repository: { owner: { login: "acme" }, name: "widgets", private: false },
-  sender: { login: "bob" },
+  sender: { login: "bob", id: 1002 },
 };
 
 const reviewCommentPayload: ReviewCommentPayload = {
@@ -160,7 +160,7 @@ const reviewCommentPayload: ReviewCommentPayload = {
     user: { login: "carol" },
   },
   repository: { owner: { login: "acme" }, name: "widgets", private: false },
-  sender: { login: "carol" },
+  sender: { login: "carol", id: 1003 },
 };
 
 beforeEach(() => {
@@ -503,7 +503,7 @@ describe("handleIssueComment", () => {
     const log = createMockLogger();
     const payload: IssueCommentPayload = {
       ...issueCommentPayload,
-      sender: { login: "test-bot[bot]" },
+      sender: { login: "test-bot[bot]", id: 2001 },
     };
 
     const result = await handleIssueComment(env, log, payload, "trace-2");
@@ -580,7 +580,7 @@ describe("handleReviewComment", () => {
     const log = createMockLogger();
     const payload: ReviewCommentPayload = {
       ...reviewCommentPayload,
-      sender: { login: "test-bot[bot]" },
+      sender: { login: "test-bot[bot]", id: 2001 },
     };
 
     const result = await handleReviewComment(env, log, payload, "trace-3");
