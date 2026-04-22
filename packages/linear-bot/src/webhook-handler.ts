@@ -128,6 +128,44 @@ async function getAuthHeaders(env: Env, traceId?: string): Promise<Record<string
   };
 }
 
+/**
+ * Create a session via the control plane.
+ */
+async function createSession(
+  env: Env,
+  params: {
+    repoOwner: string;
+    repoName: string;
+    title: string;
+    model: string;
+    reasoningEffort?: string;
+  },
+  traceId?: string
+): Promise<{ ok: true; sessionId: string } | { ok: false; status: number; body: string }> {
+  const headers = await getAuthHeaders(env, traceId);
+  const response = await env.CONTROL_PLANE.fetch("https://internal/sessions", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      ...params,
+      spawnSource: "linear-bot",
+    }),
+  });
+
+  if (!response.ok) {
+    let body = "";
+    try {
+      body = await response.text();
+    } catch {
+      /* ignore */
+    }
+    return { ok: false, status: response.status, body };
+  }
+
+  const result = (await response.json()) as { sessionId: string };
+  return { ok: true, sessionId: result.sessionId };
+}
+
 // ─── Sub-handlers ────────────────────────────────────────────────────────────
 
 async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: string): Promise<void> {
@@ -483,44 +521,36 @@ async function handleNewSession(
     true
   );
 
-  const headers = await getAuthHeaders(env, traceId);
-
-  const sessionRes = await env.CONTROL_PLANE.fetch("https://internal/sessions", {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      repoOwner,
-      repoName,
+  const sessionResult = await createSession(
+    env,
+    {
+      repoOwner: repoOwner!,
+      repoName: repoName!,
       title: `${issue.identifier}: ${issue.title}`,
       model,
       reasoningEffort,
-      spawnSource: "linear-bot",
-    }),
-  });
+    },
+    traceId
+  );
 
-  if (!sessionRes.ok) {
-    let sessionErrBody = "";
-    try {
-      sessionErrBody = await sessionRes.text();
-    } catch {
-      /* ignore */
-    }
+  if (!sessionResult.ok) {
     await emitAgentActivity(client, agentSessionId, {
       type: "error",
-      body: `Failed to create a coding session.\n\n\`HTTP ${sessionRes.status}: ${sessionErrBody.slice(0, 200)}\``,
+      body: `Failed to create a coding session.\n\n\`HTTP ${sessionResult.status}: ${sessionResult.body.slice(0, 200)}\``,
     });
     log.error("control_plane.create_session", {
       trace_id: traceId,
       issue_identifier: issue.identifier,
       repo: repoFullName,
-      http_status: sessionRes.status,
-      response_body: sessionErrBody.slice(0, 500),
+      http_status: sessionResult.status,
+      response_body: sessionResult.body.slice(0, 500),
       duration_ms: Date.now() - startTime,
     });
     return;
   }
 
-  const session = (await sessionRes.json()) as { sessionId: string };
+  const headers = await getAuthHeaders(env, traceId);
+  const session = sessionResult;
 
   await storeIssueSession(env, issue.id, {
     sessionId: session.sessionId,
