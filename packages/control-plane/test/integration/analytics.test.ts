@@ -4,6 +4,7 @@ import type {
   AnalyticsBreakdownResponse,
   AnalyticsSummaryResponse,
   AnalyticsTimeseriesResponse,
+  SpawnSource,
 } from "@open-inspect/shared";
 import { generateInternalToken } from "../../src/auth/internal";
 import { SessionIndexStore } from "../../src/db/session-index";
@@ -25,6 +26,7 @@ async function seedSession(
     repoOwner: string;
     repoName: string;
     scmLogin: string | null;
+    spawnSource?: SpawnSource;
     status: "created" | "active" | "completed" | "failed" | "archived" | "cancelled";
     createdAt: number;
     updatedAt: number;
@@ -43,6 +45,7 @@ async function seedSession(
     reasoningEffort: null,
     baseBranch: "main",
     status: input.status,
+    spawnSource: input.spawnSource,
     scmLogin: input.scmLogin,
     createdAt: input.createdAt,
     updatedAt: input.updatedAt,
@@ -484,5 +487,125 @@ describe("Analytics API", () => {
         lastActive: apiActiveAt + 8_000,
       },
     ]);
+  });
+
+  it("includes bot-spawned sessions and excludes agent/automation sessions", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+    const base = now - 2 * 24 * 60 * 60 * 1000;
+
+    // Human-initiated sessions (should be included)
+    await seedSession(store, {
+      id: "web-session",
+      repoOwner: "acme",
+      repoName: "app",
+      scmLogin: "alice",
+      spawnSource: "user",
+      status: "completed",
+      createdAt: base,
+      updatedAt: base + 1_000,
+      totalCost: 1,
+      activeDurationMs: 100_000,
+      messageCount: 5,
+      prCount: 1,
+    });
+    await seedSession(store, {
+      id: "slack-session",
+      repoOwner: "acme",
+      repoName: "app",
+      scmLogin: null,
+      spawnSource: "slack-bot",
+      status: "completed",
+      createdAt: base + 60_000,
+      updatedAt: base + 61_000,
+      totalCost: 0.5,
+      activeDurationMs: 50_000,
+      messageCount: 3,
+      prCount: 0,
+    });
+    await seedSession(store, {
+      id: "linear-session",
+      repoOwner: "acme",
+      repoName: "app",
+      scmLogin: null,
+      spawnSource: "linear-bot",
+      status: "failed",
+      createdAt: base + 120_000,
+      updatedAt: base + 121_000,
+      totalCost: 0.25,
+      activeDurationMs: 30_000,
+      messageCount: 2,
+      prCount: 0,
+    });
+    await seedSession(store, {
+      id: "github-session",
+      repoOwner: "acme",
+      repoName: "app",
+      scmLogin: "bob",
+      spawnSource: "github-bot",
+      status: "completed",
+      createdAt: base + 180_000,
+      updatedAt: base + 181_000,
+      totalCost: 0.75,
+      activeDurationMs: 80_000,
+      messageCount: 4,
+      prCount: 1,
+    });
+
+    // Non-human sessions (should be excluded)
+    await seedSession(store, {
+      id: "agent-child",
+      repoOwner: "acme",
+      repoName: "app",
+      scmLogin: "alice",
+      spawnSource: "agent",
+      status: "completed",
+      createdAt: base + 240_000,
+      updatedAt: base + 241_000,
+      totalCost: 2,
+      activeDurationMs: 200_000,
+      messageCount: 10,
+      prCount: 0,
+    });
+    await seedSession(store, {
+      id: "automation-session",
+      repoOwner: "acme",
+      repoName: "app",
+      scmLogin: "alice",
+      spawnSource: "automation",
+      status: "completed",
+      createdAt: base + 300_000,
+      updatedAt: base + 301_000,
+      totalCost: 3,
+      activeDurationMs: 400_000,
+      messageCount: 20,
+      prCount: 2,
+    });
+
+    // Summary should count only the 4 human sessions
+    const summaryRes = await SELF.fetch("https://test.local/analytics/summary?days=7", {
+      headers: await authHeaders(),
+    });
+    expect(summaryRes.status).toBe(200);
+    const summary = await summaryRes.json<AnalyticsSummaryResponse>();
+    expect(summary.totalSessions).toBe(4);
+    expect(summary.activeUsers).toBe(2); // alice + bob (scm_login-based)
+    expect(summary.totalCost).toBe(2.5);
+    expect(summary.totalPrs).toBe(2);
+
+    // Breakdown by user should include bot sessions, not agent/automation
+    const breakdownRes = await SELF.fetch("https://test.local/analytics/breakdown?days=7&by=user", {
+      headers: await authHeaders(),
+    });
+    expect(breakdownRes.status).toBe(200);
+    const breakdown = await breakdownRes.json<AnalyticsBreakdownResponse>();
+
+    const keys = breakdown.entries.map((e) => e.key);
+    expect(keys).toContain("alice");
+    expect(keys).toContain("bob");
+    expect(keys).toContain("unknown"); // slack + linear sessions with no scm_login
+
+    const totalBreakdownSessions = breakdown.entries.reduce((n, e) => n + e.sessions, 0);
+    expect(totalBreakdownSessions).toBe(4);
   });
 });

@@ -4,11 +4,16 @@ import type {
   AnalyticsBreakdownResponse,
   AnalyticsSummaryResponse,
   AnalyticsTimeseriesResponse,
+  SpawnSource,
 } from "@open-inspect/shared";
+
+/** Spawn sources that represent direct human-initiated sessions. */
+export const HUMAN_SPAWN_SOURCES: SpawnSource[] = ["user", "slack-bot", "linear-bot", "github-bot"];
 
 export interface AnalyticsFilters {
   startAt: number;
   endAt: number;
+  spawnSources?: SpawnSource[];
 }
 
 interface SummaryRow {
@@ -47,6 +52,9 @@ export class AnalyticsStore {
   constructor(private readonly db: D1Database) {}
 
   async getSummary(filters: AnalyticsFilters): Promise<AnalyticsSummaryResponse> {
+    const sources = filters.spawnSources ?? HUMAN_SPAWN_SOURCES;
+    const placeholders = sources.map(() => "?").join(", ");
+
     const result = await this.db
       .prepare(
         `SELECT
@@ -62,9 +70,9 @@ export class AnalyticsStore {
            COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) AS cancelled_count
          FROM sessions
          WHERE created_at >= ? AND created_at < ?
-           AND spawn_source = 'user'`
+           AND spawn_source IN (${placeholders})`
       )
-      .bind(filters.startAt, filters.endAt)
+      .bind(filters.startAt, filters.endAt, ...sources)
       .first<SummaryRow>();
 
     const totalSessions = result?.total_sessions ?? 0;
@@ -88,6 +96,9 @@ export class AnalyticsStore {
   }
 
   async getTimeseries(filters: AnalyticsFilters): Promise<AnalyticsTimeseriesResponse> {
+    const sources = filters.spawnSources ?? HUMAN_SPAWN_SOURCES;
+    const placeholders = sources.map(() => "?").join(", ");
+
     const result = await this.db
       .prepare(
         `SELECT
@@ -96,11 +107,11 @@ export class AnalyticsStore {
            COUNT(*) AS count
          FROM sessions
          WHERE created_at >= ? AND created_at < ?
-           AND spawn_source = 'user'
+           AND spawn_source IN (${placeholders})
          GROUP BY date, group_key
          ORDER BY date ASC, group_key ASC`
       )
-      .bind(filters.startAt, filters.endAt)
+      .bind(filters.startAt, filters.endAt, ...sources)
       .all<TimeseriesRow>();
 
     const series: AnalyticsTimeseriesResponse["series"] = [];
@@ -129,6 +140,9 @@ export class AnalyticsStore {
         ? "COALESCE(NULLIF(scm_login, ''), 'unknown')"
         : "repo_owner || '/' || repo_name";
 
+    const sources = filters.spawnSources ?? HUMAN_SPAWN_SOURCES;
+    const placeholders = sources.map(() => "?").join(", ");
+
     const result = await this.db
       .prepare(
         `SELECT
@@ -147,11 +161,11 @@ export class AnalyticsStore {
            MAX(updated_at) AS last_active
          FROM sessions
          WHERE created_at >= ? AND created_at < ?
-           AND spawn_source = 'user'
+           AND spawn_source IN (${placeholders})
          GROUP BY key
          ORDER BY sessions DESC, key ASC`
       )
-      .bind(filters.startAt, filters.endAt)
+      .bind(filters.startAt, filters.endAt, ...sources)
       .all<BreakdownRow>();
 
     const entries: AnalyticsBreakdownEntry[] = (result.results ?? []).map((row) => ({
