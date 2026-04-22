@@ -72,4 +72,14 @@ describe("fetchUser", () => {
     const result = await fetchUser(client, "user-1");
     expect(result).toBeNull();
   });
+
+  it("returns null on GraphQL errors payload", async () => {
+    mockFetchResponse({
+      data: null,
+      errors: [{ message: "Not authorized" }],
+    });
+
+    const result = await fetchUser(client, "user-1");
+    expect(result).toBeNull();
+  });
 });

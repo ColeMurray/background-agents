@@ -147,7 +147,14 @@ async function linearGraphQL(
     throw new Error(`Linear API error: ${res.status}`);
   }
 
-  return (await res.json()) as Record<string, unknown>;
+  const json = (await res.json()) as Record<string, unknown>;
+
+  if (Array.isArray(json.errors) && json.errors.length > 0) {
+    const msg = (json.errors[0] as { message?: string }).message ?? "Unknown GraphQL error";
+    throw new Error(`Linear GraphQL error: ${msg}`);
+  }
+
+  return json;
 }
 
 // ─── Agent Activities ────────────────────────────────────────────────────────
