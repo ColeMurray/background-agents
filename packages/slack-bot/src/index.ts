@@ -83,7 +83,8 @@ async function createSession(
   model: string,
   reasoningEffort: string | undefined,
   branch: string | undefined,
-  traceId?: string
+  traceId?: string,
+  slackUserId?: string
 ): Promise<{ sessionId: string; status: string } | null> {
   const startTime = Date.now();
   const base = {
@@ -93,6 +94,7 @@ async function createSession(
     model,
     reasoning_effort: reasoningEffort,
     branch,
+    slack_user_id: slackUserId,
   };
   try {
     const headers = await getAuthHeaders(env, traceId);
@@ -893,7 +895,8 @@ async function startSessionAndSendPrompt(
     model,
     reasoningEffort,
     branch,
-    traceId
+    traceId,
+    userId
   );
 
   if (!session) {
