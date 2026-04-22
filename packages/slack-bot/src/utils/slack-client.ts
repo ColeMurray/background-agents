@@ -237,6 +237,7 @@ export async function getUserInfo(
     profile?: {
       display_name?: string;
       real_name?: string;
+      email?: string;
     };
   };
   error?: string;
@@ -256,6 +257,7 @@ export async function getUserInfo(
       profile?: {
         display_name?: string;
         real_name?: string;
+        email?: string;
       };
     };
     error?: string;
