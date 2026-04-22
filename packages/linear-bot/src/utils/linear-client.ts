@@ -322,6 +322,47 @@ export async function getRepoSuggestions(
   }
 }
 
+// ─── User Lookup ────────────────────────────────────────────────────────────
+
+/**
+ * Fetch a Linear user by ID. Returns name and email for identity linking.
+ */
+export async function fetchUser(
+  client: LinearApiClient,
+  userId: string
+): Promise<{ id: string; name: string; email: string | null } | null> {
+  try {
+    const data = await linearGraphQL(
+      client,
+      `
+      query FetchUser($id: String!) {
+        user(id: $id) {
+          id
+          name
+          email
+        }
+      }
+    `,
+      { id: userId }
+    );
+
+    const user = (data as { data?: { user?: Record<string, unknown> } }).data?.user;
+    if (!user) return null;
+
+    return {
+      id: user.id as string,
+      name: user.name as string,
+      email: (user.email as string) ?? null,
+    };
+  } catch (err) {
+    log.error("linear.fetch_user", {
+      user_id: userId,
+      error: err instanceof Error ? err : new Error(String(err)),
+    });
+    return null;
+  }
+}
+
 // ─── Webhook Verification ────────────────────────────────────────────────────
 
 export async function verifyLinearWebhook(
