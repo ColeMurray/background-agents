@@ -310,7 +310,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           cursorRef.current = data.replay?.cursor ?? null;
           setReplaying(false);
 
-          if (data.spawnError) {
+          if (data.spawnError && data.state?.sandboxStatus === "failed") {
             console.error("Sandbox spawn error:", data.spawnError);
             setSessionState((prev) => (prev ? { ...prev, sandboxStatus: "failed" } : null));
           }
