@@ -101,7 +101,13 @@ cd packages/modal-infra && uv sync --frozen && cd -
    of the panel for `*.YOUR-SUBDOMAIN.workers.dev`
 4. **Create API Token** at [API Tokens](https://dash.cloudflare.com/profile/api-tokens):
    - Use template: "Edit Cloudflare Workers"
-   - Add permissions: Workers KV Storage (Edit), Workers R2 Storage (Edit)
+   - Verify it has these permissions:
+     - Account | Workers KV Storage | Edit (should be included with template)
+     - Account | Workers R2 Storage | Edit (should be included with template)
+     - Account | D1 | Edit
+   - Set "Account Resources" to include your account
+   - Set "Zone Resources" to include all zones from your account
+   - Click "Continue to summary" and "Update token"
 5. **Enable R2**: Must add payment info, but first 10 GB/month is free
 
 ### Cloudflare R2 (Terraform State Backend)
