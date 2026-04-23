@@ -72,6 +72,17 @@ variable "modal_workspace" {
   }
 }
 
+variable "modal_environment" {
+  description = "Modal environment name. Use 'main' for the default environment (omitted from endpoint URLs). Non-main envs (e.g., 'production', 'dev') are included in the URL slug."
+  type        = string
+  default     = "main"
+
+  validation {
+    condition     = var.sandbox_provider != "modal" || length(var.modal_environment) > 0
+    error_message = "modal_environment must be set when sandbox_provider = 'modal'."
+  }
+}
+
 # =============================================================================
 # GitHub OAuth App Credentials
 # =============================================================================
