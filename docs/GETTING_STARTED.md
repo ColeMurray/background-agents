@@ -150,7 +150,8 @@ Create an R2 API Token:
 1. Go to [Modal Settings](https://modal.com/settings)
 2. **Create a new API token**: Settings -> API Tokens -> New Token
 3. Note the **Token ID** and **Token Secret**
-4. Note your **Workspace name** (visible in your Modal dashboard URL)
+4. Note your **Workspace** and **Environment names** (visible in your Modal dashboard URL,
+   https://modal.com/apps/<modal_workspace>/<modal_environment>)
 
 ### Daytona
 
@@ -355,6 +356,7 @@ vercel_team_id              = "team_xxxxx"       # Your Vercel ID (even personal
 modal_token_id              = "your-modal-token-id"
 modal_token_secret          = "your-modal-token-secret"
 modal_workspace             = "your-modal-workspace"
+modal_environment           = "your-modal-environment"
 
 # Daytona (only required when sandbox_provider = "daytona")
 # daytona_api_url           = "https://app.daytona.io/api"
