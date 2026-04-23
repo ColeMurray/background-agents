@@ -5,9 +5,12 @@
 import { normalizeWebhookEvent } from "@open-inspect/shared";
 import { AutomationStore } from "../db/automation-store";
 import { verifyWebhookApiKey } from "../auth/webhook-key";
+import { createLogger } from "../logger";
 import type { Route, RequestContext } from "../routes/shared";
 import { parsePattern, json, error } from "../routes/shared";
 import type { Env } from "../types";
+
+const logger = createLogger("webhook:automation");
 
 /** Maximum webhook payload size (64KB). */
 const MAX_PAYLOAD_SIZE = 64 * 1024;
@@ -16,36 +19,56 @@ async function handleAutomationWebhook(
   request: Request,
   env: Env,
   match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const automationId = match.groups?.id;
   if (!automationId) return error("Automation ID required", 400);
 
-  // 1. Validate content type
-  const contentType = request.headers.get("content-type");
-  if (!contentType?.includes("application/json")) {
-    return error("Content-Type must be application/json", 415);
-  }
-
-  // 2. Validate API key
-  const authHeader = request.headers.get("authorization");
-  const apiKey = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  if (!apiKey) return error("Missing API key", 401);
-
-  // 3. Look up automation
+  // 1. Look up automation
   const store = new AutomationStore(env.DB);
   const automation = await store.getById(automationId);
   if (!automation || automation.trigger_type !== "webhook") {
     return error("Not found", 404);
   }
 
+  // 1a. Short-circuit disabled automations before any auth or body work
+  if (automation.enabled !== 1) {
+    logger.info("Webhook skipped: automation disabled", {
+      event: "webhook.skipped",
+      automation_id: automationId,
+      reason: "disabled",
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return json({ ok: true, triggered: 0, skipped: 1 });
+  }
+
   if (!automation.trigger_auth_data) {
     return error("Webhook not configured", 500);
   }
 
+  // 2. Validate content type
+  const contentType = request.headers.get("content-type");
+  if (!contentType?.includes("application/json")) {
+    return error("Content-Type must be application/json", 415);
+  }
+
+  // 3. Validate API key
+  const authHeader = request.headers.get("authorization");
+  const apiKey = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  if (!apiKey) return error("Missing API key", 401);
+
   // 4. Verify API key
   const valid = await verifyWebhookApiKey(apiKey, automation.trigger_auth_data);
-  if (!valid) return error("Invalid API key", 401);
+  if (!valid) {
+    logger.warn("Webhook auth failed", {
+      event: "webhook.auth_failed",
+      automation_id: automationId,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Invalid API key", 401);
+  }
 
   // 5. Parse body — fast-path reject on Content-Length before reading
   const contentLength = parseInt(request.headers.get("content-length") ?? "0", 10);
@@ -86,6 +109,16 @@ async function handleAutomationWebhook(
   });
 
   const result = await response.json<{ triggered: number; skipped: number }>();
+
+  logger.info("Webhook processed", {
+    event: "webhook.processed",
+    automation_id: automationId,
+    triggered: result.triggered,
+    skipped: result.skipped,
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+  });
+
   return json({ ok: true, ...result }, response.status === 200 ? 200 : response.status);
 }
 

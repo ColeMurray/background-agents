@@ -204,6 +204,44 @@ describe("POST /webhooks/sentry/:id", () => {
 
     expect(response.status).toBe(404);
   });
+
+  it("returns 200 with skipped: 1 for disabled automation", async () => {
+    const automation = await createSentryAutomation({ enabled: 0 });
+    const body = JSON.stringify(sentryIssuePayload);
+    const signature = await signSentryPayload(body, SENTRY_TEST_SECRET);
+
+    const response = await SELF.fetch(`https://test.local/webhooks/sentry/${automation.id}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "sentry-hook-signature": signature,
+      },
+      body,
+    });
+
+    expect(response.status).toBe(200);
+    const result = await response.json<{ ok: boolean; triggered: number; skipped: number }>();
+    expect(result.ok).toBe(true);
+    expect(result.skipped).toBe(1);
+    expect(result.triggered).toBe(0);
+  });
+
+  it("returns 404 for soft-deleted automation", async () => {
+    const automation = await createSentryAutomation({ deleted_at: Date.now() });
+    const body = JSON.stringify(sentryIssuePayload);
+    const signature = await signSentryPayload(body, SENTRY_TEST_SECRET);
+
+    const response = await SELF.fetch(`https://test.local/webhooks/sentry/${automation.id}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "sentry-hook-signature": signature,
+      },
+      body,
+    });
+
+    expect(response.status).toBe(404);
+  });
 });
 
 // ─── Automation webhook tests ─────────────────────────────────────────────────
@@ -351,5 +389,57 @@ describe("POST /webhooks/automation/:id", () => {
     });
 
     expect(response.status).toBe(413);
+  });
+
+  it("returns 200 with skipped: 1 for disabled automation", async () => {
+    const automation = await createWebhookAutomation({ enabled: 0 });
+
+    const response = await SELF.fetch(`https://test.local/webhooks/automation/${automation.id}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${TEST_API_KEY}`,
+      },
+      body: JSON.stringify({ action: "deploy" }),
+    });
+
+    expect(response.status).toBe(200);
+    const result = await response.json<{ ok: boolean; triggered: number; skipped: number }>();
+    expect(result.ok).toBe(true);
+    expect(result.skipped).toBe(1);
+    expect(result.triggered).toBe(0);
+  });
+
+  it("skips auth verification for disabled automation (invalid key still returns 200)", async () => {
+    const automation = await createWebhookAutomation({ enabled: 0 });
+
+    const response = await SELF.fetch(`https://test.local/webhooks/automation/${automation.id}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer totally-wrong-key",
+      },
+      body: JSON.stringify({ action: "deploy" }),
+    });
+
+    expect(response.status).toBe(200);
+    const result = await response.json<{ ok: boolean; triggered: number; skipped: number }>();
+    expect(result.ok).toBe(true);
+    expect(result.skipped).toBe(1);
+  });
+
+  it("returns 404 for soft-deleted automation", async () => {
+    const automation = await createWebhookAutomation({ deleted_at: Date.now() });
+
+    const response = await SELF.fetch(`https://test.local/webhooks/automation/${automation.id}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${TEST_API_KEY}`,
+      },
+      body: JSON.stringify({ action: "deploy" }),
+    });
+
+    expect(response.status).toBe(404);
   });
 });

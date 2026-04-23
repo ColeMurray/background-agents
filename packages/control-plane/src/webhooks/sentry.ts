@@ -6,9 +6,12 @@
 import { verifySentrySignature, normalizeSentryEvent } from "@open-inspect/shared";
 import { AutomationStore } from "../db/automation-store";
 import { decryptSentrySecret } from "../auth/webhook-key";
+import { createLogger } from "../logger";
 import type { Route, RequestContext } from "../routes/shared";
 import { parsePattern, json, error } from "../routes/shared";
 import type { Env } from "../types";
+
+const logger = createLogger("webhook:sentry");
 
 /** Maximum Sentry webhook payload size (256KB — Sentry payloads with stack traces can be large). */
 const MAX_PAYLOAD_SIZE = 256 * 1024;
@@ -17,7 +20,7 @@ async function handleSentryWebhook(
   request: Request,
   env: Env,
   match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const automationId = match.groups?.id;
   if (!automationId) return error("Automation ID required", 400);
@@ -27,6 +30,18 @@ async function handleSentryWebhook(
   const automation = await store.getById(automationId);
   if (!automation || automation.trigger_type !== "sentry") {
     return error("Not found", 404);
+  }
+
+  // 1a. Short-circuit disabled automations before expensive crypto
+  if (automation.enabled !== 1) {
+    logger.info("Webhook skipped: automation disabled", {
+      event: "webhook.skipped",
+      automation_id: automationId,
+      reason: "disabled",
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return json({ ok: true, triggered: 0, skipped: 1 });
   }
 
   if (!automation.trigger_auth_data) {
@@ -62,10 +77,16 @@ async function handleSentryWebhook(
 
   const valid = await verifySentrySignature(body, signature, secret);
   if (!valid) {
+    logger.warn("Webhook auth failed", {
+      event: "webhook.auth_failed",
+      automation_id: automationId,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
     return error("Invalid signature", 401);
   }
 
-  // 3. Parse and normalize
+  // 4. Parse and normalize
   let payload: Record<string, unknown>;
   try {
     payload = JSON.parse(body) as Record<string, unknown>;
@@ -78,7 +99,7 @@ async function handleSentryWebhook(
     return json({ ok: true, skipped: true });
   }
 
-  // 4. Forward to SchedulerDO
+  // 5. Forward to SchedulerDO
   if (!env.SCHEDULER) {
     return error("Scheduler not configured", 503);
   }
@@ -93,6 +114,16 @@ async function handleSentryWebhook(
   });
 
   const result = await response.json<{ triggered: number; skipped: number }>();
+
+  logger.info("Webhook processed", {
+    event: "webhook.processed",
+    automation_id: automationId,
+    triggered: result.triggered,
+    skipped: result.skipped,
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+  });
+
   return json({ ok: true, ...result }, response.status === 200 ? 200 : response.status);
 }
 
