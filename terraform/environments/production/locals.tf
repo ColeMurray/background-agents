@@ -2,6 +2,10 @@ locals {
   name_suffix         = var.deployment_name
   use_modal_backend   = var.sandbox_provider == "modal"
   use_daytona_backend = var.sandbox_provider == "daytona"
+  # Modal omits the environment segment for the default "main" environment.
+  # Non-main environments: "{workspace}-{env}--{app}.modal.run"
+  # Default (main) environment:  "{workspace}--{app}.modal.run"
+  modal_workspace_slug = var.modal_environment == "main" ? var.modal_workspace : "${var.modal_workspace}-${var.modal_environment}"
 
   # URLs for cross-service configuration
   control_plane_host = "open-inspect-control-plane-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev"
