@@ -262,7 +262,10 @@ export class UserStore {
         updates.avatarUrl = identity.avatarUrl;
       }
 
-      // Step 2c: Backfill email if user has none and provider now has one
+      // Step 2c: Backfill email if user has none and provider now has one.
+      // The check-then-update is racy (a concurrent writer could claim the email
+      // between the SELECT and UPDATE), but the outer retry in resolveOrCreateUser
+      // handles this: on retry, emailOwner is non-null and the backfill is skipped.
       if (!user.email && normalizedEmail) {
         const emailOwner = await this.getUserByEmail(normalizedEmail);
         if (!emailOwner) {
@@ -302,30 +305,46 @@ export class UserStore {
       }
     }
 
-    // Step 4: Brand new user
-    const newUser = await this.createUser({
-      displayName: identity.displayName,
-      email: normalizedEmail ?? undefined,
-      avatarUrl: identity.avatarUrl,
-    });
+    // Step 4: Brand new user — batch user + identity creation so a UNIQUE
+    // failure on the identity INSERT rolls back the user INSERT, preventing
+    // orphaned user rows under concurrent requests.
+    const userId = generateId();
+    const identityId = generateId();
+    const now = Date.now();
+    const displayName = identity.displayName ?? null;
+    const avatarUrl = identity.avatarUrl ?? null;
 
-    await this.createIdentity({
-      userId: newUser.id,
-      provider: identity.provider,
-      providerUserId: identity.providerUserId,
-      providerLogin: identity.providerLogin,
-      providerEmail: normalizedEmail ?? undefined,
-    });
+    await this.db.batch([
+      this.db
+        .prepare(
+          "INSERT INTO users (id, display_name, email, avatar_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+        )
+        .bind(userId, displayName, normalizedEmail, avatarUrl, now, now),
+      this.db
+        .prepare(
+          "INSERT INTO user_identities (id, user_id, provider, provider_user_id, provider_login, provider_email, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(
+          identityId,
+          userId,
+          identity.provider,
+          identity.providerUserId,
+          identity.providerLogin ?? null,
+          normalizedEmail,
+          now
+        ),
+    ]);
 
     return {
-      id: newUser.id,
-      displayName: newUser.displayName,
-      email: newUser.email,
+      id: userId,
+      displayName,
+      email: normalizedEmail,
       isNew: true,
     };
   }
 }
 
 function isUniqueConstraintError(err: unknown): boolean {
-  return err instanceof Error && err.message.includes("UNIQUE constraint failed");
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.toLowerCase().includes("unique constraint failed");
 }

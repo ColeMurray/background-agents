@@ -56,6 +56,7 @@ describe("UserStore", () => {
         providerUserId: "12345",
         displayName: "Alice",
       });
+      const beforeUpdate = await store.getUserById(first.id);
 
       const second = await store.resolveOrCreateUser({
         provider: "github",
@@ -69,6 +70,7 @@ describe("UserStore", () => {
 
       const user = await store.getUserById(first.id);
       expect(user!.displayName).toBe("Alice Updated");
+      expect(user!.updatedAt).toBeGreaterThanOrEqual(beforeUpdate!.updatedAt);
     });
 
     it("links new identity to existing user by matching email", async () => {
@@ -157,6 +159,32 @@ describe("UserStore", () => {
 
       const user = await store.getUserById(result.id);
       expect(user!.avatarUrl).toBe("https://avatars.example.com/alice.png");
+    });
+
+    it("concurrent calls for same identity resolve to same user without orphans", async () => {
+      const identity = {
+        provider: "github" as const,
+        providerUserId: "race-123",
+        displayName: "Racer",
+      };
+
+      const [a, b] = await Promise.all([
+        store.resolveOrCreateUser(identity),
+        store.resolveOrCreateUser(identity),
+      ]);
+
+      // Both resolve to the same canonical user
+      expect(a.id).toBe(b.id);
+
+      // Exactly one identity row exists (no duplicates)
+      const identities = await store.getIdentitiesForUser(a.id);
+      expect(identities).toHaveLength(1);
+
+      // No orphaned user rows — count all users in the table
+      const allUsers = await env.DB.prepare("SELECT COUNT(*) as cnt FROM users").first<{
+        cnt: number;
+      }>();
+      expect(allUsers!.cnt).toBe(1);
     });
   });
 
