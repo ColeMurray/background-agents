@@ -108,7 +108,7 @@ export class AnalyticsStore {
       .prepare(
         `SELECT
            date(s.created_at / 1000, 'unixepoch') AS date,
-           COALESCE(MAX(NULLIF(u.display_name, '')), MAX(NULLIF(s.scm_login, '')), 'Unknown user') AS group_key,
+           COALESCE(MAX(NULLIF(u.display_name, '')), MAX(NULLIF(s.scm_login, '')), '__unknown__') AS group_key,
            COUNT(*) AS count
          FROM sessions s
          LEFT JOIN users u ON s.user_id = u.id

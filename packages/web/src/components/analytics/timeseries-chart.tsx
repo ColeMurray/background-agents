@@ -56,7 +56,7 @@ export function AnalyticsTimeseriesChart({ series, loading }: TimeseriesChartPro
     );
   }
 
-  const { data, groupKeys } = buildTimeseriesChartData(series);
+  const { data, groupKeys, labelMap } = buildTimeseriesChartData(series);
   const previewGroups = groupKeys.slice(0, 5);
   const hiddenGroups = Math.max(groupKeys.length - previewGroups.length, 0);
 
@@ -75,7 +75,7 @@ export function AnalyticsTimeseriesChart({ series, loading }: TimeseriesChartPro
         <div className="flex flex-wrap gap-2 pt-2 sm:justify-end">
           {previewGroups.map((groupKey) => (
             <Badge key={groupKey} variant="default">
-              {groupKey}
+              {labelMap[groupKey] ?? groupKey}
             </Badge>
           ))}
           {hiddenGroups > 0 ? <Badge variant="pr-draft">+{hiddenGroups} more</Badge> : null}
@@ -124,7 +124,8 @@ export function AnalyticsTimeseriesChart({ series, loading }: TimeseriesChartPro
                 }}
                 formatter={(value, name) => {
                   const count = typeof value === "number" ? value : Number(value ?? 0);
-                  return [formatAnalyticsCount(count), String(name)];
+                  const label = labelMap[String(name)] ?? String(name);
+                  return [formatAnalyticsCount(count), label];
                 }}
               />
               {groupKeys.map((groupKey, index) => {

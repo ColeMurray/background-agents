@@ -278,7 +278,7 @@ describe("Analytics API", () => {
         date: dateBucket(cancelledAt),
         groups: {
           alice: 1,
-          "Unknown user": 1,
+          __unknown__: 1,
         },
       },
     ]);

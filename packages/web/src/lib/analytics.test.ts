@@ -16,6 +16,7 @@ describe("analytics utilities", () => {
     ]);
 
     expect(result.groupKeys).toEqual(["alice", "charlie", "bob"]);
+    expect(result.labelMap).toEqual({});
     expect(result.data).toEqual([
       {
         date: "2026-04-10",
@@ -32,6 +33,15 @@ describe("analytics utilities", () => {
         bob: 0,
       },
     ]);
+  });
+
+  it("maps __unknown__ sentinel to 'Unknown user' in labelMap", () => {
+    const result = buildTimeseriesChartData([
+      { date: "2026-04-10", groups: { alice: 2, __unknown__: 1 } },
+    ]);
+
+    expect(result.groupKeys).toEqual(["alice", "__unknown__"]);
+    expect(result.labelMap).toEqual({ __unknown__: "Unknown user" });
   });
 
   it("formats completion rate from terminal sessions only", () => {
@@ -86,6 +96,43 @@ describe("analytics utilities", () => {
     );
 
     expect(result.map((entry) => entry.displayName)).toEqual(["Alice", "Zoe"]);
+  });
+
+  it("sorts user entries by key when displayName is missing", () => {
+    const result = sortAnalyticsUserEntries(
+      [
+        {
+          key: "user-id-1",
+          displayName: "Zoe",
+          sessions: 1,
+          completed: 1,
+          failed: 0,
+          cancelled: 0,
+          cost: 0,
+          prs: 0,
+          messageCount: 0,
+          avgDuration: 0,
+          lastActive: 1,
+        },
+        {
+          key: "bob-login",
+          sessions: 1,
+          completed: 1,
+          failed: 0,
+          cancelled: 0,
+          cost: 0,
+          prs: 0,
+          messageCount: 0,
+          avgDuration: 0,
+          lastActive: 2,
+        },
+      ],
+      "user",
+      "asc"
+    );
+
+    // "bob-login" (key fallback) sorts before "Zoe" (displayName)
+    expect(result.map((entry) => entry.displayName ?? entry.key)).toEqual(["bob-login", "Zoe"]);
   });
 
   it("sorts user entries by completion rate descending", () => {
