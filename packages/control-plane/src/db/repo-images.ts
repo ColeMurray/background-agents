@@ -18,8 +18,38 @@ export interface RepoImage {
   created_at: number;
 }
 
+export interface StoredRepoImage {
+  id: string;
+  provider_image_id: string;
+}
+
 export class RepoImageStore {
   constructor(private readonly db: D1Database) {}
+
+  async getStoredImagesForRepo(repoOwner: string, repoName: string): Promise<StoredRepoImage[]> {
+    const normalizedOwner = repoOwner.toLowerCase();
+    const normalizedName = repoName.toLowerCase();
+    const storedImages = await this.db
+      .prepare(
+        `SELECT id, provider_image_id FROM repo_images
+         WHERE repo_owner = ? AND repo_name = ? AND status != 'building'`
+      )
+      .bind(normalizedOwner, normalizedName)
+      .all<StoredRepoImage>();
+
+    return storedImages.results || [];
+  }
+
+  async deleteStoredImagesForRepo(repoOwner: string, repoName: string): Promise<number> {
+    const result = await this.db
+      .prepare(
+        "DELETE FROM repo_images WHERE repo_owner = ? AND repo_name = ? AND status != 'building'"
+      )
+      .bind(repoOwner.toLowerCase(), repoName.toLowerCase())
+      .run();
+
+    return result.meta?.changes ?? 0;
+  }
 
   async registerBuild(build: RepoImageBuild): Promise<void> {
     const now = Date.now();

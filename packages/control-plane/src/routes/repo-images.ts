@@ -27,6 +27,7 @@ import {
   extractRepoParams,
   createRouteSourceControlProvider,
   resolveInstalledRepo,
+  resolveRepoOrError,
 } from "./shared";
 
 const logger = createLogger("router:repo-images");
@@ -202,12 +203,15 @@ async function handleTriggerBuild(
   const buildId = `img-${owner}-${name}-${now}`;
 
   try {
+    const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
+    if (resolved instanceof Response) return resolved;
+
     // Register the build in D1
     await store.registerBuild({
       id: buildId,
       repoOwner: owner,
       repoName: name,
-      baseBranch: "main",
+      baseBranch: resolved.defaultBranch,
     });
 
     // Construct callback URL
@@ -266,7 +270,7 @@ async function handleTriggerBuild(
       {
         repoOwner: owner,
         repoName: name,
-        defaultBranch: "main",
+        defaultBranch: resolved.defaultBranch,
         buildId,
         callbackUrl,
         userEnvVars,
@@ -292,6 +296,79 @@ async function handleTriggerBuild(
       trace_id: ctx.trace_id,
     });
     return error("Failed to trigger build", 500);
+  }
+}
+
+/**
+ * DELETE /repo-images/:owner/:name
+ * Delete stored pre-built images for a repo without affecting live sessions.
+ */
+async function handleDeleteRepoImages(
+  _request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const providerError = requireModalRepoImages(env);
+  if (providerError) return providerError;
+
+  if (!env.DB) {
+    return error("Database not configured", 503);
+  }
+  if (!env.MODAL_API_SECRET || !env.MODAL_WORKSPACE) {
+    return error("Modal configuration not available", 503);
+  }
+
+  const params = extractRepoParams(match);
+  if (params instanceof Response) return params;
+  const { owner, name } = params;
+
+  const store = new RepoImageStore(env.DB);
+
+  try {
+    const storedImages = await store.getStoredImagesForRepo(owner, name);
+    const providerImageIds = storedImages
+      .map((image) => image.provider_image_id)
+      .filter((providerImageId) => Boolean(providerImageId));
+
+    if (providerImageIds.length > 0) {
+      const client = createModalClient(env.MODAL_API_SECRET, env.MODAL_WORKSPACE);
+      const results = await Promise.all(
+        providerImageIds.map((providerImageId) =>
+          client.deleteProviderImage(
+            { providerImageId },
+            { trace_id: ctx.trace_id, request_id: ctx.request_id }
+          )
+        )
+      );
+
+      const undeleted = results.filter((result) => !result.deleted);
+      if (undeleted.length > 0) {
+        throw new Error(`Failed to delete ${undeleted.length} provider images`);
+      }
+    }
+
+    const deleted = await store.deleteStoredImagesForRepo(owner, name);
+
+    logger.info("repo_image.deleted", {
+      repo_owner: owner,
+      repo_name: name,
+      deleted,
+      provider_image_count: providerImageIds.length,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+
+    return json({ ok: true, deleted });
+  } catch (e) {
+    logger.error("repo_image.delete_error", {
+      error: e instanceof Error ? e.message : String(e),
+      repo_owner: owner,
+      repo_name: name,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Failed to delete stored repo images", 500);
   }
 }
 
@@ -543,6 +620,11 @@ export const repoImageRoutes: Route[] = [
     method: "GET",
     pattern: parsePattern("/repo-images/status"),
     handler: handleGetStatus,
+  },
+  {
+    method: "DELETE",
+    pattern: parsePattern("/repo-images/:owner/:name"),
+    handler: handleDeleteRepoImages,
   },
   {
     method: "PUT",
