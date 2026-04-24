@@ -52,9 +52,17 @@ vi.mock("../db/automation-store", () => ({
   toAutomationRun: vi.fn((row: unknown) => row),
 }));
 
+const mockSessionStoreCreate = vi.fn().mockResolvedValue(undefined);
 vi.mock("../db/session-index", () => ({
   SessionIndexStore: vi.fn().mockImplementation(() => ({
-    create: vi.fn().mockResolvedValue(undefined),
+    create: mockSessionStoreCreate,
+  })),
+}));
+
+const mockUserStoreGetIdentity = vi.fn().mockResolvedValue(null);
+vi.mock("../db/user-store", () => ({
+  UserStore: vi.fn().mockImplementation(() => ({
+    getIdentity: mockUserStoreGetIdentity,
   })),
 }));
 
@@ -115,6 +123,7 @@ const sampleAutomation = {
   next_run_at: now - 60000,
   consecutive_failures: 0,
   created_by: "user-1",
+  user_id: null as string | null,
   created_at: now - 86400000,
   updated_at: now - 86400000,
   deleted_at: null,
@@ -312,6 +321,43 @@ describe("SchedulerDO", () => {
         completed_at: expect.any(Number),
       });
       expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledWith("auto-1");
+    });
+
+    it("passes automation user_id to session index", async () => {
+      const automation = { ...sampleAutomation, user_id: "canonical-user-1" };
+      mockStore.getOverdueAutomations.mockResolvedValue([automation]);
+
+      const scheduler = createSchedulerDO();
+      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+
+      expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: "canonical-user-1" })
+      );
+    });
+
+    it("falls back to identity lookup for legacy automations without user_id", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      mockUserStoreGetIdentity.mockResolvedValue({ userId: "looked-up-user" });
+
+      const scheduler = createSchedulerDO();
+      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+
+      expect(mockUserStoreGetIdentity).toHaveBeenCalledWith("github", "user-1");
+      expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: "looked-up-user" })
+      );
+    });
+
+    it("creates session with null userId when identity lookup finds nothing", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      mockUserStoreGetIdentity.mockResolvedValue(null);
+
+      const scheduler = createSchedulerDO();
+      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+
+      expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: null })
+      );
     });
 
     it("recovers timed-out running runs", async () => {

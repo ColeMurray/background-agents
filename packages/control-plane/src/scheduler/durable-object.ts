@@ -19,6 +19,7 @@ import {
 } from "@open-inspect/shared";
 import { AutomationStore, toAutomationRun, type AutomationRow } from "../db/automation-store";
 import { SessionIndexStore } from "../db/session-index";
+import { UserStore } from "../db/user-store";
 import { generateId } from "../auth/crypto";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
@@ -566,6 +567,23 @@ export class SchedulerDO extends DurableObject<Env> {
       throw new Error(`Session init failed with status ${initResponse.status}`);
     }
 
+    // Resolve the canonical user_id for the session index.
+    // New automations have user_id populated at creation time.
+    // Legacy automations (pre-Phase 5) store the GitHub numeric user ID in created_by
+    // (set from NextAuth session.user.id). Fall back to looking it up via user_identities.
+    let userId = automation.user_id;
+    if (!userId && automation.created_by && automation.created_by !== "anonymous") {
+      try {
+        const userStore = new UserStore(this.env.DB);
+        const identity = await userStore.getIdentity("github", automation.created_by);
+        if (identity) {
+          userId = identity.userId;
+        }
+      } catch {
+        // Best-effort — proceed without user_id
+      }
+    }
+
     // Index the session in D1
     const now = Date.now();
     const sessionStore = new SessionIndexStore(this.env.DB);
@@ -582,6 +600,7 @@ export class SchedulerDO extends DurableObject<Env> {
       spawnDepth: 0,
       automationId: automation.id,
       automationRunId: runId,
+      userId,
       createdAt: now,
       updatedAt: now,
     });

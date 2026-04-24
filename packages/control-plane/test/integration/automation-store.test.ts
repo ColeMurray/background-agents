@@ -29,6 +29,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     next_run_at: now + 86400000,
     consecutive_failures: 0,
     created_by: "user-1",
+    user_id: null,
     created_at: now,
     updated_at: now,
     deleted_at: null,
@@ -80,6 +81,24 @@ describe("AutomationStore (D1 integration)", () => {
       expect(result!.schedule_cron).toBe("0 9 * * *");
       expect(result!.enabled).toBe(1);
       expect(result!.consecutive_failures).toBe(0);
+    });
+
+    it("stores and retrieves user_id", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-uid", user_id: "canonical-user-1" }));
+
+      const result = await store.getById("auto-uid");
+      expect(result).not.toBeNull();
+      expect(result!.user_id).toBe("canonical-user-1");
+    });
+
+    it("defaults user_id to null when omitted", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-uid-null" }));
+
+      const result = await store.getById("auto-uid-null");
+      expect(result).not.toBeNull();
+      expect(result!.user_id).toBeNull();
     });
 
     it("returns null for nonexistent automation", async () => {

@@ -925,7 +925,8 @@ async function handleCreateSession(
           scmUserId,
           scmToken,
           scmRefreshToken,
-          scmTokenExpiresAt ?? Date.now() + DEFAULT_TOKEN_LIFETIME_MS
+          scmTokenExpiresAt ?? Date.now() + DEFAULT_TOKEN_LIFETIME_MS,
+          resolvedUserId
         )
         .catch((e) =>
           logger.error("Failed to write tokens to D1", {
