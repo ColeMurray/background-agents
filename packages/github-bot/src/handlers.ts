@@ -33,6 +33,7 @@ async function createSession(
     reasoningEffort?: string | null;
     scmLogin: string;
     scmUserId: string;
+    scmAvatarUrl: string;
   }
 ): Promise<string> {
   const body: Record<string, unknown> = {
@@ -42,6 +43,7 @@ async function createSession(
     model: params.model,
     scmLogin: params.scmLogin,
     scmUserId: params.scmUserId,
+    scmAvatarUrl: params.scmAvatarUrl,
     spawnSource: "github-bot",
   };
   if (params.reasoningEffort) {
@@ -211,6 +213,7 @@ export async function handleReviewRequested(
     reasoningEffort: config.reasoningEffort,
     scmLogin: sender.login,
     scmUserId: String(sender.id),
+    scmAvatarUrl: sender.avatar_url,
   });
   log.info("session.created", { ...meta, session_id: sessionId, action: "review" });
 
@@ -309,6 +312,7 @@ export async function handlePullRequestOpened(
     reasoningEffort: config.reasoningEffort,
     scmLogin: sender.login,
     scmUserId: String(sender.id),
+    scmAvatarUrl: sender.avatar_url,
   });
   log.info("session.created", { ...meta, session_id: sessionId, action: "auto_review" });
 
@@ -413,6 +417,7 @@ export async function handleIssueComment(
     reasoningEffort: config.reasoningEffort,
     scmLogin: sender.login,
     scmUserId: String(sender.id),
+    scmAvatarUrl: sender.avatar_url,
   });
   log.info("session.created", { ...meta, session_id: sessionId, action: "comment" });
 
@@ -510,6 +515,7 @@ export async function handleReviewComment(
     reasoningEffort: config.reasoningEffort,
     scmLogin: sender.login,
     scmUserId: String(sender.id),
+    scmAvatarUrl: sender.avatar_url,
   });
   log.info("session.created", { ...meta, session_id: sessionId, action: "review_comment" });
 

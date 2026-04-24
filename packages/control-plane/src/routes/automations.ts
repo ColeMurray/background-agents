@@ -100,6 +100,7 @@ async function handleCreateAutomation(
       scmLogin?: string;
       scmName?: string;
       scmEmail?: string;
+      scmAvatarUrl?: string;
     }
   >(request);
   if (body instanceof Response) return body;
@@ -235,6 +236,7 @@ async function handleCreateAutomation(
         providerLogin: body.scmLogin,
         providerEmail: body.scmEmail,
         displayName: body.scmName || body.scmLogin,
+        avatarUrl: body.scmAvatarUrl,
       });
       resolvedUserId = resolvedUser.id;
     } catch (e) {

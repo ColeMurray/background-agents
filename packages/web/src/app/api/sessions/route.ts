@@ -76,6 +76,7 @@ export async function POST(request: NextRequest) {
       scmLogin: user.login,
       scmName: user.name,
       scmEmail: user.email,
+      scmAvatarUrl: user.image,
     };
 
     const response = await controlPlaneFetch("/sessions", {

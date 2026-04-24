@@ -723,6 +723,7 @@ function resolveProviderIdentity(
     scmLogin?: string;
     scmName?: string;
     scmEmail?: string;
+    scmAvatarUrl?: string;
     actorUserId?: string;
     actorDisplayName?: string;
     actorEmail?: string;
@@ -739,6 +740,7 @@ function resolveProviderIdentity(
             providerLogin: body.scmLogin,
             providerEmail: body.scmEmail,
             displayName: body.scmName || body.scmLogin,
+            avatarUrl: body.scmAvatarUrl,
           }
         : null;
 
