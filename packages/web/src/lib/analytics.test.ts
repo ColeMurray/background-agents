@@ -51,6 +51,43 @@ describe("analytics utilities", () => {
     ).toBe("50%");
   });
 
+  it("sorts user entries by displayName when present", () => {
+    const result = sortAnalyticsUserEntries(
+      [
+        {
+          key: "user-id-1",
+          displayName: "Zoe",
+          sessions: 1,
+          completed: 1,
+          failed: 0,
+          cancelled: 0,
+          cost: 0,
+          prs: 0,
+          messageCount: 0,
+          avgDuration: 0,
+          lastActive: 1,
+        },
+        {
+          key: "user-id-2",
+          displayName: "Alice",
+          sessions: 1,
+          completed: 1,
+          failed: 0,
+          cancelled: 0,
+          cost: 0,
+          prs: 0,
+          messageCount: 0,
+          avgDuration: 0,
+          lastActive: 2,
+        },
+      ],
+      "user",
+      "asc"
+    );
+
+    expect(result.map((entry) => entry.displayName)).toEqual(["Alice", "Zoe"]);
+  });
+
   it("sorts user entries by completion rate descending", () => {
     const result = sortAnalyticsUserEntries(
       [

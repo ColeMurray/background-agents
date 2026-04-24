@@ -128,7 +128,7 @@ export function sortAnalyticsUserEntries(
 
     switch (sortKey) {
       case "user":
-        comparison = left.key.localeCompare(right.key);
+        comparison = (left.displayName ?? left.key).localeCompare(right.displayName ?? right.key);
         break;
       case "completionRate":
         comparison = getCompletionRate(left) - getCompletionRate(right);
