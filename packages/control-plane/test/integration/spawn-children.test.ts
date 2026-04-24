@@ -11,6 +11,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
   async function setupParent(opts?: {
     repoId?: number;
     userId?: string;
+    canonicalUserId?: string;
     scmLogin?: string;
     spawnDepth?: number;
     parentSessionId?: string;
@@ -42,6 +43,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       parentSessionId: opts?.parentSessionId ?? null,
       spawnSource: opts?.spawnSource ?? "user",
       spawnDepth: opts?.spawnDepth ?? 0,
+      userId: opts?.canonicalUserId ?? null,
       createdAt: now,
       updatedAt: now,
     });
@@ -53,6 +55,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     const { parentName, sandboxToken, store } = await setupParent({
       repoId: 12345,
       userId: "user-1",
+      canonicalUserId: "canonical-abc123",
       scmLogin: "acmedev",
     });
 
@@ -81,6 +84,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(child!.spawnDepth).toBe(1);
     expect(child!.repoOwner).toBe("acme");
     expect(child!.repoName).toBe("web-app");
+    expect(child!.userId).toBe("canonical-abc123");
 
     // Verify the child DO was initialized by querying its /internal/state
     const childDoId = env.SESSION.idFromName(body.sessionId);

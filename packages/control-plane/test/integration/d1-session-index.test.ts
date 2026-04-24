@@ -442,4 +442,51 @@ describe("D1 SessionIndexStore", () => {
       expect(child!.spawnDepth).toBe(1);
     });
   });
+
+  describe("userId", () => {
+    it("stores and retrieves userId", async () => {
+      const store = new SessionIndexStore(env.DB);
+      const now = Date.now();
+
+      await store.create({
+        id: "session-with-user",
+        title: "User-linked session",
+        repoOwner: "acme",
+        repoName: "web-app",
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: null,
+        baseBranch: null,
+        status: "created",
+        userId: "canonical-user-id",
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const session = await store.get("session-with-user");
+      expect(session).not.toBeNull();
+      expect(session!.userId).toBe("canonical-user-id");
+    });
+
+    it("defaults userId to null when omitted", async () => {
+      const store = new SessionIndexStore(env.DB);
+      const now = Date.now();
+
+      await store.create({
+        id: "session-no-user",
+        title: "No user",
+        repoOwner: "acme",
+        repoName: "web-app",
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: null,
+        baseBranch: null,
+        status: "created",
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const session = await store.get("session-no-user");
+      expect(session).not.toBeNull();
+      expect(session!.userId).toBeNull();
+    });
+  });
 });

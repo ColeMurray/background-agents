@@ -28,7 +28,8 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     },
   };
 
-  const makeStore = () => ({
+  const makeStore = (parentUserId: string | null = null) => ({
+    get: vi.fn().mockResolvedValue({ userId: parentUserId }),
     getSpawnDepth: vi.fn().mockResolvedValue(0),
     countActiveChildren: vi.fn().mockResolvedValue(0),
     countTotalChildren: vi.fn().mockResolvedValue(0),
@@ -57,7 +58,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
   }
 
   it("returns 201 when child prompt enqueue succeeds", async () => {
-    const store = makeStore();
+    const store = makeStore("canonical-user-123");
     vi.mocked(SessionIndexStore).mockImplementation(() => store as never);
 
     const parentStub: DurableObjectStub = {
@@ -90,8 +91,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const payload = await response.json<{ sessionId: string; status: string }>();
     expect(payload.status).toBe("created");
 
-    const createdChildId = store.create.mock.calls[0]?.[0]?.id;
-    expect(createdChildId).toBe(payload.sessionId);
+    const childEntry = store.create.mock.calls[0]?.[0];
+    expect(childEntry?.id).toBe(payload.sessionId);
+    expect(childEntry?.userId).toBe("canonical-user-123");
     expect(store.updateStatus).not.toHaveBeenCalled();
   });
 

@@ -30,6 +30,7 @@ import {
 import { IntegrationSettingsStore } from "./db/integration-settings";
 import { SessionIndexStore } from "./db/session-index";
 import { UserScmTokenStore, DEFAULT_TOKEN_LIFETIME_MS } from "./db/user-scm-tokens";
+import { UserStore, type ProviderIdentity } from "./db/user-store";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./session/contracts";
 
 import {
@@ -705,6 +706,64 @@ async function handleListSessions(
   });
 }
 
+/**
+ * Derives a ProviderIdentity from spawnSource and the request body.
+ * For GitHub-based callers (web + github-bot), reuses existing scm* fields.
+ * For Slack/Linear bots, uses the actor* fields.
+ * Returns null when no identity can be resolved (e.g. missing userId).
+ */
+function resolveProviderIdentity(
+  spawnSource: SpawnSource,
+  body: {
+    scmUserId?: string;
+    scmLogin?: string;
+    scmName?: string;
+    scmEmail?: string;
+    actorUserId?: string;
+    actorDisplayName?: string;
+    actorEmail?: string;
+    actorAvatarUrl?: string;
+  }
+): ProviderIdentity | null {
+  switch (spawnSource) {
+    case "user":
+    case "github-bot":
+      return body.scmUserId
+        ? {
+            provider: "github",
+            providerUserId: body.scmUserId,
+            providerLogin: body.scmLogin,
+            providerEmail: body.scmEmail,
+            displayName: body.scmName || body.scmLogin,
+          }
+        : null;
+
+    case "slack-bot":
+      return body.actorUserId
+        ? {
+            provider: "slack",
+            providerUserId: body.actorUserId,
+            providerEmail: body.actorEmail,
+            displayName: body.actorDisplayName,
+            avatarUrl: body.actorAvatarUrl,
+          }
+        : null;
+
+    case "linear-bot":
+      return body.actorUserId
+        ? {
+            provider: "linear",
+            providerUserId: body.actorUserId,
+            providerEmail: body.actorEmail,
+            displayName: body.actorDisplayName,
+          }
+        : null;
+
+    default:
+      return null;
+  }
+}
+
 async function handleCreateSession(
   request: Request,
   env: Env,
@@ -721,6 +780,10 @@ async function handleCreateSession(
     scmName?: string;
     scmEmail?: string;
     spawnSource?: SpawnSource;
+    actorUserId?: string;
+    actorDisplayName?: string;
+    actorEmail?: string;
+    actorAvatarUrl?: string;
   };
 
   if (!body.repoOwner || !body.repoName) {
@@ -742,6 +805,24 @@ async function handleCreateSession(
   const { repoId, defaultBranch } = resolved;
 
   const userId = body.userId || "anonymous";
+
+  // Resolve canonical user model ID (for D1 session index).
+  // Best-effort: if resolution fails, the session is created without a user_id.
+  let resolvedUserId: string | null = null;
+  const providerIdentity = resolveProviderIdentity(body.spawnSource ?? "user", body);
+  if (providerIdentity) {
+    try {
+      const userStore = new UserStore(env.DB);
+      const resolvedUser = await userStore.resolveOrCreateUser(providerIdentity);
+      resolvedUserId = resolvedUser.id;
+    } catch (e) {
+      logger.warn("Failed to resolve user identity, session will have no user_id", {
+        error: e instanceof Error ? e : String(e),
+        provider: providerIdentity.provider,
+      });
+    }
+  }
+
   const scmLogin = body.scmLogin;
   const scmName = body.scmName;
   const scmEmail = body.scmEmail;
@@ -864,6 +945,7 @@ async function handleCreateSession(
     status: "created",
     spawnSource: body.spawnSource,
     scmLogin: scmLogin || null,
+    userId: resolvedUserId,
     createdAt: now,
     updatedAt: now,
   });
@@ -1753,6 +1835,10 @@ async function handleSpawnChild(
     return error(`Maximum total children (${MAX_TOTAL_CHILDREN}) reached`, 429);
   }
 
+  // Read parent's canonical user_id from D1 for inheritance
+  const parentSession = await sessionStore.get(parentId);
+  const parentUserId = parentSession?.userId ?? null;
+
   // Get parent context from parent DO
   const parentDoId = env.SESSION.idFromName(parentId);
   const parentStub = env.SESSION.get(parentDoId);
@@ -1862,6 +1948,7 @@ async function handleSpawnChild(
     spawnSource: "agent",
     spawnDepth: childDepth,
     scmLogin: spawnContext.owner.scmLogin || null,
+    userId: parentUserId,
     createdAt: now,
     updatedAt: now,
   });
