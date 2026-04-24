@@ -22,6 +22,10 @@ describe("extractModelFromLabels", () => {
     expect(extractModelFromLabels([{ name: "model:gpt-5.4" }])).toBe("openai/gpt-5.4");
   });
 
+  it("returns GPT 5.5 for model:gpt-5.5 label", () => {
+    expect(extractModelFromLabels([{ name: "model:gpt-5.5" }])).toBe("openai/gpt-5.5");
+  });
+
   it("returns null for unknown model label", () => {
     expect(extractModelFromLabels([{ name: "model:unknown-model" }])).toBeNull();
   });
