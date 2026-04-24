@@ -368,7 +368,7 @@ describe("Analytics API", () => {
         lastActive: aliceCreatedAt + 2_000,
       },
       {
-        key: "__unknown__",
+        key: "unknown",
         displayName: "Unknown user",
         sessions: 1,
         completed: 0,
@@ -621,7 +621,7 @@ describe("Analytics API", () => {
     const keys = breakdown.entries.map((e) => e.key);
     expect(keys).toContain("alice");
     expect(keys).toContain("bob");
-    expect(keys).toContain("__unknown__"); // slack + linear sessions with no scm_login
+    expect(keys).toContain("unknown"); // slack + linear sessions with no scm_login
 
     const totalBreakdownSessions = breakdown.entries.reduce((n, e) => n + e.sessions, 0);
     expect(totalBreakdownSessions).toBe(4);
@@ -741,5 +741,57 @@ describe("Analytics API", () => {
     expect(allGroups).not.toContain("alice");
     expect(allGroups).not.toContain("alice-gh");
     expect(allGroups).toContain("bob");
+  });
+
+  it("sums timeseries counts when distinct users share the same display name", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+    const dayAgo = now - 24 * 60 * 60 * 1000;
+
+    // Two distinct users with the same display name
+    await seedUser(env.DB, { id: "user-alex-1", displayName: "Alex" });
+    await seedUser(env.DB, { id: "user-alex-2", displayName: "Alex" });
+
+    await seedSession(store, {
+      id: "alex1-session",
+      repoOwner: "acme",
+      repoName: "app",
+      scmLogin: "alex-one",
+      userId: "user-alex-1",
+      status: "completed",
+      createdAt: dayAgo,
+      updatedAt: dayAgo + 1_000,
+      totalCost: 1,
+      activeDurationMs: 100_000,
+      messageCount: 5,
+      prCount: 1,
+    });
+    await seedSession(store, {
+      id: "alex2-session",
+      repoOwner: "acme",
+      repoName: "app",
+      scmLogin: "alex-two",
+      userId: "user-alex-2",
+      status: "completed",
+      createdAt: dayAgo + 60_000,
+      updatedAt: dayAgo + 61_000,
+      totalCost: 0.5,
+      activeDurationMs: 50_000,
+      messageCount: 3,
+      prCount: 0,
+    });
+
+    const res = await SELF.fetch("https://test.local/analytics/timeseries?days=7", {
+      headers: await authHeaders(),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json<AnalyticsTimeseriesResponse>();
+
+    // Both sessions land on the same date with the same "Alex" label
+    const dayBucket = dateBucket(dayAgo);
+    const dayEntry = body.series.find((s) => s.date === dayBucket);
+    expect(dayEntry).toBeDefined();
+    // Reducer must sum, not overwrite: 1 + 1 = 2
+    expect(dayEntry!.groups["Alex"]).toBe(2);
   });
 });

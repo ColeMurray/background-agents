@@ -120,7 +120,7 @@ export class AnalyticsStore {
     for (const row of result.results ?? []) {
       const lastPoint = series[series.length - 1];
       if (lastPoint?.date === row.date) {
-        lastPoint.groups[row.group_key] = row.count;
+        lastPoint.groups[row.group_key] = (lastPoint.groups[row.group_key] ?? 0) + row.count;
         continue;
       }
 
@@ -140,7 +140,7 @@ export class AnalyticsStore {
     const isUserBreakdown = by === "user";
 
     const groupExpression = isUserBreakdown
-      ? "COALESCE(s.user_id, NULLIF(s.scm_login, ''), '__unknown__')"
+      ? "COALESCE(s.user_id, NULLIF(s.scm_login, ''), 'unknown')"
       : "s.repo_owner || '/' || s.repo_name";
 
     const displayNameSelect = isUserBreakdown
