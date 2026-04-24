@@ -2,11 +2,14 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { Env } from "./types";
 import type * as SlackClientModule from "./utils/slack-client";
 
-const { mockVerifySlackSignature, mockPublishView, mockOpenView } = vi.hoisted(() => ({
-  mockVerifySlackSignature: vi.fn(),
-  mockPublishView: vi.fn(),
-  mockOpenView: vi.fn(),
-}));
+const { mockVerifySlackSignature, mockPublishView, mockOpenView, mockGetUserInfo } = vi.hoisted(
+  () => ({
+    mockVerifySlackSignature: vi.fn(),
+    mockPublishView: vi.fn(),
+    mockOpenView: vi.fn(),
+    mockGetUserInfo: vi.fn(),
+  })
+);
 
 vi.mock("./utils/slack-client", async () => {
   const actual = await vi.importActual<typeof SlackClientModule>("./utils/slack-client");
@@ -15,6 +18,7 @@ vi.mock("./utils/slack-client", async () => {
     verifySlackSignature: mockVerifySlackSignature,
     publishView: mockPublishView,
     openView: mockOpenView,
+    getUserInfo: mockGetUserInfo,
   };
 });
 
@@ -123,6 +127,7 @@ describe("POST /interactions", () => {
     clearLocalCache();
     mockVerifySlackSignature.mockResolvedValue(true);
     mockOpenView.mockResolvedValue({ ok: true });
+    mockGetUserInfo.mockResolvedValue({ ok: true, user: undefined });
   });
 
   it.each(["foo..bar", "release/", "-bad", "@", "foo/.bar", "foo.lock"])(
@@ -543,6 +548,225 @@ describe("POST /interactions", () => {
     const init = sessionCall?.[1] as RequestInit;
     const body = JSON.parse(String(init.body)) as { branch?: string };
     expect(body.branch).toBe("repo-branch");
+
+    slackFetch.mockRestore();
+  });
+
+  it("forwards identity fields from getUserInfo to session creation", async () => {
+    const slackFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      return new Response(JSON.stringify({ ok: true, ts: "123.456" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    mockGetUserInfo.mockResolvedValue({
+      ok: true,
+      user: {
+        id: "U123",
+        name: "jdoe",
+        real_name: "Jane Doe",
+        profile: {
+          display_name: "Jane",
+          email: "jane@example.com",
+        },
+      },
+    });
+
+    const payload = {
+      type: "block_actions",
+      user: { id: "U123" },
+      channel: { id: "C123" },
+      message: { ts: "111.222" },
+      actions: [
+        {
+          action_id: "select_repo",
+          selected_option: { value: "acme/app" },
+        },
+      ],
+    };
+
+    const request = new Request("http://localhost/interactions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "x-slack-signature": "v0=test",
+        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
+      },
+      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
+    });
+
+    const env = makeEnv();
+    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+      "pending:C123:111.222",
+      JSON.stringify({
+        message: "Please handle this",
+        userId: "U123",
+      })
+    );
+
+    (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/repos")) {
+          return new Response(
+            JSON.stringify({
+              repos: [
+                {
+                  id: "acme/app",
+                  owner: "acme",
+                  name: "app",
+                  fullName: "acme/app",
+                  defaultBranch: "main",
+                  private: true,
+                },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        if (url.endsWith("/sessions")) {
+          return new Response(JSON.stringify({ sessionId: "session-1", status: "running" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (url.includes("/prompt")) {
+          return new Response(JSON.stringify({ messageId: "msg-1" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ enabledModels: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    );
+
+    const ctx = makeCtx();
+    const response = await app.fetch(request, env, ctx);
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    const sessionCall = (
+      env.CONTROL_PLANE.fetch as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls.find(([input]) => {
+      const url = typeof input === "string" ? input : (input as URL).toString();
+      return url.endsWith("/sessions");
+    });
+
+    expect(sessionCall).toBeTruthy();
+    const init = sessionCall?.[1] as RequestInit;
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body.actorUserId).toBe("U123");
+    expect(body.actorDisplayName).toBe("Jane");
+    expect(body.actorEmail).toBe("jane@example.com");
+    expect(body.spawnSource).toBe("slack-bot");
+
+    slackFetch.mockRestore();
+  });
+
+  it("creates session even when getUserInfo throws", async () => {
+    const slackFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      return new Response(JSON.stringify({ ok: true, ts: "123.456" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    mockGetUserInfo.mockRejectedValue(new Error("Slack API down"));
+
+    const payload = {
+      type: "block_actions",
+      user: { id: "U123" },
+      channel: { id: "C123" },
+      message: { ts: "111.222" },
+      actions: [
+        {
+          action_id: "select_repo",
+          selected_option: { value: "acme/app" },
+        },
+      ],
+    };
+
+    const request = new Request("http://localhost/interactions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "x-slack-signature": "v0=test",
+        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
+      },
+      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
+    });
+
+    const env = makeEnv();
+    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+      "pending:C123:111.222",
+      JSON.stringify({
+        message: "Please handle this",
+        userId: "U123",
+      })
+    );
+
+    (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/repos")) {
+          return new Response(
+            JSON.stringify({
+              repos: [
+                {
+                  id: "acme/app",
+                  owner: "acme",
+                  name: "app",
+                  fullName: "acme/app",
+                  defaultBranch: "main",
+                  private: true,
+                },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        if (url.endsWith("/sessions")) {
+          return new Response(JSON.stringify({ sessionId: "session-1", status: "running" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (url.includes("/prompt")) {
+          return new Response(JSON.stringify({ messageId: "msg-1" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ enabledModels: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    );
+
+    const ctx = makeCtx();
+    const response = await app.fetch(request, env, ctx);
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    const sessionCall = (
+      env.CONTROL_PLANE.fetch as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls.find(([input]) => {
+      const url = typeof input === "string" ? input : (input as URL).toString();
+      return url.endsWith("/sessions");
+    });
+
+    expect(sessionCall).toBeTruthy();
+    const init = sessionCall?.[1] as RequestInit;
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body.actorUserId).toBe("U123");
+    expect(body.actorDisplayName).toBeUndefined();
+    expect(body.actorEmail).toBeUndefined();
+    expect(body.spawnSource).toBe("slack-bot");
 
     slackFetch.mockRestore();
   });

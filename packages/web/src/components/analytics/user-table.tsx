@@ -56,8 +56,8 @@ function SortButton({
 }
 
 function UserCell({ entry }: { entry: AnalyticsBreakdownEntry }) {
-  const isUnknown = entry.key === "unknown";
-  const label = isUnknown ? "Unknown user" : entry.key;
+  const isUnknown = entry.key === "__unknown__";
+  const label = entry.displayName ?? entry.key;
   const initial = label[0]?.toUpperCase() ?? "?";
 
   return (
@@ -75,7 +75,7 @@ function UserCell({ entry }: { entry: AnalyticsBreakdownEntry }) {
       <div className="min-w-0">
         <div className="truncate font-medium text-foreground">{label}</div>
         <div className="text-xs text-muted-foreground">
-          {isUnknown ? "Sessions without SCM login" : "Tracked user activity"}
+          {isUnknown ? "Sessions without linked user" : "Tracked user activity"}
         </div>
       </div>
     </div>

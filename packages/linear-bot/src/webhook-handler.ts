@@ -14,6 +14,7 @@ import {
   getLinearClient,
   emitAgentActivity,
   fetchIssueDetails,
+  fetchUser,
   updateAgentSession,
   getRepoSuggestions,
 } from "./utils/linear-client";
@@ -139,6 +140,9 @@ async function createSession(
     title: string;
     model: string;
     reasoningEffort?: string;
+    actorUserId?: string;
+    actorDisplayName?: string;
+    actorEmail?: string;
   },
   traceId?: string
 ): Promise<{ ok: true; sessionId: string } | { ok: false; status: number; body: string }> {
@@ -483,10 +487,12 @@ async function handleNewSession(
     return;
   }
 
-  // ─── Resolve model ────────────────────────────────────────────────────
+  // ─── Resolve user preferences and identity ────────────────────────────
 
   let userModel: string | undefined;
   let userReasoningEffort: string | undefined;
+  let actorDisplayName: string | undefined;
+  let actorEmail: string | undefined;
   const appUserId = webhook.appUserId;
   if (appUserId) {
     const prefs = await getUserPreferences(env, appUserId);
@@ -494,6 +500,10 @@ async function handleNewSession(
       userModel = prefs.model;
     }
     userReasoningEffort = prefs?.reasoningEffort;
+
+    const linearUser = await fetchUser(client, appUserId);
+    actorDisplayName = linearUser?.name;
+    actorEmail = linearUser?.email ?? undefined;
   }
 
   const labelModel = extractModelFromLabels(labels);
@@ -529,6 +539,9 @@ async function handleNewSession(
       title: `${issue.identifier}: ${issue.title}`,
       model,
       reasoningEffort,
+      actorUserId: appUserId,
+      actorDisplayName,
+      actorEmail,
     },
     traceId
   );

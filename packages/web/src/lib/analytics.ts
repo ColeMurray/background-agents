@@ -84,9 +84,12 @@ export function formatCompletionRate(entry: AnalyticsBreakdownEntry): string {
   return `${Math.round(getCompletionRate(entry) * 100)}%`;
 }
 
+const UNKNOWN_SENTINEL = "__unknown__";
+
 export function buildTimeseriesChartData(series: AnalyticsTimeseriesResponse["series"]): {
   data: Array<Record<string, number | string>>;
   groupKeys: string[];
+  labelMap: Record<string, string>;
 } {
   const totals = new Map<string, number>();
 
@@ -99,6 +102,13 @@ export function buildTimeseriesChartData(series: AnalyticsTimeseriesResponse["se
   const groupKeys = Array.from(totals.entries())
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .map(([groupKey]) => groupKey);
+
+  const labelMap: Record<string, string> = {};
+  for (const key of groupKeys) {
+    if (key === UNKNOWN_SENTINEL) {
+      labelMap[key] = "Unknown user";
+    }
+  }
 
   const data = series.map((point) => {
     const row: Record<string, number | string> = {
@@ -113,7 +123,7 @@ export function buildTimeseriesChartData(series: AnalyticsTimeseriesResponse["se
     return row;
   });
 
-  return { data, groupKeys };
+  return { data, groupKeys, labelMap };
 }
 
 export function sortAnalyticsUserEntries(
@@ -128,7 +138,7 @@ export function sortAnalyticsUserEntries(
 
     switch (sortKey) {
       case "user":
-        comparison = left.key.localeCompare(right.key);
+        comparison = (left.displayName ?? left.key).localeCompare(right.displayName ?? right.key);
         break;
       case "completionRate":
         comparison = getCompletionRate(left) - getCompletionRate(right);

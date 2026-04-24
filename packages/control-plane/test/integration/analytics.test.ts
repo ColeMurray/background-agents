@@ -278,7 +278,7 @@ describe("Analytics API", () => {
         date: dateBucket(cancelledAt),
         groups: {
           alice: 1,
-          unknown: 1,
+          __unknown__: 1,
         },
       },
     ]);
@@ -368,7 +368,7 @@ describe("Analytics API", () => {
         lastActive: aliceCreatedAt + 2_000,
       },
       {
-        key: "unknown",
+        key: "__unknown__",
         displayName: "Unknown user",
         sessions: 1,
         completed: 0,
@@ -621,7 +621,7 @@ describe("Analytics API", () => {
     const keys = breakdown.entries.map((e) => e.key);
     expect(keys).toContain("alice");
     expect(keys).toContain("bob");
-    expect(keys).toContain("unknown"); // slack + linear sessions with no scm_login
+    expect(keys).toContain("__unknown__"); // slack + linear sessions with no scm_login
 
     const totalBreakdownSessions = breakdown.entries.reduce((n, e) => n + e.sessions, 0);
     expect(totalBreakdownSessions).toBe(4);

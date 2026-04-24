@@ -199,6 +199,7 @@ describe("handlePullRequestOpened", () => {
     expect(sessionBody.repoName).toBe("widgets");
     expect(sessionBody.title).toContain("Review PR #42");
     expect(sessionBody.scmLogin).toBe("alice");
+    expect(sessionBody.scmUserId).toBe("1001");
     expect(sessionBody.spawnSource).toBe("github-bot");
 
     const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
@@ -367,6 +368,7 @@ describe("handleReviewRequested", () => {
     expect(sessionBody.repoName).toBe("widgets");
     expect(sessionBody.title).toContain("Review PR #42");
     expect(sessionBody.scmLogin).toBe("alice");
+    expect(sessionBody.scmUserId).toBe("1001");
     expect(sessionBody.spawnSource).toBe("github-bot");
 
     // Verify prompt sending
@@ -461,6 +463,7 @@ describe("handleIssueComment", () => {
 
     const sessionBody = JSON.parse(cpFetch.mock.calls[0][1].body);
     expect(sessionBody.scmLogin).toBe("bob");
+    expect(sessionBody.scmUserId).toBe("1002");
     expect(sessionBody.spawnSource).toBe("github-bot");
 
     const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
@@ -552,6 +555,7 @@ describe("handleReviewComment", () => {
 
     const sessionBody = JSON.parse(cpFetch.mock.calls[0][1].body);
     expect(sessionBody.scmLogin).toBe("carol");
+    expect(sessionBody.scmUserId).toBe("1003");
     expect(sessionBody.spawnSource).toBe("github-bot");
 
     const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
