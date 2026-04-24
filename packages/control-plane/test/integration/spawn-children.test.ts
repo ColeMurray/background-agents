@@ -97,6 +97,33 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(state.status).toBe("active");
   });
 
+  it("propagates null userId from parent to child", async () => {
+    const { parentName, sandboxToken, store } = await setupParent({
+      repoId: 12345,
+      userId: "user-1",
+      scmLogin: "acmedev",
+      // canonicalUserId intentionally omitted → null
+    });
+
+    const res = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({
+        title: "Child without user",
+        prompt: "Parent has no canonical userId",
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = await res.json<{ sessionId: string }>();
+    const child = await store.get(body.sessionId);
+    expect(child).not.toBeNull();
+    expect(child!.userId).toBeNull();
+  });
+
   it("rejects when depth >= 2 (403)", async () => {
     const { parentName, sandboxToken } = await setupParent({
       spawnDepth: 2,
