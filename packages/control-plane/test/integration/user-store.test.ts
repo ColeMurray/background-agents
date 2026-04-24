@@ -120,33 +120,66 @@ describe("UserStore", () => {
       expect(user!.email).toBe("alice@example.com");
     });
 
-    it("skips email update when another user already owns the email", async () => {
-      // User A owns the email
+    it("refreshes identity metadata on repeat sign-in", async () => {
+      // Create user without email or login
       await store.resolveOrCreateUser({
+        provider: "slack",
+        providerUserId: "UABC",
+        displayName: "Alice",
+      });
+
+      const before = await store.getIdentity("slack", "UABC");
+      expect(before!.providerEmail).toBeNull();
+      expect(before!.providerLogin).toBeNull();
+
+      // Same identity, now with email and login (after Slack scope added)
+      await store.resolveOrCreateUser({
+        provider: "slack",
+        providerUserId: "UABC",
+        displayName: "Alice",
+        providerLogin: "alice.smith",
+        providerEmail: "alice@example.com",
+      });
+
+      const after = await store.getIdentity("slack", "UABC");
+      expect(after!.providerEmail).toBe("alice@example.com");
+      expect(after!.providerLogin).toBe("alice.smith");
+    });
+
+    it("re-links identity to email-owning user when email conflict is discovered", async () => {
+      // User A owns the email (e.g. GitHub login)
+      const userA = await store.resolveOrCreateUser({
         provider: "github",
         providerUserId: "gh-111",
         displayName: "User A",
         providerEmail: "shared@example.com",
       });
 
-      // User B has no email
+      // User B created without email (e.g. Slack before users:read.email scope)
       const userB = await store.resolveOrCreateUser({
         provider: "slack",
         providerUserId: "slack-222",
         displayName: "User B",
       });
       expect(userB.email).toBeNull();
+      expect(userB.id).not.toBe(userA.id);
 
-      // User B's provider now reports the same email — should NOT update
-      const userBRetry = await store.resolveOrCreateUser({
+      // User B's provider now reports the same email — identity should
+      // re-link to User A (same principle as step 3 email-based linking)
+      const result = await store.resolveOrCreateUser({
         provider: "slack",
         providerUserId: "slack-222",
         displayName: "User B",
         providerEmail: "shared@example.com",
       });
 
-      expect(userBRetry.id).toBe(userB.id);
-      expect(userBRetry.email).toBeNull();
+      expect(result.id).toBe(userA.id);
+      expect(result.email).toBe("shared@example.com");
+
+      // Both identities now belong to User A
+      const identities = await store.getIdentitiesForUser(userA.id);
+      expect(identities).toHaveLength(2);
+      expect(identities.map((i) => i.provider).sort()).toEqual(["github", "slack"]);
     });
 
     it("stores avatar_url on new user", async () => {
