@@ -14,6 +14,7 @@ import {
   getLinearClient,
   emitAgentActivity,
   fetchIssueDetails,
+  fetchUser,
   updateAgentSession,
   getRepoSuggestions,
 } from "./utils/linear-client";
@@ -139,6 +140,9 @@ async function createSession(
     title: string;
     model: string;
     reasoningEffort?: string;
+    actorUserId?: string;
+    actorDisplayName?: string;
+    actorEmail?: string;
   },
   traceId?: string
 ): Promise<{ ok: true; sessionId: string } | { ok: false; status: number; body: string }> {
@@ -508,6 +512,16 @@ async function handleNewSession(
     labelModel,
   });
 
+  // ─── Resolve user identity ─────────────────────────────────────────────
+
+  let actorDisplayName: string | undefined;
+  let actorEmail: string | undefined;
+  if (appUserId) {
+    const linearUser = await fetchUser(client, appUserId);
+    actorDisplayName = linearUser?.name;
+    actorEmail = linearUser?.email ?? undefined;
+  }
+
   // ─── Create session ───────────────────────────────────────────────────
 
   await updateAgentSession(client, agentSessionId, { plan: makePlan("repo_resolved") });
@@ -529,6 +543,9 @@ async function handleNewSession(
       title: `${issue.identifier}: ${issue.title}`,
       model,
       reasoningEffort,
+      actorUserId: appUserId,
+      actorDisplayName,
+      actorEmail,
     },
     traceId
   );

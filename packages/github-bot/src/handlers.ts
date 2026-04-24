@@ -32,6 +32,7 @@ async function createSession(
     model: string;
     reasoningEffort?: string | null;
     scmLogin: string;
+    scmUserId: string;
   }
 ): Promise<string> {
   const body: Record<string, unknown> = {
@@ -40,6 +41,7 @@ async function createSession(
     title: params.title,
     model: params.model,
     scmLogin: params.scmLogin,
+    scmUserId: params.scmUserId,
     spawnSource: "github-bot",
   };
   if (params.reasoningEffort) {
@@ -208,6 +210,7 @@ export async function handleReviewRequested(
     model: config.model,
     reasoningEffort: config.reasoningEffort,
     scmLogin: sender.login,
+    scmUserId: String(sender.id),
   });
   log.info("session.created", { ...meta, session_id: sessionId, action: "review" });
 
@@ -305,6 +308,7 @@ export async function handlePullRequestOpened(
     model: config.model,
     reasoningEffort: config.reasoningEffort,
     scmLogin: sender.login,
+    scmUserId: String(sender.id),
   });
   log.info("session.created", { ...meta, session_id: sessionId, action: "auto_review" });
 
@@ -408,6 +412,7 @@ export async function handleIssueComment(
     model: config.model,
     reasoningEffort: config.reasoningEffort,
     scmLogin: sender.login,
+    scmUserId: String(sender.id),
   });
   log.info("session.created", { ...meta, session_id: sessionId, action: "comment" });
 
@@ -504,6 +509,7 @@ export async function handleReviewComment(
     model: config.model,
     reasoningEffort: config.reasoningEffort,
     scmLogin: sender.login,
+    scmUserId: String(sender.id),
   });
   log.info("session.created", { ...meta, session_id: sessionId, action: "review_comment" });
 
