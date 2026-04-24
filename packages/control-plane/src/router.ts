@@ -710,7 +710,11 @@ async function handleListSessions(
  * Derives a ProviderIdentity from spawnSource and the request body.
  * For GitHub-based callers (web + github-bot), reuses existing scm* fields.
  * For Slack/Linear bots, uses the actor* fields.
- * Returns null when no identity can be resolved (e.g. missing userId).
+ *
+ * Returns null when the caller hasn't supplied the required provider-specific
+ * ID (scmUserId for GitHub, actorUserId for Slack/Linear). This is expected
+ * during the phased rollout: Phase 2 wires this plumbing, Phase 4 updates
+ * each bot to send identity fields. Until then, bot sessions get user_id = NULL.
  */
 function resolveProviderIdentity(
   spawnSource: SpawnSource,
