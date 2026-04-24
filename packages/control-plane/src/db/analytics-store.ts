@@ -60,6 +60,10 @@ export class AnalyticsStore {
       .prepare(
         `SELECT
            COUNT(*) AS total_sessions,
+           -- Uses user_id when available, falls back to scm_login for unlinked sessions.
+           -- During the Phase 4→6 rollout window, the same person may appear under both
+           -- keys (scm_login on old sessions, user_id on new), temporarily inflating this
+           -- count. Resolves once the Phase 6 backfill populates user_id on historical rows.
            COUNT(DISTINCT COALESCE(user_id, NULLIF(scm_login, ''))) AS active_users,
            COALESCE(SUM(total_cost), 0) AS total_cost,
            COALESCE(SUM(pr_count), 0) AS total_prs,
@@ -104,7 +108,7 @@ export class AnalyticsStore {
       .prepare(
         `SELECT
            date(s.created_at / 1000, 'unixepoch') AS date,
-           COALESCE(u.display_name, NULLIF(s.scm_login, ''), 'unknown') AS group_key,
+           COALESCE(MAX(NULLIF(u.display_name, '')), MAX(NULLIF(s.scm_login, '')), 'unknown') AS group_key,
            COUNT(*) AS count
          FROM sessions s
          LEFT JOIN users u ON s.user_id = u.id
@@ -144,7 +148,7 @@ export class AnalyticsStore {
       : "s.repo_owner || '/' || s.repo_name";
 
     const displayNameSelect = isUserBreakdown
-      ? "COALESCE(u.display_name, NULLIF(s.scm_login, ''), 'Unknown user') AS display_name,"
+      ? "COALESCE(MAX(NULLIF(u.display_name, '')), MAX(NULLIF(s.scm_login, '')), 'Unknown user') AS display_name,"
       : "";
 
     const joinClause = isUserBreakdown ? "LEFT JOIN users u ON s.user_id = u.id" : "";
