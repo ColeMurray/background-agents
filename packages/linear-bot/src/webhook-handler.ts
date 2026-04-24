@@ -487,10 +487,12 @@ async function handleNewSession(
     return;
   }
 
-  // ─── Resolve model ────────────────────────────────────────────────────
+  // ─── Resolve user preferences and identity ────────────────────────────
 
   let userModel: string | undefined;
   let userReasoningEffort: string | undefined;
+  let actorDisplayName: string | undefined;
+  let actorEmail: string | undefined;
   const appUserId = webhook.appUserId;
   if (appUserId) {
     const prefs = await getUserPreferences(env, appUserId);
@@ -498,6 +500,10 @@ async function handleNewSession(
       userModel = prefs.model;
     }
     userReasoningEffort = prefs?.reasoningEffort;
+
+    const linearUser = await fetchUser(client, appUserId);
+    actorDisplayName = linearUser?.name;
+    actorEmail = linearUser?.email ?? undefined;
   }
 
   const labelModel = extractModelFromLabels(labels);
@@ -511,16 +517,6 @@ async function handleNewSession(
     userReasoningEffort,
     labelModel,
   });
-
-  // ─── Resolve user identity ─────────────────────────────────────────────
-
-  let actorDisplayName: string | undefined;
-  let actorEmail: string | undefined;
-  if (appUserId) {
-    const linearUser = await fetchUser(client, appUserId);
-    actorDisplayName = linearUser?.name;
-    actorEmail = linearUser?.email ?? undefined;
-  }
 
   // ─── Create session ───────────────────────────────────────────────────
 
