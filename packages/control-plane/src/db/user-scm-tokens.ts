@@ -68,6 +68,7 @@ export class UserScmTokenStore {
            access_token_encrypted = excluded.access_token_encrypted,
            refresh_token_encrypted = excluded.refresh_token_encrypted,
            token_expires_at = excluded.token_expires_at,
+           user_id = COALESCE(user_scm_tokens.user_id, excluded.user_id),
            updated_at = excluded.updated_at
          WHERE excluded.token_expires_at > user_scm_tokens.token_expires_at`
       )

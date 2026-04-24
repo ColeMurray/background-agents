@@ -240,6 +240,7 @@ async function handleCreateAutomation(
     } catch (e) {
       logger.warn("Failed to resolve user identity for automation", {
         error: e instanceof Error ? e : String(e),
+        scmUserId: body.scmUserId,
       });
     }
   }

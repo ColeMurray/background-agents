@@ -81,7 +81,7 @@ class FakeD1Database {
         access_token_encrypted: accessEnc,
         refresh_token_encrypted: refreshEnc,
         token_expires_at: expiresAt,
-        user_id: existing ? existing.user_id : userId,
+        user_id: existing ? (existing.user_id ?? userId) : userId,
         created_at: existing ? existing.created_at : createdAt,
         updated_at: updatedAt,
       });
@@ -272,6 +272,19 @@ describe("UserScmTokenStore", () => {
 
     const row = db.getRow("user-789");
     expect(row!.user_id).toBe("canonical-user-1");
+  });
+
+  it("upsertTokens backfills null user_id on conflict update", async () => {
+    const expiresAt1 = Date.now() + 3600_000;
+    const expiresAt2 = Date.now() + 7200_000;
+
+    await store.upsertTokens("user-legacy", "access-1", "refresh-1", expiresAt1);
+    expect(db.getRow("user-legacy")!.user_id).toBeNull();
+
+    await store.upsertTokens("user-legacy", "access-2", "refresh-2", expiresAt2, "resolved-user");
+
+    const row = db.getRow("user-legacy");
+    expect(row!.user_id).toBe("resolved-user");
   });
 
   it("getTokens returns null for unknown user", async () => {
