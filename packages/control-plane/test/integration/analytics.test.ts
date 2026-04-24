@@ -26,6 +26,7 @@ async function seedSession(
     repoOwner: string;
     repoName: string;
     scmLogin: string | null;
+    userId?: string | null;
     spawnSource?: SpawnSource;
     status: "created" | "active" | "completed" | "failed" | "archived" | "cancelled";
     createdAt: number;
@@ -47,6 +48,7 @@ async function seedSession(
     status: input.status,
     spawnSource: input.spawnSource,
     scmLogin: input.scmLogin,
+    userId: input.userId,
     createdAt: input.createdAt,
     updatedAt: input.updatedAt,
   });
@@ -57,6 +59,19 @@ async function seedSession(
     messageCount: input.messageCount,
     prCount: input.prCount,
   });
+}
+
+async function seedUser(
+  db: D1Database,
+  user: { id: string; displayName: string; email?: string }
+): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare(
+      "INSERT INTO users (id, display_name, email, avatar_url, created_at, updated_at) VALUES (?, ?, ?, NULL, ?, ?)"
+    )
+    .bind(user.id, user.displayName, user.email ?? null, now, now)
+    .run();
 }
 
 describe("Analytics API", () => {
@@ -341,6 +356,7 @@ describe("Analytics API", () => {
     expect(body.entries).toEqual([
       {
         key: "alice",
+        displayName: "alice",
         sessions: 2,
         completed: 1,
         failed: 0,
@@ -352,19 +368,8 @@ describe("Analytics API", () => {
         lastActive: aliceCreatedAt + 2_000,
       },
       {
-        key: "bob",
-        sessions: 1,
-        completed: 0,
-        failed: 1,
-        cancelled: 0,
-        cost: 0.75,
-        prs: 0,
-        messageCount: 2,
-        avgDuration: 50_000,
-        lastActive: bobFailedAt + 3_000,
-      },
-      {
-        key: "unknown",
+        key: "__unknown__",
+        displayName: "Unknown user",
         sessions: 1,
         completed: 0,
         failed: 0,
@@ -374,6 +379,19 @@ describe("Analytics API", () => {
         messageCount: 0,
         avgDuration: 0,
         lastActive: unknownActiveAt + 4_000,
+      },
+      {
+        key: "bob",
+        displayName: "bob",
+        sessions: 1,
+        completed: 0,
+        failed: 1,
+        cancelled: 0,
+        cost: 0.75,
+        prs: 0,
+        messageCount: 2,
+        avgDuration: 50_000,
+        lastActive: bobFailedAt + 3_000,
       },
     ]);
   });
@@ -603,9 +621,125 @@ describe("Analytics API", () => {
     const keys = breakdown.entries.map((e) => e.key);
     expect(keys).toContain("alice");
     expect(keys).toContain("bob");
-    expect(keys).toContain("unknown"); // slack + linear sessions with no scm_login
+    expect(keys).toContain("__unknown__"); // slack + linear sessions with no scm_login
 
     const totalBreakdownSessions = breakdown.entries.reduce((n, e) => n + e.sessions, 0);
     expect(totalBreakdownSessions).toBe(4);
+  });
+
+  it("groups sessions by user_id and shows display name from users table", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+
+    // Seed a user in the users table
+    await seedUser(env.DB, {
+      id: "user-abc",
+      displayName: "Alice Smith",
+      email: "alice@acme.test",
+    });
+
+    // Two sessions with the same user_id but different scm_logins → should merge
+    await seedSession(store, {
+      id: "alice-web",
+      repoOwner: "acme",
+      repoName: "app",
+      scmLogin: "alice",
+      userId: "user-abc",
+      status: "completed",
+      createdAt: now - 2 * 24 * 60 * 60 * 1000,
+      updatedAt: now - 2 * 24 * 60 * 60 * 1000 + 1_000,
+      totalCost: 1,
+      activeDurationMs: 100_000,
+      messageCount: 5,
+      prCount: 1,
+    });
+    await seedSession(store, {
+      id: "alice-github",
+      repoOwner: "acme",
+      repoName: "app",
+      scmLogin: "alice-gh",
+      userId: "user-abc",
+      status: "completed",
+      createdAt: now - 24 * 60 * 60 * 1000,
+      updatedAt: now - 24 * 60 * 60 * 1000 + 2_000,
+      totalCost: 0.5,
+      activeDurationMs: 50_000,
+      messageCount: 3,
+      prCount: 0,
+    });
+
+    // Session without user_id falls back to scm_login key
+    await seedSession(store, {
+      id: "bob-unlinked",
+      repoOwner: "acme",
+      repoName: "app",
+      scmLogin: "bob",
+      status: "failed",
+      createdAt: now - 3 * 24 * 60 * 60 * 1000,
+      updatedAt: now - 3 * 24 * 60 * 60 * 1000 + 3_000,
+      totalCost: 0.25,
+      activeDurationMs: 30_000,
+      messageCount: 2,
+      prCount: 0,
+    });
+
+    // Breakdown: user_id sessions merge under canonical ID with display name
+    const breakdownRes = await SELF.fetch(
+      "https://test.local/analytics/breakdown?days=30&by=user",
+      { headers: await authHeaders() }
+    );
+    expect(breakdownRes.status).toBe(200);
+    const breakdown = await breakdownRes.json<AnalyticsBreakdownResponse>();
+
+    expect(breakdown.entries).toEqual([
+      {
+        key: "user-abc",
+        displayName: "Alice Smith",
+        sessions: 2,
+        completed: 2,
+        failed: 0,
+        cancelled: 0,
+        cost: 1.5,
+        prs: 1,
+        messageCount: 8,
+        avgDuration: 75_000,
+        lastActive: now - 24 * 60 * 60 * 1000 + 2_000,
+      },
+      {
+        key: "bob",
+        displayName: "bob",
+        sessions: 1,
+        completed: 0,
+        failed: 1,
+        cancelled: 0,
+        cost: 0.25,
+        prs: 0,
+        messageCount: 2,
+        avgDuration: 30_000,
+        lastActive: now - 3 * 24 * 60 * 60 * 1000 + 3_000,
+      },
+    ]);
+
+    // Summary: activeUsers counts distinct user_id (alice's 2 sessions = 1 user)
+    const summaryRes = await SELF.fetch("https://test.local/analytics/summary?days=30", {
+      headers: await authHeaders(),
+    });
+    expect(summaryRes.status).toBe(200);
+    const summary = await summaryRes.json<AnalyticsSummaryResponse>();
+    expect(summary.activeUsers).toBe(2); // user-abc + bob
+
+    // Timeseries: uses display name from users table
+    const timeseriesRes = await SELF.fetch("https://test.local/analytics/timeseries?days=30", {
+      headers: await authHeaders(),
+    });
+    expect(timeseriesRes.status).toBe(200);
+    const timeseries = await timeseriesRes.json<AnalyticsTimeseriesResponse>();
+
+    // All Alice's sessions should appear under "Alice Smith", not "alice"/"alice-gh"
+    const allGroups = timeseries.series.flatMap((s) => Object.keys(s.groups));
+    expect(allGroups).toContain("Alice Smith");
+    expect(allGroups).not.toContain("alice");
+    expect(allGroups).not.toContain("alice-gh");
+    expect(allGroups).toContain("bob");
   });
 });
