@@ -1686,30 +1686,13 @@ export class SessionDO extends DurableObject<Env> {
       return undefined;
     }
 
-    // Fetch global secrets
-    let globalSecrets: Record<string, string> = {};
-    try {
-      const globalStore = new GlobalSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
-      globalSecrets = await globalStore.getDecryptedSecrets();
-    } catch (e) {
-      this.log.error("Failed to load global secrets, proceeding without", {
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
+    // Fail hard on secret loading — sandboxes must not silently lose secrets
+    const globalStore = new GlobalSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+    const globalSecrets = await globalStore.getDecryptedSecrets();
 
-    // Fetch repo secrets
-    let repoSecrets: Record<string, string> = {};
-    try {
-      const repoId = await this.ensureRepoId(session);
-      const repoStore = new RepoSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
-      repoSecrets = await repoStore.getDecryptedSecrets(repoId);
-    } catch (e) {
-      this.log.warn("Failed to load repo secrets, proceeding without", {
-        repo_owner: session.repo_owner,
-        repo_name: session.repo_name,
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
+    const repoId = await this.ensureRepoId(session);
+    const repoStore = new RepoSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+    const repoSecrets = await repoStore.getDecryptedSecrets(repoId);
 
     // Merge: repo overrides global
     const { merged, totalBytes, exceedsLimit } = mergeSecrets(globalSecrets, repoSecrets);

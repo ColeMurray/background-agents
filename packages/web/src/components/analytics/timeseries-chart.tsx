@@ -70,7 +70,7 @@ export function AnalyticsTimeseriesChart({ series, loading }: TimeseriesChartPro
       <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h2 className="text-lg font-semibold text-foreground">Sessions Over Time</h2>
-          <p className="text-sm text-muted-foreground">Daily session counts stacked by user.</p>
+          <p className="text-sm text-muted-foreground">Daily session counts by user.</p>
         </div>
         <div className="flex flex-wrap gap-2 pt-2 sm:justify-end">
           {previewGroups.map((groupKey) => (
@@ -92,8 +92,8 @@ export function AnalyticsTimeseriesChart({ series, loading }: TimeseriesChartPro
                   const gradientId = getGradientId(groupKey, index);
                   return (
                     <linearGradient key={groupKey} id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={color} stopOpacity={0.32} />
-                      <stop offset="95%" stopColor={color} stopOpacity={0.06} />
+                      <stop offset="5%" stopColor={color} stopOpacity={0.18} />
+                      <stop offset="95%" stopColor={color} stopOpacity={0.03} />
                     </linearGradient>
                   );
                 })}
@@ -136,7 +136,6 @@ export function AnalyticsTimeseriesChart({ series, loading }: TimeseriesChartPro
                     key={groupKey}
                     type="monotone"
                     dataKey={groupKey}
-                    stackId="sessions"
                     stroke={color}
                     fill={`url(#${gradientId})`}
                     strokeWidth={2}
@@ -150,7 +149,7 @@ export function AnalyticsTimeseriesChart({ series, loading }: TimeseriesChartPro
         </div>
       </div>
       <div className="mt-3 text-xs text-muted-foreground">
-        Hover the chart to inspect stacked daily counts for each user.
+        Hover the chart to inspect daily counts for each user.
       </div>
     </div>
   );
