@@ -3,6 +3,7 @@
  */
 
 import type { GitHubAppConfig } from "../../auth/github-app";
+import type { CacheStore } from "../../cache/cache-store";
 
 /**
  * Configuration for GitHubSourceControlProvider.
@@ -10,8 +11,8 @@ import type { GitHubAppConfig } from "../../auth/github-app";
 export interface GitHubProviderConfig {
   /** GitHub App configuration (required for push auth) */
   appConfig?: GitHubAppConfig;
-  /** KV namespace for caching installation tokens */
-  kvCache?: KVNamespace;
+  /** Cache store for caching installation tokens */
+  cacheStore?: CacheStore;
 }
 
 /**

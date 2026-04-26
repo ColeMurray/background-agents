@@ -54,6 +54,7 @@ import type {
 } from "../types";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
+import { createKvCacheStore } from "../cache/cache-store";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
 import { SessionPullRequestService } from "./pull-request-service";
 import { RepoSecretsStore } from "../db/repo-secrets";
@@ -535,7 +536,7 @@ export class SessionDO extends DurableObject<Env> {
       provider,
       github: {
         appConfig: appConfig ?? undefined,
-        kvCache: this.env.REPOS_CACHE,
+        cacheStore: createKvCacheStore(this.env.REPOS_CACHE),
       },
     });
   }
@@ -581,7 +582,10 @@ export class SessionDO extends DurableObject<Env> {
               scmProvider === "gitlab"
                 ? () => Promise.resolve(this.env.GITLAB_ACCESS_TOKEN ?? null)
                 : appConfig
-                  ? () => getCachedInstallationToken(appConfig, this.env)
+                  ? () =>
+                      getCachedInstallationToken(appConfig, {
+                        cacheStore: createKvCacheStore(this.env.REPOS_CACHE),
+                      })
                   : () => Promise.resolve(null);
 
             return createDaytonaProvider(
