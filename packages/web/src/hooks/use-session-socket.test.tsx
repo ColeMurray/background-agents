@@ -220,6 +220,29 @@ describe("useSessionSocket", () => {
     });
   });
 
+  it("revalidates the sidebar session list on title updates", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1"));
+
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+      socket.receive({ type: "session_title", title: "Generated title" });
+    });
+
+    await waitFor(() => {
+      expect(result.current.sessionState?.title).toBe("Generated title");
+    });
+
+    expect(mutateMock).toHaveBeenCalledWith(
+      "/api/sessions?limit=50&offset=0&excludeStatus=archived"
+    );
+  });
+
   it("drops invalid numeric screenshot metadata from subscribed artifacts", async () => {
     const { result } = renderHook(() => useSessionSocket("session-1"));
 

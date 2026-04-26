@@ -283,6 +283,18 @@ export class SessionRepository {
     );
   }
 
+  updateSessionTitleIfUnset(sessionId: string, title: string, updatedAt: number): boolean {
+    this.sql.exec(
+      `UPDATE session SET title = ?, updated_at = ?
+       WHERE id = ? AND (title IS NULL OR TRIM(title) = '')`,
+      title,
+      updatedAt,
+      sessionId
+    );
+
+    return this.getSession()?.title === title;
+  }
+
   updateSessionStatus(sessionId: string, status: SessionStatus, updatedAt: number): void {
     this.sql.exec(
       `UPDATE session SET status = ?, updated_at = ? WHERE id = ?`,

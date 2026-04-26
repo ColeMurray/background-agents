@@ -152,6 +152,22 @@ describe("SessionRepository", () => {
     });
   });
 
+  describe("updateSessionTitleIfUnset", () => {
+    it("updates the title only when the current title is unset", () => {
+      mock.setData(`SELECT * FROM session LIMIT 1`, [{ id: "sess-1", title: "Generated title" }]);
+
+      expect(repo.updateSessionTitleIfUnset("sess-1", "Generated title", 4000)).toBe(true);
+      expect(mock.calls[0].query).toContain("WHERE id = ? AND (title IS NULL OR TRIM(title) = '')");
+      expect(mock.calls[0].params).toEqual(["Generated title", 4000, "sess-1"]);
+    });
+
+    it("returns false when a title already exists", () => {
+      mock.setData(`SELECT * FROM session LIMIT 1`, [{ id: "sess-1", title: "Manual title" }]);
+
+      expect(repo.updateSessionTitleIfUnset("sess-1", "Generated title", 4000)).toBe(false);
+    });
+  });
+
   describe("addSessionCost", () => {
     it("increments total_cost and updates updated_at for the current session", () => {
       repo.addSessionCost(0.0123, 5000);

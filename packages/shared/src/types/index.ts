@@ -256,6 +256,12 @@ export type SandboxEvent =
       timestamp: number;
     }
   | {
+      type: "session_title";
+      title: string;
+      sandboxId: string;
+      timestamp: number;
+    }
+  | {
       type: "user_message";
       content: string;
       messageId: string;
