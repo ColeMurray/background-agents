@@ -1,5 +1,6 @@
 import type { Env, SlackInteractionPayload } from "./types";
 import { createLogger } from "./logger";
+import { createKvCacheStore } from "./cache-store";
 
 const log = createLogger("branch-preferences");
 
@@ -29,7 +30,9 @@ export async function getUserRepoBranchPreference(
 ): Promise<string | undefined> {
   try {
     const key = getUserRepoBranchKey(userId, repoId);
-    const value = normalizeBranchPreference((await env.SLACK_KV.get(key)) ?? undefined);
+    const value = normalizeBranchPreference(
+      (await createKvCacheStore(env.SLACK_KV).get(key)) ?? undefined
+    );
     if (!value) {
       return undefined;
     }
@@ -67,6 +70,7 @@ export async function getUserRepoBranchPreferences(
     // KV list returns up to 1000 keys per page; pagination is not handled
     // since users are unlikely to configure that many repo overrides.
     const listed = await env.SLACK_KV.list({ prefix });
+    const cacheStore = createKvCacheStore(env.SLACK_KV);
 
     for (const key of listed.keys) {
       const repoId = key.name.slice(prefix.length);
@@ -74,7 +78,7 @@ export async function getUserRepoBranchPreferences(
         continue;
       }
 
-      const branch = normalizeBranchPreference((await env.SLACK_KV.get(key.name)) ?? undefined);
+      const branch = normalizeBranchPreference((await cacheStore.get(key.name)) ?? undefined);
       if (!branch || !isValidBranchName(branch)) {
         continue;
       }
@@ -103,7 +107,7 @@ export async function saveUserRepoBranchPreference(
     const normalizedBranch = normalizeBranchPreference(branch);
 
     if (!normalizedBranch) {
-      await env.SLACK_KV.delete(key);
+      await createKvCacheStore(env.SLACK_KV).delete(key);
       return true;
     }
 
@@ -116,7 +120,7 @@ export async function saveUserRepoBranchPreference(
       return false;
     }
 
-    await env.SLACK_KV.put(key, normalizedBranch);
+    await createKvCacheStore(env.SLACK_KV).put(key, normalizedBranch);
     return true;
   } catch (e) {
     log.error("kv.put", {
