@@ -881,6 +881,26 @@ async function handleCreateSession(
     resolveSandboxSettings(env.DB, repoOwner, repoName),
   ]);
 
+  // Store session in D1 before initializing the SessionDO. SessionDO init starts
+  // sandbox warming, so D1 failures must fail before any sandbox can be spawned.
+  const now = Date.now();
+  const sessionStore = new SessionIndexStore(env.DB);
+  await sessionStore.create({
+    id: sessionId,
+    title: body.title || null,
+    repoOwner,
+    repoName,
+    model,
+    reasoningEffort,
+    baseBranch: body.branch || defaultBranch || "main",
+    status: "created",
+    spawnSource: body.spawnSource,
+    scmLogin: scmLogin || null,
+    userId: resolvedUserId,
+    createdAt: now,
+    updatedAt: now,
+  });
+
   // Initialize session with user info and optional encrypted token
   const initResponse = await stub.fetch(
     internalRequest(
@@ -937,25 +957,6 @@ async function handleCreateSession(
         )
     );
   }
-
-  // Store session in D1 index for listing
-  const now = Date.now();
-  const sessionStore = new SessionIndexStore(env.DB);
-  await sessionStore.create({
-    id: sessionId,
-    title: body.title || null,
-    repoOwner,
-    repoName,
-    model,
-    reasoningEffort,
-    baseBranch: body.branch || defaultBranch || "main",
-    status: "created",
-    spawnSource: body.spawnSource,
-    scmLogin: scmLogin || null,
-    userId: resolvedUserId,
-    createdAt: now,
-    updatedAt: now,
-  });
 
   const result: CreateSessionResponse = {
     sessionId,

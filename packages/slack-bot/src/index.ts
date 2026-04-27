@@ -32,6 +32,7 @@ import { getAvailableRepos } from "./classifier/repos";
 import { callbacksRouter } from "./callbacks";
 import { buildInternalAuthHeaders } from "./utils/internal";
 import { createLogger } from "./logger";
+import { createKvCacheStore } from "@open-inspect/shared";
 import {
   BRANCH_MODAL_CALLBACK_ID,
   REPO_BRANCH_MODAL_CALLBACK_ID,
@@ -225,7 +226,7 @@ async function lookupThreadSession(
 ): Promise<ThreadSession | null> {
   try {
     const key = getThreadSessionKey(channel, threadTs);
-    const data = await env.SLACK_KV.get(key, "json");
+    const data = await createKvCacheStore(env.SLACK_KV).get(key, "json");
     if (data && typeof data === "object") {
       return data as ThreadSession;
     }
@@ -253,7 +254,7 @@ async function storeThreadSession(
 ): Promise<void> {
   try {
     const key = getThreadSessionKey(channel, threadTs);
-    await env.SLACK_KV.put(key, JSON.stringify(session), {
+    await createKvCacheStore(env.SLACK_KV).put(key, JSON.stringify(session), {
       expirationTtl: 86400, // 24 hours
     });
   } catch (e) {
@@ -272,7 +273,7 @@ async function storeThreadSession(
 async function clearThreadSession(env: Env, channel: string, threadTs: string): Promise<void> {
   try {
     const key = getThreadSessionKey(channel, threadTs);
-    await env.SLACK_KV.delete(key);
+    await createKvCacheStore(env.SLACK_KV).delete(key);
   } catch (e) {
     log.error("kv.delete", {
       key_prefix: "thread",
@@ -352,7 +353,7 @@ function isValidUserPreferences(data: unknown): data is UserPreferences {
 async function getUserPreferences(env: Env, userId: string): Promise<UserPreferences | null> {
   try {
     const key = getUserPreferencesKey(userId);
-    const data = await env.SLACK_KV.get(key, "json");
+    const data = await createKvCacheStore(env.SLACK_KV).get(key, "json");
     if (isValidUserPreferences(data)) {
       return data;
     }
@@ -396,7 +397,7 @@ async function saveUserPreferences(
       updatedAt: Date.now(),
     };
     // No TTL - preferences persist indefinitely
-    await env.SLACK_KV.put(key, JSON.stringify(prefs));
+    await createKvCacheStore(env.SLACK_KV).put(key, JSON.stringify(prefs));
     return true;
   } catch (e) {
     log.error("kv.put", {
@@ -1055,13 +1056,14 @@ app.post("/events", async (c) => {
   const eventId = payload.event_id as string | undefined;
   if (eventId) {
     const dedupeKey = `event:${eventId}`;
-    const existing = await c.env.SLACK_KV.get(dedupeKey);
+    const cacheStore = createKvCacheStore(c.env.SLACK_KV);
+    const existing = await cacheStore.get(dedupeKey);
     if (existing) {
       log.debug("slack.event.duplicate", { trace_id: traceId, event_id: eventId });
       return c.json({ ok: true });
     }
     // Mark as seen with 1 hour TTL (Slack retries are within minutes)
-    await c.env.SLACK_KV.put(dedupeKey, "1", { expirationTtl: 3600 });
+    await cacheStore.put(dedupeKey, "1", { expirationTtl: 3600 });
   }
 
   // Process event asynchronously
@@ -1428,7 +1430,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
 
     // Store original message in KV for later retrieval when user selects a repo
     const pendingKey = `pending:${channel}:${threadTs || ts}`;
-    await env.SLACK_KV.put(
+    await createKvCacheStore(env.SLACK_KV).put(
       pendingKey,
       JSON.stringify({
         message: messageText,
@@ -1656,7 +1658,7 @@ async function handleRepoSelection(
 ): Promise<void> {
   // Retrieve pending message from KV
   const pendingKey = `pending:${channel}:${threadTs || messageTs}`;
-  const pendingData = await env.SLACK_KV.get(pendingKey, "json");
+  const pendingData = await createKvCacheStore(env.SLACK_KV).get(pendingKey, "json");
 
   if (!pendingData || typeof pendingData !== "object") {
     await postMessage(
@@ -1722,7 +1724,7 @@ async function handleRepoSelection(
   }
 
   // Clean up pending message
-  await env.SLACK_KV.delete(pendingKey);
+  await createKvCacheStore(env.SLACK_KV).delete(pendingKey);
 
   // Post that the agent is working
   await postSessionStartedMessage(env, channel, threadKey, sessionResult.sessionId);

@@ -679,6 +679,33 @@ describe("SandboxLifecycleManager", () => {
       expect(storage.calls).toContain("updateSandboxStatus:failed");
     });
 
+    it("fails spawn when getUserEnvVars rejects", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      storage.getUserEnvVars = vi.fn(async () => {
+        throw new Error("D1 decryption failure");
+      });
+      const broadcaster = createMockBroadcaster();
+      const wsManager = createMockWebSocketManager(false);
+      const provider = createMockProvider();
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        broadcaster,
+        wsManager,
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).not.toHaveBeenCalled();
+      expect(storage.calls).toContain("updateSandboxStatus:failed");
+      expect(manager.isSpawning()).toBe(false);
+    });
+
     it("skips spawn when already spawning", async () => {
       const sandbox = createMockSandbox({ status: "spawning" });
       const storage = createMockStorage(createMockSession(), sandbox);

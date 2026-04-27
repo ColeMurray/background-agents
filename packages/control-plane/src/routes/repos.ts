@@ -4,6 +4,7 @@
 
 import { RepoMetadataStore } from "../db/repo-metadata";
 import type { Env } from "../types";
+import { createKvCacheStore } from "@open-inspect/shared";
 import type {
   EnrichedRepository,
   InstallationRepository,
@@ -43,6 +44,7 @@ interface CachedReposList {
  */
 async function refreshReposCache(env: Env, traceId?: string): Promise<void> {
   const provider = createRouteSourceControlProvider(env);
+  const cacheStore = createKvCacheStore(env.REPOS_CACHE);
 
   let repos: InstallationRepository[];
   try {
@@ -89,7 +91,7 @@ async function refreshReposCache(env: Env, traceId?: string): Promise<void> {
   const cachedAt = new Date().toISOString();
   const freshUntil = Date.now() + REPOS_CACHE_FRESH_MS;
   try {
-    await env.REPOS_CACHE.put(
+    await cacheStore.put(
       REPOS_CACHE_KEY,
       JSON.stringify({ repos: enrichedRepos, cachedAt, freshUntil }),
       { expirationTtl: REPOS_CACHE_KV_TTL_SECONDS }
@@ -123,11 +125,13 @@ async function handleListRepos(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
+  const cacheStore = createKvCacheStore(env.REPOS_CACHE);
+
   // Read from KV cache
   let cached: CachedReposList | null = null;
   try {
     cached = await ctx.metrics.time("kv_read", () =>
-      env.REPOS_CACHE.get<CachedReposList>(REPOS_CACHE_KEY, "json")
+      cacheStore.get<CachedReposList>(REPOS_CACHE_KEY, "json")
     );
   } catch (e) {
     logger.warn("Failed to read repos cache", { error: e instanceof Error ? e : String(e) });
@@ -196,7 +200,7 @@ async function handleListRepos(
   const freshUntil = Date.now() + REPOS_CACHE_FRESH_MS;
   try {
     await ctx.metrics.time("kv_write", () =>
-      env.REPOS_CACHE.put(
+      cacheStore.put(
         REPOS_CACHE_KEY,
         JSON.stringify({ repos: enrichedRepos, cachedAt, freshUntil }),
         { expirationTtl: REPOS_CACHE_KV_TTL_SECONDS }
@@ -247,7 +251,7 @@ async function handleUpdateRepoMetadata(
     await metadataStore.upsert(owner, name, metadata);
 
     // Invalidate the KV repos cache so next fetch includes updated metadata
-    await env.REPOS_CACHE.delete(REPOS_CACHE_KEY);
+    await createKvCacheStore(env.REPOS_CACHE).delete(REPOS_CACHE_KEY);
 
     // Return normalized repo identifier
     const normalizedRepo = `${owner.toLowerCase()}/${name.toLowerCase()}`;
