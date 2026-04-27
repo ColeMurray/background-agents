@@ -699,6 +699,9 @@ class AgentBridge:
             self.log.warn("opencode.session_title_fetch_error", exc=e)
             return
 
+        if not isinstance(data, dict):
+            return
+
         title = data.get("title")
         if not isinstance(title, str) or not title.strip():
             return

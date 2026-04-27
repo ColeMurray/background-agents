@@ -437,7 +437,6 @@ class TestSSEStreaming:
     ):
         """Should complete on session.status with type=idle."""
         http_client = bridge.http_client
-        http_client.get_responses = [MockResponse(200, {"title": "Generated title"})]
 
         http_client.sse_events = [
             create_sse_event("server.connected", {}),
@@ -474,9 +473,25 @@ class TestSSEStreaming:
         async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
             events.append(event)
 
-        assert len(events) == 2
+        assert len(events) == 1
         assert events[0]["type"] == "token"
-        assert events[1] == {"type": "session_title", "title": "Generated title"}
+
+    @pytest.mark.asyncio
+    async def test_emits_session_title_event_when_available(self, bridge: AgentBridge):
+        """Should forward the generated OpenCode session title as a side-channel event."""
+        http_client = bridge.http_client
+        http_client.get_responses = [MockResponse(200, {"title": "Generated title"})]
+
+        sent_events = []
+
+        async def capture_event(event: dict[str, Any]) -> None:
+            sent_events.append(event)
+
+        bridge._send_event = capture_event  # type: ignore[method-assign]
+
+        await bridge._emit_session_title_event()
+
+        assert sent_events == [{"type": "session_title", "title": "Generated title"}]
 
     @pytest.mark.asyncio
     async def test_handles_session_error(self, bridge: AgentBridge):
