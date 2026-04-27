@@ -374,7 +374,7 @@ variable "project_root" {
 variable "r2_media_location" {
   description = "Cloudflare R2 location hint for the media bucket (e.g. ENAM, WNAM, APAC, WEUR, EEUR)"
   type        = string
-  default     = "ENAM"
+  default     = "WEUR"
 }
 
 # =============================================================================

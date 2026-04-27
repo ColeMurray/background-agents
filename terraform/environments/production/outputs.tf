@@ -27,7 +27,7 @@ output "d1_database_id" {
 # Cloudflare Workers
 output "control_plane_url" {
   description = "Control plane worker URL"
-  value       = module.control_plane_worker.worker_url
+  value       = local.control_plane_url
 }
 
 output "control_plane_worker_name" {
@@ -52,12 +52,12 @@ output "linear_bot_worker_name" {
 
 output "linear_bot_webhook_url" {
   description = "Linear bot webhook URL (set in Linear OAuth Application webhook config)"
-  value       = var.enable_linear_bot ? "${module.linear_bot_worker[0].worker_url}/webhook" : null
+  value       = var.enable_linear_bot ? "${local.linear_bot_url}/webhook" : null
 }
 
 output "linear_bot_oauth_authorize_url" {
   description = "Visit this URL to install the Linear agent in your workspace (requires admin)"
-  value       = var.enable_linear_bot ? "${module.linear_bot_worker[0].worker_url}/oauth/authorize" : null
+  value       = var.enable_linear_bot ? "${local.linear_bot_url}/oauth/authorize" : null
 }
 
 output "github_bot_worker_name" {
@@ -106,7 +106,7 @@ output "verification_commands" {
   value       = <<-EOF
 
     # 1. Health check control plane
-    curl ${module.control_plane_worker.worker_url}/health
+    curl ${local.control_plane_url}/health
 
     # 2. Health check sandbox backend
     ${local.use_modal_backend ? "curl ${module.modal_app[0].api_health_url}" : "# Daytona sandboxes use the REST API directly — no health endpoint to check"}
@@ -115,7 +115,7 @@ output "verification_commands" {
     curl ${local.web_app_url}
 
     # 4. Test authenticated endpoint (should return 401)
-    curl ${module.control_plane_worker.worker_url}/sessions
+    curl ${local.control_plane_url}/sessions
 
   EOF
 }

@@ -7,6 +7,7 @@ locals {
   control_plane_host = "open-inspect-control-plane-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev"
   control_plane_url  = "https://${local.control_plane_host}"
   ws_url             = "wss://${local.control_plane_host}"
+  linear_bot_url     = "https://open-inspect-linear-bot-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev"
 
   # Web app URL depends on deployment platform
   web_app_url = var.web_platform == "cloudflare" ? (

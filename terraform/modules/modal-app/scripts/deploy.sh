@@ -30,6 +30,11 @@ cd "${DEPLOY_PATH}" || {
     exit 1
 }
 
+# Activate venv if present (ensures sandbox_runtime and other deps are available)
+if [ -f ".venv/bin/activate" ]; then
+    source .venv/bin/activate
+fi
+
 # Deploy using Modal CLI
 if [ "${DEPLOY_MODULE}" = "deploy" ]; then
     # Method 1: Use deploy.py wrapper (recommended)
