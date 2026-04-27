@@ -9,8 +9,7 @@
  * 3. Token valid for 1 hour
  */
 
-import type { InstallationRepository } from "@open-inspect/shared";
-import type { CacheStore } from "../cache/cache-store";
+import type { CacheStore, InstallationRepository } from "@open-inspect/shared";
 
 /** Timeout for individual GitHub API requests (ms). */
 export const GITHUB_FETCH_TIMEOUT_MS = 60_000;
@@ -259,7 +258,7 @@ async function readInstallationTokenFromCache(
   }
 
   try {
-    const cached = await env.cacheStore.get<CachedInstallationToken>(cacheKey);
+    const cached = await env.cacheStore.get<CachedInstallationToken>(cacheKey, "json");
     return cached ?? null;
   } catch {
     return null;

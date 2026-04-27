@@ -23,7 +23,7 @@ import {
   handleReviewComment,
   type HandlerResult,
 } from "./handlers";
-import { createKvCacheStore } from "./cache-store";
+import { createKvCacheStore } from "@open-inspect/shared";
 
 const app = new Hono<{ Bindings: Env }>();
 const DELIVERY_DEDUPE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;

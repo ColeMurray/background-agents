@@ -4,7 +4,7 @@
 
 import { RepoMetadataStore } from "../db/repo-metadata";
 import type { Env } from "../types";
-import { createKvCacheStore } from "../cache/cache-store";
+import { createKvCacheStore } from "@open-inspect/shared";
 import type {
   EnrichedRepository,
   InstallationRepository,
@@ -131,7 +131,7 @@ async function handleListRepos(
   let cached: CachedReposList | null = null;
   try {
     cached = await ctx.metrics.time("kv_read", () =>
-      cacheStore.get<CachedReposList>(REPOS_CACHE_KEY)
+      cacheStore.get<CachedReposList>(REPOS_CACHE_KEY, "json")
     );
   } catch (e) {
     logger.warn("Failed to read repos cache", { error: e instanceof Error ? e : String(e) });

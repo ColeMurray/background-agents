@@ -32,7 +32,7 @@ import { getAvailableRepos } from "./classifier/repos";
 import { callbacksRouter } from "./callbacks";
 import { buildInternalAuthHeaders } from "./utils/internal";
 import { createLogger } from "./logger";
-import { createKvCacheStore } from "./cache-store";
+import { createKvCacheStore } from "@open-inspect/shared";
 import {
   BRANCH_MODAL_CALLBACK_ID,
   REPO_BRANCH_MODAL_CALLBACK_ID,

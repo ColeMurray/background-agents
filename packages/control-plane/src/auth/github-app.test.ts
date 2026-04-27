@@ -6,15 +6,20 @@ import {
   INSTALLATION_TOKEN_CACHE_MAX_AGE_MS,
   INSTALLATION_TOKEN_MIN_REMAINING_MS,
 } from "./github-app";
-import type { CacheStore } from "../cache/cache-store";
+import type { CacheStore } from "@open-inspect/shared";
 
 class FakeCacheStore implements CacheStore {
   private readonly store = new Map<string, string>();
 
-  async get<T>(key: string): Promise<T | null> {
+  async get(key: string): Promise<string | null>;
+  async get<T>(key: string, type: "json"): Promise<T | null>;
+  async get<T>(key: string, type?: "json"): Promise<string | T | null> {
     const value = this.store.get(key);
     if (value == null) {
       return null;
+    }
+    if (type !== "json") {
+      return value;
     }
     return JSON.parse(value) as T;
   }

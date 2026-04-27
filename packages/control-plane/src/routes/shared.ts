@@ -5,7 +5,7 @@
 import type { CorrelationContext } from "../logger";
 import type { RequestMetrics } from "../db/instrumented-d1";
 import type { Env } from "../types";
-import { createKvCacheStore } from "../cache/cache-store";
+import { createKvCacheStore } from "@open-inspect/shared";
 import { getGitHubAppConfig } from "../auth/github-app";
 import type { Logger } from "../logger";
 import {

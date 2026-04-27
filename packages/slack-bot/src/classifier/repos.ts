@@ -10,7 +10,7 @@ import type { Env, RepoConfig, ControlPlaneRepo, ControlPlaneReposResponse } fro
 import { normalizeRepoId } from "../utils/repo";
 import { buildInternalAuthHeaders } from "../utils/internal";
 import { createLogger } from "../logger";
-import { createKvCacheStore } from "../cache-store";
+import { createKvCacheStore } from "@open-inspect/shared";
 
 const log = createLogger("repos");
 
