@@ -20,10 +20,19 @@ function createMockSql() {
     exec(query: string, ...params: unknown[]): SqlResult {
       calls.push({ query, params });
       const data = mockData.get(query) ?? [];
+      let consumed = false;
       return {
-        toArray: () => data,
-        one: () => oneValue,
-        rowsWritten: rowsWrittenByQuery.get(query) ?? 0,
+        toArray: () => {
+          consumed = true;
+          return data;
+        },
+        one: () => {
+          consumed = true;
+          return oneValue;
+        },
+        get rowsWritten() {
+          return consumed ? (rowsWrittenByQuery.get(query) ?? 0) : 0;
+        },
       };
     },
   };

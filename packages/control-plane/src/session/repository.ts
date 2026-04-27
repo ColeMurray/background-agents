@@ -294,6 +294,7 @@ export class SessionRepository {
       sessionId
     );
 
+    result.toArray();
     return (result.rowsWritten ?? 0) > 0;
   }
 
