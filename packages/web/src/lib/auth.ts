@@ -1,6 +1,6 @@
 import type { NextAuthOptions } from "next-auth";
 import GitHubProvider from "next-auth/providers/github";
-import { checkAccessAllowed, parseAllowlist } from "./access-control";
+import { checkAccessAllowed, parseAllowlist, parseBooleanEnv } from "./access-control";
 
 // Extend NextAuth types to include GitHub-specific user info
 declare module "next-auth" {
@@ -43,6 +43,7 @@ export const authOptions: NextAuthOptions = {
       const config = {
         allowedDomains: parseAllowlist(process.env.ALLOWED_EMAIL_DOMAINS),
         allowedUsers: parseAllowlist(process.env.ALLOWED_USERS),
+        unsafeAllowAllUsers: parseBooleanEnv(process.env.UNSAFE_ALLOW_ALL_USERS),
       };
 
       const githubProfile = profile as { login?: string };

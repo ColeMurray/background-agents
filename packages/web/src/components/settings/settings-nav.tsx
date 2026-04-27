@@ -55,6 +55,11 @@ const NAV_ITEMS = [
     label: "Integrations",
     icon: IntegrationsIcon,
   },
+  {
+    id: "mcp-servers",
+    label: "MCP Servers",
+    icon: TerminalIcon,
+  },
 ] as const;
 
 export type SettingsCategory = (typeof NAV_ITEMS)[number]["id"];
@@ -110,6 +115,7 @@ export function SettingsNav({ activeCategory, onSelect, onNavigate }: SettingsNa
             <li key={item.id}>
               <button
                 onClick={() => onSelect(item.id)}
+                aria-current={isActive ? "page" : undefined}
                 className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded transition ${
                   isActive
                     ? "text-foreground bg-muted font-medium"

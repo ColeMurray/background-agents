@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 export function AutomationStatusBadge({ automation }: { automation: Automation }) {
   if (automation.enabled && automation.consecutiveFailures > 0) {
     return (
-      <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+      <Badge className="bg-warning-muted text-warning">
         Degraded ({automation.consecutiveFailures} failures)
       </Badge>
     );

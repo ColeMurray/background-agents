@@ -134,7 +134,7 @@ class AgentBridge:
     SSE_INACTIVITY_TIMEOUT_MAX = 3600.0
     HTTP_CONNECT_TIMEOUT = 30.0
     HTTP_DEFAULT_TIMEOUT = 30.0
-    OPENCODE_REQUEST_TIMEOUT = 10.0
+    OPENCODE_REQUEST_TIMEOUT = 30.0
     GIT_PUSH_TIMEOUT_SECONDS = 300.0
     GIT_PUSH_TERMINATE_GRACE_SECONDS = 5.0
     PROMPT_MAX_DURATION = 5400.0
@@ -604,19 +604,19 @@ class AgentBridge:
             reasoning_effort=reasoning_effort,
         )
 
-        scm_name = author_data.get("scmName")
-        scm_email = author_data.get("scmEmail")
-        await self._configure_git_identity(
-            GitUser(
-                name=scm_name or FALLBACK_GIT_USER.name,
-                email=scm_email or FALLBACK_GIT_USER.email,
-            )
-        )
-
-        if not self.opencode_session_id:
-            await self._create_opencode_session()
-
         try:
+            scm_name = author_data.get("scmName")
+            scm_email = author_data.get("scmEmail")
+            await self._configure_git_identity(
+                GitUser(
+                    name=scm_name or FALLBACK_GIT_USER.name,
+                    email=scm_email or FALLBACK_GIT_USER.email,
+                )
+            )
+
+            if not self.opencode_session_id:
+                await self._create_opencode_session()
+
             had_error = False
             error_message = None
             async for event in self._stream_opencode_response_sse(

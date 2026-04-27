@@ -53,7 +53,7 @@ export interface PullRequestOpenedPayload {
     draft: boolean;
   };
   repository: { owner: { login: string }; name: string; private: boolean };
-  sender: { login: string };
+  sender: { login: string; id: number; avatar_url: string };
 }
 
 export interface ReviewRequestedPayload {
@@ -68,7 +68,7 @@ export interface ReviewRequestedPayload {
   };
   requested_reviewer?: { login: string };
   repository: { owner: { login: string }; name: string; private: boolean };
-  sender: { login: string };
+  sender: { login: string; id: number; avatar_url: string };
 }
 
 export interface IssueCommentPayload {
@@ -84,7 +84,7 @@ export interface IssueCommentPayload {
     user: { login: string };
   };
   repository: { owner: { login: string }; name: string; private: boolean };
-  sender: { login: string };
+  sender: { login: string; id: number; avatar_url: string };
 }
 
 export interface ReviewCommentPayload {
@@ -104,5 +104,5 @@ export interface ReviewCommentPayload {
     user: { login: string };
   };
   repository: { owner: { login: string }; name: string; private: boolean };
-  sender: { login: string };
+  sender: { login: string; id: number; avatar_url: string };
 }

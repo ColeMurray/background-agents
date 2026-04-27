@@ -23,6 +23,7 @@ type ScmTokenRow = {
   access_token_encrypted: string;
   refresh_token_encrypted: string;
   token_expires_at: number;
+  user_id: string | null;
   created_at: number;
   updated_at: number;
 };
@@ -66,14 +67,8 @@ class FakeD1Database {
     const normalized = normalizeQuery(query);
 
     if (QUERY_PATTERNS.UPSERT_TOKENS.test(normalized)) {
-      const [providerUserId, accessEnc, refreshEnc, expiresAt, createdAt, updatedAt] = args as [
-        string,
-        string,
-        string,
-        number,
-        number,
-        number,
-      ];
+      const [providerUserId, accessEnc, refreshEnc, expiresAt, userId, createdAt, updatedAt] =
+        args as [string, string, string, number, string | null, number, number];
       const existing = this.rows.get(providerUserId);
 
       // Freshness guard: ON CONFLICT ... WHERE excluded.token_expires_at > user_scm_tokens.token_expires_at
@@ -86,6 +81,7 @@ class FakeD1Database {
         access_token_encrypted: accessEnc,
         refresh_token_encrypted: refreshEnc,
         token_expires_at: expiresAt,
+        user_id: existing ? (existing.user_id ?? userId) : userId,
         created_at: existing ? existing.created_at : createdAt,
         updated_at: updatedAt,
       });
@@ -241,6 +237,54 @@ describe("UserScmTokenStore", () => {
     // Original values unchanged
     const unchanged = await store.getTokens("user-123");
     expect(unchanged!.accessToken).toBe("access-old");
+  });
+
+  it("upsertTokens stores user_id when provided", async () => {
+    const expiresAt = Date.now() + 3600_000;
+    await store.upsertTokens(
+      "user-123",
+      "access-abc",
+      "refresh-xyz",
+      expiresAt,
+      "canonical-user-1"
+    );
+
+    const row = db.getRow("user-123");
+    expect(row).toBeDefined();
+    expect(row!.user_id).toBe("canonical-user-1");
+  });
+
+  it("upsertTokens stores null user_id when omitted", async () => {
+    const expiresAt = Date.now() + 3600_000;
+    await store.upsertTokens("user-456", "access-abc", "refresh-xyz", expiresAt);
+
+    const row = db.getRow("user-456");
+    expect(row).toBeDefined();
+    expect(row!.user_id).toBeNull();
+  });
+
+  it("upsertTokens preserves existing user_id on conflict update", async () => {
+    const expiresAt1 = Date.now() + 3600_000;
+    const expiresAt2 = Date.now() + 7200_000;
+
+    await store.upsertTokens("user-789", "access-1", "refresh-1", expiresAt1, "canonical-user-1");
+    await store.upsertTokens("user-789", "access-2", "refresh-2", expiresAt2, "different-user");
+
+    const row = db.getRow("user-789");
+    expect(row!.user_id).toBe("canonical-user-1");
+  });
+
+  it("upsertTokens backfills null user_id on conflict update", async () => {
+    const expiresAt1 = Date.now() + 3600_000;
+    const expiresAt2 = Date.now() + 7200_000;
+
+    await store.upsertTokens("user-legacy", "access-1", "refresh-1", expiresAt1);
+    expect(db.getRow("user-legacy")!.user_id).toBeNull();
+
+    await store.upsertTokens("user-legacy", "access-2", "refresh-2", expiresAt2, "resolved-user");
+
+    const row = db.getRow("user-legacy");
+    expect(row!.user_id).toBe("resolved-user");
   });
 
   it("getTokens returns null for unknown user", async () => {

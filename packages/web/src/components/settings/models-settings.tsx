@@ -102,13 +102,15 @@ export function ModelsSettings() {
                 <h3 className="text-sm font-medium text-foreground uppercase tracking-wider">
                   {group.category}
                 </h3>
-                <button
+                <Button
                   type="button"
+                  variant="subtle"
+                  size="xs"
                   onClick={() => toggleCategory(group, !allEnabled)}
-                  className="text-xs text-accent hover:text-accent/80 transition"
+                  className="text-accent hover:text-accent/80"
                 >
                   {allEnabled ? "Disable all" : "Enable all"}
-                </button>
+                </Button>
               </div>
               <div className="space-y-2">
                 {group.models.map((model) => {

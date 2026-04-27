@@ -29,8 +29,10 @@ import {
   type AlarmScheduler,
   type IdGenerator,
   type RepoImageLookup,
+  type McpServerLookup,
 } from "../sandbox/lifecycle/manager";
 import { RepoImageStore } from "../db/repo-images";
+import { McpServerStore } from "../db/mcp-servers";
 import { SessionIndexStore } from "../db/session-index";
 import { DEFAULT_EXECUTION_TIMEOUT_MS } from "../sandbox/lifecycle/decisions";
 import {
@@ -52,6 +54,7 @@ import type {
 } from "../types";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
+import { createKvCacheStore } from "../cache/cache-store";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
 import { SessionPullRequestService } from "./pull-request-service";
 import { RepoSecretsStore } from "../db/repo-secrets";
@@ -533,7 +536,7 @@ export class SessionDO extends DurableObject<Env> {
       provider,
       github: {
         appConfig: appConfig ?? undefined,
-        kvCache: this.env.REPOS_CACHE,
+        cacheStore: createKvCacheStore(this.env.REPOS_CACHE),
       },
     });
   }
@@ -579,7 +582,10 @@ export class SessionDO extends DurableObject<Env> {
               scmProvider === "gitlab"
                 ? () => Promise.resolve(this.env.GITLAB_ACCESS_TOKEN ?? null)
                 : appConfig
-                  ? () => getCachedInstallationToken(appConfig, this.env)
+                  ? () =>
+                      getCachedInstallationToken(appConfig, {
+                        cacheStore: createKvCacheStore(this.env.REPOS_CACHE),
+                      })
                   : () => Promise.resolve(null);
 
             return createDaytonaProvider(
@@ -689,6 +695,17 @@ export class SessionDO extends DurableObject<Env> {
     const session = this.repository.getSession();
     const sessionId = session?.session_name || session?.id || this.ctx.id.toString();
 
+    // Create D1-backed lookups if database is available
+    // Create D1-backed lookups if database is available
+    let mcpServerLookup: McpServerLookup | undefined;
+    if (this.env.DB) {
+      const mcpStore = new McpServerStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+      mcpServerLookup = {
+        getDecryptedForSession: (repoOwner, repoName) =>
+          mcpStore.getDecryptedForSession(repoOwner, repoName),
+      };
+    }
+
     const config = {
       ...DEFAULT_LIFECYCLE_CONFIG,
       controlPlaneUrl,
@@ -698,9 +715,10 @@ export class SessionDO extends DurableObject<Env> {
         ...DEFAULT_LIFECYCLE_CONFIG.inactivity,
         timeoutMs: parseInt(this.env.SANDBOX_INACTIVITY_TIMEOUT_MS || "600000", 10),
       },
+      mcpServerLookup,
     };
 
-    // Create repo image lookup if D1 is available
+    // Create repo image lookup if D1 is available (Modal-only — Daytona doesn't use repo images)
     let repoImageLookup: RepoImageLookup | undefined;
     if (this.env.DB && sandboxBackend === "modal") {
       const repoImageStore = new RepoImageStore(this.env.DB);
@@ -1672,30 +1690,13 @@ export class SessionDO extends DurableObject<Env> {
       return undefined;
     }
 
-    // Fetch global secrets
-    let globalSecrets: Record<string, string> = {};
-    try {
-      const globalStore = new GlobalSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
-      globalSecrets = await globalStore.getDecryptedSecrets();
-    } catch (e) {
-      this.log.error("Failed to load global secrets, proceeding without", {
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
+    // Fail hard on secret loading — sandboxes must not silently lose secrets
+    const globalStore = new GlobalSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+    const globalSecrets = await globalStore.getDecryptedSecrets();
 
-    // Fetch repo secrets
-    let repoSecrets: Record<string, string> = {};
-    try {
-      const repoId = await this.ensureRepoId(session);
-      const repoStore = new RepoSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
-      repoSecrets = await repoStore.getDecryptedSecrets(repoId);
-    } catch (e) {
-      this.log.warn("Failed to load repo secrets, proceeding without", {
-        repo_owner: session.repo_owner,
-        repo_name: session.repo_name,
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
+    const repoId = await this.ensureRepoId(session);
+    const repoStore = new RepoSecretsStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+    const repoSecrets = await repoStore.getDecryptedSecrets(repoId);
 
     // Merge: repo overrides global
     const { merged, totalBytes, exceedsLimit } = mergeSecrets(globalSecrets, repoSecrets);

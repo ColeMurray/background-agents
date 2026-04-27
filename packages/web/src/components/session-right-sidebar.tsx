@@ -57,9 +57,9 @@ export function SessionRightSidebarContent({
     return (
       <div className="p-4">
         <div className="animate-pulse space-y-4">
-          <div className="h-4 bg-muted w-3/4" />
-          <div className="h-4 bg-muted w-1/2" />
-          <div className="h-4 bg-muted w-2/3" />
+          <div className="h-4 bg-muted w-3/4 rounded" />
+          <div className="h-4 bg-muted w-1/2 rounded" />
+          <div className="h-4 bg-muted w-2/3 rounded" />
         </div>
       </div>
     );

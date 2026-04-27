@@ -81,5 +81,11 @@ module "web_app" {
       targets   = ["production", "preview"]
       sensitive = false
     },
+    {
+      key       = "UNSAFE_ALLOW_ALL_USERS"
+      value     = tostring(var.unsafe_allow_all_users)
+      targets   = ["production", "preview"]
+      sensitive = false
+    },
   ]
 }

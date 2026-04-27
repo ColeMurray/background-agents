@@ -6,6 +6,7 @@
  */
 
 import { generateInternalToken, type SandboxSettings } from "@open-inspect/shared";
+import type { McpServerConfig } from "@open-inspect/shared";
 import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";
 
@@ -39,6 +40,7 @@ export interface CreateSandboxRequest {
   timeoutSeconds?: number;
   branch?: string;
   codeServerEnabled?: boolean;
+  mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
 }
 
@@ -67,6 +69,7 @@ export interface RestoreSandboxRequest {
   timeoutSeconds?: number;
   branch?: string;
   codeServerEnabled?: boolean;
+  mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
 }
 
@@ -127,16 +130,6 @@ export interface DeleteProviderImageResponse {
   deleted: boolean;
 }
 
-export interface SnapshotInfo {
-  id: string;
-  repoOwner: string;
-  repoName: string;
-  baseSha: string;
-  status: string;
-  createdAt: string;
-  expiresAt?: string;
-}
-
 interface ModalApiResponse<T> {
   success: boolean;
   data?: T;
@@ -166,7 +159,6 @@ export class ModalClient {
   private createSandboxUrl: string;
   private warmSandboxUrl: string;
   private healthUrl: string;
-  private snapshotUrl: string;
   private snapshotSandboxUrl: string;
   private restoreSandboxUrl: string;
   private buildRepoImageUrl: string;
@@ -185,7 +177,6 @@ export class ModalClient {
     this.createSandboxUrl = `${baseUrl}-api-create-sandbox.modal.run`;
     this.warmSandboxUrl = `${baseUrl}-api-warm-sandbox.modal.run`;
     this.healthUrl = `${baseUrl}-api-health.modal.run`;
-    this.snapshotUrl = `${baseUrl}-api-snapshot.modal.run`;
     this.snapshotSandboxUrl = `${baseUrl}-api-snapshot-sandbox.modal.run`;
     this.restoreSandboxUrl = `${baseUrl}-api-restore-sandbox.modal.run`;
     this.buildRepoImageUrl = `${baseUrl}-api-build-repo-image.modal.run`;
@@ -199,21 +190,6 @@ export class ModalClient {
     const token = await generateInternalToken(this.secret);
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    };
-    if (correlation?.trace_id) headers["x-trace-id"] = correlation.trace_id;
-    if (correlation?.request_id) headers["x-request-id"] = correlation.request_id;
-    if (correlation?.session_id) headers["x-session-id"] = correlation.session_id;
-    if (correlation?.sandbox_id) headers["x-sandbox-id"] = correlation.sandbox_id;
-    return headers;
-  }
-
-  /**
-   * Generate authentication headers for GET requests (no Content-Type).
-   */
-  private async getGetHeaders(correlation?: CorrelationContext): Promise<Record<string, string>> {
-    const token = await generateInternalToken(this.secret);
-    const headers: Record<string, string> = {
       Authorization: `Bearer ${token}`,
     };
     if (correlation?.trace_id) headers["x-trace-id"] = correlation.trace_id;
@@ -257,6 +233,7 @@ export class ModalClient {
           timeout_seconds: request.timeoutSeconds || null,
           branch: request.branch || null,
           code_server_enabled: request.codeServerEnabled ?? false,
+          mcp_servers: request.mcpServers || null,
           sandbox_settings: request.sandboxSettings ?? null,
         }),
       });
@@ -335,6 +312,7 @@ export class ModalClient {
             provider: request.provider,
             model: request.model,
             branch: request.branch || null,
+            mcp_servers: request.mcpServers || null,
           },
           sandbox_id: request.sandboxId,
           control_plane_url: request.controlPlaneUrl,
@@ -529,32 +507,6 @@ export class ModalClient {
     }
 
     return result.data;
-  }
-
-  /**
-   * Get the latest snapshot for a repository.
-   */
-  async getLatestSnapshot(
-    repoOwner: string,
-    repoName: string,
-    correlation?: CorrelationContext
-  ): Promise<SnapshotInfo | null> {
-    const url = `${this.snapshotUrl}?repo_owner=${encodeURIComponent(repoOwner)}&repo_name=${encodeURIComponent(repoName)}`;
-
-    const headers = await this.getGetHeaders(correlation);
-    const response = await fetch(url, { headers });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const result = (await response.json()) as ModalApiResponse<SnapshotInfo>;
-
-    if (!result.success) {
-      return null;
-    }
-
-    return result.data || null;
   }
 
   /**

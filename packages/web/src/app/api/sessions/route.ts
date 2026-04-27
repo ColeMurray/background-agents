@@ -67,6 +67,7 @@ export async function POST(request: NextRequest) {
       reasoningEffort: body.reasoningEffort,
       branch: body.branch,
       title: body.title,
+      spawnSource: "user" as const,
       scmToken: accessToken,
       scmRefreshToken: jwt?.refreshToken as string | undefined,
       scmTokenExpiresAt: jwt?.accessTokenExpiresAt as number | undefined,
@@ -75,6 +76,7 @@ export async function POST(request: NextRequest) {
       scmLogin: user.login,
       scmName: user.name,
       scmEmail: user.email,
+      scmAvatarUrl: user.image,
     };
 
     const response = await controlPlaneFetch("/sessions", {

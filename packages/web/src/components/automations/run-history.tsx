@@ -10,21 +10,13 @@ function runStatusBadge(status: AutomationRun["status"]) {
     case "starting":
       return <Badge className="bg-muted text-muted-foreground">Starting</Badge>;
     case "running":
-      return <Badge className="bg-blue-500/10 text-blue-600 dark:text-blue-400">Running</Badge>;
+      return <Badge variant="info">Running</Badge>;
     case "completed":
       return <Badge className="bg-success-muted text-success">Completed</Badge>;
     case "failed":
-      return (
-        <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
-          Failed
-        </Badge>
-      );
+      return <Badge className="bg-destructive-muted text-destructive">Failed</Badge>;
     case "skipped":
-      return (
-        <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-          Skipped
-        </Badge>
-      );
+      return <Badge className="bg-warning-muted text-warning">Skipped</Badge>;
   }
 }
 
@@ -52,7 +44,7 @@ interface RunHistoryProps {
 export function RunHistory({ runs, total, loading, onLoadMore, hasMore }: RunHistoryProps) {
   if (!loading && runs.length === 0) {
     return (
-      <div className="border border-border-muted rounded-md bg-background p-6 text-center">
+      <div className="border border-border-muted rounded-md bg-card p-6 text-center">
         <p className="text-sm text-muted-foreground">No runs yet.</p>
       </div>
     );
@@ -60,7 +52,7 @@ export function RunHistory({ runs, total, loading, onLoadMore, hasMore }: RunHis
 
   return (
     <div>
-      <div className="border border-border-muted rounded-md bg-background divide-y divide-border-muted">
+      <div className="border border-border-muted rounded-md bg-card divide-y divide-border-muted">
         {runs.map((run) => {
           const duration = formatDuration(run.startedAt, run.completedAt);
           return (
@@ -91,10 +83,10 @@ export function RunHistory({ runs, total, loading, onLoadMore, hasMore }: RunHis
                 </div>
               </div>
               {run.failureReason && (
-                <p className="mt-1 text-xs text-red-500">{run.failureReason}</p>
+                <p className="mt-1 text-xs text-destructive">{run.failureReason}</p>
               )}
               {!run.failureReason && run.skipReason && (
-                <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{run.skipReason}</p>
+                <p className="mt-1 text-xs text-warning">{run.skipReason}</p>
               )}
             </div>
           );
@@ -103,7 +95,7 @@ export function RunHistory({ runs, total, loading, onLoadMore, hasMore }: RunHis
 
       {loading && (
         <div className="flex justify-center py-4">
-          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-muted-foreground" />
+          <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
         </div>
       )}
 

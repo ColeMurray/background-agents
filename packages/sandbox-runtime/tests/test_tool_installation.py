@@ -1,5 +1,6 @@
 """Tests for _install_tools() and _install_bin_scripts() in SandboxSupervisor."""
 
+import json
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
@@ -26,12 +27,12 @@ def _make_supervisor() -> SandboxSupervisor:
 def _patch_paths(
     legacy: Path | str,
     tools: Path | str,
-    modules: Path | str = "/nonexistent",
     skills: Path | str = "/nonexistent",
     bin_src: Path | str = "/nonexistent",
     bin_dest: Path | str = "/nonexistent",
+    deps_cache: Path | str = "/nonexistent",
 ):
-    """Patch entrypoint Path() calls to redirect legacy, tools, modules, skills, and bin paths."""
+    """Patch entrypoint Path() calls to redirect legacy, tools, skills, and bin paths."""
     with patch("sandbox_runtime.entrypoint.Path") as MockPath:
         MockPath.side_effect = lambda p: Path(
             str(p)
@@ -39,7 +40,7 @@ def _patch_paths(
             .replace("/app/sandbox_runtime/tools", str(tools))
             .replace("/app/sandbox_runtime/skills", str(skills))
             .replace("/app/sandbox_runtime/bin", str(bin_src))
-            .replace("/usr/lib/node_modules", str(modules))
+            .replace("/app/opencode-deps", str(deps_cache))
             .replace("/usr/local/bin", str(bin_dest))
         )
         yield
@@ -137,8 +138,8 @@ class TestInstallTools:
 
         assert not (workdir / ".opencode").exists()
 
-    def test_node_modules_symlink_created(self, tmp_path):
-        """Node modules symlink and package.json should be created."""
+    def test_copies_prebuilt_deps_from_cache(self, tmp_path):
+        """Should copy package.json, package-lock.json, and node_modules from image cache."""
         sup = _make_supervisor()
         workdir = tmp_path / "workspace"
         workdir.mkdir()
@@ -147,20 +148,60 @@ class TestInstallTools:
         legacy_tool.parent.mkdir(parents=True)
         legacy_tool.write_text("// tool")
 
-        global_modules = tmp_path / "global-modules"
-        global_modules.mkdir()
+        # Build a fake deps cache mimicking /app/opencode-deps
+        deps_cache = tmp_path / "opencode-deps"
+        deps_cache.mkdir()
+        pkg_content = {
+            "name": "opencode-tools",
+            "type": "module",
+            "dependencies": {"@opencode-ai/plugin": "*"},
+        }
+        (deps_cache / "package.json").write_text(json.dumps(pkg_content))
+        (deps_cache / "package-lock.json").write_text('{"lockfileVersion": 3}')
+        nm = deps_cache / "node_modules" / "@opencode-ai" / "plugin"
+        nm.mkdir(parents=True)
+        (nm / "index.js").write_text("module.exports = {}")
 
-        with _patch_paths(legacy=legacy_tool, tools=tmp_path / "no-tools", modules=global_modules):
+        with _patch_paths(legacy=legacy_tool, tools=tmp_path / "no-tools", deps_cache=deps_cache):
             sup._install_tools(workdir)
 
         opencode_dir = workdir / ".opencode"
-        node_modules = opencode_dir / "node_modules"
-        assert node_modules.is_symlink()
-        assert node_modules.resolve() == global_modules.resolve()
+        # All three artefacts should be present
+        assert (opencode_dir / "package.json").exists()
+        assert (opencode_dir / "package-lock.json").exists()
+        assert (opencode_dir / "node_modules").is_dir()
 
-        package_json = opencode_dir / "package.json"
-        assert package_json.exists()
-        assert '"type": "module"' in package_json.read_text()
+        pkg = json.loads((opencode_dir / "package.json").read_text())
+        assert "@opencode-ai/plugin" in pkg["dependencies"]
+
+    def test_does_not_overwrite_existing_files(self, tmp_path):
+        """Pre-existing package.json or node_modules in .opencode/ should not be overwritten."""
+        sup = _make_supervisor()
+        workdir = tmp_path / "workspace"
+        workdir.mkdir()
+
+        legacy_tool = tmp_path / "app" / "sandbox" / "inspect-plugin.js"
+        legacy_tool.parent.mkdir(parents=True)
+        legacy_tool.write_text("// tool")
+
+        # Build a fake deps cache
+        deps_cache = tmp_path / "opencode-deps"
+        deps_cache.mkdir()
+        (deps_cache / "package.json").write_text('{"name": "cached"}')
+        (deps_cache / "package-lock.json").write_text('{"lockfileVersion": 3}')
+        (deps_cache / "node_modules").mkdir()
+
+        # Pre-create .opencode/ with existing files (e.g. from snapshot restore)
+        opencode_dir = workdir / ".opencode" / "tool"
+        opencode_dir.mkdir(parents=True)
+        existing_pkg = workdir / ".opencode" / "package.json"
+        existing_pkg.write_text('{"name": "existing"}')
+
+        with _patch_paths(legacy=legacy_tool, tools=tmp_path / "no-tools", deps_cache=deps_cache):
+            sup._install_tools(workdir)
+
+        # Existing package.json should be preserved, not overwritten by cache
+        assert existing_pkg.read_text() == '{"name": "existing"}'
 
     def test_legacy_and_tools_dir_combined(self, tmp_path):
         """Both legacy tool and tools/ directory files should be installed together."""

@@ -61,6 +61,32 @@ export type LinearGlobalConfig = IntegrationSettingsMap["linear"]["global"];
 export type CodeServerGlobalConfig = IntegrationSettingsMap["code-server"]["global"];
 export type SandboxGlobalConfig = IntegrationSettingsMap["sandbox"]["global"];
 
+/** Full MCP server config with decrypted credentials. Internal use only. */
+export interface McpServerConfig {
+  id: string;
+  name: string;
+  type: "local" | "remote";
+  command?: string[];
+  url?: string;
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+  repoScopes?: string[] | null;
+  enabled: boolean;
+}
+
+/** MCP server metadata for API responses — no decrypted credentials. */
+export interface McpServerMetadata {
+  id: string;
+  name: string;
+  type: "local" | "remote";
+  command?: string[];
+  url?: string;
+  hasEnv: boolean;
+  hasHeaders: boolean;
+  repoScopes?: string[] | null;
+  enabled: boolean;
+}
+
 export const INTEGRATION_DEFINITIONS: {
   id: IntegrationId;
   name: string;

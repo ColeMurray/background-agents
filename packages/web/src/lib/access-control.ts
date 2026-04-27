@@ -1,6 +1,7 @@
 export interface AccessControlConfig {
   allowedDomains: string[];
   allowedUsers: string[];
+  unsafeAllowAllUsers: boolean;
 }
 
 export interface AccessCheckParams {
@@ -19,11 +20,15 @@ export function parseAllowlist(value: string | undefined): string[] {
     .filter(Boolean);
 }
 
+export function parseBooleanEnv(value: string | undefined): boolean {
+  return value?.trim().toLowerCase() === "true";
+}
+
 /**
  * Check if a user is allowed to sign in based on access control configuration.
  *
  * Returns true if:
- * - Both allowlists are empty (no restrictions)
+ * - Both allowlists are empty and unsafeAllowAllUsers is true
  * - User's GitHub username is in allowedUsers
  * - User's email domain is in allowedDomains
  *
@@ -33,12 +38,12 @@ export function checkAccessAllowed(
   config: AccessControlConfig,
   params: AccessCheckParams
 ): boolean {
-  const { allowedDomains, allowedUsers } = config;
+  const { allowedDomains, allowedUsers, unsafeAllowAllUsers } = config;
   const { githubUsername, email } = params;
 
-  // No restrictions if both lists are empty
+  // Empty allowlists only permit sign-in when explicitly enabled.
   if (allowedDomains.length === 0 && allowedUsers.length === 0) {
-    return true;
+    return unsafeAllowAllUsers;
   }
 
   // Check explicit user allowlist (GitHub username)

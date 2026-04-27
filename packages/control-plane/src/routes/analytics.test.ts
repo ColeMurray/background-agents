@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { analyticsRoutes } from "./analytics";
+import { HUMAN_SPAWN_SOURCES } from "../db/analytics-store";
 import type { RequestContext } from "./shared";
 import type { Env } from "../types";
 
@@ -11,9 +12,13 @@ const mockStore = {
   getBreakdown: vi.fn(),
 };
 
-vi.mock("../db/analytics-store", () => ({
-  AnalyticsStore: vi.fn().mockImplementation(() => mockStore),
-}));
+vi.mock("../db/analytics-store", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    AnalyticsStore: vi.fn().mockImplementation(() => mockStore),
+  };
+});
 
 function getHandler(method: string, path: string) {
   const pathname = new URL(`https://test.local${path}`).pathname;
@@ -90,6 +95,7 @@ describe("analytics route handlers", () => {
       expect(mockStore.getSummary).toHaveBeenCalledWith({
         startAt: FIXED_NOW - 30 * 24 * 60 * 60 * 1000,
         endAt: FIXED_NOW,
+        spawnSources: HUMAN_SPAWN_SOURCES,
       });
     });
 
@@ -112,6 +118,7 @@ describe("analytics route handlers", () => {
       expect(mockStore.getTimeseries).toHaveBeenCalledWith({
         startAt: FIXED_NOW - 14 * 24 * 60 * 60 * 1000,
         endAt: FIXED_NOW,
+        spawnSources: HUMAN_SPAWN_SOURCES,
       });
     });
   });

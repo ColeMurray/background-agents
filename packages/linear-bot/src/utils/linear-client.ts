@@ -147,7 +147,14 @@ async function linearGraphQL(
     throw new Error(`Linear API error: ${res.status}`);
   }
 
-  return (await res.json()) as Record<string, unknown>;
+  const json = (await res.json()) as Record<string, unknown>;
+
+  if (Array.isArray(json.errors) && json.errors.length > 0) {
+    const msg = (json.errors[0] as { message?: string }).message ?? "Unknown GraphQL error";
+    throw new Error(`Linear GraphQL error: ${msg}`);
+  }
+
+  return json;
 }
 
 // ─── Agent Activities ────────────────────────────────────────────────────────
@@ -319,6 +326,47 @@ export async function getRepoSuggestions(
       error: err instanceof Error ? err : new Error(String(err)),
     });
     return [];
+  }
+}
+
+// ─── User Lookup ────────────────────────────────────────────────────────────
+
+/**
+ * Fetch a Linear user by ID. Returns name and email for identity linking.
+ */
+export async function fetchUser(
+  client: LinearApiClient,
+  userId: string
+): Promise<{ id: string; name: string; email: string | null } | null> {
+  try {
+    const data = await linearGraphQL(
+      client,
+      `
+      query FetchUser($id: String!) {
+        user(id: $id) {
+          id
+          name
+          email
+        }
+      }
+    `,
+      { id: userId }
+    );
+
+    const user = (data as { data?: { user?: Record<string, unknown> } }).data?.user;
+    if (!user) return null;
+
+    return {
+      id: user.id as string,
+      name: user.name as string,
+      email: (user.email as string) ?? null,
+    };
+  } catch (err) {
+    log.error("linear.fetch_user", {
+      user_id: userId,
+      error: err instanceof Error ? err : new Error(String(err)),
+    });
+    return null;
   }
 }
 

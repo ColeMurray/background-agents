@@ -41,7 +41,13 @@ export type EventType =
   | "push_error"
   | "user_message";
 export type ParticipantRole = "owner" | "member";
-export type SpawnSource = "user" | "agent" | "automation";
+export type SpawnSource =
+  | "user"
+  | "agent"
+  | "automation"
+  | "github-bot"
+  | "linear-bot"
+  | "slack-bot";
 export type ConfidenceLevel = "high" | "medium" | "low";
 
 // Participant in a session
@@ -462,6 +468,7 @@ export interface AgentResponse {
   toolCalls: ToolCallSummary[];
   artifacts: ArtifactInfo[];
   success: boolean;
+  error?: string;
 }
 
 export interface UserPreferences {
@@ -624,6 +631,7 @@ export interface AnalyticsTimeseriesResponse {
 
 export interface AnalyticsBreakdownEntry {
   key: string;
+  displayName?: string;
   sessions: number;
   completed: number;
   failed: number;

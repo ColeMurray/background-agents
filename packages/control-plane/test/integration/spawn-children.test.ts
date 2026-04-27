@@ -11,6 +11,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
   async function setupParent(opts?: {
     repoId?: number;
     userId?: string;
+    canonicalUserId?: string;
     scmLogin?: string;
     spawnDepth?: number;
     parentSessionId?: string;
@@ -42,6 +43,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       parentSessionId: opts?.parentSessionId ?? null,
       spawnSource: opts?.spawnSource ?? "user",
       spawnDepth: opts?.spawnDepth ?? 0,
+      userId: opts?.canonicalUserId ?? null,
       createdAt: now,
       updatedAt: now,
     });
@@ -53,6 +55,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     const { parentName, sandboxToken, store } = await setupParent({
       repoId: 12345,
       userId: "user-1",
+      canonicalUserId: "canonical-abc123",
       scmLogin: "acmedev",
     });
 
@@ -81,6 +84,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(child!.spawnDepth).toBe(1);
     expect(child!.repoOwner).toBe("acme");
     expect(child!.repoName).toBe("web-app");
+    expect(child!.userId).toBe("canonical-abc123");
 
     // Verify the child DO was initialized by querying its /internal/state
     const childDoId = env.SESSION.idFromName(body.sessionId);
@@ -91,6 +95,33 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(state.repoOwner).toBe("acme");
     // Child spawn immediately enqueues the initial prompt, which transitions session to active.
     expect(state.status).toBe("active");
+  });
+
+  it("propagates null userId from parent to child", async () => {
+    const { parentName, sandboxToken, store } = await setupParent({
+      repoId: 12345,
+      userId: "user-1",
+      scmLogin: "acmedev",
+      // canonicalUserId intentionally omitted → null
+    });
+
+    const res = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({
+        title: "Child without user",
+        prompt: "Parent has no canonical userId",
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = await res.json<{ sessionId: string }>();
+    const child = await store.get(body.sessionId);
+    expect(child).not.toBeNull();
+    expect(child!.userId).toBeNull();
   });
 
   it("rejects when depth >= 2 (403)", async () => {

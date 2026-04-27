@@ -22,6 +22,7 @@ import {
   SettingsIcon,
   AutomationsIcon,
   BranchIcon,
+  DataControlsIcon,
 } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -215,6 +216,12 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
 
   const currentSessionId = pathname?.startsWith("/session/") ? pathname.split("/")[2] : null;
 
+  const handleNavigationSelect = useCallback(() => {
+    if (isMobile) {
+      onSessionSelect?.();
+    }
+  }, [isMobile, onSessionSelect]);
+
   return (
     <aside className="w-72 h-dvh flex flex-col border-r border-border-muted bg-background">
       {/* Header */}
@@ -229,7 +236,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           >
             <SidebarIcon className="w-4 h-4" />
           </Button>
-          <Link href="/" className="flex items-center gap-2">
+          <Link href="/" onClick={handleNavigationSelect} className="flex items-center gap-2">
             <InspectIcon className="w-5 h-5" />
             <span className="font-semibold text-foreground">Inspect</span>
           </Link>
@@ -246,6 +253,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           </Button>
           <Link
             href="/settings"
+            onClick={handleNavigationSelect}
             className={`p-1.5 transition ${
               pathname === "/settings"
                 ? "text-foreground bg-muted"
@@ -263,6 +271,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
       <div className="px-3 pt-2 pb-1 flex flex-col gap-0.5">
         <Link
           href="/automations"
+          onClick={handleNavigationSelect}
           className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-md transition ${
             pathname?.startsWith("/automations")
               ? "text-foreground bg-muted"
@@ -271,6 +280,18 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
         >
           <AutomationsIcon className="w-4 h-4" />
           Automations
+        </Link>
+        <Link
+          href="/analytics"
+          onClick={handleNavigationSelect}
+          className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-md transition ${
+            pathname?.startsWith("/analytics")
+              ? "text-foreground bg-muted"
+              : "text-muted-foreground hover:text-foreground hover:bg-muted"
+          }`}
+        >
+          <DataControlsIcon className="w-4 h-4" />
+          Analytics
         </Link>
       </div>
 
@@ -292,7 +313,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
       >
         {loading ? (
           <div className="flex justify-center py-8">
-            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-muted-foreground" />
+            <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
           </div>
         ) : sessions.length === 0 ? (
           <div className="px-4 py-8 text-center text-sm text-muted-foreground">No sessions yet</div>
@@ -314,7 +335,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
             {inactiveSessions.length > 0 && (
               <>
                 <div className="px-4 py-2 mt-2">
-                  <span className="text-xs font-medium text-secondary-foreground uppercase tracking-wide">
+                  <span className="text-xs font-medium text-secondary-foreground uppercase tracking-wider">
                     Inactive
                   </span>
                 </div>
@@ -333,7 +354,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
 
             {loadingMore && (
               <div className="flex justify-center py-3">
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-muted-foreground" />
+                <div className="animate-spin rounded-full h-4 w-4 border-2 border-current border-t-transparent text-muted-foreground" />
               </div>
             )}
           </>
@@ -349,6 +370,7 @@ function UserMenu({ user }: { user?: { name?: string | null; image?: string | nu
       <DropdownMenuTrigger asChild>
         <button
           className="w-7 h-7 rounded-full overflow-hidden focus:outline-none focus:ring-2 focus:ring-primary"
+          aria-label={`Signed in as ${user?.name || "User"}`}
           title={`Signed in as ${user?.name || "User"}`}
         >
           {user?.image ? (
@@ -651,6 +673,8 @@ function SessionListItem({
             <button
               type="button"
               aria-label="Session actions"
+              aria-hidden={isMobile ? "true" : undefined}
+              tabIndex={isMobile ? -1 : undefined}
               className={`h-6 w-6 items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition data-[state=open]:opacity-100 ${
                 isMobile
                   ? "pointer-events-none flex opacity-0"

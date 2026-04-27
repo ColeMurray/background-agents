@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseAllowlist, checkAccessAllowed } from "./access-control";
+import { parseAllowlist, parseBooleanEnv, checkAccessAllowed } from "./access-control";
 
 describe("parseAllowlist", () => {
   it("returns empty array for undefined", () => {
@@ -31,10 +31,33 @@ describe("parseAllowlist", () => {
   });
 });
 
+describe("parseBooleanEnv", () => {
+  it("returns false for undefined and empty values", () => {
+    expect(parseBooleanEnv(undefined)).toBe(false);
+    expect(parseBooleanEnv("")).toBe(false);
+    expect(parseBooleanEnv("   ")).toBe(false);
+  });
+
+  it("returns true only for true", () => {
+    expect(parseBooleanEnv("true")).toBe(true);
+    expect(parseBooleanEnv(" TRUE ")).toBe(true);
+    expect(parseBooleanEnv("false")).toBe(false);
+    expect(parseBooleanEnv("1")).toBe(false);
+  });
+});
+
 describe("checkAccessAllowed", () => {
   describe("when both allowlists are empty", () => {
-    it("allows all users", () => {
-      const config = { allowedDomains: [], allowedUsers: [] };
+    it("denies all users by default", () => {
+      const config = { allowedDomains: [], allowedUsers: [], unsafeAllowAllUsers: false };
+
+      expect(checkAccessAllowed(config, {})).toBe(false);
+      expect(checkAccessAllowed(config, { githubUsername: "anyuser" })).toBe(false);
+      expect(checkAccessAllowed(config, { email: "anyone@example.com" })).toBe(false);
+    });
+
+    it("allows all users when unsafeAllowAllUsers is enabled", () => {
+      const config = { allowedDomains: [], allowedUsers: [], unsafeAllowAllUsers: true };
 
       expect(checkAccessAllowed(config, {})).toBe(true);
       expect(checkAccessAllowed(config, { githubUsername: "anyuser" })).toBe(true);
@@ -43,7 +66,11 @@ describe("checkAccessAllowed", () => {
   });
 
   describe("when allowedUsers is set", () => {
-    const config = { allowedDomains: [], allowedUsers: ["alloweduser"] };
+    const config = {
+      allowedDomains: [],
+      allowedUsers: ["alloweduser"],
+      unsafeAllowAllUsers: false,
+    };
 
     it("allows users in the list", () => {
       expect(checkAccessAllowed(config, { githubUsername: "alloweduser" })).toBe(true);
@@ -65,7 +92,11 @@ describe("checkAccessAllowed", () => {
   });
 
   describe("when allowedDomains is set", () => {
-    const config = { allowedDomains: ["company.com"], allowedUsers: [] };
+    const config = {
+      allowedDomains: ["company.com"],
+      allowedUsers: [],
+      unsafeAllowAllUsers: false,
+    };
 
     it("allows users with matching email domain", () => {
       expect(checkAccessAllowed(config, { email: "user@company.com" })).toBe(true);
@@ -89,6 +120,7 @@ describe("checkAccessAllowed", () => {
     const config = {
       allowedDomains: ["company.com"],
       allowedUsers: ["specialuser"],
+      unsafeAllowAllUsers: false,
     };
 
     it("allows users matching username", () => {
@@ -125,10 +157,29 @@ describe("checkAccessAllowed", () => {
     });
   });
 
+  describe("when unsafeAllowAllUsers is true with populated allowlists", () => {
+    const config = {
+      allowedDomains: ["company.com"],
+      allowedUsers: ["specialuser"],
+      unsafeAllowAllUsers: true,
+    };
+
+    it("still enforces the allowlist for matching users", () => {
+      expect(checkAccessAllowed(config, { githubUsername: "specialuser" })).toBe(true);
+      expect(checkAccessAllowed(config, { email: "user@company.com" })).toBe(true);
+    });
+
+    it("denies users not in the allowlist", () => {
+      expect(checkAccessAllowed(config, { githubUsername: "randomuser" })).toBe(false);
+      expect(checkAccessAllowed(config, { email: "user@other.com" })).toBe(false);
+    });
+  });
+
   describe("multiple values in allowlists", () => {
     const config = {
       allowedDomains: ["company.com", "partner.org"],
       allowedUsers: ["admin", "developer"],
+      unsafeAllowAllUsers: false,
     };
 
     it("allows any user from the list", () => {

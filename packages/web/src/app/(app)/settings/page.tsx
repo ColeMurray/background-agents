@@ -11,6 +11,7 @@ import { KeyboardShortcutsSettings } from "@/components/settings/keyboard-shortc
 import { IntegrationsSettings } from "@/components/settings/integrations-settings";
 import { SandboxSettingsPage } from "@/components/settings/sandbox-settings";
 import { ImagesSettings } from "@/components/settings/images-settings";
+import { McpServersSettings } from "@/components/settings/mcp-servers-settings";
 import { AppearanceSettings } from "@/components/settings/appearance-settings";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { SidebarIcon, BackIcon } from "@/components/ui/icons";
@@ -26,6 +27,7 @@ const CATEGORY_LABELS: Record<SettingsCategory, string> = {
   "data-controls": "Data Controls",
   sandbox: "Sandbox",
   integrations: "Integrations",
+  "mcp-servers": "MCP Servers",
 };
 
 const VALID_CATEGORIES = new Set<string>([
@@ -37,6 +39,7 @@ const VALID_CATEGORIES = new Set<string>([
   "data-controls",
   "sandbox",
   "integrations",
+  "mcp-servers",
 ]);
 
 function isValidCategory(tab: string | null): tab is SettingsCategory {
@@ -85,6 +88,7 @@ export default function SettingsPage() {
       {activeCategory === "data-controls" && <DataControlsSettings />}
       {activeCategory === "sandbox" && <SandboxSettingsPage />}
       {activeCategory === "integrations" && <IntegrationsSettings />}
+      {activeCategory === "mcp-servers" && <McpServersSettings />}
     </>
   );
 

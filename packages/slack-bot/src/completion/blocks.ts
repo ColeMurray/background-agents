@@ -27,6 +27,7 @@ const STATUS_EMOJI = {
  */
 const TRUNCATE_LIMIT = 2000;
 const FALLBACK_TEXT_LIMIT = 150;
+const ERROR_FOOTER_LIMIT = 200;
 
 /**
  * Build Slack blocks for completion message.
@@ -71,7 +72,11 @@ export function buildCompletionBlocks(
 
   // 4. Status footer
   const emoji = response.success ? STATUS_EMOJI.success : STATUS_EMOJI.warning;
-  const status = response.success ? "Done" : "Completed with issues";
+  const status = response.success
+    ? "Done"
+    : response.error
+      ? `Failed: ${truncateError(response.error, ERROR_FOOTER_LIMIT)}`
+      : "Completed with issues";
   const effortSuffix = context.reasoningEffort ? ` (${context.reasoningEffort})` : "";
   blocks.push({
     type: "context",
@@ -135,6 +140,15 @@ function truncateForSlack(text: string, maxLen: number): string {
     return truncated.slice(0, lastPeriod + 1) + "\n\n_...truncated_";
   }
   return truncated + "...\n\n_...truncated_";
+}
+
+/**
+ * Truncate an error string for Slack display, collapsing whitespace.
+ */
+export function truncateError(text: string, maxLen: number): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLen) return normalized;
+  return normalized.slice(0, maxLen - 1) + "…";
 }
 
 function getManualCreatePrUrl(artifacts: AgentResponse["artifacts"]): string | null {

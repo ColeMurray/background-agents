@@ -71,6 +71,7 @@ resource "local_file" "web_app_wrangler_production" {
     NEXT_PUBLIC_SANDBOX_PROVIDER = "${var.sandbox_provider}"
     ALLOWED_USERS = "${var.allowed_users}"
     ALLOWED_EMAIL_DOMAINS = "${var.allowed_email_domains}"
+    UNSAFE_ALLOW_ALL_USERS = "${tostring(var.unsafe_allow_all_users)}"
 
     [assets]
     directory = ".open-next/assets"

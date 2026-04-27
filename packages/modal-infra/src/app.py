@@ -125,7 +125,3 @@ def validate_control_plane_url(url: str | None) -> bool:
     except Exception as e:
         log.warn("security.url_parse_error", exc=e)
         return False
-
-
-# Volume for persistent storage (snapshot metadata, logs)
-inspect_volume = modal.Volume.from_name("open-inspect-data", create_if_missing=True)

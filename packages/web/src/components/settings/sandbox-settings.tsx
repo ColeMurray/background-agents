@@ -2,6 +2,7 @@
 
 import { useRepos } from "@/hooks/use-repos";
 import { useState, useCallback } from "react";
+import { Button } from "@/components/ui/button";
 import { ChevronDownIcon, CheckIcon, PlusIcon } from "@/components/ui/icons";
 import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
@@ -178,15 +179,17 @@ function SandboxSettingsEditor({
       <div>
         <div className="flex items-center justify-between max-w-sm mb-1.5">
           <label className="block text-sm font-medium text-foreground">Tunnel Ports</label>
-          <button
+          <Button
             type="button"
+            variant="subtle"
+            size="xs"
             onClick={handleAddRow}
             disabled={rows.length >= MAX_TUNNEL_PORTS}
-            className="flex items-center gap-1 text-xs text-accent hover:text-accent/80 disabled:opacity-50 disabled:cursor-not-allowed transition"
+            className="text-accent hover:text-accent/80"
           >
             <PlusIcon className="w-3 h-3" />
             Add port
-          </button>
+          </Button>
         </div>
         <p className="text-xs text-muted-foreground mb-2">
           Expose additional ports from sandboxes via public tunnel URLs (e.g., dev server ports).
@@ -205,13 +208,14 @@ function SandboxSettingsEditor({
                   placeholder="e.g. 3000"
                   className="flex-1"
                 />
-                <button
+                <Button
                   type="button"
+                  variant="destructive"
+                  size="xs"
                   onClick={() => handleRemoveRow(index)}
-                  className="text-xs px-2 py-1 border border-border-muted text-muted-foreground hover:text-red-500 hover:border-red-300 transition"
                 >
                   Remove
-                </button>
+                </Button>
               </div>
             ))
           )}
@@ -221,13 +225,9 @@ function SandboxSettingsEditor({
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       <div className="flex items-center gap-2">
-        <button
-          onClick={handleSave}
-          disabled={saving || !hasChanges}
-          className="px-3 py-1.5 text-sm bg-accent text-accent-foreground hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition"
-        >
+        <Button onClick={handleSave} disabled={saving || !hasChanges} size="sm">
           {saving ? "Saving..." : "Save Settings"}
-        </button>
+        </Button>
         {success && <span className="text-sm text-success">Saved</span>}
       </div>
     </div>

@@ -50,7 +50,8 @@ export class UserScmTokenStore {
     providerUserId: string,
     accessToken: string,
     refreshToken: string,
-    expiresAt: number
+    expiresAt: number,
+    userId?: string | null
   ): Promise<void> {
     const now = Date.now();
     const [accessTokenEncrypted, refreshTokenEncrypted] = await Promise.all([
@@ -61,16 +62,25 @@ export class UserScmTokenStore {
     await this.db
       .prepare(
         `INSERT INTO user_scm_tokens
-         (provider_user_id, access_token_encrypted, refresh_token_encrypted, token_expires_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
+         (provider_user_id, access_token_encrypted, refresh_token_encrypted, token_expires_at, user_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(provider_user_id) DO UPDATE SET
            access_token_encrypted = excluded.access_token_encrypted,
            refresh_token_encrypted = excluded.refresh_token_encrypted,
            token_expires_at = excluded.token_expires_at,
+           user_id = COALESCE(user_scm_tokens.user_id, excluded.user_id),
            updated_at = excluded.updated_at
          WHERE excluded.token_expires_at > user_scm_tokens.token_expires_at`
       )
-      .bind(providerUserId, accessTokenEncrypted, refreshTokenEncrypted, expiresAt, now, now)
+      .bind(
+        providerUserId,
+        accessTokenEncrypted,
+        refreshTokenEncrypted,
+        expiresAt,
+        userId ?? null,
+        now,
+        now
+      )
       .run();
   }
 

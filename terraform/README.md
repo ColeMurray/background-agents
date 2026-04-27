@@ -305,8 +305,6 @@ module "modal" {
   deploy_path   = "${path.root}/../../../packages/modal-infra"
   deploy_module = "deploy"
 
-  volume_name = "my-volume"
-
   secrets = [
     {
       name = "my-secret"

@@ -4,7 +4,7 @@ import {
   type AnalyticsBreakdownBy,
   type AnalyticsDays,
 } from "@open-inspect/shared";
-import { AnalyticsStore } from "../db/analytics-store";
+import { type AnalyticsFilters, AnalyticsStore, HUMAN_SPAWN_SOURCES } from "../db/analytics-store";
 import type { Env } from "../types";
 import { type RequestContext, type Route, error, json, parsePattern } from "./shared";
 
@@ -22,10 +22,10 @@ function parseBreakdownBy(value: string | null): AnalyticsBreakdownBy | null {
     : null;
 }
 
-function getRange(days: AnalyticsDays): { startAt: number; endAt: number } {
+function getFilters(days: AnalyticsDays): AnalyticsFilters {
   const endAt = Date.now();
   const startAt = endAt - days * 24 * 60 * 60 * 1000;
-  return { startAt, endAt };
+  return { startAt, endAt, spawnSources: HUMAN_SPAWN_SOURCES };
 }
 
 async function handleSummary(
@@ -41,7 +41,7 @@ async function handleSummary(
   }
 
   const store = new AnalyticsStore(env.DB);
-  return json(await store.getSummary(getRange(days)));
+  return json(await store.getSummary(getFilters(days)));
 }
 
 async function handleTimeseries(
@@ -57,7 +57,7 @@ async function handleTimeseries(
   }
 
   const store = new AnalyticsStore(env.DB);
-  return json(await store.getTimeseries(getRange(days)));
+  return json(await store.getTimeseries(getFilters(days)));
 }
 
 async function handleBreakdown(
@@ -79,7 +79,7 @@ async function handleBreakdown(
   }
 
   const store = new AnalyticsStore(env.DB);
-  return json(await store.getBreakdown(getRange(days), by));
+  return json(await store.getBreakdown(getFilters(days), by));
 }
 
 export const analyticsRoutes: Route[] = [

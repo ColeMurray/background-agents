@@ -3,6 +3,7 @@
 # Required environment variables:
 #   MODAL_TOKEN_ID - Modal API token ID
 #   MODAL_TOKEN_SECRET - Modal API token secret
+#   DEPLOY_PATH - Path to the Modal app source (for uv project resolution)
 #   SECRETS_JSON - JSON array of secrets with format:
 #     [{"name": "secret-name", "values": {"KEY1": "value1", "KEY2": "value2"}}]
 
@@ -48,7 +49,7 @@ echo "${SECRETS_JSON}" | jq -c '.[]' | while IFS= read -r secret; do
 
     # Create or update the secret using array expansion
     # The --force flag will update if it exists
-    if modal secret create "${secret_name}" "${args[@]}" --force; then
+    if uv run --directory "${DEPLOY_PATH}" modal secret create "${secret_name}" "${args[@]}" --force; then
         echo "Secret ${secret_name} created/updated successfully"
     else
         echo "Warning: Failed to create secret ${secret_name}"

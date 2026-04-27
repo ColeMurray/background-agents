@@ -56,10 +56,8 @@ brew install terraform
 # Node.js (22+)
 brew install node@22
 
-# Python 3.12+, uv, and Modal CLI
+# Python 3.12+ and uv (Modal CLI is installed via uv sync below)
 brew install python@3.12 uv
-pipx install modal
-modal setup
 
 # Wrangler CLI (for initial R2 bucket setup)
 npm install -g wrangler
@@ -80,6 +78,9 @@ npm install
 
 # Build the shared package (required before Terraform deployment)
 npm run build -w @open-inspect/shared
+
+# Install Python dependencies for Modal deployment (includes sandbox-runtime)
+cd packages/modal-infra && uv sync --frozen && cd -
 ```
 
 ---
@@ -396,13 +397,18 @@ project_root    = "../../../"
 enable_durable_object_bindings = false
 enable_service_bindings        = false
 
-# Access Control (at least one recommended for security)
+# Access Control (set at least one allowlist for production)
 allowed_users         = "your-github-username"  # Comma-separated GitHub usernames, or empty
 allowed_email_domains = ""                      # Comma-separated domains (e.g., "example.com,corp.io")
+
+# Explicitly opt into open access only if you want any authenticated GitHub user
+# to be able to sign in when both allowlists are empty.
+unsafe_allow_all_users = false
 ```
 
 > **Note**: Review `allowed_users` and `allowed_email_domains` carefully - these control who can
-> sign in. If both are empty, any GitHub user can access your deployment.
+> sign in. Terraform now fails if both are empty unless you explicitly set
+> `unsafe_allow_all_users = true`.
 
 ---
 
@@ -743,12 +749,25 @@ URL to match your web app URL:
 ### Modal deployment fails
 
 ```bash
-# Check Modal CLI is working
-modal token show
+# Check Modal CLI is working (from packages/modal-infra)
+cd packages/modal-infra
+uv run modal token show
 
 # View Modal logs
-modal app logs open-inspect
+uv run modal app logs open-inspect
 ```
+
+### Modal deployment fails with "No module named 'sandbox_runtime'"
+
+The `sandbox_runtime` package is a sibling package that must be installed before deploying. From the
+repository root:
+
+```bash
+cd packages/modal-infra && uv sync --frozen && cd -
+```
+
+This installs all Modal deployment dependencies including `sandbox_runtime` (resolved via
+`[tool.uv.sources]` in `pyproject.toml`).
 
 ### Worker deployment fails / "no such file or directory" for dist/index.js
 

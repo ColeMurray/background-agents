@@ -194,10 +194,14 @@ enable_service_bindings = false
 # Access Control
 # =============================================================================
 # Comma-separated list of GitHub usernames allowed to sign in
-# Leave empty to allow all GitHub users
+# Set at least one access-control allowlist unless you intentionally opt into
+# open access with unsafe_allow_all_users = true.
 allowed_users = ""
 
 # Comma-separated list of email domains allowed to sign in
-# Leave empty to allow all email domains
 # Example: "example.com,corp.io"
 allowed_email_domains = ""
+
+# Explicitly bypass the Terraform access-control safety check and allow any
+# authenticated GitHub user to sign in when both allowlists are empty.
+unsafe_allow_all_users = false

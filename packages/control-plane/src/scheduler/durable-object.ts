@@ -19,6 +19,7 @@ import {
 } from "@open-inspect/shared";
 import { AutomationStore, toAutomationRun, type AutomationRow } from "../db/automation-store";
 import { SessionIndexStore } from "../db/session-index";
+import { UserStore } from "../db/user-store";
 import { generateId } from "../auth/crypto";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
@@ -566,6 +567,26 @@ export class SchedulerDO extends DurableObject<Env> {
       throw new Error(`Session init failed with status ${initResponse.status}`);
     }
 
+    // Resolve the canonical user_id for the session index.
+    // New automations (post-Phase 5) have user_id populated at creation time, so this
+    // lookup is skipped. Legacy automations have user_id = NULL but store the GitHub
+    // numeric user ID in created_by (set from NextAuth session.user.id in the web UI,
+    // which is the only automation creation path). We look up that GitHub ID in
+    // user_identities to find the canonical user. This fallback becomes dead code once
+    // the Phase 6 backfill populates user_id on all existing automation rows.
+    let userId = automation.user_id;
+    if (!userId && automation.created_by && automation.created_by !== "anonymous") {
+      try {
+        const userStore = new UserStore(this.env.DB);
+        const identity = await userStore.getIdentity("github", automation.created_by);
+        if (identity) {
+          userId = identity.userId;
+        }
+      } catch {
+        // Best-effort — proceed without user_id
+      }
+    }
+
     // Index the session in D1
     const now = Date.now();
     const sessionStore = new SessionIndexStore(this.env.DB);
@@ -582,6 +603,7 @@ export class SchedulerDO extends DurableObject<Env> {
       spawnDepth: 0,
       automationId: automation.id,
       automationRunId: runId,
+      userId,
       createdAt: now,
       updatedAt: now,
     });

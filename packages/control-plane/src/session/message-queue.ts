@@ -232,10 +232,12 @@ export class SessionMessageQueue {
         message_id: processingMessage.id,
       });
 
+      const stopError = "Execution was stopped";
       const syntheticExecutionComplete: Extract<SandboxEvent, { type: "execution_complete" }> = {
         type: "execution_complete",
         messageId: processingMessage.id,
         success: false,
+        error: stopError,
         sandboxId: "",
         timestamp: now / 1000,
       };
@@ -251,7 +253,7 @@ export class SessionMessageQueue {
       });
 
       this.deps.ctx.waitUntil(
-        this.deps.callbackService.notifyComplete(processingMessage.id, false)
+        this.deps.callbackService.notifyComplete(processingMessage.id, false, stopError)
       );
 
       if (!options.suppressStatusReconcile) {
@@ -281,17 +283,21 @@ export class SessionMessageQueue {
 
     this.deps.repository.updateMessageCompletion(processingMessage.id, "failed", now);
 
+    const stuckError = "Execution timed out (stuck processing)";
     const syntheticEvent: Extract<SandboxEvent, { type: "execution_complete" }> = {
       type: "execution_complete",
       messageId: processingMessage.id,
       success: false,
+      error: stuckError,
       sandboxId: "",
       timestamp: now / 1000,
     };
     this.deps.repository.upsertExecutionCompleteEvent(processingMessage.id, syntheticEvent, now);
     this.deps.broadcast({ type: "sandbox_event", event: syntheticEvent });
     this.deps.broadcast({ type: "processing_status", isProcessing: false });
-    this.deps.ctx.waitUntil(this.deps.callbackService.notifyComplete(processingMessage.id, false));
+    this.deps.ctx.waitUntil(
+      this.deps.callbackService.notifyComplete(processingMessage.id, false, stuckError)
+    );
     await this.deps.reconcileSessionStatusAfterExecution(false);
   }
 

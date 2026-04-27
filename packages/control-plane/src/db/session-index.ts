@@ -15,6 +15,7 @@ export interface SessionEntry {
   automationId?: string | null;
   automationRunId?: string | null;
   scmLogin?: string | null;
+  userId?: string | null;
   totalCost?: number;
   activeDurationMs?: number;
   messageCount?: number;
@@ -38,6 +39,7 @@ interface SessionRow {
   automation_id: string | null;
   automation_run_id: string | null;
   scm_login: string | null;
+  user_id: string | null;
   total_cost: number;
   active_duration_ms: number;
   message_count: number;
@@ -77,6 +79,7 @@ function toEntry(row: SessionRow): SessionEntry {
     automationId: row.automation_id,
     automationRunId: row.automation_run_id,
     scmLogin: row.scm_login,
+    userId: row.user_id,
     totalCost: row.total_cost,
     activeDurationMs: row.active_duration_ms,
     messageCount: row.message_count,
@@ -92,8 +95,8 @@ export class SessionIndexStore {
   async create(session: SessionEntry): Promise<void> {
     await this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         session.id,
@@ -110,6 +113,7 @@ export class SessionIndexStore {
         session.automationId ?? null,
         session.automationRunId ?? null,
         session.scmLogin ?? null,
+        session.userId ?? null,
         session.createdAt,
         session.updatedAt
       )

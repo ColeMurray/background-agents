@@ -61,7 +61,7 @@ export function AutomationsList({
 
   if (automations.length === 0) {
     return (
-      <div className="border border-border-muted rounded-md bg-background p-8 text-center">
+      <div className="border border-border-muted rounded-md bg-card p-8 text-center">
         <p className="text-muted-foreground">No automations yet.</p>
         <p className="text-sm text-muted-foreground mt-1">
           Create one to run tasks on a schedule or in response to events.
@@ -71,7 +71,7 @@ export function AutomationsList({
   }
 
   return (
-    <div className="border border-border-muted rounded-md bg-background divide-y divide-border-muted">
+    <div className="border border-border-muted rounded-md bg-card divide-y divide-border-muted">
       {automations.map((automation) => (
         <div key={automation.id} className="px-4 py-4">
           {/* Header: Name + badge | Actions */}

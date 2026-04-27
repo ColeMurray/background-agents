@@ -6,6 +6,8 @@ import { mutate } from "swr";
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { useSidebarContext } from "@/components/sidebar-layout";
+import { Button } from "@/components/ui/button";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
@@ -354,14 +356,15 @@ function HomeContent({
       {!isOpen && (
         <header className="border-b border-border-muted flex-shrink-0">
           <div className="px-4 py-3">
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={toggle}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
               title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
               aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
             >
               <SidebarIcon className="w-4 h-4" />
-            </button>
+            </Button>
           </div>
         </header>
       )}
@@ -383,11 +386,7 @@ function HomeContent({
           {/* Input box - only show when authenticated */}
           {isAuthenticated && (
             <form onSubmit={handleSubmit}>
-              {error && (
-                <div className="mb-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 px-4 py-3 border border-red-200 dark:border-red-800 text-sm">
-                  {error}
-                </div>
-              )}
+              {error && <ErrorBanner className="mb-4">{error}</ErrorBanner>}
 
               <div className="border border-border bg-input">
                 {/* Text input area */}

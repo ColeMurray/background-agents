@@ -139,6 +139,7 @@ describe("SessionSidebar", () => {
 
   it("navigates directly on mobile tap without opening rename actions", async () => {
     mockUseIsMobile.mockReturnValue(true);
+    const onSessionSelect = vi.fn();
 
     render(
       <SWRConfig
@@ -148,7 +149,7 @@ describe("SessionSidebar", () => {
           revalidateOnFocus: false,
         }}
       >
-        <SessionSidebar onSessionSelect={vi.fn()} />
+        <SessionSidebar onSessionSelect={onSessionSelect} />
       </SWRConfig>
     );
 
@@ -156,6 +157,31 @@ describe("SessionSidebar", () => {
     fireEvent.click(link);
 
     expect(screen.queryByText("Rename")).not.toBeInTheDocument();
+    expect(onSessionSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the sidebar on mobile when using non-session navigation links", () => {
+    mockUseIsMobile.mockReturnValue(true);
+    const onSessionSelect = vi.fn();
+
+    render(
+      <SWRConfig
+        value={{
+          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false } },
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar onSessionSelect={onSessionSelect} />
+      </SWRConfig>
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: /^inspect$/i }));
+    fireEvent.click(screen.getByTitle("Settings"));
+    fireEvent.click(screen.getByRole("link", { name: /automations/i }));
+    fireEvent.click(screen.getByRole("link", { name: /analytics/i }));
+
+    expect(onSessionSelect).toHaveBeenCalledTimes(4);
   });
 
   it("opens rename actions on mobile long press", async () => {

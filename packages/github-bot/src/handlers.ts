@@ -31,6 +31,9 @@ async function createSession(
     title: string;
     model: string;
     reasoningEffort?: string | null;
+    scmLogin: string;
+    scmUserId: string;
+    scmAvatarUrl: string;
   }
 ): Promise<string> {
   const body: Record<string, unknown> = {
@@ -38,6 +41,10 @@ async function createSession(
     repoName: params.repoName,
     title: params.title,
     model: params.model,
+    scmLogin: params.scmLogin,
+    scmUserId: params.scmUserId,
+    scmAvatarUrl: params.scmAvatarUrl,
+    spawnSource: "github-bot",
   };
   if (params.reasoningEffort) {
     body.reasoningEffort = params.reasoningEffort;
@@ -204,6 +211,9 @@ export async function handleReviewRequested(
     title: `GitHub: Review PR #${pr.number}`,
     model: config.model,
     reasoningEffort: config.reasoningEffort,
+    scmLogin: sender.login,
+    scmUserId: String(sender.id),
+    scmAvatarUrl: sender.avatar_url,
   });
   log.info("session.created", { ...meta, session_id: sessionId, action: "review" });
 
@@ -300,6 +310,9 @@ export async function handlePullRequestOpened(
     title: `GitHub: Review PR #${pr.number}`,
     model: config.model,
     reasoningEffort: config.reasoningEffort,
+    scmLogin: sender.login,
+    scmUserId: String(sender.id),
+    scmAvatarUrl: sender.avatar_url,
   });
   log.info("session.created", { ...meta, session_id: sessionId, action: "auto_review" });
 
@@ -402,6 +415,9 @@ export async function handleIssueComment(
     title: `GitHub: PR #${issue.number} comment`,
     model: config.model,
     reasoningEffort: config.reasoningEffort,
+    scmLogin: sender.login,
+    scmUserId: String(sender.id),
+    scmAvatarUrl: sender.avatar_url,
   });
   log.info("session.created", { ...meta, session_id: sessionId, action: "comment" });
 
@@ -497,6 +513,9 @@ export async function handleReviewComment(
     title: `GitHub: PR #${pr.number} review comment`,
     model: config.model,
     reasoningEffort: config.reasoningEffort,
+    scmLogin: sender.login,
+    scmUserId: String(sender.id),
+    scmAvatarUrl: sender.avatar_url,
   });
   log.info("session.created", { ...meta, session_id: sessionId, action: "review_comment" });
 

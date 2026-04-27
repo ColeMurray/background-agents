@@ -2,7 +2,13 @@
  * API router for Open-Inspect Control Plane.
  */
 
-import type { ArtifactResponse, Env, CreateSessionRequest, CreateSessionResponse } from "./types";
+import type {
+  ArtifactResponse,
+  Env,
+  CreateSessionRequest,
+  CreateSessionResponse,
+  SpawnSource,
+} from "./types";
 import { generateId, encryptToken } from "./auth/crypto";
 import { verifyInternalToken } from "./auth/internal";
 import {
@@ -24,6 +30,7 @@ import {
 import { IntegrationSettingsStore } from "./db/integration-settings";
 import { SessionIndexStore } from "./db/session-index";
 import { UserScmTokenStore, DEFAULT_TOKEN_LIFETIME_MS } from "./db/user-scm-tokens";
+import { UserStore, type ProviderIdentity } from "./db/user-store";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./session/contracts";
 
 import {
@@ -55,6 +62,7 @@ import { reposRoutes } from "./routes/repos";
 import { repoImageRoutes } from "./routes/repo-images";
 import { secretsRoutes } from "./routes/secrets";
 import { automationRoutes } from "./routes/automations";
+import { mcpServerRoutes } from "./routes/mcp-servers";
 import { analyticsRoutes } from "./routes/analytics";
 import { webhookRoutes } from "./webhooks";
 
@@ -535,6 +543,9 @@ const routes: Route[] = [
   // Automations
   ...automationRoutes,
 
+  // MCP servers
+  ...mcpServerRoutes,
+
   // Analytics
   ...analyticsRoutes,
 
@@ -695,6 +706,70 @@ async function handleListSessions(
   });
 }
 
+/**
+ * Derives a ProviderIdentity from spawnSource and the request body.
+ * For GitHub-based callers (web + github-bot), reuses existing scm* fields.
+ * For Slack/Linear bots, uses the actor* fields.
+ *
+ * Returns null when the caller hasn't supplied the required provider-specific
+ * ID (scmUserId for GitHub, actorUserId for Slack/Linear). This is expected
+ * during the phased rollout: Phase 2 wires this plumbing, Phase 4 updates
+ * each bot to send identity fields. Until then, bot sessions get user_id = NULL.
+ */
+function resolveProviderIdentity(
+  spawnSource: SpawnSource,
+  body: {
+    scmUserId?: string;
+    scmLogin?: string;
+    scmName?: string;
+    scmEmail?: string;
+    scmAvatarUrl?: string;
+    actorUserId?: string;
+    actorDisplayName?: string;
+    actorEmail?: string;
+    actorAvatarUrl?: string;
+  }
+): ProviderIdentity | null {
+  switch (spawnSource) {
+    case "user":
+    case "github-bot":
+      return body.scmUserId
+        ? {
+            provider: "github",
+            providerUserId: body.scmUserId,
+            providerLogin: body.scmLogin,
+            providerEmail: body.scmEmail,
+            displayName: body.scmName || body.scmLogin,
+            avatarUrl: body.scmAvatarUrl,
+          }
+        : null;
+
+    case "slack-bot":
+      return body.actorUserId
+        ? {
+            provider: "slack",
+            providerUserId: body.actorUserId,
+            providerEmail: body.actorEmail,
+            displayName: body.actorDisplayName,
+            avatarUrl: body.actorAvatarUrl,
+          }
+        : null;
+
+    case "linear-bot":
+      return body.actorUserId
+        ? {
+            provider: "linear",
+            providerUserId: body.actorUserId,
+            providerEmail: body.actorEmail,
+            displayName: body.actorDisplayName,
+          }
+        : null;
+
+    default:
+      return null;
+  }
+}
+
 async function handleCreateSession(
   request: Request,
   env: Env,
@@ -710,6 +785,11 @@ async function handleCreateSession(
     scmLogin?: string;
     scmName?: string;
     scmEmail?: string;
+    spawnSource?: SpawnSource;
+    actorUserId?: string;
+    actorDisplayName?: string;
+    actorEmail?: string;
+    actorAvatarUrl?: string;
   };
 
   if (!body.repoOwner || !body.repoName) {
@@ -731,6 +811,24 @@ async function handleCreateSession(
   const { repoId, defaultBranch } = resolved;
 
   const userId = body.userId || "anonymous";
+
+  // Resolve canonical user model ID (for D1 session index).
+  // Best-effort: if resolution fails, the session is created without a user_id.
+  let resolvedUserId: string | null = null;
+  const providerIdentity = resolveProviderIdentity(body.spawnSource ?? "user", body);
+  if (providerIdentity) {
+    try {
+      const userStore = new UserStore(env.DB);
+      const resolvedUser = await userStore.resolveOrCreateUser(providerIdentity);
+      resolvedUserId = resolvedUser.id;
+    } catch (e) {
+      logger.warn("Failed to resolve user identity, session will have no user_id", {
+        error: e instanceof Error ? e : String(e),
+        provider: providerIdentity.provider,
+      });
+    }
+  }
+
   const scmLogin = body.scmLogin;
   const scmName = body.scmName;
   const scmEmail = body.scmEmail;
@@ -783,6 +881,26 @@ async function handleCreateSession(
     resolveSandboxSettings(env.DB, repoOwner, repoName),
   ]);
 
+  // Store session in D1 before initializing the SessionDO. SessionDO init starts
+  // sandbox warming, so D1 failures must fail before any sandbox can be spawned.
+  const now = Date.now();
+  const sessionStore = new SessionIndexStore(env.DB);
+  await sessionStore.create({
+    id: sessionId,
+    title: body.title || null,
+    repoOwner,
+    repoName,
+    model,
+    reasoningEffort,
+    baseBranch: body.branch || defaultBranch || "main",
+    status: "created",
+    spawnSource: body.spawnSource,
+    scmLogin: scmLogin || null,
+    userId: resolvedUserId,
+    createdAt: now,
+    updatedAt: now,
+  });
+
   // Initialize session with user info and optional encrypted token
   const initResponse = await stub.fetch(
     internalRequest(
@@ -810,6 +928,7 @@ async function handleCreateSession(
           scmUserId,
           codeServerEnabled,
           sandboxSettings,
+          spawnSource: body.spawnSource,
         }),
       },
       ctx
@@ -828,7 +947,8 @@ async function handleCreateSession(
           scmUserId,
           scmToken,
           scmRefreshToken,
-          scmTokenExpiresAt ?? Date.now() + DEFAULT_TOKEN_LIFETIME_MS
+          scmTokenExpiresAt ?? Date.now() + DEFAULT_TOKEN_LIFETIME_MS,
+          resolvedUserId
         )
         .catch((e) =>
           logger.error("Failed to write tokens to D1", {
@@ -837,23 +957,6 @@ async function handleCreateSession(
         )
     );
   }
-
-  // Store session in D1 index for listing
-  const now = Date.now();
-  const sessionStore = new SessionIndexStore(env.DB);
-  await sessionStore.create({
-    id: sessionId,
-    title: body.title || null,
-    repoOwner,
-    repoName,
-    model,
-    reasoningEffort,
-    baseBranch: body.branch || defaultBranch || "main",
-    status: "created",
-    scmLogin: scmLogin || null,
-    createdAt: now,
-    updatedAt: now,
-  });
 
   const result: CreateSessionResponse = {
     sessionId,
@@ -1740,6 +1843,10 @@ async function handleSpawnChild(
     return error(`Maximum total children (${MAX_TOTAL_CHILDREN}) reached`, 429);
   }
 
+  // Read parent's canonical user_id from D1 for inheritance
+  const parentSession = await sessionStore.get(parentId);
+  const parentUserId = parentSession?.userId ?? null;
+
   // Get parent context from parent DO
   const parentDoId = env.SESSION.idFromName(parentId);
   const parentStub = env.SESSION.get(parentDoId);
@@ -1849,6 +1956,7 @@ async function handleSpawnChild(
     spawnSource: "agent",
     spawnDepth: childDepth,
     scmLogin: spawnContext.owner.scmLogin || null,
+    userId: parentUserId,
     createdAt: now,
     updatedAt: now,
   });

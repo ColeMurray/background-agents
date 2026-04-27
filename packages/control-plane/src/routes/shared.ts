@@ -5,6 +5,7 @@
 import type { CorrelationContext } from "../logger";
 import type { RequestMetrics } from "../db/instrumented-d1";
 import type { Env } from "../types";
+import { createKvCacheStore } from "../cache/cache-store";
 import { getGitHubAppConfig } from "../auth/github-app";
 import type { Logger } from "../logger";
 import {
@@ -74,7 +75,7 @@ export function createRouteSourceControlProvider(env: Env): SourceControlProvide
     provider,
     github: {
       appConfig: appConfig ?? undefined,
-      kvCache: env.REPOS_CACHE,
+      cacheStore: createKvCacheStore(env.REPOS_CACHE),
     },
     ...(env.GITLAB_ACCESS_TOKEN && {
       gitlab: {

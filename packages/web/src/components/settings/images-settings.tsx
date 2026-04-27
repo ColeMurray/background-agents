@@ -5,6 +5,8 @@ import useSWR, { mutate } from "swr";
 import { useRepos } from "@/hooks/use-repos";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { RefreshIcon } from "@/components/ui/icons";
 import { formatRelativeTime } from "@/lib/time";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
@@ -126,67 +128,65 @@ export function ImagesSettings() {
   }
 
   return (
-    <div>
-      <h2 className="text-xl font-semibold text-foreground mb-1">Pre-Built Images</h2>
-      <p className="text-sm text-muted-foreground mb-6">
-        Enable pre-built images to speed up sandbox creation. Images are rebuilt automatically when
-        the default branch changes.
-      </p>
-
-      {error && (
-        <div className="mb-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 px-4 py-3 border border-red-200 dark:border-red-800 text-sm">
-          {error}
-        </div>
-      )}
-
-      <div className="space-y-2">
-        {repos.map((repo) => {
-          const repoKey = `${repo.owner}/${repo.name}`.toLowerCase();
-          const isEnabled = enabledRepos.has(repoKey);
-          const isToggling = togglingRepos.has(repoKey);
-          const isTriggering = triggeringRepos.has(repoKey);
-          const image = getLatestImage(repo.owner, repo.name);
-
-          return (
-            <div
-              key={repo.id}
-              className="flex items-center justify-between px-4 py-3 border border-border hover:bg-muted/50 transition"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <Switch
-                  checked={isEnabled}
-                  onCheckedChange={(checked) => handleToggle(repo.owner, repo.name, checked)}
-                  disabled={isToggling}
-                  aria-label={`Toggle pre-built images for ${repo.owner}/${repo.name}`}
-                />
-                <span className="text-sm font-medium text-foreground truncate">
-                  {repo.owner}/{repo.name}
-                </span>
-              </div>
-
-              <div className="flex items-center gap-3 flex-shrink-0 ml-4">
-                <ImageStatus image={image} isEnabled={isEnabled} />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => handleTrigger(repo.owner, repo.name)}
-                  disabled={!isEnabled || isTriggering || image?.status === "building"}
-                  title="Rebuild image"
-                >
-                  <RefreshIcon className={`w-4 h-4 ${isTriggering ? "animate-spin" : ""}`} />
-                </Button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {repos.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          No repositories found. Install the GitHub App on repositories to get started.
+    <TooltipProvider>
+      <div>
+        <h2 className="text-xl font-semibold text-foreground mb-1">Pre-Built Images</h2>
+        <p className="text-sm text-muted-foreground mb-6">
+          Enable pre-built images to speed up sandbox creation. Images are rebuilt automatically
+          when the default branch changes.
         </p>
-      )}
-    </div>
+
+        {error && <ErrorBanner className="mb-4">{error}</ErrorBanner>}
+
+        <div className="space-y-2">
+          {repos.map((repo) => {
+            const repoKey = `${repo.owner}/${repo.name}`.toLowerCase();
+            const isEnabled = enabledRepos.has(repoKey);
+            const isToggling = togglingRepos.has(repoKey);
+            const isTriggering = triggeringRepos.has(repoKey);
+            const image = getLatestImage(repo.owner, repo.name);
+
+            return (
+              <div
+                key={repo.id}
+                className="flex items-center justify-between px-4 py-3 border border-border hover:bg-muted/50 transition"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <Switch
+                    checked={isEnabled}
+                    onCheckedChange={(checked) => handleToggle(repo.owner, repo.name, checked)}
+                    disabled={isToggling}
+                    aria-label={`Toggle pre-built images for ${repo.owner}/${repo.name}`}
+                  />
+                  <span className="text-sm font-medium text-foreground truncate">
+                    {repo.owner}/{repo.name}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-3 flex-shrink-0 ml-4">
+                  <ImageStatus image={image} isEnabled={isEnabled} />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => handleTrigger(repo.owner, repo.name)}
+                    disabled={!isEnabled || isTriggering || image?.status === "building"}
+                    title="Rebuild image"
+                  >
+                    <RefreshIcon className={`w-4 h-4 ${isTriggering ? "animate-spin" : ""}`} />
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {repos.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            No repositories found. Install the GitHub App on repositories to get started.
+          </p>
+        )}
+      </div>
+    </TooltipProvider>
   );
 }
 
@@ -209,7 +209,7 @@ function ImageStatus({ image, isEnabled }: { image: RepoImage | undefined; isEna
     return (
       <div className="text-right">
         <div className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
+          <span className="w-2 h-2 rounded-full bg-success flex-shrink-0" />
           <span className="text-xs text-foreground">
             Ready {formatRelativeTime(image.created_at)}
           </span>
@@ -222,7 +222,7 @@ function ImageStatus({ image, isEnabled }: { image: RepoImage | undefined; isEna
   if (image.status === "building") {
     return (
       <div className="flex items-center gap-1.5">
-        <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse flex-shrink-0" />
+        <span className="w-2 h-2 rounded-full bg-warning animate-pulse flex-shrink-0" />
         <span className="text-xs text-foreground">
           Building... {formatRelativeTime(image.created_at)}
         </span>
@@ -234,13 +234,20 @@ function ImageStatus({ image, isEnabled }: { image: RepoImage | undefined; isEna
     return (
       <div className="text-right">
         <div className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />
+          <span className="w-2 h-2 rounded-full bg-destructive flex-shrink-0" />
           <span className="text-xs text-foreground">Failed</span>
         </div>
         {image.error_message && (
-          <span className="text-xs text-muted-foreground truncate max-w-[200px] block">
-            {image.error_message}
-          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="text-xs text-muted-foreground truncate max-w-[200px] block cursor-help">
+                {image.error_message}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-md overflow-visible whitespace-pre-wrap break-words">
+              {image.error_message}
+            </TooltipContent>
+          </Tooltip>
         )}
       </div>
     );

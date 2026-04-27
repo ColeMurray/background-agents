@@ -44,6 +44,7 @@
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
     "react-resizable-panels": "^4.9.0",
+    "recharts": "^3.8.1",
     "rehype-highlight": "^7.0.2",
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.1",
@@ -53,7 +54,7 @@
     "tailwindcss-animate": "^1.0.7"
   },
   "devDependencies": {
-    "@opennextjs/cloudflare": "^1.17.1",
+    "@opennextjs/cloudflare": "1.19.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",

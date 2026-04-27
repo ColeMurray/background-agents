@@ -8,9 +8,13 @@ const mockStore = {
   getBreakdown: vi.fn(),
 };
 
-vi.mock("./db/analytics-store", () => ({
-  AnalyticsStore: vi.fn().mockImplementation(() => mockStore),
-}));
+vi.mock("./db/analytics-store", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    AnalyticsStore: vi.fn().mockImplementation(() => mockStore),
+  };
+});
 
 describe("analytics router integration", () => {
   beforeEach(() => {

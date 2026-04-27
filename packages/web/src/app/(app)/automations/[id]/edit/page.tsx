@@ -9,6 +9,7 @@ import {
   AutomationForm,
   type AutomationFormValues,
 } from "@/components/automations/automation-form";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { SidebarIcon, BackIcon } from "@/components/ui/icons";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 
@@ -47,7 +48,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
   if (loading) {
     return (
       <div className="h-full flex items-center justify-center">
-        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-muted-foreground" />
+        <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
       </div>
     );
   }
@@ -89,15 +90,12 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
 
       <div className="flex-1 overflow-y-auto p-8">
         <div className="max-w-2xl mx-auto">
-          <h1 className="text-2xl font-semibold text-foreground mb-6">Edit Automation</h1>
+          <h1 className="text-3xl font-semibold text-foreground mb-6">Edit Automation</h1>
 
           {error && (
-            <div
-              role="alert"
-              className="mb-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 px-4 py-3 border border-red-200 dark:border-red-800 text-sm"
-            >
+            <ErrorBanner className="mb-4" role="alert">
               {error}
-            </div>
+            </ErrorBanner>
           )}
 
           <AutomationForm

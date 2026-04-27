@@ -1,7 +1,7 @@
 """Type definitions for sandbox operations."""
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, TypedDict
 
 from pydantic import BaseModel
 
@@ -106,6 +106,20 @@ class GitUser(BaseModel):
     email: str
 
 
+class McpServerConfig(TypedDict, total=False):
+    """MCP server config entry. Mirrors the TypeScript McpServerConfig type."""
+
+    id: str
+    name: str
+    type: str  # "local" | "remote"
+    command: list[str]
+    url: str
+    env: dict[str, str]
+    headers: dict[str, str]
+    repoScopes: list[str] | None
+    enabled: bool
+
+
 class SessionConfig(BaseModel):
     """Configuration passed to sandbox for a session."""
 
@@ -117,3 +131,4 @@ class SessionConfig(BaseModel):
     opencode_session_id: str | None = None
     provider: str = "anthropic"
     model: str = "claude-sonnet-4-6"
+    mcp_servers: list[McpServerConfig] | None = None

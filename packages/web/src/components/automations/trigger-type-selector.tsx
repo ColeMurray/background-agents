@@ -69,7 +69,7 @@ export function TriggerTypeSelector({ value, onChange, disabled }: TriggerTypeSe
             <div className="font-medium text-foreground">{option.label}</div>
             <div className="text-xs text-muted-foreground mt-0.5">{option.description}</div>
             {option.comingSoon && (
-              <span className="absolute top-1.5 right-1.5 text-[10px] font-medium text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+              <span className="absolute top-1.5 right-1.5 text-xs font-medium text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
                 Soon
               </span>
             )}

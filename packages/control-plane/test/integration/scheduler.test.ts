@@ -31,6 +31,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     next_run_at: now + 86400000,
     consecutive_failures: 0,
     created_by: "user-1",
+    user_id: null,
     created_at: now,
     updated_at: now,
     deleted_at: null,

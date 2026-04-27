@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type ClipboardEvent } from "
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 import { normalizeKey, parseMaybeEnvContent, type ParsedEnvEntry } from "@/lib/env-paste";
@@ -337,20 +338,21 @@ export function SecretsEditor({
     : `Values are never shown after save. Secrets apply to ${repoLabel || "the selected repo"}.`;
 
   return (
-    <div className="mt-4 border border-border bg-background p-4">
+    <div className="mt-4 rounded-md border border-border bg-background p-4">
       <div className="flex items-center justify-between mb-3">
         <div>
           <h3 className="text-sm font-semibold text-foreground">Secrets</h3>
           <p className="text-xs text-muted-foreground">{descriptionText}</p>
         </div>
-        <button
+        <Button
           type="button"
+          variant="outline"
+          size="xs"
           onClick={handleAddRow}
           disabled={!ready || disabled}
-          className="text-xs px-2 py-1 border border-border-muted text-muted-foreground hover:text-foreground hover:border-border transition disabled:opacity-50"
         >
           Add secret
-        </button>
+        </Button>
       </div>
 
       {!ready && (
@@ -409,17 +411,18 @@ export function SecretsEditor({
                     onPaste={handlePasteIntoRow}
                     className="flex-1 min-w-[200px] h-auto px-2 py-1 text-xs"
                   />
-                  <button
+                  <Button
                     type="button"
+                    variant="destructive"
+                    size="xs"
                     onClick={() => handleDeleteRow(row)}
                     disabled={disabled || deletingKey === normalizeKey(row.key)}
-                    className="text-xs px-2 py-1 border border-border-muted text-muted-foreground hover:text-red-500 hover:border-red-300 transition disabled:opacity-50"
                   >
                     {deletingKey === normalizeKey(row.key) ? "Deleting..." : "Delete"}
-                  </button>
+                  </Button>
                 </div>
                 {row.existing && (
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-xs text-muted-foreground">
                     To update, enter a new value and save.
                   </p>
                 )}
@@ -441,9 +444,7 @@ export function SecretsEditor({
                         overridden ? "opacity-40" : "opacity-70"
                       }`}
                     >
-                      <Badge variant="info" className="text-[10px]">
-                        Global
-                      </Badge>
+                      <Badge variant="info">Global</Badge>
                       <span className="text-xs text-foreground font-mono">{g.key}</span>
                       <Input
                         type="password"
@@ -453,9 +454,7 @@ export function SecretsEditor({
                         className="flex-1 min-w-[200px] h-auto px-2 py-1 text-xs"
                       />
                       {overridden && (
-                        <span className="text-[10px] text-muted-foreground">
-                          (overridden by repo)
-                        </span>
+                        <span className="text-xs text-muted-foreground">(overridden by repo)</span>
                       )}
                     </div>
                   );
@@ -464,18 +463,19 @@ export function SecretsEditor({
             </div>
           )}
 
-          {error && <p className="mt-3 text-xs text-red-500">{error}</p>}
+          {error && <p className="mt-3 text-xs text-destructive">{error}</p>}
 
           <div className="mt-3 flex items-center gap-2">
-            <button
+            <Button
               type="button"
+              variant="outline"
+              size="xs"
               onClick={handleSave}
               disabled={disabled || saving || !ready}
-              className="text-xs px-3 py-1 border border-border-muted text-foreground hover:border-foreground transition disabled:opacity-50"
             >
               {saving ? "Saving..." : "Save secrets"}
-            </button>
-            <span className="text-[11px] text-muted-foreground">
+            </Button>
+            <span className="text-xs text-muted-foreground">
               Keys are automatically uppercased. Paste a `.env` block into either field to import.
             </span>
           </div>

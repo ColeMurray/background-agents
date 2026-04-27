@@ -32,6 +32,13 @@ vi.mock("../db/automation-store", () => ({
   toAutomationRun: vi.fn((row: unknown) => row),
 }));
 
+const mockUserStore = {
+  resolveOrCreateUser: vi.fn().mockResolvedValue({ id: "resolved-user-1", isNew: false }),
+};
+vi.mock("../db/user-store", () => ({
+  UserStore: vi.fn().mockImplementation(() => mockUserStore),
+}));
+
 vi.mock("../auth/crypto", () => ({
   generateId: vi.fn(() => "generated-id"),
 }));
@@ -189,6 +196,38 @@ describe("automation route handlers", () => {
       const res = await callRoute("POST", "/automations", { body: validBody });
       expect(res.status).toBe(201);
       expect(mockStore.create).toHaveBeenCalledTimes(1);
+    });
+
+    it("resolves user_id when scmUserId is provided", async () => {
+      mockStore.create.mockResolvedValue(undefined);
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("POST", "/automations", {
+        body: { ...validBody, scmUserId: "12345", scmLogin: "alice" },
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockUserStore.resolveOrCreateUser).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "github",
+          providerUserId: "12345",
+          providerLogin: "alice",
+        })
+      );
+      expect(mockStore.create).toHaveBeenCalledWith(
+        expect.objectContaining({ user_id: "resolved-user-1" })
+      );
+    });
+
+    it("creates automation with null user_id when scmUserId is missing", async () => {
+      mockStore.create.mockResolvedValue(undefined);
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("POST", "/automations", { body: validBody });
+
+      expect(res.status).toBe(201);
+      expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
+      expect(mockStore.create).toHaveBeenCalledWith(expect.objectContaining({ user_id: null }));
     });
 
     it("stores reasoning effort when valid for the selected model", async () => {

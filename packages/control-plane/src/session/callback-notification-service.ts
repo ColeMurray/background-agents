@@ -125,6 +125,7 @@ export class CallbackNotificationService {
       sessionId,
       messageId,
       success,
+      ...(error != null ? { error } : {}),
       timestamp,
       context,
     };

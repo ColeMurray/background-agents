@@ -82,10 +82,7 @@ export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
           ),
           // Code blocks with styling
           pre: ({ children, ...props }: ComponentPropsWithoutRef<"pre">) => (
-            <pre
-              className="not-prose overflow-x-auto text-[0.8125rem] leading-relaxed rounded"
-              {...props}
-            >
+            <pre className="not-prose overflow-x-auto text-sm leading-relaxed rounded" {...props}>
               {children}
             </pre>
           ),

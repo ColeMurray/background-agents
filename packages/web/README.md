@@ -81,18 +81,20 @@ GITHUB_CLIENT_SECRET=your_github_app_client_secret
 NEXTAUTH_URL=http://localhost:3000
 NEXTAUTH_SECRET=your_random_secret  # Generate: openssl rand -base64 32
 
-# Access Control (optional - leave empty to allow all authenticated users)
+# Access Control
 ALLOWED_USERS=username1,username2          # Comma-separated GitHub usernames
 ALLOWED_EMAIL_DOMAINS=example.com,corp.io  # Comma-separated email domains
+UNSAFE_ALLOW_ALL_USERS=false               # Set true to explicitly allow all users when both lists are empty
 
 # Control Plane
 CONTROL_PLANE_URL=http://localhost:8787
 NEXT_PUBLIC_WS_URL=ws://localhost:8787
 ```
 
-> **Access Control**: If both `ALLOWED_USERS` and `ALLOWED_EMAIL_DOMAINS` are empty, any
-> authenticated GitHub user can access the application. If either is set, users must match at least
-> one condition (username in allowed list OR email domain in allowed list).
+> **Access Control**: If both `ALLOWED_USERS` and `ALLOWED_EMAIL_DOMAINS` are empty, sign-in is
+> denied unless `UNSAFE_ALLOW_ALL_USERS=true`. For Terraform-managed production deploys, Terraform
+> also fails validation unless you set at least one allowlist or explicitly opt in with
+> `unsafe_allow_all_users = true`.
 
 ### Development
 

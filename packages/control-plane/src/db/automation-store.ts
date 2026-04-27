@@ -26,6 +26,7 @@ export interface AutomationRow {
   next_run_at: number | null;
   consecutive_failures: number;
   created_by: string;
+  user_id: string | null;
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
@@ -114,9 +115,9 @@ export class AutomationStore {
         `INSERT INTO automations
          (id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
           trigger_type, schedule_cron, schedule_tz, model, reasoning_effort, enabled, next_run_at,
-          consecutive_failures, created_by, created_at, updated_at, deleted_at,
+          consecutive_failures, created_by, user_id, created_at, updated_at, deleted_at,
           event_type, trigger_config, trigger_auth_data)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
@@ -135,6 +136,7 @@ export class AutomationStore {
         row.next_run_at,
         row.consecutive_failures,
         row.created_by,
+        row.user_id,
         row.created_at,
         row.updated_at,
         row.deleted_at,

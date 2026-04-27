@@ -36,7 +36,15 @@ export async function POST(request: NextRequest) {
 
     const response = await controlPlaneFetch("/automations", {
       method: "POST",
-      body: JSON.stringify({ ...body, userId }),
+      body: JSON.stringify({
+        ...body,
+        userId,
+        scmUserId: user.id,
+        scmLogin: user.login,
+        scmName: user.name,
+        scmEmail: user.email,
+        scmAvatarUrl: user.image,
+      }),
     });
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });

@@ -33,8 +33,8 @@ TTYD_VERSION = "1.7.7"
 TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 
 # Cache buster - change this to force Modal image rebuild
-# v45: add ttyd web terminal
-CACHE_BUSTER = "v45-ttyd"
+# v47: refresh sandbox image to pull latest OpenCode release
+CACHE_BUSTER = "v47-opencode-refresh"
 
 # Base image with all development tools
 base_image = (
@@ -112,6 +112,18 @@ base_image = (
         # Install @opencode-ai/plugin globally for custom tools
         # This ensures tools can import the plugin without needing to run bun add
         "npm install -g @opencode-ai/plugin@latest zod",
+    )
+    # Pre-build OpenCode plugin deps into a staging directory.
+    # At boot, _install_tools() copies these into .opencode/ so that
+    # OpenCode's Npm.install() finds package-lock.json in sync and skips
+    # the slow arborist reify() call (2-22s) that would otherwise block
+    # the first prompt and exceed the bridge's HTTP timeout.
+    .run_commands(
+        "mkdir -p /app/opencode-deps",
+        'echo \'{"name":"opencode-tools","type":"module",'
+        '"dependencies":{"@opencode-ai/plugin":"*"}}\''
+        " > /app/opencode-deps/package.json",
+        "cd /app/opencode-deps && npm install --ignore-scripts --no-audit --no-fund",
     )
     # Install code-server for browser-based VS Code editing (direct .deb from GitHub releases)
     .run_commands(

@@ -9,6 +9,7 @@ import {
 } from "@/components/automations/automation-form";
 import { WebhookConfig } from "@/components/automations/webhook-config";
 import { Button } from "@/components/ui/button";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { SidebarIcon, BackIcon } from "@/components/ui/icons";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import Link from "next/link";
@@ -82,7 +83,7 @@ export default function NewAutomationPage() {
 
         <div className="flex-1 overflow-y-auto p-8">
           <div className="max-w-2xl mx-auto">
-            <h1 className="text-2xl font-semibold text-foreground mb-2">Automation Created</h1>
+            <h1 className="text-3xl font-semibold text-foreground mb-2">Automation Created</h1>
             {webhookResult.sentryWebhookUrl ? (
               <>
                 <p className="text-sm text-muted-foreground mb-6">
@@ -144,15 +145,12 @@ export default function NewAutomationPage() {
 
       <div className="flex-1 overflow-y-auto p-8">
         <div className="max-w-2xl mx-auto">
-          <h1 className="text-2xl font-semibold text-foreground mb-6">Create Automation</h1>
+          <h1 className="text-3xl font-semibold text-foreground mb-6">Create Automation</h1>
 
           {error && (
-            <div
-              role="alert"
-              className="mb-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 px-4 py-3 border border-red-200 dark:border-red-800 text-sm"
-            >
+            <ErrorBanner className="mb-4" role="alert">
               {error}
-            </div>
+            </ErrorBanner>
           )}
 
           <AutomationForm mode="create" onSubmit={handleSubmit} submitting={submitting} />

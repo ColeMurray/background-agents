@@ -22,6 +22,7 @@ import {
   addReaction,
   getChannelInfo,
   getThreadMessages,
+  getUserInfo,
   publishView,
   openView,
 } from "./utils/slack-client";
@@ -83,7 +84,10 @@ async function createSession(
   model: string,
   reasoningEffort: string | undefined,
   branch: string | undefined,
-  traceId?: string
+  traceId?: string,
+  slackUserId?: string,
+  actorDisplayName?: string,
+  actorEmail?: string
 ): Promise<{ sessionId: string; status: string } | null> {
   const startTime = Date.now();
   const base = {
@@ -93,6 +97,7 @@ async function createSession(
     model,
     reasoning_effort: reasoningEffort,
     branch,
+    slack_user_id: slackUserId,
   };
   try {
     const headers = await getAuthHeaders(env, traceId);
@@ -106,6 +111,10 @@ async function createSession(
         model,
         reasoningEffort,
         branch,
+        spawnSource: "slack-bot",
+        actorUserId: slackUserId,
+        actorDisplayName,
+        actorEmail,
       }),
     });
 
@@ -884,6 +893,21 @@ async function startSessionAndSendPrompt(
   const repoBranch = await getUserRepoBranchPreference(env, userId, repo.id);
   const branch = repoBranch ?? globalBranch;
 
+  // Best-effort user info resolution for identity linking
+  let displayName: string | undefined;
+  let email: string | undefined;
+  try {
+    const userInfo = await getUserInfo(env.SLACK_BOT_TOKEN, userId);
+    displayName =
+      userInfo.user?.profile?.display_name ||
+      userInfo.user?.real_name ||
+      userInfo.user?.name ||
+      undefined;
+    email = userInfo.user?.profile?.email || undefined;
+  } catch {
+    // Proceed with no display name / email — control plane handles missing fields
+  }
+
   // Create session via control plane with user's preferred model, reasoning effort, and branch
   const session = await createSession(
     env,
@@ -892,7 +916,10 @@ async function startSessionAndSendPrompt(
     model,
     reasoningEffort,
     branch,
-    traceId
+    traceId,
+    userId,
+    displayName,
+    email
   );
 
   if (!session) {
