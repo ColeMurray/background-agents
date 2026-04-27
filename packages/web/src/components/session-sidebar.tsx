@@ -5,6 +5,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { useState, useMemo, useCallback, useEffect, useRef, type TouchEvent } from "react";
 import { useSession, signOut } from "next-auth/react";
 import useSWR, { mutate } from "swr";
+import { ArchiveSessionDialog } from "@/components/archive-session-dialog";
+import { removeSessionFromSidebarCache, requestArchiveSession } from "@/lib/archive-session";
 import { formatRelativeTime, isInactiveSession } from "@/lib/time";
 import {
   buildSessionsPageKey,
@@ -35,16 +37,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import type { Session } from "@open-inspect/shared";
 
 export type SessionItem = Session;
@@ -231,21 +223,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const handleSessionArchived = useCallback(
     async (sessionId: string) => {
       setExtraSessions((prev) => prev.filter((session) => session.id !== sessionId));
-
-      await mutate<SessionListResponse>(
-        SIDEBAR_SESSIONS_KEY,
-        (currentData?: SessionListResponse) => {
-          if (!currentData) return currentData;
-          return {
-            ...currentData,
-            sessions: currentData.sessions.filter((session) => session.id !== sessionId),
-          };
-        },
-        {
-          revalidate: false,
-          populateCache: true,
-        }
-      );
+      await removeSessionFromSidebarCache(sessionId);
 
       if (currentSessionId === sessionId) {
         router.push("/");
@@ -545,14 +523,10 @@ function SessionListItem({
     setIsArchiving(true);
 
     try {
-      const response = await fetch(`/api/sessions/${session.id}/archive`, { method: "POST" });
-      if (!response.ok) {
-        throw new Error(`Failed to archive session: ${response.status}`);
+      const didArchive = await requestArchiveSession(session.id);
+      if (didArchive) {
+        await onArchive(session.id);
       }
-
-      await onArchive(session.id);
-    } catch (error) {
-      console.error("Failed to archive session:", error);
     } finally {
       setIsArchiving(false);
     }
@@ -766,21 +740,11 @@ function SessionListItem({
         </div>
       </div>
 
-      <AlertDialog open={showArchiveDialog} onOpenChange={setShowArchiveDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Archive session</AlertDialogTitle>
-            <AlertDialogDescription>
-              Archive this session? You can restore archived sessions from Settings &gt; Data
-              Controls.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleConfirmArchive}>Archive</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ArchiveSessionDialog
+        open={showArchiveDialog}
+        onOpenChange={setShowArchiveDialog}
+        onConfirm={handleConfirmArchive}
+      />
     </>
   );
 }
