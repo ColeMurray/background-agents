@@ -1504,14 +1504,15 @@ export class SessionDO extends DurableObject<Env> {
     );
   }
 
-  private syncSessionIndexTitle(sessionId: string, title: string): void {
+  private syncSessionIndexTitle(sessionId: string, title: string, updatedAt: number): void {
     if (!this.env.DB) return;
     const sessionStore = new SessionIndexStore(this.env.DB);
     this.ctx.waitUntil(
-      sessionStore.updateTitle(sessionId, title).catch((error) => {
+      sessionStore.updateTitleIfNewer(sessionId, title, updatedAt).catch((error) => {
         this.log.error("session_index.update_title.background_error", {
           session_id: sessionId,
           title,
+          updated_at: updatedAt,
           error,
         });
       })
@@ -1559,7 +1560,7 @@ export class SessionDO extends DurableObject<Env> {
     if (!didUpdate) return false;
 
     const publicSessionId = this.getPublicSessionId(session);
-    this.syncSessionIndexTitle(publicSessionId, trimmed);
+    this.syncSessionIndexTitle(publicSessionId, trimmed, updatedAt);
     this.broadcast({ type: "session_title", title: trimmed });
 
     if (session.parent_session_id) {

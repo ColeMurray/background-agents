@@ -211,6 +211,8 @@ export interface SqlStorage {
 export interface SqlResult {
   toArray(): unknown[];
   one(): unknown;
+  readonly rowsRead?: number;
+  readonly rowsWritten?: number;
 }
 
 /**
@@ -284,7 +286,7 @@ export class SessionRepository {
   }
 
   updateSessionTitleIfUnset(sessionId: string, title: string, updatedAt: number): boolean {
-    this.sql.exec(
+    const result = this.sql.exec(
       `UPDATE session SET title = ?, updated_at = ?
        WHERE id = ? AND (title IS NULL OR TRIM(title) = '')`,
       title,
@@ -292,7 +294,7 @@ export class SessionRepository {
       sessionId
     );
 
-    return this.getSession()?.title === title;
+    return (result.rowsWritten ?? 0) > 0;
   }
 
   updateSessionStatus(sessionId: string, status: SessionStatus, updatedAt: number): void {

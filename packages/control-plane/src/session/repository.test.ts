@@ -13,6 +13,7 @@ import { SessionRepository, type SqlStorage, type SqlResult } from "./repository
 function createMockSql() {
   const calls: Array<{ query: string; params: unknown[] }> = [];
   const mockData: Map<string, unknown[]> = new Map();
+  const rowsWrittenByQuery: Map<string, number> = new Map();
   let oneValue: unknown = null;
 
   const sql: SqlStorage = {
@@ -22,6 +23,7 @@ function createMockSql() {
       return {
         toArray: () => data,
         one: () => oneValue,
+        rowsWritten: rowsWrittenByQuery.get(query) ?? 0,
       };
     },
   };
@@ -32,12 +34,16 @@ function createMockSql() {
     setData(query: string, data: unknown[]) {
       mockData.set(query, data);
     },
+    setRowsWritten(query: string, rowsWritten: number) {
+      rowsWrittenByQuery.set(query, rowsWritten);
+    },
     setOne(value: unknown) {
       oneValue = value;
     },
     reset() {
       calls.length = 0;
       mockData.clear();
+      rowsWrittenByQuery.clear();
       oneValue = null;
     },
   };
@@ -154,7 +160,12 @@ describe("SessionRepository", () => {
 
   describe("updateSessionTitleIfUnset", () => {
     it("updates the title only when the current title is unset", () => {
-      mock.setData(`SELECT * FROM session LIMIT 1`, [{ id: "sess-1", title: "Generated title" }]);
+      mock.setData(`SELECT * FROM session LIMIT 1`, [{ id: "sess-1", title: null }]);
+      mock.setRowsWritten(
+        `UPDATE session SET title = ?, updated_at = ?
+       WHERE id = ? AND (title IS NULL OR TRIM(title) = '')`,
+        1
+      );
 
       expect(repo.updateSessionTitleIfUnset("sess-1", "Generated title", 4000)).toBe(true);
       expect(mock.calls[0].query).toContain("WHERE id = ? AND (title IS NULL OR TRIM(title) = '')");
@@ -163,6 +174,11 @@ describe("SessionRepository", () => {
 
     it("returns false when a title already exists", () => {
       mock.setData(`SELECT * FROM session LIMIT 1`, [{ id: "sess-1", title: "Manual title" }]);
+      mock.setRowsWritten(
+        `UPDATE session SET title = ?, updated_at = ?
+       WHERE id = ? AND (title IS NULL OR TRIM(title) = '')`,
+        0
+      );
 
       expect(repo.updateSessionTitleIfUnset("sess-1", "Generated title", 4000)).toBe(false);
     });
