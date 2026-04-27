@@ -35,8 +35,7 @@ const QUERY_PATTERNS = {
   UPDATE_STALE:
     /^UPDATE repo_images SET status = 'failed', error_message = \? WHERE status = 'building' AND created_at < \?$/,
   DELETE_OLD_FAILED: /^DELETE FROM repo_images WHERE status = 'failed' AND created_at < \?$/,
-  DELETE_STORED_FOR_REPO:
-    /^DELETE FROM repo_images WHERE repo_owner = \? AND repo_name = \? AND status != 'building'$/,
+  DELETE_STORED_FOR_REPO_BY_IDS: /^DELETE FROM repo_images WHERE id IN \((\?, )*\?\)$/,
 } as const;
 
 function normalizeQuery(query: string): string {
@@ -242,11 +241,11 @@ class FakeD1Database {
       return { meta: { changes } };
     }
 
-    if (QUERY_PATTERNS.DELETE_STORED_FOR_REPO.test(normalized)) {
-      const [owner, name] = args as [string, string];
+    if (QUERY_PATTERNS.DELETE_STORED_FOR_REPO_BY_IDS.test(normalized)) {
       let changes = 0;
-      for (const [id, row] of this.rows.entries()) {
-        if (row.repo_owner === owner && row.repo_name === name && row.status !== "building") {
+      const ids = new Set(args as string[]);
+      for (const id of this.rows.keys()) {
+        if (ids.has(id)) {
           this.rows.delete(id);
           changes++;
         }
@@ -649,7 +648,7 @@ describe("RepoImageStore", () => {
       expect(stored).toEqual([{ id: "img-ready", provider_image_id: "modal-img-ready" }]);
     });
 
-    it("deletes ready and failed rows while keeping building rows", async () => {
+    it("deletes only the requested stored rows while keeping building rows", async () => {
       await store.registerBuild({
         id: "img-building",
         repoOwner: "acme",
@@ -673,7 +672,7 @@ describe("RepoImageStore", () => {
       });
       await store.markFailed("img-failed", "failed");
 
-      const deleted = await store.deleteStoredImagesForRepo("acme", "repo");
+      const deleted = await store.deleteStoredImagesForRepo(["img-ready", "img-failed"]);
 
       expect(deleted).toBe(2);
 
@@ -691,9 +690,39 @@ describe("RepoImageStore", () => {
         baseBranch: "main",
       });
 
-      const deleted = await store.deleteStoredImagesForRepo("acme", "repo");
+      const deleted = await store.deleteStoredImagesForRepo([]);
 
       expect(deleted).toBe(0);
+    });
+
+    it("does not delete rows that become stored after the fetch snapshot", async () => {
+      await store.registerBuild({
+        id: "img-ready",
+        repoOwner: "acme",
+        repoName: "repo",
+        baseBranch: "main",
+      });
+      await store.markReady("img-ready", "modal-img-ready", "sha-ready", 30);
+
+      const stored = await store.getStoredImagesForRepo("acme", "repo");
+      expect(stored).toEqual([{ id: "img-ready", provider_image_id: "modal-img-ready" }]);
+
+      await store.registerBuild({
+        id: "img-late-failed",
+        repoOwner: "acme",
+        repoName: "repo",
+        baseBranch: "main",
+      });
+      await store.markFailed("img-late-failed", "failed later");
+
+      const deleted = await store.deleteStoredImagesForRepo(stored.map((image) => image.id));
+
+      expect(deleted).toBe(1);
+
+      const status = await store.getStatus("acme", "repo");
+      expect(status).toHaveLength(1);
+      expect(status[0].id).toBe("img-late-failed");
+      expect(status[0].status).toBe("failed");
     });
   });
 

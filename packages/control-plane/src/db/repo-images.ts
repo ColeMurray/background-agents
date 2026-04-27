@@ -40,12 +40,14 @@ export class RepoImageStore {
     return storedImages.results || [];
   }
 
-  async deleteStoredImagesForRepo(repoOwner: string, repoName: string): Promise<number> {
+  async deleteStoredImagesForRepo(ids: readonly string[]): Promise<number> {
+    const normalizedIds = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
+    if (normalizedIds.length === 0) return 0;
+
+    const placeholders = normalizedIds.map(() => "?").join(", ");
     const result = await this.db
-      .prepare(
-        "DELETE FROM repo_images WHERE repo_owner = ? AND repo_name = ? AND status != 'building'"
-      )
-      .bind(repoOwner.toLowerCase(), repoName.toLowerCase())
+      .prepare(`DELETE FROM repo_images WHERE id IN (${placeholders})`)
+      .bind(...normalizedIds)
       .run();
 
     return result.meta?.changes ?? 0;

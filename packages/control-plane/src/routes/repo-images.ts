@@ -348,7 +348,9 @@ async function handleDeleteRepoImages(
       }
     }
 
-    const deleted = await store.deleteStoredImagesForRepo(owner, name);
+    const deleted = await store.deleteStoredImagesForRepo(
+      storedImages.map((storedImage) => storedImage.id)
+    );
 
     logger.info("repo_image.deleted", {
       repo_owner: owner,

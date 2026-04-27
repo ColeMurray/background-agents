@@ -122,6 +122,6 @@ describe("repo image route handlers", () => {
       { providerImageId: "modal-img-1" },
       expect.objectContaining({ trace_id: "trace-1", request_id: "req-1" })
     );
-    expect(mockRepoImageStore.deleteStoredImagesForRepo).toHaveBeenCalledWith("acme", "repo");
+    expect(mockRepoImageStore.deleteStoredImagesForRepo).toHaveBeenCalledWith(["img-1", "img-2"]);
   });
 });
