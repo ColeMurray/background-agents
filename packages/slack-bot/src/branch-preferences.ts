@@ -104,10 +104,11 @@ export async function saveUserRepoBranchPreference(
 ): Promise<boolean> {
   try {
     const key = getUserRepoBranchKey(userId, repoId);
+    const cacheStore = createKvCacheStore(env.SLACK_KV);
     const normalizedBranch = normalizeBranchPreference(branch);
 
     if (!normalizedBranch) {
-      await createKvCacheStore(env.SLACK_KV).delete(key);
+      await cacheStore.delete(key);
       return true;
     }
 
@@ -120,7 +121,7 @@ export async function saveUserRepoBranchPreference(
       return false;
     }
 
-    await createKvCacheStore(env.SLACK_KV).put(key, normalizedBranch);
+    await cacheStore.put(key, normalizedBranch);
     return true;
   } catch (e) {
     log.error("kv.put", {
