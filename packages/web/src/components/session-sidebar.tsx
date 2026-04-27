@@ -6,7 +6,7 @@ import { useState, useMemo, useCallback, useEffect, useRef, type TouchEvent } fr
 import { useSession, signOut } from "next-auth/react";
 import useSWR, { mutate } from "swr";
 import { ArchiveSessionDialog } from "@/components/archive-session-dialog";
-import { removeSessionFromSidebarCache, requestArchiveSession } from "@/lib/archive-session";
+import { archiveSession } from "@/lib/archive-session";
 import { formatRelativeTime, isInactiveSession } from "@/lib/time";
 import {
   buildSessionsPageKey,
@@ -223,7 +223,6 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const handleSessionArchived = useCallback(
     async (sessionId: string) => {
       setExtraSessions((prev) => prev.filter((session) => session.id !== sessionId));
-      await removeSessionFromSidebarCache(sessionId);
 
       if (currentSessionId === sessionId) {
         router.push("/");
@@ -523,7 +522,7 @@ function SessionListItem({
     setIsArchiving(true);
 
     try {
-      const didArchive = await requestArchiveSession(session.id);
+      const didArchive = await archiveSession(session.id);
       if (didArchive) {
         await onArchive(session.id);
       }

@@ -5,17 +5,7 @@ import {
   type SessionListResponse,
 } from "@/lib/session-list";
 
-export async function requestArchiveSession(sessionId: string) {
-  const response = await fetch(`/api/sessions/${sessionId}/archive`, { method: "POST" });
-  if (!response.ok) {
-    console.error("Failed to archive session");
-    return false;
-  }
-
-  return true;
-}
-
-export async function removeSessionFromSidebarCache(sessionId: string) {
+async function removeSessionFromSidebarCache(sessionId: string) {
   await mutate<SessionListResponse>(
     SIDEBAR_SESSIONS_KEY,
     (currentData?: SessionListResponse) =>
@@ -30,4 +20,15 @@ export async function removeSessionFromSidebarCache(sessionId: string) {
       populateCache: true,
     }
   );
+}
+
+export async function archiveSession(sessionId: string) {
+  const response = await fetch(`/api/sessions/${sessionId}/archive`, { method: "POST" });
+  if (!response.ok) {
+    console.error("Failed to archive session");
+    return false;
+  }
+
+  await removeSessionFromSidebarCache(sessionId);
+  return true;
 }

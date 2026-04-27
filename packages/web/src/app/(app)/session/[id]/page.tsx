@@ -28,7 +28,7 @@ import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "reac
 import { TerminalPanel } from "@/components/terminal-panel";
 import { ActionBar } from "@/components/action-bar";
 import { copyToClipboard, formatModelNameLower } from "@/lib/format";
-import { removeSessionFromSidebarCache, requestArchiveSession } from "@/lib/archive-session";
+import { archiveSession } from "@/lib/archive-session";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
@@ -227,9 +227,8 @@ function SessionPageContent() {
   );
 
   const handleArchive = useCallback(async () => {
-    const didArchive = await requestArchiveSession(sessionId);
+    const didArchive = await archiveSession(sessionId);
     if (didArchive) {
-      await removeSessionFromSidebarCache(sessionId);
       router.push("/");
     }
   }, [router, sessionId]);
