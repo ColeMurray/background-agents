@@ -6,6 +6,7 @@ import type { ConditionRegistry } from "./conditions";
 import type { TriggerSourceDefinition } from "./types";
 import { sentrySource, sentryConditions } from "./sentry";
 import { webhookSource, webhookConditions } from "./webhook";
+import { githubSource } from "./github";
 
 // GitHub and Linear condition handlers (stubs for Phase 2c).
 // These need to exist so that the ConditionRegistry is complete.
@@ -105,4 +106,8 @@ export const conditionRegistry: ConditionRegistry = {
  * All registered trigger sources. The UI reads this for the trigger type selector.
  * Only Sentry and Webhook are active in Phase 2a/2b.
  */
-export const triggerSources: TriggerSourceDefinition[] = [sentrySource, webhookSource];
+export const triggerSources: TriggerSourceDefinition[] = [
+  sentrySource,
+  webhookSource,
+  githubSource,
+];

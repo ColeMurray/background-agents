@@ -353,8 +353,8 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         </>
       )}
 
-      {/* Event type selector (for Sentry) */}
-      {triggerType === "sentry" && eventTypes.length > 0 && (
+      {/* Event type selector (for Sentry and GitHub) */}
+      {(triggerType === "sentry" || triggerType === "github_event") && eventTypes.length > 0 && (
         <div>
           <label className="block text-sm font-medium text-foreground mb-1.5">Event Type</label>
           <Select value={eventType} onValueChange={setEventType}>
@@ -419,7 +419,9 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
               ? "Run the test suite and fix any failing tests. If all tests pass, look for TODO comments and address the most impactful one."
               : triggerType === "sentry"
                 ? "Investigate this Sentry error. Find the root cause in the codebase, then open a PR with a fix."
-                : "Process this webhook payload and take the appropriate action."
+                : triggerType === "github_event"
+                  ? "Review this pull request and provide feedback. Check for code quality issues, potential bugs, and suggest improvements."
+                  : "Process this webhook payload and take the appropriate action."
           }
           maxLength={10000}
           required
