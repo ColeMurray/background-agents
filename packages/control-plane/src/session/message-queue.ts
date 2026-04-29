@@ -341,7 +341,13 @@ export class SessionMessageQueue {
     }
 
     // COALESCE update: populate identity fields on non-owner participants
-    if (data.authorEmail || data.authorLogin || data.scmAccessTokenEncrypted) {
+    const hasEnrichment =
+      data.authorDisplayName ||
+      data.authorEmail ||
+      data.authorLogin ||
+      data.scmUserId ||
+      data.scmAccessTokenEncrypted;
+    if (hasEnrichment) {
       this.deps.repository.updateParticipantCoalesce(participant.id, {
         scmName: data.authorDisplayName ?? null,
         scmEmail: data.authorEmail ?? null,

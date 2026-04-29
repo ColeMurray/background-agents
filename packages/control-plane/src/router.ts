@@ -793,8 +793,6 @@ export function deriveUserId(body: {
   scmUserId?: string;
   actorUserId?: string;
 }): string {
-  if (body.userId) return body.userId;
-
   switch (body.spawnSource) {
     case "github-bot":
       return body.scmUserId ? `github:${body.scmUserId}` : "anonymous";
@@ -803,7 +801,7 @@ export function deriveUserId(body: {
     case "linear-bot":
       return body.actorUserId ? `linear:${body.actorUserId}` : "anonymous";
     default:
-      return "anonymous";
+      return body.userId || "anonymous";
   }
 }
 

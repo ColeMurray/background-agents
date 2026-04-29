@@ -41,9 +41,13 @@ describe("parseAuthorId", () => {
 });
 
 describe("deriveUserId", () => {
-  it("returns explicit userId when provided", () => {
+  it("returns explicit userId for non-bot spawnSource", () => {
+    expect(deriveUserId({ userId: "user-abc", spawnSource: "user" })).toBe("user-abc");
+  });
+
+  it("ignores explicit userId for bot spawnSource and derives from identity fields", () => {
     expect(deriveUserId({ userId: "user-abc", spawnSource: "github-bot", scmUserId: "1001" })).toBe(
-      "user-abc"
+      "github:1001"
     );
   });
 
