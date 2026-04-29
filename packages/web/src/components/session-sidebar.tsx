@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useState, useMemo, useCallback, useEffect, useRef, type TouchEvent } from "react";
 import { useSession, signOut } from "next-auth/react";
 import useSWR, { mutate } from "swr";
+import { ArchiveSessionDialog } from "@/components/archive-session-dialog";
+import { archiveSession } from "@/lib/archive-session";
 import { formatRelativeTime, isInactiveSession } from "@/lib/time";
 import {
   buildSessionsPageKey,
@@ -18,6 +20,7 @@ import {
   MoreIcon,
   SidebarIcon,
   InspectIcon,
+  ArchiveIcon,
   PlusIcon,
   SettingsIcon,
   AutomationsIcon,
@@ -63,6 +66,7 @@ interface SessionSidebarProps {
 export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: SessionSidebarProps) {
   const { data: authSession } = useSession();
   const pathname = usePathname();
+  const router = useRouter();
   const [searchQuery, setSearchQuery] = useState("");
   const [extraSessions, setExtraSessions] = useState<SessionItem[]>([]);
   const [hasMorePages, setHasMorePages] = useState(false);
@@ -216,6 +220,17 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
 
   const currentSessionId = pathname?.startsWith("/session/") ? pathname.split("/")[2] : null;
 
+  const handleSessionArchived = useCallback(
+    async (sessionId: string) => {
+      setExtraSessions((prev) => prev.filter((session) => session.id !== sessionId));
+
+      if (currentSessionId === sessionId) {
+        router.push("/");
+      }
+    },
+    [currentSessionId, router]
+  );
+
   const handleNavigationSelect = useCallback(() => {
     if (isMobile) {
       onSessionSelect?.();
@@ -327,6 +342,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
                 childSessions={childrenMap.get(session.id)}
                 currentSessionId={currentSessionId}
                 isMobile={isMobile}
+                onArchive={handleSessionArchived}
                 onSessionSelect={onSessionSelect}
               />
             ))}
@@ -346,6 +362,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
                     childSessions={childrenMap.get(session.id)}
                     currentSessionId={currentSessionId}
                     isMobile={isMobile}
+                    onArchive={handleSessionArchived}
                     onSessionSelect={onSessionSelect}
                   />
                 ))}
@@ -417,12 +434,14 @@ function SessionWithChildren({
   childSessions,
   currentSessionId,
   isMobile,
+  onArchive,
   onSessionSelect,
 }: {
   session: SessionItem;
   childSessions?: SessionItem[];
   currentSessionId: string | null;
   isMobile: boolean;
+  onArchive: (sessionId: string) => Promise<void>;
   onSessionSelect?: () => void;
 }) {
   return (
@@ -431,6 +450,7 @@ function SessionWithChildren({
         session={session}
         isActive={session.id === currentSessionId}
         isMobile={isMobile}
+        onArchive={onArchive}
         onSessionSelect={onSessionSelect}
       />
       {childSessions &&
@@ -451,11 +471,13 @@ function SessionListItem({
   session,
   isActive,
   isMobile,
+  onArchive,
   onSessionSelect,
 }: {
   session: SessionItem;
   isActive: boolean;
   isMobile: boolean;
+  onArchive: (sessionId: string) => Promise<void>;
   onSessionSelect?: () => void;
 }) {
   const timestamp = session.updatedAt || session.createdAt;
@@ -466,6 +488,8 @@ function SessionListItem({
   const isOrphanChild = session.parentSessionId && session.spawnSource === "agent";
   const [isRenaming, setIsRenaming] = useState(false);
   const [isActionsOpen, setIsActionsOpen] = useState(false);
+  const [isArchiving, setIsArchiving] = useState(false);
+  const [showArchiveDialog, setShowArchiveDialog] = useState(false);
   const [title, setTitle] = useState(displayTitle);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressTriggeredRef = useRef(false);
@@ -486,6 +510,25 @@ function SessionListItem({
   const handleCancelRename = () => {
     setTitle(displayTitle);
     setIsRenaming(false);
+  };
+
+  const handleStartArchive = () => {
+    setIsActionsOpen(false);
+    setShowArchiveDialog(true);
+  };
+
+  const handleConfirmArchive = async () => {
+    setShowArchiveDialog(false);
+    setIsArchiving(true);
+
+    try {
+      const didArchive = await archiveSession(session.id);
+      if (didArchive) {
+        await onArchive(session.id);
+      }
+    } finally {
+      setIsArchiving(false);
+    }
   };
 
   const handleRenameSubmit = async () => {
@@ -590,106 +633,118 @@ function SessionListItem({
   }, [clearLongPressTimer]);
 
   return (
-    <div
-      className={`group relative block px-4 py-2.5 border-l-2 transition ${
-        isActive ? "border-l-accent bg-accent-muted" : "border-l-transparent hover:bg-muted"
-      }`}
-    >
-      {isRenaming ? (
-        <>
-          <input
-            autoFocus
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            onFocus={(e) => e.currentTarget.select()}
-            onBlur={handleRenameSubmit}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                e.currentTarget.blur();
+    <>
+      <div
+        className={`group relative block px-4 py-2.5 border-l-2 transition ${
+          isActive ? "border-l-accent bg-accent-muted" : "border-l-transparent hover:bg-muted"
+        }`}
+      >
+        {isRenaming ? (
+          <>
+            <input
+              autoFocus
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              onFocus={(e) => e.currentTarget.select()}
+              onBlur={handleRenameSubmit}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  e.currentTarget.blur();
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  handleCancelRename();
+                }
+              }}
+              className="w-full text-sm bg-transparent text-foreground outline-none focus:ring-inset focus:ring-ring font-medium pr-8"
+            />
+            <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
+              <span>{relativeTime}</span>
+              <span>·</span>
+              <span className="truncate">{repoInfo}</span>
+            </div>
+          </>
+        ) : (
+          <Link
+            href={buildSessionHref(session)}
+            onClick={(event) => {
+              if (longPressTriggeredRef.current) {
+                event.preventDefault();
+                longPressTriggeredRef.current = false;
+                return;
               }
-              if (e.key === "Escape") {
-                e.preventDefault();
-                handleCancelRename();
+              if (isMobile) {
+                onSessionSelect?.();
               }
             }}
-            className="w-full text-sm bg-transparent text-foreground outline-none focus:ring-inset focus:ring-ring font-medium pr-8"
-          />
-          <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
-            <span>{relativeTime}</span>
-            <span>·</span>
-            <span className="truncate">{repoInfo}</span>
-          </div>
-        </>
-      ) : (
-        <Link
-          href={buildSessionHref(session)}
-          onClick={(event) => {
-            if (longPressTriggeredRef.current) {
-              event.preventDefault();
-              longPressTriggeredRef.current = false;
-              return;
-            }
-            if (isMobile) {
-              onSessionSelect?.();
-            }
-          }}
-          onContextMenu={(event) => {
-            if (isMobile) {
-              event.preventDefault();
-            }
-          }}
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
-          onTouchCancel={handleTouchEnd}
-          className="block pr-8"
-        >
-          <div className="truncate text-sm font-medium text-foreground">{displayTitle}</div>
-          <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
-            <span>{relativeTime}</span>
-            <span>·</span>
-            <span className="truncate">{repoInfo}</span>
-            {isOrphanChild && (
-              <>
-                <span>·</span>
-                <span className="text-accent">sub-task</span>
-              </>
-            )}
-            {session.baseBranch && session.baseBranch !== "main" && (
-              <>
-                <span>·</span>
-                <BranchIcon className="w-3 h-3 flex-shrink-0" />
-                <span className="truncate">{session.baseBranch}</span>
-              </>
-            )}
-          </div>
-        </Link>
-      )}
+            onContextMenu={(event) => {
+              if (isMobile) {
+                event.preventDefault();
+              }
+            }}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            onTouchCancel={handleTouchEnd}
+            className="block pr-8"
+          >
+            <div className="truncate text-sm font-medium text-foreground">{displayTitle}</div>
+            <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
+              <span>{relativeTime}</span>
+              <span>·</span>
+              <span className="truncate">{repoInfo}</span>
+              {isOrphanChild && (
+                <>
+                  <span>·</span>
+                  <span className="text-accent">sub-task</span>
+                </>
+              )}
+              {session.baseBranch && session.baseBranch !== "main" && (
+                <>
+                  <span>·</span>
+                  <BranchIcon className="w-3 h-3 flex-shrink-0" />
+                  <span className="truncate">{session.baseBranch}</span>
+                </>
+              )}
+            </div>
+          </Link>
+        )}
 
-      <div className="absolute inset-y-0 right-2 flex items-start pt-2">
-        <DropdownMenu open={isActionsOpen} onOpenChange={setIsActionsOpen}>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              aria-label="Session actions"
-              aria-hidden={isMobile ? "true" : undefined}
-              tabIndex={isMobile ? -1 : undefined}
-              className={`h-6 w-6 items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition data-[state=open]:opacity-100 ${
-                isMobile
-                  ? "pointer-events-none flex opacity-0"
-                  : "flex opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-              }`}
-            >
-              <MoreIcon className="w-4 h-4" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={handleStartRename}>Rename</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <div className="absolute inset-y-0 right-2 flex items-start pt-2">
+          <DropdownMenu open={isActionsOpen} onOpenChange={setIsActionsOpen}>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label="Session actions"
+                aria-hidden={isMobile ? "true" : undefined}
+                tabIndex={isMobile ? -1 : undefined}
+                className={`h-6 w-6 items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition data-[state=open]:opacity-100 ${
+                  isMobile
+                    ? "pointer-events-none flex opacity-0"
+                    : "flex opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                }`}
+              >
+                <MoreIcon className="w-4 h-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={handleStartRename}>Rename</DropdownMenuItem>
+              <DropdownMenuItem onClick={handleStartArchive} disabled={isArchiving}>
+                <ArchiveIcon className="w-4 h-4" />
+                Archive
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
-    </div>
+
+      <ArchiveSessionDialog
+        open={showArchiveDialog}
+        onOpenChange={setShowArchiveDialog}
+        onConfirm={handleConfirmArchive}
+      />
+    </>
   );
 }
 

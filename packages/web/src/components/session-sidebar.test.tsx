@@ -14,6 +14,10 @@ const { mockUseIsMobile } = vi.hoisted(() => ({
   mockUseIsMobile: vi.fn(() => false),
 }));
 
+const { mockPush } = vi.hoisted(() => ({
+  mockPush: vi.fn(),
+}));
+
 vi.mock("next-auth/react", () => ({
   useSession: () => ({
     data: {
@@ -28,6 +32,7 @@ vi.mock("next-auth/react", () => ({
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/",
+  useRouter: () => ({ push: mockPush }),
 }));
 
 vi.mock("next/link", () => ({
@@ -47,6 +52,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
   mockUseIsMobile.mockReturnValue(false);
+  mockPush.mockReset();
 });
 
 function createSession(index: number) {
@@ -207,5 +213,47 @@ describe("SessionSidebar", () => {
     });
 
     expect(screen.getByText("Rename")).toBeInTheDocument();
+    expect(screen.getByText("Archive")).toBeInTheDocument();
+  });
+
+  it("archives a session from the sidebar actions menu", async () => {
+    mockUseIsMobile.mockReturnValue(true);
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/sessions/session-1/archive" && init?.method === "POST") {
+        return jsonResponse({ ok: true });
+      }
+
+      throw new Error(`Unexpected fetch for ${String(input)}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false } },
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    const link = await screen.findByRole("link", { name: /session 1/i });
+    vi.useFakeTimers();
+    fireEvent.touchStart(link, { touches: [{ clientX: 20, clientY: 20 }] });
+    act(() => {
+      vi.advanceTimersByTime(MOBILE_LONG_PRESS_MS);
+    });
+    vi.useRealTimers();
+
+    fireEvent.click(screen.getByText("Archive"));
+    fireEvent.click(await screen.findByRole("button", { name: "Archive" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/sessions/session-1/archive", { method: "POST" });
+    });
   });
 });
