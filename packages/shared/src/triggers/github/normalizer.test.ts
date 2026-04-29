@@ -53,6 +53,7 @@ const issueCommentPayload = {
   repository: repo,
   sender,
   issue: {
+    id: 10010,
     number: 10,
     title: "Bug report",
   },
@@ -95,6 +96,7 @@ const issuesOpenedPayload = {
   repository: repo,
   sender,
   issue: {
+    id: 50101,
     number: 101,
     title: "New bug found",
     body: "Steps to reproduce...",
@@ -108,6 +110,7 @@ const issuesLabeledPayload = {
   repository: repo,
   sender,
   issue: {
+    id: 50101,
     number: 101,
     title: "New bug found",
     body: "Steps to reproduce...",
@@ -199,14 +202,14 @@ describe("normalizeGitHubEvent", () => {
   });
 
   describe("issue_comment.created", () => {
-    it("uses issue number in the concurrency key", () => {
+    it("uses comment id for trigger and concurrency keys", () => {
       const event = normalizeGitHubEvent("issue_comment", issueCommentPayload);
 
       expect(event).not.toBeNull();
       expect(event!.source).toBe("github");
       expect(event!.eventType).toBe("issue_comment.created");
       expect(event!.triggerKey).toBe("issue_comment:9001");
-      expect(event!.concurrencyKey).toBe("issue:10");
+      expect(event!.concurrencyKey).toBe("issue_comment:9001");
       expect(event!.actor).toBe("dev-user");
       expect(event!.repoOwner).toBe("acme-org");
       expect(event!.repoName).toBe("my-app");

@@ -205,7 +205,7 @@ function normalizeIssueComment(
   if (typeof issueNumber !== "number" || !Number.isFinite(issueNumber)) return null;
 
   const triggerKey = `issue_comment:${commentId}`;
-  const concurrencyKey = `issue:${issueNumber}`;
+  const concurrencyKey = `issue_comment:${commentId}`;
 
   return {
     source: "github",

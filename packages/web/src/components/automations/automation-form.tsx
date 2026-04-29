@@ -120,7 +120,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     () => triggerSources.find((sourceDef) => sourceDef.triggerType === triggerType),
     [triggerType]
   );
-  const eventTypes = triggerMetadata?.eventTypes ?? [];
+  const eventTypes = useMemo(() => triggerMetadata?.eventTypes ?? [], [triggerMetadata]);
   const showEventTypeSelector = Boolean(
     triggerMetadata?.supportsEventTypes && eventTypes.length > 0
   );
