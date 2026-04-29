@@ -91,6 +91,7 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
     getNextPendingMessage: vi.fn(() => null as MessageRow | null),
     updateMessageToProcessing: vi.fn(),
     getParticipantById: vi.fn(() => createParticipant()),
+    updateParticipantCoalesce: vi.fn(),
     updateMessageCompletion: vi.fn(),
     upsertExecutionCompleteEvent: vi.fn(),
   };
@@ -145,6 +146,7 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
     queue,
     repository,
     wsManager,
+    participantService,
     broadcast,
     spawnSandbox,
     setSessionStatus,
@@ -245,5 +247,74 @@ describe("SessionMessageQueue", () => {
     await h.queue.failStuckProcessingMessage();
 
     expect(h.reconcileSessionStatusAfterExecution).toHaveBeenCalledWith(false);
+  });
+
+  describe("enqueuePromptFromApi", () => {
+    it("creates participant with authorDisplayName when new", async () => {
+      const h = buildQueue();
+      h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
+
+      await h.queue.enqueuePromptFromApi({
+        content: "Fix bug",
+        authorId: "github:1001",
+        source: "github-bot",
+        authorDisplayName: "Cole Murray",
+      });
+
+      expect(h.participantService.create).toHaveBeenCalledWith("github:1001", "Cole Murray");
+    });
+
+    it("uses authorId as display name when authorDisplayName is missing", async () => {
+      const h = buildQueue();
+      h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
+
+      await h.queue.enqueuePromptFromApi({
+        content: "Fix bug",
+        authorId: "github:1001",
+        source: "github-bot",
+      });
+
+      expect(h.participantService.create).toHaveBeenCalledWith("github:1001", "github:1001");
+    });
+
+    it("runs COALESCE update when enrichment fields are provided", async () => {
+      const h = buildQueue();
+
+      await h.queue.enqueuePromptFromApi({
+        content: "Fix bug",
+        authorId: "github:1001",
+        source: "github-bot",
+        authorDisplayName: "Cole Murray",
+        authorEmail: "1001+cole@users.noreply.github.com",
+        authorLogin: "cole",
+        scmUserId: "1001",
+        scmAccessTokenEncrypted: "enc-access",
+        scmRefreshTokenEncrypted: "enc-refresh",
+        scmTokenExpiresAt: 9999999,
+      });
+
+      expect(h.repository.updateParticipantCoalesce).toHaveBeenCalledWith("part-1", {
+        scmName: "Cole Murray",
+        scmEmail: "1001+cole@users.noreply.github.com",
+        scmLogin: "cole",
+        scmUserId: "1001",
+        scmAccessTokenEncrypted: "enc-access",
+        scmRefreshTokenEncrypted: "enc-refresh",
+        scmTokenExpiresAt: 9999999,
+      });
+      expect(h.repository.getParticipantById).toHaveBeenCalledWith("part-1");
+    });
+
+    it("skips COALESCE when no enrichment fields are provided", async () => {
+      const h = buildQueue();
+
+      await h.queue.enqueuePromptFromApi({
+        content: "Fix bug",
+        authorId: "github:1001",
+        source: "github-bot",
+      });
+
+      expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
+    });
   });
 });
