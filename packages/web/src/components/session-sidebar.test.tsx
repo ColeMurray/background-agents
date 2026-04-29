@@ -256,4 +256,47 @@ describe("SessionSidebar", () => {
       expect(fetchMock).toHaveBeenCalledWith("/api/sessions/session-1/archive", { method: "POST" });
     });
   });
+
+  it("keeps the session in the sidebar when archiving fails", async () => {
+    mockUseIsMobile.mockReturnValue(true);
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/sessions/session-1/archive" && init?.method === "POST") {
+        return new Response(null, { status: 500 });
+      }
+
+      throw new Error(`Unexpected fetch for ${String(input)}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false } },
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    const link = await screen.findByRole("link", { name: /session 1/i });
+    vi.useFakeTimers();
+    fireEvent.touchStart(link, { touches: [{ clientX: 20, clientY: 20 }] });
+    act(() => {
+      vi.advanceTimersByTime(MOBILE_LONG_PRESS_MS);
+    });
+    vi.useRealTimers();
+
+    fireEvent.click(screen.getByText("Archive"));
+    fireEvent.click(await screen.findByRole("button", { name: "Archive" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/sessions/session-1/archive", { method: "POST" });
+    });
+
+    expect(screen.getByRole("link", { name: /session 1/i })).toBeInTheDocument();
+  });
 });

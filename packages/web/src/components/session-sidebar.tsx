@@ -222,6 +222,8 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
 
   const handleSessionArchived = useCallback(
     async (sessionId: string) => {
+      // First-page sessions are removed from the SWR cache by archiveSession() itself.
+      // Extra sessions (loaded via pagination) are managed in local state.
       setExtraSessions((prev) => prev.filter((session) => session.id !== sessionId));
 
       if (currentSessionId === sessionId) {

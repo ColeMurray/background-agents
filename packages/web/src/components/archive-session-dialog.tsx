@@ -14,7 +14,7 @@ import {
 interface ArchiveSessionDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onConfirm: () => void | Promise<void>;
+  onConfirm: () => void;
 }
 
 export function ArchiveSessionDialog({ open, onOpenChange, onConfirm }: ArchiveSessionDialogProps) {

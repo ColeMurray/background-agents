@@ -1,4 +1,5 @@
 import { mutate } from "swr";
+import { toast } from "sonner";
 import {
   removeSessionFromList,
   SIDEBAR_SESSIONS_KEY,
@@ -34,14 +35,14 @@ export async function archiveSession(sessionId: string): Promise<boolean> {
   try {
     const response = await fetch(`/api/sessions/${sessionId}/archive`, { method: "POST" });
     if (!response.ok) {
-      console.error("Failed to archive session");
+      toast.error("Failed to archive session");
       return false;
     }
 
     await removeSessionFromSidebarCache(sessionId);
     return true;
-  } catch (error) {
-    console.error("Failed to archive session:", { sessionId, error });
+  } catch {
+    toast.error("Failed to archive session");
     return false;
   }
 }
