@@ -54,7 +54,6 @@ Base image definition with:
 ### API (`src/`)
 
 - **web_api.py**: HTTP endpoints called by the control plane
-- **functions.py**: Modal function definitions (used internally)
 
 ### Scheduler (`src/scheduler/`)
 
@@ -194,11 +193,6 @@ pytest tests/
 mypy src/
 ```
 
-### CLI Tools
+### Health Check
 
-Development utilities available via Modal CLI:
-
-```bash
-# Check service health
-modal run src/cli.py::check_health
-```
+The health endpoint is available at `GET /api_health` (no authentication required).
