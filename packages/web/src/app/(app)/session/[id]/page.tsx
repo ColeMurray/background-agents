@@ -229,6 +229,7 @@ function SessionPageContent() {
   const handleArchive = useCallback(async () => {
     const didArchive = await archiveSession(sessionId);
     if (didArchive) {
+      mutate(SIDEBAR_SESSIONS_KEY);
       router.push("/");
     }
   }, [router, sessionId]);

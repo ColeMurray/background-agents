@@ -11,6 +11,7 @@ import { formatRelativeTime, isInactiveSession } from "@/lib/time";
 import {
   buildSessionsPageKey,
   mergeUniqueSessions,
+  removeSessionFromList,
   SIDEBAR_SESSIONS_KEY,
   type SessionListResponse,
 } from "@/lib/session-list";
@@ -222,8 +223,14 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
 
   const handleSessionArchived = useCallback(
     async (sessionId: string) => {
-      // First-page sessions are removed from the SWR cache by archiveSession() itself.
-      // Extra sessions (loaded via pagination) are managed in local state.
+      await mutate<SessionListResponse>(
+        SIDEBAR_SESSIONS_KEY,
+        (current) =>
+          current
+            ? { ...current, sessions: removeSessionFromList(current.sessions, sessionId) }
+            : current,
+        { revalidate: false, populateCache: true }
+      );
       setExtraSessions((prev) => prev.filter((session) => session.id !== sessionId));
 
       if (currentSessionId === sessionId) {

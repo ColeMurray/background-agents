@@ -1,35 +1,10 @@
-import { mutate } from "swr";
 import { toast } from "sonner";
-import {
-  removeSessionFromList,
-  SIDEBAR_SESSIONS_KEY,
-  type SessionListResponse,
-} from "@/lib/session-list";
 
 /**
- * Removes an archived session from the cached sidebar list without triggering revalidation.
- */
-async function removeSessionFromSidebarCache(sessionId: string) {
-  await mutate<SessionListResponse>(
-    SIDEBAR_SESSIONS_KEY,
-    (currentData?: SessionListResponse) =>
-      currentData
-        ? {
-            ...currentData,
-            sessions: removeSessionFromList(currentData.sessions, sessionId),
-          }
-        : currentData,
-    {
-      revalidate: false,
-      populateCache: true,
-    }
-  );
-}
-
-/**
- * Archives a session and updates the sidebar cache so archived sessions disappear immediately.
+ * Archives a session via the API.
  *
- * Returns `true` only when both the archive request and cache update succeed.
+ * Returns `true` when the request succeeds. Callers are responsible for
+ * updating any client-side caches or navigation state.
  */
 export async function archiveSession(sessionId: string): Promise<boolean> {
   try {
@@ -39,7 +14,6 @@ export async function archiveSession(sessionId: string): Promise<boolean> {
       return false;
     }
 
-    await removeSessionFromSidebarCache(sessionId);
     return true;
   } catch {
     toast.error("Failed to archive session");
