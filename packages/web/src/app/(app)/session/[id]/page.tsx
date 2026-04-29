@@ -30,7 +30,11 @@ import { ActionBar } from "@/components/action-bar";
 import { copyToClipboard, formatModelNameLower } from "@/lib/format";
 import { archiveSession } from "@/lib/archive-session";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
-import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
+import {
+  removeSessionFromList,
+  SIDEBAR_SESSIONS_KEY,
+  type SessionListResponse,
+} from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { DEFAULT_MODEL, getDefaultReasoningEffort, type ModelCategory } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
@@ -229,7 +233,14 @@ function SessionPageContent() {
   const handleArchive = useCallback(async () => {
     const didArchive = await archiveSession(sessionId);
     if (didArchive) {
-      mutate(SIDEBAR_SESSIONS_KEY);
+      await mutate<SessionListResponse>(
+        SIDEBAR_SESSIONS_KEY,
+        (current) =>
+          current
+            ? { ...current, sessions: removeSessionFromList(current.sessions, sessionId) }
+            : current,
+        { revalidate: false, populateCache: true }
+      );
       router.push("/");
     }
   }, [router, sessionId]);
