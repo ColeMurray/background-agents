@@ -51,3 +51,7 @@ export function mergeUniqueSessions(existing: Session[], incoming: Session[]) {
 
   return merged;
 }
+
+export function removeSessionFromList(sessions: Session[], sessionId: string) {
+  return sessions.filter((session) => session.id !== sessionId);
+}
