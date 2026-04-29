@@ -205,7 +205,7 @@ describe("handlePullRequestOpened", () => {
 
     const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
     expect(promptBody.source).toBe("github");
-    expect(promptBody.authorId).toBe("github:alice");
+    expect(promptBody.authorId).toBe("github:1001");
     expect(promptBody.content).toContain("Pull Request #42");
 
     expect(log.info).toHaveBeenCalledWith(
@@ -378,7 +378,7 @@ describe("handleReviewRequested", () => {
     expect(promptCall[0]).toBe("https://internal/sessions/session-123/prompt");
     const promptBody = JSON.parse(promptCall[1].body);
     expect(promptBody.source).toBe("github");
-    expect(promptBody.authorId).toBe("github:alice");
+    expect(promptBody.authorId).toBe("github:1001");
     expect(promptBody.content).toContain("Pull Request #42");
     expect(promptBody.content).toContain("acme/widgets");
     expect(promptBody.content).toContain("gh pr diff 42");
@@ -472,7 +472,7 @@ describe("handleIssueComment", () => {
     const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
     expect(promptBody.content).toContain("please fix the error handling");
     expect(promptBody.content).not.toContain("@test-bot[bot]");
-    expect(promptBody.authorId).toBe("github:bob");
+    expect(promptBody.authorId).toBe("github:1002");
   });
 
   it("returns early if not a PR", async () => {
@@ -570,7 +570,7 @@ describe("handleReviewComment", () => {
     expect(promptBody.content).toContain("src/cache.ts");
     expect(promptBody.content).toContain("const cache = new Map()");
     expect(promptBody.content).toContain("comments/200/replies");
-    expect(promptBody.authorId).toBe("github:carol");
+    expect(promptBody.authorId).toBe("github:1003");
   });
 
   it("returns early if no @mention", async () => {
