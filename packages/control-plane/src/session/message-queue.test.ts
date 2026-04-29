@@ -258,10 +258,10 @@ describe("SessionMessageQueue", () => {
         content: "Fix bug",
         authorId: "github:1001",
         source: "github-bot",
-        authorDisplayName: "Cole Murray",
+        authorDisplayName: "Octo Cat",
       });
 
-      expect(h.participantService.create).toHaveBeenCalledWith("github:1001", "Cole Murray");
+      expect(h.participantService.create).toHaveBeenCalledWith("github:1001", "Octo Cat");
     });
 
     it("uses authorId as display name when authorDisplayName is missing", async () => {
@@ -284,9 +284,9 @@ describe("SessionMessageQueue", () => {
         content: "Fix bug",
         authorId: "github:1001",
         source: "github-bot",
-        authorDisplayName: "Cole Murray",
-        authorEmail: "1001+cole@users.noreply.github.com",
-        authorLogin: "cole",
+        authorDisplayName: "Octo Cat",
+        authorEmail: "1001+octocat@users.noreply.github.com",
+        authorLogin: "octocat",
         scmUserId: "1001",
         scmAccessTokenEncrypted: "enc-access",
         scmRefreshTokenEncrypted: "enc-refresh",
@@ -294,9 +294,9 @@ describe("SessionMessageQueue", () => {
       });
 
       expect(h.repository.updateParticipantCoalesce).toHaveBeenCalledWith("part-1", {
-        scmName: "Cole Murray",
-        scmEmail: "1001+cole@users.noreply.github.com",
-        scmLogin: "cole",
+        scmName: "Octo Cat",
+        scmEmail: "1001+octocat@users.noreply.github.com",
+        scmLogin: "octocat",
         scmUserId: "1001",
         scmAccessTokenEncrypted: "enc-access",
         scmRefreshTokenEncrypted: "enc-refresh",
