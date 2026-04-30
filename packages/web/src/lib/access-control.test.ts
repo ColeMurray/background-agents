@@ -53,7 +53,7 @@ describe("checkAccessAllowed", () => {
 
       expect(checkAccessAllowed(config, {})).toBe(false);
       expect(checkAccessAllowed(config, { githubUsername: "anyuser" })).toBe(false);
-      expect(checkAccessAllowed(config, { email: "anyone@example.com" })).toBe(false);
+      expect(checkAccessAllowed(config, { emails: ["anyone@example.com"] })).toBe(false);
     });
 
     it("allows all users when unsafeAllowAllUsers is enabled", () => {
@@ -61,7 +61,7 @@ describe("checkAccessAllowed", () => {
 
       expect(checkAccessAllowed(config, {})).toBe(true);
       expect(checkAccessAllowed(config, { githubUsername: "anyuser" })).toBe(true);
-      expect(checkAccessAllowed(config, { email: "anyone@example.com" })).toBe(true);
+      expect(checkAccessAllowed(config, { emails: ["anyone@example.com"] })).toBe(true);
     });
   });
 
@@ -87,7 +87,7 @@ describe("checkAccessAllowed", () => {
 
     it("denies when no username provided", () => {
       expect(checkAccessAllowed(config, {})).toBe(false);
-      expect(checkAccessAllowed(config, { email: "user@example.com" })).toBe(false);
+      expect(checkAccessAllowed(config, { emails: ["user@example.com"] })).toBe(false);
     });
   });
 
@@ -99,20 +99,44 @@ describe("checkAccessAllowed", () => {
     };
 
     it("allows users with matching email domain", () => {
-      expect(checkAccessAllowed(config, { email: "user@company.com" })).toBe(true);
+      expect(checkAccessAllowed(config, { emails: ["user@company.com"] })).toBe(true);
     });
 
     it("allows users with different case email", () => {
-      expect(checkAccessAllowed(config, { email: "User@COMPANY.COM" })).toBe(true);
+      expect(checkAccessAllowed(config, { emails: ["User@COMPANY.COM"] })).toBe(true);
     });
 
     it("denies users with non-matching email domain", () => {
-      expect(checkAccessAllowed(config, { email: "user@other.com" })).toBe(false);
+      expect(checkAccessAllowed(config, { emails: ["user@other.com"] })).toBe(false);
     });
 
     it("denies when no email provided", () => {
       expect(checkAccessAllowed(config, {})).toBe(false);
       expect(checkAccessAllowed(config, { githubUsername: "someuser" })).toBe(false);
+    });
+  });
+
+  describe("when user has multiple emails", () => {
+    const config = {
+      allowedDomains: ["company.com"],
+      allowedUsers: [],
+      unsafeAllowAllUsers: false,
+    };
+
+    it("allows access when any email matches the domain", () => {
+      expect(
+        checkAccessAllowed(config, {
+          emails: ["user@personal.com", "user@company.com"],
+        })
+      ).toBe(true);
+    });
+
+    it("denies access when no email matches the domain", () => {
+      expect(
+        checkAccessAllowed(config, {
+          emails: ["user@personal.com", "user@gmail.com"],
+        })
+      ).toBe(false);
     });
   });
 
@@ -128,21 +152,21 @@ describe("checkAccessAllowed", () => {
     });
 
     it("allows users matching email domain", () => {
-      expect(checkAccessAllowed(config, { email: "someone@company.com" })).toBe(true);
+      expect(checkAccessAllowed(config, { emails: ["someone@company.com"] })).toBe(true);
     });
 
     it("allows users matching either condition", () => {
       expect(
         checkAccessAllowed(config, {
           githubUsername: "specialuser",
-          email: "user@other.com",
+          emails: ["user@other.com"],
         })
       ).toBe(true);
 
       expect(
         checkAccessAllowed(config, {
           githubUsername: "otheruser",
-          email: "user@company.com",
+          emails: ["user@company.com"],
         })
       ).toBe(true);
     });
@@ -151,7 +175,7 @@ describe("checkAccessAllowed", () => {
       expect(
         checkAccessAllowed(config, {
           githubUsername: "randomuser",
-          email: "user@other.com",
+          emails: ["user@other.com"],
         })
       ).toBe(false);
     });
@@ -166,12 +190,12 @@ describe("checkAccessAllowed", () => {
 
     it("still enforces the allowlist for matching users", () => {
       expect(checkAccessAllowed(config, { githubUsername: "specialuser" })).toBe(true);
-      expect(checkAccessAllowed(config, { email: "user@company.com" })).toBe(true);
+      expect(checkAccessAllowed(config, { emails: ["user@company.com"] })).toBe(true);
     });
 
     it("denies users not in the allowlist", () => {
       expect(checkAccessAllowed(config, { githubUsername: "randomuser" })).toBe(false);
-      expect(checkAccessAllowed(config, { email: "user@other.com" })).toBe(false);
+      expect(checkAccessAllowed(config, { emails: ["user@other.com"] })).toBe(false);
     });
   });
 
@@ -188,8 +212,8 @@ describe("checkAccessAllowed", () => {
     });
 
     it("allows any domain from the list", () => {
-      expect(checkAccessAllowed(config, { email: "user@company.com" })).toBe(true);
-      expect(checkAccessAllowed(config, { email: "user@partner.org" })).toBe(true);
+      expect(checkAccessAllowed(config, { emails: ["user@company.com"] })).toBe(true);
+      expect(checkAccessAllowed(config, { emails: ["user@partner.org"] })).toBe(true);
     });
   });
 });

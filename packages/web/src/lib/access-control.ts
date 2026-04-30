@@ -6,7 +6,7 @@ export interface AccessControlConfig {
 
 export interface AccessCheckParams {
   githubUsername?: string;
-  email?: string;
+  emails?: string[];
 }
 
 /**
@@ -30,7 +30,7 @@ export function parseBooleanEnv(value: string | undefined): boolean {
  * Returns true if:
  * - Both allowlists are empty and unsafeAllowAllUsers is true
  * - User's GitHub username is in allowedUsers
- * - User's email domain is in allowedDomains
+ * - Any of the user's emails has a domain in allowedDomains
  *
  * Logic is OR-based: matching either list grants access.
  */
@@ -39,7 +39,7 @@ export function checkAccessAllowed(
   params: AccessCheckParams
 ): boolean {
   const { allowedDomains, allowedUsers, unsafeAllowAllUsers } = config;
-  const { githubUsername, email } = params;
+  const { githubUsername, emails } = params;
 
   // Empty allowlists only permit sign-in when explicitly enabled.
   if (allowedDomains.length === 0 && allowedUsers.length === 0) {
@@ -51,13 +51,10 @@ export function checkAccessAllowed(
     return true;
   }
 
-  // Check email domain allowlist
-  if (email) {
-    const domain = email.toLowerCase().split("@")[1];
-    if (domain && allowedDomains.includes(domain)) {
-      return true;
-    }
-  }
-
-  return false;
+  return (
+    emails?.some((email) => {
+      const domain = email.toLowerCase().split("@")[1];
+      return domain !== undefined && allowedDomains.includes(domain);
+    }) ?? false
+  );
 }
