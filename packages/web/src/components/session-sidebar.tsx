@@ -501,6 +501,7 @@ function SessionListItem({
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
   const [title, setTitle] = useState(displayTitle);
   const isStartingRenameRef = useRef(false);
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressTriggeredRef = useRef(false);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -517,6 +518,15 @@ function SessionListItem({
     setTitle(displayTitle);
     setIsRenaming(true);
   };
+
+  useEffect(() => {
+    if (!isRenaming) return;
+    const id = window.setTimeout(() => {
+      renameInputRef.current?.focus();
+      renameInputRef.current?.select();
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [isRenaming]);
 
   const handleCancelRename = () => {
     setTitle(displayTitle);
@@ -653,7 +663,7 @@ function SessionListItem({
         {isRenaming ? (
           <>
             <input
-              autoFocus
+              ref={renameInputRef}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               onFocus={(e) => e.currentTarget.select()}
