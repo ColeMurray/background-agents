@@ -135,13 +135,14 @@ function buildIssueCommentContext(payload: IssueCommentPayload, repoFullName: st
   const bodyPreview = commentBody ? commentBody.slice(0, BODY_PREVIEW_MAX) : undefined;
   const issueNumber = issue?.number ?? "unknown";
   const issueTitle = issue?.title ?? undefined;
+  const itemType = issue?.pull_request ? "PR" : "Issue";
 
   const lines: string[] = [
     GITHUB_EVENT_PREAMBLE,
     "",
     "Event: issue_comment.created",
     `Repository: ${repoFullName}`,
-    `Issue #${issueNumber}: ${issueTitle ?? "(no title)"}`,
+    `${itemType} #${issueNumber}: ${issueTitle ?? "(no title)"}`,
     `Commenter: ${commenter ?? "unknown"}`,
   ];
 

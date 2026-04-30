@@ -77,7 +77,7 @@ describe("deriveUserId", () => {
     expect(deriveUserId({ spawnSource: "linear-bot" })).toBe("anonymous");
   });
 
-  it("falls back to anonymous for unknown spawnSource", () => {
+  it("falls back to anonymous for spawnSource 'user' when userId is missing", () => {
     expect(deriveUserId({ spawnSource: "user" })).toBe("anonymous");
   });
 

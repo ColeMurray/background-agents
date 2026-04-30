@@ -96,4 +96,31 @@ describe("automation cron submission", () => {
 
     expect(onSubmit).not.toHaveBeenCalled();
   });
+
+  it("requires event type when trigger source exposes event type selector", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Review new PRs",
+          repoOwner: "open-inspect",
+          repoName: "background-agents",
+          baseBranch: "main",
+          model: "openai/gpt-5.4",
+          instructions: "Review incoming PRs for regressions.",
+          triggerType: "github_event",
+        }}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Create Automation" })).toBeDisabled();
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(screen.getByText("Event type is required.")).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
 });

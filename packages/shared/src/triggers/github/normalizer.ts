@@ -4,24 +4,28 @@
 
 import type { GitHubAutomationEvent } from "../types";
 import { buildGitHubContextBlock } from "./context";
-import type {
-  CheckSuitePayload,
-  IssueCommentPayload,
-  IssuesPayload,
-  PullRequestPayload,
-  PullRequestReviewCommentPayload,
-  SupportedGitHubPayload,
+import {
+  GITHUB_WEBHOOK_EVENT_CATALOG,
+  type CheckSuitePayload,
+  type IssueCommentPayload,
+  type IssuesPayload,
+  type PullRequestPayload,
+  type PullRequestReviewCommentPayload,
+  type SupportedGitHubPayload,
 } from "./webhook-types";
 
 // ─── Supported event type map ─────────────────────────────────────────────────
 
-const SUPPORTED_EVENTS: Record<string, Set<string>> = {
-  pull_request: new Set(["opened", "synchronize", "closed"]),
-  issue_comment: new Set(["created"]),
-  pull_request_review_comment: new Set(["created"]),
-  check_suite: new Set(["completed"]),
-  issues: new Set(["opened", "labeled"]),
-};
+const SUPPORTED_EVENTS: Record<string, Set<string>> = GITHUB_WEBHOOK_EVENT_CATALOG.reduce(
+  (supportedEvents, { event, action }) => {
+    if (!supportedEvents[event]) {
+      supportedEvents[event] = new Set<string>();
+    }
+    supportedEvents[event].add(action);
+    return supportedEvents;
+  },
+  {} as Record<string, Set<string>>
+);
 
 // ─── Payload accessors ────────────────────────────────────────────────────────
 
@@ -232,15 +236,17 @@ function normalizeReviewComment(
 ): GitHubAutomationEvent | null {
   const comment = getComment(payload);
   const pr = getPR(payload);
-  if (!comment) return null;
+  if (!comment || !pr) return null;
 
   const commentId = comment.id;
   if (typeof commentId !== "number" || !Number.isFinite(commentId)) return null;
 
   const prNumber = pr.number;
+  if (typeof prNumber !== "number" || !Number.isFinite(prNumber)) return null;
+
   const branch = pr.head?.ref;
   const triggerKey = `pr_review_comment:${commentId}`;
-  const concurrencyKey = `pr:${typeof prNumber === "number" && Number.isFinite(prNumber) ? prNumber : "unknown"}`;
+  const concurrencyKey = `pr:${prNumber}`;
 
   return {
     source: "github",

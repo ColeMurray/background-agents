@@ -108,6 +108,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     initialValues?.triggerType ?? "schedule"
   );
   const [eventType, setEventType] = useState(initialValues?.eventType ?? "");
+  const [eventTypeError, setEventTypeError] = useState("");
   const [conditions, setConditions] = useState<TriggerCondition[]>(
     initialValues?.triggerConfig?.conditions ?? []
   );
@@ -133,6 +134,12 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     if (!stillValid) setEventType("");
   }, [eventType, eventTypes]);
 
+  useEffect(() => {
+    if (!showEventTypeSelector || eventType) {
+      setEventTypeError("");
+    }
+  }, [showEventTypeSelector, eventType]);
+
   const handleRepoChange = useCallback(
     (repoFullName: string) => {
       setSelectedRepo(repoFullName);
@@ -146,6 +153,10 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     e.preventDefault();
     if (!name.trim() || !selectedRepo || !instructions.trim() || !isScheduleValid) return;
     if (triggerType === "sentry" && mode === "create" && !sentryClientSecret.trim()) return;
+    if (showEventTypeSelector && !eventType) {
+      setEventTypeError("Event type is required.");
+      return;
+    }
 
     const values: AutomationFormValues = {
       name: name.trim(),
@@ -368,7 +379,13 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {showEventTypeSelector && (
         <div>
           <label className="block text-sm font-medium text-foreground mb-1.5">Event Type</label>
-          <Select value={eventType} onValueChange={setEventType}>
+          <Select
+            value={eventType}
+            onValueChange={(value) => {
+              setEventType(value);
+              if (eventTypeError) setEventTypeError("");
+            }}
+          >
             <SelectTrigger className="w-full">
               <SelectValue placeholder={eventTypePlaceholder} />
             </SelectTrigger>
@@ -381,6 +398,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
               ))}
             </SelectContent>
           </Select>
+          {eventTypeError && <p className="mt-1 text-xs text-destructive">{eventTypeError}</p>}
         </div>
       )}
 
@@ -451,6 +469,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
             !selectedRepo ||
             !instructions.trim() ||
             !isScheduleValid ||
+            (showEventTypeSelector && !eventType) ||
             (triggerType === "sentry" && mode === "create" && !sentryClientSecret.trim())
           }
         >

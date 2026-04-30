@@ -3,10 +3,12 @@
  */
 
 import type { TriggerSourceDefinition } from "../types";
+import { GITHUB_WEBHOOK_EVENT_CATALOG } from "./webhook-types";
 
 export type { GitHubAutomationEvent } from "../types";
 export { normalizeGitHubEvent } from "./normalizer";
 export { buildGitHubContextBlock } from "./context";
+export { GITHUB_WEBHOOK_EVENT_CATALOG } from "./webhook-types";
 
 export const githubSource: TriggerSourceDefinition = {
   source: "github",
@@ -15,47 +17,10 @@ export const githubSource: TriggerSourceDefinition = {
   description: "Trigger on GitHub pull request, issue, or CI events",
   supportsEventTypes: true,
   eventTypePlaceholder: "Select GitHub event type...",
-  eventTypes: [
-    {
-      eventType: "pull_request.opened",
-      displayName: "PR Opened",
-      description: "A pull request was opened",
-    },
-    {
-      eventType: "pull_request.synchronize",
-      displayName: "PR Updated",
-      description: "New commits pushed to a pull request",
-    },
-    {
-      eventType: "pull_request.closed",
-      displayName: "PR Closed",
-      description: "A pull request was closed or merged",
-    },
-    {
-      eventType: "issue_comment.created",
-      displayName: "Issue Comment",
-      description: "A comment was added to an issue or PR",
-    },
-    {
-      eventType: "pull_request_review_comment.created",
-      displayName: "Review Comment",
-      description: "A review comment was added to a pull request",
-    },
-    {
-      eventType: "check_suite.completed",
-      displayName: "Check Suite Completed",
-      description: "A CI check suite finished running",
-    },
-    {
-      eventType: "issues.opened",
-      displayName: "Issue Opened",
-      description: "A new issue was opened",
-    },
-    {
-      eventType: "issues.labeled",
-      displayName: "Issue Labeled",
-      description: "A label was added to an issue",
-    },
-  ],
+  eventTypes: GITHUB_WEBHOOK_EVENT_CATALOG.map(({ event, action, displayName, description }) => ({
+    eventType: `${event}.${action}`,
+    displayName,
+    description,
+  })),
   supportedConditions: ["branch", "label", "path_glob", "actor", "check_conclusion"],
 };
