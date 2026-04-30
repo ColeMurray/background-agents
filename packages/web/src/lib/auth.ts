@@ -25,6 +25,17 @@ declare module "next-auth/jwt" {
   }
 }
 
+type GitHubEmail = { email: string; verified: boolean; primary: boolean };
+
+async function fetchGitHubEmails(accessToken: string): Promise<string[]> {
+  const response = await fetch("https://api.github.com/user/emails", {
+    headers: { Authorization: `Bearer ${accessToken}`, "User-Agent": "open-inspect" },
+  });
+  if (!response.ok) return [];
+  const emails = (await response.json()) as GitHubEmail[];
+  return emails.filter((e) => e.verified).map((e) => e.email);
+}
+
 export const authOptions: NextAuthOptions = {
   debug: process.env.NODE_ENV === "development" || process.env.NEXTAUTH_DEBUG === "true",
   providers: [
@@ -39,7 +50,7 @@ export const authOptions: NextAuthOptions = {
     }),
   ],
   callbacks: {
-    async signIn({ profile, user }) {
+    async signIn({ profile, account }) {
       const config = {
         allowedDomains: parseAllowlist(process.env.ALLOWED_EMAIL_DOMAINS),
         allowedUsers: parseAllowlist(process.env.ALLOWED_USERS),
@@ -47,15 +58,20 @@ export const authOptions: NextAuthOptions = {
       };
 
       const githubProfile = profile as { login?: string };
-      const isAllowed = checkAccessAllowed(config, {
-        githubUsername: githubProfile.login,
-        email: user.email ?? undefined,
-      });
 
-      if (!isAllowed) {
-        return false;
+      if (checkAccessAllowed(config, { githubUsername: githubProfile.login })) {
+        return true;
       }
-      return true;
+
+      let emails: string[] = [];
+      if (config.allowedDomains.length > 0 && account?.access_token) {
+        emails = await fetchGitHubEmails(account.access_token);
+      }
+
+      return checkAccessAllowed(config, {
+        githubUsername: githubProfile.login,
+        emails,
+      });
     },
     async jwt({ token, account, profile }) {
       if (account) {

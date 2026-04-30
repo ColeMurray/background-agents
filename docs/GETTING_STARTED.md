@@ -216,21 +216,23 @@ access.
    - Issues: **Read & Write** _(required if enabling GitHub bot)_
    - Pull requests: **Read & Write**
    - Metadata: **Read-only**
-6. Click **"Create GitHub App"**
-7. Note the **App ID** and **Client ID** (top of page)
-8. Under **"Client secrets"**, click **"Generate a new client secret"** and note the **Client
+6. Set **Account permissions**:
+   - Email addresses: **Read-only**
+7. Click **"Create GitHub App"**
+8. Note the **App ID** and **Client ID** (top of page)
+9. Under **"Client secrets"**, click **"Generate a new client secret"** and note the **Client
    Secret**
-9. Scroll down to **"Private keys"** and click **"Generate a private key"** (downloads a .pem file)
-10. **Convert the key to PKCS#8 format** (required for Cloudflare Workers):
+10. Scroll down to **"Private keys"** and click **"Generate a private key"** (downloads a .pem file)
+11. **Convert the key to PKCS#8 format** (required for Cloudflare Workers):
     ```bash
     openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt \
       -in ~/Downloads/your-app-name.*.private-key.pem \
       -out private-key-pkcs8.pem
     ```
-11. **Install the app** on your account/organization:
+12. **Install the app** on your account/organization:
     - Click "Install App" in the sidebar
     - Select the repositories you want Open-Inspect to access
-12. Note the **Installation ID** from the URL after installing:
+13. Note the **Installation ID** from the URL after installing:
     ```
     https://github.com/settings/installations/INSTALLATION_ID
     ```

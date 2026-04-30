@@ -130,10 +130,11 @@ Guide user through creating a GitHub App (handles both OAuth and repo access):
    - **CRITICAL**: Must match deployed Vercel URL exactly!
 6. **Repository permissions**: Contents (Read & Write), Issues (Read & Write), Pull requests (Read &
    Write), Metadata (Read-only)
-7. Create app, note **App ID**
-8. Generate **Client Secret**, note **Client ID** and **Client Secret**
-9. Generate **Private Key** (downloads .pem file)
-10. Install app on account, note **Installation ID** from URL
+7. **Account permissions**: Email addresses (Read-only)
+8. Create app, note **App ID**
+9. Generate **Client Secret**, note **Client ID** and **Client Secret**
+10. Generate **Private Key** (downloads .pem file)
+11. Install app on account, note **Installation ID** from URL
 
 After receiving the .pem path, convert to PKCS#8:
 
