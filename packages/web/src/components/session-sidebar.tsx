@@ -500,6 +500,7 @@ function SessionListItem({
   const [isArchiving, setIsArchiving] = useState(false);
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
   const [title, setTitle] = useState(displayTitle);
+  const isStartingRenameRef = useRef(false);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressTriggeredRef = useRef(false);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -511,6 +512,7 @@ function SessionListItem({
   }, [displayTitle, isRenaming]);
 
   const handleStartRename = () => {
+    isStartingRenameRef.current = true;
     setIsActionsOpen(false);
     setTitle(displayTitle);
     setIsRenaming(true);
@@ -737,8 +739,16 @@ function SessionListItem({
                 <MoreIcon className="w-4 h-4" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={handleStartRename}>Rename</DropdownMenuItem>
+            <DropdownMenuContent
+              align="end"
+              onCloseAutoFocus={(event) => {
+                if (isStartingRenameRef.current) {
+                  event.preventDefault();
+                  isStartingRenameRef.current = false;
+                }
+              }}
+            >
+              <DropdownMenuItem onSelect={handleStartRename}>Rename</DropdownMenuItem>
               <DropdownMenuItem onClick={handleStartArchive} disabled={isArchiving}>
                 <ArchiveIcon className="w-4 h-4" />
                 Archive
