@@ -8,7 +8,7 @@ export interface AccessControlConfig {
 
 export interface AccessCheckParams {
   githubUsername?: string;
-  email?: string;
+  emails?: string[];
 }
 
 export type AccessAllowReason =
@@ -30,6 +30,11 @@ export function parseAllowlist(value: string | undefined): string[] {
 
 export function parseBooleanEnv(value: string | undefined): boolean {
   return value?.trim().toLowerCase() === "true";
+}
+
+function parseDomain(email: string): string | null {
+  const parts = email.split("@");
+  return parts.length === 2 ? parts[1].toLowerCase() : null;
 }
 
 /**
@@ -60,7 +65,7 @@ export function getAccessAllowReason(
 ): AccessAllowReason | null {
   const { allowedDomains, allowedUsers, allowedEmails, unsafeAllowAllUsers } = config;
   const allowedOrganizations = config.allowedOrganizations ?? [];
-  const { githubUsername, email } = params;
+  const { githubUsername, emails } = params;
 
   // Empty allowlists only permit sign-in when explicitly enabled.
   if (
@@ -80,16 +85,18 @@ export function getAccessAllowReason(
   // Check exact email allowlist. Provider-agnostic, and the only way to admit a
   // specific address on a shared domain (e.g. one gmail.com user) without
   // domain-allowing every gmail.com account.
-  if (email && allowedEmails.includes(email.toLowerCase())) {
+  if (emails?.some((email) => allowedEmails.includes(email.toLowerCase()))) {
     return "email_allowlist";
   }
 
-  // Check email domain allowlist
-  if (email) {
-    const domain = email.toLowerCase().split("@")[1];
-    if (domain && allowedDomains.includes(domain)) {
-      return "email_domain_allowlist";
-    }
+  // Check email domain allowlist.
+  if (
+    emails
+      ?.map((email) => parseDomain(email))
+      ?.filter((domain) => domain !== null)
+      ?.some((domain) => allowedDomains.includes(domain))
+  ) {
+    return "email_domain_allowlist";
   }
 
   return null;

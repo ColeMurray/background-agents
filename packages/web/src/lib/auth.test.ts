@@ -6,7 +6,7 @@ import {
   applyJwtClaims,
   applySessionUser,
   getStaticSignInReason,
-  getVerifiedPrimaryGitHubEmail,
+  getVerifiedGitHubEmails,
 } from "./auth";
 
 vi.mock("@open-inspect/shared", () => ({
@@ -270,8 +270,8 @@ describe("authOptions signIn", () => {
   });
 });
 
-describe("getVerifiedPrimaryGitHubEmail", () => {
-  it("returns the verified primary GitHub email", async () => {
+describe("getVerifiedGitHubEmails", () => {
+  it("returns all verified emails", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify([
@@ -281,10 +281,13 @@ describe("getVerifiedPrimaryGitHubEmail", () => {
       )
     );
 
-    await expect(getVerifiedPrimaryGitHubEmail("token")).resolves.toBe("user@company.com");
+    await expect(getVerifiedGitHubEmails({ accessToken: "token" })).resolves.toEqual([
+      { email: "other@example.com", primary: false, verified: true, visibility: "private" },
+      { email: "user@company.com", primary: true, verified: true, visibility: "private" },
+    ]);
   });
 
-  it("rejects an unverified primary GitHub email", async () => {
+  it("excludes unverified emails", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify([
@@ -293,13 +296,13 @@ describe("getVerifiedPrimaryGitHubEmail", () => {
       )
     );
 
-    await expect(getVerifiedPrimaryGitHubEmail("token")).resolves.toBeNull();
+    await expect(getVerifiedGitHubEmails({ accessToken: "token" })).resolves.toEqual([]);
   });
 
-  it("returns null when GitHub email lookup fails", async () => {
+  it("returns empty array when GitHub email lookup fails", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 403 }));
 
-    await expect(getVerifiedPrimaryGitHubEmail("token")).resolves.toBeNull();
+    await expect(getVerifiedGitHubEmails({ accessToken: "token" })).resolves.toEqual([]);
   });
 });
 
@@ -312,7 +315,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: "google",
           profile: { email_verified: false } as unknown as Profile,
-          email: "pm@gmail.com",
+          emails: ["pm@gmail.com"],
           config,
         })
       ).toBeNull();
@@ -323,7 +326,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: "google",
           profile: { email_verified: "false" } as unknown as Profile,
-          email: "pm@gmail.com",
+          emails: ["pm@gmail.com"],
           config,
         })
       ).toBeNull();
@@ -334,7 +337,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: "google",
           profile: {} as Profile,
-          email: "pm@gmail.com",
+          emails: ["pm@gmail.com"],
           config,
         })
       ).toBeNull();
@@ -345,7 +348,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: "google",
           profile: { email_verified: true } as unknown as Profile,
-          email: "pm@gmail.com",
+          emails: ["pm@gmail.com"],
           config,
         })
       ).toBe("email_allowlist");
@@ -356,7 +359,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: "google",
           profile: { email_verified: "true" } as unknown as Profile,
-          email: "pm@gmail.com",
+          emails: ["pm@gmail.com"],
           config,
         })
       ).toBe("email_allowlist");
@@ -367,7 +370,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: "google",
           profile: { email_verified: "True" } as unknown as Profile,
-          email: "pm@gmail.com",
+          emails: ["pm@gmail.com"],
           config,
         })
       ).toBe("email_allowlist");
@@ -378,7 +381,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: "google",
           profile: { email_verified: true } as unknown as Profile,
-          email: "stranger@gmail.com",
+          emails: ["stranger@gmail.com"],
           config,
         })
       ).toBeNull();
@@ -391,7 +394,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: "github",
           profile: { login: "octocat" } as unknown as Profile,
-          email: "octo@company.com",
+          emails: ["octo@company.com"],
           config: cfg({ allowedUsers: ["octocat"] }),
         })
       ).toBe("username_allowlist");
@@ -402,7 +405,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: "github",
           profile: { login: "stranger" } as unknown as Profile,
-          email: "stranger@other.com",
+          emails: ["stranger@other.com"],
           config: cfg({ allowedDomains: ["company.com"], allowedUsers: ["octocat"] }),
         })
       ).toBeNull();
@@ -413,7 +416,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: undefined,
           profile: { login: "octocat" } as unknown as Profile,
-          email: "octo@company.com",
+          emails: ["octo@company.com"],
           config: cfg({ allowedUsers: ["octocat"] }),
         })
       ).toBe("username_allowlist");
@@ -429,7 +432,7 @@ describe("getStaticSignInReason", () => {
         getStaticSignInReason({
           provider: "gitlab",
           profile: { email_verified: true } as unknown as Profile,
-          email: "user@company.com",
+          emails: ["user@company.com"],
           config: cfg({ allowedDomains: ["company.com"] }),
         })
       ).toBeNull();
