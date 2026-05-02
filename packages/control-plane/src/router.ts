@@ -1820,16 +1820,6 @@ async function handleUpdateSessionTitle(
     )
   );
 
-  if (response.ok) {
-    // read the validated title from the DO response
-    const doResult = (await response.clone().json()) as { title: string };
-    const sessionStore = new SessionIndexStore(env.DB);
-    const updated = await sessionStore.updateTitle(sessionId, doResult.title);
-    if (!updated) {
-      logger.warn("Session not found in D1 index during title update", { session_id: sessionId });
-    }
-  }
-
   return response;
 }
 
@@ -1866,15 +1856,6 @@ async function handleArchiveSession(
     )
   );
 
-  if (response.ok) {
-    // Update D1 index
-    const sessionStore = new SessionIndexStore(env.DB);
-    const updated = await sessionStore.updateStatus(sessionId, "archived");
-    if (!updated) {
-      logger.warn("Session not found in D1 index during archive", { session_id: sessionId });
-    }
-  }
-
   return response;
 }
 
@@ -1910,15 +1891,6 @@ async function handleUnarchiveSession(
       ctx
     )
   );
-
-  if (response.ok) {
-    // Update D1 index
-    const sessionStore = new SessionIndexStore(env.DB);
-    const updated = await sessionStore.updateStatus(sessionId, "active");
-    if (!updated) {
-      logger.warn("Session not found in D1 index during unarchive", { session_id: sessionId });
-    }
-  }
 
   return response;
 }
@@ -2213,11 +2185,6 @@ async function handleCancelChild(
   const response = await childStub.fetch(
     internalRequest(buildSessionInternalUrl(SessionInternalPaths.cancel), { method: "POST" }, ctx)
   );
-
-  // Update D1 status if cancel succeeded
-  if (response.ok) {
-    await sessionStore.updateStatus(childId, "cancelled");
-  }
 
   return response;
 }

@@ -425,6 +425,7 @@ export class SessionDO extends DurableObject<Env> {
         getPublicSessionId: (session) => this.getPublicSessionId(session),
         getParticipantByUserId: (userId) => this.participantService.getByUserId(userId),
         transitionSessionStatus: (status) => this.transitionSessionStatus(status),
+        syncSessionIndexTitle: (sessionId, title) => this.syncSessionIndexTitle(sessionId, title),
         stopExecution: (options) => this.stopExecution(options),
         getSandboxSocket: () => this.wsManager.getSandboxSocket(),
         sendToSandbox: (ws, message) => this.wsManager.send(ws, message),
@@ -1464,6 +1465,20 @@ export class SessionDO extends DurableObject<Env> {
           session_id: sessionId,
           status,
           updated_at: updatedAt,
+          error,
+        });
+      })
+    );
+  }
+
+  private syncSessionIndexTitle(sessionId: string, title: string): void {
+    if (!this.env.DB) return;
+    const sessionStore = new SessionIndexStore(this.env.DB);
+    this.ctx.waitUntil(
+      sessionStore.updateTitle(sessionId, title).catch((error) => {
+        this.log.error("session_index.update_title.background_error", {
+          session_id: sessionId,
+          title,
           error,
         });
       })
