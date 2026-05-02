@@ -29,7 +29,6 @@ const TRIGGER_OPTIONS: TriggerOption[] = [
     type: "github_event",
     label: "GitHub Event",
     description: "Trigger on PR, issue, or CI events",
-    comingSoon: true,
   },
   {
     type: "linear_event",

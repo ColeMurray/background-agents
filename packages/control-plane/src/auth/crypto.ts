@@ -108,4 +108,21 @@ export async function hashToken(token: string): Promise<string> {
     .join("");
 }
 
+/**
+ * Encrypt an access/refresh token pair.
+ * Returns null for tokens that weren't provided (undefined/empty).
+ * Throws if encryption of a provided token fails.
+ */
+export async function encryptTokenPair(
+  accessToken: string | undefined,
+  refreshToken: string | undefined,
+  encryptionKey: string
+): Promise<{ accessTokenEncrypted: string | null; refreshTokenEncrypted: string | null }> {
+  const accessTokenEncrypted = accessToken ? await encryptToken(accessToken, encryptionKey) : null;
+  const refreshTokenEncrypted = refreshToken
+    ? await encryptToken(refreshToken, encryptionKey)
+    : null;
+  return { accessTokenEncrypted, refreshTokenEncrypted };
+}
+
 // timingSafeEqual is exported from @open-inspect/shared — use that instead.

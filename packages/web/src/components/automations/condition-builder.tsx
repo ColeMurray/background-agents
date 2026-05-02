@@ -32,6 +32,13 @@ const CONDITION_LABELS: Record<string, string> = {
 };
 
 const SENTRY_LEVELS = ["warning", "error", "fatal"];
+export const CHECK_CONCLUSION_OPTIONS = [
+  "success",
+  "failure",
+  "neutral",
+  "cancelled",
+  "timed_out",
+] as const;
 
 export function ConditionBuilder({ conditions, onChange, triggerSource }: ConditionBuilderProps) {
   // Get available condition types for this trigger source
@@ -53,6 +60,25 @@ export function ConditionBuilder({ conditions, onChange, triggerSource }: Condit
           type: "jsonpath",
           operator: "all_match",
           value: [{ path: "$.", comparison: "eq", value: "" }],
+        };
+        break;
+      case "branch":
+        newCondition = { type: "branch", operator: "glob_match", value: [] };
+        break;
+      case "label":
+        newCondition = { type: "label", operator: "any_of", value: [] };
+        break;
+      case "path_glob":
+        newCondition = { type: "path_glob", operator: "any_match", value: [] };
+        break;
+      case "actor":
+        newCondition = { type: "actor", operator: "include", value: [] };
+        break;
+      case "check_conclusion":
+        newCondition = {
+          type: "check_conclusion",
+          operator: "eq",
+          value: CHECK_CONCLUSION_OPTIONS[0],
         };
         break;
       default:
@@ -142,6 +168,67 @@ function ConditionEditor({
           filters={condition.value}
           onChange={(value) => onChange({ ...condition, value })}
         />
+      );
+    case "branch":
+      return (
+        <TagInput
+          values={condition.value}
+          onChange={(value) => onChange({ ...condition, value })}
+          placeholder="Add branch pattern (e.g., main, feature/*)..."
+        />
+      );
+    case "label":
+      return (
+        <TagInput
+          values={condition.value}
+          onChange={(value) => onChange({ ...condition, value })}
+          placeholder="Add label..."
+        />
+      );
+    case "path_glob":
+      return (
+        <TagInput
+          values={condition.value}
+          onChange={(value) => onChange({ ...condition, value })}
+          placeholder="Add path pattern (e.g., src/**, *.ts)..."
+        />
+      );
+    case "actor":
+      return (
+        <div className="space-y-2">
+          <Select
+            value={condition.operator}
+            onValueChange={(v) => onChange({ ...condition, operator: v as "include" | "exclude" })}
+          >
+            <SelectTrigger className="w-32 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="include">include</SelectItem>
+              <SelectItem value="exclude">exclude</SelectItem>
+            </SelectContent>
+          </Select>
+          <TagInput
+            values={condition.value}
+            onChange={(value) => onChange({ ...condition, value })}
+            placeholder="Add actor username..."
+          />
+        </div>
+      );
+    case "check_conclusion":
+      return (
+        <Select value={condition.value} onValueChange={(v) => onChange({ ...condition, value: v })}>
+          <SelectTrigger className="w-40 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {CHECK_CONCLUSION_OPTIONS.map((option) => (
+              <SelectItem key={option} value={option}>
+                {option}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       );
     default:
       return <div className="text-xs text-muted-foreground">Configuration not available</div>;
