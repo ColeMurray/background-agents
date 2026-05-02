@@ -3,18 +3,25 @@ import { initNamedSession, openSandboxWs, seedSandboxAuth, queryDO } from "./hel
 
 const SANDBOX_TOKEN = "test-sandbox-auth-token-abc123";
 const SANDBOX_ID = "sb-integration-test";
+const DEFAULT_WAIT_FOR_SANDBOX_STATUS_TIMEOUT_MS = 3000;
 
 async function waitForSandboxStatus(
   stub: DurableObjectStub,
   status: string,
-  timeoutMs = 3000
+  timeoutMs = DEFAULT_WAIT_FOR_SANDBOX_STATUS_TIMEOUT_MS
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
+  let lastStatus: string | undefined;
   while (Date.now() < deadline) {
     const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox");
-    if (rows[0]?.status === status) return;
+    lastStatus = rows[0]?.status;
+    if (lastStatus === status) return;
     await new Promise((r) => setTimeout(r, 100));
   }
+
+  throw new Error(
+    `Timed out after ${timeoutMs}ms waiting for sandbox status "${status}"; last status was "${lastStatus ?? "missing"}"`
+  );
 }
 
 describe("Sandbox WebSocket (via SELF.fetch)", () => {
@@ -98,9 +105,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     });
     expect(ws).not.toBeNull();
     ws!.accept();
-
-    // Small delay to ensure DO has processed the connect handler fully
-    await new Promise((r) => setTimeout(r, 100));
+    await waitForSandboxStatus(stub, "ready");
 
     const stateRes = await stub.fetch("http://internal/internal/state");
     const state = await stateRes.json<{ sandbox: { status: string } }>();
