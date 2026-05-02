@@ -106,6 +106,12 @@ export interface TriggerSourceDefinition {
     description: string;
   }>;
 
+  /** Whether the UI should expose an event type selector for this trigger source. */
+  supportsEventTypes?: boolean;
+
+  /** Optional UI placeholder for the event type selector for this trigger source. */
+  eventTypePlaceholder?: string;
+
   /** Condition types this source supports (keys into ConditionConfigMap). */
   supportedConditions: ConditionType[];
 }
