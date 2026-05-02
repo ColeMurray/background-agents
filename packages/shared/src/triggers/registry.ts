@@ -38,7 +38,8 @@ const sharedConditions = {
       if (event.source !== "github" && event.source !== "linear") return true;
       const labels = event.labels;
       if (!labels?.length) return c.operator === "none_of";
-      const hasOverlap = c.value.some((l: string) => labels.includes(l));
+      const lowerLabels = labels.map((l) => l.toLowerCase());
+      const hasOverlap = c.value.some((l: string) => lowerLabels.includes(l.toLowerCase()));
       return c.operator === "any_of" ? hasOverlap : !hasOverlap;
     },
   },
@@ -63,9 +64,10 @@ const sharedConditions = {
     evaluate(c: { operator: string; value: string[] }, event: AutomationEvent) {
       if (event.source !== "github" && event.source !== "linear") return true;
       if (!event.actor) return false;
+      const lowerActor = event.actor.toLowerCase();
       return c.operator === "include"
-        ? c.value.includes(event.actor)
-        : !c.value.includes(event.actor);
+        ? c.value.some((v: string) => v.toLowerCase() === lowerActor)
+        : c.value.every((v: string) => v.toLowerCase() !== lowerActor);
     },
   },
   check_conclusion: {
