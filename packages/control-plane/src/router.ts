@@ -9,7 +9,7 @@ import type {
   CreateSessionResponse,
   SpawnSource,
 } from "./types";
-import { generateId, encryptToken } from "./auth/crypto";
+import { generateId, encryptTokenPair } from "./auth/crypto";
 import { verifyInternalToken } from "./auth/internal";
 import {
   buildMediaObjectKey,
@@ -924,25 +924,17 @@ async function handleCreateSession(
   let scmTokenEncrypted: string | null = null;
   let scmRefreshTokenEncrypted: string | null = null;
 
-  // If SCM token provided, encrypt it
-  if (scmToken && env.TOKEN_ENCRYPTION_KEY) {
+  if (env.TOKEN_ENCRYPTION_KEY) {
     try {
-      scmTokenEncrypted = await encryptToken(scmToken, env.TOKEN_ENCRYPTION_KEY);
+      ({
+        accessTokenEncrypted: scmTokenEncrypted,
+        refreshTokenEncrypted: scmRefreshTokenEncrypted,
+      } = await encryptTokenPair(scmToken, scmRefreshToken, env.TOKEN_ENCRYPTION_KEY));
     } catch (e) {
       logger.error("Failed to encrypt SCM token", {
-        error: e instanceof Error ? e : String(e),
+        error: e instanceof Error ? e.message : String(e),
       });
       return error("Failed to process SCM token", 500);
-    }
-  }
-
-  if (scmRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
-    try {
-      scmRefreshTokenEncrypted = await encryptToken(scmRefreshToken, env.TOKEN_ENCRYPTION_KEY);
-    } catch (e) {
-      logger.warn("Session created without refresh token — token refresh will be unavailable", {
-        error: e instanceof Error ? e : String(e),
-      });
     }
   }
 
@@ -1728,30 +1720,25 @@ async function handleSessionWsToken(
   const { scmTokenEncrypted, scmRefreshTokenEncrypted } = await ctx.metrics.time(
     "encrypt_tokens",
     async () => {
-      let accessToken: string | null = null;
-      let refreshToken: string | null = null;
-
-      if (scmToken && env.TOKEN_ENCRYPTION_KEY) {
-        try {
-          accessToken = await encryptToken(scmToken, env.TOKEN_ENCRYPTION_KEY);
-        } catch (e) {
-          logger.error("Failed to encrypt SCM token", {
-            error: e instanceof Error ? e : String(e),
-          });
-        }
+      if (!env.TOKEN_ENCRYPTION_KEY) {
+        return { scmTokenEncrypted: null, scmRefreshTokenEncrypted: null };
       }
-
-      if (scmRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
-        try {
-          refreshToken = await encryptToken(scmRefreshToken, env.TOKEN_ENCRYPTION_KEY);
-        } catch (e) {
-          logger.error("Failed to encrypt SCM refresh token", {
-            error: e instanceof Error ? e : String(e),
-          });
-        }
+      try {
+        const { accessTokenEncrypted, refreshTokenEncrypted } = await encryptTokenPair(
+          scmToken,
+          scmRefreshToken,
+          env.TOKEN_ENCRYPTION_KEY
+        );
+        return {
+          scmTokenEncrypted: accessTokenEncrypted,
+          scmRefreshTokenEncrypted: refreshTokenEncrypted,
+        };
+      } catch (e) {
+        logger.error("Failed to encrypt SCM tokens", {
+          error: e instanceof Error ? e.message : String(e),
+        });
+        return { scmTokenEncrypted: null, scmRefreshTokenEncrypted: null };
       }
-
-      return { scmTokenEncrypted: accessToken, scmRefreshTokenEncrypted: refreshToken };
     }
   );
 
