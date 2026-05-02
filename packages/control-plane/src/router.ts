@@ -1717,30 +1717,24 @@ async function handleSessionWsToken(
   const scmRefreshToken = body.scmRefreshToken;
 
   // Encrypt the SCM tokens if provided
-  const { scmTokenEncrypted, scmRefreshTokenEncrypted } = await ctx.metrics.time(
-    "encrypt_tokens",
-    async () => {
-      if (!env.TOKEN_ENCRYPTION_KEY) {
-        return { scmTokenEncrypted: null, scmRefreshTokenEncrypted: null };
-      }
-      try {
-        const { accessTokenEncrypted, refreshTokenEncrypted } = await encryptTokenPair(
-          scmToken,
-          scmRefreshToken,
-          env.TOKEN_ENCRYPTION_KEY
-        );
-        return {
-          scmTokenEncrypted: accessTokenEncrypted,
-          scmRefreshTokenEncrypted: refreshTokenEncrypted,
-        };
-      } catch (e) {
-        logger.error("Failed to encrypt SCM tokens", {
-          error: e instanceof Error ? e.message : String(e),
-        });
-        return { scmTokenEncrypted: null, scmRefreshTokenEncrypted: null };
-      }
+  let scmTokenEncrypted: string | null = null;
+  let scmRefreshTokenEncrypted: string | null = null;
+
+  if (env.TOKEN_ENCRYPTION_KEY) {
+    try {
+      ({
+        accessTokenEncrypted: scmTokenEncrypted,
+        refreshTokenEncrypted: scmRefreshTokenEncrypted,
+      } = await ctx.metrics.time("encrypt_tokens", () =>
+        encryptTokenPair(scmToken, scmRefreshToken, env.TOKEN_ENCRYPTION_KEY!)
+      ));
+    } catch (e) {
+      logger.error("Failed to encrypt SCM tokens", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return error("Failed to process SCM tokens", 500);
     }
-  );
+  }
 
   // Populate D1 with the user's SCM tokens (non-blocking) so centralized refresh works
   if (scmUserId && scmToken && scmRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
