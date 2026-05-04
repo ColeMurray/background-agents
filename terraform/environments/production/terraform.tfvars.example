@@ -178,6 +178,12 @@ project_root = "../../../"
 # Also used as the outbound HTTP User-Agent header. Defaults to "Open-Inspect".
 # app_name = "Open-Inspect"
 
+# Short brand label shown only in the sidebar header (next to the logo).
+# Leave empty to default to "Inspect" when app_name is unset, or to fall through
+# to app_name when app_name is overridden. Set this when app_name is too wide
+# for the sidebar (e.g. app_name = "Acme Coding Agent", app_short_name = "Acme").
+# app_short_name = ""
+
 # Optional URL (absolute or root-relative path) to a custom logo image for the
 # web sidebar and browser favicon. Leave empty to use the built-in icon.
 # Example: "/branding/logo.svg" (file under packages/web/public/) or

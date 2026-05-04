@@ -337,6 +337,12 @@ variable "app_name" {
   default     = "Open-Inspect"
 }
 
+variable "app_short_name" {
+  description = "Short brand label shown only in the web sidebar header next to the logo. Defaults to 'Inspect' to keep the sidebar visually compact. When empty, falls through to app_name when app_name is overridden, otherwise renders as 'Inspect'."
+  type        = string
+  default     = ""
+}
+
 variable "app_icon_url" {
   description = "Optional URL (absolute or root-relative) to a custom logo image for the web sidebar and browser favicon. Leave empty to use the built-in icon."
   type        = string

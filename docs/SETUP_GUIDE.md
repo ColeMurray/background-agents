@@ -97,6 +97,10 @@ ALLOWED_EMAIL_DOMAINS=
 # inlined into the client bundle at build time — restart `npm run dev`
 # after changing them.
 NEXT_PUBLIC_APP_NAME=Open-Inspect
+# Short label for the sidebar header (next to the logo). Defaults to
+# "Inspect" when unset; falls through to NEXT_PUBLIC_APP_NAME when only
+# the long name is overridden.
+NEXT_PUBLIC_APP_SHORT_NAME=
 NEXT_PUBLIC_APP_ICON_URL=
 ```
 
