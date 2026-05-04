@@ -29,7 +29,7 @@ import {
   DataControlsIcon,
 } from "@/components/ui/icons";
 import { AppIcon } from "@/components/ui/app-icon";
-import { APP_NAME } from "@/lib/site-config";
+import { APP_SHORT_NAME } from "@/lib/site-config";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -274,7 +274,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           </Button>
           <Link href="/" onClick={handleNavigationSelect} className="flex items-center gap-2">
             <AppIcon className="w-5 h-5" />
-            <span className="font-semibold text-foreground">{APP_NAME}</span>
+            <span className="font-semibold text-foreground">{APP_SHORT_NAME}</span>
           </Link>
         </div>
         <div className="flex items-center gap-2">
