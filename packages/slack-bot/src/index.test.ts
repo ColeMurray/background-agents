@@ -22,8 +22,20 @@ vi.mock("./utils/slack-client", async () => {
   };
 });
 
-import app from "./index";
+import app, { buildAppHomeIntroText } from "./index";
 import { clearLocalCache } from "./classifier/repos";
+
+describe("buildAppHomeIntroText", () => {
+  it("uses the configured app name", () => {
+    expect(buildAppHomeIntroText("Acme Bot")).toBe("Configure your Acme Bot preferences below.");
+  });
+
+  it("works with the default Open-Inspect name", () => {
+    expect(buildAppHomeIntroText("Open-Inspect")).toBe(
+      "Configure your Open-Inspect preferences below."
+    );
+  });
+});
 
 function createMockKV() {
   const store = new Map<string, string>();

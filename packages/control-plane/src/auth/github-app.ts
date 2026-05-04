@@ -9,7 +9,11 @@
  * 3. Token valid for 1 hour
  */
 
-import type { CacheStore, InstallationRepository } from "@open-inspect/shared";
+import {
+  DEFAULT_APP_NAME,
+  type CacheStore,
+  type InstallationRepository,
+} from "@open-inspect/shared";
 
 /** Timeout for individual GitHub API requests (ms). */
 export const GITHUB_FETCH_TIMEOUT_MS = 60_000;
@@ -27,6 +31,13 @@ const INSTALLATION_TOKEN_CACHE_KEY_PREFIX = "github:installation-token:v1";
 
 interface InstallationTokenCacheBindings {
   cacheStore?: CacheStore;
+  /** User-Agent header sent on outbound GitHub API requests. */
+  userAgent?: string;
+}
+
+function resolveUserAgent(env: InstallationTokenCacheBindings | undefined): string {
+  const value = env?.userAgent?.trim();
+  return value && value.length > 0 ? value : DEFAULT_APP_NAME;
 }
 
 interface CachedInstallationToken {
@@ -215,7 +226,8 @@ export async function generateAppJwt(appId: string, privateKey: string): Promise
  */
 async function getInstallationTokenWithMetadata(
   jwt: string,
-  installationId: string
+  installationId: string,
+  userAgent: string
 ): Promise<InstallationTokenResponse> {
   const url = `https://api.github.com/app/installations/${installationId}/access_tokens`;
 
@@ -225,7 +237,7 @@ async function getInstallationTokenWithMetadata(
       Authorization: `Bearer ${jwt}`,
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "Open-Inspect",
+      "User-Agent": userAgent,
     },
   });
 
@@ -318,7 +330,11 @@ async function refreshInstallationToken(
 ): Promise<CachedInstallationToken> {
   const nowEpochMs = Date.now();
   const jwt = await generateAppJwt(config.appId, config.privateKey);
-  const tokenData = await getInstallationTokenWithMetadata(jwt, config.installationId);
+  const tokenData = await getInstallationTokenWithMetadata(
+    jwt,
+    config.installationId,
+    resolveUserAgent(env)
+  );
   const parsedExpiresAtEpochMs = Date.parse(tokenData.expires_at);
   const cached: CachedInstallationToken = {
     token: tokenData.token,
@@ -418,7 +434,7 @@ export async function listInstallationRepositories(
     Authorization: `Bearer ${token}`,
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
-    "User-Agent": "Open-Inspect",
+    "User-Agent": resolveUserAgent(env),
   };
 
   const fetchPage = async (
@@ -522,7 +538,7 @@ export async function getInstallationRepository(
         Authorization: `Bearer ${token}`,
         Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "Open-Inspect",
+        "User-Agent": resolveUserAgent(env),
       },
     });
 
@@ -586,7 +602,7 @@ export async function listRepositoryBranches(
           Authorization: `Bearer ${token}`,
           Accept: "application/vnd.github+json",
           "X-GitHub-Api-Version": "2022-11-28",
-          "User-Agent": "Open-Inspect",
+          "User-Agent": resolveUserAgent(env),
         },
       }
     );

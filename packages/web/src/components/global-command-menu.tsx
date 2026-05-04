@@ -4,13 +4,8 @@ import { useMemo } from "react";
 import type { Session } from "@open-inspect/shared";
 import { formatRelativeTime } from "@/lib/time";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
-import {
-  AutomationsIcon,
-  BranchIcon,
-  InspectIcon,
-  PlusIcon,
-  SettingsIcon,
-} from "@/components/ui/icons";
+import { AutomationsIcon, BranchIcon, PlusIcon, SettingsIcon } from "@/components/ui/icons";
+import { AppIcon } from "@/components/ui/app-icon";
 import {
   Command,
   CommandDialog,
@@ -80,7 +75,7 @@ export function GlobalCommandMenu({
               <CommandShortcut>{SHORTCUT_LABELS.NEW_SESSION}</CommandShortcut>
             </CommandItem>
             <CommandItem onSelect={() => handleSelect(() => onNavigate("/"))}>
-              <InspectIcon className="h-4 w-4" />
+              <AppIcon className="h-4 w-4" />
               <span>Home</span>
             </CommandItem>
             <CommandItem onSelect={() => handleSelect(() => onNavigate("/settings"))}>

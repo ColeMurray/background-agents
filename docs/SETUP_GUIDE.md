@@ -92,6 +92,12 @@ INTERNAL_CALLBACK_SECRET=your_shared_secret
 # Optional access control
 ALLOWED_USERS=
 ALLOWED_EMAIL_DOMAINS=
+
+# Optional whitelabel branding (defaults shown). NEXT_PUBLIC_* vars are
+# inlined into the client bundle at build time — restart `npm run dev`
+# after changing them.
+NEXT_PUBLIC_APP_NAME=Open-Inspect
+NEXT_PUBLIC_APP_ICON_URL=
 ```
 
 Do not commit `packages/web/.env.local`.

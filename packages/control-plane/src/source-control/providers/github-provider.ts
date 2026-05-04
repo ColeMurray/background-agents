@@ -46,10 +46,20 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
 
   private readonly appConfig?: GitHubProviderConfig["appConfig"];
   private readonly cacheStore?: GitHubProviderConfig["cacheStore"];
+  private readonly userAgent: string;
 
   constructor(config: GitHubProviderConfig = {}) {
     this.appConfig = config.appConfig;
     this.cacheStore = config.cacheStore;
+    this.userAgent = config.userAgent || USER_AGENT;
+  }
+
+  /** Bindings passed to github-app helpers so they share cache + User-Agent. */
+  private installationBindings() {
+    return {
+      cacheStore: this.cacheStore,
+      userAgent: this.userAgent,
+    };
   }
 
   /**
@@ -65,7 +75,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         headers: {
           Accept: "application/vnd.github.v3+json",
           Authorization: `Bearer ${auth.token}`,
-          "User-Agent": USER_AGENT,
+          "User-Agent": this.userAgent,
         },
       }
     );
@@ -124,7 +134,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         headers: {
           Accept: "application/vnd.github.v3+json",
           Authorization: `Bearer ${auth.token}`,
-          "User-Agent": USER_AGENT,
+          "User-Agent": this.userAgent,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(requestBody),
@@ -216,7 +226,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         this.appConfig,
         config.owner,
         config.name,
-        this.cacheStore ? { cacheStore: this.cacheStore } : undefined
+        this.installationBindings()
       );
       if (!repo) {
         return null;
@@ -250,7 +260,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     try {
       const result = await listInstallationRepositories(
         this.appConfig,
-        this.cacheStore ? { cacheStore: this.cacheStore } : undefined
+        this.installationBindings()
       );
       return result.repos;
     } catch (error) {
@@ -278,7 +288,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         this.appConfig,
         config.owner,
         config.name,
-        this.cacheStore ? { cacheStore: this.cacheStore } : undefined
+        this.installationBindings()
       );
     } catch (error) {
       throw SourceControlProviderError.fromFetchError(
@@ -301,7 +311,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     }
 
     try {
-      const token = await getCachedInstallationToken(this.appConfig);
+      const token = await getCachedInstallationToken(this.appConfig, this.installationBindings());
       return {
         authType: "app",
         token,
@@ -355,7 +365,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
           headers: {
             Accept: "application/vnd.github.v3+json",
             Authorization: `Bearer ${accessToken}`,
-            "User-Agent": USER_AGENT,
+            "User-Agent": this.userAgent,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ labels }),
@@ -390,7 +400,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
           headers: {
             Accept: "application/vnd.github.v3+json",
             Authorization: `Bearer ${accessToken}`,
-            "User-Agent": USER_AGENT,
+            "User-Agent": this.userAgent,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ reviewers }),

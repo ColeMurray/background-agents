@@ -12,6 +12,7 @@ import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
 import { SIDEBAR_SESSIONS_KEY, type SessionListResponse } from "@/lib/session-list";
 import { Button } from "@/components/ui/button";
 import { GitHubIcon } from "@/components/ui/icons";
+import { APP_NAME } from "@/lib/site-config";
 
 interface SidebarContextValue {
   isOpen: boolean;
@@ -89,7 +90,7 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   if (!session) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-8">
-        <h1 className="text-4xl font-bold text-foreground">Open-Inspect</h1>
+        <h1 className="text-4xl font-bold text-foreground">{APP_NAME}</h1>
         <p className="text-muted-foreground max-w-md text-center">
           Background coding agent for your team. Ship faster with AI-powered code changes.
         </p>

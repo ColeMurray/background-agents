@@ -55,16 +55,18 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
 
   private readonly accessToken: string;
   private readonly namespace?: string;
+  private readonly userAgent: string;
 
   constructor(config: GitLabProviderConfig) {
     this.accessToken = config.accessToken;
     this.namespace = config.namespace;
+    this.userAgent = config.userAgent || USER_AGENT;
   }
 
   private headers(token: string): Record<string, string> {
     return {
       Authorization: `Bearer ${token}`,
-      "User-Agent": USER_AGENT,
+      "User-Agent": this.userAgent,
     };
   }
 

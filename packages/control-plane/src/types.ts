@@ -74,6 +74,7 @@ export interface Env {
 
   // Variables
   DEPLOYMENT_NAME: string;
+  APP_NAME?: string; // Display name for user-visible UI, PR footers, and HTTP User-Agent headers
   SCM_PROVIDER?: string; // Source control provider for this deployment (default: github)
   WORKER_URL?: string; // Base URL for the worker (for callbacks)
   WEB_APP_URL?: string; // Base URL for the web app (for PR links)

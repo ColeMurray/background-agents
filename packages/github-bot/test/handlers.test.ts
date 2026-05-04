@@ -188,7 +188,8 @@ describe("handlePullRequestOpened", () => {
     expect(postReaction).toHaveBeenCalledWith(
       "test-installation-token",
       "https://api.github.com/repos/acme/widgets/issues/42/reactions",
-      "eyes"
+      "eyes",
+      "Open-Inspect"
     );
 
     const cpFetch = getControlPlaneFetch(env);
@@ -350,12 +351,14 @@ describe("handleReviewRequested", () => {
       appId: "12345",
       privateKey: "test-key",
       installationId: "67890",
+      userAgent: "Open-Inspect",
     });
 
     expect(postReaction).toHaveBeenCalledWith(
       "test-installation-token",
       "https://api.github.com/repos/acme/widgets/issues/42/reactions",
-      "eyes"
+      "eyes",
+      "Open-Inspect"
     );
 
     const cpFetch = getControlPlaneFetch(env);
@@ -457,7 +460,8 @@ describe("handleIssueComment", () => {
     expect(postReaction).toHaveBeenCalledWith(
       "test-installation-token",
       "https://api.github.com/repos/acme/widgets/issues/comments/100/reactions",
-      "eyes"
+      "eyes",
+      "Open-Inspect"
     );
 
     const cpFetch = getControlPlaneFetch(env);
@@ -555,7 +559,8 @@ describe("handleReviewComment", () => {
     expect(postReaction).toHaveBeenCalledWith(
       "test-installation-token",
       "https://api.github.com/repos/acme/widgets/pulls/comments/200/reactions",
-      "eyes"
+      "eyes",
+      "Open-Inspect"
     );
 
     const cpFetch = getControlPlaneFetch(env);

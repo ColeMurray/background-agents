@@ -61,6 +61,18 @@ module "web_app" {
       targets   = ["production", "preview"]
       sensitive = false
     },
+    {
+      key       = "NEXT_PUBLIC_APP_NAME"
+      value     = var.app_name
+      targets   = ["production", "preview"]
+      sensitive = false
+    },
+    {
+      key       = "NEXT_PUBLIC_APP_ICON_URL"
+      value     = var.app_icon_url
+      targets   = ["production", "preview"]
+      sensitive = false
+    },
     # Internal
     {
       key       = "INTERNAL_CALLBACK_SECRET"
