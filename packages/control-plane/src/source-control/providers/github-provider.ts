@@ -54,14 +54,6 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     this.userAgent = config.userAgent || USER_AGENT;
   }
 
-  /** Bindings passed to github-app helpers so they share cache + User-Agent. */
-  private installationBindings() {
-    return {
-      cacheStore: this.cacheStore,
-      userAgent: this.userAgent,
-    };
-  }
-
   /**
    * Get repository information from GitHub API.
    */
@@ -222,12 +214,10 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     }
 
     try {
-      const repo = await getInstallationRepository(
-        this.appConfig,
-        config.owner,
-        config.name,
-        this.installationBindings()
-      );
+      const repo = await getInstallationRepository(this.appConfig, config.owner, config.name, {
+        cacheStore: this.cacheStore,
+        userAgent: this.userAgent,
+      });
       if (!repo) {
         return null;
       }
@@ -258,10 +248,10 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     }
 
     try {
-      const result = await listInstallationRepositories(
-        this.appConfig,
-        this.installationBindings()
-      );
+      const result = await listInstallationRepositories(this.appConfig, {
+        cacheStore: this.cacheStore,
+        userAgent: this.userAgent,
+      });
       return result.repos;
     } catch (error) {
       throw SourceControlProviderError.fromFetchError(
@@ -284,12 +274,10 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     }
 
     try {
-      return await listRepositoryBranches(
-        this.appConfig,
-        config.owner,
-        config.name,
-        this.installationBindings()
-      );
+      return await listRepositoryBranches(this.appConfig, config.owner, config.name, {
+        cacheStore: this.cacheStore,
+        userAgent: this.userAgent,
+      });
     } catch (error) {
       throw SourceControlProviderError.fromFetchError(
         `Failed to list branches: ${error instanceof Error ? error.message : String(error)}`,
@@ -311,7 +299,10 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     }
 
     try {
-      const token = await getCachedInstallationToken(this.appConfig, this.installationBindings());
+      const token = await getCachedInstallationToken(this.appConfig, {
+        cacheStore: this.cacheStore,
+        userAgent: this.userAgent,
+      });
       return {
         authType: "app",
         token,
