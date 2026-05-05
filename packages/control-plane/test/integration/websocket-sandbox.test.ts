@@ -3,6 +3,26 @@ import { initNamedSession, openSandboxWs, seedSandboxAuth, queryDO } from "./hel
 
 const SANDBOX_TOKEN = "test-sandbox-auth-token-abc123";
 const SANDBOX_ID = "sb-integration-test";
+const DEFAULT_WAIT_FOR_SANDBOX_STATUS_TIMEOUT_MS = 3000;
+
+async function waitForSandboxStatus(
+  stub: DurableObjectStub,
+  status: string,
+  timeoutMs = DEFAULT_WAIT_FOR_SANDBOX_STATUS_TIMEOUT_MS
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastStatus: string | undefined;
+  while (Date.now() < deadline) {
+    const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox");
+    lastStatus = rows[0]?.status;
+    if (lastStatus === status) return;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  throw new Error(
+    `Timed out after ${timeoutMs}ms waiting for sandbox status "${status}"; last status was "${lastStatus ?? "missing"}"`
+  );
+}
 
 describe("Sandbox WebSocket (via SELF.fetch)", () => {
   it("upgrade with valid auth returns 101", async () => {
@@ -52,9 +72,12 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
   it("upgrade for stopped sandbox returns 410", async () => {
     const name = `ws-sandbox-stopped-${Date.now()}`;
     const { stub } = await initNamedSession(name);
-    await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: SANDBOX_ID });
 
-    // Set sandbox status to stopped
+    // Wait for init's fire-and-forget warmSandbox to fail (no Modal in test env)
+    // before forcing stopped, otherwise it can race and overwrite the status.
+    await waitForSandboxStatus(stub, "failed");
+
+    await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: SANDBOX_ID });
     await queryDO(stub, "UPDATE sandbox SET status = ?", "stopped");
 
     const { ws, response } = await openSandboxWs(name, {
@@ -74,14 +97,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     // Wait for init's fire-and-forget warmSandbox to fail (no Modal in test env).
     // The spawn failure sets status to "failed" which we need to happen before
     // the WS connect sets it to "ready", otherwise the two race.
-    const waitForSpawnToSettle = async () => {
-      for (let i = 0; i < 30; i++) {
-        const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox");
-        if (rows[0]?.status === "failed") return;
-        await new Promise((r) => setTimeout(r, 100));
-      }
-    };
-    await waitForSpawnToSettle();
+    await waitForSandboxStatus(stub, "failed");
 
     const { ws } = await openSandboxWs(name, {
       authToken: SANDBOX_TOKEN,
@@ -89,9 +105,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     });
     expect(ws).not.toBeNull();
     ws!.accept();
-
-    // Small delay to ensure DO has processed the connect handler fully
-    await new Promise((r) => setTimeout(r, 100));
+    await waitForSandboxStatus(stub, "ready");
 
     const stateRes = await stub.fetch("http://internal/internal/state");
     const state = await stateRes.json<{ sandbox: { status: string } }>();

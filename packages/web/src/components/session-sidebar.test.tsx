@@ -55,15 +55,19 @@ afterEach(() => {
   mockPush.mockReset();
 });
 
-function createSession(index: number) {
+function createSession(index: number, overrides: Record<string, unknown> = {}) {
   return {
     id: `session-${index}`,
     title: `Session ${index}`,
     repoOwner: "open-inspect",
     repoName: "background-agents",
+    parentSessionId: null,
+    spawnSource: "user",
+    spawnDepth: 0,
     status: "active",
     createdAt: 1000 + index,
     updatedAt: 2000 + index,
+    ...overrides,
   };
 }
 
@@ -75,6 +79,45 @@ function jsonResponse(body: unknown) {
 }
 
 describe("SessionSidebar", () => {
+  it("renders nested child sessions under their immediate parent", async () => {
+    const parent = createSession(1, { updatedAt: 4000 });
+    const child = createSession(2, {
+      title: "Child session",
+      parentSessionId: parent.id,
+      spawnSource: "agent",
+      spawnDepth: 1,
+      updatedAt: 3000,
+    });
+    const grandchild = createSession(3, {
+      title: "Grandchild session",
+      parentSessionId: child.id,
+      spawnSource: "agent",
+      spawnDepth: 2,
+      updatedAt: 2000,
+    });
+
+    render(
+      <SWRConfig
+        value={{
+          fallback: {
+            [SIDEBAR_SESSIONS_KEY]: {
+              sessions: [parent, child, grandchild],
+              hasMore: false,
+            },
+          },
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    expect(await screen.findByText("Session 1")).toBeInTheDocument();
+    expect(screen.getByText("Child session")).toBeInTheDocument();
+    expect(screen.getByText("Grandchild session")).toBeInTheDocument();
+  });
+
   it("loads the next page when scrolled near the bottom", async () => {
     const firstPage = Array.from({ length: 50 }, (_, index) => createSession(index + 1));
     const secondPage = Array.from({ length: 5 }, (_, index) => createSession(index + 51));
