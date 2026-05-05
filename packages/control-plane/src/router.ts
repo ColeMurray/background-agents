@@ -9,7 +9,7 @@ import type {
   CreateSessionResponse,
   SpawnSource,
 } from "./types";
-import { generateId, encryptToken } from "./auth/crypto";
+import { generateId, encryptTokenPair } from "./auth/crypto";
 import { verifyInternalToken } from "./auth/internal";
 import {
   buildMediaObjectKey,
@@ -924,25 +924,17 @@ async function handleCreateSession(
   let scmTokenEncrypted: string | null = null;
   let scmRefreshTokenEncrypted: string | null = null;
 
-  // If SCM token provided, encrypt it
-  if (scmToken && env.TOKEN_ENCRYPTION_KEY) {
+  if (env.TOKEN_ENCRYPTION_KEY) {
     try {
-      scmTokenEncrypted = await encryptToken(scmToken, env.TOKEN_ENCRYPTION_KEY);
+      ({
+        accessTokenEncrypted: scmTokenEncrypted,
+        refreshTokenEncrypted: scmRefreshTokenEncrypted,
+      } = await encryptTokenPair(scmToken, scmRefreshToken, env.TOKEN_ENCRYPTION_KEY));
     } catch (e) {
       logger.error("Failed to encrypt SCM token", {
-        error: e instanceof Error ? e : String(e),
+        error: e instanceof Error ? e.message : String(e),
       });
       return error("Failed to process SCM token", 500);
-    }
-  }
-
-  if (scmRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
-    try {
-      scmRefreshTokenEncrypted = await encryptToken(scmRefreshToken, env.TOKEN_ENCRYPTION_KEY);
-    } catch (e) {
-      logger.warn("Session created without refresh token — token refresh will be unavailable", {
-        error: e instanceof Error ? e : String(e),
-      });
     }
   }
 
@@ -1725,35 +1717,24 @@ async function handleSessionWsToken(
   const scmRefreshToken = body.scmRefreshToken;
 
   // Encrypt the SCM tokens if provided
-  const { scmTokenEncrypted, scmRefreshTokenEncrypted } = await ctx.metrics.time(
-    "encrypt_tokens",
-    async () => {
-      let accessToken: string | null = null;
-      let refreshToken: string | null = null;
+  let scmTokenEncrypted: string | null = null;
+  let scmRefreshTokenEncrypted: string | null = null;
 
-      if (scmToken && env.TOKEN_ENCRYPTION_KEY) {
-        try {
-          accessToken = await encryptToken(scmToken, env.TOKEN_ENCRYPTION_KEY);
-        } catch (e) {
-          logger.error("Failed to encrypt SCM token", {
-            error: e instanceof Error ? e : String(e),
-          });
-        }
-      }
-
-      if (scmRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
-        try {
-          refreshToken = await encryptToken(scmRefreshToken, env.TOKEN_ENCRYPTION_KEY);
-        } catch (e) {
-          logger.error("Failed to encrypt SCM refresh token", {
-            error: e instanceof Error ? e : String(e),
-          });
-        }
-      }
-
-      return { scmTokenEncrypted: accessToken, scmRefreshTokenEncrypted: refreshToken };
+  if (env.TOKEN_ENCRYPTION_KEY) {
+    try {
+      ({
+        accessTokenEncrypted: scmTokenEncrypted,
+        refreshTokenEncrypted: scmRefreshTokenEncrypted,
+      } = await ctx.metrics.time("encrypt_tokens", () =>
+        encryptTokenPair(scmToken, scmRefreshToken, env.TOKEN_ENCRYPTION_KEY!)
+      ));
+    } catch (e) {
+      logger.error("Failed to encrypt SCM tokens", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return error("Failed to process SCM tokens", 500);
     }
-  );
+  }
 
   // Populate D1 with the user's SCM tokens (non-blocking) so centralized refresh works
   if (scmUserId && scmToken && scmRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
@@ -1839,16 +1820,6 @@ async function handleUpdateSessionTitle(
     )
   );
 
-  if (response.ok) {
-    // read the validated title from the DO response
-    const doResult = (await response.clone().json()) as { title: string };
-    const sessionStore = new SessionIndexStore(env.DB);
-    const updated = await sessionStore.updateTitle(sessionId, doResult.title);
-    if (!updated) {
-      logger.warn("Session not found in D1 index during title update", { session_id: sessionId });
-    }
-  }
-
   return response;
 }
 
@@ -1885,15 +1856,6 @@ async function handleArchiveSession(
     )
   );
 
-  if (response.ok) {
-    // Update D1 index
-    const sessionStore = new SessionIndexStore(env.DB);
-    const updated = await sessionStore.updateStatus(sessionId, "archived");
-    if (!updated) {
-      logger.warn("Session not found in D1 index during archive", { session_id: sessionId });
-    }
-  }
-
   return response;
 }
 
@@ -1929,15 +1891,6 @@ async function handleUnarchiveSession(
       ctx
     )
   );
-
-  if (response.ok) {
-    // Update D1 index
-    const sessionStore = new SessionIndexStore(env.DB);
-    const updated = await sessionStore.updateStatus(sessionId, "active");
-    if (!updated) {
-      logger.warn("Session not found in D1 index during unarchive", { session_id: sessionId });
-    }
-  }
 
   return response;
 }
@@ -2232,11 +2185,6 @@ async function handleCancelChild(
   const response = await childStub.fetch(
     internalRequest(buildSessionInternalUrl(SessionInternalPaths.cancel), { method: "POST" }, ctx)
   );
-
-  // Update D1 status if cancel succeeded
-  if (response.ok) {
-    await sessionStore.updateStatus(childId, "cancelled");
-  }
 
   return response;
 }

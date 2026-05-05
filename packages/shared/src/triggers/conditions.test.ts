@@ -32,6 +32,46 @@ describe("matchesConditions", () => {
     ];
     expect(matchesConditions(conditions, event, conditionRegistry)).toBe(false);
   });
+
+  describe("actor condition (case-insensitive)", () => {
+    it("matches actor with different casing (include)", () => {
+      const event = buildMockEvent("github", { actor: "ColeMurray" });
+      const conditions = [
+        { type: "actor" as const, operator: "include" as const, value: ["colemurray"] },
+      ];
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(true);
+    });
+
+    it("matches actor with different casing (exclude)", () => {
+      const event = buildMockEvent("github", { actor: "ColeMurray" });
+      const conditions = [
+        { type: "actor" as const, operator: "exclude" as const, value: ["COLEMURRAY"] },
+      ];
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(false);
+    });
+
+    it("matches actor with exact casing", () => {
+      const event = buildMockEvent("github", { actor: "octocat" });
+      const conditions = [
+        { type: "actor" as const, operator: "include" as const, value: ["octocat"] },
+      ];
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(true);
+    });
+  });
+
+  describe("label condition (case-insensitive)", () => {
+    it("matches labels with different casing (any_of)", () => {
+      const event = buildMockEvent("github", { labels: ["Bug", "Enhancement"] });
+      const conditions = [{ type: "label" as const, operator: "any_of" as const, value: ["bug"] }];
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(true);
+    });
+
+    it("rejects labels with different casing (none_of)", () => {
+      const event = buildMockEvent("github", { labels: ["Bug"] });
+      const conditions = [{ type: "label" as const, operator: "none_of" as const, value: ["BUG"] }];
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(false);
+    });
+  });
 });
 
 describe("validateConditions", () => {

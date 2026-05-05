@@ -51,6 +51,7 @@ export interface SessionLifecycleHandlerDeps {
   getPublicSessionId: (session: SessionRow) => string;
   getParticipantByUserId: (userId: string) => ParticipantRow | null;
   transitionSessionStatus: (status: SessionStatus) => Promise<boolean>;
+  syncSessionIndexTitle: (sessionId: string, title: string) => void;
   stopExecution: (options?: { suppressStatusReconcile?: boolean }) => Promise<void>;
   getSandboxSocket: () => WebSocket | null;
   sendToSandbox: (ws: WebSocket, message: string | object) => boolean;
@@ -223,6 +224,9 @@ export function createSessionLifecycleHandler(
       }
 
       deps.repository.updateSessionTitle(session.id, body.title, deps.now());
+
+      const publicSessionId = deps.getPublicSessionId(session);
+      deps.syncSessionIndexTitle(publicSessionId, body.title);
 
       deps.broadcast({
         type: "session_title",

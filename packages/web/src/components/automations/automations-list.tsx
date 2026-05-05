@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { describeCron } from "@open-inspect/shared";
+import { describeCron, GITHUB_WEBHOOK_EVENT_CATALOG } from "@open-inspect/shared";
 import type { Automation } from "@open-inspect/shared";
 import { AutomationStatusBadge } from "@/components/automations/automation-status-badge";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,13 @@ interface AutomationsListProps {
   onTrigger: (id: string) => void;
   onDelete: (id: string) => void;
 }
+
+const GITHUB_EVENT_LABELS: Record<string, string> = Object.fromEntries(
+  GITHUB_WEBHOOK_EVENT_CATALOG.map(({ event, action, shortLabel }) => [
+    `${event}.${action}`,
+    shortLabel,
+  ])
+);
 
 function describeTrigger(automation: Automation): string {
   if (automation.triggerType === "schedule" && automation.scheduleCron) {
@@ -36,12 +43,8 @@ function describeTrigger(automation: Automation): string {
       "issue.created": "new error",
       "issue.regression": "error regression",
       "metric_alert.critical": "metric alert",
-      "pull_request.opened": "PR opened",
-      "pull_request.synchronize": "PR updated",
-      "issues.opened": "issue opened",
-      "issue_comment.created": "comment created",
-      "check_suite.completed": "CI completed",
       "webhook.received": "webhook received",
+      ...GITHUB_EVENT_LABELS,
     };
     const eventLabel = EVENT_LABELS[automation.eventType] || automation.eventType;
     return `${label}: ${eventLabel}`;

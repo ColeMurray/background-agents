@@ -97,6 +97,27 @@ EOF
 
 github_app_installation_id = ""
 
+# GitHub Bot (Optional)
+# Set enable_github_bot = true to deploy the GitHub bot worker for PR reviews
+# and @mention commands. Requires github_webhook_secret and github_bot_username.
+enable_github_bot = false
+
+# Shared secret for verifying GitHub webhook signatures
+# Generate with: openssl rand -hex 32
+# Configure the same value in your GitHub App's webhook settings.
+github_webhook_secret = ""
+
+# GitHub App bot username for @mention detection
+# This is the GitHub App's slug (the name in its profile URL) with the literal
+# "[bot]" suffix that GitHub appends to all GitHub App accounts.
+# Find it at: https://github.com/apps/<your-app-slug> — the slug is the last
+# path segment. The bot's commits/comments will appear as "<slug>[bot]".
+# Examples:
+#   App named "Open Inspect"     -> slug "open-inspect"     -> "open-inspect[bot]"
+#   App named "Acme Code Review" -> slug "acme-code-review" -> "acme-code-review[bot]"
+# The webhook handler uses this to detect @mentions of the bot in PRs/issues.
+github_bot_username = ""
+
 # =============================================================================
 # Slack App Credentials (Optional)
 # =============================================================================
@@ -163,6 +184,11 @@ nextauth_secret = ""
 # - "modal": existing Modal-based sandboxes with filesystem snapshot restore
 # - "daytona": direct Daytona REST API integration with stop/start resume
 sandbox_provider = "modal"
+
+# Platform for the web app deployment
+# - "vercel": deploy the Next.js app to Vercel (requires vercel_api_token + vercel_team_id)
+# - "cloudflare": deploy the web app to Cloudflare Workers via OpenNext (no Vercel credentials needed)
+web_platform = "vercel"
 
 # Unique deployment name (used in resource names and URLs)
 # IMPORTANT: This must be globally unique for Vercel URLs.
