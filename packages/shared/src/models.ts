@@ -32,7 +32,7 @@ export type ValidModel = (typeof VALID_MODELS)[number];
 /**
  * Default model to use when none specified or invalid.
  */
-export const DEFAULT_MODEL: ValidModel = "anthropic/claude-sonnet-4-6";
+export const DEFAULT_MODEL: ValidModel = "openai/gpt-5.5";
 
 /**
  * Reasoning effort levels supported across providers.
