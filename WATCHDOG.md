@@ -12,6 +12,7 @@ README for the full architecture overview.
 | Control plane | https://open-inspect-control-plane-watchdog.watchdog-no.workers.dev |
 | Slack bot     | https://open-inspect-slack-bot-watchdog.watchdog-no.workers.dev     |
 | GitHub bot    | https://open-inspect-github-bot-watchdog.watchdog-no.workers.dev    |
+| Linear bot    | https://open-inspect-linear-bot-watchdog.watchdog-no.workers.dev    |
 | Modal API     | https://watchdog--open-inspect-api-health.modal.run                 |
 
 ## Deployment identifiers
@@ -24,6 +25,8 @@ README for the full architecture overview.
   [Anton Watchdog](https://github.com/organizations/watchdog-no/settings/apps/anton-watchdog) (ID
   `3073401`, slug `anton-watchdog[bot]`)
 - Slack App: ID `A0AKYG6D091`, display name `Anton`
+- Linear App: name `Anton` — manage at
+  [Linear → Settings → API → Applications](https://linear.app/settings/api/applications)
 - Web platform: **Cloudflare Workers** (via OpenNext) — not Vercel
 
 ## Terraform state
@@ -71,6 +74,8 @@ If the Slack/GitHub webhook URLs ever change (e.g. deployment_name rename), re-v
 - GitHub:
   [Webhook config](https://github.com/organizations/watchdog-no/settings/apps/anton-watchdog) (URL +
   secret)
+- Linear: [Applications](https://linear.app/settings/api/applications) → Anton → update Webhook URL
+  - Callback URL to match deployed worker
 
 ## Adding a new repo
 
