@@ -405,6 +405,12 @@ project_root    = "../../../"
 # replaces the built-in icon in the web sidebar and browser favicon.
 # app_icon_url = ""
 
+# Custom domains (optional, Cloudflare web_platform only — see Step 9b).
+# Hostname only, no scheme. Leave empty to use the default workers.dev URLs.
+# Domains must be bound to the Cloudflare worker before setting these.
+# web_app_domain       = ""
+# control_plane_domain = ""
+
 # Initial deployment: set both to false (see Step 7)
 enable_durable_object_bindings = false
 enable_service_bindings        = false
@@ -637,6 +643,106 @@ curl -I https://open-inspect-web-{deployment_name}.YOUR-SUBDOMAIN.workers.dev
 2. Sign in with GitHub
 3. Create a new session with a repository
 4. Send a prompt and verify the sandbox starts
+
+---
+
+## Step 9b: Custom Domains (Optional, Cloudflare only)
+
+By default, deployments use Cloudflare-assigned `*.workers.dev` URLs. You can put the web app and/or
+control plane behind your own domain (e.g., `app.example.com`) without redeploying any
+infrastructure — only the URL/identity layer changes.
+
+> **Cloudflare web_platform only.** Vercel deployments use Vercel-managed domains (configured in the
+> Vercel dashboard) and ignore these variables.
+
+### 1. Bind the domain to the worker in Cloudflare
+
+You must bind the hostname to the worker **before** setting any tfvars values, or sign-in will break
+(NextAuth will redirect to a URL that doesn't resolve).
+
+Two paths:
+
+**Dashboard (simplest):** Workers & Pages → `open-inspect-web-{deployment_name}` → Settings →
+Triggers → Custom Domains → "Add Custom Domain". Cloudflare auto-creates the DNS record on the zone
+and provisions a TLS certificate (usually under 60 seconds). Repeat for the control plane worker if
+you also want a custom domain there.
+
+**Terraform:** add a `cloudflare_workers_custom_domain` resource to the production environment. This
+requires your `cloudflare_api_token` to have `Workers Routes: Edit` and `DNS: Edit` on the zone, and
+the zone must already be in your Cloudflare account.
+
+Verify the binding before continuing:
+
+```bash
+curl -I https://app.example.com
+```
+
+You should see a response from the worker (200, 302, or 307). If you see SSL errors or a Cloudflare
+error page, the binding isn't fully provisioned — wait and try again.
+
+### 2. Set the variables in `terraform.tfvars`
+
+```hcl
+# Hostname only, no scheme.
+web_app_domain       = "app.example.com"
+control_plane_domain = "api.app.example.com"   # optional — leave empty to keep workers.dev
+```
+
+Setting either variable changes the corresponding URLs that get baked into the worker bundles and
+runtime config:
+
+| Variable               | Drives                                                               |
+| ---------------------- | -------------------------------------------------------------------- |
+| `web_app_domain`       | `NEXTAUTH_URL`                                                       |
+| `control_plane_domain` | `NEXT_PUBLIC_WS_URL`, `CONTROL_PLANE_URL`, Modal's allowed-host list |
+
+### 3. Update the GitHub App callback URL
+
+Before you apply, add a new line to the GitHub App's "Identifying and authorizing users" → Callback
+URL field:
+
+```
+https://app.example.com/api/auth/callback/github
+```
+
+GitHub Apps support multiple callback URLs. **Keep the existing `*.workers.dev` callback during
+cutover** so you can roll back without breaking sign-in. Save.
+
+### 4. Apply
+
+```bash
+cd terraform/environments/production
+terraform apply
+```
+
+Terraform rebuilds the web app worker (the build provisioner re-runs every apply) and regenerates
+`packages/web/wrangler.production.toml` with the new URL values.
+
+### 5. Smoke-test in this order
+
+1. `https://app.example.com` loads the unauthenticated landing page.
+2. Click sign in → consent on GitHub → redirected back to `https://app.example.com` (not the
+   workers.dev URL).
+3. Land on the dashboard, no `?error=Configuration` in the address bar.
+4. Open or create a session and send a prompt. Streaming output proves the WebSocket connection
+   works through the new control plane domain (or workers.dev, if you only set `web_app_domain`).
+
+### 6. Clean up after verification
+
+Once you've used the new domain for a day or two:
+
+- Remove the `*.workers.dev` callback URL from the GitHub App (optional, just tidy).
+- The `*.workers.dev` URLs themselves remain reachable forever — Cloudflare keeps them as fallbacks.
+  No action needed.
+
+### Troubleshooting
+
+| Symptom                                 | Likely cause                                                                                   |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Sign-in shows `?error=Configuration`    | `NEXTAUTH_URL` doesn't match the URL the browser is hitting (check `wrangler.production.toml`) |
+| `redirect_uri is not associated`        | New callback URL isn't saved on the GitHub App, or there's a typo                              |
+| WSS connection fails (sessions hang)    | `control_plane_domain` set but binding not provisioned, or browser CORS blocking the origin    |
+| Cloudflare 522/525 on the custom domain | Binding incomplete — TLS still provisioning, or domain pointing at the wrong worker            |
 
 ---
 

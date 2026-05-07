@@ -206,6 +206,21 @@ Critical notes before deploy:
 - Use two-phase Terraform deploy for DO/service bindings.
 - Deploy Modal with `modal deploy deploy.py` (not `src/app.py`).
 
+### Custom Domains (Cloudflare only)
+
+If you want to put the web app or control plane behind your own domain (e.g., `app.example.com`)
+instead of the default `*.workers.dev` URL, set `web_app_domain` and/or `control_plane_domain` in
+`terraform.tfvars`.
+
+The domain must be **bound to the Cloudflare worker first** (dashboard or
+`cloudflare_workers_custom_domain`) — these tfvars only control the URL/identity layer that gets
+baked into the worker bundle (`NEXTAUTH_URL`, `NEXT_PUBLIC_WS_URL`, `CONTROL_PLANE_URL`, Modal
+allowed hosts).
+
+After setting the vars and applying, also add the new URL to the GitHub App's callback URL list.
+Full walkthrough in
+[GETTING_STARTED.md → Step 9b](./GETTING_STARTED.md#step-9b-custom-domains-optional-cloudflare-only).
+
 ## Common Issues and Fixes
 
 ### OAuth error: `redirect_uri is not associated with this application`
