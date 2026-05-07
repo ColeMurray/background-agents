@@ -94,38 +94,45 @@ export async function initializeSession(
   headers.set("x-trace-id", ctx.trace_id);
   headers.set("x-request-id", ctx.request_id);
 
-  const initResponse = await stub.fetch(
-    new Request(buildSessionInternalUrl(SessionInternalPaths.init), {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        sessionName: input.sessionId,
-        repoOwner: input.repoOwner,
-        repoName: input.repoName,
-        repoId: input.repoId,
-        defaultBranch: input.defaultBranch,
-        branch: input.branch,
-        title: input.title,
-        model: input.model,
-        reasoningEffort: input.reasoningEffort,
-        userId: input.participantUserId,
-        scmLogin: input.scmLogin,
-        scmName: input.scmName,
-        scmEmail: input.scmEmail,
-        scmTokenEncrypted: input.scmTokenEncrypted,
-        scmRefreshTokenEncrypted: input.scmRefreshTokenEncrypted,
-        scmTokenExpiresAt: input.scmTokenExpiresAt,
-        scmUserId: input.scmUserId,
-        codeServerEnabled: input.codeServerEnabled,
-        sandboxSettings: input.sandboxSettings,
-        parentSessionId: input.parentSessionId,
-        spawnSource: input.spawnSource,
-        spawnDepth: input.spawnDepth,
-      }),
-    })
-  );
+  let initResponse: Response;
+  try {
+    initResponse = await stub.fetch(
+      new Request(buildSessionInternalUrl(SessionInternalPaths.init), {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          sessionName: input.sessionId,
+          repoOwner: input.repoOwner,
+          repoName: input.repoName,
+          repoId: input.repoId,
+          defaultBranch: input.defaultBranch,
+          branch: input.branch,
+          title: input.title,
+          model: input.model,
+          reasoningEffort: input.reasoningEffort,
+          userId: input.participantUserId,
+          scmLogin: input.scmLogin,
+          scmName: input.scmName,
+          scmEmail: input.scmEmail,
+          scmTokenEncrypted: input.scmTokenEncrypted,
+          scmRefreshTokenEncrypted: input.scmRefreshTokenEncrypted,
+          scmTokenExpiresAt: input.scmTokenExpiresAt,
+          scmUserId: input.scmUserId,
+          codeServerEnabled: input.codeServerEnabled,
+          sandboxSettings: input.sandboxSettings,
+          parentSessionId: input.parentSessionId,
+          spawnSource: input.spawnSource,
+          spawnDepth: input.spawnDepth,
+        }),
+      })
+    );
+  } catch (transportError) {
+    await markSessionFailed(sessionStore, input.sessionId, ctx.trace_id);
+    throw transportError;
+  }
 
   if (!initResponse.ok) {
+    await markSessionFailed(sessionStore, input.sessionId, ctx.trace_id);
     const errorText = await initResponse.text().catch(() => "unknown");
     logger.error("DO init failed", {
       session_id: input.sessionId,
@@ -137,4 +144,25 @@ export async function initializeSession(
   }
 
   return { sessionId: input.sessionId, status: "created" };
+}
+
+/**
+ * Best-effort compensation: mark the D1 session row as failed so it
+ * doesn't appear as a phantom "created" session in listings.
+ */
+async function markSessionFailed(
+  sessionStore: SessionIndexStore,
+  sessionId: string,
+  traceId: string
+): Promise<void> {
+  try {
+    await sessionStore.updateStatus(sessionId, "failed");
+  } catch (compensationError) {
+    logger.error("Failed to mark session as failed after DO init error", {
+      session_id: sessionId,
+      trace_id: traceId,
+      error:
+        compensationError instanceof Error ? compensationError.message : String(compensationError),
+    });
+  }
 }

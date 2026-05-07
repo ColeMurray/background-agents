@@ -41,6 +41,7 @@ describe("initializeSession", () => {
   };
 
   let createMock: ReturnType<typeof vi.fn>;
+  let updateStatusMock: ReturnType<typeof vi.fn>;
   let stubFetchMock: ReturnType<typeof vi.fn>;
 
   function createEnv() {
@@ -57,7 +58,10 @@ describe("initializeSession", () => {
     vi.clearAllMocks();
 
     createMock = vi.fn().mockResolvedValue(undefined);
-    vi.mocked(SessionIndexStore).mockImplementation(() => ({ create: createMock }) as never);
+    updateStatusMock = vi.fn().mockResolvedValue(true);
+    vi.mocked(SessionIndexStore).mockImplementation(
+      () => ({ create: createMock, updateStatus: updateStatusMock }) as never
+    );
 
     stubFetchMock = vi.fn(async () => Response.json({ status: "created" }));
   });
@@ -90,6 +94,22 @@ describe("initializeSession", () => {
     );
     expect(createMock).toHaveBeenCalledOnce();
     expect(stubFetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("marks D1 row as failed when DO init returns a non-ok response", async () => {
+    stubFetchMock.mockResolvedValue(new Response("Internal error", { status: 500 }));
+
+    await expect(initializeSession(createEnv(), baseInput, ctx as never)).rejects.toThrow();
+    expect(updateStatusMock).toHaveBeenCalledWith("session-123", "failed");
+  });
+
+  it("marks D1 row as failed when DO init throws a transport error", async () => {
+    stubFetchMock.mockRejectedValue(new Error("network failure"));
+
+    await expect(initializeSession(createEnv(), baseInput, ctx as never)).rejects.toThrow(
+      "network failure"
+    );
+    expect(updateStatusMock).toHaveBeenCalledWith("session-123", "failed");
   });
 
   it("passes the correct fields to D1 session index", async () => {
