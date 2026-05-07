@@ -3,14 +3,19 @@ locals {
   use_modal_backend   = var.sandbox_provider == "modal"
   use_daytona_backend = var.sandbox_provider == "daytona"
 
-  # URLs for cross-service configuration
-  control_plane_host = "open-inspect-control-plane-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev"
+  # Default workers.dev hostnames. They remain reachable even after a custom
+  # domain is bound, so they double as fallbacks.
+  default_control_plane_host = "open-inspect-control-plane-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev"
+  default_web_app_host       = "open-inspect-web-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev"
+
+  # Resolved control plane host — custom domain when set, workers.dev otherwise.
+  control_plane_host = var.control_plane_domain != "" ? var.control_plane_domain : local.default_control_plane_host
   control_plane_url  = "https://${local.control_plane_host}"
   ws_url             = "wss://${local.control_plane_host}"
 
-  # Web app URL depends on deployment platform
+  # Web app URL: custom domain on Cloudflare path, or workers.dev / Vercel default
   web_app_url = var.web_platform == "cloudflare" ? (
-    "https://open-inspect-web-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev"
+    var.web_app_domain != "" ? "https://${var.web_app_domain}" : "https://${local.default_web_app_host}"
     ) : (
     "https://open-inspect-${local.name_suffix}.vercel.app"
   )

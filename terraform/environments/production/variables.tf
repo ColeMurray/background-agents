@@ -422,3 +422,28 @@ variable "unsafe_allow_all_users" {
   type        = bool
   default     = false
 }
+
+# =============================================================================
+# Custom Domains (optional)
+# =============================================================================
+# When set, these override the default workers.dev URLs in cross-service
+# config (NEXTAUTH_URL, NEXT_PUBLIC_WS_URL, CONTROL_PLANE_URL, Modal allowed
+# hosts) and in outputs.
+#
+# These variables do NOT create the Cloudflare custom domain bindings — add
+# cloudflare_workers_custom_domain resources separately, or have the zone
+# admin bind the domains in the dashboard.
+#
+# Set the hostname only (no scheme): "app.example.com", not "https://...".
+
+variable "web_app_domain" {
+  description = "Custom hostname for the web app. Overrides the workers.dev URL when set. Drives NEXTAUTH_URL."
+  type        = string
+  default     = ""
+}
+
+variable "control_plane_domain" {
+  description = "Custom hostname for the control plane. Drives CONTROL_PLANE_URL, NEXT_PUBLIC_WS_URL, and Modal's allowed-host list."
+  type        = string
+  default     = ""
+}

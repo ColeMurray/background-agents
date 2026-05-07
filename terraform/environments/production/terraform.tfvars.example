@@ -190,6 +190,34 @@ sandbox_provider = "modal"
 # - "cloudflare": deploy the web app to Cloudflare Workers via OpenNext (no Vercel credentials needed)
 web_platform = "vercel"
 
+# =============================================================================
+# Custom Domains (optional, Cloudflare web_platform only)
+# =============================================================================
+# Hostname only, no scheme. Leave empty (or commented) to use the default
+# workers.dev URLs.
+#
+# These variables do NOT bind the domain in Cloudflare. Before setting them:
+#   1. Have the zone admin add the zone to this Cloudflare account.
+#   2. Bind each hostname to the corresponding worker via a
+#      cloudflare_workers_custom_domain resource (or in the dashboard:
+#      Workers & Pages -> <worker> -> Settings -> Triggers -> Custom Domains).
+#   3. Wait for TLS to provision (usually <60s) and DNS to propagate.
+#
+# After setting these and running terraform apply:
+#   - NEXTAUTH_URL is rebuilt from web_app_domain.
+#   - NEXT_PUBLIC_WS_URL and CONTROL_PLANE_URL are rebuilt from control_plane_domain.
+#   - Modal's allowed-host list updates automatically.
+#   - Update the GitHub App's OAuth callback URL to:
+#       https://<web_app_domain>/api/auth/callback/github
+#     (GitHub Apps support multiple callback URLs — keep the workers.dev one
+#     during cutover, then remove it once the custom domain is verified.)
+#
+# Example layout:
+#   web_app_domain       = "app.example.com"
+#   control_plane_domain = "api.app.example.com"
+# web_app_domain       = ""
+# control_plane_domain = ""
+
 # Unique deployment name (used in resource names and URLs)
 # IMPORTANT: This must be globally unique for Vercel URLs.
 # Use something unique like your GitHub username, company name, or a random suffix.
