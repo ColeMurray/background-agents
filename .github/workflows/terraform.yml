@@ -208,6 +208,9 @@ jobs:
           TF_VAR_enable_github_bot: "${{ secrets.ENABLE_GITHUB_BOT || 'false' }}"
           TF_VAR_github_webhook_secret: ${{ secrets.GH_WEBHOOK_SECRET }}
           TF_VAR_github_bot_username: ${{ secrets.GH_BOT_USERNAME }}
+          TF_VAR_app_name: "${{ secrets.APP_NAME || 'Open-Inspect' }}"
+          TF_VAR_app_short_name: ${{ secrets.APP_SHORT_NAME }}
+          TF_VAR_app_icon_url: ${{ secrets.APP_ICON_URL }}
           TF_VAR_enable_linear_bot: "${{ secrets.ENABLE_LINEAR_BOT || 'false' }}"
           TF_VAR_linear_client_id: ${{ secrets.LINEAR_CLIENT_ID }}
           TF_VAR_linear_client_secret: ${{ secrets.LINEAR_CLIENT_SECRET }}
@@ -336,6 +339,9 @@ jobs:
           TF_VAR_enable_github_bot: "${{ secrets.ENABLE_GITHUB_BOT || 'false' }}"
           TF_VAR_github_webhook_secret: ${{ secrets.GH_WEBHOOK_SECRET }}
           TF_VAR_github_bot_username: ${{ secrets.GH_BOT_USERNAME }}
+          TF_VAR_app_name: "${{ secrets.APP_NAME || 'Open-Inspect' }}"
+          TF_VAR_app_short_name: ${{ secrets.APP_SHORT_NAME }}
+          TF_VAR_app_icon_url: ${{ secrets.APP_ICON_URL }}
           TF_VAR_enable_linear_bot: "${{ secrets.ENABLE_LINEAR_BOT || 'false' }}"
           TF_VAR_linear_client_id: ${{ secrets.LINEAR_CLIENT_ID }}
           TF_VAR_linear_client_secret: ${{ secrets.LINEAR_CLIENT_SECRET }}
