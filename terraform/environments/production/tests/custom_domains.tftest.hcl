@@ -163,7 +163,7 @@ run "both_domains_set" {
   }
 }
 
-run "vercel_platform_ignores_web_app_domain" {
+run "vercel_platform_rejects_web_app_domain" {
   command = plan
 
   variables {
@@ -171,8 +171,19 @@ run "vercel_platform_ignores_web_app_domain" {
     web_app_domain = "app.example.com"
   }
 
+  expect_failures = [var.web_app_domain]
+}
+
+run "vercel_platform_with_empty_web_app_domain_is_allowed" {
+  command = plan
+
+  variables {
+    web_platform   = "vercel"
+    web_app_domain = ""
+  }
+
   assert {
     condition     = local.web_app_url == "https://open-inspect-test.vercel.app"
-    error_message = "web_app_domain must be ignored when web_platform = vercel — Vercel manages its own domains."
+    error_message = "Empty web_app_domain on Vercel must produce the default vercel.app URL — the validation should only fire when a value is supplied."
   }
 }

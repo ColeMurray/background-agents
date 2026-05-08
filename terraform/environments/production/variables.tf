@@ -440,6 +440,11 @@ variable "web_app_domain" {
   description = "Custom hostname for the web app. Overrides the workers.dev URL when set. Drives NEXTAUTH_URL."
   type        = string
   default     = ""
+
+  validation {
+    condition     = var.web_app_domain == "" || var.web_platform == "cloudflare"
+    error_message = "web_app_domain only takes effect when web_platform = \"cloudflare\". Vercel deployments use Vercel-managed domains and ignore this variable. Either remove web_app_domain or switch web_platform to \"cloudflare\"."
+  }
 }
 
 variable "control_plane_domain" {
