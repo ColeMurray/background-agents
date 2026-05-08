@@ -235,7 +235,7 @@ project_root = "../../../"
 #
 # After manual creation, import the bucket so Terraform manages the binding without
 # trying to recreate it:
-#   terraform import cloudflare_r2_bucket.media <cloudflare_account_id>/<bucket-name>
+#   terraform import cloudflare_r2_bucket.media <cloudflare_account_id>/<bucket-name>/default
 #
 # Worker runtime needs (granted automatically through the binding, listed for reference):
 #   - R2 object-level: Read, Write, Delete on this bucket only.
