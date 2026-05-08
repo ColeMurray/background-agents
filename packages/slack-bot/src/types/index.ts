@@ -18,6 +18,7 @@ export interface Env {
   WEB_APP_URL: string;
   DEFAULT_MODEL: string;
   CLASSIFICATION_MODEL: string;
+  APP_NAME?: string;
 
   // Secrets
   SLACK_BOT_TOKEN: string;

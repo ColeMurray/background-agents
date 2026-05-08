@@ -7,6 +7,11 @@ import { getValidModelOrDefault, isValidModel } from "../../../utils/models";
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "archived", "cancelled", "failed"]);
 
+/**
+ * Request body for the /internal/init endpoint.
+ * The router constructs this from SessionInitInput — see session/initialize.ts.
+ * Note: `userId` here is the participantUserId from SessionInitInput.
+ */
 interface InitRequest {
   sessionName: string;
   repoOwner: string;

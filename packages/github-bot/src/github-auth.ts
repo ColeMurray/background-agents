@@ -1,7 +1,11 @@
+import { DEFAULT_APP_NAME } from "@open-inspect/shared";
+
 export interface GitHubAppConfig {
   appId: string;
   privateKey: string;
   installationId: string;
+  /** User-Agent header sent on outbound GitHub API requests. */
+  userAgent?: string;
 }
 
 function base64UrlEncode(input: Uint8Array | string): string {
@@ -63,7 +67,11 @@ export async function generateAppJwt(appId: string, privateKey: string): Promise
   return `${signingInput}.${base64UrlEncode(new Uint8Array(signature))}`;
 }
 
-async function getInstallationToken(jwt: string, installationId: string): Promise<string> {
+async function getInstallationToken(
+  jwt: string,
+  installationId: string,
+  userAgent: string
+): Promise<string> {
   const url = `https://api.github.com/app/installations/${installationId}/access_tokens`;
   const response = await fetch(url, {
     method: "POST",
@@ -71,7 +79,7 @@ async function getInstallationToken(jwt: string, installationId: string): Promis
       Authorization: `Bearer ${jwt}`,
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "Open-Inspect",
+      "User-Agent": userAgent,
     },
   });
 
@@ -86,7 +94,7 @@ async function getInstallationToken(jwt: string, installationId: string): Promis
 
 export async function generateInstallationToken(config: GitHubAppConfig): Promise<string> {
   const jwt = await generateAppJwt(config.appId, config.privateKey);
-  return getInstallationToken(jwt, config.installationId);
+  return getInstallationToken(jwt, config.installationId, config.userAgent || DEFAULT_APP_NAME);
 }
 
 const WRITE_PERMISSIONS = new Set(["write", "maintain", "admin"]);
@@ -100,7 +108,8 @@ export async function checkSenderPermission(
   token: string,
   owner: string,
   repo: string,
-  username: string
+  username: string,
+  userAgent: string = DEFAULT_APP_NAME
 ): Promise<PermissionCheckResult> {
   try {
     const response = await fetch(
@@ -110,7 +119,7 @@ export async function checkSenderPermission(
           Authorization: `Bearer ${token}`,
           Accept: "application/vnd.github+json",
           "X-GitHub-Api-Version": "2022-11-28",
-          "User-Agent": "Open-Inspect",
+          "User-Agent": userAgent,
         },
       }
     );
@@ -122,7 +131,12 @@ export async function checkSenderPermission(
   }
 }
 
-export async function postReaction(token: string, url: string, content: string): Promise<boolean> {
+export async function postReaction(
+  token: string,
+  url: string,
+  content: string,
+  userAgent: string = DEFAULT_APP_NAME
+): Promise<boolean> {
   try {
     const response = await fetch(url, {
       method: "POST",
@@ -130,7 +144,7 @@ export async function postReaction(token: string, url: string, content: string):
         Authorization: `Bearer ${token}`,
         Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "Open-Inspect",
+        "User-Agent": userAgent,
       },
       body: JSON.stringify({ content }),
     });

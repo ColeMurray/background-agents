@@ -176,4 +176,55 @@ describe("GitHubSourceControlProvider", () => {
 
     expect(spec.force).toBe(false);
   });
+
+  describe("userAgent threading", () => {
+    it("forwards configured userAgent to listInstallationRepositories", async () => {
+      mockListInstallationRepositories.mockResolvedValueOnce({
+        repos: [],
+        timing: { tokenGenerationMs: 0, pages: [], totalPages: 0, totalRepos: 0 },
+      });
+
+      const provider = new GitHubSourceControlProvider({
+        appConfig: fakeAppConfig,
+        userAgent: "Acme Bot",
+      });
+      await provider.listRepositories();
+
+      expect(mockListInstallationRepositories).toHaveBeenCalledWith(
+        fakeAppConfig,
+        expect.objectContaining({ userAgent: "Acme Bot" })
+      );
+    });
+
+    it("forwards configured userAgent to getInstallationRepository", async () => {
+      mockGetInstallationRepository.mockResolvedValueOnce(null);
+
+      const provider = new GitHubSourceControlProvider({
+        appConfig: fakeAppConfig,
+        userAgent: "Acme Bot",
+      });
+      await provider.checkRepositoryAccess({ owner: "acme", name: "web" });
+
+      expect(mockGetInstallationRepository).toHaveBeenCalledWith(
+        fakeAppConfig,
+        "acme",
+        "web",
+        expect.objectContaining({ userAgent: "Acme Bot" })
+      );
+    });
+
+    it("falls back to the default User-Agent when none is configured", async () => {
+      mockGetInstallationRepository.mockResolvedValueOnce(null);
+
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+      await provider.checkRepositoryAccess({ owner: "acme", name: "web" });
+
+      expect(mockGetInstallationRepository).toHaveBeenCalledWith(
+        fakeAppConfig,
+        "acme",
+        "web",
+        expect.objectContaining({ userAgent: "Open-Inspect" })
+      );
+    });
+  });
 });

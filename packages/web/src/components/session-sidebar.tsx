@@ -29,7 +29,6 @@ import { useIsMobile } from "@/hooks/use-media-query";
 import {
   MoreIcon,
   SidebarIcon,
-  InspectIcon,
   ArchiveIcon,
   PlusIcon,
   SettingsIcon,
@@ -37,6 +36,8 @@ import {
   BranchIcon,
   DataControlsIcon,
 } from "@/components/ui/icons";
+import { AppIcon } from "@/components/ui/app-icon";
+import { APP_SHORT_NAME } from "@/lib/site-config";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -280,8 +281,8 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
             <SidebarIcon className="w-4 h-4" />
           </Button>
           <Link href="/" onClick={handleNavigationSelect} className="flex items-center gap-2">
-            <InspectIcon className="w-5 h-5" />
-            <span className="font-semibold text-foreground">Inspect</span>
+            <AppIcon className="w-5 h-5" />
+            <span className="font-semibold text-foreground">{APP_SHORT_NAME}</span>
           </Link>
         </div>
         <div className="flex items-center gap-2">

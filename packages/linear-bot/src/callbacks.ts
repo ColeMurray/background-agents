@@ -12,7 +12,7 @@ import {
   updateAgentSession,
 } from "./utils/linear-client";
 import { extractAgentResponse, formatAgentResponse } from "./completion/extractor";
-import { timingSafeEqual } from "@open-inspect/shared";
+import { resolveAppName, timingSafeEqual } from "@open-inspect/shared";
 import { computeHmacHex } from "./utils/crypto";
 import { makePlan } from "./plan";
 import { createLogger } from "./logger";
@@ -26,6 +26,16 @@ export async function verifyCallbackSignature<T extends { signature: string }>(
   const { signature, ...data } = payload;
   const expectedHex = await computeHmacHex(JSON.stringify(data), secret);
   return timingSafeEqual(signature, expectedHex);
+}
+
+export function formatCompletionComment(
+  appName: string,
+  success: boolean,
+  message: string
+): string {
+  return success
+    ? `## 🤖 ${appName} completed\n\n${message}`
+    : `## ⚠️ ${appName} encountered an issue\n\n${message}`;
 }
 
 export function isValidPayload(payload: unknown): payload is CompletionCallback {
@@ -333,9 +343,7 @@ async function handleCompletionCallback(
       return;
     }
 
-    const commentBody = payload.success
-      ? `## 🤖 Open-Inspect completed\n\n${message}`
-      : `## ⚠️ Open-Inspect encountered an issue\n\n${message}`;
+    const commentBody = formatCompletionComment(resolveAppName(env), payload.success, message);
 
     const result = await postIssueComment(env.LINEAR_API_KEY, context.issueId, commentBody);
 

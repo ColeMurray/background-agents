@@ -14,7 +14,7 @@ import {
 } from "./utils/linear-client";
 import { callbacksRouter } from "./callbacks";
 import { createLogger } from "./logger";
-import { verifyInternalToken } from "@open-inspect/shared";
+import { resolveAppName, verifyInternalToken } from "@open-inspect/shared";
 import { handleAgentSessionEvent, escapeHtml } from "./webhook-handler";
 import {
   getTeamRepoMapping,
@@ -40,6 +40,19 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 function readStringField(record: Record<string, unknown>, key: string): string | null {
   const value = record[key];
   return typeof value === "string" ? value : null;
+}
+
+export function buildOAuthSuccessHtml(appName: string, orgName: string): string {
+  return `
+      <html>
+        <head><title>OAuth Success</title></head>
+        <body>
+          <h1>${escapeHtml(appName)} Agent Installed!</h1>
+          <p>Successfully connected to workspace: <strong>${escapeHtml(orgName)}</strong></p>
+          <p>You can now @mention or assign the agent on Linear issues.</p>
+        </body>
+      </html>
+    `;
 }
 
 function isAgentSessionWebhookPayload(payload: unknown): payload is AgentSessionWebhook {
@@ -81,16 +94,7 @@ app.get("/oauth/callback", async (c) => {
 
   try {
     const { orgName } = await exchangeCodeForToken(c.env, code);
-    return c.html(`
-      <html>
-        <head><title>OAuth Success</title></head>
-        <body>
-          <h1>Open-Inspect Agent Installed!</h1>
-          <p>Successfully connected to workspace: <strong>${escapeHtml(orgName)}</strong></p>
-          <p>You can now @mention or assign the agent on Linear issues.</p>
-        </body>
-      </html>
-    `);
+    return c.html(buildOAuthSuccessHtml(resolveAppName(c.env), orgName));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error("oauth.callback_error", { error: err instanceof Error ? err : new Error(msg) });

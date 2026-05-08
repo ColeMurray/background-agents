@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatToolAction, isValidToolCallPayload } from "./callbacks";
+import { formatCompletionComment, formatToolAction, isValidToolCallPayload } from "./callbacks";
 
 // ─── formatToolAction ────────────────────────────────────────────────────────
 
@@ -59,6 +59,28 @@ describe("formatToolAction", () => {
 
   it("unknown tool → 'Using tool: {name}'", () => {
     expect(formatToolAction("search_files", { query: "foo" })).toBe("Using tool: search_files");
+  });
+});
+
+// ─── formatCompletionComment ─────────────────────────────────────────────────
+
+describe("formatCompletionComment", () => {
+  it("uses the configured app name on success", () => {
+    expect(formatCompletionComment("Acme Bot", true, "All set.")).toBe(
+      "## 🤖 Acme Bot completed\n\nAll set."
+    );
+  });
+
+  it("uses the configured app name on failure", () => {
+    expect(formatCompletionComment("Acme Bot", false, "Something went wrong.")).toBe(
+      "## ⚠️ Acme Bot encountered an issue\n\nSomething went wrong."
+    );
+  });
+
+  it("works with the default Open-Inspect name", () => {
+    expect(formatCompletionComment("Open-Inspect", true, "ok")).toBe(
+      "## 🤖 Open-Inspect completed\n\nok"
+    );
   });
 });
 

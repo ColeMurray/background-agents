@@ -10,7 +10,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
-import { timingSafeEqual } from "@open-inspect/shared";
+import { resolveAppName, timingSafeEqual } from "@open-inspect/shared";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { getGitHubAppConfig, getCachedInstallationToken } from "../auth/github-app";
 import { createModalClient } from "../sandbox/client";
@@ -468,6 +468,7 @@ export class SessionDO extends DurableObject<Env> {
                 artifact,
               });
             },
+            appName: resolveAppName(this.env),
           });
 
           return pullRequestService.createPullRequest(input);
@@ -586,6 +587,7 @@ export class SessionDO extends DurableObject<Env> {
                   ? () =>
                       getCachedInstallationToken(appConfig, {
                         cacheStore: createKvCacheStore(this.env.REPOS_CACHE),
+                        userAgent: resolveAppName(this.env),
                       })
                   : () => Promise.resolve(null);
 

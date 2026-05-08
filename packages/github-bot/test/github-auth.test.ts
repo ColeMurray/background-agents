@@ -105,6 +105,30 @@ describe("postReaction", () => {
     const result = await postReaction("tok", "https://api.github.com/test", "eyes");
     expect(result).toBe(false);
   });
+
+  it("uses the configured User-Agent when one is provided", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response("", { status: 201 }));
+    await postReaction("tok", "https://api.github.com/test", "eyes", "Acme Bot");
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "https://api.github.com/test",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "User-Agent": "Acme Bot" }),
+      })
+    );
+  });
+
+  it("defaults the User-Agent to Open-Inspect when omitted", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response("", { status: 201 }));
+    await postReaction("tok", "https://api.github.com/test", "eyes");
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "https://api.github.com/test",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "User-Agent": "Open-Inspect" }),
+      })
+    );
+  });
 });
 
 describe("checkSenderPermission", () => {
@@ -186,6 +210,20 @@ describe("checkSenderPermission", () => {
           "User-Agent": "Open-Inspect",
         },
       }
+    );
+  });
+
+  it("uses the configured User-Agent when one is provided", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ permission: "write" }), { status: 200 })
+    );
+    await checkSenderPermission("tok", "acme", "widgets", "alice", "Acme Bot");
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        headers: expect.objectContaining({ "User-Agent": "Acme Bot" }),
+      })
     );
   });
 });

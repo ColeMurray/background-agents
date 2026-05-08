@@ -2,6 +2,7 @@
  * GitHub authentication utilities.
  */
 
+import { DEFAULT_APP_NAME } from "@open-inspect/shared";
 import { decryptToken, encryptToken } from "./crypto";
 import type { GitHubUser, GitHubTokenResponse } from "../types";
 
@@ -92,12 +93,15 @@ export async function refreshAccessToken(
 /**
  * Get current user info from GitHub.
  */
-export async function getGitHubUser(accessToken: string): Promise<GitHubUser> {
+export async function getGitHubUser(
+  accessToken: string,
+  userAgent: string = DEFAULT_APP_NAME
+): Promise<GitHubUser> {
   const response = await fetch("https://api.github.com/user", {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/vnd.github.v3+json",
-      "User-Agent": "Open-Inspect",
+      "User-Agent": userAgent,
     },
   });
 
@@ -112,13 +116,14 @@ export async function getGitHubUser(accessToken: string): Promise<GitHubUser> {
  * Get user's email addresses from GitHub.
  */
 export async function getGitHubUserEmails(
-  accessToken: string
+  accessToken: string,
+  userAgent: string = DEFAULT_APP_NAME
 ): Promise<Array<{ email: string; primary: boolean; verified: boolean }>> {
   const response = await fetch("https://api.github.com/user/emails", {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/vnd.github.v3+json",
-      "User-Agent": "Open-Inspect",
+      "User-Agent": userAgent,
     },
   });
 

@@ -1,3 +1,4 @@
+import { resolveAppName } from "@open-inspect/shared";
 import type {
   Env,
   PullRequestOpenedPayload,
@@ -90,9 +91,10 @@ function fireAndForgetReaction(
   log: Logger,
   token: string,
   url: string,
+  userAgent: string,
   meta: Record<string, unknown>
 ): void {
-  postReaction(token, url, "eyes").then(
+  postReaction(token, url, "eyes", userAgent).then(
     (ok) => {
       if (ok) log.debug("acknowledgment.posted", meta);
       else log.warn("acknowledgment.failed", meta);
@@ -125,11 +127,13 @@ async function resolveCallerGating(
     }
   }
 
+  const userAgent = resolveAppName(env);
   const [ghToken, headers] = await Promise.all([
     generateInstallationToken({
       appId: env.GITHUB_APP_ID,
       privateKey: env.GITHUB_APP_PRIVATE_KEY,
       installationId: env.GITHUB_APP_INSTALLATION_ID,
+      userAgent,
     }),
     getAuthHeaders(env, traceId),
   ]);
@@ -139,7 +143,8 @@ async function resolveCallerGating(
       ghToken,
       owner,
       repoName,
-      senderLogin
+      senderLogin,
+      userAgent
     );
     if (!hasPermission) {
       const reason = error ? "permission_check_failed" : "sender_insufficient_permission";
@@ -202,6 +207,7 @@ export async function handleReviewRequested(
     log,
     ghToken,
     `https://api.github.com/repos/${owner}/${repoName}/issues/${pr.number}/reactions`,
+    resolveAppName(env),
     meta
   );
 
@@ -301,6 +307,7 @@ export async function handlePullRequestOpened(
     log,
     ghToken,
     `https://api.github.com/repos/${owner}/${repoName}/issues/${pr.number}/reactions`,
+    resolveAppName(env),
     meta
   );
 
@@ -406,6 +413,7 @@ export async function handleIssueComment(
     log,
     ghToken,
     `https://api.github.com/repos/${owner}/${repoName}/issues/comments/${comment.id}/reactions`,
+    resolveAppName(env),
     meta
   );
 
@@ -504,6 +512,7 @@ export async function handleReviewComment(
     log,
     ghToken,
     `https://api.github.com/repos/${owner}/${repoName}/pulls/comments/${comment.id}/reactions`,
+    resolveAppName(env),
     meta
   );
 
