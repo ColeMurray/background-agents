@@ -139,37 +139,58 @@ def _generate_clone_token() -> str:
     return ""
 
 
-async def _stream_build_logs(sandbox) -> tuple[str, bool]:
+_STREAM_INTERESTING_EVENTS = (
+    "git.sync_complete",
+    "image_build.complete",
+    "setup.failed",
+    "start.failed",
+    "supervisor.error",
+)
+
+
+async def _stream_build_logs(sandbox) -> tuple[str, bool, str | None]:
     """
     Stream sandbox stdout and extract build results.
 
     The entrypoint logs structured JSON lines. We look for:
     - event="git.sync_complete" with "head_sha" field
     - event="image_build.complete" to know the build finished
+    - event in {"setup.failed","start.failed","supervisor.error"} to capture
+      the real cause when the sandbox exits before image_build.complete fires.
 
     The sandbox stays alive after logging image_build.complete (it awaits
     shutdown_event), so we can snapshot_filesystem() while it's still running.
 
     Returns:
-        (head_sha, build_complete) tuple. head_sha is empty string if not found.
+        (head_sha, build_complete, error_message) tuple. head_sha is empty
+        string if not found. error_message is None on success, or a short
+        captured tail of the failing event when build_complete is False.
     """
     head_sha = ""
+    error_message: str | None = None
     try:
         async for line in sandbox.stdout:
-            if "git.sync_complete" not in line and "image_build.complete" not in line:
+            if not any(marker in line for marker in _STREAM_INTERESTING_EVENTS):
                 continue
             try:
                 entry = json.loads(line)
-                event = entry.get("event", "")
-                if event == "git.sync_complete" and entry.get("head_sha"):
-                    head_sha = entry["head_sha"]
-                elif event == "image_build.complete":
-                    return head_sha, True
             except json.JSONDecodeError:
                 continue
+            event = entry.get("event", "")
+            if event == "git.sync_complete" and entry.get("head_sha"):
+                head_sha = entry["head_sha"]
+            elif event == "image_build.complete":
+                return head_sha, True, None
+            elif event in ("setup.failed", "start.failed"):
+                tail = (entry.get("output_tail") or "").strip()
+                # Last 500 chars is plenty to identify the failure.
+                error_message = f"{event}: {tail[-500:]}" if tail else event
+            elif event == "supervisor.error" and not error_message:
+                msg = entry.get("error_message") or entry.get("error") or ""
+                error_message = f"supervisor.error: {msg}"[:500]
     except Exception as e:
         log.warn("build.stream_error", error=str(e))
-    return head_sha, False
+    return head_sha, False, error_message
 
 
 @app.function(
@@ -230,10 +251,11 @@ async def build_repo_image(
         )
 
         # 3. Stream stdout until build completes (sandbox stays alive for snapshotting)
-        base_sha, build_complete = await _stream_build_logs(handle.modal_sandbox)
+        base_sha, build_complete, stream_error = await _stream_build_logs(handle.modal_sandbox)
         if not build_complete:
             exit_code = handle.modal_sandbox.returncode
-            raise BuildError(f"Build sandbox exited without completing (exit_code={exit_code})")
+            detail = stream_error or f"exit_code={exit_code}"
+            raise BuildError(f"Build sandbox exited without completing: {detail}")
 
         # 4. Snapshot the running sandbox's filesystem
         image = await handle.modal_sandbox.snapshot_filesystem.aio()

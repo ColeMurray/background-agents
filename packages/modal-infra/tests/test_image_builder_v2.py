@@ -194,9 +194,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete = await _stream_build_logs(mock_sandbox)
+        sha, complete, error = await _stream_build_logs(mock_sandbox)
         assert sha == "abc123def456"
         assert complete is True
+        assert error is None
 
     @pytest.mark.asyncio
     async def test_complete_without_sha(self):
@@ -208,9 +209,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete = await _stream_build_logs(mock_sandbox)
+        sha, complete, error = await _stream_build_logs(mock_sandbox)
         assert sha == ""
         assert complete is True
+        assert error is None
 
     @pytest.mark.asyncio
     async def test_incomplete_when_sandbox_exits(self):
@@ -223,9 +225,11 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete = await _stream_build_logs(mock_sandbox)
+        sha, complete, error = await _stream_build_logs(mock_sandbox)
         assert sha == "abc123"
         assert complete is False
+        # No setup.failed/start.failed/supervisor.error in this stream.
+        assert error is None
 
     @pytest.mark.asyncio
     async def test_returns_incomplete_on_error(self):
@@ -238,9 +242,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = _raise()
 
-        sha, complete = await _stream_build_logs(mock_sandbox)
+        sha, complete, error = await _stream_build_logs(mock_sandbox)
         assert sha == ""
         assert complete is False
+        assert error is None
 
     @pytest.mark.asyncio
     async def test_handles_malformed_json(self):
@@ -253,9 +258,63 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete = await _stream_build_logs(mock_sandbox)
+        sha, complete, error = await _stream_build_logs(mock_sandbox)
         assert sha == "abc123"
         assert complete is True
+        assert error is None
+
+    @pytest.mark.asyncio
+    async def test_captures_setup_failed_tail(self):
+        """When setup.failed precedes sandbox exit, capture its output_tail in error."""
+        log_lines = [
+            json.dumps({"level": "info", "event": "git.sync_complete", "head_sha": "abc"}),
+            json.dumps(
+                {
+                    "level": "error",
+                    "event": "setup.failed",
+                    "exit_code": 1,
+                    "output_tail": "initdb: error: cannot be run as root",
+                }
+            ),
+            json.dumps(
+                {
+                    "level": "error",
+                    "event": "supervisor.error",
+                    "error_type": "RuntimeError",
+                    "error_message": "setup hook failed in build mode",
+                }
+            ),
+        ]
+        mock_sandbox = MagicMock()
+        mock_sandbox.stdout = self._async_stdout(log_lines)
+
+        sha, complete, error = await _stream_build_logs(mock_sandbox)
+        assert sha == "abc"
+        assert complete is False
+        assert error is not None
+        assert "setup.failed" in error
+        assert "initdb: error: cannot be run as root" in error
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_supervisor_error(self):
+        """If only supervisor.error is present, surface its error_message."""
+        log_lines = [
+            json.dumps(
+                {
+                    "level": "error",
+                    "event": "supervisor.error",
+                    "error_type": "RuntimeError",
+                    "error_message": "git clone failed: auth rejected",
+                }
+            ),
+        ]
+        mock_sandbox = MagicMock()
+        mock_sandbox.stdout = self._async_stdout(log_lines)
+
+        sha, complete, error = await _stream_build_logs(mock_sandbox)
+        assert sha == ""
+        assert complete is False
+        assert error == "supervisor.error: git clone failed: auth rejected"
 
 
 class TestBuildError:
