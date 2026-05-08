@@ -237,6 +237,13 @@ project_root = "../../../"
 # trying to recreate it:
 #   terraform import cloudflare_r2_bucket.media <cloudflare_account_id>/<bucket-name>/default
 #
+# WARNING — renaming an existing Terraform-managed bucket:
+# If you previously deployed without this variable (Terraform owns the default-named
+# bucket) and now set r2_media_bucket_name to a different name WITHOUT first running
+# `terraform import` on the new name, Terraform will destroy the existing bucket and
+# create a new one — permanently deleting all stored objects. Migrate objects first
+# (e.g. with rclone) and import the new bucket before applying.
+#
 # Worker runtime needs (granted automatically through the binding, listed for reference):
 #   - R2 object-level: Read, Write, Delete on this bucket only.
 # The Terraform/Cloudflare API token does NOT need object-level R2 permissions —
