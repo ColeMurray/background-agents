@@ -214,8 +214,10 @@ instead of the default `*.workers.dev` URL, set `web_app_domain` and/or `control
 
 The domain must be **bound to the Cloudflare worker first** (dashboard or
 `cloudflare_workers_custom_domain`) — these tfvars only control the URL/identity layer that gets
-baked into the worker bundle (`NEXTAUTH_URL`, `NEXT_PUBLIC_WS_URL`, `CONTROL_PLANE_URL`, Modal
-allowed hosts).
+baked into the worker bundle (`NEXTAUTH_URL`, `NEXT_PUBLIC_WS_URL`, `CONTROL_PLANE_URL`, and Modal's
+`ALLOWED_CONTROL_PLANE_HOSTS` when `sandbox_provider = "modal"`). `web_app_domain` is rejected at
+plan time when `web_platform = "vercel"`; `control_plane_domain` always applies. Daytona deployments
+need no extra wiring — see Step 9b for details.
 
 After setting the vars and applying, also add the new URL to the GitHub App's callback URL list.
 Full walkthrough in

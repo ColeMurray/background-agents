@@ -424,20 +424,30 @@ variable "unsafe_allow_all_users" {
 }
 
 # =============================================================================
-# Custom Domains (optional)
+# Custom Domains (Cloudflare workers only)
 # =============================================================================
-# When set, these override the default workers.dev URLs in cross-service
-# config (NEXTAUTH_URL, NEXT_PUBLIC_WS_URL, CONTROL_PLANE_URL, Modal allowed
-# hosts) and in outputs.
+# Optional. When set, these override the default workers.dev URLs in
+# cross-service config (NEXTAUTH_URL, NEXT_PUBLIC_WS_URL, CONTROL_PLANE_URL)
+# and outputs. When sandbox_provider = "modal", control_plane_domain also
+# flows into Modal's ALLOWED_CONTROL_PLANE_HOSTS so sandbox callbacks
+# reach the new hostname. Daytona doesn't need an equivalent — the
+# control plane calls Daytona's API, not the reverse, so there's no host
+# allowlist to maintain.
 #
-# These variables do NOT create the Cloudflare custom domain bindings — add
-# cloudflare_workers_custom_domain resources separately, or have the zone
-# admin bind the domains in the dashboard.
+# - web_app_domain only takes effect when web_platform = "cloudflare".
+#   Vercel deployments manage their own domains; setting this variable
+#   while web_platform = "vercel" fails at plan time (see validation block).
+# - control_plane_domain always applies — the control plane is a Cloudflare
+#   Worker regardless of web platform.
+#
+# These variables do NOT bind the domain in Cloudflare. Add a
+# cloudflare_workers_custom_domain resource separately, or have the zone
+# admin bind the domain in the dashboard.
 #
 # Set the hostname only (no scheme): "app.example.com", not "https://...".
 
 variable "web_app_domain" {
-  description = "Custom hostname for the web app. Overrides the workers.dev URL when set. Drives NEXTAUTH_URL."
+  description = "Custom hostname for the Cloudflare web Worker. Drives NEXTAUTH_URL. Has no effect when web_platform = \"vercel\" (rejected at plan time when both are set)."
   type        = string
   default     = ""
 
@@ -448,7 +458,7 @@ variable "web_app_domain" {
 }
 
 variable "control_plane_domain" {
-  description = "Custom hostname for the control plane. Drives CONTROL_PLANE_URL, NEXT_PUBLIC_WS_URL, and Modal's allowed-host list."
+  description = "Custom hostname for the Cloudflare control plane Worker. Drives CONTROL_PLANE_URL, NEXT_PUBLIC_WS_URL, and (when sandbox_provider = \"modal\") Modal's ALLOWED_CONTROL_PLANE_HOSTS. No-op for Daytona's REST-pull model."
   type        = string
   default     = ""
 }

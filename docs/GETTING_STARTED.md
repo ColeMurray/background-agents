@@ -652,8 +652,15 @@ By default, deployments use Cloudflare-assigned `*.workers.dev` URLs. You can pu
 control plane behind your own domain (e.g., `app.example.com`) without redeploying any
 infrastructure — only the URL/identity layer changes.
 
-> **Cloudflare web_platform only.** Vercel deployments use Vercel-managed domains (configured in the
-> Vercel dashboard) and ignore these variables.
+> **Cloudflare web_platform only.** `web_app_domain` is rejected at plan time when
+> `web_platform = "vercel"` — Vercel deployments use Vercel-managed domains (configured in the
+> Vercel dashboard). `control_plane_domain` always applies regardless of web platform, since the
+> control plane is a Cloudflare Worker either way.
+>
+> **Sandbox backend interaction.** When `sandbox_provider = "modal"`, setting `control_plane_domain`
+> automatically updates Modal's `ALLOWED_CONTROL_PLANE_HOSTS` so sandbox callbacks reach the new
+> hostname. Daytona deployments need no extra wiring — the control plane calls Daytona's REST API,
+> not the reverse, so there's no host allowlist to maintain.
 
 ### 1. Bind the domain to the worker in Cloudflare
 
@@ -691,10 +698,10 @@ control_plane_domain = "api.app.example.com"   # optional — leave empty to kee
 Setting either variable changes the corresponding URLs that get baked into the worker bundles and
 runtime config:
 
-| Variable               | Drives                                                               |
-| ---------------------- | -------------------------------------------------------------------- |
-| `web_app_domain`       | `NEXTAUTH_URL`                                                       |
-| `control_plane_domain` | `NEXT_PUBLIC_WS_URL`, `CONTROL_PLANE_URL`, Modal's allowed-host list |
+| Variable               | Drives                                                                                                                   |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `web_app_domain`       | `NEXTAUTH_URL` (Cloudflare web_platform only)                                                                            |
+| `control_plane_domain` | `NEXT_PUBLIC_WS_URL`, `CONTROL_PLANE_URL`, and Modal's `ALLOWED_CONTROL_PLANE_HOSTS` (when `sandbox_provider = "modal"`) |
 
 ### 3. Update the GitHub App callback URL
 
