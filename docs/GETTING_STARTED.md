@@ -708,7 +708,7 @@ runtime config:
 Before you apply, add a new line to the GitHub App's "Identifying and authorizing users" → Callback
 URL field:
 
-```
+```text
 https://app.example.com/api/auth/callback/github
 ```
 
