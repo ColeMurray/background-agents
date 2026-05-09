@@ -8,8 +8,13 @@ import {
   type LinearBotSettings,
   type CodeServerSettings,
   type SandboxSettings,
+  type SlackGlobalSettings,
   MAX_TUNNEL_PORTS,
 } from "@open-inspect/shared";
+
+type SettingsLevel = "global" | "repo";
+
+const SLACK_MENTIONS_POLICIES = ["allow", "escape", "strip"] as const;
 
 export class IntegrationSettingsValidationError extends Error {
   constructor(message: string) {
@@ -59,7 +64,7 @@ export class IntegrationSettingsStore {
     if (settings.defaults) {
       settings = {
         ...settings,
-        defaults: this.validateAndNormalizeSettings(integrationId, settings.defaults),
+        defaults: this.validateAndNormalizeSettings(integrationId, settings.defaults, "global"),
       };
     }
 
@@ -103,7 +108,7 @@ export class IntegrationSettingsStore {
     repo: string,
     settings: IntegrationSettingsMap[K]["repo"]
   ): Promise<void> {
-    const normalized = this.validateAndNormalizeSettings(integrationId, settings);
+    const normalized = this.validateAndNormalizeSettings(integrationId, settings, "repo");
 
     const now = Date.now();
     await this.db
@@ -170,7 +175,8 @@ export class IntegrationSettingsStore {
 
   private validateAndNormalizeSettings<K extends IntegrationId>(
     integrationId: K,
-    settings: IntegrationSettingsMap[K]["repo"]
+    settings: IntegrationSettingsMap[K]["repo"],
+    level: SettingsLevel
   ): IntegrationSettingsMap[K]["repo"] {
     if (integrationId === "github") {
       return this.validateAndNormalizeGitHubSettings(
@@ -189,6 +195,13 @@ export class IntegrationSettingsStore {
     if (integrationId === "sandbox") {
       return this.validateSandboxSettings(
         settings as SandboxSettings
+      ) as IntegrationSettingsMap[K]["repo"];
+    }
+
+    if (integrationId === "slack") {
+      return this.validateSlackSettings(
+        settings as SlackGlobalSettings,
+        level
       ) as IntegrationSettingsMap[K]["repo"];
     }
 
@@ -316,6 +329,40 @@ export class IntegrationSettingsStore {
       }
       return { ...settings, tunnelPorts: dedupedPorts };
     }
+    return settings;
+  }
+
+  private validateSlackSettings(
+    settings: SlackGlobalSettings,
+    level: SettingsLevel
+  ): SlackGlobalSettings {
+    const allowedKeys =
+      level === "global"
+        ? new Set(["agentNotificationsEnabled", "mentionsPolicy"])
+        : new Set(["agentNotificationsEnabled"]);
+
+    for (const key of Object.keys(settings)) {
+      if (!allowedKeys.has(key)) {
+        throw new IntegrationSettingsValidationError(`Unknown slack setting: ${key}`);
+      }
+    }
+
+    if (
+      settings.agentNotificationsEnabled !== undefined &&
+      typeof settings.agentNotificationsEnabled !== "boolean"
+    ) {
+      throw new IntegrationSettingsValidationError("agentNotificationsEnabled must be a boolean");
+    }
+
+    if (
+      settings.mentionsPolicy !== undefined &&
+      !SLACK_MENTIONS_POLICIES.includes(settings.mentionsPolicy)
+    ) {
+      throw new IntegrationSettingsValidationError(
+        `mentionsPolicy must be one of: ${SLACK_MENTIONS_POLICIES.join(", ")}`
+      );
+    }
+
     return settings;
   }
 }
