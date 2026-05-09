@@ -17,8 +17,18 @@
  * See `docs/THEMING.md` for the full walkthrough.
  */
 
+/**
+ * Whether a theme reads as light, dark, or follows the OS preference.
+ * Reserved values; named palettes should be "light" or "dark" only.
+ */
 export type AppThemeColorScheme = "light" | "dark" | "system";
 
+/**
+ * One entry in the theme registry. `id` doubles as the CSS class selector
+ * and the value persisted by next-themes; `label` is the human-readable
+ * name shown in the Appearance picker; `colorScheme` drives syntax
+ * highlighting fallback when this theme is active.
+ */
 export interface AppTheme {
   id: string;
   label: string;
@@ -32,6 +42,10 @@ export interface AppTheme {
   colorScheme: AppThemeColorScheme;
 }
 
+/**
+ * Registered themes, in the order they appear in the Appearance picker.
+ * Each entry must have a matching CSS rule in `globals.css` keyed by `id`.
+ */
 export const APP_THEMES: AppTheme[] = [
   { id: "light", label: "Default", colorScheme: "light" },
   { id: "dark", label: "Dark", colorScheme: "dark" },
@@ -41,10 +55,20 @@ export const APP_THEMES: AppTheme[] = [
   { id: "blue", label: "Blue", colorScheme: "light" },
 ];
 
+/** Theme ids in registration order — passed to next-themes' `themes` prop. */
 export const APP_THEME_IDS = APP_THEMES.map((t) => t.id);
 
+/**
+ * Hard-coded fallback used when no deploy-time default is configured or the
+ * configured value is invalid. "system" preserves the historical behavior.
+ */
 export const DEFAULT_APP_THEME = "system";
 
+/**
+ * Look up a registered theme by id. Returns `undefined` for unknown ids so
+ * callers can decide how to handle them (most should fall through to the
+ * resolved light/dark behavior rather than treating it as an error).
+ */
 export function getAppTheme(id: string | undefined): AppTheme | undefined {
   return APP_THEMES.find((t) => t.id === id);
 }

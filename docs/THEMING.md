@@ -121,6 +121,11 @@ To ship your own brand (e.g., "Acme Purple"):
    ```
 
    You only need to override the tokens that change; everything else inherits from `:root`.
+   Each named palette is light-only or dark-only — `next-themes` is configured with
+   `attribute="class"`, which puts a single theme class on `<html>` at a time, so
+   selectors like `.acme-purple.dark` never match. If you want both a light and dark
+   variant of a brand, register them as two separate themes (e.g., `acme-purple` and
+   `acme-purple-dark`).
 
 2. **Register it in [`app-themes.ts`](../packages/web/src/lib/app-themes.ts).** Add an entry to
    `APP_THEMES`:

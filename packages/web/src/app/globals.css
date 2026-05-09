@@ -213,9 +213,15 @@ pre code.hljs {
  * id as a class on `<html>`, so picking "Blue" in Settings → Appearance (or
  * setting `app_default_theme = "blue"` in tfvars) makes these rules win.
  *
+ * Blue is light-only by design: with `attribute="class"` only one theme
+ * class is present on `<html>` at a time, so picking "Blue" replaces (not
+ * stacks with) "Dark" — a user who wants a dark UI picks "Dark" instead.
+ * A separate dark variant of a branded palette should be registered as its
+ * own theme entry (e.g., `{ id: "blue-dark", colorScheme: "dark" }`) with
+ * its own `.blue-dark { ... }` rule, rather than relying on `.blue.dark`.
+ *
  * To replace this with your own brand, override only the tokens that change
- * (background, accent, ring) — everything else inherits from `:root`. Add a
- * matching `.blue.dark` block if you want a dark variant of the same brand.
+ * (background, accent, ring) — everything else inherits from `:root`.
  *
  * To remove the example entirely: delete this block, drop the matching entry
  * from `APP_THEMES`, and you're back to Default / Dark / System.
