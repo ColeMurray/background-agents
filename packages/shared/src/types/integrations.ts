@@ -3,10 +3,13 @@
 export type IntegrationId = "github" | "linear" | "code-server" | "sandbox" | "slack";
 
 /** Enforces the common shape for all integration configurations. */
-export interface IntegrationEntry<TRepo extends object = Record<string, unknown>> {
+export interface IntegrationEntry<
+  TRepo extends object = Record<string, unknown>,
+  TGlobalDefaults extends object = TRepo,
+> {
   global: {
     enabledRepos?: string[];
-    defaults?: TRepo;
+    defaults?: TGlobalDefaults;
   };
   repo: TRepo;
 }
@@ -65,7 +68,7 @@ export interface IntegrationSettingsMap {
   linear: IntegrationEntry<LinearBotSettings>;
   "code-server": IntegrationEntry<CodeServerSettings>;
   sandbox: IntegrationEntry<SandboxSettings>;
-  slack: IntegrationEntry<SlackGlobalSettings>;
+  slack: IntegrationEntry<SlackRepoSettings, SlackGlobalSettings>;
 }
 
 /** Derived type for the GitHub bot global config. */

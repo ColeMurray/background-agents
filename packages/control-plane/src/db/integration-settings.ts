@@ -147,7 +147,9 @@ export class IntegrationSettingsStore {
   async getResolvedConfig<K extends IntegrationId>(
     integrationId: K,
     repo: string
-  ): Promise<ResolvedIntegrationConfig<IntegrationSettingsMap[K]["repo"]>> {
+  ): Promise<
+    ResolvedIntegrationConfig<NonNullable<IntegrationSettingsMap[K]["global"]["defaults"]>>
+  > {
     const [globalSettings, repoSettings] = await Promise.all([
       this.getGlobal(integrationId),
       this.getRepoSettings(integrationId, repo),
@@ -169,7 +171,7 @@ export class IntegrationSettingsStore {
     }
 
     return { enabledRepos, settings } as ResolvedIntegrationConfig<
-      IntegrationSettingsMap[K]["repo"]
+      NonNullable<IntegrationSettingsMap[K]["global"]["defaults"]>
     >;
   }
 
