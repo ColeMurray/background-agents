@@ -1,18 +1,25 @@
 /**
  * App theme registry.
  *
- * Each entry corresponds to a CSS rule in `globals.css` (e.g., `.dark { ... }`,
- * `.blue { ... }`). next-themes adds the theme `id` as a class on `<html>`,
- * so the CSS selector and the registry id must match.
+ * Built-ins (`light`, `dark`, `system`) are wired to rules in `globals.css`.
+ * Branded themes live one-per-file in `app/themes/<id>.css` and are imported
+ * from `app/layout.tsx` after `globals.css`. `next-themes` adds the active
+ * theme's `id` as a class on `<html>`, so the CSS selector and the registry
+ * id must match.
  *
  * `colorScheme` tells the rest of the app whether a theme reads as light or
  * dark — primarily so syntax highlighting (`syntax-highlight-theme.tsx`) can
  * pick the right hljs stylesheet when a custom palette is active.
  *
- * Adding a new theme:
+ * Adding a new branded theme:
  *   1. Append an entry here.
- *   2. Add a matching block in `globals.css` (e.g., `.blue { --background: ...; }`).
- *   3. (Optional) Add a `.blue.dark { ... }` block if it has a dark variant.
+ *   2. Create `app/themes/<id>.css` with a `.<id> { ... }` rule.
+ *   3. Import it from `app/layout.tsx` after `./globals.css`.
+ *   4. Add the id to the `app_default_theme` validation list in `variables.tf`.
+ *
+ * Each named palette is light-only or dark-only (next-themes' `attribute="class"`
+ * puts only one theme class on `<html>` at a time, so `.foo.dark` never matches).
+ * Register a separate `<id>-dark` theme entry + file for a dark variant.
  *
  * See `docs/THEMING.md` for the full walkthrough.
  */
@@ -44,14 +51,15 @@ export interface AppTheme {
 
 /**
  * Registered themes, in the order they appear in the Appearance picker.
- * Each entry must have a matching CSS rule in `globals.css` keyed by `id`.
+ * Each entry must have a matching CSS rule keyed by `id` — built-ins live in
+ * `globals.css`, branded themes in `app/themes/<id>.css`.
  */
 export const APP_THEMES: AppTheme[] = [
   { id: "light", label: "Default", colorScheme: "light" },
   { id: "dark", label: "Dark", colorScheme: "dark" },
   { id: "system", label: "System", colorScheme: "system" },
   // Example branded theme. Remove or rename to fit your deployment, and
-  // adjust the matching `.blue` rule in globals.css.
+  // adjust the matching file at `app/themes/blue.css`.
   { id: "blue", label: "Blue", colorScheme: "light" },
 ];
 

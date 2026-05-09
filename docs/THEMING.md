@@ -11,10 +11,12 @@ and what makes adding a new themed palette later a contained change.
 
 Three layers cooperate:
 
-1. **CSS custom properties in `globals.css`.** Each visual concept (background, foreground, accent,
-   border, etc.) is a `--token`. Light values live in `:root`, dark values live in `.dark`, and a
-   `@media (prefers-color-scheme: dark)` block exists as a no-JS fallback so the page doesn't flash
-   white before hydration on dark systems.
+1. **CSS custom properties.** Each visual concept (background, foreground, accent, border, etc.)
+   is a `--token`. Built-in light/dark values live in `globals.css` (`:root`, `.dark`, plus a
+   `@media (prefers-color-scheme: dark)` block as a no-JS fallback so the page doesn't flash white
+   before hydration on dark systems). Branded themes live one-per-file in
+   [`packages/web/src/app/themes/`](../packages/web/src/app/themes/) and override the same tokens
+   under their own class selector (e.g., `.blue { ... }` in `themes/blue.css`).
 2. **Tailwind semantic utilities** (`bg-background`, `text-muted-foreground`, …). They are wired to
    the CSS tokens in the Tailwind config, so writing `className="bg-card text-foreground"` follows
    the active theme automatically.
@@ -25,7 +27,7 @@ Three layers cooperate:
 
 ## Token catalog
 
-The current tokens (all defined in `globals.css`):
+The current tokens (defined in `globals.css`; branded theme files override the subset they need):
 
 | Token                                                                                      | Purpose                                   |
 | ------------------------------------------------------------------------------------------ | ----------------------------------------- |
@@ -107,8 +109,10 @@ Default is `"system"` — the historical behavior.
 
 To ship your own brand (e.g., "Acme Purple"):
 
-1. **Add a CSS rule in [`globals.css`](../packages/web/src/app/globals.css).** Use a class selector
-   that matches the theme id you'll register:
+1. **Create a CSS file at
+   [`packages/web/src/app/themes/<id>.css`](../packages/web/src/app/themes/).** One file per theme,
+   keyed by the id you'll register — e.g., `themes/acme-purple.css`. Use a class selector that
+   matches the id:
 
    ```css
    .acme-purple {
@@ -120,14 +124,24 @@ To ship your own brand (e.g., "Acme Purple"):
    }
    ```
 
-   You only need to override the tokens that change; everything else inherits from `:root`.
-   Each named palette is light-only or dark-only — `next-themes` is configured with
-   `attribute="class"`, which puts a single theme class on `<html>` at a time, so
-   selectors like `.acme-purple.dark` never match. If you want both a light and dark
-   variant of a brand, register them as two separate themes (e.g., `acme-purple` and
-   `acme-purple-dark`).
+   You only need to override the tokens that change; everything else inherits from `:root`. Each
+   named palette is light-only or dark-only — `next-themes` is configured with
+   `attribute="class"`, which puts a single theme class on `<html>` at a time, so selectors like
+   `.acme-purple.dark` never match. If you want both a light and dark variant of a brand, register
+   them as two separate themes (e.g., `acme-purple` and `acme-purple-dark`) with their own files.
 
-2. **Register it in [`app-themes.ts`](../packages/web/src/lib/app-themes.ts).** Add an entry to
+2. **Import the file from [`app/layout.tsx`](../packages/web/src/app/layout.tsx)** after the
+   existing `./globals.css` import:
+
+   ```ts
+   import "./globals.css";
+   import "./themes/acme-purple.css";
+   ```
+
+   Order matters — branded themes must come after `globals.css` so their rules override the
+   `:root` defaults whenever the matching class is active on `<html>`.
+
+3. **Register it in [`app-themes.ts`](../packages/web/src/lib/app-themes.ts).** Add an entry to
    `APP_THEMES`:
 
    ```ts
@@ -138,7 +152,7 @@ To ship your own brand (e.g., "Acme Purple"):
    what syntax highlighting reads when deciding whether to pair the palette with a light or dark
    hljs stylesheet.
 
-3. **Allow it in [`variables.tf`](../terraform/environments/production/variables.tf).** Add the id
+4. **Allow it in [`variables.tf`](../terraform/environments/production/variables.tf).** Add the id
    to the `app_default_theme` validation `contains(...)` list, otherwise `terraform plan` will
    reject it when a deployer sets it as the default:
 
@@ -146,14 +160,16 @@ To ship your own brand (e.g., "Acme Purple"):
    condition = contains(["light", "dark", "system", "blue", "acme-purple"], var.app_default_theme)
    ```
 
-4. **(Optional) Set it as your deploy-time default.** In `terraform.tfvars`:
+5. **(Optional) Set it as your deploy-time default.** In `terraform.tfvars`:
 
    ```hcl
    app_default_theme = "acme-purple"
    ```
 
-The shipped "Blue" theme exists as a worked example of all of the above — feel free to delete it
-once you have your own brand wired up.
+The shipped "Blue" theme (`packages/web/src/app/themes/blue.css`) exists as a worked example of
+all of the above — feel free to delete it once you have your own brand wired up. Removing it is a
+four-line change: delete the file, the import in `layout.tsx`, the `APP_THEMES` entry, and the id
+from the `variables.tf` validation list.
 
 ## Rules for component authors
 
