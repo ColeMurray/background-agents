@@ -1,12 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type * as SharedModule from "@open-inspect/shared";
 
 const { mockGetUserInfo } = vi.hoisted(() => ({
   mockGetUserInfo: vi.fn(),
 }));
 
-vi.mock("./slack-client", () => ({
-  getUserInfo: mockGetUserInfo,
-}));
+vi.mock("@open-inspect/shared", async () => {
+  const actual = await vi.importActual<typeof SharedModule>("@open-inspect/shared");
+  return {
+    ...actual,
+    getUserInfo: mockGetUserInfo,
+  };
+});
 
 import { resolveUserNames } from "./resolve-users";
 

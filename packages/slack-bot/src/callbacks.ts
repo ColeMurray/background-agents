@@ -2,12 +2,11 @@
  * Callback handlers for control-plane notifications.
  */
 
-import { computeHmacHex, timingSafeEqual } from "@open-inspect/shared";
+import { computeHmacHex, postMessage, removeReaction, timingSafeEqual } from "@open-inspect/shared";
 import { Hono } from "hono";
 import type { Env, CompletionCallback } from "./types";
 import { extractAgentResponse } from "./completion/extractor";
 import { buildCompletionBlocks, getFallbackText, truncateError } from "./completion/blocks";
-import { postMessage, removeReaction } from "./utils/slack-client";
 import { createLogger } from "./logger";
 
 const log = createLogger("callback");

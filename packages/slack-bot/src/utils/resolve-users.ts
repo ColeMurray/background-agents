@@ -1,4 +1,4 @@
-import { getUserInfo } from "./slack-client";
+import { getUserInfo } from "@open-inspect/shared";
 
 /**
  * Resolve Slack user IDs to display names.

@@ -26,7 +26,7 @@ import {
   getUserInfo,
   publishView,
   openView,
-} from "./utils/slack-client";
+} from "@open-inspect/shared";
 import { resolveUserNames } from "./utils/resolve-users";
 import { createClassifier } from "./classifier";
 import { getAvailableRepos } from "./classifier/repos";
