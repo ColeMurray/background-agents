@@ -349,6 +349,17 @@ variable "app_icon_url" {
   default     = ""
 }
 
+variable "app_default_theme" {
+  description = "Theme applied on first load before a user picks one. Useful when you want every new visitor to land on a company-branded theme out of the box; users can still switch in Settings → Appearance and their choice persists. Must be a registered theme id from packages/web/src/lib/app-themes.ts (built-in: 'light', 'dark', 'system'; the demo registry also ships 'blue'). An unknown id silently falls back to 'system' at runtime."
+  type        = string
+  default     = "system"
+  validation {
+    # Keep in sync with APP_THEMES in packages/web/src/lib/app-themes.ts.
+    condition     = contains(["light", "dark", "system", "blue"], var.app_default_theme)
+    error_message = "app_default_theme must be one of: light, dark, system, blue. To allow another value, add it to APP_THEMES in packages/web/src/lib/app-themes.ts and update this validation list."
+  }
+}
+
 variable "enable_durable_object_bindings" {
   description = "Enable DO bindings. For initial deployment: set to false (applies migrations), then set to true (adds bindings)."
   type        = bool

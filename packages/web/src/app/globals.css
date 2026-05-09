@@ -205,6 +205,49 @@ pre code.hljs {
   --overlay: rgba(0, 0, 0, 0.5);
 }
 
+/*
+ * Example branded theme — "Blue".
+ *
+ * Each named theme lives behind a class selector that matches its `id` in
+ * `packages/web/src/lib/app-themes.ts`. next-themes adds the active theme's
+ * id as a class on `<html>`, so picking "Blue" in Settings → Appearance (or
+ * setting `app_default_theme = "blue"` in tfvars) makes these rules win.
+ *
+ * To replace this with your own brand, override only the tokens that change
+ * (background, accent, ring) — everything else inherits from `:root`. Add a
+ * matching `.blue.dark` block if you want a dark variant of the same brand.
+ *
+ * To remove the example entirely: delete this block, drop the matching entry
+ * from `APP_THEMES`, and you're back to Default / Dark / System.
+ */
+.blue {
+  --background: #f4f7fb;
+  --foreground: #0f223a;
+
+  --card: #ffffff;
+  --card-foreground: #0f223a;
+
+  --popover: #ffffff;
+  --popover-foreground: #0f223a;
+
+  --primary: #1e4f8a;
+  --primary-foreground: #ffffff;
+
+  --accent: #2a73c4;
+  --accent-foreground: #ffffff;
+  --accent-muted: rgba(42, 115, 196, 0.12);
+
+  --muted: rgba(15, 34, 58, 0.05);
+  --muted-foreground: #4a647f;
+  --secondary-foreground: #6b7d92;
+
+  --border: rgba(15, 34, 58, 0.12);
+  --border-muted: rgba(15, 34, 58, 0.06);
+
+  --input: #ffffff;
+  --ring: #2a73c4;
+}
+
 html {
   scroll-behavior: smooth;
 }

@@ -79,6 +79,12 @@ module "web_app" {
       targets   = ["production", "preview"]
       sensitive = false
     },
+    {
+      key       = "NEXT_PUBLIC_APP_DEFAULT_THEME"
+      value     = var.app_default_theme
+      targets   = ["production", "preview"]
+      sensitive = false
+    },
     # Internal
     {
       key       = "INTERNAL_CALLBACK_SECRET"
