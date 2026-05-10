@@ -285,7 +285,7 @@ function buildBlocks(opts: {
         {
           type: "button",
           text: { type: "plain_text", text: "View Session" },
-          url: `${opts.webAppUrl.replace(/\/$/, "")}/sessions/${opts.sessionId}`,
+          url: `${opts.webAppUrl.replace(/\/$/, "")}/session/${opts.sessionId}`,
         },
       ],
     });
