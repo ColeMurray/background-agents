@@ -1,19 +1,7 @@
 /**
- * Slack Notify Tool — post a message to a Slack channel via the control plane.
- *
- * The bot token never enters the sandbox. This tool is only installed when
- * AGENT_SLACK_NOTIFY_ENABLED=true at spawn time.
- *
- * Output is a JSON envelope so the web transcript renderer can show a rich
- * row using the agent's own tool_call event as the single source of truth.
- *
- * Success envelope:  { ok: true,  channelInput, channelId, messageTs, permalink, truncated, strippedBroadcasts, mentionsModified }
- * Failure envelope:  { ok: false, reason, agentMessage, retryAfter? }
- *
- * `agentMessage` carries human guidance for the model; `reason` is the stable
- * code the renderer keys off. The reason keys here must stay symmetric with
- * `SLACK_DENIAL_REASONS` in `@open-inspect/shared/slack/types` — this file
- * ships into the sandbox image and cannot import from the workspace.
+ * This file ships verbatim into the sandbox image and cannot import from the
+ * workspace, so REASON_GUIDANCE keys must stay symmetric with
+ * SLACK_DENIAL_REASONS in @open-inspect/shared/slack/types by hand.
  */
 import { tool } from "@opencode-ai/plugin";
 import { z } from "zod";

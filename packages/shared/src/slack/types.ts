@@ -14,14 +14,7 @@
 
 import type { SlackMentionsPolicy } from "../types/integrations";
 
-/**
- * Reasons the slack-notify flow can fail.
- *
- * All but `bridge_error` are wire-contract codes: the control plane returns
- * them as HTTP `error` fields and the plugin propagates them. `bridge_error`
- * is plugin-only — it represents "the sandbox couldn't reach the control
- * plane at all" and therefore has no HTTP status (no request ever completed).
- */
+/** Denial reasons across the slack-notify flow (control plane + plugin). */
 export const SLACK_DENIAL_REASONS = [
   "feature_unavailable",
   "feature_disabled",
@@ -35,14 +28,8 @@ export const SLACK_DENIAL_REASONS = [
 
 export type SlackDenialReason = (typeof SLACK_DENIAL_REASONS)[number];
 
-/** Wire-contract subset: denial reasons that traverse HTTP. */
 export type SlackWireDenialReason = Exclude<SlackDenialReason, "bridge_error">;
 
-/**
- * HTTP status codes the control plane emits for each wire-contract denial
- * reason. `bridge_error` is omitted: by definition the plugin never received
- * an HTTP response when it produces that code.
- */
 export const SLACK_DENIAL_STATUS: Record<SlackWireDenialReason, number> = {
   feature_unavailable: 503,
   feature_disabled: 403,
@@ -72,14 +59,7 @@ export interface SlackNotifyFailureBody {
   retryAfter?: number;
 }
 
-/**
- * Tool-output envelope the sandbox plugin returns from `execute()`.
- * The agent's tool_call event is the single source of truth for the
- * transcript; the renderer parses this envelope to show a rich row.
- *
- * `agentMessage` is human guidance for the model; `reason` is the stable
- * code the renderer keys on.
- */
+/** `agentMessage` is guidance for the model; `reason` is the code the renderer keys on. */
 export type SlackNotifyToolEnvelope =
   | SlackNotifySuccessOutput
   | {

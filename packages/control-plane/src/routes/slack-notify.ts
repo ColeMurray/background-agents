@@ -1,12 +1,6 @@
 /**
- * Agent-initiated Slack notification handler.
- *
- * Pure RPC: the sandbox plugin calls this endpoint via its bearer token; the
- * control plane authorizes (master switch + sanitization) and forwards the
- * agent's channel verbatim to Slack. The plugin's tool output (rendered by
- * the agent's tool_call event) is the single source of truth for the
- * transcript; this handler intentionally does not emit any events of its own.
- * Audit detail lives in the structured logs below.
+ * Intentionally emits no transcript events: the agent's own tool_call event
+ * is the single source of truth. Audit detail lives in the structured logs.
  */
 
 import {
@@ -76,8 +70,7 @@ export async function handleSlackNotify(
 
   const token = env.SLACK_BOT_TOKEN;
   if (!token) {
-    // Deployment misconfiguration: every agent attempt will fail until ops
-    // sets SLACK_BOT_TOKEN. Surface at error level so it reaches alerting.
+    // Error (not warn): a missing token is a deployment misconfig and must reach alerting.
     logger.error("Slack notification denied: SLACK_BOT_TOKEN is not configured", {
       session_id: sessionId,
       reason: "feature_unavailable",

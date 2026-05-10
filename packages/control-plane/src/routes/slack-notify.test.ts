@@ -134,7 +134,6 @@ afterEach(() => {
   consoleErrorSpy.mockRestore();
 });
 
-/** Find the JSON payload of the most recent log line whose `msg` matches. */
 function lastLogPayload(
   spy: ReturnType<typeof vi.spyOn>,
   msg: string
@@ -147,7 +146,7 @@ function lastLogPayload(
         const parsed = JSON.parse(arg) as Record<string, unknown>;
         if (parsed.msg === msg) return parsed;
       } catch {
-        // not a JSON log line
+        /* skip */
       }
     }
   }
@@ -180,8 +179,7 @@ describe("handleSlackNotify", () => {
     expect(body.error).toBe("feature_unavailable");
     expect(fetchMock).not.toHaveBeenCalled();
     expect(sessionFetchMock).not.toHaveBeenCalled();
-    // Deployment misconfiguration → error severity (not warn) so it surfaces
-    // in alerting rather than getting lost in the denial-warning stream.
+    // Misconfig must log at error (not warn) so it reaches alerting.
     const errorEntry = lastLogPayload(
       consoleErrorSpy,
       "Slack notification denied: SLACK_BOT_TOKEN is not configured"
@@ -399,8 +397,7 @@ describe("handleSlackNotify", () => {
     expect(body.channelId).toBe("C1");
     expect(body.messageTs).toBe("12345.67890");
     expect(body.permalink).toBe("https://x.slack.com/archives/C1/p1234567890");
-    // Attribution must NOT leak into the agent-visible response body — it
-    // belongs in audit logs only.
+    // Attribution belongs in audit logs only — must not leak to the agent.
     expect(body).not.toHaveProperty("attribution");
 
     expect(sessionFetchMock).not.toHaveBeenCalled();

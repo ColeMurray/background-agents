@@ -156,9 +156,7 @@ describe("POST /sessions/:id/slack-notify", () => {
     expect(body.channelId).toBe("C1");
     expect(body.permalink).toContain("slack.com");
 
-    // The agent's tool_call (emitted by OpenCode in the sandbox) is the
-    // single source of truth for the transcript — the handler must not
-    // inject synthetic tool_call/tool_result events of its own.
+    // Handler must inject no transcript events — the agent's own tool_call is the source of truth.
     const slackEvents = await queryDO<{ type: string; data: string }>(
       stub,
       "SELECT type, data FROM events WHERE data LIKE '%slack-notify%' ORDER BY created_at"

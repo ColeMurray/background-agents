@@ -43,8 +43,7 @@ function successEvent(overrides: Record<string, unknown> = {}): ToolCallEvent {
 }
 
 function denialEvent(reason: string, channel = "#ops"): ToolCallEvent {
-  // Plugin returns JSON envelope; OpenCode emits the tool_call as "completed"
-  // since execute() returned cleanly. The renderer keys off ok:false + reason.
+  // Denials are status="completed" — the renderer keys off ok:false + reason, not status.
   return {
     ...BASE,
     status: "completed",
@@ -58,9 +57,7 @@ function denialEvent(reason: string, channel = "#ops"): ToolCallEvent {
 }
 
 function legacyDenialEvent(reason: string): ToolCallEvent {
-  // Pre-RPC shape: control plane emitted its own event with status="error"
-  // and the bare reason code as `output`. Kept around so historical events
-  // still render correctly in the UI.
+  // Legacy shape: status="error" with the bare reason code as `output`.
   return {
     ...BASE,
     status: "error",

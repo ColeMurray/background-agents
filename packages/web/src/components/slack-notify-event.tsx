@@ -65,10 +65,6 @@ function parseEnvelope(output: string | undefined): SlackNotifyToolEnvelope | nu
   return null;
 }
 
-/**
- * Pre-RPC, the control plane emitted a separate event with status="error" and
- * the reason code as `output`. Kept so historical events still render correctly.
- */
 function getLegacyDenialReason(event: ToolCallEvent): SlackDenialReason | null {
   if (
     event.status === "error" &&
