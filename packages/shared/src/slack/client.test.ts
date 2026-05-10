@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getChannelInfo, postMessage } from "./client";
+import {
+  addReaction,
+  getChannelInfo,
+  getPermalink,
+  getThreadMessages,
+  getUserInfo,
+  openView,
+  postMessage,
+  publishView,
+  removeReaction,
+  updateMessage,
+} from "./client";
 
 function jsonResponse(
   body: unknown,
@@ -162,5 +173,308 @@ describe("getChannelInfo", () => {
     const result = await getChannelInfo("xoxb-token", "C123");
     expect(result.ok).toBe(false);
     expect(result.error).toBe("http_500");
+  });
+});
+
+describe("getPermalink", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("fetches a permalink via GET with channel + message_ts query", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({
+        ok: true,
+        channel: "C123",
+        permalink: "https://slack.com/archives/C123/p1700000000000100",
+      })
+    );
+
+    const result = await getPermalink("xoxb-token", "C123", "1700000000.000100");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.permalink).toContain("/archives/C123/p");
+    }
+    const [url] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe(
+      "https://slack.com/api/chat.getPermalink?channel=C123&message_ts=1700000000.000100"
+    );
+  });
+
+  it("returns Slack's error envelope when the message is missing", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({ ok: false, error: "message_not_found" })
+    );
+
+    const result = await getPermalink("xoxb-token", "C123", "1.0");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("message_not_found");
+    }
+  });
+});
+
+describe("updateMessage", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("posts channel/ts/text (and optional blocks) to chat.update", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ ok: true }));
+
+    const result = await updateMessage("xoxb-token", "C123", "1700000000.000100", "edited", {
+      blocks: [{ type: "section", text: { type: "mrkdwn", text: "edited" } }],
+    });
+
+    expect(result.ok).toBe(true);
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe("https://slack.com/api/chat.update");
+    expect(init?.method).toBe("POST");
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    expect(body.channel).toBe("C123");
+    expect(body.ts).toBe("1700000000.000100");
+    expect(body.text).toBe("edited");
+    expect(Array.isArray(body.blocks)).toBe(true);
+  });
+
+  it("returns Slack's error envelope on edit failure", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({ ok: false, error: "message_not_found" })
+    );
+
+    const result = await updateMessage("xoxb-token", "C123", "1.0", "x");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("message_not_found");
+    }
+  });
+});
+
+describe("addReaction", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("posts channel/timestamp/name to reactions.add", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ ok: true }));
+
+    const result = await addReaction("xoxb-token", "C123", "1700000000.000100", "eyes");
+
+    expect(result.ok).toBe(true);
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe("https://slack.com/api/reactions.add");
+    expect(init?.method).toBe("POST");
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    expect(body.channel).toBe("C123");
+    expect(body.timestamp).toBe("1700000000.000100");
+    expect(body.name).toBe("eyes");
+  });
+
+  it("returns the already_reacted envelope verbatim", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({ ok: false, error: "already_reacted" })
+    );
+
+    const result = await addReaction("xoxb-token", "C123", "1.0", "eyes");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("already_reacted");
+    }
+  });
+});
+
+describe("removeReaction", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("posts channel/timestamp/name to reactions.remove", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ ok: true }));
+
+    await removeReaction("xoxb-token", "C123", "1700000000.000100", "eyes");
+
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe("https://slack.com/api/reactions.remove");
+    expect(init?.method).toBe("POST");
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    expect(body.channel).toBe("C123");
+    expect(body.timestamp).toBe("1700000000.000100");
+    expect(body.name).toBe("eyes");
+  });
+
+  it("returns Slack's error envelope on no_reaction", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({ ok: false, error: "no_reaction" })
+    );
+
+    const result = await removeReaction("xoxb-token", "C123", "1.0", "eyes");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("no_reaction");
+    }
+  });
+});
+
+describe("getThreadMessages", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("fetches replies via GET with channel/ts/limit", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({
+        ok: true,
+        messages: [
+          { ts: "1.1", text: "first", user: "U1" },
+          { ts: "1.2", text: "second", user: "U2" },
+        ],
+      })
+    );
+
+    const result = await getThreadMessages("xoxb-token", "C123", "1.0", 5);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.messages).toHaveLength(2);
+      expect(result.messages[0]!.text).toBe("first");
+    }
+    const [url] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe("https://slack.com/api/conversations.replies?channel=C123&ts=1.0&limit=5");
+  });
+
+  it("defaults limit to 10 when not provided", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ ok: true, messages: [] }));
+
+    await getThreadMessages("xoxb-token", "C123", "1.0");
+
+    const [url] = fetchSpy.mock.calls[0]!;
+    expect(String(url)).toContain("limit=10");
+  });
+
+  it("returns Slack's error envelope on lookup failure", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({ ok: false, error: "thread_not_found" })
+    );
+
+    const result = await getThreadMessages("xoxb-token", "C123", "1.0");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("thread_not_found");
+    }
+  });
+});
+
+describe("getUserInfo", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("fetches user info via GET with user query", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({
+        ok: true,
+        user: { id: "U1", name: "alice", profile: { display_name: "Alice S" } },
+      })
+    );
+
+    const result = await getUserInfo("xoxb-token", "U1");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.user.id).toBe("U1");
+      expect(result.user.profile?.display_name).toBe("Alice S");
+    }
+    const [url] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe("https://slack.com/api/users.info?user=U1");
+  });
+
+  it("returns Slack's error envelope on user_not_found", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({ ok: false, error: "user_not_found" })
+    );
+
+    const result = await getUserInfo("xoxb-token", "U404");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("user_not_found");
+    }
+  });
+});
+
+describe("publishView", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("posts user_id and view to views.publish", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ ok: true }));
+
+    const view = { type: "home", blocks: [] };
+    const result = await publishView("xoxb-token", "U1", view);
+
+    expect(result.ok).toBe(true);
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe("https://slack.com/api/views.publish");
+    expect(init?.method).toBe("POST");
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    expect(body.user_id).toBe("U1");
+    expect(body.view).toEqual(view);
+  });
+
+  it("returns Slack's error envelope on hash_conflict", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({ ok: false, error: "hash_conflict" })
+    );
+
+    const result = await publishView("xoxb-token", "U1", { type: "home" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("hash_conflict");
+    }
+  });
+});
+
+describe("openView", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("posts trigger_id and view to views.open", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ ok: true }));
+
+    const view = { type: "modal", title: { type: "plain_text", text: "T" } };
+    await openView("xoxb-token", "trig.1", view);
+
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe("https://slack.com/api/views.open");
+    expect(init?.method).toBe("POST");
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    expect(body.trigger_id).toBe("trig.1");
+    expect(body.view).toEqual(view);
+  });
+
+  it("returns Slack's error envelope on expired trigger", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({ ok: false, error: "expired_trigger_id" })
+    );
+
+    const result = await openView("xoxb-token", "trig.1", { type: "modal" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("expired_trigger_id");
+    }
   });
 });

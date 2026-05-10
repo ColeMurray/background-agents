@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type * as SharedModule from "@open-inspect/shared";
+import type * as ClientModule from "./client";
 
 const { mockGetUserInfo } = vi.hoisted(() => ({
   mockGetUserInfo: vi.fn(),
 }));
 
-vi.mock("@open-inspect/shared", async () => {
-  const actual = await vi.importActual<typeof SharedModule>("@open-inspect/shared");
+vi.mock("./client", async () => {
+  const actual = await vi.importActual<typeof ClientModule>("./client");
   return {
     ...actual,
     getUserInfo: mockGetUserInfo,

@@ -125,13 +125,10 @@ export async function handleSlackNotify(
     return failureResponse(reasonCode, post.error, post.retryAfter);
   }
 
-  const channelId = post.channel ?? parsed.channel;
-  const messageTs = post.ts ?? "";
-  const permalinkResp = await getPermalink(token, channelId, messageTs).catch(() => ({
-    ok: false as const,
-    permalink: undefined as string | undefined,
-  }));
-  const permalink = permalinkResp.ok && permalinkResp.permalink ? permalinkResp.permalink : "";
+  const channelId = post.channel;
+  const messageTs = post.ts;
+  const permalinkResp = await getPermalink(token, channelId, messageTs);
+  const permalink = permalinkResp.ok ? permalinkResp.permalink : "";
 
   const result: SlackNotifySuccessOutput = {
     ok: true,

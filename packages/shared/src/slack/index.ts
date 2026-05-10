@@ -11,6 +11,7 @@ export {
   updateMessage,
   verifySlackSignature,
 } from "./client";
+export type { SlackChannelInfo, SlackEnvelope, SlackThreadMessage, SlackUser } from "./client";
 export {
   applyMentionPolicy,
   sanitizeAgentText,
@@ -19,5 +20,6 @@ export {
   truncateForSlack,
 } from "./mrkdwn";
 export type { MentionPolicy, SanitizeOptions, SanitizeResult } from "./mrkdwn";
+export { resolveUserNames } from "./resolve-users";
 export { SLACK_DENIAL_REASONS, SLACK_DENIAL_STATUS, DEFAULT_MENTIONS_POLICY } from "./types";
 export type { SlackDenialReason, SlackNotifySuccessOutput, SlackNotifyFailureBody } from "./types";

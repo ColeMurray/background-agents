@@ -27,11 +27,11 @@ import {
   publishView,
   openView,
 } from "@open-inspect/shared";
-import { resolveUserNames } from "./utils/resolve-users";
+import { resolveUserNames } from "@open-inspect/shared";
 import { createClassifier } from "./classifier";
 import { getAvailableRepos } from "./classifier/repos";
 import { callbacksRouter } from "./callbacks";
-import { buildInternalAuthHeaders } from "./utils/internal";
+import { buildInternalAuthHeaders } from "@open-inspect/shared";
 import { createLogger } from "./logger";
 import { createKvCacheStore } from "@open-inspect/shared";
 import {
@@ -904,12 +904,14 @@ async function startSessionAndSendPrompt(
   let email: string | undefined;
   try {
     const userInfo = await getUserInfo(env.SLACK_BOT_TOKEN, userId);
-    displayName =
-      userInfo.user?.profile?.display_name ||
-      userInfo.user?.real_name ||
-      userInfo.user?.name ||
-      undefined;
-    email = userInfo.user?.profile?.email || undefined;
+    if (userInfo.ok) {
+      displayName =
+        userInfo.user.profile?.display_name ||
+        userInfo.user.real_name ||
+        userInfo.user.name ||
+        undefined;
+      email = userInfo.user.profile?.email || undefined;
+    }
   } catch {
     // Proceed with no display name / email — control plane handles missing fields
   }
@@ -1519,7 +1521,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     }
   );
 
-  const ackTs = ackResult.ts;
+  const ackTs = ackResult.ok ? ackResult.ts : undefined;
 
   // Create session and send prompt using shared logic
   const sessionResult = await startSessionAndSendPrompt(

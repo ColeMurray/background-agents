@@ -12,23 +12,23 @@ import { computeHmacHex, timingSafeEqual } from "../auth";
 
 const SLACK_API_BASE = "https://slack.com/api";
 
-interface SlackResponseBase {
-  ok: boolean;
-  error?: string;
-  retryAfter?: number;
-}
+/**
+ * Discriminated success/failure envelope returned by every Slack API method.
+ *
+ * The success arm is `{ ok: true } & T`; the failure arm carries an `error`
+ * string (Slack's `error` field, or one of the synthesized values
+ * `network_error` / `invalid_response` / `http_<status>` / `ratelimited`).
+ */
+export type SlackEnvelope<T = Record<string, never>> =
+  | ({ ok: true } & T)
+  | { ok: false; error: string; retryAfter?: number };
 
-interface SlackFetchInit {
-  method?: "GET" | "POST";
-  query?: Record<string, string>;
-  body?: Record<string, unknown>;
-}
-
-async function slackFetch<T extends SlackResponseBase>(
+async function slackFetch<T>(
   token: string,
   endpoint: string,
-  init?: SlackFetchInit
-): Promise<T> {
+  method: "GET" | "POST",
+  init?: { query?: Record<string, string>; body?: Record<string, unknown> }
+): Promise<SlackEnvelope<T>> {
   const url = init?.query
     ? `${SLACK_API_BASE}/${endpoint}?${new URLSearchParams(init.query).toString()}`
     : `${SLACK_API_BASE}/${endpoint}`;
@@ -44,13 +44,9 @@ async function slackFetch<T extends SlackResponseBase>(
 
   let response: Response;
   try {
-    response = await fetch(url, {
-      method: init?.method ?? "GET",
-      headers,
-      body,
-    });
+    response = await fetch(url, { method, headers, body });
   } catch {
-    return { ok: false, error: "network_error" } as T;
+    return { ok: false, error: "network_error" };
   }
 
   if (response.status === 429) {
@@ -60,18 +56,34 @@ async function slackFetch<T extends SlackResponseBase>(
       ok: false,
       error: "ratelimited",
       ...(Number.isFinite(parsed) ? { retryAfter: parsed } : {}),
-    } as T;
+    };
   }
 
   if (!response.ok) {
-    return { ok: false, error: `http_${response.status}` } as T;
+    return { ok: false, error: `http_${response.status}` };
   }
 
   try {
-    return (await response.json()) as T;
+    return (await response.json()) as SlackEnvelope<T>;
   } catch {
-    return { ok: false, error: "invalid_response" } as T;
+    return { ok: false, error: "invalid_response" };
   }
+}
+
+function slackGet<T>(
+  token: string,
+  endpoint: string,
+  query?: Record<string, string>
+): Promise<SlackEnvelope<T>> {
+  return slackFetch<T>(token, endpoint, "GET", query ? { query } : undefined);
+}
+
+function slackPost<T>(
+  token: string,
+  endpoint: string,
+  body?: Record<string, unknown>
+): Promise<SlackEnvelope<T>> {
+  return slackFetch<T>(token, endpoint, "POST", body ? { body } : undefined);
 }
 
 /**
@@ -101,7 +113,7 @@ export async function verifySlackSignature(
   return timingSafeEqual(signature, expectedSignature);
 }
 
-export async function postMessage(
+export function postMessage(
   token: string,
   channel: string,
   text: string,
@@ -110,166 +122,121 @@ export async function postMessage(
     blocks?: unknown[];
     reply_broadcast?: boolean;
   }
-): Promise<{
-  ok: boolean;
-  channel?: string;
-  ts?: string;
-  error?: string;
-  retryAfter?: number;
-}> {
-  return slackFetch(token, "chat.postMessage", {
-    method: "POST",
-    body: {
-      channel,
-      text,
-      thread_ts: options?.thread_ts,
-      blocks: options?.blocks,
-      reply_broadcast: options?.reply_broadcast,
-    },
+): Promise<SlackEnvelope<{ channel: string; ts: string }>> {
+  return slackPost(token, "chat.postMessage", {
+    channel,
+    text,
+    thread_ts: options?.thread_ts,
+    blocks: options?.blocks,
+    reply_broadcast: options?.reply_broadcast,
   });
 }
 
-export async function getPermalink(
+export function getPermalink(
   token: string,
   channel: string,
   messageTs: string
-): Promise<{
-  ok: boolean;
-  permalink?: string;
-  channel?: string;
-  error?: string;
-  retryAfter?: number;
-}> {
-  return slackFetch(token, "chat.getPermalink", {
-    query: { channel, message_ts: messageTs },
-  });
+): Promise<SlackEnvelope<{ permalink: string; channel: string }>> {
+  return slackGet(token, "chat.getPermalink", { channel, message_ts: messageTs });
 }
 
-export async function updateMessage(
+export function updateMessage(
   token: string,
   channel: string,
   ts: string,
   text: string,
-  options?: {
-    blocks?: unknown[];
-  }
-): Promise<{ ok: boolean; error?: string; retryAfter?: number }> {
-  return slackFetch(token, "chat.update", {
-    method: "POST",
-    body: {
-      channel,
-      ts,
-      text,
-      blocks: options?.blocks,
-    },
+  options?: { blocks?: unknown[] }
+): Promise<SlackEnvelope> {
+  return slackPost(token, "chat.update", {
+    channel,
+    ts,
+    text,
+    blocks: options?.blocks,
   });
 }
 
-export async function addReaction(
+export function addReaction(
   token: string,
   channel: string,
   messageTs: string,
   name: string
-): Promise<{ ok: boolean; error?: string; retryAfter?: number }> {
-  return slackFetch(token, "reactions.add", {
-    method: "POST",
-    body: { channel, timestamp: messageTs, name },
-  });
+): Promise<SlackEnvelope> {
+  return slackPost(token, "reactions.add", { channel, timestamp: messageTs, name });
 }
 
-export async function removeReaction(
+export function removeReaction(
   token: string,
   channel: string,
   messageTs: string,
   name: string
-): Promise<{ ok: boolean; error?: string; retryAfter?: number }> {
-  return slackFetch(token, "reactions.remove", {
-    method: "POST",
-    body: { channel, timestamp: messageTs, name },
-  });
+): Promise<SlackEnvelope> {
+  return slackPost(token, "reactions.remove", { channel, timestamp: messageTs, name });
 }
 
-export async function getChannelInfo(
+export interface SlackChannelInfo {
+  id: string;
+  name: string;
+  topic?: { value: string };
+  purpose?: { value: string };
+}
+
+export function getChannelInfo(
   token: string,
   channelId: string
-): Promise<{
-  ok: boolean;
-  channel?: {
-    id: string;
-    name: string;
-    topic?: { value: string };
-    purpose?: { value: string };
-  };
-  error?: string;
-  retryAfter?: number;
-}> {
-  return slackFetch(token, "conversations.info", {
-    query: { channel: channelId },
-  });
+): Promise<SlackEnvelope<{ channel: SlackChannelInfo }>> {
+  return slackGet(token, "conversations.info", { channel: channelId });
 }
 
-export async function getThreadMessages(
+export interface SlackThreadMessage {
+  ts: string;
+  text: string;
+  user?: string;
+  bot_id?: string;
+}
+
+export function getThreadMessages(
   token: string,
   channelId: string,
   threadTs: string,
   limit = 10
-): Promise<{
-  ok: boolean;
-  messages?: Array<{
-    ts: string;
-    text: string;
-    user?: string;
-    bot_id?: string;
-  }>;
-  error?: string;
-  retryAfter?: number;
-}> {
-  return slackFetch(token, "conversations.replies", {
-    query: { channel: channelId, ts: threadTs, limit: String(limit) },
+): Promise<SlackEnvelope<{ messages: SlackThreadMessage[] }>> {
+  return slackGet(token, "conversations.replies", {
+    channel: channelId,
+    ts: threadTs,
+    limit: String(limit),
   });
 }
 
-export async function getUserInfo(
+export interface SlackUser {
+  id: string;
+  name: string;
+  real_name?: string;
+  profile?: {
+    display_name?: string;
+    real_name?: string;
+    email?: string;
+  };
+}
+
+export function getUserInfo(
   token: string,
   userId: string
-): Promise<{
-  ok: boolean;
-  user?: {
-    id: string;
-    name: string;
-    real_name?: string;
-    profile?: {
-      display_name?: string;
-      real_name?: string;
-      email?: string;
-    };
-  };
-  error?: string;
-  retryAfter?: number;
-}> {
-  return slackFetch(token, "users.info", {
-    query: { user: userId },
-  });
+): Promise<SlackEnvelope<{ user: SlackUser }>> {
+  return slackGet(token, "users.info", { user: userId });
 }
 
-export async function publishView(
+export function publishView(
   token: string,
   userId: string,
   view: Record<string, unknown>
-): Promise<{ ok: boolean; error?: string; retryAfter?: number }> {
-  return slackFetch(token, "views.publish", {
-    method: "POST",
-    body: { user_id: userId, view },
-  });
+): Promise<SlackEnvelope> {
+  return slackPost(token, "views.publish", { user_id: userId, view });
 }
 
-export async function openView(
+export function openView(
   token: string,
   triggerId: string,
   view: Record<string, unknown>
-): Promise<{ ok: boolean; error?: string; retryAfter?: number }> {
-  return slackFetch(token, "views.open", {
-    method: "POST",
-    body: { trigger_id: triggerId, view },
-  });
+): Promise<SlackEnvelope> {
+  return slackPost(token, "views.open", { trigger_id: triggerId, view });
 }
