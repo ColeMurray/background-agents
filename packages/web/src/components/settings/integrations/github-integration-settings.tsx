@@ -98,7 +98,11 @@ export function GitHubIntegrationSettings() {
         )}
       </Section>
 
-      <GlobalSettingsSection settings={settings} availableRepos={availableRepos} />
+      <GlobalSettingsSection
+        settings={settings}
+        availableRepos={availableRepos}
+        enabledModelOptions={enabledModelOptions}
+      />
 
       <Section
         title="Repository Overrides"
@@ -117,10 +121,17 @@ export function GitHubIntegrationSettings() {
 function GlobalSettingsSection({
   settings,
   availableRepos,
+  enabledModelOptions,
 }: {
   settings: GitHubGlobalConfig | null | undefined;
   availableRepos: EnrichedRepository[];
+  enabledModelOptions: { category: string; models: { id: string; name: string }[] }[];
 }) {
+  const [model, setModel] = useState(settings?.defaults?.model ?? "");
+  const [effort, setEffort] = useState(settings?.defaults?.reasoningEffort ?? "");
+  const [allowInlineDirectiveOverride, setAllowInlineDirectiveOverride] = useState(
+    settings?.defaults?.allowInlineDirectiveOverride ?? true
+  );
   const [autoReviewOnOpen, setAutoReviewOnOpen] = useState(
     settings?.defaults?.autoReviewOnOpen ?? true
   );
@@ -150,6 +161,9 @@ function GlobalSettingsSection({
   useEffect(() => {
     if (settings !== undefined && !initialized) {
       if (settings) {
+        setModel(settings.defaults?.model ?? "");
+        setEffort(settings.defaults?.reasoningEffort ?? "");
+        setAllowInlineDirectiveOverride(settings.defaults?.allowInlineDirectiveOverride ?? true);
         setAutoReviewOnOpen(settings.defaults?.autoReviewOnOpen ?? true);
         setEnabledRepos(settings.enabledRepos ?? []);
         setRepoScopeMode(settings.enabledRepos === undefined ? "all" : "selected");
@@ -179,6 +193,9 @@ function GlobalSettingsSection({
 
       if (res.ok) {
         mutate(GLOBAL_SETTINGS_KEY);
+        setModel("");
+        setEffort("");
+        setAllowInlineDirectiveOverride(true);
         setAutoReviewOnOpen(true);
         setEnabledRepos([]);
         setRepoScopeMode("all");
@@ -207,6 +224,9 @@ function GlobalSettingsSection({
     const body: GitHubGlobalConfig = {
       defaults: {
         autoReviewOnOpen,
+        allowInlineDirectiveOverride,
+        ...(model ? { model } : {}),
+        ...(effort ? { reasoningEffort: effort } : {}),
         ...(triggerUserMode === "specific" ? { allowedTriggerUsers } : {}),
         ...(codeReviewInstructions ? { codeReviewInstructions } : {}),
         ...(commentActionInstructions ? { commentActionInstructions } : {}),
@@ -258,9 +278,103 @@ function GlobalSettingsSection({
     setError("");
   };
 
+  const reasoningConfig = model ? MODEL_REASONING_CONFIG[model as ValidModel] : undefined;
+
   return (
     <Section title="Defaults & Scope" description="Global behavior and repository targeting.">
       {error && <Message tone="error" text={error} />}
+
+      <div className="mb-4">
+        <p className="text-sm font-medium text-foreground mb-2">Model defaults</p>
+        <div className="grid sm:grid-cols-2 gap-3 mb-3">
+          <label className="text-sm">
+            <span className="block text-foreground font-medium mb-1">Default model</span>
+            <Select
+              value={model}
+              onValueChange={(nextModel) => {
+                setModel(nextModel);
+                if (effort && nextModel && !isValidReasoningEffort(nextModel, effort)) {
+                  setEffort("");
+                }
+                setDirty(true);
+                setError("");
+              }}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Use system default" />
+              </SelectTrigger>
+              <SelectContent>
+                {enabledModelOptions.map((group) => (
+                  <SelectGroup key={group.category}>
+                    <SelectLabel>{group.category}</SelectLabel>
+                    {group.models.map((m) => (
+                      <SelectItem key={m.id} value={m.id}>
+                        {m.name}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground mt-1">
+              The model used for new GitHub bot sessions when no per-repo override is set.
+            </p>
+          </label>
+
+          <label className="text-sm">
+            <span className="block text-foreground font-medium mb-1">Default reasoning effort</span>
+            <Select
+              value={effort}
+              onValueChange={(v) => {
+                setEffort(v);
+                setDirty(true);
+                setError("");
+              }}
+              disabled={!reasoningConfig}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Use model default" />
+              </SelectTrigger>
+              <SelectContent>
+                {(reasoningConfig?.efforts ?? []).map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {value}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+        </div>
+
+        <label
+          htmlFor="allow-inline-directive-toggle"
+          className="flex items-center justify-between px-4 py-3 border border-border hover:bg-muted/50 transition cursor-pointer rounded-sm"
+        >
+          <div>
+            <span className="text-sm font-medium text-foreground">
+              Allow inline directive overrides
+            </span>
+            <span className="text-sm text-muted-foreground ml-2">
+              Let users override the model and reasoning per request by writing{" "}
+              <code className="text-xs">model: &lt;name&gt;</code> or{" "}
+              <code className="text-xs">reasoning: &lt;effort&gt;</code> in their @mention comment.
+              Inline directives override both the global default and any per-repository override.
+            </span>
+            <div className="mt-1.5 text-xs text-muted-foreground">
+              Example: <code>@your-bot model: opus reasoning: high please review this PR</code>
+            </div>
+          </div>
+          <Switch
+            id="allow-inline-directive-toggle"
+            checked={allowInlineDirectiveOverride}
+            onCheckedChange={(checked) => {
+              setAllowInlineDirectiveOverride(checked);
+              setDirty(true);
+              setError("");
+            }}
+          />
+        </label>
+      </div>
 
       <label
         htmlFor="auto-review-toggle"

@@ -378,6 +378,54 @@ describe("Integration settings API", () => {
       expect(body.config.allowedTriggerUsers).toEqual(["carol"]);
     });
 
+    it("returns allowInlineDirectiveOverride: true by default when unset", async () => {
+      const headers = await authHeaders();
+
+      await SELF.fetch("https://test.local/integration-settings/github", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          settings: {
+            defaults: { autoReviewOnOpen: true },
+          },
+        }),
+      });
+
+      const res = await SELF.fetch(
+        "https://test.local/integration-settings/github/resolved/acme/widgets",
+        { headers }
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json<{
+        config: { allowInlineDirectiveOverride: boolean };
+      }>();
+      expect(body.config.allowInlineDirectiveOverride).toBe(true);
+    });
+
+    it("respects explicit allowInlineDirectiveOverride: false", async () => {
+      const headers = await authHeaders();
+
+      await SELF.fetch("https://test.local/integration-settings/github", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          settings: {
+            defaults: { allowInlineDirectiveOverride: false },
+          },
+        }),
+      });
+
+      const res = await SELF.fetch(
+        "https://test.local/integration-settings/github/resolved/acme/widgets",
+        { headers }
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json<{
+        config: { allowInlineDirectiveOverride: boolean };
+      }>();
+      expect(body.config.allowInlineDirectiveOverride).toBe(false);
+    });
+
     it("returns linear resolved config with merged defaults", async () => {
       const headers = await authHeaders();
 

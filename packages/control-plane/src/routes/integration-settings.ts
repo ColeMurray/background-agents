@@ -312,6 +312,7 @@ async function handleGetResolvedConfig(
         allowedTriggerUsers: githubSettings.allowedTriggerUsers ?? null,
         codeReviewInstructions: githubSettings.codeReviewInstructions ?? null,
         commentActionInstructions: githubSettings.commentActionInstructions ?? null,
+        allowInlineDirectiveOverride: githubSettings.allowInlineDirectiveOverride ?? true,
       },
     });
   }
