@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { SandboxEvent } from "@/types/session";
@@ -52,56 +52,64 @@ function denialEvent(reason: string, channel = "#ops"): ToolCallEvent {
   };
 }
 
-function expandFirst() {
-  const buttons = screen.getAllByRole("button");
-  fireEvent.click(buttons[0]);
+function renderExpanded(event: ToolCallEvent) {
+  return render(<SlackNotifyEvent event={event} isExpanded onToggle={() => {}} />);
 }
 
 describe("SlackNotifyEvent", () => {
+  it("invokes onToggle when the row is clicked, leaving expansion to the parent", () => {
+    const onToggle = vi.fn();
+    render(<SlackNotifyEvent event={successEvent()} isExpanded={false} onToggle={onToggle} />);
+
+    expect(screen.queryByRole("link", { name: /view in slack/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button"));
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
   it("renders a successful post with channel input and a Slack permalink", () => {
-    render(<SlackNotifyEvent event={successEvent()} />);
+    renderExpanded(successEvent());
 
     expect(screen.getByText(/posted to #ops/i)).toBeInTheDocument();
-    expandFirst();
-
     const link = screen.getByRole("link", { name: /view in slack/i });
     expect(link).toHaveAttribute("href", "https://slack.com/archives/C01ABC/p1700000000001");
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", expect.stringContaining("noopener"));
+    expect(link).toHaveAttribute("rel", expect.stringContaining("noreferrer"));
+  });
+
+  it("does not render a link when the permalink uses an unsafe scheme", () => {
+    renderExpanded(successEvent({ permalink: "javascript:alert(1)" }));
+
+    expect(screen.getByText(/posted to #ops/i)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /view in slack/i })).not.toBeInTheDocument();
   });
 
   it("surfaces the truncation note when the message was truncated", () => {
-    render(<SlackNotifyEvent event={successEvent({ truncated: true })} />);
-    expandFirst();
+    renderExpanded(successEvent({ truncated: true }));
     expect(screen.getByText(/truncated/i)).toBeInTheDocument();
   });
 
   it("surfaces the broadcast-strip note when broadcasts were removed", () => {
-    render(<SlackNotifyEvent event={successEvent({ strippedBroadcasts: true })} />);
-    expandFirst();
+    renderExpanded(successEvent({ strippedBroadcasts: true }));
     expect(screen.getByText(/broadcast mentions/i)).toBeInTheDocument();
   });
 
   it("renders channel_not_found_or_forbidden with an invite-the-bot hint and no permalink", () => {
-    render(<SlackNotifyEvent event={denialEvent("channel_not_found_or_forbidden")} />);
+    renderExpanded(denialEvent("channel_not_found_or_forbidden"));
 
     expect(screen.getByText(/slack notify failed/i)).toBeInTheDocument();
-    expandFirst();
-
     expect(screen.getByText(/channel not found or bot is not in the channel/i)).toBeInTheDocument();
     expect(screen.getByText(/invite the open-inspect bot/i)).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /view in slack/i })).not.toBeInTheDocument();
   });
 
   it("renders feature_disabled with repo-specific copy", () => {
-    render(<SlackNotifyEvent event={denialEvent("feature_disabled")} />);
-    expandFirst();
+    renderExpanded(denialEvent("feature_disabled"));
     expect(screen.getByText(/notifications are disabled for this repository/i)).toBeInTheDocument();
   });
 
   it("renders rate_limited with retry-window copy", () => {
-    render(<SlackNotifyEvent event={denialEvent("rate_limited")} />);
-    expandFirst();
+    renderExpanded(denialEvent("rate_limited"));
     expect(screen.getByText(/rate-limited/i)).toBeInTheDocument();
   });
 
@@ -112,8 +120,7 @@ describe("SlackNotifyEvent", () => {
       args: { channel: "#ops", text: "" },
       output: "not-json",
     };
-    render(<SlackNotifyEvent event={event} />);
-    expandFirst();
+    renderExpanded(event);
     expect(screen.getByText(/no details available/i)).toBeInTheDocument();
   });
 });

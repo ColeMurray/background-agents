@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
 import type { SandboxEvent } from "@/types/session";
+import { getSafeExternalUrl } from "@/lib/urls";
 import { ChevronRightIcon, ErrorIcon, LinkIcon, SlackIcon } from "@/components/ui/icons";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
@@ -87,11 +87,17 @@ function getChannelInput(event: ToolCallEvent): string | undefined {
 
 interface SlackNotifyEventProps {
   event: ToolCallEvent;
+  isExpanded: boolean;
+  onToggle: () => void;
   showTime?: boolean;
 }
 
-export function SlackNotifyEvent({ event, showTime = true }: SlackNotifyEventProps) {
-  const [expanded, setExpanded] = useState(false);
+export function SlackNotifyEvent({
+  event,
+  isExpanded,
+  onToggle,
+  showTime = true,
+}: SlackNotifyEventProps) {
   const success = parseSuccess(event.output);
   const denial = success ? null : getDenialReason(event);
   const channelInput = success?.channelInput ?? getChannelInput(event);
@@ -112,12 +118,12 @@ export function SlackNotifyEvent({ event, showTime = true }: SlackNotifyEventPro
   return (
     <div className="py-0.5">
       <button
-        onClick={() => setExpanded((prev) => !prev)}
+        onClick={onToggle}
         className="w-full flex items-center gap-1.5 text-sm text-left text-muted-foreground hover:text-foreground transition-colors"
       >
         <ChevronRightIcon
           className={`w-3.5 h-3.5 text-secondary-foreground transition-transform duration-200 ${
-            expanded ? "rotate-90" : ""
+            isExpanded ? "rotate-90" : ""
           }`}
         />
         {denial ? (
@@ -131,7 +137,7 @@ export function SlackNotifyEvent({ event, showTime = true }: SlackNotifyEventPro
         )}
       </button>
 
-      {expanded && (
+      {isExpanded && (
         <div className="mt-2 ml-5 p-3 bg-card border border-border-muted text-xs overflow-hidden">
           {success ? (
             <SlackNotifySuccessBody success={success} />
@@ -152,17 +158,19 @@ function SlackNotifySuccessBody({ success }: { success: SlackNotifySuccessOutput
   if (success.strippedBroadcasts) notes.push("Broadcast mentions (@channel/@here) were stripped.");
   if (success.mentionsModified) notes.push("User mentions were rewritten per workspace policy.");
 
+  const safePermalink = getSafeExternalUrl(success.permalink);
+
   return (
     <div className="space-y-2">
       <div>
         <div className="text-muted-foreground mb-1 font-medium">Channel</div>
         <div className="text-foreground">{success.channelInput}</div>
       </div>
-      {success.permalink ? (
+      {safePermalink ? (
         <div>
           <div className="text-muted-foreground mb-1 font-medium">Slack message</div>
           <a
-            href={success.permalink}
+            href={safePermalink}
             target="_blank"
             rel="noopener noreferrer"
             className="text-primary inline-flex items-center gap-1 hover:underline"

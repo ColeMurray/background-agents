@@ -51,7 +51,14 @@ function ToolIcon({ name }: { name: string | null }) {
 
 export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: ToolCallItemProps) {
   if (event.tool === "slack-notify") {
-    return <SlackNotifyEvent event={event} showTime={showTime} />;
+    return (
+      <SlackNotifyEvent
+        event={event}
+        isExpanded={isExpanded}
+        onToggle={onToggle}
+        showTime={showTime}
+      />
+    );
   }
 
   const formatted = formatToolCall(event);
