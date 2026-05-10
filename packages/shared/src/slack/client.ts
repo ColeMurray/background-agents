@@ -42,11 +42,16 @@ async function slackFetch<T extends SlackResponseBase>(
     body = JSON.stringify(init.body);
   }
 
-  const response = await fetch(url, {
-    method: init?.method ?? "GET",
-    headers,
-    body,
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: init?.method ?? "GET",
+      headers,
+      body,
+    });
+  } catch {
+    return { ok: false, error: "network_error" } as T;
+  }
 
   if (response.status === 429) {
     const retryHeader = response.headers.get("retry-after");

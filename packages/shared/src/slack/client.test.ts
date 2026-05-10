@@ -98,6 +98,14 @@ describe("postMessage", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toBe("invalid_response");
   });
+
+  it("on fetch network error returns a typed error rather than throwing", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new TypeError("fetch failed"));
+
+    const result = await postMessage("xoxb-token", "C123", "hi");
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("network_error");
+  });
 });
 
 describe("getChannelInfo", () => {

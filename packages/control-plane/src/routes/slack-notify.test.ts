@@ -134,7 +134,8 @@ afterEach(() => {
 });
 
 describe("handleSlackNotify", () => {
-  it("returns 503 feature_unavailable when SLACK_BOT_TOKEN is missing", async () => {
+  it("returns 503 feature_unavailable and emits a denial event when SLACK_BOT_TOKEN is missing", async () => {
+    seedActiveSession();
     const res = await callHandler(
       { channel: "#ops", text: "hello" },
       { SLACK_BOT_TOKEN: undefined }
@@ -143,7 +144,11 @@ describe("handleSlackNotify", () => {
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe("feature_unavailable");
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(sessionFetchMock).not.toHaveBeenCalled();
+    expect(sessionFetchMock).toHaveBeenCalledTimes(1);
+    const events = await emittedEvents();
+    expect(events[0]?.type).toBe("tool_call");
+    expect(events[0]?.status).toBe("error");
+    expect(events[0]?.output).toBe("feature_unavailable");
   });
 
   it("returns feature_disabled when global master switch is off", async () => {
@@ -168,7 +173,12 @@ describe("handleSlackNotify", () => {
     expect(sentEvent.output).toBe("feature_disabled");
   });
 
-  it("returns feature_disabled when repo override is false even if global is true", async () => {
+  // The handler reads only the resolved master switch (returned by
+  // getResolvedConfig, which already merges global + repo). Whether the
+  // resolved `false` came from a global default or a repo override is not
+  // the handler's concern — that resolution is covered by
+  // IntegrationSettingsStore tests in db/integration-settings.test.ts.
+  it("does not call Slack when feature_disabled regardless of resolution source", async () => {
     seedActiveSession();
     integrationStoreMock.getResolvedConfig.mockResolvedValue({
       enabledRepos: null,
@@ -434,5 +444,44 @@ describe("handleSlackNotify", () => {
     await callHandler({ channel: "#ops", text: "hi" });
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("maps Slack network/fetch failures to slack_api_error and emits a denial event", async () => {
+    seedActiveSession();
+    integrationStoreMock.getResolvedConfig.mockResolvedValue({
+      enabledRepos: null,
+      settings: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
+    });
+    // Shared slackFetch wraps fetch() in try/catch and returns
+    // { ok: false, error: "network_error" } on TypeError. The handler must
+    // map that to slack_api_error rather than letting the rejection escape.
+    fetchMock.mockRejectedValueOnce(new TypeError("fetch failed"));
+
+    const res = await callHandler({ channel: "#ops", text: "hello" });
+
+    expect(res.status).toBe(502);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("slack_api_error");
+    const events = await emittedEvents();
+    expect(events[0]?.type).toBe("tool_call");
+    expect(events[0]?.status).toBe("error");
+    expect(events[0]?.output).toBe("slack_api_error");
+  });
+
+  it("rejects raw text longer than the input cap", async () => {
+    seedActiveSession();
+    integrationStoreMock.getResolvedConfig.mockResolvedValue({
+      enabledRepos: null,
+      settings: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
+    });
+
+    const oversized = "a".repeat(12_001);
+    const res = await callHandler({ channel: "#ops", text: oversized });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; message?: string };
+    expect(body.error).toBe("invalid_input");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(sessionFetchMock).not.toHaveBeenCalled();
   });
 });

@@ -26,6 +26,8 @@ const logger = createLogger("slack-notify");
 
 /** Maximum text length before truncation; fits within Slack's section block. */
 const SLACK_TEXT_MAX_LENGTH = 2900;
+/** Hard cap on the raw text we accept and persist verbatim in event args. */
+const RAW_TEXT_INPUT_MAX_LENGTH = 12_000;
 /** Channel name length cap (Slack max is 80). */
 const CHANNEL_INPUT_MAX_LENGTH = 80;
 /** Reason field cap; recorded for audit only. */
@@ -86,11 +88,6 @@ export async function handleSlackNotify(
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required", 400);
 
-  const token = env.SLACK_BOT_TOKEN;
-  if (!token) {
-    return failureResponse("feature_unavailable", "Slack bot token is not configured.");
-  }
-
   const parsed = await parseBody(request);
   if (parsed instanceof Response) return parsed;
 
@@ -106,6 +103,12 @@ export async function handleSlackNotify(
     parentSessionId: session.parentSessionId ?? null,
     repo,
   };
+
+  const token = env.SLACK_BOT_TOKEN;
+  if (!token) {
+    await emitDenial(env, sessionId, ctx, parsed, attribution, "feature_unavailable");
+    return failureResponse("feature_unavailable", "Slack bot token is not configured.");
+  }
 
   const settingsStore = new IntegrationSettingsStore(env.DB);
   const { settings } = await settingsStore.getResolvedConfig("slack", repo);
@@ -137,8 +140,6 @@ export async function handleSlackNotify(
     sessionId,
     appName: env.APP_NAME ?? "Open-Inspect",
     webAppUrl: env.WEB_APP_URL,
-    truncated: sanitized.truncated,
-    strippedBroadcasts: sanitized.strippedBroadcasts,
   });
 
   const post = await postMessage(token, parsed.channel, sanitized.text, {
@@ -235,6 +236,12 @@ async function parseBody(request: Request): Promise<ParsedBody | Response> {
   if (text.length === 0) {
     return failureResponse("invalid_input", "text is required.");
   }
+  if (text.length > RAW_TEXT_INPUT_MAX_LENGTH) {
+    return failureResponse(
+      "invalid_input",
+      `text must be at most ${RAW_TEXT_INPUT_MAX_LENGTH} characters.`
+    );
+  }
 
   const threadTs =
     typeof body.thread_ts === "string" && body.thread_ts.length > 0 ? body.thread_ts : undefined;
@@ -254,8 +261,6 @@ function buildBlocks(opts: {
   sessionId: string;
   appName: string;
   webAppUrl: string | undefined;
-  truncated: boolean;
-  strippedBroadcasts: boolean;
 }): unknown[] {
   const blocks: unknown[] = [
     {
