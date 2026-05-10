@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type {
@@ -265,5 +265,94 @@ describe("SlackIntegrationSettings", () => {
       "/api/integration-settings/slack/repos/acme/web",
       expect.objectContaining({ method: "DELETE" })
     );
+  });
+
+  // Regression: form must resync when SWR revalidates after the first render.
+  it("global form resyncs when settings change from null to populated (not dirty)", () => {
+    setupSWR({ global: null });
+    const { rerender } = render(<SlackIntegrationSettings />);
+
+    expect(screen.getByRole("switch", { name: /enable agent notifications/i })).toHaveAttribute(
+      "aria-checked",
+      "false"
+    );
+
+    act(() => {
+      setupSWR({
+        global: { defaults: { agentNotificationsEnabled: true, mentionsPolicy: "strip" } },
+      });
+    });
+    rerender(<SlackIntegrationSettings />);
+
+    expect(screen.getByRole("switch", { name: /enable agent notifications/i })).toHaveAttribute(
+      "aria-checked",
+      "true"
+    );
+    expect((screen.getByRole("radio", { name: /strip/i }) as HTMLInputElement).checked).toBe(true);
+  });
+
+  // Regression: dirty edits must not be clobbered by SWR revalidation.
+  it("global form preserves dirty local edits when settings revalidate", async () => {
+    const user = userEvent.setup();
+    setupSWR({ global: null });
+    const { rerender } = render(<SlackIntegrationSettings />);
+
+    await user.click(screen.getByRole("switch", { name: /enable agent notifications/i }));
+    expect(screen.getByRole("switch", { name: /enable agent notifications/i })).toHaveAttribute(
+      "aria-checked",
+      "true"
+    );
+
+    act(() => {
+      setupSWR({
+        global: { defaults: { agentNotificationsEnabled: false, mentionsPolicy: "strip" } },
+      });
+    });
+    rerender(<SlackIntegrationSettings />);
+
+    expect(screen.getByRole("switch", { name: /enable agent notifications/i })).toHaveAttribute(
+      "aria-checked",
+      "true"
+    );
+    expect((screen.getByRole("radio", { name: /allow/i }) as HTMLInputElement).checked).toBe(true);
+  });
+
+  // Regression: per-repo row must resync when entry.settings changes from SWR.
+  it("repo override row resyncs mode when entry.settings updates", () => {
+    setupSWR({
+      global: { defaults: { agentNotificationsEnabled: true, mentionsPolicy: "allow" } },
+      repos: [{ repo: "acme/web", settings: {} }],
+      availableRepos: [repo("acme/web")],
+    });
+    const { rerender } = render(<SlackIntegrationSettings />);
+
+    expect(screen.getByText("Inherit global setting")).toBeInTheDocument();
+
+    act(() => {
+      setupSWR({
+        global: { defaults: { agentNotificationsEnabled: true, mentionsPolicy: "allow" } },
+        repos: [{ repo: "acme/web", settings: { agentNotificationsEnabled: false } }],
+        availableRepos: [repo("acme/web")],
+      });
+    });
+    rerender(<SlackIntegrationSettings />);
+
+    expect(screen.getByText("Override: notifications off")).toBeInTheDocument();
+  });
+
+  // Regression: mixed-case override keys still dedupe against the available-repos picker.
+  it("dedupes available repos against mixed-case override keys", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: { defaults: { agentNotificationsEnabled: true, mentionsPolicy: "allow" } },
+      repos: [{ repo: "ACME/Web", settings: {} }],
+      availableRepos: [repo("acme/web"), repo("acme/api")],
+    });
+
+    render(<SlackIntegrationSettings />);
+
+    await user.click(screen.getByRole("combobox", { name: /select a repository/i }));
+    expect(screen.queryByRole("option", { name: "acme/web" })).toBeNull();
+    expect(await screen.findByRole("option", { name: "acme/api" })).toBeInTheDocument();
   });
 });

@@ -131,18 +131,13 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
   );
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
-  const [initialized, setInitialized] = useState(false);
   const [showResetDialog, setShowResetDialog] = useState(false);
 
   useEffect(() => {
-    if (settings !== undefined && !initialized) {
-      if (settings) {
-        setAgentNotificationsEnabled(settings.defaults?.agentNotificationsEnabled ?? false);
-        setMentionsPolicy(settings.defaults?.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY);
-      }
-      setInitialized(true);
-    }
-  }, [settings, initialized]);
+    if (settings === undefined || dirty || saving) return;
+    setAgentNotificationsEnabled(settings?.defaults?.agentNotificationsEnabled ?? false);
+    setMentionsPolicy(settings?.defaults?.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY);
+  }, [settings, dirty, saving]);
 
   const isConfigured = settings !== null && settings !== undefined;
 
@@ -285,7 +280,7 @@ function RepoOverridesSection({
 }) {
   const [addingRepo, setAddingRepo] = useState("");
 
-  const overriddenRepos = new Set(overrides.map((o) => o.repo));
+  const overriddenRepos = new Set(overrides.map((o) => o.repo.toLowerCase()));
   const availableForOverride = availableRepos.filter(
     (r) => !overriddenRepos.has(r.fullName.toLowerCase())
   );
@@ -359,6 +354,11 @@ function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
   const [mode, setMode] = useState<OverrideMode>(deriveOverrideMode(entry.settings));
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (dirty || saving) return;
+    setMode(deriveOverrideMode(entry.settings));
+  }, [entry.settings, dirty, saving]);
 
   const handleSave = async () => {
     setSaving(true);
