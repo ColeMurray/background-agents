@@ -283,6 +283,25 @@ export class SessionRepository {
     );
   }
 
+  markTitleManuallySet(sessionId: string, updatedAt: number): void {
+    this.sql.exec(
+      `UPDATE session SET title_manually_set = 1, updated_at = ? WHERE id = ?`,
+      updatedAt,
+      sessionId
+    );
+  }
+
+  // Intentionally does NOT touch updated_at — this marker is an internal
+  // one-shot guard for auto-rename, not a participant-visible session update,
+  // so it must not bump the row's activity timestamp.
+  markTitleAutoRenameAttempted(sessionId: string, attemptedAt: number): void {
+    this.sql.exec(
+      `UPDATE session SET title_auto_rename_attempted_at = ? WHERE id = ?`,
+      attemptedAt,
+      sessionId
+    );
+  }
+
   updateSessionStatus(sessionId: string, status: SessionStatus, updatedAt: number): void {
     this.sql.exec(
       `UPDATE session SET status = ?, updated_at = ? WHERE id = ?`,

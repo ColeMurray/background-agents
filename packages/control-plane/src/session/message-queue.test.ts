@@ -44,6 +44,8 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     code_server_enabled: 0,
     total_cost: 0,
     sandbox_settings: null,
+    title_manually_set: 0,
+    title_auto_rename_attempted_at: null,
     created_at: 1000,
     updated_at: 1000,
     ...overrides,
@@ -82,7 +84,11 @@ function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
   };
 }
 
-function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | null }) {
+function buildQueue(options?: {
+  getClientInfo?: (ws: WebSocket) => ClientInfo | null;
+  session?: SessionRow | null;
+  triggerAutoRename?: (prompt: string) => Promise<void>;
+}) {
   const repository = {
     createMessage: vi.fn(),
     createEvent: vi.fn(),
@@ -117,6 +123,8 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
   const updateLastActivity = vi.fn();
   const waitUntil = vi.fn();
 
+  const session = options?.session === undefined ? createSession() : options.session;
+
   const queue = new SessionMessageQueue({
     env: {} as Env,
     ctx: { waitUntil } as unknown as DurableObjectState,
@@ -134,12 +142,13 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
     scmProvider: "github",
     getClientInfo: options?.getClientInfo ?? (() => createClientInfo()),
     validateReasoningEffort: vi.fn(() => null),
-    getSession: vi.fn(() => createSession()),
+    getSession: vi.fn(() => session),
     updateLastActivity,
     spawnSandbox,
     broadcast,
     setSessionStatus,
     reconcileSessionStatusAfterExecution,
+    triggerAutoRename: options?.triggerAutoRename,
   });
 
   return {
@@ -316,5 +325,69 @@ describe("SessionMessageQueue", () => {
 
       expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("SessionMessageQueue auto-rename trigger", () => {
+  it("triggers auto-rename via waitUntil on first bot prompt", async () => {
+    const triggerAutoRename = vi.fn(async (_prompt: string) => {});
+    const h = buildQueue({
+      session: createSession({
+        title: null,
+        title_manually_set: 0,
+        title_auto_rename_attempted_at: null,
+      }),
+      triggerAutoRename,
+    });
+
+    await h.queue.enqueuePromptFromApi({
+      content: "Fix the login bug",
+      authorId: "github:1001",
+      source: "github-bot",
+    });
+
+    expect(h.waitUntil).toHaveBeenCalledTimes(1);
+    expect(triggerAutoRename).toHaveBeenCalledTimes(1);
+    expect(triggerAutoRename).toHaveBeenCalledWith("Fix the login bug");
+  });
+
+  it("does NOT trigger when title was manually set", async () => {
+    const triggerAutoRename = vi.fn(async (_prompt: string) => {});
+    const h = buildQueue({
+      session: createSession({
+        title: "Manually chosen",
+        title_manually_set: 1,
+        title_auto_rename_attempted_at: null,
+      }),
+      triggerAutoRename,
+    });
+
+    await h.queue.enqueuePromptFromApi({
+      content: "Fix the login bug",
+      authorId: "github:1001",
+      source: "github-bot",
+    });
+
+    expect(triggerAutoRename).not.toHaveBeenCalled();
+  });
+
+  it("does NOT trigger when auto-rename was already attempted", async () => {
+    const triggerAutoRename = vi.fn(async (_prompt: string) => {});
+    const h = buildQueue({
+      session: createSession({
+        title: "Some title",
+        title_manually_set: 0,
+        title_auto_rename_attempted_at: 1234567890,
+      }),
+      triggerAutoRename,
+    });
+
+    await h.queue.enqueuePromptFromApi({
+      content: "Fix the login bug",
+      authorId: "github:1001",
+      source: "github-bot",
+    });
+
+    expect(triggerAutoRename).not.toHaveBeenCalled();
   });
 });

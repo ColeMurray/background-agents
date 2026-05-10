@@ -39,6 +39,8 @@ export interface SessionRow {
   code_server_enabled: number; // 0 = disabled (default), 1 = enabled
   total_cost: number; // Running aggregate of step_finish event costs
   sandbox_settings: string | null; // JSON blob of SandboxSettings
+  title_manually_set: number; // 0 or 1
+  title_auto_rename_attempted_at: number | null;
   created_at: number;
   updated_at: number;
 }

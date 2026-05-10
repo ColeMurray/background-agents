@@ -41,7 +41,11 @@ interface InitRequest {
 export interface SessionLifecycleHandlerDeps {
   repository: Pick<
     SessionRepository,
-    "upsertSession" | "createSandbox" | "createParticipant" | "updateSessionTitle"
+    | "upsertSession"
+    | "createSandbox"
+    | "createParticipant"
+    | "updateSessionTitle"
+    | "markTitleManuallySet"
   >;
   getDurableObjectId: () => string;
   tokenEncryptionKey?: string;
@@ -228,7 +232,11 @@ export function createSessionLifecycleHandler(
         );
       }
 
-      deps.repository.updateSessionTitle(session.id, body.title, deps.now());
+      const now = deps.now();
+      deps.repository.updateSessionTitle(session.id, body.title, now);
+      // Flag the row so the background auto-rename in session-titler never
+      // overwrites a participant's explicit choice.
+      deps.repository.markTitleManuallySet(session.id, now);
 
       const publicSessionId = deps.getPublicSessionId(session);
       deps.syncSessionIndexTitle(publicSessionId, body.title);

@@ -25,6 +25,8 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     code_server_enabled: 0,
     total_cost: 0,
     sandbox_settings: null,
+    title_manually_set: 0,
+    title_auto_rename_attempted_at: null,
     created_at: 1000,
     updated_at: 2000,
     ...overrides,
@@ -81,6 +83,7 @@ function createHandler() {
     createSandbox: vi.fn(),
     createParticipant: vi.fn(),
     updateSessionTitle: vi.fn(),
+    markTitleManuallySet: vi.fn(),
   };
   const getDurableObjectId = vi.fn(() => "session-do-id");
   const encryptToken = vi.fn();
@@ -458,6 +461,7 @@ describe("createSessionLifecycleHandler", () => {
     expect(repository.updateSessionTitle).toHaveBeenCalledWith("session-1", "New Title", 1234);
     expect(syncSessionIndexTitle).toHaveBeenCalledWith("public-session-1", "New Title");
     expect(broadcast).toHaveBeenCalledWith({ type: "session_title", title: "New Title" });
+    expect(repository.markTitleManuallySet).toHaveBeenCalledWith("session-1", 1234);
   });
 
   it("returns 400 for invalid archive body", async () => {

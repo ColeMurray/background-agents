@@ -92,6 +92,8 @@ import {
 } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
 import { createAlarmHandler, type AlarmHandler } from "./alarm/handler";
+import Anthropic from "@anthropic-ai/sdk";
+import { generateTitle, runAutoRename, type TitlerClient } from "./services/session-titler";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -150,6 +152,12 @@ export class SessionDO extends DurableObject<Env> {
   private _alarmHandler: AlarmHandler | null = null;
   // Sandbox event processor (lazily initialized)
   private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
+  // Titler client for session auto-rename. Tri-state lazy:
+  //   undefined → not yet computed
+  //   null      → computed, no ANTHROPIC_API_KEY configured (fallback path only)
+  //   instance  → ready
+  // The getter caches null so the cold-start warning fires exactly once per DO.
+  private _titlerClient: TitlerClient | null | undefined;
 
   // Internal HTTP route table (transport wiring only; handlers remain on SessionDO).
   private readonly routes = createSessionInternalRoutes({
@@ -319,6 +327,7 @@ export class SessionDO extends DurableObject<Env> {
             await this.ctx.storage.setAlarm(deadline);
           }
         },
+        triggerAutoRename: (prompt: string) => this.runAutoRenameForFirstPrompt(prompt),
       });
     }
 
@@ -336,6 +345,25 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     return this._messageService;
+  }
+
+  /**
+   * Returns the Anthropic SDK client used for session auto-rename, or null
+   * if ANTHROPIC_API_KEY is not configured. Lazily instantiated, cached for
+   * the DO lifetime.
+   */
+  private get titlerClient(): TitlerClient | null {
+    if (this._titlerClient === undefined) {
+      this._titlerClient = this.env.ANTHROPIC_API_KEY
+        ? new Anthropic({ apiKey: this.env.ANTHROPIC_API_KEY })
+        : null;
+      if (!this._titlerClient) {
+        this.log.warn("auto_rename.no_api_key", {
+          message: "ANTHROPIC_API_KEY not configured; auto-rename will use deterministic fallback",
+        });
+      }
+    }
+    return this._titlerClient;
   }
 
   private get messagesHandler(): MessagesHandler {
@@ -1426,6 +1454,32 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async processMessageQueue(): Promise<void> {
     await this.messageQueue.processMessageQueue();
+  }
+
+  /**
+   * Build deps and run the auto-rename orchestrator.
+   * Called from the message queue via ctx.waitUntil on the first eligible prompt.
+   */
+  private async runAutoRenameForFirstPrompt(prompt: string): Promise<void> {
+    await runAutoRename({
+      deps: {
+        repository: {
+          getSession: () => this.repository.getSession(),
+          updateSessionTitle: (sessionId, title, updatedAt) =>
+            this.repository.updateSessionTitle(sessionId, title, updatedAt),
+          markTitleAutoRenameAttempted: (sessionId, attemptedAt) =>
+            this.repository.markTitleAutoRenameAttempted(sessionId, attemptedAt),
+        },
+        titler: ({ prompt, spawnSource }) =>
+          generateTitle({ client: this.titlerClient, prompt, spawnSource }),
+        syncSessionIndexTitle: (sessionId, title) => this.syncSessionIndexTitle(sessionId, title),
+        broadcast: (message) => this.broadcast(message),
+        getPublicSessionId: (session) => this.getPublicSessionId(session),
+        log: this.log,
+        now: () => Date.now(),
+      },
+      prompt,
+    });
   }
 
   /**

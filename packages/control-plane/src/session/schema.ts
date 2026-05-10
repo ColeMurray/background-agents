@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS session (
   code_server_enabled INTEGER NOT NULL DEFAULT 0,   -- 0 = disabled, 1 = enabled (opt-in)
   total_cost REAL NOT NULL DEFAULT 0,              -- Running session cost from step_finish events
   sandbox_settings TEXT DEFAULT NULL,               -- JSON blob of SandboxSettings (resolved at session creation)
+  title_manually_set INTEGER NOT NULL DEFAULT 0, -- 1 once a participant has explicitly renamed via PATCH
+  title_auto_rename_attempted_at INTEGER,        -- Unix ms when auto-rename began (one-shot guard)
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -382,6 +384,16 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 30,
     description: "Add total_cost to session",
     run: `ALTER TABLE session ADD COLUMN total_cost REAL NOT NULL DEFAULT 0`,
+  },
+  {
+    id: 31,
+    description: "Add title_manually_set to session",
+    run: `ALTER TABLE session ADD COLUMN title_manually_set INTEGER NOT NULL DEFAULT 0`,
+  },
+  {
+    id: 32,
+    description: "Add title_auto_rename_attempted_at to session",
+    run: `ALTER TABLE session ADD COLUMN title_auto_rename_attempted_at INTEGER`,
   },
 ];
 

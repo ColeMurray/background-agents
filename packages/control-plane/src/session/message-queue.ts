@@ -49,6 +49,12 @@ interface MessageQueueDeps {
   setSessionStatus: (status: SessionStatus) => Promise<void>;
   reconcileSessionStatusAfterExecution: (success: boolean) => Promise<void>;
   scheduleExecutionTimeout?: (startedAtMs: number) => Promise<void>;
+  /**
+   * Background task to auto-generate a session title from the first prompt.
+   * Called via ctx.waitUntil after the message is persisted. Receives the raw
+   * prompt content. Wired by SessionDO; absent in tests that don't exercise it.
+   */
+  triggerAutoRename?: (prompt: string) => Promise<void>;
 }
 
 interface StopExecutionOptions {
@@ -103,6 +109,8 @@ export class SessionMessageQueue {
       status: "pending",
       createdAt: now,
     });
+
+    this.maybeScheduleAutoRename(data.content);
 
     await this.deps.setSessionStatus("active");
 
@@ -329,6 +337,27 @@ export class SessionMessageQueue {
     this.deps.broadcast({ type: "sandbox_event", event: userMessageEvent });
   }
 
+  /**
+   * Schedule background auto-rename on the FIRST eligible prompt for a session.
+   * Skips if title was manually set or auto-rename was already attempted.
+   */
+  private maybeScheduleAutoRename(prompt: string): void {
+    if (!this.deps.triggerAutoRename) return;
+    const session = this.deps.getSession();
+    if (!session) return;
+    if (session.title_manually_set === 1) return;
+    if (session.title_auto_rename_attempted_at !== null) return;
+    const trigger = this.deps.triggerAutoRename;
+    this.deps.ctx.waitUntil(
+      trigger(prompt).catch((error) => {
+        this.deps.log.error("auto_rename.background_error", {
+          session_id: session.id,
+          error,
+        });
+      })
+    );
+  }
+
   async enqueuePromptFromApi(
     data: EnqueuePromptRequest
   ): Promise<{ messageId: string; status: "queued" }> {
@@ -390,6 +419,8 @@ export class SessionMessageQueue {
       status: "pending",
       createdAt: now,
     });
+
+    this.maybeScheduleAutoRename(data.content);
 
     await this.deps.setSessionStatus("active");
 

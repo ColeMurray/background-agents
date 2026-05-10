@@ -62,6 +62,7 @@ export interface Env {
   MODAL_API_SECRET?: string; // Shared secret for authenticating with Modal endpoints
   DAYTONA_API_KEY?: string; // Daytona REST API key (Bearer auth + HMAC derivation)
   INTERNAL_CALLBACK_SECRET?: string; // For signing callbacks to slack-bot
+  ANTHROPIC_API_KEY?: string; // For session auto-rename via Claude Haiku
   SLACK_BOT_TOKEN?: string; // Slack bot token for agent-initiated chat.postMessage calls
 
   // GitHub App secrets (for git operations)

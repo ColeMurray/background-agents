@@ -54,6 +54,8 @@ function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
     code_server_enabled: 0,
     total_cost: 0,
     sandbox_settings: null,
+    title_manually_set: 0,
+    title_auto_rename_attempted_at: null,
     created_at: Date.now() - 60000,
     updated_at: Date.now(),
     ...overrides,

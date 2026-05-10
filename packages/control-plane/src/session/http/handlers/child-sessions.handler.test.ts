@@ -24,6 +24,8 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     code_server_enabled: 0,
     total_cost: 0,
     sandbox_settings: null,
+    title_manually_set: 0,
+    title_auto_rename_attempted_at: null,
     created_at: 1000,
     updated_at: 2000,
     ...overrides,
