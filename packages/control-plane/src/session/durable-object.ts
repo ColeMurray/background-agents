@@ -34,7 +34,7 @@ import {
 } from "../sandbox/lifecycle/manager";
 import { RepoImageStore } from "../db/repo-images";
 import { McpServerStore } from "../db/mcp-servers";
-import { IntegrationSettingsStore } from "../db/integration-settings";
+import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { DEFAULT_EXECUTION_TIMEOUT_MS } from "../sandbox/lifecycle/decisions";
 import {
@@ -701,7 +701,6 @@ export class SessionDO extends DurableObject<Env> {
     const sessionId = session?.session_name || session?.id || this.ctx.id.toString();
 
     // Create D1-backed lookups if database is available
-    // Create D1-backed lookups if database is available
     let mcpServerLookup: McpServerLookup | undefined;
     if (this.env.DB) {
       const mcpStore = new McpServerStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
@@ -724,7 +723,7 @@ export class SessionDO extends DurableObject<Env> {
             "slack",
             `${repoOwner}/${repoName}`
           );
-          return settings.agentNotificationsEnabled === true;
+          return resolveSlackSettings(settings).agentNotificationsEnabled;
         },
       };
     }

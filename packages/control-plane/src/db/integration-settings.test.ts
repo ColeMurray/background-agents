@@ -3,6 +3,7 @@ import {
   IntegrationSettingsStore,
   IntegrationSettingsValidationError,
   isValidIntegrationId,
+  resolveSlackSettings,
 } from "./integration-settings";
 
 type GlobalRow = {
@@ -899,6 +900,36 @@ describe("IntegrationSettingsStore", () => {
       const config = await store.getResolvedConfig("slack", "acme/widgets");
       expect(config.settings.agentNotificationsEnabled).toBe(true);
       expect(config.settings.mentionsPolicy).toBe("allow");
+    });
+  });
+
+  describe("resolveSlackSettings", () => {
+    it("treats undefined as disabled with default mention policy", () => {
+      expect(resolveSlackSettings(undefined)).toEqual({
+        agentNotificationsEnabled: false,
+        mentionsPolicy: "allow",
+      });
+    });
+
+    it("treats empty object as disabled with default mention policy", () => {
+      expect(resolveSlackSettings({})).toEqual({
+        agentNotificationsEnabled: false,
+        mentionsPolicy: "allow",
+      });
+    });
+
+    it("returns enabled true only when the flag is exactly true", () => {
+      expect(
+        resolveSlackSettings({ agentNotificationsEnabled: true }).agentNotificationsEnabled
+      ).toBe(true);
+      expect(
+        resolveSlackSettings({ agentNotificationsEnabled: false }).agentNotificationsEnabled
+      ).toBe(false);
+    });
+
+    it("preserves a configured mention policy", () => {
+      expect(resolveSlackSettings({ mentionsPolicy: "strip" }).mentionsPolicy).toBe("strip");
+      expect(resolveSlackSettings({ mentionsPolicy: "escape" }).mentionsPolicy).toBe("escape");
     });
   });
 });

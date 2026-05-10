@@ -19,3 +19,5 @@ export {
   truncateForSlack,
 } from "./mrkdwn";
 export type { MentionPolicy, SanitizeOptions, SanitizeResult } from "./mrkdwn";
+export { SLACK_DENIAL_REASONS, SLACK_DENIAL_STATUS, DEFAULT_MENTIONS_POLICY } from "./types";
+export type { SlackDenialReason, SlackNotifySuccessOutput, SlackNotifyFailureBody } from "./types";

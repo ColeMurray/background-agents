@@ -1,34 +1,21 @@
 "use client";
 
+import {
+  SLACK_DENIAL_REASONS,
+  type SlackDenialReason,
+  type SlackNotifySuccessOutput,
+} from "@open-inspect/shared";
 import type { SandboxEvent } from "@/types/session";
 import { getSafeExternalUrl } from "@/lib/urls";
 import { ChevronRightIcon, ErrorIcon, LinkIcon, SlackIcon } from "@/components/ui/icons";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 
-interface SlackNotifySuccessOutput {
-  ok: true;
-  channelInput: string;
-  channelId?: string;
-  messageTs?: string;
-  permalink?: string;
-  truncated?: boolean;
-  strippedBroadcasts?: boolean;
-  mentionsModified?: boolean;
-}
+/** Defensive wire-shape: tolerates older events that omit non-essential fields. */
+type ParsedSuccess = Pick<SlackNotifySuccessOutput, "ok" | "channelInput"> &
+  Partial<Omit<SlackNotifySuccessOutput, "ok" | "channelInput">>;
 
-const DENIAL_REASONS = [
-  "feature_unavailable",
-  "feature_disabled",
-  "empty_message_after_sanitization",
-  "channel_not_found_or_forbidden",
-  "rate_limited",
-  "slack_api_error",
-  "invalid_input",
-] as const;
-type DenialReason = (typeof DENIAL_REASONS)[number];
-
-const DENIAL_COPY: Record<DenialReason, { headline: string; hint?: string }> = {
+const DENIAL_COPY: Record<SlackDenialReason, { headline: string; hint?: string }> = {
   feature_unavailable: {
     headline: "Slack notifications are not configured for this deployment.",
   },
@@ -54,7 +41,7 @@ const DENIAL_COPY: Record<DenialReason, { headline: string; hint?: string }> = {
   },
 };
 
-function parseSuccess(output: string | undefined): SlackNotifySuccessOutput | null {
+function parseSuccess(output: string | undefined): ParsedSuccess | null {
   if (!output) return null;
   try {
     const parsed: unknown = JSON.parse(output);
@@ -64,7 +51,7 @@ function parseSuccess(output: string | undefined): SlackNotifySuccessOutput | nu
       (parsed as { ok?: unknown }).ok === true &&
       typeof (parsed as { channelInput?: unknown }).channelInput === "string"
     ) {
-      return parsed as SlackNotifySuccessOutput;
+      return parsed as ParsedSuccess;
     }
   } catch {
     return null;
@@ -72,11 +59,11 @@ function parseSuccess(output: string | undefined): SlackNotifySuccessOutput | nu
   return null;
 }
 
-function getDenialReason(event: ToolCallEvent): DenialReason | null {
+function getDenialReason(event: ToolCallEvent): SlackDenialReason | null {
   if (event.status !== "error") return null;
   if (typeof event.output !== "string") return null;
-  return (DENIAL_REASONS as readonly string[]).includes(event.output)
-    ? (event.output as DenialReason)
+  return (SLACK_DENIAL_REASONS as readonly string[]).includes(event.output)
+    ? (event.output as SlackDenialReason)
     : null;
 }
 
@@ -152,7 +139,7 @@ export function SlackNotifyEvent({
   );
 }
 
-function SlackNotifySuccessBody({ success }: { success: SlackNotifySuccessOutput }) {
+function SlackNotifySuccessBody({ success }: { success: ParsedSuccess }) {
   const notes: string[] = [];
   if (success.truncated) notes.push("Message was truncated to fit Slack length limits.");
   if (success.strippedBroadcasts) notes.push("Broadcast mentions (@channel/@here) were stripped.");
@@ -195,7 +182,7 @@ function SlackNotifyDenialBody({
   reason,
   channelInput,
 }: {
-  reason: DenialReason;
+  reason: SlackDenialReason;
   channelInput: string | undefined;
 }) {
   const { headline, hint } = DENIAL_COPY[reason];

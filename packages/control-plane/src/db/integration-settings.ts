@@ -2,6 +2,7 @@ import {
   isValidModel,
   isValidReasoningEffort,
   INTEGRATION_DEFINITIONS,
+  DEFAULT_MENTIONS_POLICY,
   type IntegrationId,
   type IntegrationSettingsMap,
   type GitHubBotSettings,
@@ -9,6 +10,7 @@ import {
   type CodeServerSettings,
   type SandboxSettings,
   type SlackGlobalSettings,
+  type SlackMentionsPolicy,
   MAX_TUNNEL_PORTS,
 } from "@open-inspect/shared";
 
@@ -372,4 +374,23 @@ export class IntegrationSettingsStore {
 export interface ResolvedIntegrationConfig<TRepo extends object = Record<string, unknown>> {
   enabledRepos: string[] | null;
   settings: TRepo;
+}
+
+/**
+ * Apply runtime defaults to raw Slack settings.
+ *
+ * Reads the partially-typed shape returned by `getResolvedConfig("slack", ...)`
+ * and produces the canonical view used by the route handler and the DO
+ * lifecycle factory: a definite boolean for the master gate, and a definite
+ * mention policy. Avoids re-applying `=== true` and `?? "allow"` at every
+ * call site.
+ */
+export function resolveSlackSettings(raw: Partial<SlackGlobalSettings> | undefined): {
+  agentNotificationsEnabled: boolean;
+  mentionsPolicy: SlackMentionsPolicy;
+} {
+  return {
+    agentNotificationsEnabled: raw?.agentNotificationsEnabled === true,
+    mentionsPolicy: raw?.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY,
+  };
 }

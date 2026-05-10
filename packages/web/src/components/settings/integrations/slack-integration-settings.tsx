@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import {
+  DEFAULT_MENTIONS_POLICY,
   type EnrichedRepository,
   type SlackGlobalConfig,
   type SlackGlobalSettings,
@@ -56,8 +57,6 @@ const MENTIONS_POLICY_OPTIONS: {
     description: "Mentions are removed entirely from the message body.",
   },
 ];
-
-const DEFAULT_MENTIONS_POLICY: SlackMentionsPolicy = "allow";
 
 interface GlobalResponse {
   settings: SlackGlobalConfig | null;

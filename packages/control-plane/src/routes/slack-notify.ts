@@ -11,11 +11,13 @@ import {
   getPermalink,
   postMessage,
   sanitizeAgentText,
-  type MentionPolicy,
+  SLACK_DENIAL_STATUS,
+  type SlackDenialReason,
   type SlackGlobalSettings,
+  type SlackNotifySuccessOutput,
 } from "@open-inspect/shared";
 import { generateId } from "../auth/crypto";
-import { IntegrationSettingsStore } from "../db/integration-settings";
+import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { createLogger } from "../logger";
 import { buildSessionInternalUrl, SessionInternalPaths } from "../session/contracts";
@@ -32,27 +34,7 @@ const RAW_TEXT_INPUT_MAX_LENGTH = 12_000;
 const CHANNEL_INPUT_MAX_LENGTH = 80;
 /** Reason field cap; recorded for audit only. */
 const REASON_MAX_LENGTH = 500;
-const DEFAULT_MENTIONS_POLICY: MentionPolicy = "allow";
 const SYNTHETIC_SANDBOX_ID = "control-plane";
-
-type DenialReason =
-  | "feature_unavailable"
-  | "feature_disabled"
-  | "empty_message_after_sanitization"
-  | "channel_not_found_or_forbidden"
-  | "rate_limited"
-  | "slack_api_error"
-  | "invalid_input";
-
-const STATUS_FOR_REASON: Record<DenialReason, number> = {
-  feature_unavailable: 503,
-  feature_disabled: 403,
-  empty_message_after_sanitization: 422,
-  channel_not_found_or_forbidden: 404,
-  rate_limited: 429,
-  slack_api_error: 502,
-  invalid_input: 400,
-};
 
 interface ParsedBody {
   channel: string;
@@ -66,17 +48,6 @@ interface Attribution {
   triggerSource: string | null;
   parentSessionId: string | null;
   repo: string;
-}
-
-interface SuccessOutput {
-  ok: true;
-  channelInput: string;
-  channelId: string;
-  messageTs: string;
-  permalink: string;
-  truncated: boolean;
-  strippedBroadcasts: boolean;
-  mentionsModified: boolean;
 }
 
 export async function handleSlackNotify(
@@ -112,8 +83,10 @@ export async function handleSlackNotify(
 
   const settingsStore = new IntegrationSettingsStore(env.DB);
   const { settings } = await settingsStore.getResolvedConfig("slack", repo);
-  const slackSettings = settings as Partial<SlackGlobalSettings>;
-  if (slackSettings.agentNotificationsEnabled !== true) {
+  const { agentNotificationsEnabled, mentionsPolicy } = resolveSlackSettings(
+    settings as Partial<SlackGlobalSettings>
+  );
+  if (!agentNotificationsEnabled) {
     await emitDenial(env, sessionId, ctx, parsed, attribution, "feature_disabled");
     return failureResponse(
       "feature_disabled",
@@ -121,7 +94,6 @@ export async function handleSlackNotify(
     );
   }
 
-  const mentionsPolicy = (slackSettings.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY) as MentionPolicy;
   const sanitized = sanitizeAgentText(parsed.text, {
     mentionsPolicy,
     maxLength: SLACK_TEXT_MAX_LENGTH,
@@ -161,7 +133,7 @@ export async function handleSlackNotify(
   }));
   const permalink = permalinkResp.ok && permalinkResp.permalink ? permalinkResp.permalink : "";
 
-  const result: SuccessOutput = {
+  const result: SlackNotifySuccessOutput = {
     ok: true,
     channelInput: parsed.channel,
     channelId,
@@ -294,7 +266,7 @@ function buildBlocks(opts: {
   return blocks;
 }
 
-function mapSlackError(slackError: string | undefined): DenialReason {
+function mapSlackError(slackError: string | undefined): SlackDenialReason {
   if (!slackError) return "slack_api_error";
   if (
     slackError === "channel_not_found" ||
@@ -308,14 +280,14 @@ function mapSlackError(slackError: string | undefined): DenialReason {
 }
 
 function failureResponse(
-  reason: DenialReason,
+  reason: SlackDenialReason,
   message: string | undefined,
   retryAfter?: number
 ): Response {
   const body: Record<string, unknown> = { error: reason };
   if (message) body.message = message;
   if (typeof retryAfter === "number") body.retryAfter = retryAfter;
-  return json(body, STATUS_FOR_REASON[reason]);
+  return json(body, SLACK_DENIAL_STATUS[reason]);
 }
 
 async function emitDenial(
@@ -324,7 +296,7 @@ async function emitDenial(
   ctx: RequestContext,
   parsed: ParsedBody,
   attribution: Attribution,
-  reason: DenialReason,
+  reason: SlackDenialReason,
   retryAfter?: number
 ): Promise<void> {
   await emitToolEvent(env, sessionId, ctx, {
