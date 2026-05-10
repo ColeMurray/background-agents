@@ -50,9 +50,9 @@ class SandboxConfig:
     repo_image_id: str | None = None  # Pre-built repo image ID from provider
     repo_image_sha: str | None = None  # Git SHA the repo image was built from
     code_server_enabled: bool = False  # Whether to start code-server in the sandbox
-    # Whether to install the agent-initiated slack-notify tool. Resolved at
-    # spawn time by the control plane from the master switch + token presence.
-    agent_slack_notify_enabled: bool = False
+    agent_slack_notify_enabled: bool = (
+        False  # Whether to install the agent-initiated slack-notify tool
+    )
     settings: dict[str, Any] | None = (
         None  # Sandbox settings (tunnelPorts, etc.) from control plane
     )

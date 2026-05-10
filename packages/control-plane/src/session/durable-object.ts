@@ -711,8 +711,6 @@ export class SessionDO extends DurableObject<Env> {
       };
     }
 
-    // Resolve agent-slack-notify gate at spawn time:
-    // master switch (with optional repo override) AND token presence.
     // Token absence short-circuits to false so a misconfigured deployment
     // never installs a tool that would 503 on every call.
     let slackAgentNotifyLookup: SlackAgentNotifyLookup | undefined;

@@ -229,14 +229,7 @@ class TestInstallTools:
         assert len(js_files) == 3
 
     def test_slack_notify_installed_when_enabled(self, tmp_path):
-        """slack-notify.js should be installed when AGENT_SLACK_NOTIFY_ENABLED=true.
-
-        The disabled/unset cases are intentionally not tested here: the gate is a
-        single-line check (`os.environ.get(...).lower() != "true"`) that's
-        readily verified by inspection of `_install_tools`. End-to-end behavior
-        is covered upstream by the control-plane test that asserts the env var
-        flows from settings into the sandbox config.
-        """
+        """slack-notify.js should be installed when AGENT_SLACK_NOTIFY_ENABLED=true."""
         sup = _make_supervisor()
         workdir = tmp_path / "workspace"
         workdir.mkdir()

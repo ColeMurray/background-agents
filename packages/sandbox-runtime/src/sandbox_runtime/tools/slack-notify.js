@@ -1,13 +1,8 @@
 /**
  * Slack Notify Tool — post a message to a Slack channel via the control plane.
  *
- * The bot token never enters the sandbox. The control plane authorizes the
- * call against the master switch + Slack-side channel membership, sanitizes
- * the text, attaches an attribution footer + View Session button, and emits
- * tool_call/tool_result events on the session transcript. This tool only
- * exists in the sandbox if the control plane installed it at spawn time
- * (AGENT_SLACK_NOTIFY_ENABLED=true) — see _install_tools in the
- * sandbox-runtime entrypoint.
+ * The bot token never enters the sandbox. This tool is only installed when
+ * AGENT_SLACK_NOTIFY_ENABLED=true at spawn time.
  */
 import { tool } from "@opencode-ai/plugin";
 import { z } from "zod";

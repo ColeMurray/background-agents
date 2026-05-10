@@ -164,7 +164,7 @@ export interface SandboxLifecycleConfig {
   sessionId?: string;
   /** MCP server lookup for injecting servers into sandboxes. */
   mcpServerLookup?: McpServerLookup;
-  /** Resolves the spawn-time agent-slack-notify gate (master switch + token presence). */
+  /** Resolves the spawn-time agent-slack-notify gate. */
   slackAgentNotifyLookup?: SlackAgentNotifyLookup;
 }
 
@@ -209,16 +209,8 @@ export interface RepoImageLookup {
 // ==================== Slack Agent-Notify Lookup ====================
 
 /**
- * Lookup interface for the spawn-time agent-slack-notify gate.
- *
- * Implementations resolve the slack integration's master switch (with optional
- * per-repo override) AND token presence into a single boolean. Keeps the
- * lifecycle manager free of direct D1 / env-var dependencies.
- *
- * Returning false (or throwing) means "do not install the slack-notify tool
- * in this sandbox." Per-call authorization is still re-checked at runtime by
- * the control-plane endpoint, so a stale-but-permissive resolution here is
- * safe — the endpoint will deny if the master switch later flips off.
+ * Resolves the spawn-time agent-slack-notify gate for a given repo.
+ * False (or throwing) means do not install the tool in this sandbox.
  */
 export interface SlackAgentNotifyLookup {
   isEnabledForRepo(repoOwner: string, repoName: string): Promise<boolean>;
@@ -521,14 +513,6 @@ export class SandboxLifecycleManager {
     }
   }
 
-  /**
-   * Resolve whether the slack-notify tool should be installed in this sandbox.
-   *
-   * Spawn-time decision per spec §7.5: tool presence is fixed for the
-   * sandbox's lifetime. The lookup encapsulates `master_switch &&
-   * SLACK_BOT_TOKEN_present`. Returns false on lookup failure to keep
-   * spawn safe by default.
-   */
   private async resolveAgentSlackNotifyEnabled(session: SessionRow): Promise<boolean> {
     if (!this.config.slackAgentNotifyLookup) return false;
     try {
