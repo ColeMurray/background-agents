@@ -1682,8 +1682,10 @@ describe("SandboxLifecycleManager", () => {
     function buildManagerWith(opts: {
       lookup?: SlackAgentNotifyLookup;
       provider?: ReturnType<typeof createMockProvider>;
+      sandbox?: ReturnType<typeof createMockSandbox>;
     }) {
-      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const sandbox =
+        opts.sandbox ?? createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const storage = createMockStorage(createMockSession(), sandbox);
       const provider = opts.provider ?? createMockProvider();
       const config = { ...createTestConfig(), slackAgentNotifyLookup: opts.lookup };
@@ -1697,6 +1699,10 @@ describe("SandboxLifecycleManager", () => {
         config
       );
       return { manager, provider };
+    }
+
+    function snapshotSandbox() {
+      return createMockSandbox({ status: "stopped", snapshot_image_id: "img-abc123" });
     }
 
     it("passes agentSlackNotifyEnabled=true when the lookup returns true", async () => {
@@ -1747,6 +1753,57 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ agentSlackNotifyEnabled: false })
+      );
+    });
+
+    it("passes agentSlackNotifyEnabled=true on snapshot restore when the lookup returns true", async () => {
+      const lookup: SlackAgentNotifyLookup = {
+        isEnabledForRepo: vi.fn(async () => true),
+      };
+      const { manager, provider } = buildManagerWith({ lookup, sandbox: snapshotSandbox() });
+
+      await manager.spawnSandbox();
+
+      expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ agentSlackNotifyEnabled: true })
+      );
+    });
+
+    it("passes agentSlackNotifyEnabled=false on snapshot restore when the lookup returns false", async () => {
+      const lookup: SlackAgentNotifyLookup = {
+        isEnabledForRepo: vi.fn(async () => false),
+      };
+      const { manager, provider } = buildManagerWith({ lookup, sandbox: snapshotSandbox() });
+
+      await manager.spawnSandbox();
+
+      expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ agentSlackNotifyEnabled: false })
+      );
+    });
+
+    it("passes agentSlackNotifyEnabled=false on snapshot restore when no lookup is configured", async () => {
+      const { manager, provider } = buildManagerWith({ sandbox: snapshotSandbox() });
+
+      await manager.spawnSandbox();
+
+      expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ agentSlackNotifyEnabled: false })
+      );
+    });
+
+    it("treats lookup failure as disabled on snapshot restore and continues spawning", async () => {
+      const lookup: SlackAgentNotifyLookup = {
+        isEnabledForRepo: vi.fn(async () => {
+          throw new Error("D1 unavailable");
+        }),
+      };
+      const { manager, provider } = buildManagerWith({ lookup, sandbox: snapshotSandbox() });
+
+      await manager.spawnSandbox();
+
+      expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({ agentSlackNotifyEnabled: false })
       );
     });
