@@ -65,6 +65,7 @@ import { secretsRoutes } from "./routes/secrets";
 import { automationRoutes } from "./routes/automations";
 import { mcpServerRoutes } from "./routes/mcp-servers";
 import { analyticsRoutes } from "./routes/analytics";
+import { handleSlackNotify } from "./routes/slack-notify";
 import { webhookRoutes } from "./webhooks";
 
 const logger = createLogger("router");
@@ -195,6 +196,7 @@ const SANDBOX_AUTH_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/children$/, // POST spawn, GET list
   /^\/sessions\/[^/]+\/children\/[^/]+$/, // GET child detail
   /^\/sessions\/[^/]+\/children\/[^/]+\/cancel$/, // POST cancel child
+  /^\/sessions\/[^/]+\/slack-notify$/, // Agent-initiated Slack notification
 ];
 
 type CachedScmProvider =
@@ -502,6 +504,13 @@ const routes: Route[] = [
     method: "POST",
     pattern: parsePattern("/sessions/:id/unarchive"),
     handler: handleUnarchiveSession,
+  },
+
+  // Agent-initiated Slack notification (sandbox-authenticated)
+  {
+    method: "POST",
+    pattern: parsePattern("/sessions/:id/slack-notify"),
+    handler: handleSlackNotify,
   },
 
   // Child session management (sandbox-authenticated)

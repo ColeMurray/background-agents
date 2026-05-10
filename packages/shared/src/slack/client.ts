@@ -107,6 +107,7 @@ export async function postMessage(
   }
 ): Promise<{
   ok: boolean;
+  channel?: string;
   ts?: string;
   error?: string;
   retryAfter?: number;
@@ -120,6 +121,22 @@ export async function postMessage(
       blocks: options?.blocks,
       reply_broadcast: options?.reply_broadcast,
     },
+  });
+}
+
+export async function getPermalink(
+  token: string,
+  channel: string,
+  messageTs: string
+): Promise<{
+  ok: boolean;
+  permalink?: string;
+  channel?: string;
+  error?: string;
+  retryAfter?: number;
+}> {
+  return slackFetch(token, "chat.getPermalink", {
+    query: { channel, message_ts: messageTs },
   });
 }
 

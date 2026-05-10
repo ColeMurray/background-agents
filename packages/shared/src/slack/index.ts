@@ -1,6 +1,7 @@
 export {
   addReaction,
   getChannelInfo,
+  getPermalink,
   getThreadMessages,
   getUserInfo,
   openView,
