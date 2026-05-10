@@ -43,12 +43,6 @@ const STATUS_FALLBACK_REASON = {
   503: "feature_unavailable",
 };
 
-function isKnownReason(reason) {
-  return (
-    typeof reason === "string" && Object.prototype.hasOwnProperty.call(REASON_GUIDANCE, reason)
-  );
-}
-
 function buildFailureEnvelope(reason, message, retryAfter) {
   const guidance = REASON_GUIDANCE[reason] ?? REASON_GUIDANCE.slack_api_error;
   const detail = message ? `${guidance} (${message})` : guidance;
@@ -138,7 +132,10 @@ export default tool({
 
     const { reason, message, retryAfter } = await readErrorBody(response);
     const fallbackReason = STATUS_FALLBACK_REASON[response.status] ?? "slack_api_error";
-    const finalReason = isKnownReason(reason) ? reason : fallbackReason;
+    const finalReason =
+      typeof reason === "string" && Object.hasOwn(REASON_GUIDANCE, reason)
+        ? reason
+        : fallbackReason;
     return buildFailureEnvelope(finalReason, message, retryAfter);
   },
 });
