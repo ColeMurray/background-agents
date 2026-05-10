@@ -164,6 +164,8 @@ export interface SandboxLifecycleConfig {
   sessionId?: string;
   /** MCP server lookup for injecting servers into sandboxes. */
   mcpServerLookup?: McpServerLookup;
+  /** Resolves the spawn-time agent-slack-notify gate (master switch + token presence). */
+  slackAgentNotifyLookup?: SlackAgentNotifyLookup;
 }
 
 /**
@@ -202,6 +204,24 @@ export interface RepoImageLookup {
     repoName: string,
     baseBranch?: string
   ): Promise<{ provider_image_id: string; base_sha: string } | null>;
+}
+
+// ==================== Slack Agent-Notify Lookup ====================
+
+/**
+ * Lookup interface for the spawn-time agent-slack-notify gate.
+ *
+ * Implementations resolve the slack integration's master switch (with optional
+ * per-repo override) AND token presence into a single boolean. Keeps the
+ * lifecycle manager free of direct D1 / env-var dependencies.
+ *
+ * Returning false (or throwing) means "do not install the slack-notify tool
+ * in this sandbox." Per-call authorization is still re-checked at runtime by
+ * the control-plane endpoint, so a stale-but-permissive resolution here is
+ * safe — the endpoint will deny if the master switch later flips off.
+ */
+export interface SlackAgentNotifyLookup {
+  isEnabledForRepo(repoOwner: string, repoName: string): Promise<boolean>;
 }
 
 // ==================== Callbacks ====================
@@ -411,6 +431,7 @@ export class SandboxLifecycleManager {
       const mcpServers = await this.loadMcpServers(session);
 
       const codeServerEnabled = session.code_server_enabled === 1;
+      const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const sandboxSettings = this.parseSandboxSettings(session);
       const createConfig: CreateSandboxConfig = {
         sessionId,
@@ -427,6 +448,7 @@ export class SandboxLifecycleManager {
         timeoutSeconds,
         branch: session.base_branch,
         codeServerEnabled,
+        agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
       };
@@ -496,6 +518,30 @@ export class SandboxLifecycleManager {
       });
     } finally {
       this.isSpawningSandbox = false;
+    }
+  }
+
+  /**
+   * Resolve whether the slack-notify tool should be installed in this sandbox.
+   *
+   * Spawn-time decision per spec §7.5: tool presence is fixed for the
+   * sandbox's lifetime. The lookup encapsulates `master_switch &&
+   * SLACK_BOT_TOKEN_present`. Returns false on lookup failure to keep
+   * spawn safe by default.
+   */
+  private async resolveAgentSlackNotifyEnabled(session: SessionRow): Promise<boolean> {
+    if (!this.config.slackAgentNotifyLookup) return false;
+    try {
+      return await this.config.slackAgentNotifyLookup.isEnabledForRepo(
+        session.repo_owner,
+        session.repo_name
+      );
+    } catch (err) {
+      this.log.warn("Failed to resolve agent slack-notify gate; treating as disabled", {
+        event: "slack_notify.gate_resolve_failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
     }
   }
 
@@ -576,6 +622,7 @@ export class SandboxLifecycleManager {
         session.spawn_source === "agent" ? CHILD_SANDBOX_TIMEOUT_SECONDS : undefined;
 
       const codeServerEnabled = session.code_server_enabled === 1;
+      const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const mcpServers = await this.loadMcpServers(session);
       const sandboxSettings = this.parseSandboxSettings(session);
       const result = await this.provider.restoreFromSnapshot({
@@ -592,6 +639,7 @@ export class SandboxLifecycleManager {
         timeoutSeconds,
         branch: session.base_branch,
         codeServerEnabled,
+        agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
       });

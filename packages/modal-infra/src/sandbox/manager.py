@@ -50,6 +50,9 @@ class SandboxConfig:
     repo_image_id: str | None = None  # Pre-built repo image ID from provider
     repo_image_sha: str | None = None  # Git SHA the repo image was built from
     code_server_enabled: bool = False  # Whether to start code-server in the sandbox
+    # Whether to install the agent-initiated slack-notify tool. Resolved at
+    # spawn time by the control plane from the master switch + token presence.
+    agent_slack_notify_enabled: bool = False
     settings: dict[str, Any] | None = (
         None  # Sandbox settings (tunnelPorts, etc.) from control plane
     )
@@ -273,6 +276,9 @@ class SandboxManager:
         terminal_enabled = bool((config.settings or {}).get("terminalEnabled", False))
         if terminal_enabled:
             env_vars["TERMINAL_ENABLED"] = "true"
+
+        if config.agent_slack_notify_enabled:
+            env_vars["AGENT_SLACK_NOTIFY_ENABLED"] = "true"
 
         if config.session_config:
             env_vars["SESSION_CONFIG"] = config.session_config.model_dump_json()
@@ -532,6 +538,7 @@ class SandboxManager:
         user_env_vars: dict[str, str] | None = None,
         timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS,
         code_server_enabled: bool = False,
+        agent_slack_notify_enabled: bool = False,
         settings: dict[str, Any] | None = None,
     ) -> SandboxHandle:
         """
@@ -599,6 +606,9 @@ class SandboxManager:
         terminal_enabled = bool((settings or {}).get("terminalEnabled", False))
         if terminal_enabled:
             env_vars["TERMINAL_ENABLED"] = "true"
+
+        if agent_slack_notify_enabled:
+            env_vars["AGENT_SLACK_NOTIFY_ENABLED"] = "true"
 
         # Create the sandbox from the snapshot image
         create_kwargs: dict = {

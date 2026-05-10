@@ -28,6 +28,16 @@ from .log_config import configure_logging, get_logger
 configure_logging()
 
 
+# Sandbox tools whose installation is gated on a spawn-time env var.
+# The env var must be literally "true" (case-insensitive) for the tool to be
+# copied into .opencode/tool/. Anything else — unset, "false", "0", "" —
+# leaves the tool out, so the agent never sees it. Decision is stable per
+# spawn; restarts re-run _install_tools with the same env.
+AGENT_TOOLS_GATED_ON_ENV: dict[str, str] = {
+    "slack-notify.js": "AGENT_SLACK_NOTIFY_ENABLED",
+}
+
+
 class SandboxSupervisor:
     """
     Supervisor process for sandbox lifecycle management.
@@ -311,11 +321,19 @@ class SandboxSupervisor:
         if legacy_tool.exists():
             shutil.copy(legacy_tool, tool_dest / "create-pull-request.js")
 
-        # Copy all .js files from tools/ — these must export tool() for OpenCode
+        # Copy all .js files from tools/ — these must export tool() for OpenCode.
+        # Some tools are gated on a spawn-time env var: control-plane decides
+        # whether the feature should be available in this sandbox and only the
+        # gated env var being literally "true" installs the tool. Restarts
+        # re-run this with the same env, so the decision is stable per spawn.
         if tools_dir.exists():
             for tool_file in tools_dir.iterdir():
-                if tool_file.is_file() and tool_file.suffix == ".js":
-                    shutil.copy(tool_file, tool_dest / tool_file.name)
+                if not (tool_file.is_file() and tool_file.suffix == ".js"):
+                    continue
+                gate_env = AGENT_TOOLS_GATED_ON_ENV.get(tool_file.name)
+                if gate_env and os.environ.get(gate_env, "").lower() != "true":
+                    continue
+                shutil.copy(tool_file, tool_dest / tool_file.name)
 
         # Copy pre-built deps (package.json, package-lock.json, node_modules)
         # from the image staging directory.  This gives OpenCode a lockfile

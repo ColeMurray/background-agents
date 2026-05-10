@@ -15,6 +15,7 @@ import {
   type IdGenerator,
   type SandboxLifecycleConfig,
   type RepoImageLookup,
+  type SlackAgentNotifyLookup,
 } from "./manager";
 import {
   SandboxProviderError,
@@ -1674,6 +1675,80 @@ describe("SandboxLifecycleManager", () => {
             (m as { urls: Record<string, string> }).urls["3000"] === "https://tunnel.example.com"
         )
       ).toBe(true);
+    });
+  });
+
+  describe("agent slack-notify gate", () => {
+    function buildManagerWith(opts: {
+      lookup?: SlackAgentNotifyLookup;
+      provider?: ReturnType<typeof createMockProvider>;
+    }) {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const provider = opts.provider ?? createMockProvider();
+      const config = { ...createTestConfig(), slackAgentNotifyLookup: opts.lookup };
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        config
+      );
+      return { manager, provider };
+    }
+
+    it("passes agentSlackNotifyEnabled=true when the lookup returns true", async () => {
+      const lookup: SlackAgentNotifyLookup = {
+        isEnabledForRepo: vi.fn(async () => true),
+      };
+      const { manager, provider } = buildManagerWith({ lookup });
+
+      await manager.spawnSandbox();
+
+      expect(lookup.isEnabledForRepo).toHaveBeenCalledWith("testowner", "testrepo");
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ agentSlackNotifyEnabled: true })
+      );
+    });
+
+    it("passes agentSlackNotifyEnabled=false when the lookup returns false", async () => {
+      const lookup: SlackAgentNotifyLookup = {
+        isEnabledForRepo: vi.fn(async () => false),
+      };
+      const { manager, provider } = buildManagerWith({ lookup });
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ agentSlackNotifyEnabled: false })
+      );
+    });
+
+    it("passes agentSlackNotifyEnabled=false when no lookup is configured (deployment without Slack)", async () => {
+      const { manager, provider } = buildManagerWith({});
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ agentSlackNotifyEnabled: false })
+      );
+    });
+
+    it("treats lookup failure as disabled and continues spawning", async () => {
+      const lookup: SlackAgentNotifyLookup = {
+        isEnabledForRepo: vi.fn(async () => {
+          throw new Error("D1 unavailable");
+        }),
+      };
+      const { manager, provider } = buildManagerWith({ lookup });
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ agentSlackNotifyEnabled: false })
+      );
     });
   });
 });
