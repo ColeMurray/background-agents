@@ -22,4 +22,10 @@ export {
 export type { MentionPolicy, SanitizeOptions, SanitizeResult } from "./mrkdwn";
 export { resolveUserNames } from "./resolve-users";
 export { SLACK_DENIAL_REASONS, SLACK_DENIAL_STATUS, DEFAULT_MENTIONS_POLICY } from "./types";
-export type { SlackDenialReason, SlackNotifySuccessOutput, SlackNotifyFailureBody } from "./types";
+export type {
+  SlackDenialReason,
+  SlackWireDenialReason,
+  SlackNotifySuccessOutput,
+  SlackNotifyFailureBody,
+  SlackNotifyToolEnvelope,
+} from "./types";

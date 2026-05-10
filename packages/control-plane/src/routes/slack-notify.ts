@@ -1,10 +1,12 @@
 /**
  * Agent-initiated Slack notification handler.
  *
- * The sandbox calls this endpoint via its bearer token; the control plane
- * authorizes (master switch + sanitization), forwards the agent's channel
- * verbatim to Slack, and emits tool_call/tool_result events so the post is
- * visible in the session transcript.
+ * Pure RPC: the sandbox plugin calls this endpoint via its bearer token; the
+ * control plane authorizes (master switch + sanitization) and forwards the
+ * agent's channel verbatim to Slack. The plugin's tool output (rendered by
+ * the agent's tool_call event) is the single source of truth for the
+ * transcript; this handler intentionally does not emit any events of its own.
+ * Audit detail lives in the structured logs below.
  */
 
 import {
@@ -12,15 +14,13 @@ import {
   postMessage,
   sanitizeAgentText,
   SLACK_DENIAL_STATUS,
-  type SlackDenialReason,
   type SlackGlobalSettings,
   type SlackNotifySuccessOutput,
+  type SlackWireDenialReason,
 } from "@open-inspect/shared";
-import { generateId } from "../auth/crypto";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { createLogger } from "../logger";
-import { buildSessionInternalUrl, SessionInternalPaths } from "../session/contracts";
 import type { Env } from "../types";
 import { error, json, type RequestContext } from "./shared";
 
@@ -34,7 +34,6 @@ const RAW_TEXT_INPUT_MAX_LENGTH = 12_000;
 const CHANNEL_INPUT_MAX_LENGTH = 80;
 /** Reason field cap; recorded for audit only. */
 const REASON_MAX_LENGTH = 500;
-const SYNTHETIC_SANDBOX_ID = "control-plane";
 
 interface ParsedBody {
   channel: string;
@@ -43,10 +42,10 @@ interface ParsedBody {
   reason: string | undefined;
 }
 
-interface Attribution {
-  promptAuthorUserId: string | null;
-  triggerSource: string | null;
-  parentSessionId: string | null;
+interface AuditFields {
+  prompt_author_user_id: string | null;
+  trigger_source: string | null;
+  parent_session_id: string | null;
   repo: string;
 }
 
@@ -68,16 +67,25 @@ export async function handleSlackNotify(
   }
 
   const repo = `${session.repoOwner}/${session.repoName}`;
-  const attribution: Attribution = {
-    promptAuthorUserId: session.userId ?? null,
-    triggerSource: session.spawnSource ?? null,
-    parentSessionId: session.parentSessionId ?? null,
+  const audit: AuditFields = {
+    prompt_author_user_id: session.userId ?? null,
+    trigger_source: session.spawnSource ?? null,
+    parent_session_id: session.parentSessionId ?? null,
     repo,
   };
 
   const token = env.SLACK_BOT_TOKEN;
   if (!token) {
-    await emitDenial(env, sessionId, ctx, parsed, attribution, "feature_unavailable");
+    // Deployment misconfiguration: every agent attempt will fail until ops
+    // sets SLACK_BOT_TOKEN. Surface at error level so it reaches alerting.
+    logger.error("Slack notification denied: SLACK_BOT_TOKEN is not configured", {
+      session_id: sessionId,
+      reason: "feature_unavailable",
+      channel_input: parsed.channel,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+      ...audit,
+    });
     return failureResponse("feature_unavailable", "Slack bot token is not configured.");
   }
 
@@ -87,7 +95,7 @@ export async function handleSlackNotify(
     settings as Partial<SlackGlobalSettings>
   );
   if (!agentNotificationsEnabled) {
-    await emitDenial(env, sessionId, ctx, parsed, attribution, "feature_disabled");
+    logDenial(sessionId, ctx, parsed, audit, "feature_disabled");
     return failureResponse(
       "feature_disabled",
       "Slack agent notifications are disabled for this repository."
@@ -100,7 +108,7 @@ export async function handleSlackNotify(
   });
 
   if (sanitized.text.trim().length === 0) {
-    await emitDenial(env, sessionId, ctx, parsed, attribution, "empty_message_after_sanitization");
+    logDenial(sessionId, ctx, parsed, audit, "empty_message_after_sanitization");
     return failureResponse(
       "empty_message_after_sanitization",
       "Message body is empty after sanitization."
@@ -121,7 +129,7 @@ export async function handleSlackNotify(
 
   if (!post.ok) {
     const reasonCode = mapSlackError(post.error);
-    await emitDenial(env, sessionId, ctx, parsed, attribution, reasonCode, post.retryAfter);
+    logDenial(sessionId, ctx, parsed, audit, reasonCode, post.retryAfter);
     return failureResponse(reasonCode, post.error, post.retryAfter);
   }
 
@@ -141,41 +149,18 @@ export async function handleSlackNotify(
     mentionsModified: sanitized.mentionsModified,
   };
 
-  const callId = generateId();
-  await emitToolEvent(env, sessionId, ctx, {
-    type: "tool_call",
-    tool: "slack-notify",
-    args: {
-      channel: parsed.channel,
-      text: parsed.text,
-      thread_ts: parsed.threadTs,
-      reason: parsed.reason,
-    },
-    callId,
-    status: "completed",
-    output: JSON.stringify({ ...result, attribution }),
-    sandboxId: SYNTHETIC_SANDBOX_ID,
-    timestamp: Date.now() / 1000,
-  });
-
-  await emitToolEvent(env, sessionId, ctx, {
-    type: "tool_result",
-    callId,
-    result: JSON.stringify(result),
-    sandboxId: SYNTHETIC_SANDBOX_ID,
-    timestamp: Date.now() / 1000,
-  });
-
   logger.info("Slack notification posted", {
     event: "slack_notify.success",
     session_id: sessionId,
-    repo,
     channel_input: parsed.channel,
     channel_id: channelId,
     message_ts: messageTs,
     truncated: sanitized.truncated,
+    stripped_broadcasts: sanitized.strippedBroadcasts,
+    mentions_modified: sanitized.mentionsModified,
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
+    ...audit,
   });
 
   return json(result);
@@ -263,7 +248,7 @@ function buildBlocks(opts: {
   return blocks;
 }
 
-function mapSlackError(slackError: string | undefined): SlackDenialReason {
+function mapSlackError(slackError: string | undefined): SlackWireDenialReason {
   if (!slackError) return "slack_api_error";
   if (
     slackError === "channel_not_found" ||
@@ -277,7 +262,7 @@ function mapSlackError(slackError: string | undefined): SlackDenialReason {
 }
 
 function failureResponse(
-  reason: SlackDenialReason,
+  reason: SlackWireDenialReason,
   message: string | undefined,
   retryAfter?: number
 ): Response {
@@ -287,59 +272,23 @@ function failureResponse(
   return json(body, SLACK_DENIAL_STATUS[reason]);
 }
 
-async function emitDenial(
-  env: Env,
+function logDenial(
   sessionId: string,
   ctx: RequestContext,
   parsed: ParsedBody,
-  attribution: Attribution,
-  reason: SlackDenialReason,
+  audit: AuditFields,
+  reason: SlackWireDenialReason,
   retryAfter?: number
-): Promise<void> {
-  await emitToolEvent(env, sessionId, ctx, {
-    type: "tool_call",
-    tool: "slack-notify",
-    args: {
-      channel: parsed.channel,
-      text: parsed.text,
-      thread_ts: parsed.threadTs,
-      reason: parsed.reason,
-    },
-    callId: generateId(),
-    status: "error",
-    output: reason,
-    sandboxId: SYNTHETIC_SANDBOX_ID,
-    timestamp: Date.now() / 1000,
-    attribution,
-    retryAfter,
+): void {
+  logger.warn("Slack notification denied", {
+    event: "slack_notify.denial",
+    session_id: sessionId,
+    reason,
+    channel_input: parsed.channel,
+    has_thread_ts: parsed.threadTs !== undefined,
+    retry_after: retryAfter ?? null,
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+    ...audit,
   });
-}
-
-async function emitToolEvent(
-  env: Env,
-  sessionId: string,
-  ctx: RequestContext,
-  payload: Record<string, unknown>
-): Promise<void> {
-  const doId = env.SESSION.idFromName(sessionId);
-  const stub = env.SESSION.get(doId);
-  const headers = new Headers({ "Content-Type": "application/json" });
-  headers.set("x-trace-id", ctx.trace_id);
-  headers.set("x-request-id", ctx.request_id);
-  try {
-    await stub.fetch(
-      new Request(buildSessionInternalUrl(SessionInternalPaths.sandboxEvent), {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload),
-      })
-    );
-  } catch (err) {
-    logger.warn("Failed to emit slack-notify tool event", {
-      session_id: sessionId,
-      error: err instanceof Error ? err.message : String(err),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-  }
 }

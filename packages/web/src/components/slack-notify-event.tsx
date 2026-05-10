@@ -39,6 +39,9 @@ const DENIAL_COPY: Record<SlackDenialReason, { headline: string; hint?: string }
   invalid_input: {
     headline: "The notification arguments were invalid.",
   },
+  bridge_error: {
+    headline: "Couldn't reach the control plane to post the notification.",
+  },
 };
 
 function parseSuccess(output: string | undefined): ParsedSuccess | null {
@@ -59,12 +62,50 @@ function parseSuccess(output: string | undefined): ParsedSuccess | null {
   return null;
 }
 
+function parseDenialEnvelope(
+  output: string
+): { reason: SlackDenialReason; retryAfter?: number } | null {
+  try {
+    const parsed: unknown = JSON.parse(output);
+    if (parsed && typeof parsed === "object" && (parsed as { ok?: unknown }).ok === false) {
+      const reason = (parsed as { reason?: unknown }).reason;
+      if (
+        typeof reason === "string" &&
+        (SLACK_DENIAL_REASONS as readonly string[]).includes(reason)
+      ) {
+        const retryAfterRaw = (parsed as { retryAfter?: unknown }).retryAfter;
+        return {
+          reason: reason as SlackDenialReason,
+          retryAfter: typeof retryAfterRaw === "number" ? retryAfterRaw : undefined,
+        };
+      }
+    }
+  } catch {
+    // not JSON
+  }
+  return null;
+}
+
 function getDenialReason(event: ToolCallEvent): SlackDenialReason | null {
-  if (event.status !== "error") return null;
   if (typeof event.output !== "string") return null;
-  return (SLACK_DENIAL_REASONS as readonly string[]).includes(event.output)
-    ? (event.output as SlackDenialReason)
-    : null;
+  // Envelope shape: plugin returns `{ok:false, reason, ...}` as JSON.
+  const fromEnvelope = parseDenialEnvelope(event.output);
+  if (fromEnvelope) return fromEnvelope.reason;
+  // Bare-code shape: pre-RPC, the control plane emitted a separate event
+  // with status="error" and the reason code as `output`. Kept so historical
+  // events still render correctly.
+  if (
+    event.status === "error" &&
+    (SLACK_DENIAL_REASONS as readonly string[]).includes(event.output)
+  ) {
+    return event.output as SlackDenialReason;
+  }
+  return null;
+}
+
+function getRetryAfterSeconds(event: ToolCallEvent): number | undefined {
+  if (typeof event.output !== "string") return undefined;
+  return parseDenialEnvelope(event.output)?.retryAfter;
 }
 
 function getChannelInput(event: ToolCallEvent): string | undefined {
@@ -129,7 +170,11 @@ export function SlackNotifyEvent({
           {success ? (
             <SlackNotifySuccessBody success={success} />
           ) : denial ? (
-            <SlackNotifyDenialBody reason={denial} channelInput={channelInput} />
+            <SlackNotifyDenialBody
+              reason={denial}
+              channelInput={channelInput}
+              retryAfterSeconds={getRetryAfterSeconds(event)}
+            />
           ) : (
             <span className="text-secondary-foreground">No details available</span>
           )}
@@ -181,15 +226,24 @@ function SlackNotifySuccessBody({ success }: { success: ParsedSuccess }) {
 function SlackNotifyDenialBody({
   reason,
   channelInput,
+  retryAfterSeconds,
 }: {
   reason: SlackDenialReason;
   channelInput: string | undefined;
+  retryAfterSeconds: number | undefined;
 }) {
   const { headline, hint } = DENIAL_COPY[reason];
+  const showRetryAfter =
+    reason === "rate_limited" && typeof retryAfterSeconds === "number" && retryAfterSeconds > 0;
   return (
     <div className="space-y-1">
       <div className="text-foreground">{headline}</div>
       {hint ? <div className="text-secondary-foreground">{hint}</div> : null}
+      {showRetryAfter ? (
+        <div className="text-muted-foreground">
+          Wait <span className="text-foreground">{retryAfterSeconds}s</span> before retrying.
+        </div>
+      ) : null}
       {channelInput ? (
         <div className="text-muted-foreground">
           Requested channel: <span className="text-foreground">{channelInput}</span>

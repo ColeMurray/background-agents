@@ -79,15 +79,6 @@ async function callHandler(body: unknown, envOverrides?: Partial<Env>): Promise<
   );
 }
 
-async function emittedEvents(): Promise<Array<Record<string, unknown>>> {
-  const events: Array<Record<string, unknown>> = [];
-  for (const call of sessionFetchMock.mock.calls) {
-    const req = call[0] as Request;
-    events.push((await req.clone().json()) as Record<string, unknown>);
-  }
-  return events;
-}
-
 function seedActiveSession(opts?: {
   parentSessionId?: string | null;
   spawnSource?: string;
@@ -123,18 +114,62 @@ function mockSlackResponse(opts: { status?: number; body?: unknown; retryAfter?:
   );
 }
 
+let consoleLogSpy: ReturnType<typeof vi.spyOn>;
+let consoleWarnSpy: ReturnType<typeof vi.spyOn>;
+let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+
 beforeEach(() => {
   vi.clearAllMocks();
   sessionFetchMock.mockResolvedValue(new Response("{}", { status: 200 }));
   vi.stubGlobal("fetch", fetchMock);
+  consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  consoleLogSpy.mockRestore();
+  consoleWarnSpy.mockRestore();
+  consoleErrorSpy.mockRestore();
 });
 
+/** Find the JSON payload of the most recent log line whose `msg` matches. */
+function lastLogPayload(
+  spy: ReturnType<typeof vi.spyOn>,
+  msg: string
+): Record<string, unknown> | undefined {
+  for (let i = spy.mock.calls.length - 1; i >= 0; i--) {
+    const call = spy.mock.calls[i];
+    for (const arg of call) {
+      if (typeof arg !== "string") continue;
+      try {
+        const parsed = JSON.parse(arg) as Record<string, unknown>;
+        if (parsed.msg === msg) return parsed;
+      } catch {
+        // not a JSON log line
+      }
+    }
+  }
+  return undefined;
+}
+
 describe("handleSlackNotify", () => {
-  it("returns 503 feature_unavailable and emits a denial event when SLACK_BOT_TOKEN is missing", async () => {
+  it("happy path posts no events to the DO — the agent's tool_call is the source of truth", async () => {
+    seedActiveSession();
+    integrationStoreMock.getResolvedConfig.mockResolvedValue({
+      enabledRepos: null,
+      settings: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
+    });
+    mockSlackResponse({ body: { ok: true, channel: "C1", ts: "1.2" } });
+    mockSlackResponse({ body: { ok: true, permalink: "https://x.slack.com/p", channel: "C1" } });
+
+    await callHandler({ channel: "#ops", text: "hello" });
+
+    expect(sessionFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 503 feature_unavailable and logs at error level when SLACK_BOT_TOKEN is missing", async () => {
     seedActiveSession();
     const res = await callHandler(
       { channel: "#ops", text: "hello" },
@@ -144,11 +179,15 @@ describe("handleSlackNotify", () => {
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe("feature_unavailable");
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(sessionFetchMock).toHaveBeenCalledTimes(1);
-    const events = await emittedEvents();
-    expect(events[0]?.type).toBe("tool_call");
-    expect(events[0]?.status).toBe("error");
-    expect(events[0]?.output).toBe("feature_unavailable");
+    expect(sessionFetchMock).not.toHaveBeenCalled();
+    // Deployment misconfiguration → error severity (not warn) so it surfaces
+    // in alerting rather than getting lost in the denial-warning stream.
+    const errorEntry = lastLogPayload(
+      consoleErrorSpy,
+      "Slack notification denied: SLACK_BOT_TOKEN is not configured"
+    );
+    expect(errorEntry).toBeDefined();
+    expect(errorEntry?.reason).toBe("feature_unavailable");
   });
 
   it("returns feature_disabled when global master switch is off", async () => {
@@ -164,13 +203,7 @@ describe("handleSlackNotify", () => {
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe("feature_disabled");
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(sessionFetchMock).toHaveBeenCalledTimes(1);
-    const events = await emittedEvents();
-    const sentEvent = events[0];
-    expect(sentEvent.type).toBe("tool_call");
-    expect(sentEvent.tool).toBe("slack-notify");
-    expect(sentEvent.status).toBe("error");
-    expect(sentEvent.output).toBe("feature_disabled");
+    expect(sessionFetchMock).not.toHaveBeenCalled();
   });
 
   // The handler reads only the resolved master switch (returned by
@@ -332,7 +365,7 @@ describe("handleSlackNotify", () => {
     expect(sentBody.text).not.toContain("|github.com>");
   });
 
-  it("emits tool_call (completed) and tool_result events with attribution on success", async () => {
+  it("returns the success envelope (no events emitted) and logs attribution on success", async () => {
     seedActiveSession({
       parentSessionId: "parent-1",
       spawnSource: "agent",
@@ -360,30 +393,33 @@ describe("handleSlackNotify", () => {
     });
 
     expect(res.status).toBe(200);
-    expect(sessionFetchMock).toHaveBeenCalledTimes(2);
-    const events = await emittedEvents();
-    const [toolCall, toolResult] = events;
-    expect(toolCall.type).toBe("tool_call");
-    expect(toolCall.tool).toBe("slack-notify");
-    expect(toolCall.status).toBe("completed");
-    const args = toolCall.args as Record<string, unknown>;
-    expect(args.channel).toBe("#ops");
-    expect(args.reason).toBe("user asked");
-    const output = JSON.parse(toolCall.output as string) as Record<string, unknown>;
-    expect(output.channelId).toBe("C1");
-    expect(output.messageTs).toBe("12345.67890");
-    expect(output.permalink).toBe("https://x.slack.com/archives/C1/p1234567890");
-    const attribution = output.attribution as Record<string, unknown>;
-    expect(attribution.parentSessionId).toBe("parent-1");
-    expect(attribution.triggerSource).toBe("agent");
-    expect(attribution.promptAuthorUserId).toBe("user-42");
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.channelInput).toBe("#ops");
+    expect(body.channelId).toBe("C1");
+    expect(body.messageTs).toBe("12345.67890");
+    expect(body.permalink).toBe("https://x.slack.com/archives/C1/p1234567890");
+    // Attribution must NOT leak into the agent-visible response body — it
+    // belongs in audit logs only.
+    expect(body).not.toHaveProperty("attribution");
 
-    expect(toolResult.type).toBe("tool_result");
-    expect(toolResult.callId).toBe(toolCall.callId);
+    expect(sessionFetchMock).not.toHaveBeenCalled();
+
+    const logEntry = lastLogPayload(consoleLogSpy, "Slack notification posted");
+    expect(logEntry).toBeDefined();
+    expect(logEntry?.parent_session_id).toBe("parent-1");
+    expect(logEntry?.trigger_source).toBe("agent");
+    expect(logEntry?.prompt_author_user_id).toBe("user-42");
+    expect(logEntry?.repo).toBe("acme/web-app");
+    expect(logEntry?.channel_id).toBe("C1");
   });
 
-  it("emits a single failed tool_call event on Slack-side denial", async () => {
-    seedActiveSession();
+  it("logs an audit warning with attribution on Slack-side denial (no events emitted)", async () => {
+    seedActiveSession({
+      parentSessionId: "parent-2",
+      spawnSource: "agent",
+      userId: "user-99",
+    });
     integrationStoreMock.getResolvedConfig.mockResolvedValue({
       enabledRepos: null,
       settings: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
@@ -392,12 +428,14 @@ describe("handleSlackNotify", () => {
 
     await callHandler({ channel: "#nope", text: "hi" });
 
-    expect(sessionFetchMock).toHaveBeenCalledTimes(1);
-    const events = await emittedEvents();
-    const sentEvent = events[0];
-    expect(sentEvent.type).toBe("tool_call");
-    expect(sentEvent.status).toBe("error");
-    expect(sentEvent.output).toBe("channel_not_found_or_forbidden");
+    expect(sessionFetchMock).not.toHaveBeenCalled();
+
+    const logEntry = lastLogPayload(consoleWarnSpy, "Slack notification denied");
+    expect(logEntry).toBeDefined();
+    expect(logEntry?.reason).toBe("channel_not_found_or_forbidden");
+    expect(logEntry?.parent_session_id).toBe("parent-2");
+    expect(logEntry?.trigger_source).toBe("agent");
+    expect(logEntry?.prompt_author_user_id).toBe("user-99");
   });
 
   it("passes channel input verbatim to Slack — channel ID", async () => {
@@ -446,7 +484,7 @@ describe("handleSlackNotify", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("maps Slack network/fetch failures to slack_api_error and emits a denial event", async () => {
+  it("maps Slack network/fetch failures to slack_api_error", async () => {
     seedActiveSession();
     integrationStoreMock.getResolvedConfig.mockResolvedValue({
       enabledRepos: null,
@@ -462,10 +500,7 @@ describe("handleSlackNotify", () => {
     expect(res.status).toBe(502);
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe("slack_api_error");
-    const events = await emittedEvents();
-    expect(events[0]?.type).toBe("tool_call");
-    expect(events[0]?.status).toBe("error");
-    expect(events[0]?.output).toBe("slack_api_error");
+    expect(sessionFetchMock).not.toHaveBeenCalled();
   });
 
   it("rejects raw text longer than the input cap", async () => {

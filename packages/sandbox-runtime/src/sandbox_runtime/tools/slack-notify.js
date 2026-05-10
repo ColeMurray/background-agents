@@ -3,10 +3,80 @@
  *
  * The bot token never enters the sandbox. This tool is only installed when
  * AGENT_SLACK_NOTIFY_ENABLED=true at spawn time.
+ *
+ * Output is a JSON envelope so the web transcript renderer can show a rich
+ * row using the agent's own tool_call event as the single source of truth.
+ *
+ * Success envelope:  { ok: true,  channelInput, channelId, messageTs, permalink, truncated, strippedBroadcasts, mentionsModified }
+ * Failure envelope:  { ok: false, reason, agentMessage, retryAfter? }
+ *
+ * `agentMessage` carries human guidance for the model; `reason` is the stable
+ * code the renderer keys off. The reason keys here must stay symmetric with
+ * `SLACK_DENIAL_REASONS` in `@open-inspect/shared/slack/types` — this file
+ * ships into the sandbox image and cannot import from the workspace.
  */
 import { tool } from "@opencode-ai/plugin";
 import { z } from "zod";
-import { bridgeFetch, extractError } from "./_bridge-client.js";
+import { bridgeFetch } from "./_bridge-client.js";
+
+const REASON_GUIDANCE = {
+  feature_unavailable:
+    "The deployment is not configured to send agent notifications. Tell the user this is unavailable.",
+  feature_disabled:
+    "Agent notifications are disabled for this repository. Ask the user to enable them in integration settings.",
+  channel_not_found_or_forbidden:
+    "The channel was not found, is archived, or the bot is not in it. If the channel name is correct and not archived, ask the user to invite the bot.",
+  empty_message_after_sanitization:
+    "The message body was empty after sanitization. Try again with non-empty content.",
+  rate_limited: "Slack rate-limited the request. Wait before retrying.",
+  slack_api_error: "Slack returned an unexpected error. The post did not go through.",
+  invalid_input: "The notification arguments were invalid; correct them and retry.",
+  bridge_error: "Could not reach the control plane to post the notification.",
+};
+
+const STATUS_FALLBACK_REASON = {
+  400: "invalid_input",
+  403: "feature_disabled",
+  404: "channel_not_found_or_forbidden",
+  422: "empty_message_after_sanitization",
+  429: "rate_limited",
+  503: "feature_unavailable",
+};
+
+function isKnownReason(reason) {
+  return (
+    typeof reason === "string" && Object.prototype.hasOwnProperty.call(REASON_GUIDANCE, reason)
+  );
+}
+
+function buildFailureEnvelope(reason, message, retryAfter) {
+  const guidance = REASON_GUIDANCE[reason] ?? REASON_GUIDANCE.slack_api_error;
+  const detail = message ? `${guidance} (${message})` : guidance;
+  const envelope = { ok: false, reason, agentMessage: detail };
+  if (typeof retryAfter === "number") {
+    envelope.retryAfter = retryAfter;
+  }
+  return JSON.stringify(envelope);
+}
+
+async function readErrorBody(response) {
+  let text;
+  try {
+    text = await response.text();
+  } catch {
+    return { reason: undefined, message: undefined, retryAfter: undefined };
+  }
+  try {
+    const body = JSON.parse(text);
+    return {
+      reason: typeof body.error === "string" ? body.error : undefined,
+      message: typeof body.message === "string" ? body.message : undefined,
+      retryAfter: typeof body.retryAfter === "number" ? body.retryAfter : undefined,
+    };
+  } catch {
+    return { reason: undefined, message: text || undefined, retryAfter: undefined };
+  }
+}
 
 export default tool({
   name: "slack-notify",
@@ -37,8 +107,9 @@ export default tool({
       ),
   },
   async execute(args) {
+    let response;
     try {
-      const response = await bridgeFetch("/slack-notify", {
+      response = await bridgeFetch("/slack-notify", {
         method: "POST",
         body: JSON.stringify({
           channel: args.channel,
@@ -47,42 +118,27 @@ export default tool({
           reason: args.reason,
         }),
       });
-
-      if (!response.ok) {
-        const errorMessage = await extractError(response);
-
-        if (response.status === 503) {
-          return `Cannot post to Slack: ${errorMessage}. The deployment is not configured to send agent notifications.`;
-        }
-        if (response.status === 403) {
-          return `Cannot post to Slack: ${errorMessage}. Agent notifications are disabled for this repository — ask the user to enable them in integration settings.`;
-        }
-        if (response.status === 404) {
-          return `Cannot post to Slack: ${errorMessage}. The channel ${args.channel} was not found, is archived, or the bot is not in it. If the channel name is correct and not archived, ask the user to invite the bot.`;
-        }
-        if (response.status === 422) {
-          return `Cannot post to Slack: ${errorMessage}. The message body was empty after sanitization — try again with non-empty content.`;
-        }
-        if (response.status === 429) {
-          return `Rate limited by Slack: ${errorMessage}. Wait before retrying.`;
-        }
-        return `Failed to post to Slack: ${errorMessage} (HTTP ${response.status})`;
-      }
-
-      const result = await response.json();
-      const lines = [`Posted to ${result.channelInput}: ${result.permalink}`];
-      if (result.truncated) {
-        lines.push("Note: message was truncated to fit Slack length limits.");
-      }
-      if (result.strippedBroadcasts) {
-        lines.push("Note: broadcast mentions (@channel/@here) were stripped.");
-      }
-      if (result.mentionsModified) {
-        lines.push("Note: direct user mentions were modified per workspace mentions policy.");
-      }
-      return lines.join("\n");
     } catch (error) {
-      return `Failed to post to Slack: ${error instanceof Error ? error.message : String(error)}`;
+      const message = error instanceof Error ? error.message : String(error);
+      return buildFailureEnvelope("bridge_error", message);
     }
+
+    if (response.ok) {
+      try {
+        const result = await response.json();
+        return JSON.stringify(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return buildFailureEnvelope(
+          "slack_api_error",
+          `Control plane returned a non-JSON 2xx response: ${message}`
+        );
+      }
+    }
+
+    const { reason, message, retryAfter } = await readErrorBody(response);
+    const fallbackReason = STATUS_FALLBACK_REASON[response.status] ?? "slack_api_error";
+    const finalReason = isKnownReason(reason) ? reason : fallbackReason;
+    return buildFailureEnvelope(finalReason, message, retryAfter);
   },
 });

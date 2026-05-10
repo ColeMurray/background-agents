@@ -121,7 +121,7 @@ describe("POST /sessions/:id/slack-notify", () => {
     expect(body.error).toBe("feature_disabled");
   });
 
-  it("returns 200 and emits tool_call + tool_result events on Slack success", async () => {
+  it("returns the success envelope and persists no events of its own", async () => {
     const { sessionName, sandboxToken, stub } = await setupSession({
       agentNotificationsEnabled: true,
       mentionsPolicy: "allow",
@@ -156,18 +156,14 @@ describe("POST /sessions/:id/slack-notify", () => {
     expect(body.channelId).toBe("C1");
     expect(body.permalink).toContain("slack.com");
 
-    const events = await queryDO<{ type: string; data: string }>(
+    // The agent's tool_call (emitted by OpenCode in the sandbox) is the
+    // single source of truth for the transcript — the handler must not
+    // inject synthetic tool_call/tool_result events of its own.
+    const slackEvents = await queryDO<{ type: string; data: string }>(
       stub,
-      "SELECT type, data FROM events ORDER BY created_at"
+      "SELECT type, data FROM events WHERE data LIKE '%slack-notify%' ORDER BY created_at"
     );
-    const toolCall = events.find((e) => e.type === "tool_call" && e.data.includes("slack-notify"));
-    const toolResult = events.find(
-      (e) =>
-        e.type === "tool_result" &&
-        (e.data.includes("permalink") || e.data.includes("channelInput"))
-    );
-    expect(toolCall).toBeDefined();
-    expect(toolResult).toBeDefined();
+    expect(slackEvents).toHaveLength(0);
   });
 
   it("maps Slack channel_not_found to 404 channel_not_found_or_forbidden", async () => {
