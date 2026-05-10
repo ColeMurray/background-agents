@@ -63,7 +63,7 @@ export default tool({
           return `Cannot post to Slack: ${errorMessage}. Agent notifications are disabled for this repository — ask the user to enable them in integration settings.`;
         }
         if (response.status === 404) {
-          return `Cannot post to Slack: ${errorMessage}. The bot is not in this channel — ask the user to invite the bot to ${args.channel}.`;
+          return `Cannot post to Slack: ${errorMessage}. The channel ${args.channel} was not found, is archived, or the bot is not in it. If the channel name is correct and not archived, ask the user to invite the bot.`;
         }
         if (response.status === 422) {
           return `Cannot post to Slack: ${errorMessage}. The message body was empty after sanitization — try again with non-empty content.`;
