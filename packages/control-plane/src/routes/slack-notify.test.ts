@@ -409,6 +409,7 @@ describe("handleSlackNotify", () => {
     expect(logEntry?.prompt_author_user_id).toBe("user-42");
     expect(logEntry?.repo).toBe("acme/web-app");
     expect(logEntry?.channel_id).toBe("C1");
+    expect(logEntry?.request_reason).toBe("user asked");
   });
 
   it("logs an audit warning with attribution on Slack-side denial (no events emitted)", async () => {
@@ -433,6 +434,7 @@ describe("handleSlackNotify", () => {
     expect(logEntry?.parent_session_id).toBe("parent-2");
     expect(logEntry?.trigger_source).toBe("agent");
     expect(logEntry?.prompt_author_user_id).toBe("user-99");
+    expect(logEntry?.request_reason).toBeNull();
   });
 
   it("passes channel input verbatim to Slack — channel ID", async () => {
