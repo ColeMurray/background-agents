@@ -246,9 +246,11 @@ class TestInstallTools:
         (tools_dir / "slack-notify.js").write_text("// slack-notify")
         (tools_dir / "spawn-task.js").write_text("// spawn-task")
 
-        with patch.dict("os.environ", {"AGENT_SLACK_NOTIFY_ENABLED": "true"}):
-            with _patch_paths(legacy=tmp_path / "no-legacy", tools=tools_dir):
-                sup._install_tools(workdir)
+        with (
+            patch.dict("os.environ", {"AGENT_SLACK_NOTIFY_ENABLED": "true"}),
+            _patch_paths(legacy=tmp_path / "no-legacy", tools=tools_dir),
+        ):
+            sup._install_tools(workdir)
 
         tool_dest = workdir / ".opencode" / "tool"
         assert (tool_dest / "slack-notify.js").exists()
