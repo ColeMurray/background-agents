@@ -3,15 +3,31 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { initSession, initNamedSession, openClientWs, collectMessages, queryDO } from "./helpers";
 import type { SessionDO } from "../../src/session/durable-object";
 
-async function waitForAutoRename(stub: DurableObjectStub, timeoutMs = 3000): Promise<void> {
+const AUTO_RENAME_TIMEOUT_MS = 3000;
+const AUTO_RENAME_POLL_INTERVAL_MS = 25;
+// runAutoRename writes title_auto_rename_attempted_at BEFORE awaiting the titler call and
+// writing the final title — wait for both so downstream title assertions don't race.
+const BACKGROUND_SETTLE_WAIT_MS = 200;
+
+async function waitForAutoRename(
+  stub: DurableObjectStub,
+  timeoutMs = AUTO_RENAME_TIMEOUT_MS
+): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const rows = await queryDO<{
       title_auto_rename_attempted_at: number | null;
       title: string | null;
     }>(stub, `SELECT title, title_auto_rename_attempted_at FROM session LIMIT 1`);
-    if (rows[0]?.title_auto_rename_attempted_at !== null) return;
-    await new Promise((r) => setTimeout(r, 25));
+    const row = rows[0];
+    if (
+      row?.title_auto_rename_attempted_at !== null &&
+      typeof row?.title === "string" &&
+      row.title.trim().length > 0
+    ) {
+      return;
+    }
+    await new Promise((r) => setTimeout(r, AUTO_RENAME_POLL_INTERVAL_MS));
   }
   throw new Error("Auto-rename did not run within timeout");
 }
@@ -77,7 +93,7 @@ describe("session auto-rename (integration)", () => {
     });
 
     // Give the would-be-background-task time to NOT run.
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, BACKGROUND_SETTLE_WAIT_MS));
 
     const rows = await queryDO<{
       title: string | null;
@@ -186,7 +202,7 @@ describe("session auto-rename (integration)", () => {
     // Start collecting AFTER subscribe completes — wait specifically for session_title.
     const collector = collectMessages(ws, {
       until: (msg) => msg.type === "session_title",
-      timeoutMs: 3000,
+      timeoutMs: AUTO_RENAME_TIMEOUT_MS,
     });
 
     const res = await stub.fetch("http://internal/internal/prompt", {
