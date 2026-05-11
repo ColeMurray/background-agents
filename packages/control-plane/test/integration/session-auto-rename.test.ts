@@ -138,10 +138,15 @@ describe("session auto-rename (integration)", () => {
       );
     });
 
-    // Subscribe BEFORE both prompts. Collect for a bounded window so we can verify
-    // exactly one session_title broadcast fires (no early-exit via `until`).
+    // Two-phase wait: (a) wait up to AUTO_RENAME_TIMEOUT_MS for the FIRST session_title
+    // broadcast so we never time out before the (background) rename fires; (b) then collect
+    // for a short tail window to assert no SECOND broadcast — that's what proves
+    // "only triggers once."
     const { ws } = await openClientWs(sessionName, { subscribe: true, userId: "user-1" });
-    const collector = collectMessages(ws, { timeoutMs: NO_BROADCAST_WAIT_MS });
+    const firstCollector = collectMessages(ws, {
+      until: (msg) => msg.type === "session_title",
+      timeoutMs: AUTO_RENAME_TIMEOUT_MS,
+    });
 
     await Promise.all([
       stub.fetch("http://internal/internal/prompt", {
@@ -156,10 +161,14 @@ describe("session auto-rename (integration)", () => {
       }),
     ]);
 
-    const messages = await collector;
-    const titleMessages = messages.filter((m) => m.type === "session_title");
-    expect(titleMessages).toHaveLength(1);
-    expect(titleMessages[0].title).toMatch(/(First prompt|Second prompt)/);
+    const firstMessages = await firstCollector;
+    const firstTitleMessages = firstMessages.filter((m) => m.type === "session_title");
+    expect(firstTitleMessages).toHaveLength(1);
+    expect(firstTitleMessages[0].title).toMatch(/(First prompt|Second prompt)/);
+
+    // Tail: no second broadcast should follow.
+    const tailMessages = await collectMessages(ws, { timeoutMs: NO_BROADCAST_WAIT_MS });
+    expect(tailMessages.some((m) => m.type === "session_title")).toBe(false);
 
     const rows = await queryDO<{
       title: string | null;
