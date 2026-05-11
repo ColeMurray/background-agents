@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ServerMessage, SessionArtifact, SessionState } from "@open-inspect/shared";
 import type * as SwrModule from "swr";
+import { SIDEBAR_SESSIONS_KEY, type SessionListResponse } from "@/lib/session-list";
 import { useSessionSocket } from "./use-session-socket";
 
 const { mutateMock } = vi.hoisted(() => ({
@@ -497,6 +498,8 @@ describe("useSessionSocket", () => {
       expect(result.current.sessionState?.title).toBe("Session 1");
     });
 
+    mutateMock.mockClear();
+
     act(() => {
       socket.receive({ type: "session_title", title: "Refreshed title" });
     });
@@ -504,5 +507,74 @@ describe("useSessionSocket", () => {
     await waitFor(() => {
       expect(result.current.sessionState?.title).toBe("Refreshed title");
     });
+
+    // Regression: the auto-rename title must also flow into the sidebar SWR
+    // cache so the session list updates in lockstep with the detail header.
+    // Without this, the sidebar stayed stale until an unrelated event
+    // (e.g. session_status) happened to revalidate the list.
+    const titleCalls = mutateMock.mock.calls.filter(([key]) => key === SIDEBAR_SESSIONS_KEY);
+    expect(titleCalls).toHaveLength(1);
+    const [, updater, options] = titleCalls[0];
+    expect(options).toMatchObject({ revalidate: false });
+    const updated = (updater as (data: SessionListResponse | undefined) => SessionListResponse)({
+      sessions: [
+        {
+          id: "session-1",
+          title: "Session 1",
+          repoOwner: "acme",
+          repoName: "web-app",
+          createdAt: 1,
+          updatedAt: 1,
+        } as SessionListResponse["sessions"][number],
+      ],
+      hasMore: false,
+    });
+    expect(updated.sessions[0].title).toBe("Refreshed title");
+  });
+
+  it("mutates the sidebar cache when a buffered session_title is applied via subscribe", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1"));
+
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive({ type: "session_title", title: "Auto-named topic" });
+    });
+
+    expect(mutateMock.mock.calls.filter(([key]) => key === SIDEBAR_SESSIONS_KEY)).toHaveLength(0);
+
+    act(() => {
+      socket.receive(createSubscribedMessage());
+    });
+
+    await waitFor(() => {
+      expect(result.current.sessionState?.title).toBe("Auto-named topic");
+    });
+
+    // The buffered title must also be mirrored to the sidebar cache when it
+    // is finally applied on subscribe — same reasoning as the post-subscribed
+    // case above.
+    const titleCalls = mutateMock.mock.calls.filter(([key]) => key === SIDEBAR_SESSIONS_KEY);
+    expect(titleCalls).toHaveLength(1);
+    const [, updater, options] = titleCalls[0];
+    expect(options).toMatchObject({ revalidate: false });
+    const updated = (updater as (data: SessionListResponse | undefined) => SessionListResponse)({
+      sessions: [
+        {
+          id: "session-1",
+          title: "Session 1",
+          repoOwner: "acme",
+          repoName: "web-app",
+          createdAt: 1,
+          updatedAt: 1,
+        } as SessionListResponse["sessions"][number],
+      ],
+      hasMore: false,
+    });
+    expect(updated.sessions[0].title).toBe("Auto-named topic");
   });
 });

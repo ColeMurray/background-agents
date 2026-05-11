@@ -2,7 +2,11 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { mutate } from "swr";
-import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
+import {
+  applyTitleUpdate,
+  SIDEBAR_SESSIONS_KEY,
+  type SessionListResponse,
+} from "@/lib/session-list";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type {
   ParticipantPresence,
@@ -298,6 +302,15 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
               // Apply any session_title that arrived before "subscribed".
               ...(bufferedTitle ? { title: bufferedTitle } : {}),
             });
+            if (bufferedTitle) {
+              // Buffered title is being applied to the header now; mirror it
+              // into the sidebar cache so the list updates at the same time.
+              void mutate<SessionListResponse>(
+                SIDEBAR_SESSIONS_KEY,
+                (current) => applyTitleUpdate(current, sessionId, bufferedTitle, Date.now()),
+                { revalidate: false }
+              );
+            }
           }
           // Store the current user's participant ID and info for author attribution
           if (data.participantId) {
@@ -454,6 +467,15 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
             const incomingTitle = data.title;
             if (subscribedRef.current) {
               setSessionState((prev) => (prev ? { ...prev, title: incomingTitle } : null));
+              // Mirror the title into the sidebar SWR cache so the list
+              // updates in lockstep with the detail header. Without this, the
+              // sidebar stayed stale until an unrelated event (e.g.
+              // session_status) happened to revalidate the list.
+              void mutate<SessionListResponse>(
+                SIDEBAR_SESSIONS_KEY,
+                (current) => applyTitleUpdate(current, sessionId, incomingTitle, Date.now()),
+                { revalidate: false }
+              );
             } else {
               // Subscribed hasn't landed yet — buffer so the "subscribed"
               // handler can apply the title once state is initialized.
