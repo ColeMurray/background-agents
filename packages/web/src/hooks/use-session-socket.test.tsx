@@ -41,9 +41,9 @@ class FakeWebSocket {
     this.sentMessages.push(JSON.parse(data) as Record<string, unknown>);
   }
 
-  close(code = 1000, reason = "") {
+  close(code = 1000, reason = "", wasClean = true) {
     this.readyState = FakeWebSocket.CLOSED;
-    this.onclose?.({ code, reason, wasClean: true } as CloseEvent);
+    this.onclose?.({ code, reason, wasClean } as CloseEvent);
   }
 
   open() {
@@ -407,6 +407,102 @@ describe("useSessionSocket", () => {
           createdAt: 300,
         },
       ]);
+    });
+  });
+
+  // Regression: when the auto-rename titler commits during the WS subscribe
+  // handshake, the server can send `session_title` on the wire BEFORE
+  // `subscribed`. Without buffering, the title was silently dropped because
+  // the handler ignored updates while sessionState was still null.
+  it("buffers a session_title that arrives before subscribed and applies it on subscribe", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1"));
+
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+    });
+
+    act(() => {
+      socket.receive({ type: "session_title", title: "Auto-named topic" });
+    });
+
+    // Title arrived before subscribed — sessionState is still null and the
+    // title must NOT be visible yet (nothing to merge into).
+    expect(result.current.sessionState).toBeNull();
+
+    act(() => {
+      socket.receive(createSubscribedMessage());
+    });
+
+    // Subscribed snapshot had the stale title ("Session 1"), but the buffered
+    // session_title takes precedence.
+    await waitFor(() => {
+      expect(result.current.sessionState?.title).toBe("Auto-named topic");
+    });
+  });
+
+  it("drops a buffered session_title when the WebSocket closes before subscribed lands", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1"));
+
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive({ type: "session_title", title: "Stale from old socket" });
+      // Drop unclean before subscribed lands so the hook auto-reconnects.
+      socket.close(1006, "abnormal", false);
+    });
+
+    // After reconnect, a fresh subscribed must NOT be overridden by the stale
+    // buffered title from the previous socket.
+    await waitFor(
+      () => {
+        expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2);
+      },
+      { timeout: 3000 }
+    );
+
+    const reconnected = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+    act(() => {
+      reconnected.open();
+      reconnected.receive(createSubscribedMessage());
+    });
+
+    await waitFor(() => {
+      expect(result.current.sessionState?.title).toBe("Session 1");
+    });
+  });
+
+  it("applies session_title normally when it arrives after subscribed", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1"));
+
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+    });
+
+    await waitFor(() => {
+      expect(result.current.sessionState?.title).toBe("Session 1");
+    });
+
+    act(() => {
+      socket.receive({ type: "session_title", title: "Refreshed title" });
+    });
+
+    await waitFor(() => {
+      expect(result.current.sessionState?.title).toBe("Refreshed title");
     });
   });
 });

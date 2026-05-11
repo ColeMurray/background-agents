@@ -203,6 +203,10 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   const [authError, setAuthError] = useState<string | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [sessionState, setSessionState] = useState<SessionState | null>(null);
+  // Holds a session_title broadcast that arrived before "subscribed" so it
+  // can be applied once the initial state lands. Without this, the title is
+  // silently dropped (see use-session-socket.test.ts).
+  const pendingTitleRef = useRef<string | null>(null);
   const [messages, _setMessages] = useState<Message[]>([]);
   const [events, setEvents] = useState<SandboxEvent[]>([]);
   const [participants, setParticipants] = useState<Participant[]>([]);
@@ -284,11 +288,15 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           setArtifacts(data.artifacts.map(toUiArtifact));
           pendingTextRef.current = null;
           if (data.state) {
+            const bufferedTitle = pendingTitleRef.current;
+            pendingTitleRef.current = null;
             setSessionState({
               ...data.state,
               // Backward-compatible default for older sessions that may omit this.
               isProcessing: data.state.isProcessing ?? false,
               totalCost: data.state.totalCost ?? 0,
+              // Apply any session_title that arrived before "subscribed".
+              ...(bufferedTitle ? { title: bufferedTitle } : {}),
             });
           }
           // Store the current user's participant ID and info for author attribution
@@ -443,7 +451,14 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
 
         case "session_title":
           if (data.title) {
-            setSessionState((prev) => (prev ? { ...prev, title: data.title! } : null));
+            const incomingTitle = data.title;
+            if (subscribedRef.current) {
+              setSessionState((prev) => (prev ? { ...prev, title: incomingTitle } : null));
+            } else {
+              // Subscribed hasn't landed yet — buffer so the "subscribed"
+              // handler can apply the title once state is initialized.
+              pendingTitleRef.current = incomingTitle;
+            }
           }
           break;
 
@@ -586,6 +601,9 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
       });
       connectingRef.current = false;
       subscribedRef.current = false;
+      // Drop any buffered session_title so a stale value from this socket
+      // can't override the freshly-fetched title in the next "subscribed".
+      pendingTitleRef.current = null;
       setConnected(false);
       setConnecting(false);
       setReplaying(false);

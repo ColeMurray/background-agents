@@ -140,6 +140,36 @@ describe("session auto-rename (integration)", () => {
     expect(rows[0].title).toMatch(/(First prompt|Second prompt)/);
   });
 
+  it("subscribed state reflects a title committed during the subscribe handshake", async () => {
+    // Regression: the auto-rename runs in ctx.waitUntil and, after the Haiku
+    // network call returns, commits a new title and broadcasts session_title.
+    // If that commit lands after `getSessionState` captures its title snapshot
+    // but before `subscribed` is sent, the subscribed payload would ship with
+    // a stale (null) title and the client had nothing to fall back to. The fix
+    // re-reads the latest title from SQLite right before sending. We simulate
+    // the committed-mid-handshake state by writing the title directly via
+    // runInDurableObject (the same synchronous SQLite write the auto-rename
+    // tail performs) and then subscribing.
+    const sessionName = `auto-rename-handshake-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const { stub } = await initNamedSession(sessionName);
+
+    await runInDurableObject(stub, (instance: SessionDO) => {
+      instance.ctx.storage.sql.exec(
+        `UPDATE session SET title = ? WHERE id = (SELECT id FROM session LIMIT 1)`,
+        "Late-committed title"
+      );
+    });
+
+    const { messages } = await openClientWs(sessionName, {
+      subscribe: true,
+      userId: "user-1",
+    });
+    const subscribed = messages.find((m) => m.type === "subscribed") as
+      | { state?: { title?: string | null } }
+      | undefined;
+    expect(subscribed?.state?.title).toBe("Late-committed title");
+  });
+
   it("broadcasts session_title to subscribed clients after auto-rename completes", async () => {
     const sessionName = `auto-rename-broadcast-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const { stub } = await initNamedSession(sessionName);

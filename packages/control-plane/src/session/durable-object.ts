@@ -1250,6 +1250,17 @@ export class SessionDO extends DurableObject<Env> {
     // Fetch sandbox once and thread it through to avoid a redundant SQLite read.
     const sandbox = this.getSandbox();
     const state = await this.getSessionState(sandbox);
+    // Close a race with concurrent ctx.waitUntil background tasks (e.g. the
+    // auto-rename titler) that may commit a new title between getSessionState's
+    // snapshot read and this point — the titler's Haiku call can resolve
+    // anywhere in this window, and its post-call tail (updateSessionTitle +
+    // broadcast) runs synchronously. Without this refresh, the broadcast they
+    // emit would arrive on the wire *before* "subscribed", and the client's
+    // session_title handler drops updates when sessionState is still null.
+    const latestTitle = this.getSession()?.title ?? null;
+    if (latestTitle !== state.title) {
+      state.title = latestTitle;
+    }
     const artifacts = this.messageService.listArtifacts();
     const replay = this.getReplayData();
 
