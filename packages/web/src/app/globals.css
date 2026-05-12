@@ -72,6 +72,9 @@ pre code.hljs {
   --success: #28c840;
   --success-muted: rgba(40, 200, 64, 0.1);
 
+  /* Brand teal (used for branch bar and accents on the home page) */
+  --brand-teal: #3fb8a0;
+
   /* Border radius */
   --radius: 0.25rem;
 }
@@ -113,6 +116,8 @@ pre code.hljs {
 
     --success: #28c840;
     --success-muted: rgba(40, 200, 64, 0.1);
+
+    --brand-teal: #4dccb1;
   }
 }
 
@@ -152,6 +157,8 @@ pre code.hljs {
 
   --success: #28c840;
   --success-muted: rgba(40, 200, 64, 0.1);
+
+  --brand-teal: #4dccb1;
 }
 
 html {
