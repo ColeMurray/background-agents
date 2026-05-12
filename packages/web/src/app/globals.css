@@ -205,6 +205,13 @@ pre code.hljs {
   --overlay: rgba(0, 0, 0, 0.5);
 }
 
+/*
+ * Branded themes (e.g., `.blue`) live in `app/themes/<id>.css` and are imported
+ * from `app/layout.tsx` after this file. Each branded theme overrides the
+ * `:root` token defaults above whenever its class is active on `<html>`.
+ * See `docs/THEMING.md` for the full walkthrough.
+ */
+
 html {
   scroll-behavior: smooth;
 }

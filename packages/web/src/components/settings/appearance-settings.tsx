@@ -1,5 +1,6 @@
 "use client";
 
+import { useTheme } from "next-themes";
 import {
   useSyntaxHighlightPreferences,
   LIGHT_THEMES,
@@ -7,6 +8,7 @@ import {
   type ColorSchemeMode,
   type SyntaxHighlightThemeDefinition,
 } from "@/hooks/use-syntax-highlight-preferences";
+import { APP_THEMES, DEFAULT_APP_THEME } from "@/lib/app-themes";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { SunIcon, MoonIcon, MonitorIcon } from "@/components/ui/icons";
 
@@ -53,6 +55,7 @@ function ThemeRow({
 export function AppearanceSettings() {
   const { colorSchemeMode, preferredLightTheme, preferredDarkTheme, update } =
     useSyntaxHighlightPreferences();
+  const { theme, setTheme } = useTheme();
 
   return (
     <div>
@@ -60,6 +63,37 @@ export function AppearanceSettings() {
       <p className="text-sm text-muted-foreground mb-6">
         Customize the appearance of the application.
       </p>
+
+      {/* App theme section */}
+      <div className="mb-8">
+        <h3 className="text-base font-medium text-foreground mb-1">App theme</h3>
+        <p className="text-sm text-muted-foreground mb-4">
+          Pick the look of the entire app. Default uses the built-in colors; System matches your OS
+          preference; additional palettes can be registered in code and selected here.
+        </p>
+
+        <div className="border border-border rounded-md">
+          <div className="flex items-center justify-between px-4 py-3">
+            <div>
+              <span className="text-sm text-foreground">Theme</span>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Your choice persists across sessions and overrides the deploy-time default.
+              </p>
+            </div>
+            <select
+              value={theme ?? DEFAULT_APP_THEME}
+              onChange={(e) => setTheme(e.target.value)}
+              className="text-sm bg-background border border-border rounded px-2 py-1.5 text-foreground"
+            >
+              {APP_THEMES.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </div>
 
       {/* Code Highlighting section */}
       <div>
