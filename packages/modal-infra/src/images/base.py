@@ -19,8 +19,20 @@ import sandbox_runtime
 # Get the path to the sandbox runtime code (provider-agnostic)
 SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
 
-# OpenCode version to install
-OPENCODE_VERSION = "latest"
+# OpenCode version to install.
+#
+# Pinned to 1.14.41 — the last release before opencode's Hono → Effect Schema
+# migration (landed across v1.14.42+, released 2026-05-09 onward) broke event
+# publishing on the legacy `/event` SSE endpoint. With newer versions the
+# bridge connects, posts the prompt, opencode processes it and records the
+# assistant response in the session store, but no `message.updated` /
+# `message.part.updated` / `session.idle` events are streamed back — so the
+# session shows execution_complete with no reply.
+#
+# Symptom in bridge logs: `prompt.run outcome=success duration_ms=35-367`,
+# which means `_stream_opencode_response_sse` returned with zero yielded
+# events. Tracked in #567.
+OPENCODE_VERSION = "1.14.41"
 
 # code-server version to install (pinned for reproducible images)
 CODE_SERVER_VERSION = "4.109.5"
@@ -33,8 +45,8 @@ TTYD_VERSION = "1.7.7"
 TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 
 # Cache buster - change this to force Modal image rebuild
-# v48: refresh sandbox image for Claude Opus 4.7 support
-CACHE_BUSTER = "v48-opus-4-7"
+# v49: pin opencode-ai to 1.14.41 (newer versions break SSE event publishing)
+CACHE_BUSTER = "v49-pin-opencode-1-14-41"
 
 # Base image with all development tools
 base_image = (
@@ -107,11 +119,11 @@ base_image = (
     # CACHE_BUSTER is embedded in a no-op echo so Modal invalidates this layer on bump.
     .run_commands(
         f"echo 'cache: {CACHE_BUSTER}' > /dev/null",
-        "npm install -g opencode-ai@latest",
+        f"npm install -g opencode-ai@{OPENCODE_VERSION}",
         "opencode --version || echo 'OpenCode installed'",
         # Install @opencode-ai/plugin globally for custom tools
         # This ensures tools can import the plugin without needing to run bun add
-        "npm install -g @opencode-ai/plugin@latest zod",
+        f"npm install -g @opencode-ai/plugin@{OPENCODE_VERSION} zod",
     )
     # Pre-build OpenCode plugin deps into a staging directory.
     # At boot, _install_tools() copies these into .opencode/ so that
