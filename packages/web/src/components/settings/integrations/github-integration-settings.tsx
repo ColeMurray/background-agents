@@ -608,6 +608,12 @@ function RepoOverrideRow({
   const [commentActionInstructions, setCommentActionInstructions] = useState(
     entry.settings.commentActionInstructions ?? ""
   );
+  const [autoReviewMode, setAutoReviewMode] = useState<"global" | "override">(
+    entry.settings.autoReviewOnOpen !== undefined ? "override" : "global"
+  );
+  const [autoReviewOnOpen, setAutoReviewOnOpen] = useState(
+    entry.settings.autoReviewOnOpen ?? false
+  );
   const [newUsername, setNewUsername] = useState("");
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -634,6 +640,7 @@ function RepoOverrideRow({
     if (codeReviewMode === "override") settings.codeReviewInstructions = codeReviewInstructions;
     if (commentActionMode === "override")
       settings.commentActionInstructions = commentActionInstructions;
+    if (autoReviewMode === "override") settings.autoReviewOnOpen = autoReviewOnOpen;
 
     try {
       const res = await fetch(`/api/integration-settings/github/repos/${owner}/${name}`, {
@@ -739,6 +746,39 @@ function RepoOverrideRow({
         <Button variant="destructive" size="sm" onClick={handleDelete}>
           Remove
         </Button>
+      </div>
+
+      <div>
+        <p className="text-xs font-medium text-muted-foreground mb-1">Auto-review new PRs</p>
+        <div className="flex items-center gap-2 mb-1">
+          <Select
+            value={autoReviewMode}
+            onValueChange={(v: "global" | "override") => {
+              setAutoReviewMode(v);
+              setDirty(true);
+            }}
+          >
+            <SelectTrigger density="compact" className="w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="global">Use global default</SelectItem>
+              <SelectItem value="override">Override for this repo</SelectItem>
+            </SelectContent>
+          </Select>
+          {autoReviewMode === "override" && (
+            <label className="flex items-center gap-2 text-xs text-foreground">
+              <Switch
+                checked={autoReviewOnOpen}
+                onCheckedChange={(checked) => {
+                  setAutoReviewOnOpen(checked);
+                  setDirty(true);
+                }}
+              />
+              <span>{autoReviewOnOpen ? "Enabled" : "Disabled"}</span>
+            </label>
+          )}
+        </div>
       </div>
 
       <div>
