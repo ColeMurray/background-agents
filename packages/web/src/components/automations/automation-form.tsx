@@ -50,6 +50,11 @@ const COMMON_SET = new Set(COMMON_TIMEZONES);
 const ALL_TIMEZONES = Intl.supportedValuesOf("timeZone");
 const DEFAULT_REASONING_VALUE = "__default__";
 
+// Keep in sync with MAX_INSTRUCTIONS_LENGTH in
+// packages/control-plane/src/routes/automations.ts.
+const INSTRUCTIONS_MAX_LENGTH = 15000;
+const INSTRUCTIONS_WARNING_THRESHOLD = Math.floor(INSTRUCTIONS_MAX_LENGTH * 0.9);
+
 const toOption = (tz: string) => ({ value: tz, label: tz.replace(/_/g, " ") });
 
 const TIMEZONE_GROUPS: ComboboxGroup[] = [
@@ -452,11 +457,28 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
                   ? "Review this pull request and provide feedback. Check for code quality issues, potential bugs, and suggest improvements."
                   : "Process this webhook payload and take the appropriate action."
           }
-          maxLength={10000}
+          maxLength={INSTRUCTIONS_MAX_LENGTH}
           required
           rows={6}
+          aria-describedby="instructions-counter"
           className="resize-y"
         />
+        <div
+          id="instructions-counter"
+          aria-live="polite"
+          className={`mt-1 text-xs text-right ${
+            instructions.length >= INSTRUCTIONS_MAX_LENGTH
+              ? "text-destructive"
+              : instructions.length >= INSTRUCTIONS_WARNING_THRESHOLD
+                ? "text-warning"
+                : "text-muted-foreground"
+          }`}
+        >
+          {instructions.length >= INSTRUCTIONS_MAX_LENGTH ? (
+            <span>Maximum length reached. </span>
+          ) : null}
+          {instructions.length.toLocaleString()} / {INSTRUCTIONS_MAX_LENGTH.toLocaleString()}
+        </div>
       </div>
 
       {/* Submit */}

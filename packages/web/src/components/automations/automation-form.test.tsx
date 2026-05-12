@@ -124,3 +124,52 @@ describe("automation cron submission", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 });
+
+describe("instructions character counter", () => {
+  const baseInitialValues = {
+    name: "Daily review",
+    repoOwner: "open-inspect",
+    repoName: "background-agents",
+    baseBranch: "main",
+    model: "openai/gpt-5.4",
+    scheduleCron: "0 9 * * *",
+    scheduleTz: "UTC",
+  };
+
+  const renderForm = (instructions: string) =>
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{ ...baseInitialValues, instructions }}
+      />
+    );
+
+  it("shows current length and the 15,000 cap", () => {
+    renderForm("hello");
+    expect(screen.getByText("5 / 15,000")).toBeInTheDocument();
+  });
+
+  it("uses muted color well below the warning threshold", () => {
+    renderForm("hello");
+    const counter = screen.getByText("5 / 15,000");
+    expect(counter).toHaveClass("text-muted-foreground");
+    expect(counter).not.toHaveClass("text-warning");
+    expect(counter).not.toHaveClass("text-destructive");
+  });
+
+  it("switches to warning color at 90% of the cap", () => {
+    renderForm("a".repeat(13500));
+    const counter = screen.getByText("13,500 / 15,000");
+    expect(counter).toHaveClass("text-warning");
+    expect(counter).not.toHaveClass("text-destructive");
+  });
+
+  it("switches to destructive color and shows a notice at the cap", () => {
+    renderForm("a".repeat(15000));
+    const counter = screen.getByText(/15,000 \/ 15,000/);
+    expect(counter).toHaveClass("text-destructive");
+    expect(counter).toHaveTextContent("Maximum length reached.");
+  });
+});
