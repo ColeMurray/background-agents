@@ -132,8 +132,10 @@ base_image = (
     # the first prompt and exceed the bridge's HTTP timeout.
     .run_commands(
         "mkdir -p /app/opencode-deps",
-        'echo \'{"name":"opencode-tools","type":"module",'
-        '"dependencies":{"@opencode-ai/plugin":"*"}}\''
+        # Pin staged plugin to OPENCODE_VERSION so the pre-staged tree copied
+        # into .opencode/ at boot matches the globally installed plugin (#567).
+        f'echo \'{{"name":"opencode-tools","type":"module",'
+        f'"dependencies":{{"@opencode-ai/plugin":"{OPENCODE_VERSION}"}}}}\''
         " > /app/opencode-deps/package.json",
         "cd /app/opencode-deps && npm install --ignore-scripts --no-audit --no-fund",
     )
