@@ -69,6 +69,10 @@ export function DataControlsSettings() {
         { revalidate: false, populateCache: true }
       );
       setExtraSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      // Server-side list shifts down by one, so the next Load more must
+      // start one offset earlier to avoid skipping the session that took
+      // this row's slot.
+      setOffset((prev) => prev - 1);
       mutate(SIDEBAR_SESSIONS_KEY);
     } catch {
       toast.error("Failed to unarchive session");
