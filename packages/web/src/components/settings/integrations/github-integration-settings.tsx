@@ -74,6 +74,7 @@ export function GitHubIntegrationSettings() {
   const settings = globalData?.settings;
   const repoOverrides = repoSettingsData?.repos ?? [];
   const availableRepos = reposData?.repos ?? [];
+  const defaultAutoReviewOnOpen = settings?.defaults?.autoReviewOnOpen ?? true;
 
   return (
     <div>
@@ -108,6 +109,7 @@ export function GitHubIntegrationSettings() {
           overrides={repoOverrides}
           availableRepos={availableRepos}
           enabledModelOptions={enabledModelOptions}
+          defaultAutoReviewOnOpen={defaultAutoReviewOnOpen}
         />
       </Section>
     </div>
@@ -506,10 +508,12 @@ function RepoOverridesSection({
   overrides,
   availableRepos,
   enabledModelOptions,
+  defaultAutoReviewOnOpen,
 }: {
   overrides: RepoSettingsEntry[];
   availableRepos: EnrichedRepository[];
   enabledModelOptions: { category: string; models: { id: string; name: string }[] }[];
+  defaultAutoReviewOnOpen: boolean;
 }) {
   const [addingRepo, setAddingRepo] = useState("");
 
@@ -551,6 +555,7 @@ function RepoOverridesSection({
               key={entry.repo}
               entry={entry}
               enabledModelOptions={enabledModelOptions}
+              defaultAutoReviewOnOpen={defaultAutoReviewOnOpen}
             />
           ))}
         </div>
@@ -584,9 +589,11 @@ function RepoOverridesSection({
 function RepoOverrideRow({
   entry,
   enabledModelOptions,
+  defaultAutoReviewOnOpen,
 }: {
   entry: RepoSettingsEntry;
   enabledModelOptions: { category: string; models: { id: string; name: string }[] }[];
+  defaultAutoReviewOnOpen: boolean;
 }) {
   const [model, setModel] = useState(entry.settings.model ?? "");
   const [effort, setEffort] = useState(entry.settings.reasoningEffort ?? "");
@@ -612,7 +619,7 @@ function RepoOverrideRow({
     entry.settings.autoReviewOnOpen !== undefined ? "override" : "global"
   );
   const [autoReviewOnOpen, setAutoReviewOnOpen] = useState(
-    entry.settings.autoReviewOnOpen ?? false
+    entry.settings.autoReviewOnOpen ?? defaultAutoReviewOnOpen
   );
   const [newUsername, setNewUsername] = useState("");
   const [saving, setSaving] = useState(false);
@@ -627,6 +634,14 @@ function RepoOverrideRow({
     if (effort && newModel && !isValidReasoningEffort(newModel, effort)) {
       setEffort("");
     }
+  };
+
+  const handleAutoReviewModeChange = (newMode: "global" | "override") => {
+    setAutoReviewMode(newMode);
+    if (newMode === "override" && entry.settings.autoReviewOnOpen === undefined) {
+      setAutoReviewOnOpen(defaultAutoReviewOnOpen);
+    }
+    setDirty(true);
   };
 
   const handleSave = async () => {
@@ -751,13 +766,7 @@ function RepoOverrideRow({
       <div>
         <p className="text-xs font-medium text-muted-foreground mb-1">Auto-review new PRs</p>
         <div className="flex items-center gap-2 mb-1">
-          <Select
-            value={autoReviewMode}
-            onValueChange={(v: "global" | "override") => {
-              setAutoReviewMode(v);
-              setDirty(true);
-            }}
-          >
+          <Select value={autoReviewMode} onValueChange={handleAutoReviewModeChange}>
             <SelectTrigger density="compact" className="w-48">
               <SelectValue />
             </SelectTrigger>
