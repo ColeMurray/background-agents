@@ -6,7 +6,20 @@ from pathlib import Path
 
 from daytona import CreateSnapshotParams, Daytona, Image
 
-OPENCODE_VERSION = "latest"
+# OpenCode version to install.
+#
+# Pinned to 1.14.41 — the last release before opencode's Hono → Effect Schema
+# migration (landed across v1.14.42+, released 2026-05-09 onward) broke event
+# publishing on the legacy `/event` SSE endpoint. With newer versions the
+# bridge connects, posts the prompt, opencode processes it and records the
+# assistant response in the session store, but no `message.updated` /
+# `message.part.updated` / `session.idle` events are streamed back — so the
+# session shows execution_complete with no reply.
+#
+# Symptom in bridge logs: `prompt.run outcome=success duration_ms=35-367`,
+# which means `_stream_opencode_response_sse` returned with zero yielded
+# events. Tracked in #567.
+OPENCODE_VERSION = "1.14.41"
 CODE_SERVER_VERSION = "4.109.5"
 AGENT_BROWSER_VERSION = "0.21.2"
 SANDBOX_VERSION = "daytona-v1"
@@ -46,7 +59,7 @@ def build_base_image(repo_root: Path) -> Image:
         )
         .run_commands(
             f"npm install -g opencode-ai@{OPENCODE_VERSION}",
-            "npm install -g @opencode-ai/plugin@latest zod",
+            f"npm install -g @opencode-ai/plugin@{OPENCODE_VERSION} zod",
             f"curl -fsSL -o /tmp/code-server.deb "
             f"https://github.com/coder/code-server/releases/download/v{CODE_SERVER_VERSION}/"
             f"code-server_{CODE_SERVER_VERSION}_amd64.deb",
