@@ -11,8 +11,8 @@ and what makes adding a new themed palette later a contained change.
 
 Three layers cooperate:
 
-1. **CSS custom properties.** Each visual concept (background, foreground, accent, border, etc.)
-   is a `--token`. Built-in light/dark values live in `globals.css` (`:root`, `.dark`, plus a
+1. **CSS custom properties.** Each visual concept (background, foreground, accent, border, etc.) is
+   a `--token`. Built-in light/dark values live in `globals.css` (`:root`, `.dark`, plus a
    `@media (prefers-color-scheme: dark)` block as a no-JS fallback so the page doesn't flash white
    before hydration on dark systems). Branded themes live one-per-file in
    [`packages/web/src/app/themes/`](../packages/web/src/app/themes/) and override the same tokens
@@ -125,10 +125,10 @@ To ship your own brand (e.g., "Acme Purple"):
    ```
 
    You only need to override the tokens that change; everything else inherits from `:root`. Each
-   named palette is light-only or dark-only — `next-themes` is configured with
-   `attribute="class"`, which puts a single theme class on `<html>` at a time, so selectors like
-   `.acme-purple.dark` never match. If you want both a light and dark variant of a brand, register
-   them as two separate themes (e.g., `acme-purple` and `acme-purple-dark`) with their own files.
+   named palette is light-only or dark-only — `next-themes` is configured with `attribute="class"`,
+   which puts a single theme class on `<html>` at a time, so selectors like `.acme-purple.dark`
+   never match. If you want both a light and dark variant of a brand, register them as two separate
+   themes (e.g., `acme-purple` and `acme-purple-dark`) with their own files.
 
 2. **Import the file from [`app/layout.tsx`](../packages/web/src/app/layout.tsx)** after the
    existing `./globals.css` import:
@@ -138,8 +138,8 @@ To ship your own brand (e.g., "Acme Purple"):
    import "./themes/acme-purple.css";
    ```
 
-   Order matters — branded themes must come after `globals.css` so their rules override the
-   `:root` defaults whenever the matching class is active on `<html>`.
+   Order matters — branded themes must come after `globals.css` so their rules override the `:root`
+   defaults whenever the matching class is active on `<html>`.
 
 3. **Register it in [`app-themes.ts`](../packages/web/src/lib/app-themes.ts).** Add an entry to
    `APP_THEMES`:
@@ -166,8 +166,8 @@ To ship your own brand (e.g., "Acme Purple"):
    app_default_theme = "acme-purple"
    ```
 
-The shipped "Blue" theme (`packages/web/src/app/themes/blue.css`) exists as a worked example of
-all of the above — feel free to delete it once you have your own brand wired up. Removing it is a
+The shipped "Blue" theme (`packages/web/src/app/themes/blue.css`) exists as a worked example of all
+of the above — feel free to delete it once you have your own brand wired up. Removing it is a
 four-line change: delete the file, the import in `layout.tsx`, the `APP_THEMES` entry, and the id
 from the `variables.tf` validation list.
 
