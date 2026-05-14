@@ -403,12 +403,10 @@ project_root    = "../../../"
 # Display name shown in the web UI tab title, sign-in page, landing hero, bot
 # messages (Slack/Linear), PR body footer, and outbound HTTP User-Agent.
 # app_name = "Open-Inspect"
-# Short brand label shown only in the sidebar header (next to the logo).
-# Leave empty to default to "Inspect" (or to follow app_name when app_name
-# is overridden). Set this when app_name is too wide for the sidebar.
-# app_short_name = ""
+# Short brand label shown only in the sidebar header.
+# app_short_name = "Inspect"
 # Optional URL (absolute or root-relative) to a custom logo/favicon. When set,
-# replaces the built-in icon in the web sidebar and browser favicon.
+# replaces the built-in icon in the command menu and browser favicon.
 # app_icon_url = ""
 
 # Initial deployment: set both to false (see Step 7)
@@ -887,20 +885,19 @@ Add these to your `terraform.tfvars`:
 
 ```hcl
 # Display name shown in:
-#   - Web tab title, sidebar logo, sign-in page, landing hero
+#   - Web tab title, sign-in page, landing hero
 #   - Slack App Home settings page
 #   - Linear OAuth success page and completion comments
 #   - PR body footer ("Created with [<app_name>](<session-url>)")
 #   - Outbound HTTP User-Agent headers (GitHub, GitLab API)
 app_name = "Acme Bot"
 
-# Optional short label for the sidebar header next to the logo. When empty,
-# falls through to app_name (or "Inspect" if app_name is also unset). Set this
-# when app_name is too wide for the sidebar.
+# Optional short label for the sidebar header. Set this when app_name is too
+# wide for the sidebar.
 app_short_name = "Acme"
 
 # Optional URL to a custom logo image (SVG/PNG). When set, replaces the
-# built-in icon in the web sidebar, command menu, and browser favicon.
+# built-in icon in the command menu and browser favicon.
 # Use an absolute URL or a root-relative path served from packages/web/public/.
 app_icon_url = "/branding/logo.svg"   # or "https://cdn.example.com/logo.svg"
 ```

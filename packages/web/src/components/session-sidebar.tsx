@@ -36,7 +36,6 @@ import {
   BranchIcon,
   DataControlsIcon,
 } from "@/components/ui/icons";
-import { AppIcon } from "@/components/ui/app-icon";
 import { APP_SHORT_NAME } from "@/lib/site-config";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -270,7 +269,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
     <aside className="w-72 h-dvh flex flex-col border-r border-border-muted bg-background">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border-muted">
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <Button
             variant="ghost"
             size="icon"
@@ -280,12 +279,11 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
           >
             <SidebarIcon className="w-4 h-4" />
           </Button>
-          <Link href="/" onClick={handleNavigationSelect} className="flex items-center gap-2">
-            <AppIcon className="w-5 h-5" />
-            <span className="font-semibold text-foreground">{APP_SHORT_NAME}</span>
+          <Link href="/" onClick={handleNavigationSelect} className="min-w-0">
+            <span className="block truncate font-semibold text-foreground">{APP_SHORT_NAME}</span>
           </Link>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <Button
             variant="ghost"
             size="icon"
