@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseInlineDirective } from "./inline-directive";
+import { parseInlineDirective } from "../src/inline-directive";
 
 describe("parseInlineDirective", () => {
   it("returns empty cleanedBody and no overrides for empty input", () => {

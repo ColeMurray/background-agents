@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveSessionModelSettings } from "./model-resolution";
+import { resolveSessionModelSettings } from "../src/model-resolution";
 
 const ENV_DEFAULT = "anthropic/claude-sonnet-4-6";
 

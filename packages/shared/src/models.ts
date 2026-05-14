@@ -219,7 +219,7 @@ const MODEL_ALIASES: Record<string, ValidModel> = {
 export function resolveModelAlias(raw: string): string {
   const lower = raw.toLowerCase();
   if (MODEL_ALIASES[lower]) return MODEL_ALIASES[lower];
-  return normalizeModelId(raw);
+  return normalizeModelId(lower);
 }
 
 // === Validation helpers ===
