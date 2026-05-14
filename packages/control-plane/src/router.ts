@@ -27,20 +27,21 @@ import {
   SourceControlProviderError,
   type SourceControlProviderName,
 } from "./source-control";
-import { IntegrationSettingsStore } from "./db/integration-settings";
 import { SessionIndexStore } from "./db/session-index";
 import { UserScmTokenStore, DEFAULT_TOKEN_LIFETIME_MS } from "./db/user-scm-tokens";
 import { UserStore, type ProviderIdentity } from "./db/user-store";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./session/contracts";
 import { initializeSession, type SessionInitInput } from "./session/initialize";
+import {
+  resolveCodeServerEnabled,
+  resolveSandboxSettings,
+} from "./session/integration-settings-resolution";
 
 import {
   getValidModelOrDefault,
   isValidModel,
   isValidReasoningEffort,
   VALID_MODELS,
-  type CodeServerSettings,
-  type SandboxSettings,
   type ScreenshotArtifactMetadata,
   type SessionStatus,
   type CallbackContext,
@@ -74,57 +75,6 @@ const logger = createLogger("router");
 const MAX_SPAWN_DEPTH = 2;
 const MAX_CONCURRENT_CHILDREN = 5;
 const MAX_TOTAL_CHILDREN = 15;
-
-/**
- * Resolve whether code-server should be enabled for a given repo,
- * checking both the `enabled` setting and the `enabledRepos` allowlist.
- */
-async function resolveCodeServerEnabled(
-  db: D1Database | undefined,
-  repoOwner: string,
-  repoName: string
-): Promise<boolean> {
-  if (!db) return false;
-  const repo = `${repoOwner}/${repoName}`;
-  try {
-    const store = new IntegrationSettingsStore(db);
-    const { enabledRepos, settings } = await store.getResolvedConfig("code-server", repo);
-    const csSettings = settings as CodeServerSettings;
-    if (csSettings.enabled !== true) return false;
-    // enabledRepos: null → all repos, [] → none, [...] → allowlist
-    if (enabledRepos !== null && !enabledRepos.includes(repo)) return false;
-    return true;
-  } catch (e) {
-    logger.warn("Failed to resolve code-server integration settings, defaulting to disabled", {
-      error: e instanceof Error ? e.message : String(e),
-    });
-    return false;
-  }
-}
-
-/**
- * Resolve sandbox settings for a given repo, merging global defaults with per-repo overrides.
- */
-async function resolveSandboxSettings(
-  db: D1Database | undefined,
-  repoOwner: string,
-  repoName: string
-): Promise<SandboxSettings> {
-  if (!db) return {};
-  const repo = `${repoOwner}/${repoName}`;
-  try {
-    const store = new IntegrationSettingsStore(db);
-    const { enabledRepos, settings } = await store.getResolvedConfig("sandbox", repo);
-    // enabledRepos: null → all repos, [] → none, [...] → allowlist
-    if (enabledRepos !== null && !enabledRepos.includes(repo)) return {};
-    return settings as SandboxSettings;
-  } catch (e) {
-    logger.warn("Failed to resolve sandbox settings, using defaults", {
-      error: e instanceof Error ? e.message : String(e),
-    });
-    return {};
-  }
-}
 
 const SESSION_STATUSES: SessionStatus[] = [
   "created",
