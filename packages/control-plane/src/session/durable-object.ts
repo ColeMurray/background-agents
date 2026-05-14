@@ -1018,7 +1018,17 @@ export class SessionDO extends DurableObject<Env> {
       } else {
         const client = this.wsManager.removeClient(ws);
         if (client) {
-          this.broadcast({ type: "presence_leave", userId: client.userId });
+          // If the participant still has other authenticated sockets (e.g. another
+          // browser tab), don't send presence_leave — the client filters by userId
+          // and would remove them entirely. Broadcast a refresh instead.
+          const stillPresent = Array.from(this.wsManager.getAuthenticatedClients()).some(
+            (c) => c.participantId === client.participantId
+          );
+          if (stillPresent) {
+            this.presenceService.broadcastPresence();
+          } else {
+            this.broadcast({ type: "presence_leave", userId: client.userId });
+          }
         }
       }
     } finally {
