@@ -3,6 +3,9 @@
 A stateless Cloudflare Worker that translates GitHub webhook events into Open-Inspect coding agent
 sessions. It provides two capabilities:
 
+For day-to-day usage, see the user-facing
+[GitHub integration guide](../../docs/integrations/GITHUB.md).
+
 1. **Code Review** — Assign the bot as a PR reviewer; it performs an automated code review and
    submits structured feedback.
 2. **Comment-Triggered Actions** — @mention the bot in a PR comment; it reads the PR context and

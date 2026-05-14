@@ -571,6 +571,8 @@ Or construct it from your App's slug: if your app is named `My-Inspect-App`, the
 - **Comment Actions**: @mention the bot in a PR comment with instructions (e.g.,
   `@my-app[bot] fix the failing test`)
 
+For day-to-day workflows, see [GitHub Integration](./integrations/GITHUB.md).
+
 ---
 
 ## Step 8: Deploy the Web App

@@ -1,0 +1,207 @@
+# GitHub Integration
+
+Open-Inspect's GitHub integration lets your team start agent work from pull requests. The GitHub Bot
+can review PRs, respond to `@mentions` in PR comments, and act on inline review-thread comments.
+
+This guide is for people using the GitHub integration day to day. If you are installing the GitHub
+App or deploying the bot worker, start with
+[Create GitHub App](../GETTING_STARTED.md#step-3-create-github-app) and
+[Complete GitHub Bot Setup](../GETTING_STARTED.md#step-7c-complete-github-bot-setup-if-using-github-bot).
+Settings and safety notes are covered near the end.
+
+---
+
+## Quick Start
+
+1. Make sure the GitHub App is installed on the repository you want Open-Inspect to work in.
+2. To request a review, assign the GitHub App bot as a PR reviewer.
+3. To ask for a change or answer, mention the bot in a PR comment:
+   ```text
+   @my-app[bot] fix the failing checkout test
+   ```
+4. For line-specific work, mention the bot in an inline PR review comment.
+5. Watch for the eyes reaction, which means the bot accepted the request.
+6. Open the Open-Inspect web app to watch the full session while the agent works.
+
+---
+
+## What GitHub Can Do
+
+| Workflow                  | How it works                                                               |
+| ------------------------- | -------------------------------------------------------------------------- |
+| Auto-review new PRs       | Review non-draft PRs when they are opened, if auto-review is enabled       |
+| Review on demand          | Assign the GitHub App bot as a PR reviewer                                 |
+| Respond to PR comments    | Mention the bot in a PR conversation comment                               |
+| Respond to review threads | Mention the bot in an inline review comment                                |
+| Post back to GitHub       | Submit a PR review, reply to a review thread, or post a PR summary comment |
+| Customize behavior        | Set repository scope, trigger users, models, and custom instructions       |
+
+Open-Inspect does not use GitHub slash commands today. In GitHub, requests are ordinary PR comments
+or review-thread comments that mention the bot.
+
+---
+
+## Starting Code Reviews
+
+### Auto-review on PR open
+
+When **Auto-review new PRs** is enabled, Open-Inspect starts a review session for newly opened,
+non-draft PRs in enabled repositories.
+
+Auto-review is skipped when:
+
+- The PR is a draft
+- The PR was opened by the GitHub App bot itself
+- The repository is outside the configured GitHub Bot scope
+- The PR opener is not allowed to trigger the bot
+- Auto-review is disabled globally or for that repository
+
+Converting a draft PR to ready for review does not start the same auto-review path. Assign the bot
+as a reviewer if you want a review after a draft becomes ready.
+
+### Reviewer assignment
+
+Assign the GitHub App bot as a reviewer on a PR to request an on-demand code review. The bot starts
+a new Open-Inspect session, acknowledges the request with an eyes reaction on the PR, and asks the
+agent to inspect the PR diff and submit a GitHub review.
+
+The review can be a general comment, an approval, or a request for changes. The agent may also add
+inline review comments when useful.
+
+---
+
+## Comment-Triggered Actions
+
+Mention the GitHub App bot in a PR conversation comment to ask for code changes, analysis, or a
+follow-up answer:
+
+```text
+@my-app[bot] can you simplify the retry logic and update the tests?
+```
+
+Open-Inspect strips the bot mention before sending the request to the agent. The rest of the comment
+becomes the prompt.
+
+Comment-triggered actions only run on pull requests. Mentions on ordinary GitHub issues are ignored.
+Comments from the bot itself are also ignored so the bot does not respond to its own output.
+
+### Inline review comments
+
+When you mention the bot in a PR review thread, Open-Inspect includes the file path and diff context
+from that thread. The agent can reply directly to the review thread and can also post a summary
+comment on the PR.
+
+Each accepted GitHub webhook starts a new Open-Inspect session. GitHub comments do not continue an
+existing session the way Slack thread replies do. The agent still reads the current PR conversation
+when it needs context.
+
+---
+
+## What Gets Posted Back
+
+When a GitHub request is accepted, the bot adds an eyes reaction. That reaction is best-effort; if
+GitHub rejects the reaction, the session can still start.
+
+For review workflows, the agent posts the review result back to the PR. Depending on what it finds,
+that may be a general review comment, an approval, a request for changes, or inline review comments.
+
+For comment-triggered workflows, the agent posts a PR comment summarizing what it did or answering
+the question. If the request came from an inline review thread, the agent may also reply in that
+thread.
+
+GitHub does not receive the same managed completion message that Slack receives. After the initial
+eyes reaction, GitHub-facing output is written by the agent from inside the session. If you want to
+watch live progress, inspect logs, or see artifacts, open the Open-Inspect web app.
+
+---
+
+## Settings and Repository Scope
+
+Open the web app and go to **Settings > Integrations > GitHub** to configure the GitHub Bot.
+
+| Setting                     | What it controls                                                                                |
+| --------------------------- | ----------------------------------------------------------------------------------------------- |
+| Auto-review new PRs         | Whether new non-draft PRs should be reviewed automatically                                      |
+| Repository Scope            | Whether the bot responds in all accessible repositories or only selected repositories           |
+| Allowed Trigger Users       | Who can trigger the bot from GitHub                                                             |
+| Model and reasoning effort  | Per-repository model and reasoning depth for GitHub-started sessions                            |
+| Code Review Instructions    | Extra guidance appended to PR review prompts                                                    |
+| Comment Action Instructions | Extra guidance appended to `@mention` action prompts                                            |
+| Repository Overrides        | Per-repository overrides for model, reasoning, instructions, trigger users, and review behavior |
+
+If no GitHub Bot settings are configured, Open-Inspect uses permissive defaults: all repositories
+available to the GitHub App are in scope, auto-review is enabled, and users with write, maintain, or
+admin access to the repository can trigger the bot.
+
+If repository scope is set to **Selected repositories** and no repositories are selected, the bot
+does not respond to GitHub webhooks. If **Only specific users** is selected and the user list is
+empty, no one can trigger the bot for that scope.
+
+Repository overrides take priority over global defaults for the repository they apply to. Model and
+reasoning settings are configured through repository overrides; otherwise, GitHub-started sessions
+use the deployment default model.
+
+---
+
+## Admin and Safety Notes
+
+These notes are most useful for repository and deployment admins deciding where the GitHub Bot
+should be available.
+
+- Repository access is deployment-scoped through the configured GitHub App installation. To restrict
+  what Open-Inspect can access, install the GitHub App only on intended repositories and use
+  **Repository Scope** for an additional bot-level filter.
+- The same GitHub App is used for OAuth and repository access. GitHub App credentials and webhook
+  secrets stay server-side.
+- Webhooks are verified before Open-Inspect acts on them. Duplicate webhook deliveries are
+  deduplicated so GitHub retries do not normally create duplicate sessions.
+- By default, trigger access is checked against GitHub repository permission and requires write,
+  maintain, or admin access. If you configure **Only specific users**, that list becomes the trigger
+  gate for the configured scope.
+- The bot ignores draft PRs, bot-authored PRs, bot-authored comments, ordinary issue comments, and
+  comments that do not mention the bot.
+- GitHub content such as PR titles, descriptions, and comments is treated as untrusted context
+  before it is sent to the agent.
+- If the bot cannot load its GitHub integration settings, it fails closed and does not start
+  sessions.
+
+---
+
+## Troubleshooting
+
+### The bot does not respond to a PR
+
+Check that the GitHub App is installed on the repository and that the GitHub Bot worker is enabled.
+Then confirm the webhook URL, webhook secret, subscribed events, and `github_bot_username` in
+[Complete GitHub Bot Setup](../GETTING_STARTED.md#step-7c-complete-github-bot-setup-if-using-github-bot).
+
+Also check **Settings > Integrations > GitHub**. The repository may be outside the selected
+repository scope, or the triggering user may be outside the allowed user list.
+
+### Auto-review did not run
+
+Auto-review only runs for newly opened, non-draft PRs. It is skipped for draft PRs, bot-authored
+PRs, disabled repositories, and users who are not allowed to trigger the bot. If a PR was converted
+from draft to ready for review, assign the bot as a reviewer.
+
+### A mention did not start a session
+
+Mentions must be in a pull request conversation comment or PR review thread. Mentions on ordinary
+GitHub issues are ignored. Use the bot's full GitHub username, including `[bot]`, such as
+`@my-app[bot]`.
+
+### I see an eyes reaction but no follow-up
+
+The eyes reaction means the bot accepted the request. GitHub completion output is posted by the
+agent, not by a managed bot callback. The session may still be running, or the agent may have failed
+after the request was accepted. Open the Open-Inspect web app to inspect the session.
+
+### The wrong model or instructions were used
+
+Check **Settings > Integrations > GitHub**. Repository overrides take priority over global defaults.
+Changes apply to new GitHub-triggered sessions.
+
+### The bot is active in too many repositories
+
+Limit the GitHub App installation to the repositories Open-Inspect should access. You can also set
+**Repository Scope** to **Selected repositories** in the GitHub integration settings.
