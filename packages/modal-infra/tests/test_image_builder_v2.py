@@ -2,18 +2,21 @@
 
 import json
 import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
 from sandbox_runtime.auth.internal import generate_internal_token, verify_internal_token
+from src.sandbox.manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
 from src.scheduler.image_builder import (
     CALLBACK_BACKOFF_BASE,
     CALLBACK_MAX_RETRIES,
     BuildError,
     _callback_with_retry,
     _stream_build_logs,
+    build_repo_image,
 )
 
 
@@ -233,7 +236,7 @@ class TestStreamBuildLogs:
 
         async def _raise():
             raise Exception("stream error")
-            yield  # noqa: unreachable — makes this an async generator
+            yield  # pragma: no cover - makes this an async generator
 
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = _raise()
@@ -265,3 +268,101 @@ class TestBuildError:
         err = BuildError("sandbox exited with code 1")
         assert isinstance(err, Exception)
         assert str(err) == "sandbox exited with code 1"
+
+
+class TestBuildRepoImage:
+    """Test the async repo image build worker."""
+
+    @staticmethod
+    def _async_stdout(lines):
+        async def _aiter():
+            for line in lines:
+                yield line
+
+        return _aiter()
+
+    def _build_handle(self, *, snapshot_side_effect=None):
+        snapshot_aio = AsyncMock(
+            side_effect=snapshot_side_effect,
+            return_value=SimpleNamespace(object_id="im-test"),
+        )
+        snapshot_filesystem = MagicMock()
+        snapshot_filesystem.aio = snapshot_aio
+        terminate_aio = AsyncMock()
+        terminate = SimpleNamespace(aio=terminate_aio)
+        sandbox = SimpleNamespace(
+            stdout=self._async_stdout(
+                [
+                    json.dumps({"event": "git.sync_complete", "head_sha": "abc123"}),
+                    json.dumps({"event": "image_build.complete", "duration_ms": 5000}),
+                ]
+            ),
+            snapshot_filesystem=snapshot_filesystem,
+            terminate=terminate,
+            returncode=0,
+        )
+        return SimpleNamespace(modal_sandbox=sandbox), snapshot_aio, terminate_aio
+
+    @pytest.mark.asyncio
+    async def test_uses_snapshot_timeout_and_terminates_on_success(self):
+        handle, snapshot_aio, terminate_aio = self._build_handle()
+        manager = SimpleNamespace(create_build_sandbox=AsyncMock(return_value=handle))
+
+        with (
+            patch("src.scheduler.image_builder.validate_control_plane_url", return_value=True),
+            patch("src.scheduler.image_builder._generate_clone_token", return_value="gh-token"),
+            patch("src.sandbox.manager.SandboxManager", return_value=manager),
+            patch(
+                "src.scheduler.image_builder._callback_with_retry",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as callback,
+        ):
+            await build_repo_image.local(
+                repo_owner="acme",
+                repo_name="repo",
+                callback_url="https://cp.test/repo-images/build-complete",
+                build_id="img-1",
+            )
+
+        snapshot_aio.assert_awaited_once_with(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
+        terminate_aio.assert_awaited_once()
+        callback.assert_awaited_once()
+        callback_payload = callback.await_args.args[1]
+        assert callback_payload["build_id"] == "img-1"
+        assert callback_payload["provider_image_id"] == "im-test"
+        assert callback_payload["base_sha"] == "abc123"
+
+    @pytest.mark.asyncio
+    async def test_terminates_and_reports_failure_when_snapshot_times_out(self):
+        handle, snapshot_aio, terminate_aio = self._build_handle(
+            snapshot_side_effect=TimeoutError("Timed out waiting for image to be created")
+        )
+        manager = SimpleNamespace(create_build_sandbox=AsyncMock(return_value=handle))
+
+        with (
+            patch("src.scheduler.image_builder.validate_control_plane_url", return_value=True),
+            patch("src.scheduler.image_builder._generate_clone_token", return_value="gh-token"),
+            patch("src.sandbox.manager.SandboxManager", return_value=manager),
+            patch(
+                "src.scheduler.image_builder._callback_with_retry",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as callback,
+        ):
+            await build_repo_image.local(
+                repo_owner="acme",
+                repo_name="repo",
+                callback_url="https://cp.test/repo-images/build-complete",
+                build_id="img-1",
+            )
+
+        snapshot_aio.assert_awaited_once_with(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
+        terminate_aio.assert_awaited_once()
+        callback.assert_awaited_once()
+        failure_url, failure_payload = callback.await_args.args
+        assert failure_url == "https://cp.test/repo-images/build-failed"
+        assert failure_payload == {
+            "build_id": "img-1",
+            "error": "Timed out waiting for image to be created",
+        }

@@ -30,6 +30,7 @@ from ..images.base import base_image
 log = get_logger("manager")
 
 DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200  # 2 hours
+SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS = 300
 MAX_TUNNEL_PORTS = 10
 
 
@@ -485,7 +486,9 @@ class SandboxManager:
 
         # Use Modal's native snapshot_filesystem() API
         # This returns an Image directly (not async)
-        image = handle.modal_sandbox.snapshot_filesystem()
+        image = handle.modal_sandbox.snapshot_filesystem(
+            timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
+        )
 
         # The image object_id is the unique identifier for this snapshot
         # Modal automatically stores the image and it persists indefinitely
