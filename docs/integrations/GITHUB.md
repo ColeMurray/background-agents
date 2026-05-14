@@ -15,11 +15,11 @@ Settings and safety notes are covered near the end.
 
 1. Make sure the GitHub App is installed on the repository you want Open-Inspect to work in.
 2. To request a review, assign the GitHub App bot as a PR reviewer.
-3. To ask for a change or answer, mention the bot in a PR comment:
+3. To ask for analysis or a reply, mention the bot in a PR comment:
    ```text
-   @my-app[bot] fix the failing checkout test
+   @my-app[bot] can you explain why the checkout test is failing?
    ```
-4. For line-specific work, mention the bot in an inline PR review comment.
+4. For line-specific discussion, mention the bot in an inline PR review comment.
 5. Watch for the eyes reaction, which means the bot accepted the request.
 6. Open the Open-Inspect web app to watch the full session while the agent works.
 
@@ -72,15 +72,19 @@ inline review comments when useful.
 
 ## Comment-Triggered Actions
 
-Mention the GitHub App bot in a PR conversation comment to ask for code changes, analysis, or a
-follow-up answer:
+Mention the GitHub App bot in a PR conversation comment to ask for analysis, a follow-up answer, or
+a GitHub reply:
 
 ```text
-@my-app[bot] can you simplify the retry logic and update the tests?
+@my-app[bot] can you explain why this retry path is failing?
 ```
 
 Open-Inspect strips the bot mention before sending the request to the agent. The rest of the comment
 becomes the prompt.
+
+Comment-triggered sessions currently start from the repository default branch, not the PR head
+branch. Use them for responses and review-thread discussion rather than asking the agent to push
+commits to the existing PR branch.
 
 Comment-triggered actions only run on pull requests. Mentions on ordinary GitHub issues are ignored.
 Comments from the bot itself are also ignored so the bot does not respond to its own output.
@@ -105,7 +109,7 @@ GitHub rejects the reaction, the session can still start.
 For review workflows, the agent posts the review result back to the PR. Depending on what it finds,
 that may be a general review comment, an approval, a request for changes, or inline review comments.
 
-For comment-triggered workflows, the agent posts a PR comment summarizing what it did or answering
+For comment-triggered workflows, the agent posts a PR comment summarizing its response or answering
 the question. If the request came from an inline review thread, the agent may also reply in that
 thread.
 
@@ -124,7 +128,7 @@ Open the web app and go to **Settings > Integrations > GitHub** to configure the
 | Auto-review new PRs         | Whether new non-draft PRs should be reviewed automatically                                      |
 | Repository Scope            | Whether the bot responds in all accessible repositories or only selected repositories           |
 | Allowed Trigger Users       | Who can trigger the bot from GitHub                                                             |
-| Model and reasoning effort  | Per-repository model and reasoning depth for GitHub-started sessions                            |
+| Model and reasoning effort  | Model and reasoning depth for GitHub-started sessions, when configured                          |
 | Code Review Instructions    | Extra guidance appended to PR review prompts                                                    |
 | Comment Action Instructions | Extra guidance appended to `@mention` action prompts                                            |
 | Repository Overrides        | Per-repository overrides for model, reasoning, instructions, trigger users, and review behavior |
@@ -134,12 +138,17 @@ available to the GitHub App are in scope, auto-review is enabled, and users with
 admin access to the repository can trigger the bot.
 
 If repository scope is set to **Selected repositories** and no repositories are selected, the bot
-does not respond to GitHub webhooks. If **Only specific users** is selected and the user list is
-empty, no one can trigger the bot for that scope.
+does not run direct GitHub Bot workflows such as auto-review, reviewer assignment, or `@mention`
+actions. If **Only specific users** is selected and the user list is empty, no one can trigger those
+direct bot workflows for that scope.
 
-Repository overrides take priority over global defaults for the repository they apply to. Model and
-reasoning settings are configured through repository overrides; otherwise, GitHub-started sessions
-use the deployment default model.
+These GitHub Bot settings do not gate GitHub event automations. Automations are matched separately
+by their repository, event type, enabled state, and trigger conditions.
+
+Repository overrides take priority over global defaults for the repository they apply to. The web UI
+currently exposes model and reasoning settings on repository overrides. If global model or reasoning
+defaults exist in integration settings, GitHub-started sessions honor them. If neither a repository
+override nor global default sets a model, sessions use the deployment default model.
 
 ---
 
@@ -158,10 +167,14 @@ should be available.
 - By default, trigger access is checked against GitHub repository permission and requires write,
   maintain, or admin access. If you configure **Only specific users**, that list becomes the trigger
   gate for the configured scope.
-- The bot ignores draft PRs, bot-authored PRs, bot-authored comments, ordinary issue comments, and
-  comments that do not mention the bot.
-- GitHub content such as PR titles, descriptions, and comments is treated as untrusted context
-  before it is sent to the agent.
+- Auto-review skips draft PRs and PRs opened by the GitHub App bot. Manual reviewer assignments and
+  `@mention` triggers are still evaluated through the normal repository and user gates.
+- The bot ignores bot-authored comments, ordinary issue comments, and comments that do not mention
+  the bot.
+- Initial prompts mark selected GitHub fields as untrusted. Code-review prompts wrap PR title,
+  author, branches, and description; comment-triggered prompts wrap the triggering comment.
+  Review-thread file and diff context, plus GitHub context later read by the agent, are not
+  separately transformed by the bot.
 - If the bot cannot load its GitHub integration settings, it fails closed and does not start
   sessions.
 
@@ -175,8 +188,9 @@ Check that the GitHub App is installed on the repository and that the GitHub Bot
 Then confirm the webhook URL, webhook secret, subscribed events, and `github_bot_username` in
 [Complete GitHub Bot Setup](../GETTING_STARTED.md#step-7c-complete-github-bot-setup-if-using-github-bot).
 
-Also check **Settings > Integrations > GitHub**. The repository may be outside the selected
-repository scope, or the triggering user may be outside the allowed user list.
+Also check **Settings > Integrations > GitHub**. For direct GitHub Bot workflows, the repository may
+be outside the selected repository scope, or the triggering user may be outside the allowed user
+list.
 
 ### Auto-review did not run
 

@@ -9,7 +9,7 @@ For day-to-day usage, see the user-facing
 1. **Code Review** — Assign the bot as a PR reviewer; it performs an automated code review and
    submits structured feedback.
 2. **Comment-Triggered Actions** — @mention the bot in a PR comment; it reads the PR context and
-   executes the requested action (typically making code changes and pushing commits).
+   responds with analysis, a summary comment, or a review-thread reply.
 
 The bot is a **webhook-to-session translator** — it verifies webhooks, posts an acknowledgment
 reaction, creates a session via the control plane, and sends a prompt. The agent in the sandbox
@@ -49,9 +49,8 @@ Key design decisions:
 - **Unidirectional service binding**: The bot calls the control plane to create sessions and send
   prompts. There is no reverse binding — the agent posts results to GitHub directly from the
   sandbox.
-- **No session reuse**: Every non-duplicate webhook delivery creates a fresh session. Git provides
-  continuity (the agent clones the latest branch state). Delivery dedupe is handled separately in KV
-  using `X-GitHub-Delivery`.
+- **No session reuse**: Every non-duplicate webhook delivery creates a fresh session. Delivery
+  dedupe is handled separately in KV using `X-GitHub-Delivery`.
 - **No PR context fetching**: The bot only uses metadata already in the webhook payload. The agent
   gathers additional context (diffs, prior comments, file contents) itself using `gh` CLI.
 

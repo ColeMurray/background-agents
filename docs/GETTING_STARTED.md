@@ -569,7 +569,7 @@ Or construct it from your App's slug: if your app is named `My-Inspect-App`, the
 
 - **Code Review**: Assign the bot as a PR reviewer — it performs an automated review
 - **Comment Actions**: @mention the bot in a PR comment with instructions (e.g.,
-  `@my-app[bot] fix the failing test`)
+  `@my-app[bot] explain why this test is failing`)
 
 For day-to-day workflows, see [GitHub Integration](./integrations/GITHUB.md).
 
