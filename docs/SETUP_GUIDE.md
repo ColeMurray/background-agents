@@ -4,11 +4,12 @@ This is the primary setup guide for users and contributors.
 
 It is organized by goal so you can pick the fastest path:
 
-| Path   | Best For                                                 | Time       |
-| ------ | -------------------------------------------------------- | ---------- |
-| Path A | Run the web app locally against an existing backend      | ~10-20 min |
-| Path B | Contribute code locally (lint/typecheck/tests)           | ~15-30 min |
-| Path C | Deploy your own full stack (Cloudflare + Modal + Vercel) | ~1-3 hours |
+| Path   | Best For                                                  | Time       |
+| ------ | --------------------------------------------------------- | ---------- |
+| Path A | Run the web app locally against an existing backend       | ~10-20 min |
+| Path B | Contribute code locally (lint/typecheck/tests)            | ~15-30 min |
+| Path C | Run local web + control plane against real GitHub + Modal | ~30-60 min |
+| Path D | Deploy your own full stack (Cloudflare + Modal + Vercel)  | ~1-3 hours |
 
 ## Important Context
 
@@ -30,6 +31,12 @@ Optional (needed for `modal-infra` development):
 - `uv` (recommended) or `pip`
 - Modal CLI (`modal`)
 
+Optional (needed for Path C local web + control plane):
+
+- Wrangler CLI (`npx wrangler` from repo dependencies is fine)
+- `jq` for local D1 migration scripts
+- A tunnel tool such as `ngrok` so remote Modal sandboxes can call back to the local control plane
+
 Optional (needed for full deployment):
 
 - Terraform `1.6+`
@@ -41,6 +48,12 @@ Quick check:
 node -v
 npm -v
 git --version
+python --version
+uv --version
+modal --version
+npx wrangler --version
+jq --version
+ngrok --version
 ```
 
 ## Step 0: Bootstrap the Repo
@@ -191,7 +204,22 @@ pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
-## Path C: Full Self-Hosted Deployment
+## Path C: Run Local Web And Control Plane
+
+Use this when developing or debugging behavior that requires the web app and control plane to run
+together locally, while still using real GitHub App credentials and real Modal sandboxes.
+
+This path is most useful for control-plane and session-flow changes that need real end-to-end
+behavior: auth, session creation, Durable Objects, WebSockets, Modal sandbox creation, bridge
+callbacks, and streamed events.
+
+The detailed guide is here [LOCAL_WEB_CONTROL_PLANE.md](./LOCAL_WEB_CONTROL_PLANE.md)
+
+Because Modal sandboxes run remotely, this path requires a tunnel from Modal back to the local
+control plane. The detailed guide covers the required `CONTROL_PLANE_URL`, `NEXT_PUBLIC_WS_URL`, and
+`WORKER_URL` settings.
+
+## Path D: Full Self-Hosted Deployment
 
 For full infrastructure setup, use:
 
@@ -232,5 +260,6 @@ Control plane cannot reach Modal (or Modal is not properly configured/deployed).
 - Full production deployment: [docs/GETTING_STARTED.md](./GETTING_STARTED.md)
 - GitHub integration usage: [docs/integrations/GITHUB.md](./integrations/GITHUB.md)
 - Debugging and observability: [docs/DEBUGGING_PLAYBOOK.md](./DEBUGGING_PLAYBOOK.md)
+- Local web and control plane: [docs/LOCAL_WEB_CONTROL_PLANE.md](./LOCAL_WEB_CONTROL_PLANE.md)
 - OpenAI model setup: [docs/OPENAI_MODELS.md](./OPENAI_MODELS.md)
 - Contribution workflow: [CONTRIBUTING.md](../CONTRIBUTING.md)

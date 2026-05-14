@@ -7,6 +7,11 @@
     "packages/*"
   ],
   "scripts": {
+    "dev:env": "node scripts/local-env.mjs",
+    "dev:modal-secrets": "node scripts/modal-secrets.mjs",
+    "dev:db:local": "bash scripts/d1-migrate.sh local",
+    "dev:control-plane": "npm run dev -w @open-inspect/control-plane",
+    "dev:web": "npm run dev -w @open-inspect/web",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
@@ -21,6 +26,7 @@
   "devDependencies": {
     "@eslint/js": "^9.18.0",
     "@types/node": "^22.10.5",
+    "dotenv": "^16.6.1",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-react": "^7.37.4",

@@ -108,6 +108,20 @@ export default tseslint.config(
     },
   },
 
+  // Root maintenance scripts run in Node.js.
+  {
+    files: ["scripts/**/*.{js,mjs,cjs,ts}"],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+        ...globals.es2022,
+      },
+    },
+    rules: {
+      "no-console": "off",
+    },
+  },
+
   // Test files configuration
   {
     files: ["**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}"],
