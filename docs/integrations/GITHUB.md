@@ -1,52 +1,53 @@
 # GitHub Integration
 
 Open-Inspect's GitHub integration lets your team start agent work from pull requests. The GitHub Bot
-can review PRs, respond to `@mentions` in PR comments, and act on inline review-thread comments.
+can automatically review new PRs and respond when you mention it in PR comments or inline review
+threads.
 
 This guide is for people using the GitHub integration day to day. If you are installing the GitHub
 App or deploying the bot worker, start with
 [Create GitHub App](../GETTING_STARTED.md#step-3-create-github-app) and
 [Complete GitHub Bot Setup](../GETTING_STARTED.md#step-7c-complete-github-bot-setup-if-using-github-bot).
-Settings and safety notes are covered near the end.
 
 ---
 
 ## Quick Start
 
-1. Make sure the GitHub App is installed on the repository you want Open-Inspect to work in.
-2. To request a review, assign the GitHub App bot as a PR reviewer.
+1. Make sure the GitHub App is installed on the repository.
+2. To get an automatic review, open a non-draft PR in a repository where auto-review is enabled.
 3. To ask for analysis or a reply, mention the bot in a PR comment:
    ```text
    @my-app[bot] can you explain why the checkout test is failing?
    ```
 4. For line-specific discussion, mention the bot in an inline PR review comment.
 5. Watch for the eyes reaction, which means the bot accepted the request.
-6. Open the Open-Inspect web app to watch the full session while the agent works.
+6. Open the Open-Inspect web app to watch the full session.
 
 ---
 
-## What GitHub Can Do
+## Supported Workflows
 
 | Workflow                  | How it works                                                               |
 | ------------------------- | -------------------------------------------------------------------------- |
 | Auto-review new PRs       | Review non-draft PRs when they are opened, if auto-review is enabled       |
-| Review on demand          | Assign the GitHub App bot as a PR reviewer                                 |
 | Respond to PR comments    | Mention the bot in a PR conversation comment                               |
 | Respond to review threads | Mention the bot in an inline review comment                                |
 | Post back to GitHub       | Submit a PR review, reply to a review thread, or post a PR summary comment |
 | Customize behavior        | Set repository scope, trigger users, models, and custom instructions       |
 
-Open-Inspect does not use GitHub slash commands today. In GitHub, requests are ordinary PR comments
-or review-thread comments that mention the bot.
+Open-Inspect does not use GitHub slash commands today, and it does not support requesting the GitHub
+App bot through the PR reviewer picker. Use auto-review or `@mention` comments instead.
 
 ---
 
-## Starting Code Reviews
+## Automatic PR Reviews
 
-### Auto-review on PR open
+### When It Runs
 
 When **Auto-review new PRs** is enabled, Open-Inspect starts a review session for newly opened,
-non-draft PRs in enabled repositories.
+non-draft PRs in enabled repositories. The agent inspects the PR diff and posts a GitHub review.
+
+### When It Skips
 
 Auto-review is skipped when:
 
@@ -56,21 +57,19 @@ Auto-review is skipped when:
 - The PR opener is not allowed to trigger the bot
 - Auto-review is disabled globally or for that repository
 
-Converting a draft PR to ready for review does not start the same auto-review path. Assign the bot
-as a reviewer if you want a review after a draft becomes ready.
+Converting a draft PR to ready for review does not start the same auto-review path. If you need a
+follow-up after a draft becomes ready, mention the bot in a PR comment.
 
-### Reviewer assignment
+### What It Posts
 
-Assign the GitHub App bot as a reviewer on a PR to request an on-demand code review. The bot starts
-a new Open-Inspect session, acknowledges the request with an eyes reaction on the PR, and asks the
-agent to inspect the PR diff and submit a GitHub review.
-
-The review can be a general comment, an approval, or a request for changes. The agent may also add
-inline review comments when useful.
+The agent can submit a general review comment, approve the PR, request changes, or add inline review
+comments when useful.
 
 ---
 
-## Comment-Triggered Actions
+## `@Mention` Actions
+
+### PR Conversation Comments
 
 Mention the GitHub App bot in a PR conversation comment to ask for analysis, a follow-up answer, or
 a GitHub reply:
@@ -82,68 +81,80 @@ a GitHub reply:
 Open-Inspect strips the bot mention before sending the request to the agent. The rest of the comment
 becomes the prompt.
 
-Comment-triggered sessions currently start from the repository default branch, not the PR head
-branch. Use them for responses and review-thread discussion rather than asking the agent to push
-commits to the existing PR branch.
-
-Comment-triggered actions only run on pull requests. Mentions on ordinary GitHub issues are ignored.
-Comments from the bot itself are also ignored so the bot does not respond to its own output.
-
-### Inline review comments
+### Inline Review Threads
 
 When you mention the bot in a PR review thread, Open-Inspect includes the file path and diff context
 from that thread. The agent can reply directly to the review thread and can also post a summary
 comment on the PR.
 
+### Current Branch Behavior
+
+Comment-triggered sessions currently start from the repository default branch, not the PR head
+branch. Use them for responses and review-thread discussion rather than asking the agent to push
+commits to the existing PR branch.
+
 Each accepted GitHub webhook starts a new Open-Inspect session. GitHub comments do not continue an
 existing session the way Slack thread replies do. The agent still reads the current PR conversation
 when it needs context.
 
+Comment-triggered actions only run on pull requests. Mentions on ordinary GitHub issues are ignored.
+Comments from the bot itself are also ignored so the bot does not respond to its own output.
+
 ---
 
-## What Gets Posted Back
+## What You See
+
+### Acknowledgment
 
 When a GitHub request is accepted, the bot adds an eyes reaction. That reaction is best-effort; if
 GitHub rejects the reaction, the session can still start.
 
-For review workflows, the agent posts the review result back to the PR. Depending on what it finds,
-that may be a general review comment, an approval, a request for changes, or inline review comments.
+### GitHub Output
 
-For comment-triggered workflows, the agent posts a PR comment summarizing its response or answering
-the question. If the request came from an inline review thread, the agent may also reply in that
-thread.
+For auto-review workflows, the agent posts the review result back to the PR. Depending on what it
+finds, that may be a general review comment, an approval, a request for changes, or inline review
+comments.
+
+For `@mention` workflows, the agent posts a PR comment summarizing its response or answering the
+question. If the request came from an inline review thread, the agent may also reply in that thread.
 
 GitHub does not receive the same managed completion message that Slack receives. After the initial
-eyes reaction, GitHub-facing output is written by the agent from inside the session. If you want to
-watch live progress, inspect logs, or see artifacts, open the Open-Inspect web app.
+eyes reaction, GitHub-facing output is written by the agent from inside the session. Use the
+Open-Inspect web app to watch live progress, inspect logs, or see artifacts.
 
 ---
 
-## Settings and Repository Scope
+## Settings
 
 Open the web app and go to **Settings > Integrations > GitHub** to configure the GitHub Bot.
 
-| Setting                     | What it controls                                                                                |
-| --------------------------- | ----------------------------------------------------------------------------------------------- |
-| Auto-review new PRs         | Whether new non-draft PRs should be reviewed automatically                                      |
-| Repository Scope            | Whether the bot responds in all accessible repositories or only selected repositories           |
-| Allowed Trigger Users       | Who can trigger the bot from GitHub                                                             |
-| Model and reasoning effort  | Model and reasoning depth for GitHub-started sessions, when configured                          |
-| Code Review Instructions    | Extra guidance appended to PR review prompts                                                    |
-| Comment Action Instructions | Extra guidance appended to `@mention` action prompts                                            |
-| Repository Overrides        | Per-repository overrides for model, reasoning, instructions, trigger users, and review behavior |
+### Defaults and Scope
+
+| Setting               | What it controls                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------- |
+| Auto-review new PRs   | Whether new non-draft PRs should be reviewed automatically                            |
+| Repository Scope      | Whether the bot responds in all accessible repositories or only selected repositories |
+| Allowed Trigger Users | Who can trigger the bot from GitHub                                                   |
 
 If no GitHub Bot settings are configured, Open-Inspect uses permissive defaults: all repositories
 available to the GitHub App are in scope, auto-review is enabled, and users with write, maintain, or
 admin access to the repository can trigger the bot.
 
-If repository scope is set to **Selected repositories** and no repositories are selected, the bot
-does not run direct GitHub Bot workflows such as auto-review, reviewer assignment, or `@mention`
-actions. If **Only specific users** is selected and the user list is empty, no one can trigger those
-direct bot workflows for that scope.
+If repository scope is set to **Selected repositories** and no repositories are selected, direct
+GitHub Bot workflows are disabled. If **Only specific users** is selected and the user list is
+empty, no one can trigger direct bot workflows for that scope.
 
-These GitHub Bot settings do not gate GitHub event automations. Automations are matched separately
-by their repository, event type, enabled state, and trigger conditions.
+These settings do not gate GitHub event automations. Automations are matched separately by their
+repository, event type, enabled state, and trigger conditions.
+
+### Models and Instructions
+
+| Setting                     | What it controls                                                          |
+| --------------------------- | ------------------------------------------------------------------------- |
+| Model and reasoning effort  | Model and reasoning depth for GitHub-started sessions, when configured    |
+| Code Review Instructions    | Extra guidance appended to PR review prompts                              |
+| Comment Action Instructions | Extra guidance appended to `@mention` action prompts                      |
+| Repository Overrides        | Per-repository overrides for model, reasoning, instructions, and behavior |
 
 Repository overrides take priority over global defaults for the repository they apply to. The web UI
 currently exposes model and reasoning settings on repository overrides. If global model or reasoning
@@ -154,29 +165,34 @@ override nor global default sets a model, sessions use the deployment default mo
 
 ## Admin and Safety Notes
 
-These notes are most useful for repository and deployment admins deciding where the GitHub Bot
-should be available.
+### Access Boundaries
 
 - Repository access is deployment-scoped through the configured GitHub App installation. To restrict
   what Open-Inspect can access, install the GitHub App only on intended repositories and use
   **Repository Scope** for an additional bot-level filter.
 - The same GitHub App is used for OAuth and repository access. GitHub App credentials and webhook
   secrets stay server-side.
-- Webhooks are verified before Open-Inspect acts on them. Duplicate webhook deliveries are
-  deduplicated so GitHub retries do not normally create duplicate sessions.
 - By default, trigger access is checked against GitHub repository permission and requires write,
   maintain, or admin access. If you configure **Only specific users**, that list becomes the trigger
   gate for the configured scope.
-- Auto-review skips draft PRs and PRs opened by the GitHub App bot. Manual reviewer assignments and
-  `@mention` triggers are still evaluated through the normal repository and user gates.
+
+### Bot Behavior
+
+- Auto-review skips draft PRs and PRs opened by the GitHub App bot. Manual `@mention` triggers are
+  still evaluated through the normal repository and user gates.
 - The bot ignores bot-authored comments, ordinary issue comments, and comments that do not mention
   the bot.
+- If the bot cannot load its GitHub integration settings, it fails closed and does not start direct
+  bot sessions.
+
+### Prompt Safety
+
 - Initial prompts mark selected GitHub fields as untrusted. Code-review prompts wrap PR title,
   author, branches, and description; comment-triggered prompts wrap the triggering comment.
-  Review-thread file and diff context, plus GitHub context later read by the agent, are not
+- Review-thread file and diff context, plus GitHub context later read by the agent, are not
   separately transformed by the bot.
-- If the bot cannot load its GitHub integration settings, it fails closed and does not start
-  sessions.
+- Webhooks are verified before Open-Inspect acts on them. Duplicate webhook deliveries are
+  deduplicated so GitHub retries do not normally create duplicate direct bot sessions.
 
 ---
 
@@ -195,8 +211,9 @@ list.
 ### Auto-review did not run
 
 Auto-review only runs for newly opened, non-draft PRs. It is skipped for draft PRs, bot-authored
-PRs, disabled repositories, and users who are not allowed to trigger the bot. If a PR was converted
-from draft to ready for review, assign the bot as a reviewer.
+PRs, disabled repositories, and users who are not allowed to trigger the bot.
+
+If a PR was converted from draft to ready for review, mention the bot in a PR comment instead.
 
 ### A mention did not start a session
 

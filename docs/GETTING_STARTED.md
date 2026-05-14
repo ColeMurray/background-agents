@@ -567,7 +567,8 @@ Or construct it from your App's slug: if your app is named `My-Inspect-App`, the
 
 ### Usage
 
-- **Code Review**: Assign the bot as a PR reviewer — it performs an automated review
+- **Code Review**: Open a non-draft PR in a repository where auto-review is enabled — it performs an
+  automated review
 - **Comment Actions**: @mention the bot in a PR comment with instructions (e.g.,
   `@my-app[bot] explain why this test is failing`)
 
@@ -835,7 +836,7 @@ If the bot doesn't see the original message when tagged in a thread reply:
 2. Check the webhook secret matches `github_webhook_secret` in terraform.tfvars
 3. Confirm `enable_github_bot = true` in terraform.tfvars and the worker is deployed
 4. Check that `github_bot_username` matches your App's bot login (e.g., `my-app[bot]`)
-5. For PR reviews, ensure the bot is assigned as a reviewer (not just mentioned)
+5. For PR reviews, ensure auto-review is enabled for the repository and the PR is not a draft
 6. For comment actions, ensure the bot is @mentioned in a **PR** comment (not an issue)
 
 ### "Model not found" errors (Daytona provider)
