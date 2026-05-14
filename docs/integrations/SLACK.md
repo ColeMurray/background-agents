@@ -70,6 +70,9 @@ Can you investigate the flaky login test in acme/web?
 DMs do not need an `@mention`. If you include one anyway, Open-Inspect strips it before sending the
 request to the agent.
 
+To continue a session that started from a DM, reply in the Slack thread created for that DM request.
+Sending a new top-level DM is treated as a new request and may start repository selection again.
+
 ### Repository dropdowns
 
 Repository dropdowns are tied to the pending Slack thread, not to a personal GitHub repository list.
@@ -85,7 +88,8 @@ expired, send the request again and include the repository name, such as `owner/
 ## Threaded Conversations
 
 A top-level Slack request starts a new Slack thread. Reply in that thread to send follow-up prompts
-to the same Open-Inspect session.
+to the same Open-Inspect session. This applies in both channels and DMs: in a direct message, the
+follow-up still needs to be a thread reply, not a fresh top-level DM.
 
 Open-Inspect keeps the Slack thread connected to the session for about 24 hours. If you reply after
 that mapping expires, or if you reply outside the thread, the bot may start repository selection
