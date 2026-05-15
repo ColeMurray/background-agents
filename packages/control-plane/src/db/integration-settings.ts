@@ -12,6 +12,8 @@ import {
   type SlackGlobalSettings,
   type SlackMentionsPolicy,
   MAX_TUNNEL_PORTS,
+  MIN_SETUP_TIMEOUT_SECONDS,
+  MAX_SETUP_TIMEOUT_SECONDS,
 } from "@open-inspect/shared";
 
 type SettingsLevel = "global" | "repo";
@@ -332,6 +334,18 @@ export class IntegrationSettingsStore {
         }
       }
       return { ...settings, tunnelPorts: dedupedPorts };
+    }
+    if (settings.setupTimeoutSeconds !== undefined) {
+      if (
+        typeof settings.setupTimeoutSeconds !== "number" ||
+        !Number.isInteger(settings.setupTimeoutSeconds) ||
+        settings.setupTimeoutSeconds < MIN_SETUP_TIMEOUT_SECONDS ||
+        settings.setupTimeoutSeconds > MAX_SETUP_TIMEOUT_SECONDS
+      ) {
+        throw new IntegrationSettingsValidationError(
+          `setupTimeoutSeconds must be an integer between ${MIN_SETUP_TIMEOUT_SECONDS} and ${MAX_SETUP_TIMEOUT_SECONDS}`
+        );
+      }
     }
     return settings;
   }
