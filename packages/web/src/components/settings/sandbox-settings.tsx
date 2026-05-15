@@ -8,7 +8,11 @@ import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import useSWR from "swr";
 import type { SandboxSettings } from "@open-inspect/shared";
-import { MAX_TUNNEL_PORTS } from "@open-inspect/shared";
+import {
+  MAX_TUNNEL_PORTS,
+  MIN_SETUP_TIMEOUT_SECONDS,
+  MAX_SETUP_TIMEOUT_SECONDS,
+} from "@open-inspect/shared";
 
 const GLOBAL_SCOPE = "__global__";
 
@@ -56,14 +60,26 @@ function SandboxSettingsEditor({
     ? ((data as GlobalSettingsResponse)?.settings?.defaults?.terminalEnabled ?? false)
     : ((data as RepoSettingsResponse)?.settings?.terminalEnabled ?? false);
 
+  const currentSetupTimeoutSeconds: number | undefined = isGlobal
+    ? (data as GlobalSettingsResponse)?.settings?.defaults?.setupTimeoutSeconds
+    : (data as RepoSettingsResponse)?.settings?.setupTimeoutSeconds;
+
   const [portRows, setPortRows] = useState<string[] | null>(null);
   const [terminalEnabled, setTerminalEnabled] = useState<boolean | null>(null);
+  const [setupTimeoutSeconds, setSetupTimeoutSeconds] = useState<number | null | undefined>(
+    undefined
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
   // Resolve terminal toggle: local edit or server state
   const resolvedTerminalEnabled = terminalEnabled ?? currentTerminalEnabled;
+
+  const resolvedSetupTimeoutSeconds =
+    setupTimeoutSeconds === undefined
+      ? currentSetupTimeoutSeconds
+      : (setupTimeoutSeconds ?? undefined);
 
   // Use server state unless user is editing
   const rows = portRows ?? currentPorts.map(String);
@@ -104,12 +120,31 @@ function SandboxSettingsEditor({
       return;
     }
 
+    if (
+      resolvedSetupTimeoutSeconds !== undefined &&
+      resolvedSetupTimeoutSeconds !== null &&
+      (!Number.isInteger(resolvedSetupTimeoutSeconds) ||
+        resolvedSetupTimeoutSeconds < MIN_SETUP_TIMEOUT_SECONDS ||
+        resolvedSetupTimeoutSeconds > MAX_SETUP_TIMEOUT_SECONDS)
+    ) {
+      setError(
+        `setupTimeoutSeconds must be between ${MIN_SETUP_TIMEOUT_SECONDS} and ${MAX_SETUP_TIMEOUT_SECONDS}`
+      );
+      return;
+    }
+
     setSaving(true);
     try {
       const existingEnabledRepos = isGlobal
         ? (data as GlobalSettingsResponse)?.settings?.enabledRepos
         : undefined;
-      const settingsPayload = { tunnelPorts: ports, terminalEnabled: resolvedTerminalEnabled };
+      const settingsPayload: SandboxSettings = {
+        tunnelPorts: ports,
+        terminalEnabled: resolvedTerminalEnabled,
+        ...(resolvedSetupTimeoutSeconds != null
+          ? { setupTimeoutSeconds: resolvedSetupTimeoutSeconds }
+          : {}),
+      };
       const body = isGlobal
         ? { settings: { defaults: settingsPayload, enabledRepos: existingEnabledRepos } }
         : { settings: settingsPayload };
@@ -128,6 +163,7 @@ function SandboxSettingsEditor({
       await mutate();
       setPortRows(null);
       setTerminalEnabled(null);
+      setSetupTimeoutSeconds(undefined);
       setSuccess(true);
       setTimeout(() => setSuccess(false), 2000);
     } catch (e) {
@@ -135,13 +171,15 @@ function SandboxSettingsEditor({
     } finally {
       setSaving(false);
     }
-  }, [rows, isGlobal, apiUrl, mutate, data, resolvedTerminalEnabled]);
+  }, [rows, isGlobal, apiUrl, mutate, data, resolvedTerminalEnabled, resolvedSetupTimeoutSeconds]);
 
   const hasPortChanges =
     portRows !== null &&
     JSON.stringify(normalizePorts(portRows).ports) !== JSON.stringify(currentPorts);
   const hasTerminalChange = terminalEnabled !== null && terminalEnabled !== currentTerminalEnabled;
-  const hasChanges = hasPortChanges || hasTerminalChange;
+  const hasTimeoutChange =
+    setupTimeoutSeconds !== undefined && setupTimeoutSeconds !== currentSetupTimeoutSeconds;
+  const hasChanges = hasPortChanges || hasTerminalChange || hasTimeoutChange;
 
   if (isLoading) {
     return <p className="text-sm text-muted-foreground">Loading...</p>;
@@ -174,6 +212,27 @@ function SandboxSettingsEditor({
             />
           </button>
         </div>
+      </div>
+
+      {/* Setup Timeout */}
+      <div className="max-w-sm">
+        <label className="block text-sm font-medium text-foreground mb-1">Setup Timeout</label>
+        <p className="text-xs text-muted-foreground mb-2">
+          Maximum seconds allowed for <code>.openinspect/setup.sh</code> to complete.
+        </p>
+        <Input
+          type="number"
+          inputMode="numeric"
+          min={MIN_SETUP_TIMEOUT_SECONDS}
+          max={MAX_SETUP_TIMEOUT_SECONDS}
+          value={resolvedSetupTimeoutSeconds ?? ""}
+          placeholder="300 (default)"
+          onChange={(e) => {
+            const raw = e.target.value;
+            setSetupTimeoutSeconds(raw === "" ? null : Number(raw));
+          }}
+          className="w-full"
+        />
       </div>
 
       <div>
