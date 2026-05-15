@@ -710,6 +710,33 @@ describe("IntegrationSettingsStore", () => {
         })
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
+
+    it("round-trips setupTimeoutSeconds", async () => {
+      await store.setGlobal("sandbox", { defaults: { setupTimeoutSeconds: 600 } });
+
+      const result = await store.getGlobal("sandbox");
+      expect(result).toEqual({ defaults: { setupTimeoutSeconds: 600 } });
+    });
+
+    it("rejects setupTimeoutSeconds below minimum", async () => {
+      await expect(
+        store.setGlobal("sandbox", { defaults: { setupTimeoutSeconds: 59 } })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects setupTimeoutSeconds above maximum", async () => {
+      await expect(
+        store.setGlobal("sandbox", { defaults: { setupTimeoutSeconds: 1801 } })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects non-integer setupTimeoutSeconds", async () => {
+      await expect(
+        store.setGlobal("sandbox", {
+          defaults: { setupTimeoutSeconds: 1.5 as unknown as number },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
   });
 
   describe("linear settings", () => {
