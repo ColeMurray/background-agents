@@ -278,6 +278,10 @@ class SandboxManager:
         if terminal_enabled:
             env_vars["TERMINAL_ENABLED"] = "true"
 
+        setup_timeout_seconds = (config.settings or {}).get("setupTimeoutSeconds")
+        if setup_timeout_seconds is not None:
+            env_vars["SETUP_TIMEOUT_SECONDS"] = str(setup_timeout_seconds)
+
         if config.agent_slack_notify_enabled:
             env_vars["AGENT_SLACK_NOTIFY_ENABLED"] = "true"
 
