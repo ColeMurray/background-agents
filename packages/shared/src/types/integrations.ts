@@ -42,12 +42,20 @@ export interface CodeServerSettings {
 /** Maximum number of tunnel ports a user can configure per sandbox. */
 export const MAX_TUNNEL_PORTS = 10;
 
+/** Maximum setup hook timeout (seconds) a user can configure. */
+export const MAX_SETUP_TIMEOUT_SECONDS = 1800;
+
+/** Minimum setup hook timeout (seconds) a user can configure. */
+export const MIN_SETUP_TIMEOUT_SECONDS = 60;
+
 /** Sandbox environment settings. Provider-agnostic: describes what the user wants, not how it's done. */
 export interface SandboxSettings {
   /** Extra ports to expose via tunnels (e.g., dev server ports 3000, 5173). */
   tunnelPorts?: number[];
   /** Enable a browser-based terminal (ttyd) in sandbox sessions. */
   terminalEnabled?: boolean;
+  /** Override the entrypoint's DEFAULT_SETUP_TIMEOUT_SECONDS for .openinspect/setup.sh. */
+  setupTimeoutSeconds?: number;
 }
 
 export type SlackMentionsPolicy = "allow" | "escape" | "strip";
