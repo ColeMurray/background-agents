@@ -10,7 +10,12 @@
  * spawn attempts within the same request.
  */
 
-import { MAX_TUNNEL_PORTS, type SandboxSettings } from "@open-inspect/shared";
+import {
+  MAX_TUNNEL_PORTS,
+  MIN_SETUP_TIMEOUT_SECONDS,
+  MAX_SETUP_TIMEOUT_SECONDS,
+  type SandboxSettings,
+} from "@open-inspect/shared";
 import type { SandboxStatus } from "../../types";
 import type { SandboxRow, SessionRow } from "../../session/types";
 import type { McpServerConfig } from "@open-inspect/shared";
@@ -1183,6 +1188,15 @@ export class SandboxLifecycleManager {
 
       if (typeof settings.terminalEnabled === "boolean") {
         result.terminalEnabled = settings.terminalEnabled;
+      }
+
+      if (
+        typeof settings.setupTimeoutSeconds === "number" &&
+        Number.isInteger(settings.setupTimeoutSeconds) &&
+        settings.setupTimeoutSeconds >= MIN_SETUP_TIMEOUT_SECONDS &&
+        settings.setupTimeoutSeconds <= MAX_SETUP_TIMEOUT_SECONDS
+      ) {
+        result.setupTimeoutSeconds = settings.setupTimeoutSeconds;
       }
 
       return result;

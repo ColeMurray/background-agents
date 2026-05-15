@@ -1676,6 +1676,60 @@ describe("SandboxLifecycleManager", () => {
         )
       ).toBe(true);
     });
+
+    it("doSpawn() passes setupTimeoutSeconds from session settings", async () => {
+      const session = createMockSession({
+        sandbox_settings: '{"setupTimeoutSeconds":600}',
+      });
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(session, sandbox);
+      const provider = createMockProvider();
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sandboxSettings: { setupTimeoutSeconds: 600 },
+        })
+      );
+    });
+
+    it("doSpawn() drops setupTimeoutSeconds outside valid range from stored settings", async () => {
+      const session = createMockSession({
+        sandbox_settings: '{"setupTimeoutSeconds":9999}',
+      });
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(session, sandbox);
+      const provider = createMockProvider();
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sandboxSettings: {},
+        })
+      );
+    });
   });
 
   describe("agent slack-notify gate", () => {
