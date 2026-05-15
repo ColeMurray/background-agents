@@ -1397,6 +1397,11 @@ export class SessionDO extends DurableObject<Env> {
    * Process sandbox event.
    */
   private async processSandboxEvent(event: SandboxEvent): Promise<void> {
+    if (event.type === "session_title") {
+      this.applyGeneratedSessionTitle(event.title);
+      return;
+    }
+
     await this.sandboxEventProcessor.processSandboxEvent(event);
   }
 
@@ -1536,6 +1541,21 @@ export class SessionDO extends DurableObject<Env> {
     );
   }
 
+  private syncSessionIndexTitle(sessionId: string, title: string, updatedAt: number): void {
+    if (!this.env.DB) return;
+    const sessionStore = new SessionIndexStore(this.env.DB);
+    this.ctx.waitUntil(
+      sessionStore.updateTitleIfNewer(sessionId, title, updatedAt).catch((error) => {
+        this.log.error("session_index.update_title.background_error", {
+          session_id: sessionId,
+          title,
+          updated_at: updatedAt,
+          error,
+        });
+      })
+    );
+  }
+
   private async transitionSessionStatus(status: SessionStatus): Promise<boolean> {
     const session = this.getSession();
     if (!session) return false;
@@ -1561,6 +1581,32 @@ export class SessionDO extends DurableObject<Env> {
 
     // Notify parent session (if this is a child) so its UI can refresh
     this.notifyParentOfStatusChange(session, publicSessionId, status);
+
+    return true;
+  }
+
+  private applyGeneratedSessionTitle(title: string): boolean {
+    const trimmed = title.trim();
+    if (!trimmed) return false;
+
+    const session = this.getSession();
+    if (!session) return false;
+
+    const updatedAt = Math.max(Date.now(), session.updated_at + 1);
+    const didUpdate = this.repository.updateSessionTitleIfUnset(session.id, trimmed, updatedAt);
+    if (!didUpdate) return false;
+
+    const publicSessionId = this.getPublicSessionId(session);
+    this.syncSessionIndexTitle(publicSessionId, trimmed, updatedAt);
+    this.broadcast({ type: "session_title", title: trimmed });
+
+    if (session.parent_session_id) {
+      this.notifyParentOfStatusChange(
+        { ...session, title: trimmed },
+        publicSessionId,
+        session.status
+      );
+    }
 
     return true;
   }

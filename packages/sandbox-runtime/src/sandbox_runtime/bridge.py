@@ -683,6 +683,31 @@ class AgentBridge:
 
         await self._save_session_id()
 
+    async def _emit_session_title_event(self) -> None:
+        """Fetch the OpenCode session title and forward it when available."""
+        if not self.http_client or not self.opencode_session_id:
+            return
+
+        try:
+            resp = await self.http_client.get(
+                f"{self.opencode_base_url}/session/{self.opencode_session_id}",
+                timeout=self.OPENCODE_REQUEST_TIMEOUT,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            self.log.warn("opencode.session_title_fetch_error", exc=e)
+            return
+
+        if not isinstance(data, dict):
+            return
+
+        title = data.get("title")
+        if not isinstance(title, str) or not title.strip():
+            return
+
+        await self._send_event({"type": "session_title", "title": title.strip()})
+
     @staticmethod
     def _extract_error_message(error: object) -> str | None:
         """Extract message from OpenCode NamedError: { "name": "...", "data": { "message": "..." } }."""
@@ -1158,6 +1183,7 @@ class AgentBridge:
                                             elapsed_s=round(elapsed, 1),
                                             tracked_msgs=len(allowed_assistant_msg_ids),
                                         )
+                                        await self._emit_session_title_event()
                                         async for final_event in self._fetch_final_message_state(
                                             message_id,
                                             opencode_message_id,
@@ -1182,6 +1208,7 @@ class AgentBridge:
                                             elapsed_s=round(elapsed, 1),
                                             tracked_msgs=len(allowed_assistant_msg_ids),
                                         )
+                                        await self._emit_session_title_event()
                                         async for final_event in self._fetch_final_message_state(
                                             message_id,
                                             opencode_message_id,

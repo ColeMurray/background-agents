@@ -34,6 +34,7 @@ const QUERY_PATTERNS = {
   UPDATE_STATUS: /^UPDATE sessions SET status = \?/,
   UPDATE_UPDATED_AT: /^UPDATE sessions SET updated_at = \?/,
   UPDATE_TITLE: /^UPDATE sessions SET title = \?/,
+  UPDATE_TITLE_IF_NEWER: /^UPDATE sessions SET title = \?, updated_at = \? WHERE id = \? AND updated_at <= \?$/,
   UPDATE_METRICS: /^UPDATE sessions SET total_cost = \?/,
   DELETE_SESSION: /^DELETE FROM sessions WHERE id = \?$/,
   SELECT_BY_PARENT:
@@ -191,6 +192,17 @@ class FakeD1Database {
       const row = this.rows.get(id);
       if (row && row.updated_at <= maxUpdatedAt) {
         row.status = status;
+        row.updated_at = updatedAt;
+        return { meta: { changes: 1 } };
+      }
+      return { meta: { changes: 0 } };
+    }
+
+    if (QUERY_PATTERNS.UPDATE_TITLE_IF_NEWER.test(normalized)) {
+      const [title, updatedAt, id, maxUpdatedAt] = args as [string, number, string, number];
+      const row = this.rows.get(id);
+      if (row && row.updated_at <= maxUpdatedAt) {
+        row.title = title;
         row.updated_at = updatedAt;
         return { meta: { changes: 1 } };
       }
@@ -525,6 +537,30 @@ describe("SessionIndexStore", () => {
     it("returns false when session not found", async () => {
       const updated = await store.updateTitle("nonexistent", "New Title");
       expect(updated).toBe(false);
+    });
+  });
+
+  describe("updateTitleIfNewer", () => {
+    it("updates the title when the write is current", async () => {
+      await store.create(makeSession({ updatedAt: 1000 }));
+
+      const updated = await store.updateTitleIfNewer("test-id", "Generated Title", 2000);
+      expect(updated).toBe(true);
+
+      const session = await store.get("test-id");
+      expect(session?.title).toBe("Generated Title");
+      expect(session?.updatedAt).toBe(2000);
+    });
+
+    it("ignores stale title writes when a newer update already exists", async () => {
+      await store.create(makeSession({ title: "Manual Title", updatedAt: 2000 }));
+
+      const updated = await store.updateTitleIfNewer("test-id", "Generated Title", 1500);
+      expect(updated).toBe(false);
+
+      const session = await store.get("test-id");
+      expect(session?.title).toBe("Manual Title");
+      expect(session?.updatedAt).toBe(2000);
     });
   });
 

@@ -444,6 +444,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
         case "session_title":
           if (data.title) {
             setSessionState((prev) => (prev ? { ...prev, title: data.title! } : null));
+            mutate(SIDEBAR_SESSIONS_KEY);
           }
           break;
 
