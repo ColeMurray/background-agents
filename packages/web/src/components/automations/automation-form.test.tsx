@@ -123,6 +123,35 @@ describe("automation cron submission", () => {
     expect(screen.getByText("Event type is required.")).toBeInTheDocument();
     expect(onSubmit).not.toHaveBeenCalled();
   });
+
+  it("submits triggerConfig with empty conditions for non-schedule automations", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Review PRs",
+          repoOwner: "open-inspect",
+          repoName: "background-agents",
+          baseBranch: "main",
+          model: "openai/gpt-5.4",
+          instructions: "Review incoming PRs.",
+          triggerType: "github_event",
+          eventType: "pull_request.opened",
+          triggerConfig: { conditions: [] },
+        }}
+      />
+    );
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      triggerConfig: { conditions: [] },
+    });
+  });
 });
 
 describe("instructions character counter", () => {
