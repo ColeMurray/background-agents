@@ -281,3 +281,76 @@ class TestRestoreSandboxTerminal:
         assert handle.ttyd_url is None
         assert "TERMINAL_ENABLED" not in captured["env"]
         assert captured["encrypted_ports"] is None
+
+
+class TestSetupTimeoutEnvVar:
+    """setup_timeout_seconds setting is injected as SETUP_TIMEOUT_SECONDS env var."""
+
+    @pytest.mark.asyncio
+    async def test_injects_setup_timeout_when_set(self, monkeypatch):
+        captured = {}
+
+        async def fake_create_aio(*args, **kwargs):
+            captured["env"] = kwargs.get("env")
+
+            class FakeSandbox:
+                object_id = "obj-123"
+                stdout = None
+
+            return FakeSandbox()
+
+        fake_create = MagicMock()
+        fake_create.aio = fake_create_aio
+        monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+        monkeypatch.setattr(
+            SandboxManager,
+            "_resolve_and_setup_tunnels",
+            AsyncMock(return_value=(None, None, None)),
+        )
+
+        manager = SandboxManager()
+        config = SandboxConfig(
+            repo_owner="acme",
+            repo_name="repo",
+            control_plane_url="https://cp.example.com",
+            sandbox_auth_token="token-123",
+            settings={"setupTimeoutSeconds": 600},
+        )
+
+        await manager.create_sandbox(config)
+
+        assert captured["env"]["SETUP_TIMEOUT_SECONDS"] == "600"
+
+    @pytest.mark.asyncio
+    async def test_omits_setup_timeout_when_not_set(self, monkeypatch):
+        captured = {}
+
+        async def fake_create_aio(*args, **kwargs):
+            captured["env"] = kwargs.get("env")
+
+            class FakeSandbox:
+                object_id = "obj-123"
+                stdout = None
+
+            return FakeSandbox()
+
+        fake_create = MagicMock()
+        fake_create.aio = fake_create_aio
+        monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+        monkeypatch.setattr(
+            SandboxManager,
+            "_resolve_and_setup_tunnels",
+            AsyncMock(return_value=(None, None, None)),
+        )
+
+        manager = SandboxManager()
+        config = SandboxConfig(
+            repo_owner="acme",
+            repo_name="repo",
+            control_plane_url="https://cp.example.com",
+            sandbox_auth_token="token-123",
+        )
+
+        await manager.create_sandbox(config)
+
+        assert "SETUP_TIMEOUT_SECONDS" not in captured["env"]
