@@ -23,7 +23,8 @@ const CONDITION_LABELS: Record<string, string> = {
   sentry_project: "Sentry Project",
   sentry_level: "Error Level",
   jsonpath: "JSONPath Filter",
-  branch: "Branch",
+  branch: "Head branch",
+  target_branch: "Target branch",
   label: "Label",
   path_glob: "Path Glob",
   actor: "Actor",
@@ -64,6 +65,9 @@ export function ConditionBuilder({ conditions, onChange, triggerSource }: Condit
         break;
       case "branch":
         newCondition = { type: "branch", operator: "glob_match", value: [] };
+        break;
+      case "target_branch":
+        newCondition = { type: "target_branch", operator: "glob_match", value: [] };
         break;
       case "label":
         newCondition = { type: "label", operator: "any_of", value: [] };
@@ -174,7 +178,15 @@ function ConditionEditor({
         <TagInput
           values={condition.value}
           onChange={(value) => onChange({ ...condition, value })}
-          placeholder="Add branch pattern (e.g., main, feature/*)..."
+          placeholder="Head branch pattern (PR source, e.g. main, feature/*)..."
+        />
+      );
+    case "target_branch":
+      return (
+        <TagInput
+          values={condition.value}
+          onChange={(value) => onChange({ ...condition, value })}
+          placeholder="Target branch pattern (merge base, e.g. main, stable)..."
         />
       );
     case "label":

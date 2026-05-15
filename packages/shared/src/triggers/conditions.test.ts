@@ -72,6 +72,38 @@ describe("matchesConditions", () => {
       expect(matchesConditions(conditions, event, conditionRegistry)).toBe(false);
     });
   });
+
+  describe("GitHub target_branch (merge base)", () => {
+    it("matches when merge base ref matches a pattern", () => {
+      const event = buildMockEvent("github", {
+        branch: "feature/x",
+        targetBranch: "stable",
+      });
+      const conditions = [
+        { type: "target_branch" as const, operator: "glob_match" as const, value: ["stable"] },
+      ];
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(true);
+    });
+
+    it("does not match when merge base differs", () => {
+      const event = buildMockEvent("github", {
+        branch: "feature/x",
+        targetBranch: "main",
+      });
+      const conditions = [
+        { type: "target_branch" as const, operator: "glob_match" as const, value: ["stable"] },
+      ];
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(false);
+    });
+
+    it("does not match when the event has no merge base ref", () => {
+      const event = buildMockEvent("github", { branch: "main" });
+      const conditions = [
+        { type: "target_branch" as const, operator: "glob_match" as const, value: ["main"] },
+      ];
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(false);
+    });
+  });
 });
 
 describe("validateConditions", () => {
@@ -102,5 +134,24 @@ describe("validateConditions", () => {
     );
     expect(errors).toHaveLength(1);
     expect(errors[0]).toContain("does not apply to webhook triggers");
+  });
+
+  it("returns error for empty target_branch patterns on github", () => {
+    const errors = validateConditions(
+      [{ type: "target_branch", operator: "glob_match", value: [] }],
+      "github",
+      conditionRegistry
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("target branch");
+  });
+
+  it("accepts target_branch for github triggers", () => {
+    const errors = validateConditions(
+      [{ type: "target_branch", operator: "glob_match", value: ["stable", "main"] }],
+      "github",
+      conditionRegistry
+    );
+    expect(errors).toHaveLength(0);
   });
 });
