@@ -206,7 +206,9 @@ class TestRebuildRepoImages:
             "MODAL_API_SECRET": "test-secret",
         }
 
-        mock_enabled = {"repos": [{"repoOwner": "acme", "repoName": "repo"}]}
+        mock_enabled = {
+            "repos": [{"repoOwner": "acme", "repoName": "repo", "defaultBranch": "master"}]
+        }
         mock_status = {
             "images": [
                 {
@@ -236,6 +238,8 @@ class TestRebuildRepoImages:
                 return mock_cleanup
             return {}
 
+        mock_ls_remote = MagicMock(return_value="new-sha")
+
         with (
             patch.dict("os.environ", env, clear=False),
             patch(
@@ -250,7 +254,7 @@ class TestRebuildRepoImages:
             ) as mock_post,
             patch(
                 "src.scheduler.image_builder._git_ls_remote_sha",
-                return_value="new-sha",
+                side_effect=mock_ls_remote,
             ),
             patch(
                 "sandbox_runtime.auth.github_app.generate_installation_token",
@@ -266,6 +270,9 @@ class TestRebuildRepoImages:
         assert len(trigger_calls) == 1
         assert "acme/repo" in str(trigger_calls[0])
 
+        # Verify ls-remote was called with the real branch, not "main"
+        mock_ls_remote.assert_called_once_with("acme", "repo", "master", mock_ls_remote.call_args[0][3])
+
     @pytest.mark.asyncio
     async def test_skips_build_when_sha_matches(self):
         """Should not trigger a build when SHAs match."""
@@ -274,7 +281,9 @@ class TestRebuildRepoImages:
             "MODAL_API_SECRET": "test-secret",
         }
 
-        mock_enabled = {"repos": [{"repoOwner": "acme", "repoName": "repo"}]}
+        mock_enabled = {
+            "repos": [{"repoOwner": "acme", "repoName": "repo", "defaultBranch": "main"}]
+        }
         mock_status = {
             "images": [
                 {
@@ -335,7 +344,11 @@ class TestRebuildRepoImages:
 
         async def mock_get_side_effect(url, **kwargs):
             if "enabled-repos" in url:
-                return {"repos": [{"repoOwner": "acme", "repoName": "repo"}]}
+                return {
+                    "repos": [
+                        {"repoOwner": "acme", "repoName": "repo", "defaultBranch": "main"}
+                    ]
+                }
             if "status" in url:
                 return {"images": []}
             return {}
@@ -380,3 +393,55 @@ class TestRebuildRepoImages:
 
         cleanup_calls = [c for c in mock_post.call_args_list if "cleanup" in str(c)]
         assert len(cleanup_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_skips_repo_without_default_branch(self):
+        """Should skip repos that are missing defaultBranch in the enabled-repos response."""
+        env = {
+            "CONTROL_PLANE_URL": "https://cp.test",
+            "MODAL_API_SECRET": "test-secret",
+        }
+
+        # Repo returned without defaultBranch (e.g. control plane couldn't resolve it)
+        mock_enabled = {"repos": [{"repoOwner": "acme", "repoName": "repo"}]}
+
+        async def mock_get_side_effect(url, **kwargs):
+            if "enabled-repos" in url:
+                return mock_enabled
+            if "status" in url:
+                return {"images": []}
+            return {}
+
+        mock_ls_remote = MagicMock(return_value="abc123")
+
+        with (
+            patch.dict("os.environ", env, clear=False),
+            patch(
+                "src.scheduler.image_builder._api_get",
+                new_callable=AsyncMock,
+                side_effect=mock_get_side_effect,
+            ),
+            patch(
+                "src.scheduler.image_builder._api_post",
+                new_callable=AsyncMock,
+                return_value={"ok": True, "markedFailed": 0, "deleted": 0},
+            ) as mock_post,
+            patch(
+                "src.scheduler.image_builder._git_ls_remote_sha",
+                side_effect=mock_ls_remote,
+            ),
+            patch(
+                "sandbox_runtime.auth.github_app.generate_installation_token",
+                return_value="gh-token",
+            ),
+        ):
+            from src.scheduler.image_builder import rebuild_repo_images
+
+            await rebuild_repo_images.local()
+
+        # No trigger — repo was skipped
+        trigger_calls = [c for c in mock_post.call_args_list if "trigger" in str(c)]
+        assert len(trigger_calls) == 0
+
+        # ls-remote was never called — skipped before SHA check
+        mock_ls_remote.assert_not_called()

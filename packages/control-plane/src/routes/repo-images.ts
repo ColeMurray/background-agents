@@ -197,6 +197,14 @@ async function handleTriggerBuild(
   if (params instanceof Response) return params;
   const { owner, name } = params;
 
+  // Resolve the repo to get its actual default branch — never assume "main".
+  const provider = createRouteSourceControlProvider(env);
+  const resolved = await resolveInstalledRepo(provider, owner, name);
+  if (!resolved) {
+    return error("Repository not found or not installed", 404);
+  }
+  const { defaultBranch } = resolved;
+
   const store = new RepoImageStore(env.DB);
   const now = Date.now();
   const buildId = `img-${owner}-${name}-${now}`;
@@ -207,7 +215,7 @@ async function handleTriggerBuild(
       id: buildId,
       repoOwner: owner,
       repoName: name,
-      baseBranch: "main",
+      baseBranch: defaultBranch,
     });
 
     // Construct callback URL
@@ -230,12 +238,8 @@ async function handleTriggerBuild(
 
       let repoSecrets: Record<string, string> = {};
       try {
-        const provider = createRouteSourceControlProvider(env);
-        const resolved = await resolveInstalledRepo(provider, owner, name);
-        if (resolved) {
-          const repoStore = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
-          repoSecrets = await repoStore.getDecryptedSecrets(resolved.repoId);
-        }
+        const repoStore = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+        repoSecrets = await repoStore.getDecryptedSecrets(resolved.repoId);
       } catch (e) {
         logger.warn("repo_image.repo_secrets_failed", {
           error: e instanceof Error ? e.message : String(e),
@@ -266,7 +270,7 @@ async function handleTriggerBuild(
       {
         repoOwner: owner,
         repoName: name,
-        defaultBranch: "main",
+        defaultBranch,
         buildId,
         callbackUrl,
         userEnvVars,
@@ -512,7 +516,23 @@ async function handleGetEnabledRepos(
 
   try {
     const repos = await metadataStore.getImageBuildEnabledRepos();
-    return json({ repos });
+
+    // Resolve each repo's actual default branch so the scheduler can poll
+    // the right ref. Failures are silenced per-repo — a resolution error
+    // means the scheduler will skip that repo this tick, not crash.
+    const provider = createRouteSourceControlProvider(env);
+    const reposWithBranch = await Promise.all(
+      repos.map(async (repo) => {
+        try {
+          const resolved = await resolveInstalledRepo(provider, repo.repoOwner, repo.repoName);
+          return { ...repo, defaultBranch: resolved?.defaultBranch ?? "" };
+        } catch {
+          return { ...repo, defaultBranch: "" };
+        }
+      })
+    );
+
+    return json({ repos: reposWithBranch });
   } catch (e) {
     logger.error("repo_image.enabled_repos_error", {
       error: e instanceof Error ? e.message : String(e),

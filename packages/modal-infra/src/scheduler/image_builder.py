@@ -517,11 +517,17 @@ async def rebuild_repo_images():
         for repo in enabled_repos:
             repo_owner = repo.get("repoOwner", "")
             repo_name = repo.get("repoName", "")
+            default_branch = repo.get("defaultBranch", "")
 
-            if not repo_owner or not repo_name:
+            if not repo_owner or not repo_name or not default_branch:
+                log.warn(
+                    "scheduler.missing_default_branch",
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                )
                 continue
 
-            remote_sha = _git_ls_remote_sha(repo_owner, repo_name, "main", clone_token)
+            remote_sha = _git_ls_remote_sha(repo_owner, repo_name, default_branch, clone_token)
             if not remote_sha:
                 continue
 

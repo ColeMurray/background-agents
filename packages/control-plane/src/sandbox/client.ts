@@ -112,7 +112,7 @@ export interface WarmSandboxResponse {
 export interface BuildRepoImageRequest {
   repoOwner: string;
   repoName: string;
-  defaultBranch?: string;
+  defaultBranch: string;
   buildId: string;
   callbackUrl: string;
   userEnvVars?: Record<string, string>;
@@ -533,7 +533,7 @@ export class ModalClient {
         body: JSON.stringify({
           repo_owner: request.repoOwner,
           repo_name: request.repoName,
-          default_branch: request.defaultBranch || "main",
+          default_branch: request.defaultBranch,
           build_id: request.buildId,
           callback_url: request.callbackUrl,
           user_env_vars: request.userEnvVars,
