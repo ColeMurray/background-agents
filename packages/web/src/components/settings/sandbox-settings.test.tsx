@@ -6,7 +6,11 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { SWRConfig } from "swr";
-import { MAX_TUNNEL_PORTS } from "@open-inspect/shared";
+import {
+  MAX_TUNNEL_PORTS,
+  MIN_SETUP_TIMEOUT_SECONDS,
+  MAX_SETUP_TIMEOUT_SECONDS,
+} from "@open-inspect/shared";
 import { SandboxSettingsPage } from "./sandbox-settings";
 
 expect.extend(matchers);
@@ -17,10 +21,14 @@ vi.mock("@/hooks/use-repos", () => ({
 
 const SETTINGS_KEY = "/api/integration-settings/sandbox";
 
-function globalSettings(tunnelPorts: number[], enabledRepos?: string[]) {
+function globalSettings(
+  tunnelPorts: number[],
+  enabledRepos?: string[],
+  extra?: { setupTimeoutSeconds?: number; terminalEnabled?: boolean }
+) {
   return {
     integrationId: "sandbox",
-    settings: { defaults: { tunnelPorts }, enabledRepos },
+    settings: { defaults: { tunnelPorts, ...extra }, enabledRepos },
   };
 }
 
@@ -236,5 +244,128 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     await user.type(inputs[1], "3000");
 
     expect(screen.getByText("Save Settings").closest("button")).toBeDisabled();
+  });
+});
+
+describe("SandboxSettingsPage — setup timeout", () => {
+  const user = userEvent.setup();
+
+  it("renders setup timeout input with placeholder when no value configured", () => {
+    renderWithSWR({ integrationId: "sandbox", settings: null });
+    expect(screen.getByPlaceholderText("300 (default)")).toBeInTheDocument();
+  });
+
+  it("renders existing setupTimeoutSeconds as input value", () => {
+    renderWithSWR(globalSettings([], undefined, { setupTimeoutSeconds: 600 }));
+    expect(screen.getByPlaceholderText("300 (default)")).toHaveValue(600);
+  });
+
+  it("enables Save when setupTimeoutSeconds is changed", async () => {
+    renderWithSWR({ integrationId: "sandbox", settings: null });
+    const input = screen.getByPlaceholderText("300 (default)");
+    await user.type(input, "600");
+    expect(screen.getByText("Save Settings").closest("button")).not.toBeDisabled();
+  });
+
+  it("shows validation error when timeout is below minimum", async () => {
+    const { fetchMock } = renderWithSWR({ integrationId: "sandbox", settings: null });
+    const input = screen.getByPlaceholderText("300 (default)");
+    await user.type(input, "30");
+    await user.click(screen.getByText("Save Settings"));
+    expect(
+      screen.getByText(
+        new RegExp(
+          `setupTimeoutSeconds must be between ${MIN_SETUP_TIMEOUT_SECONDS} and ${MAX_SETUP_TIMEOUT_SECONDS}`
+        )
+      )
+    ).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      SETTINGS_KEY,
+      expect.objectContaining({ method: "PUT" })
+    );
+  });
+
+  it("includes setupTimeoutSeconds in save payload when set", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      throw new Error("unexpected fetch");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: { [SETTINGS_KEY]: { integrationId: "sandbox", settings: null } },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    const input = screen.getByPlaceholderText("300 (default)");
+    await user.type(input, "600");
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        SETTINGS_KEY,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({
+            settings: {
+              defaults: {
+                tunnelPorts: [],
+                terminalEnabled: false,
+                setupTimeoutSeconds: 600,
+              },
+            },
+          }),
+        })
+      );
+    });
+  });
+
+  it("omits setupTimeoutSeconds from payload when input is cleared", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      throw new Error("unexpected fetch");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: {
+            [SETTINGS_KEY]: globalSettings([], undefined, { setupTimeoutSeconds: 600 }),
+          },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    const input = screen.getByPlaceholderText("300 (default)");
+    await user.clear(input);
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([, init]) => (init as RequestInit)?.method === "PUT");
+      const body = JSON.parse((call?.[1] as RequestInit)?.body as string);
+      expect(body.settings.defaults.setupTimeoutSeconds).toBeUndefined();
+    });
   });
 });
