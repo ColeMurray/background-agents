@@ -44,19 +44,23 @@ upload-media /tmp/current.png \
 
 Use `agent-browser record` for browser recordings. Record to an `.mp4` path so `agent-browser`
 encodes a silent MP4, then probe actual dimensions/duration with `ffprobe` and upload with
-`upload-media`. The `record-browser-video` helper wraps that full flow.
+`upload-media`.
 
 ```bash
-record-browser-video \
-  --url "http://127.0.0.1:3000/checkout" \
-  --caption "Checkout flow recording" \
-  --output-basename /tmp/opencode/checkout-flow \
-  --viewport 1440x900 \
-  -- bash -lc 'agent-browser snapshot -i && agent-browser click "[data-testid=continue]" && agent-browser wait 1000'
+agent-browser open "http://127.0.0.1:3000/checkout" && \
+agent-browser set viewport 1440 900 && \
+agent-browser snapshot -i && \
+STARTED_AT_MS=$(date +%s%3N) && \
+agent-browser record start /tmp/opencode/checkout-flow.mp4 && \
+agent-browser click "[data-testid=continue]" && \
+agent-browser wait 1000 && \
+agent-browser record stop && \
+ENDED_AT_MS=$(date +%s%3N)
 ```
 
 When recording manually, always pair `agent-browser record start /tmp/opencode/demo.mp4` with
-`agent-browser record stop`, then probe/upload the resulting MP4.
+`agent-browser record stop`, then probe and upload the resulting MP4. Use the `record-video` skill
+when you need the complete metadata and upload command pattern.
 
 ```bash
 ffprobe -v error -print_format json -show_streams -show_format /tmp/opencode/demo.mp4

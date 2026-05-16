@@ -260,7 +260,6 @@ class TestInstallBinScripts:
         src = tmp_path / "app" / "sandbox_runtime" / "bin"
         src.mkdir(parents=True)
         (src / "upload-media.js").write_text("#!/usr/bin/env node\n// upload cli")
-        (src / "record-browser-video.js").write_text("#!/usr/bin/env node\n// record cli")
 
         dest = tmp_path / "usr-local-bin"
         dest.mkdir()
@@ -274,11 +273,6 @@ class TestInstallBinScripts:
         assert installed.exists()
         assert installed.read_text() == "#!/usr/bin/env node\n// upload cli"
         assert installed.stat().st_mode & 0o755
-
-        record_installed = dest / "record-browser-video"
-        assert record_installed.exists()
-        assert record_installed.read_text() == "#!/usr/bin/env node\n// record cli"
-        assert record_installed.stat().st_mode & 0o755
 
     def test_non_js_files_skipped(self, tmp_path):
         """Non-.js files in bin/ should not be installed."""

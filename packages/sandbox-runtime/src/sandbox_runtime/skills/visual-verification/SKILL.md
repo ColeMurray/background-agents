@@ -13,10 +13,9 @@ using it reliably.
 
 ## Key Fact
 
-`upload-media` and `record-browser-video` are **bash commands** installed on PATH. Run them with
-your Bash tool, not as MCP tools or tool bindings. For videos, prefer `record-browser-video` when
-you want the full record/probe/upload workflow in one command, or use `agent-browser record`
-directly when manually controlling the recording.
+`upload-media` is a **bash command** installed on PATH. Run it with your Bash tool, not as an MCP
+tool or tool binding. For videos, use `agent-browser record` directly, then probe and upload the
+resulting MP4 with `upload-media`.
 
 ## When To Use It
 
@@ -123,12 +122,28 @@ upload-media /tmp/verify-annotated.png \
 Video recording for interaction flows:
 
 ```bash
-record-browser-video \
-  --url "$URL" \
+agent-browser open "$URL" && \
+agent-browser set viewport 1512 982 && \
+agent-browser snapshot -i && \
+STARTED_AT_MS=$(date +%s%3N) && \
+agent-browser record start /tmp/opencode/menu-recording.mp4 && \
+agent-browser click "[data-testid=settings]" && \
+agent-browser wait 1000 && \
+agent-browser record stop && \
+ENDED_AT_MS=$(date +%s%3N) && \
+PROBE_JSON=$(ffprobe -v error -print_format json -show_streams -show_format /tmp/opencode/menu-recording.mp4) && \
+DURATION_MS=$(node -e 'const p=JSON.parse(process.argv[1]); const v=(p.streams||[]).find((s)=>s.codec_type==="video")||{}; const d=Number(v.duration ?? p.format?.duration); console.log(Math.max(1, Math.round(d * 1000)));' "$PROBE_JSON") && \
+DIMENSIONS=$(node -e 'const p=JSON.parse(process.argv[1]); const v=(p.streams||[]).find((s)=>s.codec_type==="video")||{}; console.log(JSON.stringify({width:Number(v.width),height:Number(v.height)}));' "$PROBE_JSON") && \
+upload-media /tmp/opencode/menu-recording.mp4 \
+  --artifact-type video \
   --caption "Menu interaction recording" \
-  --output-basename /tmp/opencode/menu-recording \
-  --viewport 1512x982 \
-  -- bash -lc 'agent-browser snapshot -i && agent-browser click "[data-testid=settings]" && agent-browser wait 1000'
+  --source-url "$URL" \
+  --duration-ms "$DURATION_MS" \
+  --recording-started-at "$STARTED_AT_MS" \
+  --recording-ended-at "$ENDED_AT_MS" \
+  --dimensions "$DIMENSIONS" \
+  --truncated false \
+  --has-audio false
 ```
 
 ## Reporting Template
@@ -167,8 +182,6 @@ Uploaded artifact: abc123
   requested viewport as video dimensions.
 - Prefer stable selectors such as `[data-testid=...]`, `[data-clear-completed]`, or `#todo-title`.
   Run `agent-browser snapshot -i` before recording when selectors or accessible names are uncertain.
-- If an old `/tmp/openinspect-browser-video-state.json` file blocks recovery, remove it only after
-  confirming no active recorder process from that state is still running.
 
 ## Relationship To `agent-browser`
 
