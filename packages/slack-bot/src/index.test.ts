@@ -562,8 +562,70 @@ describe("POST /interactions", () => {
       status: "Starting...",
       loading_messages: ["Starting..."],
     });
-    expect(order.indexOf("status")).toBeLessThan(order.indexOf("repos"));
+    expect(order.indexOf("repos")).toBeLessThan(order.indexOf("status"));
     expect(order.indexOf("status")).toBeLessThan(order.indexOf("session"));
+
+    slackFetch.mockRestore();
+  });
+
+  it("does not set Starting status when selected repo is no longer available", async () => {
+    const slackFetch = mockSlackFetch([]);
+    const env = makeEnv();
+    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+      "pending:C123:111.222",
+      JSON.stringify({
+        message: "Please handle this",
+        userId: "U123",
+      })
+    );
+
+    (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/repos")) {
+          return new Response(JSON.stringify({ repos: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ enabledModels: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    );
+
+    const payload = {
+      type: "block_actions",
+      user: { id: "U123" },
+      channel: { id: "C123" },
+      message: { ts: "111.222" },
+      actions: [
+        {
+          action_id: "select_repo",
+          selected_option: { value: "acme/app" },
+        },
+      ],
+    };
+    const request = new Request("http://localhost/interactions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "x-slack-signature": "v0=test",
+        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
+      },
+      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
+    });
+    const ctx = makeCtx();
+
+    const response = await app.fetch(request, env, ctx);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+
+    await flushWaitUntil(ctx);
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+    expect(statusFetchBodies(slackFetch)).toEqual([]);
 
     slackFetch.mockRestore();
   });

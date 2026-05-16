@@ -1736,7 +1736,6 @@ async function handleRepoSelection(
   };
 
   const threadKey = threadTs || messageTs;
-  scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
 
   // Find the repo config
   const repos = await getAvailableRepos(env, traceId);
@@ -1751,6 +1750,8 @@ async function handleRepoSelection(
     );
     return;
   }
+
+  scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
 
   // Post acknowledgment
   await postMessage(env.SLACK_BOT_TOKEN, channel, `Working on *${repo.fullName}*...`, {
