@@ -1,6 +1,6 @@
 ---
 name: visual-verification
-description: Verify application UI changes with uploaded screenshot artifacts
+description: Verify application UI changes with uploaded screenshot or video artifacts
 ---
 
 # visual-verification
@@ -13,24 +13,24 @@ using it reliably.
 
 ## Key Fact
 
-`upload-media` is a **bash command** installed on PATH. Run it with your Bash tool, not as an MCP
-tool or tool binding. Example: `upload-media /tmp/screenshot.png --caption "..."`.
+`upload-media`, `start-browser-video`, and `stop-browser-video` are **bash commands** installed on
+PATH. Run them with your Bash tool, not as MCP tools or tool bindings.
 
 ## When To Use It
 
 - Verify a UI change after editing code
 - Capture before/after screenshots for comparison
 - Confirm responsive layout differences at a chosen viewport
-- Produce an uploaded screenshot artifact the user can review in-session
+- Produce an uploaded screenshot or short video artifact the user can review in-session
 
 ## Success Criteria
 
 The task is not complete until all of these are true:
 
 1. The changed UI is opened in the browser.
-2. The capture mode is chosen explicitly: viewport or full-page.
+2. The capture mode is chosen explicitly: viewport screenshot, full-page screenshot, or video.
 3. The viewport is set explicitly or reported as a deliberate default.
-4. A screenshot is uploaded with `upload-media` in the same prompt.
+4. A screenshot or video is uploaded in the same prompt.
 5. The returned `artifactId` is reported back to the user.
 6. The response states what was verified and what dimensions/mode were used.
 
@@ -42,7 +42,8 @@ The task is not complete until all of these are true:
 4. Choose one of:
    - Viewport screenshot for above-the-fold or device-specific review
    - Full-page screenshot for full document review
-5. Upload the screenshot immediately with matching metadata.
+   - Video recording for interaction flows, animations, transitions, or multi-step behavior
+5. Upload the capture immediately with matching metadata.
 6. Report the result with the artifact ID and actual capture settings.
 
 ## Default Decision Rules
@@ -56,6 +57,8 @@ The task is not complete until all of these are true:
   report it.
 - If the screenshot is intended to prove a fix, prefer stating exactly what was checked, not only
   that a screenshot was taken.
+- Use a video when the proof depends on seeing interaction over time, such as opening a menu,
+  dragging, typing, navigating between states, or watching an animation complete.
 
 ## Using Screenshots From Other Sources
 
@@ -115,12 +118,26 @@ upload-media /tmp/verify-annotated.png \
   --annotated
 ```
 
+Video recording for interaction flows:
+
+```bash
+agent-browser open "$URL" && \
+agent-browser set viewport 1512 982 && \
+start-browser-video \
+  --caption "Menu interaction recording" \
+  --source-url "$URL" \
+  --dimensions '{"width":1512,"height":982}' && \
+agent-browser click "Settings" && \
+agent-browser wait 1000 && \
+stop-browser-video
+```
+
 ## Reporting Template
 
 Include the following in the final response:
 
 - What UI change or state was verified
-- Whether the capture was viewport or full-page
+- Whether the capture was viewport, full-page, or video
 - The viewport used
 - The source URL
 - The uploaded artifact ID
@@ -138,9 +155,11 @@ Uploaded artifact: abc123
 
 ## Guardrails
 
-- Do not claim the screenshot was uploaded unless `upload-media` returned an artifact ID.
+- Do not claim the screenshot or video was uploaded unless the upload command returned an artifact
+  ID.
 - Do not report viewport metadata you did not explicitly set or verify.
 - Do not use `upload-media` in a later prompt; it is prompt-scoped.
+- Do not leave an active recording open. Always run `stop-browser-video` after the interaction.
 - If the user asked for a full-page screenshot, do not use viewport-only capture.
 - If the UI requires interaction before it matches the expected state, perform that interaction
   before capturing.
@@ -150,4 +169,4 @@ Uploaded artifact: abc123
 - Use `agent-browser` directly for open-ended browsing, debugging, auth flows, snapshots, and custom
   inspection.
 - Use `visual-verification` when the deliverable is proof that a UI change works and the user should
-  receive an uploaded screenshot artifact.
+  receive an uploaded screenshot or video artifact.

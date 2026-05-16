@@ -11,6 +11,7 @@ import type {
   ServerMessage,
   SessionArtifact,
   SessionState as SharedSessionState,
+  VideoArtifactMetadata,
 } from "@open-inspect/shared";
 
 // WebSocket URL (should come from env in production)
@@ -118,9 +119,41 @@ const SCREENSHOT_MIME_TYPES = new Set<ScreenshotArtifactMetadata["mimeType"]>([
   "image/jpeg",
   "image/webp",
 ]);
+const VIDEO_MIME_TYPES = new Set<VideoArtifactMetadata["mimeType"]>(["video/mp4"]);
 
 function isScreenshotMimeType(value: string): value is ScreenshotArtifactMetadata["mimeType"] {
   return SCREENSHOT_MIME_TYPES.has(value as ScreenshotArtifactMetadata["mimeType"]);
+}
+
+function isVideoMimeType(value: string): value is VideoArtifactMetadata["mimeType"] {
+  return VIDEO_MIME_TYPES.has(value as VideoArtifactMetadata["mimeType"]);
+}
+
+function toNonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function toPositiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function toDimensions(value: unknown): { width: number; height: number } | undefined {
+  if (
+    value &&
+    typeof value === "object" &&
+    typeof (value as { width?: unknown }).width === "number" &&
+    Number.isFinite((value as { width: number }).width) &&
+    (value as { width: number }).width > 0 &&
+    typeof (value as { height?: unknown }).height === "number" &&
+    Number.isFinite((value as { height: number }).height) &&
+    (value as { height: number }).height > 0
+  ) {
+    return {
+      width: (value as { width: number }).width,
+      height: (value as { height: number }).height,
+    };
+  }
+  return undefined;
 }
 
 function toUiArtifact(artifact: SessionArtifact): Artifact {
@@ -145,33 +178,23 @@ function toUiArtifact(artifact: SessionArtifact): Artifact {
           filename: typeof meta.filename === "string" ? meta.filename : undefined,
           objectKey: typeof meta.objectKey === "string" ? meta.objectKey : undefined,
           mimeType:
-            typeof meta.mimeType === "string" && isScreenshotMimeType(meta.mimeType)
+            typeof meta.mimeType === "string" &&
+            (isScreenshotMimeType(meta.mimeType) || isVideoMimeType(meta.mimeType))
               ? meta.mimeType
               : undefined,
-          sizeBytes:
-            typeof meta.sizeBytes === "number" &&
-            Number.isFinite(meta.sizeBytes) &&
-            meta.sizeBytes >= 0
-              ? meta.sizeBytes
-              : undefined,
-          viewport:
-            meta.viewport &&
-            typeof meta.viewport === "object" &&
-            typeof (meta.viewport as { width?: unknown }).width === "number" &&
-            Number.isFinite((meta.viewport as { width: number }).width) &&
-            (meta.viewport as { width: number }).width > 0 &&
-            typeof (meta.viewport as { height?: unknown }).height === "number" &&
-            Number.isFinite((meta.viewport as { height: number }).height) &&
-            (meta.viewport as { height: number }).height > 0
-              ? {
-                  width: (meta.viewport as { width: number }).width,
-                  height: (meta.viewport as { height: number }).height,
-                }
-              : undefined,
+          sizeBytes: toNonNegativeNumber(meta.sizeBytes),
+          viewport: toDimensions(meta.viewport),
           sourceUrl: typeof meta.sourceUrl === "string" ? meta.sourceUrl : undefined,
+          endUrl: typeof meta.endUrl === "string" ? meta.endUrl : undefined,
           fullPage: typeof meta.fullPage === "boolean" ? meta.fullPage : undefined,
           annotated: typeof meta.annotated === "boolean" ? meta.annotated : undefined,
           caption: typeof meta.caption === "string" ? meta.caption : undefined,
+          durationMs: toPositiveNumber(meta.durationMs),
+          recordingStartedAt: toPositiveNumber(meta.recordingStartedAt),
+          recordingEndedAt: toPositiveNumber(meta.recordingEndedAt),
+          dimensions: toDimensions(meta.dimensions),
+          truncated: typeof meta.truncated === "boolean" ? meta.truncated : undefined,
+          hasAudio: meta.hasAudio === false ? false : undefined,
           previewStatus:
             meta.previewStatus === "active" ||
             meta.previewStatus === "outdated" ||

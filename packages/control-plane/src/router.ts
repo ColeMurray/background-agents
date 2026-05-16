@@ -14,13 +14,18 @@ import { verifyInternalToken } from "./auth/internal";
 import {
   buildMediaObjectKey,
   detectScreenshotFileType,
+  detectVideoFileType,
   isMultipartFile,
   isSupportedScreenshotMimeType,
+  isSupportedVideoMimeType,
   type MultipartFieldValue,
   parseOptionalBoolean,
   parseOptionalViewport,
+  parseVideoUploadMetadata,
   SCREENSHOT_MAX_BYTES,
   SCREENSHOT_UPLOAD_LIMIT_PER_SESSION,
+  VIDEO_MAX_BYTES,
+  VIDEO_UPLOAD_LIMIT_PER_SESSION,
 } from "./media";
 import {
   resolveScmProviderFromEnv,
@@ -42,6 +47,7 @@ import {
   type CodeServerSettings,
   type SandboxSettings,
   type ScreenshotArtifactMetadata,
+  type VideoArtifactMetadata,
   type SessionStatus,
   type CallbackContext,
   type SpawnChildSessionRequest,
@@ -1241,6 +1247,22 @@ function getOptionalFormString(value: MultipartFieldValue | null): string | unde
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+async function parseErrorMessage(response: Response, fallback: string): Promise<string> {
+  const responseText = await response.text();
+  if (!responseText) return fallback;
+
+  try {
+    const parsedError = JSON.parse(responseText) as { error?: unknown };
+    if (typeof parsedError.error === "string" && parsedError.error.trim()) {
+      return parsedError.error;
+    }
+  } catch {
+    // Fall through to raw response text.
+  }
+
+  return responseText;
+}
+
 async function listSessionArtifactsFromDo(
   stub: DurableObjectStub,
   ctx: RequestContext
@@ -1283,18 +1305,26 @@ async function getSessionArtifactFromDo(
   return data.artifact;
 }
 
-function getScreenshotMimeType(
+function getMediaMimeType(
   artifact: Pick<ArtifactResponse, "metadata">
-): "image/png" | "image/jpeg" | "image/webp" | null {
+): "image/png" | "image/jpeg" | "image/webp" | "video/mp4" | null {
   const mimeType = artifact.metadata?.mimeType;
-  return typeof mimeType === "string" && isSupportedScreenshotMimeType(mimeType) ? mimeType : null;
+  if (typeof mimeType !== "string") return null;
+  if (isSupportedScreenshotMimeType(mimeType) || isSupportedVideoMimeType(mimeType)) {
+    return mimeType;
+  }
+  return null;
 }
 
 function getContentTypeFromHeaders(
   headers: Headers
-): "image/png" | "image/jpeg" | "image/webp" | null {
+): "image/png" | "image/jpeg" | "image/webp" | "video/mp4" | null {
   const contentType = headers.get("Content-Type");
-  return contentType && isSupportedScreenshotMimeType(contentType) ? contentType : null;
+  if (!contentType) return null;
+  if (isSupportedScreenshotMimeType(contentType) || isSupportedVideoMimeType(contentType)) {
+    return contentType;
+  }
+  return null;
 }
 
 async function handleMediaUpload(
@@ -1320,8 +1350,11 @@ async function handleMediaUpload(
 
   const artifactTypeField = getRequiredFormString(formData.get("artifactType"), "artifactType");
   if (artifactTypeField instanceof Response) return artifactTypeField;
+  if (artifactTypeField === "video") {
+    return handleVideoUpload({ sessionId, formData, fileEntry, env, ctx });
+  }
   if (artifactTypeField !== "screenshot") {
-    return error("Only screenshot uploads are supported", 400);
+    return error("Only screenshot and video uploads are supported", 400);
   }
 
   if (fileEntry.size <= 0) {
@@ -1474,8 +1507,130 @@ async function handleMediaUpload(
   return json({ artifactId, objectKey }, 201);
 }
 
+async function handleVideoUpload(input: {
+  sessionId: string;
+  formData: FormData;
+  fileEntry: Exclude<MultipartFieldValue, string>;
+  env: Env;
+  ctx: RequestContext;
+}): Promise<Response> {
+  const { sessionId, formData, fileEntry, env, ctx } = input;
+
+  if (fileEntry.size <= 0) {
+    return error("Uploaded file is empty", 400);
+  }
+
+  if (fileEntry.size > VIDEO_MAX_BYTES) {
+    return error(`Video uploads must be ${VIDEO_MAX_BYTES} bytes or smaller`, 400);
+  }
+
+  if (fileEntry.type && !isSupportedVideoMimeType(fileEntry.type)) {
+    return error("Unsupported video MIME type", 400);
+  }
+
+  const doId = env.SESSION.idFromName(sessionId);
+  const stub = env.SESSION.get(doId);
+  const artifactsResult = await listSessionArtifactsFromDo(stub, ctx);
+  if (artifactsResult instanceof Response) return artifactsResult;
+
+  const videoCount = artifactsResult.filter((artifact) => artifact.type === "video").length;
+  if (videoCount >= VIDEO_UPLOAD_LIMIT_PER_SESSION) {
+    return error(`Session video limit of ${VIDEO_UPLOAD_LIMIT_PER_SESSION} uploads exceeded`, 429);
+  }
+
+  let uploadMetadata: ReturnType<typeof parseVideoUploadMetadata>;
+  try {
+    uploadMetadata = parseVideoUploadMetadata(formData);
+  } catch (fieldError) {
+    return error(fieldError instanceof Error ? fieldError.message : "Invalid video metadata", 400);
+  }
+
+  const bytes = new Uint8Array(await fileEntry.arrayBuffer());
+  const detectedFileType = detectVideoFileType(bytes);
+  if (!detectedFileType) {
+    return error("Uploaded file is not a supported video format", 400);
+  }
+
+  if (fileEntry.type && fileEntry.type !== detectedFileType.mimeType) {
+    return error("Uploaded file MIME type does not match file contents", 400);
+  }
+
+  const artifactId = generateId();
+  const objectKey = buildMediaObjectKey(sessionId, artifactId, detectedFileType.extension);
+  const metadata: VideoArtifactMetadata = {
+    ...uploadMetadata,
+    objectKey,
+    mimeType: detectedFileType.mimeType,
+    sizeBytes: bytes.byteLength,
+  };
+
+  await env.MEDIA_BUCKET.put(objectKey, bytes, {
+    httpMetadata: { contentType: detectedFileType.mimeType },
+  });
+
+  const createArtifactResponse = await stub.fetch(
+    internalRequest(
+      buildSessionInternalUrl(SessionInternalPaths.createMediaArtifact),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          artifactId,
+          artifactType: "video",
+          objectKey,
+          metadata,
+        }),
+      },
+      ctx
+    )
+  );
+
+  if (!createArtifactResponse.ok) {
+    try {
+      await env.MEDIA_BUCKET.delete(objectKey);
+    } catch (cleanupError) {
+      logger.error("media.upload.cleanup_failed", {
+        session_id: sessionId,
+        artifact_id: artifactId,
+        object_key: objectKey,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+        error: cleanupError instanceof Error ? cleanupError : String(cleanupError),
+      });
+    }
+
+    const doErrorMessage = await parseErrorMessage(
+      createArtifactResponse,
+      "Failed to persist video artifact"
+    );
+    if (createArtifactResponse.status >= 500) {
+      logger.error("media.upload.create_artifact_failed", {
+        session_id: sessionId,
+        artifact_id: artifactId,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+        error: doErrorMessage,
+        http_status: createArtifactResponse.status,
+      });
+      return error("Failed to persist media artifact", 500);
+    }
+
+    logger.warn("media.upload.create_artifact_failed", {
+      session_id: sessionId,
+      artifact_id: artifactId,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+      error: doErrorMessage,
+      http_status: createArtifactResponse.status,
+    });
+    return error(doErrorMessage, createArtifactResponse.status);
+  }
+
+  return json({ artifactId, objectKey }, 201);
+}
+
 async function handleMediaGet(
-  _request: Request,
+  request: Request,
   env: Env,
   match: RegExpMatchArray,
   ctx: RequestContext
@@ -1493,8 +1648,55 @@ async function handleMediaGet(
   const stub = env.SESSION.get(doId);
   const artifact = await getSessionArtifactFromDo(stub, artifactId, ctx);
   if (artifact instanceof Response) return artifact;
-  if (!artifact || artifact.type !== "screenshot" || !artifact.url) {
+  if (!artifact || (artifact.type !== "screenshot" && artifact.type !== "video") || !artifact.url) {
     return error("Media artifact not found", 404);
+  }
+
+  const rangeHeader = request.headers.get("Range");
+  if (rangeHeader) {
+    const head = await env.MEDIA_BUCKET.head(artifact.url);
+    if (!head) {
+      logger.warn("media.stream.object_missing", {
+        session_id: sessionId,
+        artifact_id: artifactId,
+        object_key: artifact.url,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return error("Media artifact not found", 404);
+    }
+
+    const parsedRange = parseByteRangeHeader(rangeHeader, head.size);
+    if (parsedRange instanceof Response) return parsedRange;
+
+    const rangedObject = await env.MEDIA_BUCKET.get(artifact.url, {
+      range: { offset: parsedRange.start, length: parsedRange.length },
+    });
+    if (!rangedObject) {
+      return error("Media artifact not found", 404);
+    }
+
+    const headers = new Headers();
+    head.writeHttpMetadata(headers);
+    const contentType = getContentTypeFromHeaders(headers) ?? getMediaMimeType(artifact);
+    if (!contentType) {
+      logger.error("media.stream.invalid_metadata", {
+        session_id: sessionId,
+        artifact_id: artifactId,
+        object_key: artifact.url,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return error("Media artifact is invalid", 500);
+    }
+
+    headers.set("Content-Type", contentType);
+    headers.set("ETag", head.httpEtag);
+    headers.set("Accept-Ranges", "bytes");
+    headers.set("Content-Range", `bytes ${parsedRange.start}-${parsedRange.end}/${head.size}`);
+    headers.set("Content-Length", String(parsedRange.length));
+
+    return new Response(rangedObject.body, { status: 206, headers });
   }
 
   const object = await env.MEDIA_BUCKET.get(artifact.url);
@@ -1511,7 +1713,7 @@ async function handleMediaGet(
 
   const headers = new Headers();
   object.writeHttpMetadata(headers);
-  const contentType = getContentTypeFromHeaders(headers) ?? getScreenshotMimeType(artifact);
+  const contentType = getContentTypeFromHeaders(headers) ?? getMediaMimeType(artifact);
   if (!contentType) {
     logger.error("media.stream.invalid_metadata", {
       session_id: sessionId,
@@ -1525,9 +1727,57 @@ async function handleMediaGet(
 
   headers.set("Content-Type", contentType);
   headers.set("ETag", object.httpEtag);
+  headers.set("Accept-Ranges", "bytes");
   headers.set("Content-Length", String(object.size));
 
   return new Response(object.body, { headers });
+}
+
+function parseByteRangeHeader(
+  rangeHeader: string,
+  size: number
+): { start: number; end: number; length: number } | Response {
+  const unsatisfied = () =>
+    Response.json(
+      { error: "Requested range is not satisfiable" },
+      { status: 416, headers: { "Content-Range": `bytes */${size}` } }
+    );
+
+  if (!rangeHeader.startsWith("bytes=") || rangeHeader.includes(",")) {
+    return unsatisfied();
+  }
+
+  const range = rangeHeader.slice("bytes=".length).trim();
+  const parts = range.split("-");
+  if (parts.length !== 2) {
+    return unsatisfied();
+  }
+  const [startRaw, endRaw] = parts;
+
+  let start: number;
+  let end: number;
+  if (startRaw === "") {
+    const suffixLength = Number(endRaw);
+    if (!Number.isInteger(suffixLength) || suffixLength <= 0) return unsatisfied();
+    start = Math.max(size - suffixLength, 0);
+    end = size - 1;
+  } else {
+    start = Number(startRaw);
+    end = endRaw === "" ? size - 1 : Number(endRaw);
+  }
+
+  if (
+    !Number.isInteger(start) ||
+    !Number.isInteger(end) ||
+    start < 0 ||
+    end < start ||
+    start >= size
+  ) {
+    return unsatisfied();
+  }
+
+  end = Math.min(end, size - 1);
+  return { start, end, length: end - start + 1 };
 }
 
 async function handleSessionParticipants(
