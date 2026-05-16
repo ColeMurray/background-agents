@@ -257,6 +257,18 @@ function statusFetchBodies(fetchMock: { mock: { calls: readonly (readonly unknow
     .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
 }
 
+function slackApiBodies(
+  fetchMock: { mock: { calls: readonly (readonly unknown[])[] } },
+  method: string
+) {
+  return fetchMock.mock.calls
+    .filter(([input]) => {
+      const url = typeof input === "string" ? input : String(input);
+      return url.includes(method);
+    })
+    .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+}
+
 function promptFetchBodies(fetchMock: { mock: { calls: readonly (readonly unknown[])[] } }) {
   return fetchMock.mock.calls
     .filter(([input]) => {
@@ -325,6 +337,33 @@ describe("POST /events", () => {
     });
     expect(order.indexOf("status")).toBeLessThan(order.indexOf("channelInfo"));
     expect(order.indexOf("status")).toBeLessThan(order.indexOf("session"));
+
+    const postBodies = slackApiBodies(slackFetch, "chat.postMessage");
+    expect(postBodies.some((body) => String(body.text).includes("Session started!"))).toBe(false);
+
+    const updateBodies = slackApiBodies(slackFetch, "chat.update");
+    expect(updateBodies).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channel: "C123",
+          ts: "222.333",
+          text: "Working on *acme/app*...",
+          blocks: expect.arrayContaining([
+            expect.objectContaining({
+              type: "actions",
+              elements: expect.arrayContaining([
+                expect.objectContaining({
+                  type: "button",
+                  text: { type: "plain_text", text: "View Session" },
+                  url: "https://app.test/session/session-1",
+                  action_id: "view_session",
+                }),
+              ]),
+            }),
+          ]),
+        }),
+      ])
+    );
 
     slackFetch.mockRestore();
   });
@@ -564,6 +603,31 @@ describe("POST /interactions", () => {
     });
     expect(order.indexOf("repos")).toBeLessThan(order.indexOf("status"));
     expect(order.indexOf("status")).toBeLessThan(order.indexOf("session"));
+
+    const postBodies = slackApiBodies(slackFetch, "chat.postMessage");
+    expect(postBodies.some((body) => String(body.text).includes("Session started!"))).toBe(false);
+
+    const updateBodies = slackApiBodies(slackFetch, "chat.update");
+    expect(updateBodies).toEqual([
+      expect.objectContaining({
+        channel: "C123",
+        ts: "222.333",
+        text: "Working on *acme/app*...",
+        blocks: expect.arrayContaining([
+          expect.objectContaining({
+            type: "actions",
+            elements: expect.arrayContaining([
+              expect.objectContaining({
+                type: "button",
+                text: { type: "plain_text", text: "View Session" },
+                url: "https://app.test/session/session-1",
+                action_id: "view_session",
+              }),
+            ]),
+          }),
+        ]),
+      }),
+    ]);
 
     slackFetch.mockRestore();
   });

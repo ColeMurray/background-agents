@@ -886,6 +886,42 @@ function scheduleStartingStatus(
   );
 }
 
+function buildWorkingMessageBlocks(
+  repoFullName: string,
+  options: { reasoning?: string; sessionId?: string; webAppUrl?: string } = {}
+): Array<Record<string, unknown>> {
+  const blocks: Array<Record<string, unknown>> = [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: options.reasoning
+          ? `Working on *${repoFullName}*...\n_${options.reasoning}_`
+          : `Working on *${repoFullName}*...`,
+      },
+    },
+  ];
+
+  if (options.sessionId && options.webAppUrl) {
+    blocks.push({
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: {
+            type: "plain_text",
+            text: "View Session",
+          },
+          url: `${options.webAppUrl}/session/${options.sessionId}`,
+          action_id: "view_session",
+        },
+      ],
+    });
+  }
+
+  return blocks;
+}
+
 /**
  * Create a session and send the initial prompt.
  * Shared logic between handleAppMention and handleRepoSelection.
@@ -1000,23 +1036,6 @@ async function startSessionAndSendPrompt(
   }
 
   return { sessionId: session.sessionId };
-}
-
-/**
- * Post the "session started" notification to Slack.
- */
-async function postSessionStartedMessage(
-  env: Env,
-  channel: string,
-  threadTs: string,
-  sessionId: string
-): Promise<void> {
-  await postMessage(
-    env.SLACK_BOT_TOKEN,
-    channel,
-    `Session started! The agent is now working on your request.\n\nView progress: ${env.WEB_APP_URL}/session/${sessionId}`,
-    { thread_ts: threadTs }
-  );
 }
 
 const app = new Hono<{ Bindings: Env }>();
@@ -1333,7 +1352,6 @@ interface IncomingMessageParams {
  * - Repo classification
  * - Clarification / repo selection UI
  * - Ack message + session creation
- * - Session started message
  */
 async function handleIncomingMessage(params: IncomingMessageParams): Promise<void> {
   const {
@@ -1538,15 +1556,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     `Working on *${repo.fullName}*...`,
     {
       thread_ts: threadKey,
-      blocks: [
-        {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: `Working on *${repo.fullName}*...\n_${result.reasoning}_`,
-          },
-        },
-      ],
+      blocks: buildWorkingMessageBlocks(repo.fullName, { reasoning: result.reasoning }),
     }
   );
 
@@ -1573,34 +1583,13 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   // Update the acknowledgment message with session link button
   if (ackTs) {
     await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, `Working on *${repo.fullName}*...`, {
-      blocks: [
-        {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: `Working on *${repo.fullName}*...\n_${result.reasoning}_`,
-          },
-        },
-        {
-          type: "actions",
-          elements: [
-            {
-              type: "button",
-              text: {
-                type: "plain_text",
-                text: "View Session",
-              },
-              url: `${env.WEB_APP_URL}/session/${sessionResult.sessionId}`,
-              action_id: "view_session",
-            },
-          ],
-        },
-      ],
+      blocks: buildWorkingMessageBlocks(repo.fullName, {
+        reasoning: result.reasoning,
+        sessionId: sessionResult.sessionId,
+        webAppUrl: env.WEB_APP_URL,
+      }),
     });
   }
-
-  // Post that the agent is working
-  await postSessionStartedMessage(env, channel, threadKey, sessionResult.sessionId);
 }
 
 /**
@@ -1754,9 +1743,16 @@ async function handleRepoSelection(
   scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
 
   // Post acknowledgment
-  await postMessage(env.SLACK_BOT_TOKEN, channel, `Working on *${repo.fullName}*...`, {
-    thread_ts: threadKey,
-  });
+  const ackResult = await postMessage(
+    env.SLACK_BOT_TOKEN,
+    channel,
+    `Working on *${repo.fullName}*...`,
+    {
+      thread_ts: threadKey,
+      blocks: buildWorkingMessageBlocks(repo.fullName),
+    }
+  );
+  const ackTs = ackResult.ok ? ackResult.ts : undefined;
 
   // Create session and send prompt using shared logic
   const sessionResult = await startSessionAndSendPrompt(
@@ -1779,8 +1775,14 @@ async function handleRepoSelection(
   // Clean up pending message
   await createKvCacheStore(env.SLACK_KV).delete(pendingKey);
 
-  // Post that the agent is working
-  await postSessionStartedMessage(env, channel, threadKey, sessionResult.sessionId);
+  if (ackTs) {
+    await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, `Working on *${repo.fullName}*...`, {
+      blocks: buildWorkingMessageBlocks(repo.fullName, {
+        sessionId: sessionResult.sessionId,
+        webAppUrl: env.WEB_APP_URL,
+      }),
+    });
+  }
 }
 
 /**
