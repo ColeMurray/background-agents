@@ -14,9 +14,7 @@ import pytest
 NODE_BINARY = shutil.which("node")
 RUNTIME_DIR = Path(__file__).resolve().parents[1] / "src" / "sandbox_runtime"
 UPLOAD_MEDIA_SCRIPT = RUNTIME_DIR / "bin" / "upload-media.js"
-START_BROWSER_VIDEO_SCRIPT = RUNTIME_DIR / "bin" / "start-browser-video.js"
-STOP_BROWSER_VIDEO_SCRIPT = RUNTIME_DIR / "bin" / "stop-browser-video.js"
-BROWSER_VIDEO_RECORDER_SCRIPT = RUNTIME_DIR / "bin" / "browser-video-recorder.js"
+RECORD_BROWSER_VIDEO_SCRIPT = RUNTIME_DIR / "bin" / "record-browser-video.js"
 BRIDGE_CLIENT_MODULE = RUNTIME_DIR / "tools" / "_bridge-client.js"
 TOOL_SUBPROCESS_TIMEOUT_SECONDS = 10
 MP4_BYTES = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
@@ -189,12 +187,19 @@ def test_upload_media_posts_video_metadata(tmp_path: Path) -> None:
     assert 'name="dimensions"\r\n\r\n{"width":1280,"height":720}' in body
 
 
-def test_start_browser_video_rejects_missing_caption(tmp_path: Path) -> None:
+def test_record_browser_video_rejects_missing_caption(tmp_path: Path) -> None:
     result = subprocess.run(
-        [NODE_BINARY, str(START_BROWSER_VIDEO_SCRIPT)],
+        [
+            NODE_BINARY,
+            str(RECORD_BROWSER_VIDEO_SCRIPT),
+            "--url",
+            "https://app.example.com",
+            "--output-basename",
+            str(tmp_path / "demo"),
+        ],
         capture_output=True,
         text=True,
-        env=_tool_env({"OPEN_INSPECT_RECORDING_STATE": str(tmp_path / "recording.json")}),
+        env=_tool_env(),
         check=False,
         timeout=TOOL_SUBPROCESS_TIMEOUT_SECONDS,
     )
@@ -203,171 +208,172 @@ def test_start_browser_video_rejects_missing_caption(tmp_path: Path) -> None:
     assert "--caption requires a value" in result.stderr
 
 
-def test_start_browser_video_rejects_existing_active_state(tmp_path: Path) -> None:
-    state_file = tmp_path / "recording.json"
-    state_file.write_text(json.dumps({"recordingId": "rec-1"}))
-
-    result = subprocess.run(
-        [NODE_BINARY, str(START_BROWSER_VIDEO_SCRIPT), "--caption", "Menu opens"],
-        capture_output=True,
-        text=True,
-        env=_tool_env({"OPEN_INSPECT_RECORDING_STATE": str(state_file)}),
-        check=False,
-        timeout=TOOL_SUBPROCESS_TIMEOUT_SECONDS,
-    )
-
-    assert result.returncode == 1
-    assert "A browser recording is already active" in result.stderr
-
-
-def test_start_browser_video_rejects_invalid_dimensions(tmp_path: Path) -> None:
+def test_record_browser_video_rejects_invalid_viewport(tmp_path: Path) -> None:
     result = subprocess.run(
         [
             NODE_BINARY,
-            str(START_BROWSER_VIDEO_SCRIPT),
+            str(RECORD_BROWSER_VIDEO_SCRIPT),
+            "--url",
+            "https://app.example.com",
             "--caption",
             "Menu opens",
-            "--dimensions",
+            "--output-basename",
+            str(tmp_path / "demo"),
+            "--viewport",
             '{"width":0.4,"height":720}',
         ],
         capture_output=True,
         text=True,
-        env=_tool_env({"OPEN_INSPECT_RECORDING_STATE": str(tmp_path / "recording.json")}),
+        env=_tool_env(),
         check=False,
         timeout=TOOL_SUBPROCESS_TIMEOUT_SECONDS,
     )
 
     assert result.returncode == 1
-    assert "--dimensions must include positive integer width and height" in result.stderr
+    assert "--viewport must include positive integer width and height" in result.stderr
 
 
-def test_start_browser_video_does_not_call_server_when_local_setup_fails(tmp_path: Path) -> None:
-    tmp_file = tmp_path / "not-a-directory"
-    tmp_file.write_text("not a directory")
-    state_file = tmp_path / "recording.json"
+def test_record_browser_video_uses_agent_browser_record_and_uploads_probe_metadata(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    command_log = tmp_path / "commands.log"
+    (fake_bin / "agent-browser").write_text(
+        f"""#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+fs.appendFileSync({json.dumps(str(command_log))}, args.join(" ") + "\\n");
+if (args[0] === "record" && args[1] === "start") {{
+  fs.writeFileSync(args[2], "webm bytes");
+}}
+process.exit(0);
+"""
+    )
+    (fake_bin / "ffmpeg").write_text(
+        f"""#!/usr/bin/env node
+const fs = require("fs");
+const out = process.argv[process.argv.length - 1];
+fs.writeFileSync(out, Buffer.from({list(MP4_BYTES)}));
+process.exit(0);
+"""
+    )
+    (fake_bin / "ffprobe").write_text(
+        """#!/usr/bin/env node
+console.log(JSON.stringify({
+  streams: [{ codec_type: "video", width: 1280, height: 578, duration: "1.45" }],
+  format: { duration: "1.45" }
+}));
+"""
+    )
+    for script in fake_bin.iterdir():
+        script.chmod(0o755)
 
+    output_base = tmp_path / "recordings" / "demo"
     with _CaptureServer() as server:
         result = subprocess.run(
-            [NODE_BINARY, str(START_BROWSER_VIDEO_SCRIPT), "--caption", "Menu opens"],
+            [
+                NODE_BINARY,
+                str(RECORD_BROWSER_VIDEO_SCRIPT),
+                "--url",
+                "https://app.example.com/todos",
+                "--caption",
+                "Todo completion flow",
+                "--output-basename",
+                str(output_base),
+                "--viewport",
+                "1512x982",
+                "--",
+                NODE_BINARY,
+                "-e",
+                "process.exit(0)",
+            ],
             capture_output=True,
             text=True,
             env=_tool_env(
                 {
                     "CONTROL_PLANE_URL": server.url,
-                    "OPEN_INSPECT_RECORDING_STATE": str(state_file),
-                    "TMPDIR": str(tmp_file),
-                    "TMP": str(tmp_file),
-                    "TEMP": str(tmp_file),
+                    "PATH": f"{fake_bin}:{os.environ['PATH']}",
                 }
             ),
             check=False,
             timeout=TOOL_SUBPROCESS_TIMEOUT_SECONDS,
         )
 
-    assert result.returncode == 1
-    assert server.requests == []
-    assert not state_file.exists()
-
-
-def test_stop_browser_video_uploads_recording_and_clears_state(tmp_path: Path) -> None:
-    video = tmp_path / "recording.mp4"
-    metadata = tmp_path / "recording.mp4.json"
-    state_file = tmp_path / "recording-state.json"
-    video.write_bytes(MP4_BYTES)
-    metadata.write_text(
-        json.dumps(
-            {
-                "durationMs": 1450,
-                "recordingStartedAt": 1000,
-                "recordingEndedAt": 2450,
-                "dimensions": {"width": 1280, "height": 720},
-                "truncated": False,
-                "endUrl": "https://app.example.com/end",
-                "hasAudio": False,
-            }
-        )
-    )
-    state_file.write_text(
-        json.dumps(
-            {
-                "recordingId": "rec-1",
-                "caption": "Menu opens",
-                "sourceUrl": "https://app.example.com/start",
-                "startedAt": 1000,
-                "maxDurationMs": 90000,
-                "videoPath": str(video),
-                "metadataPath": str(metadata),
-                "recorderPid": None,
-            }
-        )
-    )
-
-    with _CaptureServer() as server:
-        result = subprocess.run(
-            [NODE_BINARY, str(STOP_BROWSER_VIDEO_SCRIPT)],
-            capture_output=True,
-            text=True,
-            env=_tool_env(
-                {
-                    "CONTROL_PLANE_URL": server.url,
-                    "OPEN_INSPECT_RECORDING_STATE": str(state_file),
-                }
-            ),
-            check=False,
-            timeout=TOOL_SUBPROCESS_TIMEOUT_SECONDS,
-        )
-
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["artifactId"] == "artifact-1"
-    assert not state_file.exists()
+    assert command_log.read_text().splitlines() == [
+        "open https://app.example.com/todos",
+        "set viewport 1512 982",
+        f"record start {output_base}.webm",
+        "record stop",
+    ]
+    assert (tmp_path / "recordings" / "demo.mp4").exists()
     assert len(server.requests) == 1
     body = _multipart_text(server.requests[0]["body"])
     assert 'name="artifactType"\r\n\r\nvideo' in body
-    assert 'name="caption"\r\n\r\nMenu opens' in body
-    assert 'name="recordingStartedAt"\r\n\r\n1000' in body
-    assert 'name="recordingEndedAt"\r\n\r\n2450' in body
+    assert 'name="caption"\r\n\r\nTodo completion flow' in body
+    assert 'name="durationMs"\r\n\r\n1450' in body
+    assert 'name="dimensions"\r\n\r\n{"width":1280,"height":578}' in body
 
 
-def test_stop_browser_video_preserves_state_when_upload_fails(tmp_path: Path) -> None:
-    video = tmp_path / "recording.mp4"
-    metadata = tmp_path / "recording.mp4.json"
-    state_file = tmp_path / "recording-state.json"
-    video.write_bytes(MP4_BYTES)
-    metadata.write_text(
-        json.dumps(
-            {
-                "durationMs": 1450,
-                "recordingStartedAt": 1000,
-                "recordingEndedAt": 2450,
-                "dimensions": {"width": 1280, "height": 720},
-                "truncated": False,
-                "hasAudio": False,
-            }
-        )
+def test_record_browser_video_uploads_available_webm_when_stop_fails(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    command_log = tmp_path / "commands.log"
+    (fake_bin / "agent-browser").write_text(
+        f"""#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+fs.appendFileSync({json.dumps(str(command_log))}, args.join(" ") + "\\n");
+if (args[0] === "record" && args[1] === "start") {{
+  fs.writeFileSync(args[2], "webm bytes");
+}}
+if (args[0] === "record" && args[1] === "stop") {{
+  console.error("recorder exited");
+  process.exit(2);
+}}
+process.exit(0);
+"""
     )
-    state_file.write_text(
-        json.dumps(
-            {
-                "recordingId": "rec-1",
-                "caption": "Menu opens",
-                "startedAt": 1000,
-                "maxDurationMs": 90000,
-                "videoPath": str(video),
-                "metadataPath": str(metadata),
-                "recorderPid": None,
-            }
-        )
+    (fake_bin / "ffmpeg").write_text(
+        f"""#!/usr/bin/env node
+const fs = require("fs");
+const out = process.argv[process.argv.length - 1];
+fs.writeFileSync(out, Buffer.from({list(MP4_BYTES)}));
+process.exit(0);
+"""
     )
+    (fake_bin / "ffprobe").write_text(
+        """#!/usr/bin/env node
+console.log(JSON.stringify({
+  streams: [{ codec_type: "video", width: 1280, height: 578, duration: "1.45" }],
+  format: { duration: "1.45" }
+}));
+"""
+    )
+    for script in fake_bin.iterdir():
+        script.chmod(0o755)
 
-    with _CaptureServer(status_code=503, response_body=b'{"error":"temporary outage"}') as server:
+    output_base = tmp_path / "recordings" / "demo"
+    with _CaptureServer() as server:
         result = subprocess.run(
-            [NODE_BINARY, str(STOP_BROWSER_VIDEO_SCRIPT)],
+            [
+                NODE_BINARY,
+                str(RECORD_BROWSER_VIDEO_SCRIPT),
+                "--url",
+                "https://app.example.com/todos",
+                "--caption",
+                "Todo completion flow",
+                "--output-basename",
+                str(output_base),
+            ],
             capture_output=True,
             text=True,
             env=_tool_env(
                 {
                     "CONTROL_PLANE_URL": server.url,
-                    "OPEN_INSPECT_RECORDING_STATE": str(state_file),
+                    "PATH": f"{fake_bin}:{os.environ['PATH']}",
                 }
             ),
             check=False,
@@ -375,61 +381,19 @@ def test_stop_browser_video_preserves_state_when_upload_fails(tmp_path: Path) ->
         )
 
     assert result.returncode == 1
-    assert "temporary outage" in result.stderr
-    assert "Recording state preserved" in result.stderr
-    assert state_file.exists()
+    assert json.loads(result.stdout)["artifactId"] == "artifact-1"
+    assert "agent-browser record stop failed" in result.stderr
+    assert "recorder exited" in result.stderr
+    assert command_log.read_text().splitlines() == [
+        "open https://app.example.com/todos",
+        f"record start {output_base}.webm",
+        "record stop",
+    ]
     assert len(server.requests) == 1
-
-
-def test_stop_browser_video_rejects_missing_state(tmp_path: Path) -> None:
-    result = subprocess.run(
-        [NODE_BINARY, str(STOP_BROWSER_VIDEO_SCRIPT)],
-        capture_output=True,
-        text=True,
-        env=_tool_env({"OPEN_INSPECT_RECORDING_STATE": str(tmp_path / "missing.json")}),
-        check=False,
-        timeout=TOOL_SUBPROCESS_TIMEOUT_SECONDS,
-    )
-
-    assert result.returncode == 1
-    assert "No active browser recording found" in result.stderr
-
-
-def test_browser_video_recorder_requires_output_path(tmp_path: Path) -> None:
-    result = subprocess.run(
-        [NODE_BINARY, str(BROWSER_VIDEO_RECORDER_SCRIPT), "--metadata", str(tmp_path / "m.json")],
-        capture_output=True,
-        text=True,
-        env=_tool_env(),
-        check=False,
-        timeout=TOOL_SUBPROCESS_TIMEOUT_SECONDS,
-    )
-
-    assert result.returncode == 1
-    assert "--output requires a value" in result.stderr
-
-
-def test_browser_video_recorder_rejects_invalid_max_duration(tmp_path: Path) -> None:
-    result = subprocess.run(
-        [
-            NODE_BINARY,
-            str(BROWSER_VIDEO_RECORDER_SCRIPT),
-            "--output",
-            str(tmp_path / "recording.mp4"),
-            "--metadata",
-            str(tmp_path / "recording.mp4.json"),
-            "--max-duration-ms",
-            "0",
-        ],
-        capture_output=True,
-        text=True,
-        env=_tool_env(),
-        check=False,
-        timeout=TOOL_SUBPROCESS_TIMEOUT_SECONDS,
-    )
-
-    assert result.returncode == 1
-    assert "--max-duration-ms must be a positive number" in result.stderr
+    body = _multipart_text(server.requests[0]["body"])
+    assert 'name="artifactType"\r\n\r\nvideo' in body
+    assert 'name="durationMs"\r\n\r\n1450' in body
+    assert 'name="dimensions"\r\n\r\n{"width":1280,"height":578}' in body
 
 
 def test_bridge_client_requires_sandbox_auth_token() -> None:

@@ -13,8 +13,9 @@ using it reliably.
 
 ## Key Fact
 
-`upload-media`, `start-browser-video`, and `stop-browser-video` are **bash commands** installed on
-PATH. Run them with your Bash tool, not as MCP tools or tool bindings.
+`upload-media` and `record-browser-video` are **bash commands** installed on PATH. Run them with
+your Bash tool, not as MCP tools or tool bindings. For videos, prefer `agent-browser record` or the
+`record-browser-video` helper.
 
 ## When To Use It
 
@@ -121,15 +122,12 @@ upload-media /tmp/verify-annotated.png \
 Video recording for interaction flows:
 
 ```bash
-agent-browser open "$URL" && \
-agent-browser set viewport 1512 982 && \
-start-browser-video \
+record-browser-video \
+  --url "$URL" \
   --caption "Menu interaction recording" \
-  --source-url "$URL" \
-  --dimensions '{"width":1512,"height":982}' && \
-agent-browser click "Settings" && \
-agent-browser wait 1000 && \
-stop-browser-video
+  --output-basename /tmp/opencode/menu-recording \
+  --viewport 1512x982 \
+  -- bash -lc 'agent-browser snapshot -i && agent-browser click "[data-testid=settings]" && agent-browser wait 1000'
 ```
 
 ## Reporting Template
@@ -159,10 +157,17 @@ Uploaded artifact: abc123
   ID.
 - Do not report viewport metadata you did not explicitly set or verify.
 - Do not use `upload-media` in a later prompt; it is prompt-scoped.
-- Do not leave an active recording open. Always run `stop-browser-video` after the interaction.
+- Do not leave an active recording open. Always run `agent-browser record stop` if a recording was
+  started.
 - If the user asked for a full-page screenshot, do not use viewport-only capture.
 - If the UI requires interaction before it matches the expected state, perform that interaction
   before capturing.
+- For video metadata, use the encoded MP4 dimensions and duration from `ffprobe`; do not reuse the
+  requested viewport as video dimensions.
+- Prefer stable selectors such as `[data-testid=...]`, `[data-clear-completed]`, or `#todo-title`.
+  Run `agent-browser snapshot -i` before recording when selectors or accessible names are uncertain.
+- If an old `/tmp/openinspect-browser-video-state.json` file blocks recovery, remove it only after
+  confirming no active recorder process from that state is still running.
 
 ## Relationship To `agent-browser`
 

@@ -42,20 +42,26 @@ upload-media /tmp/current.png \
 
 ## Recording Videos
 
-Use `start-browser-video` before the interaction and `stop-browser-video` after it. The stop command
-uploads the MP4 artifact.
+Use `agent-browser record` for browser recordings. The verified upload path records WebM, converts
+it to silent MP4 with `ffmpeg`, probes actual dimensions/duration with `ffprobe`, and uploads with
+`upload-media`. The `record-browser-video` helper wraps that flow.
 
 ```bash
-agent-browser open "http://127.0.0.1:3000" && \
-agent-browser set viewport 1440 900 && \
-start-browser-video \
+record-browser-video \
+  --url "http://127.0.0.1:3000/checkout" \
   --caption "Checkout flow recording" \
-  --source-url "http://127.0.0.1:3000/checkout" \
-  --dimensions '{"width":1440,"height":900}' && \
-agent-browser click "Continue" && \
-agent-browser wait 1000 && \
-stop-browser-video
+  --output-basename /tmp/opencode/checkout-flow \
+  --viewport 1440x900 \
+  -- bash -lc 'agent-browser snapshot -i && agent-browser click "[data-testid=continue]" && agent-browser wait 1000'
 ```
 
-Do not leave a recording active after completing the interaction. Videos are limited to short,
-silent MP4 recordings.
+When recording manually, always pair `agent-browser record start /tmp/opencode/demo.webm` with
+`agent-browser record stop`, then convert:
+
+```bash
+ffmpeg -y -i /tmp/opencode/demo.webm -an -c:v libx264 -pix_fmt yuv420p -movflags +faststart /tmp/opencode/demo.mp4
+```
+
+Use stable selectors like `[data-testid=...]`, `[data-clear-completed]`, or `#todo-title` when
+possible. Run `agent-browser snapshot -i` before recording if labels or selectors are uncertain. Do
+not leave a recording active after completing the interaction.
