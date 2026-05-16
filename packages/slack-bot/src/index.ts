@@ -1399,8 +1399,8 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       const channelContext = channelName
         ? formatChannelContext(channelName, channelDescription)
         : "";
-      const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
-      const promptContent = channelContext + threadContext + messageText;
+      // Existing sessions already have prior turns; adding Slack bot replies again can echo stale answers.
+      const promptContent = channelContext + messageText;
 
       const promptResult = await sendPrompt(
         env,

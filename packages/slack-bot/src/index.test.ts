@@ -187,7 +187,7 @@ function makeSessionEnv(order: string[] = []): Env {
 
 function mockSlackFetch(
   order: string[] = [],
-  options: { statusResponse?: Response | Promise<Response> } = {}
+  options: { statusResponse?: Response | Promise<Response>; threadMessages?: unknown[] } = {}
 ) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = typeof input === "string" ? input : input.toString();
@@ -214,7 +214,7 @@ function mockSlackFetch(
     }
 
     if (url.includes("conversations.replies")) {
-      return new Response(JSON.stringify({ ok: true, messages: [] }), {
+      return new Response(JSON.stringify({ ok: true, messages: options.threadMessages ?? [] }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -253,6 +253,15 @@ function statusFetchBodies(fetchMock: { mock: { calls: readonly (readonly unknow
     .filter(([input]) => {
       const url = typeof input === "string" ? input : String(input);
       return url.includes("assistant.threads.setStatus");
+    })
+    .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+}
+
+function promptFetchBodies(fetchMock: { mock: { calls: readonly (readonly unknown[])[] } }) {
+  return fetchMock.mock.calls
+    .filter(([input]) => {
+      const url = typeof input === "string" ? input : String(input);
+      return url.includes("/prompt");
     })
     .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
 }
@@ -355,7 +364,16 @@ describe("POST /events", () => {
 
   it("sets Starting status for follow-up prompts in existing threads", async () => {
     const order: string[] = [];
-    const slackFetch = mockSlackFetch(order);
+    const slackFetch = mockSlackFetch(order, {
+      threadMessages: [
+        {
+          type: "message",
+          text: "The latest commit is:\n\n- `3b23cf7` - `Add Linear integration guide (#645)`",
+          bot_id: "B123",
+          ts: "222.333",
+        },
+      ],
+    });
     const env = makeSessionEnv(order);
     await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
       "thread:C123:111.222",
@@ -394,6 +412,15 @@ describe("POST /events", () => {
     });
     expect(order.indexOf("status")).toBeLessThan(order.indexOf("prompt"));
     expect(order).not.toContain("session");
+
+    const promptBodies = promptFetchBodies(
+      env.CONTROL_PLANE.fetch as unknown as { mock: { calls: readonly (readonly unknown[])[] } }
+    );
+    expect(promptBodies).toHaveLength(1);
+    expect(promptBodies[0].content).toContain("now add coverage");
+    expect(promptBodies[0].content).toContain("Slack channel context");
+    expect(promptBodies[0].content).not.toContain("Context from the Slack thread");
+    expect(promptBodies[0].content).not.toContain("The latest commit is");
 
     slackFetch.mockRestore();
   });
