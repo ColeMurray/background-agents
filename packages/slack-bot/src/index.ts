@@ -61,10 +61,12 @@ import {
   getDefaultReasoningEffort,
   isValidReasoningEffort,
 } from "@open-inspect/shared";
+import { setAssistantThreadStatusBestEffort } from "./activity-status";
 
 const log = createLogger("handler");
 
 const MAX_REPO_SUGGESTION_OPTIONS = 100;
+type BackgroundTaskScheduler = (promise: Promise<void>) => void;
 
 export function buildAppHomeIntroText(appName: string): string {
   return `Configure your ${appName} preferences below.`;
@@ -869,6 +871,21 @@ function formatChannelContext(channelName: string, channelDescription?: string):
   return context;
 }
 
+function scheduleStartingStatus(
+  scheduleBackground: BackgroundTaskScheduler,
+  env: Env,
+  channel: string,
+  threadTs: string,
+  traceId?: string
+): void {
+  scheduleBackground(
+    setAssistantThreadStatusBestEffort(env, channel, threadTs, "Starting...", {
+      event: "start",
+      traceId,
+    })
+  );
+}
+
 /**
  * Create a session and send the initial prompt.
  * Shared logic between handleAppMention and handleRepoSelection.
@@ -1073,8 +1090,13 @@ app.post("/events", async (c) => {
     await cacheStore.put(dedupeKey, "1", { expirationTtl: 3600 });
   }
 
+  const scheduleBackground = (promise: Promise<void>) => c.executionCtx.waitUntil(promise);
+  const eventTask = Promise.resolve().then(() =>
+    handleSlackEvent(payload, c.env, traceId, scheduleBackground)
+  );
+
   // Process event asynchronously
-  c.executionCtx.waitUntil(handleSlackEvent(payload, c.env, traceId));
+  c.executionCtx.waitUntil(eventTask);
 
   log.info("http.request", {
     trace_id: traceId,
@@ -1182,10 +1204,15 @@ app.post("/interactions", async (c) => {
   const shouldOpenModalInline =
     actionId === "open_branch_modal" || actionId === REPO_BRANCH_SELECTOR_ACTION_ID;
 
+  const scheduleBackground = (promise: Promise<void>) => c.executionCtx.waitUntil(promise);
+
   if (shouldOpenModalInline) {
-    await handleSlackInteraction(payload, c.env, traceId);
+    await handleSlackInteraction(payload, c.env, traceId, scheduleBackground);
   } else {
-    c.executionCtx.waitUntil(handleSlackInteraction(payload, c.env, traceId));
+    const interactionTask = Promise.resolve().then(() =>
+      handleSlackInteraction(payload, c.env, traceId, scheduleBackground)
+    );
+    c.executionCtx.waitUntil(interactionTask);
   }
 
   log.info("http.request", {
@@ -1237,7 +1264,8 @@ async function handleSlackEvent(
     };
   },
   env: Env,
-  traceId?: string
+  traceId: string | undefined,
+  scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
   if (payload.type !== "event_callback" || !payload.event) {
     return;
@@ -1269,14 +1297,15 @@ async function handleSlackEvent(
         channel_type: event.channel_type,
       },
       env,
-      traceId
+      traceId,
+      scheduleBackground
     );
     return;
   }
 
   // Handle app_mention events
   if (event.type === "app_mention" && event.text && event.channel && event.ts) {
-    await handleAppMention(event as Required<typeof event>, env, traceId);
+    await handleAppMention(event as Required<typeof event>, env, traceId, scheduleBackground);
   }
 }
 
@@ -1587,23 +1616,31 @@ async function handleAppMention(
     thread_ts?: string;
   },
   env: Env,
-  traceId?: string
+  traceId: string | undefined,
+  scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
   // Remove the bot mention from the text
   const messageText = stripMentions(event.text);
+  const threadKey = event.thread_ts || event.ts;
+
+  if (messageText) {
+    scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
+  }
 
   // Get channel context
   let channelName: string | undefined;
   let channelDescription: string | undefined;
 
-  try {
-    const channelInfo = await getChannelInfo(env.SLACK_BOT_TOKEN, event.channel);
-    if (channelInfo.ok && channelInfo.channel) {
-      channelName = channelInfo.channel.name;
-      channelDescription = channelInfo.channel.topic?.value || channelInfo.channel.purpose?.value;
+  if (messageText) {
+    try {
+      const channelInfo = await getChannelInfo(env.SLACK_BOT_TOKEN, event.channel);
+      if (channelInfo.ok && channelInfo.channel) {
+        channelName = channelInfo.channel.name;
+        channelDescription = channelInfo.channel.topic?.value || channelInfo.channel.purpose?.value;
+      }
+    } catch {
+      // Channel info not available
     }
-  } catch {
-    // Channel info not available
   }
 
   await handleIncomingMessage({
@@ -1634,12 +1671,18 @@ async function handleDirectMessage(
     channel_type?: string;
   },
   env: Env,
-  traceId?: string
+  traceId: string | undefined,
+  scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
   log.info("slack.dm.received", { trace_id: traceId, user: event.user, channel: event.channel });
 
   // Strip any @mentions (users may type "@Bot <request>" in DMs)
   const messageText = stripMentions(event.text);
+  const threadKey = event.thread_ts || event.ts;
+
+  if (messageText) {
+    scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
+  }
 
   await handleIncomingMessage({
     text: messageText,
@@ -1661,7 +1704,8 @@ async function handleRepoSelection(
   messageTs: string,
   threadTs: string | undefined,
   env: Env,
-  traceId?: string
+  traceId: string | undefined,
+  scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
   // Retrieve pending message from KV
   const pendingKey = `pending:${channel}:${threadTs || messageTs}`;
@@ -1691,6 +1735,9 @@ async function handleRepoSelection(
     channelDescription?: string;
   };
 
+  const threadKey = threadTs || messageTs;
+  scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
+
   // Find the repo config
   const repos = await getAvailableRepos(env, traceId);
   const repo = repos.find((r) => r.id === repoId);
@@ -1707,10 +1754,8 @@ async function handleRepoSelection(
 
   // Post acknowledgment
   await postMessage(env.SLACK_BOT_TOKEN, channel, `Working on *${repo.fullName}*...`, {
-    thread_ts: threadTs || messageTs,
+    thread_ts: threadKey,
   });
-
-  const threadKey = threadTs || messageTs;
 
   // Create session and send prompt using shared logic
   const sessionResult = await startSessionAndSendPrompt(
@@ -1743,7 +1788,8 @@ async function handleRepoSelection(
 async function handleSlackInteraction(
   payload: SlackInteractionPayload,
   env: Env,
-  traceId?: string
+  traceId: string | undefined,
+  scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
   const userId = payload.user?.id;
 
@@ -1926,7 +1972,15 @@ async function handleSlackInteraction(
       if (!channel || !messageTs) return;
       const repoId = action.selected_option?.value;
       if (repoId) {
-        await handleRepoSelection(repoId, channel, messageTs, threadTs, env, traceId);
+        await handleRepoSelection(
+          repoId,
+          channel,
+          messageTs,
+          threadTs,
+          env,
+          traceId,
+          scheduleBackground
+        );
       }
       break;
     }
