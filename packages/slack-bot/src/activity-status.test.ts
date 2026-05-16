@@ -10,14 +10,18 @@ describe("formatToolStatus", () => {
   it.each([
     ["Read", { file_path: "src/auth.ts" }, "Reading src/auth.ts"],
     ["read", { path: "auth.ts" }, "Reading auth.ts"],
+    ["read", { filePath: "src/opencode.ts" }, "Reading src/opencode.ts"],
     ["read_file", { filepath: "lib/auth.ts" }, "Reading lib/auth.ts"],
     ["Edit", { file: "src/handler.ts" }, "Editing src/handler.ts"],
+    ["edit", { filePath: "src/handler.ts" }, "Editing src/handler.ts"],
     ["edit_file", { path: "handler.ts" }, "Editing handler.ts"],
     ["Write", { file_path: "new-file.ts" }, "Writing new-file.ts"],
+    ["write", { filePath: "src/new-file.ts" }, "Writing src/new-file.ts"],
     ["write_file", { filepath: "src/new-file.ts" }, "Writing src/new-file.ts"],
     ["Bash", { command: "npm test" }, "Running npm test"],
     ["execute_command", { cmd: "npm run typecheck" }, "Running npm run typecheck"],
     ["Grep", { pattern: "TODO" }, "Searching for TODO"],
+    ["glob", { pattern: "**/*.ts" }, "Finding **/*.ts"],
     ["search_files", { query: "FIXME" }, "Searching for FIXME"],
   ])("formats %s tool calls", (tool, args, expected) => {
     expect(formatToolStatus(tool, args)).toBe(expected);
@@ -27,6 +31,7 @@ describe("formatToolStatus", () => {
     expect(formatToolStatus("Read", {})).toBe("Reading file");
     expect(formatToolStatus("Bash", {})).toBe("Running command");
     expect(formatToolStatus("Grep", {})).toBe("Searching for query");
+    expect(formatToolStatus("Glob", {})).toBe("Finding files");
   });
 
   it("formats unknown tools safely", () => {

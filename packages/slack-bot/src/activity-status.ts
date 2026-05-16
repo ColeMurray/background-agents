@@ -4,6 +4,7 @@ import type { Env } from "./types";
 
 const SLACK_SET_STATUS_URL = "https://slack.com/api/assistant.threads.setStatus";
 const DEFAULT_STATUS_PART_MAX_LENGTH = 80;
+const FILE_ARG_KEYS = ["filePath", "file_path", "filepath", "path", "file"];
 
 const log = createLogger("activity-status");
 
@@ -67,19 +68,21 @@ export function formatToolStatus(tool: string, args: Record<string, unknown> = {
   switch (toolKey) {
     case "read":
     case "read_file":
-      return `Reading ${firstArg(args, ["file_path", "filepath", "path", "file"], "file")}`;
+      return `Reading ${firstArg(args, FILE_ARG_KEYS, "file")}`;
     case "edit":
     case "edit_file":
-      return `Editing ${firstArg(args, ["file_path", "filepath", "path", "file"], "file")}`;
+      return `Editing ${firstArg(args, FILE_ARG_KEYS, "file")}`;
     case "write":
     case "write_file":
-      return `Writing ${firstArg(args, ["file_path", "filepath", "path", "file"], "file")}`;
+      return `Writing ${firstArg(args, FILE_ARG_KEYS, "file")}`;
     case "bash":
     case "execute_command":
       return `Running ${firstArg(args, ["command", "cmd"], "command")}`;
     case "grep":
     case "search_files":
       return `Searching for ${firstArg(args, ["pattern", "query"], "query")}`;
+    case "glob":
+      return `Finding ${firstArg(args, ["pattern", "query"], "files")}`;
     default:
       return `Using tool: ${truncateStatusPart(normalizedTool || "unknown")}`;
   }

@@ -59,8 +59,8 @@ async function makeToolCallPayload(
 ) {
   const data = {
     sessionId: "session-1",
-    tool: "Read",
-    args: { file_path: "src/auth.ts" },
+    tool: "read",
+    args: { filePath: "src/auth.ts" },
     callId: "call-1",
     timestamp: 1778900000000,
     context: {
