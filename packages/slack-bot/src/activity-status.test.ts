@@ -11,6 +11,14 @@ describe("formatToolStatus", () => {
     ["Read", { file_path: "src/auth.ts" }, "Reading src/auth.ts"],
     ["read", { path: "auth.ts" }, "Reading auth.ts"],
     ["read", { filePath: "src/opencode.ts" }, "Reading src/opencode.ts"],
+    [
+      "read",
+      {
+        filePath:
+          "/workspace/background-agents/packages/control-plane/src/session/durable-object.ts",
+      },
+      "Reading src/session/durable-object.ts",
+    ],
     ["read_file", { filepath: "lib/auth.ts" }, "Reading lib/auth.ts"],
     ["Edit", { file: "src/handler.ts" }, "Editing src/handler.ts"],
     ["edit", { filePath: "src/handler.ts" }, "Editing src/handler.ts"],
@@ -41,9 +49,7 @@ describe("formatToolStatus", () => {
   it("truncates long display arguments", () => {
     const path = `src/${"a".repeat(100)}.ts`;
 
-    expect(formatToolStatus("Read", { file_path: path })).toBe(
-      `Reading ${"src/" + "a".repeat(73)}...`
-    );
+    expect(formatToolStatus("Read", { file_path: path })).toBe(`Reading ${"a".repeat(39)}...`);
   });
 });
 
@@ -146,8 +152,8 @@ describe("setAssistantThreadStatus", () => {
     const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body)) as {
       loading_messages: string[];
     };
-    expect(body.loading_messages[0]).toHaveLength(80);
-    expect(body.loading_messages[0]).toBe(`Searching for ${"a".repeat(63)}...`);
+    expect(body.loading_messages[0]).toHaveLength(50);
+    expect(body.loading_messages[0]).toBe(`Searching for ${"a".repeat(33)}...`);
   });
 
   it("maps Slack rate limits to a failure envelope", async () => {

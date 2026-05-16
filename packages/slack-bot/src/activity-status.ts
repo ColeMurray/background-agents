@@ -5,6 +5,7 @@ import type { Env } from "./types";
 const SLACK_SET_STATUS_URL = "https://slack.com/api/assistant.threads.setStatus";
 const DEFAULT_STATUS_PART_MAX_LENGTH = 80;
 const DEFAULT_STATUS_TEXT_MAX_LENGTH = 80;
+const LOADING_MESSAGE_MAX_LENGTH = 50;
 const FILE_ARG_KEYS = ["filePath", "file_path", "filepath", "path", "file"];
 const TOOL_STATUS_INDICATOR = "Working...";
 
@@ -68,10 +69,39 @@ function prepareStatusText(value: unknown): string {
   return truncateStatusPart(value, DEFAULT_STATUS_TEXT_MAX_LENGTH);
 }
 
+function prepareLoadingMessageText(value: unknown): string {
+  return truncateStatusPart(value, LOADING_MESSAGE_MAX_LENGTH);
+}
+
 function firstArg(args: Record<string, unknown>, keys: string[], fallback: string): string {
   for (const key of keys) {
     const value = args[key];
     const text = truncateStatusPart(value);
+    if (text) return text;
+  }
+  return fallback;
+}
+
+function compactPathPart(value: unknown, maxLength: number): string {
+  const text = normalizeStatusText(value);
+  if (!text) return "";
+
+  const normalized = text.replace(/\\/g, "/").replace(/^\/workspace\/[^/]+\//, "");
+  if (normalized.length <= maxLength) return normalized;
+
+  const parts = normalized.split("/").filter(Boolean);
+  for (let count = Math.min(3, parts.length); count > 0; count -= 1) {
+    const tail = parts.slice(-count).join("/");
+    if (tail.length <= maxLength) return tail;
+  }
+
+  return truncateStatusPart(parts.at(-1) ?? normalized, maxLength);
+}
+
+function fileArg(args: Record<string, unknown>, prefix: string, fallback: string): string {
+  const maxLength = LOADING_MESSAGE_MAX_LENGTH - prefix.length - 1;
+  for (const key of FILE_ARG_KEYS) {
+    const text = compactPathPart(args[key], maxLength);
     if (text) return text;
   }
   return fallback;
@@ -84,13 +114,13 @@ export function formatToolStatus(tool: string, args: Record<string, unknown> = {
   switch (toolKey) {
     case "read":
     case "read_file":
-      return `Reading ${firstArg(args, FILE_ARG_KEYS, "file")}`;
+      return `Reading ${fileArg(args, "Reading", "file")}`;
     case "edit":
     case "edit_file":
-      return `Editing ${firstArg(args, FILE_ARG_KEYS, "file")}`;
+      return `Editing ${fileArg(args, "Editing", "file")}`;
     case "write":
     case "write_file":
-      return `Writing ${firstArg(args, FILE_ARG_KEYS, "file")}`;
+      return `Writing ${fileArg(args, "Writing", "file")}`;
     case "bash":
     case "execute_command":
       return `Running ${firstArg(args, ["command", "cmd"], "command")}`;
@@ -114,7 +144,7 @@ export async function setAssistantThreadStatus(
   let response: Response;
   const normalizedStatus = prepareStatusText(status);
   const loadingMessages = options.loadingMessages
-    ?.map((message) => prepareStatusText(message))
+    ?.map((message) => prepareLoadingMessageText(message))
     .filter(Boolean)
     .slice(0, 10);
 
@@ -202,7 +232,7 @@ export async function setAssistantThreadStatusBestEffort(
   try {
     const statusText = meta.event === "tool_call" ? TOOL_STATUS_INDICATOR : status;
     const statusPreview = prepareStatusText(statusText);
-    const loadingMessagePreviews = [status].map((message) => prepareStatusText(message));
+    const loadingMessagePreviews = [status].map((message) => prepareLoadingMessageText(message));
     const result = await setAssistantThreadStatus(
       env.SLACK_BOT_TOKEN,
       channel,
