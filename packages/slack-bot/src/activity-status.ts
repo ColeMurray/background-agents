@@ -4,6 +4,7 @@ import type { Env } from "./types";
 
 const SLACK_SET_STATUS_URL = "https://slack.com/api/assistant.threads.setStatus";
 const DEFAULT_STATUS_PART_MAX_LENGTH = 80;
+const DEFAULT_STATUS_TEXT_MAX_LENGTH = 80;
 const FILE_ARG_KEYS = ["filePath", "file_path", "filepath", "path", "file"];
 const TOOL_STATUS_INDICATOR = "Working...";
 
@@ -11,6 +12,12 @@ const log = createLogger("activity-status");
 
 type AssistantThreadStatusOptions = {
   loadingMessages?: string[];
+};
+
+type AssistantThreadStatusResult = SlackEnvelope & {
+  detail?: unknown;
+  responseMetadata?: unknown;
+  warning?: unknown;
 };
 
 type AssistantStatusMeta = {
@@ -57,6 +64,10 @@ export function truncateStatusPart(
   return `${text.slice(0, maxLength - 3)}...`;
 }
 
+function prepareStatusText(value: unknown): string {
+  return truncateStatusPart(value, DEFAULT_STATUS_TEXT_MAX_LENGTH);
+}
+
 function firstArg(args: Record<string, unknown>, keys: string[], fallback: string): string {
   for (const key of keys) {
     const value = args[key];
@@ -99,10 +110,11 @@ export async function setAssistantThreadStatus(
   threadTs: string,
   status: string,
   options: AssistantThreadStatusOptions = {}
-): Promise<SlackEnvelope> {
+): Promise<AssistantThreadStatusResult> {
   let response: Response;
+  const normalizedStatus = prepareStatusText(status);
   const loadingMessages = options.loadingMessages
-    ?.map((message) => normalizeStatusText(message))
+    ?.map((message) => prepareStatusText(message))
     .filter(Boolean)
     .slice(0, 10);
 
@@ -116,7 +128,7 @@ export async function setAssistantThreadStatus(
       body: JSON.stringify({
         channel_id: channel,
         thread_ts: threadTs,
-        status,
+        status: normalizedStatus,
         ...(loadingMessages?.length ? { loading_messages: loadingMessages } : {}),
       }),
     });
@@ -139,9 +151,26 @@ export async function setAssistantThreadStatus(
   }
 
   try {
-    const envelope = (await response.json()) as SlackEnvelope;
+    const envelope = (await response.json()) as SlackEnvelope & {
+      detail?: unknown;
+      response_metadata?: unknown;
+      warning?: unknown;
+      warnings?: unknown;
+    };
     if (typeof envelope.ok !== "boolean") {
       return { ok: false, error: "invalid_response" };
+    }
+    if (!envelope.ok) {
+      return {
+        ok: false,
+        error: envelope.error,
+        ...(envelope.retryAfter ? { retryAfter: envelope.retryAfter } : {}),
+        ...(envelope.detail ? { detail: envelope.detail } : {}),
+        ...(envelope.response_metadata ? { responseMetadata: envelope.response_metadata } : {}),
+        ...(envelope.warning || envelope.warnings
+          ? { warning: envelope.warning ?? envelope.warnings }
+          : {}),
+      };
     }
     return envelope;
   } catch {
@@ -172,6 +201,8 @@ export async function setAssistantThreadStatusBestEffort(
 
   try {
     const statusText = meta.event === "tool_call" ? TOOL_STATUS_INDICATOR : status;
+    const statusPreview = prepareStatusText(statusText);
+    const loadingMessagePreviews = [status].map((message) => prepareStatusText(message));
     const result = await setAssistantThreadStatus(
       env.SLACK_BOT_TOKEN,
       channel,
@@ -181,6 +212,7 @@ export async function setAssistantThreadStatusBestEffort(
         loadingMessages: [status],
       }
     );
+
     if (result.ok) {
       log.info(eventName, {
         ...base,
@@ -194,7 +226,17 @@ export async function setAssistantThreadStatusBestEffort(
       ...base,
       outcome: "error",
       slack_error: result.error,
+      slack_detail: result.detail,
+      slack_response_metadata: result.responseMetadata,
+      slack_warning: result.warning,
       retry_after: result.retryAfter,
+      request_status_length: statusPreview.length,
+      request_status_preview: statusPreview,
+      request_loading_message_count: loadingMessagePreviews.length,
+      request_loading_message_lengths: loadingMessagePreviews.map((message) => message.length),
+      request_loading_message_previews: loadingMessagePreviews,
+      raw_status_length: normalizeStatusText(statusText).length,
+      raw_loading_message_lengths: [status].map((message) => normalizeStatusText(message).length),
       duration_ms: Date.now() - startTime,
     });
   } catch (error) {

@@ -129,6 +129,27 @@ describe("setAssistantThreadStatus", () => {
     });
   });
 
+  it("truncates loading messages as complete status strings", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    await expect(
+      setAssistantThreadStatus("xoxb-test", "C123", "111.222", "Working...", {
+        loadingMessages: [`Searching for ${"a".repeat(100)}`],
+      })
+    ).resolves.toEqual({ ok: true });
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body)) as {
+      loading_messages: string[];
+    };
+    expect(body.loading_messages[0]).toHaveLength(80);
+    expect(body.loading_messages[0]).toBe(`Searching for ${"a".repeat(63)}...`);
+  });
+
   it("maps Slack rate limits to a failure envelope", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("", { status: 429, headers: { "Retry-After": "7" } })
@@ -150,6 +171,34 @@ describe("setAssistantThreadStatus", () => {
     await expect(
       setAssistantThreadStatus("xoxb-test", "C123", "111.222", "Reading auth.ts")
     ).resolves.toEqual({ ok: false, error: "missing_scope" });
+  });
+
+  it("returns Slack error diagnostics for invalid arguments", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: false,
+          error: "invalid_arguments",
+          detail: "loading_messages[0] is invalid",
+          response_metadata: { messages: ["loading_messages[0] is invalid"] },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }
+      )
+    );
+
+    await expect(
+      setAssistantThreadStatus("xoxb-test", "C123", "111.222", "Working...", {
+        loadingMessages: ["Searching for TODO"],
+      })
+    ).resolves.toEqual({
+      ok: false,
+      error: "invalid_arguments",
+      detail: "loading_messages[0] is invalid",
+      responseMetadata: { messages: ["loading_messages[0] is invalid"] },
+    });
   });
 
   it.each([
