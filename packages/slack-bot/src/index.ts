@@ -1341,6 +1341,7 @@ interface IncomingMessageParams {
   channelDescription?: string;
   env: Env;
   traceId?: string;
+  scheduleBackground: BackgroundTaskScheduler;
 }
 
 /**
@@ -1364,6 +1365,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     channelDescription,
     env,
     traceId,
+    scheduleBackground,
   } = params;
 
   if (!messageText) {
@@ -1561,6 +1563,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   );
 
   const ackTs = ackResult.ok ? ackResult.ts : undefined;
+  scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
 
   // Create session and send prompt using shared logic
   const sessionResult = await startSessionAndSendPrompt(
@@ -1589,6 +1592,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         webAppUrl: env.WEB_APP_URL,
       }),
     });
+    scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
   }
 }
 
@@ -1642,6 +1646,7 @@ async function handleAppMention(
     channelDescription,
     env,
     traceId,
+    scheduleBackground,
   });
 }
 
@@ -1681,6 +1686,7 @@ async function handleDirectMessage(
     threadTs: event.thread_ts,
     env,
     traceId,
+    scheduleBackground,
   });
 }
 
@@ -1753,6 +1759,7 @@ async function handleRepoSelection(
     }
   );
   const ackTs = ackResult.ok ? ackResult.ts : undefined;
+  scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
 
   // Create session and send prompt using shared logic
   const sessionResult = await startSessionAndSendPrompt(
@@ -1782,6 +1789,7 @@ async function handleRepoSelection(
         webAppUrl: env.WEB_APP_URL,
       }),
     });
+    scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
   }
 }
 
