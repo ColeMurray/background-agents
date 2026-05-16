@@ -231,8 +231,10 @@ export async function setAssistantThreadStatusBestEffort(
 
   try {
     const statusText = meta.event === "tool_call" ? TOOL_STATUS_INDICATOR : status;
-    const statusPreview = prepareStatusText(statusText);
-    const loadingMessagePreviews = [status].map((message) => prepareLoadingMessageText(message));
+    const requestStatusLength = prepareStatusText(statusText).length;
+    const requestLoadingMessageLengths = [status].map(
+      (message) => prepareLoadingMessageText(message).length
+    );
     const result = await setAssistantThreadStatus(
       env.SLACK_BOT_TOKEN,
       channel,
@@ -260,11 +262,9 @@ export async function setAssistantThreadStatusBestEffort(
       slack_response_metadata: result.responseMetadata,
       slack_warning: result.warning,
       retry_after: result.retryAfter,
-      request_status_length: statusPreview.length,
-      request_status_preview: statusPreview,
-      request_loading_message_count: loadingMessagePreviews.length,
-      request_loading_message_lengths: loadingMessagePreviews.map((message) => message.length),
-      request_loading_message_previews: loadingMessagePreviews,
+      request_status_length: requestStatusLength,
+      request_loading_message_count: requestLoadingMessageLengths.length,
+      request_loading_message_lengths: requestLoadingMessageLengths,
       raw_status_length: normalizeStatusText(statusText).length,
       raw_loading_message_lengths: [status].map((message) => normalizeStatusText(message).length),
       duration_ms: Date.now() - startTime,
