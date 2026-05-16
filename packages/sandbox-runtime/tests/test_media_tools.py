@@ -245,16 +245,8 @@ const fs = require("fs");
 const args = process.argv.slice(2);
 fs.appendFileSync({json.dumps(str(command_log))}, args.join(" ") + "\\n");
 if (args[0] === "record" && args[1] === "start") {{
-  fs.writeFileSync(args[2], "webm bytes");
+  fs.writeFileSync(args[2], Buffer.from({list(MP4_BYTES)}));
 }}
-process.exit(0);
-"""
-    )
-    (fake_bin / "ffmpeg").write_text(
-        f"""#!/usr/bin/env node
-const fs = require("fs");
-const out = process.argv[process.argv.length - 1];
-fs.writeFileSync(out, Buffer.from({list(MP4_BYTES)}));
 process.exit(0);
 """
     )
@@ -305,7 +297,7 @@ console.log(JSON.stringify({
     assert command_log.read_text().splitlines() == [
         "open https://app.example.com/todos",
         "set viewport 1512 982",
-        f"record start {output_base}.webm",
+        f"record start {output_base}.mp4",
         "record stop",
     ]
     assert (tmp_path / "recordings" / "demo.mp4").exists()
@@ -317,7 +309,7 @@ console.log(JSON.stringify({
     assert 'name="dimensions"\r\n\r\n{"width":1280,"height":578}' in body
 
 
-def test_record_browser_video_uploads_available_webm_when_stop_fails(tmp_path: Path) -> None:
+def test_record_browser_video_uploads_available_mp4_when_stop_fails(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     command_log = tmp_path / "commands.log"
@@ -327,20 +319,12 @@ const fs = require("fs");
 const args = process.argv.slice(2);
 fs.appendFileSync({json.dumps(str(command_log))}, args.join(" ") + "\\n");
 if (args[0] === "record" && args[1] === "start") {{
-  fs.writeFileSync(args[2], "webm bytes");
+  fs.writeFileSync(args[2], Buffer.from({list(MP4_BYTES)}));
 }}
 if (args[0] === "record" && args[1] === "stop") {{
   console.error("recorder exited");
   process.exit(2);
 }}
-process.exit(0);
-"""
-    )
-    (fake_bin / "ffmpeg").write_text(
-        f"""#!/usr/bin/env node
-const fs = require("fs");
-const out = process.argv[process.argv.length - 1];
-fs.writeFileSync(out, Buffer.from({list(MP4_BYTES)}));
 process.exit(0);
 """
     )
@@ -386,7 +370,7 @@ console.log(JSON.stringify({
     assert "recorder exited" in result.stderr
     assert command_log.read_text().splitlines() == [
         "open https://app.example.com/todos",
-        f"record start {output_base}.webm",
+        f"record start {output_base}.mp4",
         "record stop",
     ]
     assert len(server.requests) == 1

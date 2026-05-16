@@ -42,9 +42,9 @@ upload-media /tmp/current.png \
 
 ## Recording Videos
 
-Use `agent-browser record` for browser recordings. The verified upload path records WebM, converts
-it to silent MP4 with `ffmpeg`, probes actual dimensions/duration with `ffprobe`, and uploads with
-`upload-media`. The `record-browser-video` helper wraps that flow.
+Use `agent-browser record` for browser recordings. Record to an `.mp4` path so `agent-browser`
+encodes a silent MP4, then probe actual dimensions/duration with `ffprobe` and upload with
+`upload-media`. The `record-browser-video` helper wraps that full flow.
 
 ```bash
 record-browser-video \
@@ -55,11 +55,11 @@ record-browser-video \
   -- bash -lc 'agent-browser snapshot -i && agent-browser click "[data-testid=continue]" && agent-browser wait 1000'
 ```
 
-When recording manually, always pair `agent-browser record start /tmp/opencode/demo.webm` with
-`agent-browser record stop`, then convert:
+When recording manually, always pair `agent-browser record start /tmp/opencode/demo.mp4` with
+`agent-browser record stop`, then probe/upload the resulting MP4.
 
 ```bash
-ffmpeg -y -i /tmp/opencode/demo.webm -an -c:v libx264 -pix_fmt yuv420p -movflags +faststart /tmp/opencode/demo.mp4
+ffprobe -v error -print_format json -show_streams -show_format /tmp/opencode/demo.mp4
 ```
 
 Use stable selectors like `[data-testid=...]`, `[data-clear-completed]`, or `#todo-title` when

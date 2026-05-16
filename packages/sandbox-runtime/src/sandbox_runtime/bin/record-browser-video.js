@@ -96,16 +96,14 @@ function parseViewportDimensions(width, height) {
 
 function normalizeOutputBasename(value) {
   const resolved = path.resolve(value);
-  if (resolved.endsWith(".webm")) return resolved.slice(0, -".webm".length);
   if (resolved.endsWith(".mp4")) return resolved.slice(0, -".mp4".length);
   return resolved;
 }
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const webmPath = `${options.outputBasename}.webm`;
   const mp4Path = `${options.outputBasename}.mp4`;
-  await mkdir(path.dirname(webmPath), { recursive: true });
+  await mkdir(path.dirname(mp4Path), { recursive: true });
 
   let recordingStarted = false;
   let recordingStartedAt = 0;
@@ -124,7 +122,7 @@ async function main() {
       ]);
     }
 
-    await execFile("agent-browser", ["record", "start", webmPath]);
+    await execFile("agent-browser", ["record", "start", mp4Path]);
     recordingStarted = true;
     recordingStartedAt = Date.now();
 
@@ -150,12 +148,11 @@ async function main() {
   }
 
   await assertFile(
-    webmPath,
+    mp4Path,
     stopError
-      ? `agent-browser record stop failed and no WebM recording was produced: ${errorMessage(stopError)}`
-      : "agent-browser did not produce a WebM recording"
+      ? `agent-browser record stop failed and no MP4 recording was produced: ${errorMessage(stopError)}`
+      : "agent-browser did not produce an MP4 recording"
   );
-  await convertWebmToMp4(webmPath, mp4Path);
   const metadata = await probeMp4(mp4Path);
   const uploadOutput = await uploadMp4({
     mp4Path,
@@ -211,22 +208,6 @@ async function assertFile(filePath, message) {
     }
     throw error;
   }
-}
-
-async function convertWebmToMp4(webmPath, mp4Path) {
-  await execFile("ffmpeg", [
-    "-y",
-    "-i",
-    webmPath,
-    "-an",
-    "-c:v",
-    "libx264",
-    "-pix_fmt",
-    "yuv420p",
-    "-movflags",
-    "+faststart",
-    mp4Path,
-  ]);
 }
 
 async function probeMp4(mp4Path) {
@@ -347,7 +328,7 @@ function printUsageAndExit(exitCode) {
 Usage:
   record-browser-video --url URL --caption "What this verifies" --output-basename /tmp/opencode/demo [--viewport 1512x982] -- bash -lc 'agent-browser click "[data-testid=save]" && agent-browser wait 1000'
 
-Records with agent-browser record, converts WebM to MP4 with ffmpeg, probes actual MP4 metadata with ffprobe, uploads with upload-media, and prints the upload JSON.
+Records MP4 directly with agent-browser record, probes actual MP4 metadata with ffprobe, uploads with upload-media, and prints the upload JSON.
 `;
   if (exitCode === 0) {
     console.log(usage.trim());

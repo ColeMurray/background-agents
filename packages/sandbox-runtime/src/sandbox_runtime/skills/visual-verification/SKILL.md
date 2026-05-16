@@ -14,8 +14,9 @@ using it reliably.
 ## Key Fact
 
 `upload-media` and `record-browser-video` are **bash commands** installed on PATH. Run them with
-your Bash tool, not as MCP tools or tool bindings. For videos, prefer `agent-browser record` or the
-`record-browser-video` helper.
+your Bash tool, not as MCP tools or tool bindings. For videos, prefer `record-browser-video` when
+you want the full record/probe/upload workflow in one command, or use `agent-browser record`
+directly when manually controlling the recording.
 
 ## When To Use It
 
