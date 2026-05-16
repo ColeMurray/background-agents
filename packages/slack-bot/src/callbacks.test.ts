@@ -177,7 +177,8 @@ describe("POST /callbacks/tool_call", () => {
       body: JSON.stringify({
         channel_id: "C123",
         thread_ts: "111.222",
-        status: "Reading src/auth.ts",
+        status: "Working...",
+        loading_messages: ["Reading src/auth.ts"],
       }),
     });
   });

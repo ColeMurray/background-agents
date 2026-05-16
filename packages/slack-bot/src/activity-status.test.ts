@@ -100,6 +100,35 @@ describe("setAssistantThreadStatus", () => {
     });
   });
 
+  it("sends loading messages when provided", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    await expect(
+      setAssistantThreadStatus("xoxb-test", "C123", "111.222", "Working...", {
+        loadingMessages: ["Reading\n<@U123>"],
+      })
+    ).resolves.toEqual({ ok: true });
+
+    expect(fetchMock).toHaveBeenCalledWith("https://slack.com/api/assistant.threads.setStatus", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer xoxb-test",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        channel_id: "C123",
+        thread_ts: "111.222",
+        status: "Working...",
+        loading_messages: ["Reading @U123"],
+      }),
+    });
+  });
+
   it("maps Slack rate limits to a failure envelope", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("", { status: 429, headers: { "Retry-After": "7" } })

@@ -5,8 +5,13 @@ import type { Env } from "./types";
 const SLACK_SET_STATUS_URL = "https://slack.com/api/assistant.threads.setStatus";
 const DEFAULT_STATUS_PART_MAX_LENGTH = 80;
 const FILE_ARG_KEYS = ["filePath", "file_path", "filepath", "path", "file"];
+const TOOL_STATUS_INDICATOR = "Working...";
 
 const log = createLogger("activity-status");
+
+type AssistantThreadStatusOptions = {
+  loadingMessages?: string[];
+};
 
 type AssistantStatusMeta = {
   event: "start" | "tool_call";
@@ -92,9 +97,15 @@ export async function setAssistantThreadStatus(
   token: string,
   channel: string,
   threadTs: string,
-  status: string
+  status: string,
+  options: AssistantThreadStatusOptions = {}
 ): Promise<SlackEnvelope> {
   let response: Response;
+  const loadingMessages = options.loadingMessages
+    ?.map((message) => normalizeStatusText(message))
+    .filter(Boolean)
+    .slice(0, 10);
+
   try {
     response = await fetch(SLACK_SET_STATUS_URL, {
       method: "POST",
@@ -106,6 +117,7 @@ export async function setAssistantThreadStatus(
         channel_id: channel,
         thread_ts: threadTs,
         status,
+        ...(loadingMessages?.length ? { loading_messages: loadingMessages } : {}),
       }),
     });
   } catch {
@@ -159,7 +171,16 @@ export async function setAssistantThreadStatusBestEffort(
   };
 
   try {
-    const result = await setAssistantThreadStatus(env.SLACK_BOT_TOKEN, channel, threadTs, status);
+    const statusText = meta.event === "tool_call" ? TOOL_STATUS_INDICATOR : status;
+    const result = await setAssistantThreadStatus(
+      env.SLACK_BOT_TOKEN,
+      channel,
+      threadTs,
+      statusText,
+      {
+        loadingMessages: [status],
+      }
+    );
     if (result.ok) {
       log.info(eventName, {
         ...base,

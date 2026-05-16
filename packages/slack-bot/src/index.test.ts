@@ -312,6 +312,7 @@ describe("POST /events", () => {
       channel_id: "C123",
       thread_ts: "111.222",
       status: "Starting...",
+      loading_messages: ["Starting..."],
     });
     expect(order.indexOf("status")).toBeLessThan(order.indexOf("channelInfo"));
     expect(order.indexOf("status")).toBeLessThan(order.indexOf("session"));
@@ -345,6 +346,7 @@ describe("POST /events", () => {
       channel_id: "D123",
       thread_ts: "444.555",
       status: "Starting...",
+      loading_messages: ["Starting..."],
     });
     expect(order.indexOf("status")).toBeLessThan(order.indexOf("session"));
 
@@ -388,6 +390,7 @@ describe("POST /events", () => {
       channel_id: "C123",
       thread_ts: "111.222",
       status: "Starting...",
+      loading_messages: ["Starting..."],
     });
     expect(order.indexOf("status")).toBeLessThan(order.indexOf("prompt"));
     expect(order).not.toContain("session");
@@ -530,6 +533,7 @@ describe("POST /interactions", () => {
       channel_id: "C123",
       thread_ts: "111.222",
       status: "Starting...",
+      loading_messages: ["Starting..."],
     });
     expect(order.indexOf("status")).toBeLessThan(order.indexOf("repos"));
     expect(order.indexOf("status")).toBeLessThan(order.indexOf("session"));
