@@ -231,6 +231,7 @@ Control plane cannot reach Modal (or Modal is not properly configured/deployed).
 - Architecture and internals: [docs/HOW_IT_WORKS.md](./HOW_IT_WORKS.md)
 - Full production deployment: [docs/GETTING_STARTED.md](./GETTING_STARTED.md)
 - GitHub integration usage: [docs/integrations/GITHUB.md](./integrations/GITHUB.md)
+- Linear integration usage: [docs/integrations/LINEAR.md](./integrations/LINEAR.md)
 - Debugging and observability: [docs/DEBUGGING_PLAYBOOK.md](./DEBUGGING_PLAYBOOK.md)
 - OpenAI model setup: [docs/OPENAI_MODELS.md](./OPENAI_MODELS.md)
 - Contribution workflow: [CONTRIBUTING.md](../CONTRIBUTING.md)

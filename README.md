@@ -185,8 +185,8 @@ Interact with agents from wherever your team already works:
   model and branch preferences via App Home. See [Slack integration](docs/integrations/SLACK.md)
 - **GitHub Bot** — Auto-review on PR open or respond to @mentions in PR comments. Configurable
   per-repo. See [GitHub integration](docs/integrations/GITHUB.md)
-- **Linear Bot** — Assign an issue to the agent and it creates a coding session, posts progress
-  activities, and links the resulting PR
+- **Linear Bot** — Mention or assign the agent on an issue to start a coding session, post progress
+  activities, and link the resulting PR. See [Linear integration](docs/integrations/LINEAR.md)
 - **Webhooks** — Trigger sessions from any external system via authenticated HTTP POST
 
 ### Automations
