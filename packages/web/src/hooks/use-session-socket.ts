@@ -114,44 +114,26 @@ function toUiSandboxEvent(event: SharedSandboxEvent): SandboxEvent {
 
 type PrState = NonNullable<NonNullable<Artifact["metadata"]>["prState"]>;
 const PR_STATES = new Set<string>(["open", "merged", "closed", "draft"]);
-const SCREENSHOT_MIME_TYPES = new Set<ScreenshotArtifactMetadata["mimeType"]>([
+type MediaMimeType = ScreenshotArtifactMetadata["mimeType"] | VideoArtifactMetadata["mimeType"];
+const MEDIA_MIME_TYPES = new Set<MediaMimeType>([
   "image/png",
   "image/jpeg",
   "image/webp",
+  "video/mp4",
 ]);
-const VIDEO_MIME_TYPES = new Set<VideoArtifactMetadata["mimeType"]>(["video/mp4"]);
 
-function isScreenshotMimeType(value: string): value is ScreenshotArtifactMetadata["mimeType"] {
-  return SCREENSHOT_MIME_TYPES.has(value as ScreenshotArtifactMetadata["mimeType"]);
+function isMediaMimeType(value: string): value is MediaMimeType {
+  return MEDIA_MIME_TYPES.has(value as MediaMimeType);
 }
 
-function isVideoMimeType(value: string): value is VideoArtifactMetadata["mimeType"] {
-  return VIDEO_MIME_TYPES.has(value as VideoArtifactMetadata["mimeType"]);
-}
-
-function toNonNegativeNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-function toPositiveNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
-function toDimensions(value: unknown): { width: number; height: number } | undefined {
+function narrowDimensions(value: unknown): { width: number; height: number } | undefined {
   if (
     value &&
     typeof value === "object" &&
     typeof (value as { width?: unknown }).width === "number" &&
-    Number.isFinite((value as { width: number }).width) &&
-    (value as { width: number }).width > 0 &&
-    typeof (value as { height?: unknown }).height === "number" &&
-    Number.isFinite((value as { height: number }).height) &&
-    (value as { height: number }).height > 0
+    typeof (value as { height?: unknown }).height === "number"
   ) {
-    return {
-      width: (value as { width: number }).width,
-      height: (value as { height: number }).height,
-    };
+    return value as { width: number; height: number };
   }
   return undefined;
 }
@@ -178,21 +160,22 @@ function toUiArtifact(artifact: SessionArtifact): Artifact {
           filename: typeof meta.filename === "string" ? meta.filename : undefined,
           objectKey: typeof meta.objectKey === "string" ? meta.objectKey : undefined,
           mimeType:
-            typeof meta.mimeType === "string" &&
-            (isScreenshotMimeType(meta.mimeType) || isVideoMimeType(meta.mimeType))
+            typeof meta.mimeType === "string" && isMediaMimeType(meta.mimeType)
               ? meta.mimeType
               : undefined,
-          sizeBytes: toNonNegativeNumber(meta.sizeBytes),
-          viewport: toDimensions(meta.viewport),
+          sizeBytes: typeof meta.sizeBytes === "number" ? meta.sizeBytes : undefined,
+          viewport: narrowDimensions(meta.viewport),
           sourceUrl: typeof meta.sourceUrl === "string" ? meta.sourceUrl : undefined,
           endUrl: typeof meta.endUrl === "string" ? meta.endUrl : undefined,
           fullPage: typeof meta.fullPage === "boolean" ? meta.fullPage : undefined,
           annotated: typeof meta.annotated === "boolean" ? meta.annotated : undefined,
           caption: typeof meta.caption === "string" ? meta.caption : undefined,
-          durationMs: toPositiveNumber(meta.durationMs),
-          recordingStartedAt: toPositiveNumber(meta.recordingStartedAt),
-          recordingEndedAt: toPositiveNumber(meta.recordingEndedAt),
-          dimensions: toDimensions(meta.dimensions),
+          durationMs: typeof meta.durationMs === "number" ? meta.durationMs : undefined,
+          recordingStartedAt:
+            typeof meta.recordingStartedAt === "number" ? meta.recordingStartedAt : undefined,
+          recordingEndedAt:
+            typeof meta.recordingEndedAt === "number" ? meta.recordingEndedAt : undefined,
+          dimensions: narrowDimensions(meta.dimensions),
           truncated: typeof meta.truncated === "boolean" ? meta.truncated : undefined,
           hasAudio: meta.hasAudio === false ? false : undefined,
           previewStatus:

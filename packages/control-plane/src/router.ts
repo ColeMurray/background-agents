@@ -19,8 +19,8 @@ import {
   isSupportedScreenshotMimeType,
   isSupportedVideoMimeType,
   type MultipartFieldValue,
+  parseDimensions,
   parseOptionalBoolean,
-  parseOptionalViewport,
   parseVideoUploadMetadata,
   SCREENSHOT_MAX_BYTES,
   SCREENSHOT_UPLOAD_LIMIT_PER_SESSION,
@@ -1380,7 +1380,11 @@ async function handleMediaUpload(
   try {
     fullPage = parseOptionalBoolean(formData.get("fullPage"));
     annotated = parseOptionalBoolean(formData.get("annotated"));
-    viewport = parseOptionalViewport(formData.get("viewport"));
+    viewport = parseDimensions(formData.get("viewport"), {
+      name: "viewport",
+      required: false,
+      mode: "round",
+    });
   } catch (fieldError) {
     return error(
       fieldError instanceof Error ? fieldError.message : "Invalid screenshot metadata",

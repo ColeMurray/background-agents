@@ -115,41 +115,58 @@ export function parseOptionalBoolean(value: MultipartFieldValue | null): boolean
   throw new Error("Boolean fields must be 'true' or 'false'");
 }
 
-export function parseOptionalViewport(
-  value: MultipartFieldValue | null
-): { width: number; height: number } | undefined {
-  if (value === null) return undefined;
+type Dimensions = { width: number; height: number };
+type DimensionsMode = "integer" | "round";
+
+export function parseDimensions(
+  value: MultipartFieldValue | null,
+  opts: { name: string; required: true; mode: DimensionsMode }
+): Dimensions;
+export function parseDimensions(
+  value: MultipartFieldValue | null,
+  opts: { name: string; required: false; mode: DimensionsMode }
+): Dimensions | undefined;
+export function parseDimensions(
+  value: MultipartFieldValue | null,
+  opts: { name: string; required: boolean; mode: DimensionsMode }
+): Dimensions | undefined {
+  if (value === null) {
+    if (opts.required) throw new Error(`${opts.name} is required`);
+    return undefined;
+  }
   if (typeof value !== "string") {
-    throw new Error("viewport must be a JSON string");
+    throw new Error(`${opts.name} must be a JSON string`);
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
   } catch {
-    throw new Error("viewport must be valid JSON");
+    throw new Error(`${opts.name} must be valid JSON`);
   }
 
   if (!parsed || typeof parsed !== "object") {
-    throw new Error("viewport must be an object");
+    throw new Error(`${opts.name} must be an object`);
   }
 
   const candidate = parsed as { width?: unknown; height?: unknown };
-  if (
-    typeof candidate.width !== "number" ||
-    !Number.isFinite(candidate.width) ||
-    candidate.width <= 0 ||
-    typeof candidate.height !== "number" ||
-    !Number.isFinite(candidate.height) ||
-    candidate.height <= 0
-  ) {
-    throw new Error("viewport must include positive width and height");
+  const width = coerceDimension(candidate.width, opts.mode);
+  const height = coerceDimension(candidate.height, opts.mode);
+  if (width === null || height === null) {
+    const detail =
+      opts.mode === "integer" ? "positive integer width and height" : "positive width and height";
+    throw new Error(`${opts.name} must include ${detail}`);
   }
 
-  return {
-    width: Math.round(candidate.width),
-    height: Math.round(candidate.height),
-  };
+  return { width, height };
+}
+
+function coerceDimension(value: unknown, mode: DimensionsMode): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  if (mode === "integer") return Number.isInteger(value) ? value : null;
+  // Reject values that round to 0 — Math.round(0.4) === 0 would silently produce a zero dimension.
+  const rounded = Math.round(value);
+  return rounded > 0 ? rounded : null;
 }
 
 export function parseVideoUploadMetadata(
@@ -157,19 +174,16 @@ export function parseVideoUploadMetadata(
   createdAt = Date.now()
 ): VideoUploadMetadata {
   const caption = parseRequiredString(fields.get("caption"), "caption");
-  const durationMs = parseRequiredPositiveInteger(fields.get("durationMs"), "durationMs");
-  if (durationMs > VIDEO_MAX_DURATION_MS) {
-    throw new Error(`durationMs must be ${VIDEO_MAX_DURATION_MS} or less`);
-  }
-
-  const recordingStartedAt = parseRequiredPositiveInteger(
-    fields.get("recordingStartedAt"),
-    "recordingStartedAt"
-  );
-  const recordingEndedAt = parseRequiredPositiveInteger(
-    fields.get("recordingEndedAt"),
-    "recordingEndedAt"
-  );
+  const durationMs = parsePositiveInteger(fields.get("durationMs"), {
+    name: "durationMs",
+    max: VIDEO_MAX_DURATION_MS,
+  });
+  const recordingStartedAt = parsePositiveInteger(fields.get("recordingStartedAt"), {
+    name: "recordingStartedAt",
+  });
+  const recordingEndedAt = parsePositiveInteger(fields.get("recordingEndedAt"), {
+    name: "recordingEndedAt",
+  });
   if (recordingEndedAt < recordingStartedAt) {
     throw new Error("recordingEndedAt must be greater than or equal to recordingStartedAt");
   }
@@ -181,7 +195,11 @@ export function parseVideoUploadMetadata(
     throw new Error("durationMs must not exceed the recording timestamp span");
   }
 
-  const dimensions = parseRequiredDimensions(fields.get("dimensions"));
+  const dimensions = parseDimensions(fields.get("dimensions"), {
+    name: "dimensions",
+    required: true,
+    mode: "integer",
+  });
   const truncated = parseRequiredBoolean(fields.get("truncated"), "truncated");
   const sourceUrl = parseOptionalUrl(fields.get("sourceUrl"), "sourceUrl");
   const endUrl = parseOptionalUrl(fields.get("endUrl"), "endUrl");
@@ -231,72 +249,31 @@ function parseRequiredString(value: MultipartFieldValue | null, name: string): s
   return value.trim();
 }
 
-function parseRequiredPositiveInteger(value: MultipartFieldValue | null, name: string): number {
-  const stringValue = parseRequiredString(value, name);
-  if (stringValue === "0") {
-    throw new Error(`${name} must be a positive number`);
+// Strict integer-only parsing — rejects decimals, exponents, and unsafe sizes.
+function parsePositiveInteger(
+  value: MultipartFieldValue | null,
+  opts: { name: string; max?: number }
+): number {
+  const text = parseRequiredString(value, opts.name);
+  if (!/^[1-9]\d*$/.test(text)) {
+    throw new Error(`${opts.name} must be a positive integer`);
   }
-  if (!/^[1-9]\d*$/.test(stringValue)) {
-    throw new Error(`${name} must be a positive integer`);
-  }
-
-  const parsed = Number(stringValue);
+  const parsed = Number(text);
   if (!Number.isSafeInteger(parsed)) {
-    throw new Error(`${name} must be a safe integer`);
+    throw new Error(`${opts.name} must be a safe integer`);
   }
-
+  if (opts.max !== undefined && parsed > opts.max) {
+    throw new Error(`${opts.name} must be ${opts.max} or less`);
+  }
   return parsed;
 }
 
 function parseRequiredBoolean(value: MultipartFieldValue | null, name: string): boolean {
-  if (value === null) {
+  const parsed = parseOptionalBoolean(value);
+  if (parsed === undefined) {
     throw new Error(`${name} is required`);
   }
-
-  return parseOptionalBoolean(value) ?? false;
-}
-
-function parseRequiredDimensions(value: MultipartFieldValue | null): {
-  width: number;
-  height: number;
-} {
-  if (value === null) {
-    throw new Error("dimensions is required");
-  }
-
-  if (typeof value !== "string") {
-    throw new Error("dimensions must be a JSON string");
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error("dimensions must be valid JSON");
-  }
-
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error("dimensions must be an object");
-  }
-
-  const candidate = parsed as { width?: unknown; height?: unknown };
-  if (
-    typeof candidate.width !== "number" ||
-    !Number.isFinite(candidate.width) ||
-    !Number.isInteger(candidate.width) ||
-    candidate.width <= 0 ||
-    typeof candidate.height !== "number" ||
-    !Number.isFinite(candidate.height) ||
-    !Number.isInteger(candidate.height) ||
-    candidate.height <= 0
-  ) {
-    throw new Error("dimensions must include positive integer width and height");
-  }
-
-  return {
-    width: candidate.width,
-    height: candidate.height,
-  };
+  return parsed;
 }
 
 function parseOptionalUrl(value: MultipartFieldValue | null, name: string): string | undefined {

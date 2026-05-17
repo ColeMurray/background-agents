@@ -5,8 +5,8 @@ import {
   detectVideoFileType,
   isSupportedScreenshotMimeType,
   isSupportedVideoMimeType,
+  parseDimensions,
   parseOptionalBoolean,
-  parseOptionalViewport,
   parseVideoUploadMetadata,
 } from "./media";
 
@@ -14,6 +14,9 @@ const MP4_SIGNATURE = Uint8Array.from([
   0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d, 0x00, 0x00, 0x02, 0x00,
   0x69, 0x73, 0x6f, 0x6d, 0x69, 0x73, 0x6f, 0x32,
 ]);
+
+const VIEWPORT_OPTS = { name: "viewport", required: false, mode: "round" } as const;
+const DIMENSIONS_OPTS = { name: "dimensions", required: true, mode: "integer" } as const;
 
 describe("media helpers", () => {
   it("builds session-scoped media object keys", () => {
@@ -71,7 +74,7 @@ describe("media helpers", () => {
 
   it.each([
     ["missing caption", { caption: "" }, "caption is required"],
-    ["non-positive duration", { durationMs: "0" }, "durationMs must be a positive number"],
+    ["non-positive duration", { durationMs: "0" }, "durationMs must be a positive integer"],
     ["decimal duration", { durationMs: "2500.5" }, "durationMs must be a positive integer"],
     ["exponent duration", { durationMs: "1e3" }, "durationMs must be a positive integer"],
     [
@@ -165,18 +168,41 @@ describe("media helpers", () => {
   });
 
   it("parses optional viewport JSON and rounds dimensions", () => {
-    expect(parseOptionalViewport('{"width":1279.6,"height":719.2}')).toEqual({
+    expect(parseDimensions('{"width":1279.6,"height":719.2}', VIEWPORT_OPTS)).toEqual({
       width: 1280,
       height: 719,
     });
-    expect(parseOptionalViewport(null)).toBeUndefined();
+    expect(parseDimensions(null, VIEWPORT_OPTS)).toBeUndefined();
   });
 
   it("rejects invalid viewport payloads", () => {
-    expect(() => parseOptionalViewport("not-json")).toThrow("viewport must be valid JSON");
-    expect(() => parseOptionalViewport("123")).toThrow("viewport must be an object");
-    expect(() => parseOptionalViewport('{"width":0,"height":100}')).toThrow(
+    expect(() => parseDimensions("not-json", VIEWPORT_OPTS)).toThrow("viewport must be valid JSON");
+    expect(() => parseDimensions("123", VIEWPORT_OPTS)).toThrow("viewport must be an object");
+    expect(() => parseDimensions('{"width":0,"height":100}', VIEWPORT_OPTS)).toThrow(
       "viewport must include positive width and height"
+    );
+  });
+
+  it("rejects round-mode values that round to zero", () => {
+    expect(() => parseDimensions('{"width":0.4,"height":720}', VIEWPORT_OPTS)).toThrow(
+      "viewport must include positive width and height"
+    );
+  });
+
+  it("parses required integer dimensions", () => {
+    expect(parseDimensions('{"width":1280,"height":720}', DIMENSIONS_OPTS)).toEqual({
+      width: 1280,
+      height: 720,
+    });
+  });
+
+  it("rejects missing or non-integer dimensions", () => {
+    expect(() => parseDimensions(null, DIMENSIONS_OPTS)).toThrow("dimensions is required");
+    expect(() => parseDimensions('{"width":1280.5,"height":720}', DIMENSIONS_OPTS)).toThrow(
+      "dimensions must include positive integer width and height"
+    );
+    expect(() => parseDimensions('{"width":-1,"height":720}', DIMENSIONS_OPTS)).toThrow(
+      "dimensions must include positive integer width and height"
     );
   });
 });

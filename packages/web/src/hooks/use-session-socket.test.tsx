@@ -285,7 +285,7 @@ describe("useSessionSocket", () => {
     });
   });
 
-  it("drops invalid numeric screenshot metadata from subscribed artifacts", async () => {
+  it("drops wrong-type metadata fields during narrowing", async () => {
     const { result } = renderHook(() => useSessionSocket("session-1"));
 
     await waitFor(() => {
@@ -301,14 +301,14 @@ describe("useSessionSocket", () => {
       socket.receive(
         createSubscribedMessage([
           {
-            id: "artifact-shot-invalid",
+            id: "artifact-shot-wrong-types",
             type: "screenshot",
-            url: "sessions/session-1/media/artifact-shot-invalid.png",
+            url: "sessions/session-1/media/artifact-shot-wrong-types.png",
             metadata: {
-              objectKey: "sessions/session-1/media/artifact-shot-invalid.png",
+              objectKey: "sessions/session-1/media/artifact-shot-wrong-types.png",
               mimeType: "image/png",
-              sizeBytes: -1,
-              viewport: { width: 0, height: -100 },
+              sizeBytes: "five",
+              viewport: "not-an-object",
             },
             createdAt: 1234,
           },
@@ -319,11 +319,11 @@ describe("useSessionSocket", () => {
     await waitFor(() => {
       expect(result.current.artifacts).toEqual([
         {
-          id: "artifact-shot-invalid",
+          id: "artifact-shot-wrong-types",
           type: "screenshot",
-          url: "sessions/session-1/media/artifact-shot-invalid.png",
+          url: "sessions/session-1/media/artifact-shot-wrong-types.png",
           metadata: expect.objectContaining({
-            objectKey: "sessions/session-1/media/artifact-shot-invalid.png",
+            objectKey: "sessions/session-1/media/artifact-shot-wrong-types.png",
             mimeType: "image/png",
             sizeBytes: undefined,
             viewport: undefined,
