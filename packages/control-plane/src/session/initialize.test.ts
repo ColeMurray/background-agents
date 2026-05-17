@@ -32,6 +32,8 @@ describe("initializeSession", () => {
     spawnDepth: 0,
     codeServerEnabled: false,
     sandboxSettings: {},
+    automationId: null,
+    automationRunId: null,
   };
 
   const ctx = {
@@ -127,10 +129,30 @@ describe("initializeSession", () => {
     expect(d1Entry.parentSessionId).toBeNull();
     expect(d1Entry.spawnSource).toBe("user");
     expect(d1Entry.spawnDepth).toBe(0);
+    expect(d1Entry.automationId).toBeNull();
+    expect(d1Entry.automationRunId).toBeNull();
     expect(d1Entry.scmLogin).toBe("acmedev");
     expect(d1Entry.userId).toBe("platform-user-1");
     expect(d1Entry.createdAt).toBeTypeOf("number");
     expect(d1Entry.updatedAt).toBeTypeOf("number");
+  });
+
+  it("passes automation lineage to D1 session index", async () => {
+    await initializeSession(
+      createEnv(),
+      {
+        ...baseInput,
+        spawnSource: "automation",
+        automationId: "auto-1",
+        automationRunId: "run-1",
+      },
+      ctx as never
+    );
+
+    const d1Entry = createMock.mock.calls[0][0];
+    expect(d1Entry.spawnSource).toBe("automation");
+    expect(d1Entry.automationId).toBe("auto-1");
+    expect(d1Entry.automationRunId).toBe("run-1");
   });
 
   it("sends the correct body to DO init endpoint", async () => {
