@@ -37,7 +37,8 @@ async function waitForSandboxSpawn(stub: DurableObjectStub): Promise<void> {
 
   while (Date.now() < deadline) {
     const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox LIMIT 1");
-    if (rows[0]?.status === "connecting") {
+    const status = rows[0]?.status;
+    if (status === "connecting" || status === "running") {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
