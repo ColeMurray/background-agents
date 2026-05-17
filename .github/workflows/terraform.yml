@@ -94,6 +94,11 @@ jobs:
         run: terraform validate -no-color
         working-directory: ${{ env.TF_WORKING_DIR }}
 
+      - name: Terraform Test
+        id: test
+        run: terraform test -no-color
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
       - name: Post Validation Results
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v8
@@ -111,6 +116,7 @@ jobs:
             | Format | ${{ steps.fmt.outcome == 'success' && '✅' || '⚠️' }} |
             | Init | ${{ steps.init.outcome == 'success' && '✅' || '❌' }} |
             | Validate | ${{ steps.validate.outcome == 'success' && '✅' || '❌' }} |
+            | Test | ${{ steps.test.outcome == 'success' && '✅' || '❌' }} |
             ${planNote}
 
             *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
