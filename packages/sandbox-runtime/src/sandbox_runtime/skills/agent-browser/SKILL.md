@@ -47,15 +47,24 @@ encodes a silent MP4, then probe actual dimensions/duration with `ffprobe` and u
 `upload-media`.
 
 ```bash
-agent-browser open "http://127.0.0.1:3000/checkout" && \
-agent-browser set viewport 1440 900 && \
-agent-browser snapshot -i && \
-STARTED_AT_MS=$(date +%s%3N) && \
-agent-browser record start /tmp/opencode/checkout-flow.mp4 && \
-agent-browser click "[data-testid=continue]" && \
-agent-browser wait 1000 && \
-agent-browser record stop && \
+set -e
+agent-browser open "http://127.0.0.1:3000/checkout"
+agent-browser set viewport 1440 900
+agent-browser snapshot -i
+STARTED_AT_MS=$(date +%s%3N)
+agent-browser record start /tmp/opencode/checkout-flow.mp4
+recording_started=1
+trap 'if [ "${recording_started:-0}" = "1" ]; then agent-browser record stop || true; fi' EXIT
+
+interaction_exit_code=0
+agent-browser click "[data-testid=continue]" || interaction_exit_code=$?
+agent-browser wait 1000 || interaction_exit_code=$?
+
+agent-browser record stop
+recording_started=0
+trap - EXIT
 ENDED_AT_MS=$(date +%s%3N)
+exit "$interaction_exit_code"
 ```
 
 When recording manually, always pair `agent-browser record start /tmp/opencode/demo.mp4` with

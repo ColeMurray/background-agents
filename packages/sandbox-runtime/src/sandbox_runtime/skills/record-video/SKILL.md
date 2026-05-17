@@ -27,18 +27,33 @@ Use `agent-browser record` as the primary recorder. Record directly to an `.mp4`
 ## Command Pattern
 
 ```bash
-agent-browser open "$URL" && \
-agent-browser set viewport 1512 982 && \
-agent-browser snapshot -i && \
-STARTED_AT_MS=$(date +%s%3N) && \
-agent-browser record start /tmp/opencode/demo.mp4 && \
-agent-browser click "[data-testid=settings]" && \
-agent-browser wait 1000 && \
-agent-browser record stop && \
-ENDED_AT_MS=$(date +%s%3N) && \
-PROBE_JSON=$(ffprobe -v error -print_format json -show_streams -show_format /tmp/opencode/demo.mp4) && \
-DURATION_MS=$(node -e 'const p=JSON.parse(process.argv[1]); const v=(p.streams||[]).find((s)=>s.codec_type==="video")||{}; const d=Number(v.duration ?? p.format?.duration); console.log(Math.max(1, Math.round(d * 1000)));' "$PROBE_JSON") && \
-DIMENSIONS=$(node -e 'const p=JSON.parse(process.argv[1]); const v=(p.streams||[]).find((s)=>s.codec_type==="video")||{}; console.log(JSON.stringify({width:Number(v.width),height:Number(v.height)}));' "$PROBE_JSON") && \
+set -e
+agent-browser open "$URL"
+agent-browser set viewport 1512 982
+agent-browser snapshot -i
+
+STARTED_AT_MS=$(date +%s%3N)
+agent-browser record start /tmp/opencode/demo.mp4
+recording_started=1
+cleanup_recording() {
+  if [ "${recording_started:-0}" = "1" ]; then
+    agent-browser record stop || true
+  fi
+}
+trap cleanup_recording EXIT
+
+interaction_exit_code=0
+agent-browser click "[data-testid=settings]" || interaction_exit_code=$?
+agent-browser wait 1000 || interaction_exit_code=$?
+
+agent-browser record stop
+recording_started=0
+trap - EXIT
+
+ENDED_AT_MS=$(date +%s%3N)
+PROBE_JSON=$(ffprobe -v error -print_format json -show_streams -show_format /tmp/opencode/demo.mp4)
+DURATION_MS=$(node -e 'const p=JSON.parse(process.argv[1]); const v=(p.streams||[]).find((s)=>s.codec_type==="video")||{}; const d=Number(v.duration ?? p.format?.duration); console.log(Math.max(1, Math.round(d * 1000)));' "$PROBE_JSON")
+DIMENSIONS=$(node -e 'const p=JSON.parse(process.argv[1]); const v=(p.streams||[]).find((s)=>s.codec_type==="video")||{}; console.log(JSON.stringify({width:Number(v.width),height:Number(v.height)}));' "$PROBE_JSON")
 upload-media /tmp/opencode/demo.mp4 \
   --artifact-type video \
   --caption "What this recording verifies" \
@@ -49,6 +64,7 @@ upload-media /tmp/opencode/demo.mp4 \
   --dimensions "$DIMENSIONS" \
   --truncated false \
   --has-audio false
+exit "$interaction_exit_code"
 ```
 
 ## Guardrails

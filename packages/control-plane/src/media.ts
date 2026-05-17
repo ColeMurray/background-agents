@@ -240,7 +240,12 @@ function parseRequiredPositiveInteger(value: MultipartFieldValue | null, name: s
     throw new Error(`${name} must be a positive integer`);
   }
 
-  return Number(stringValue);
+  const parsed = Number(stringValue);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${name} must be a safe integer`);
+  }
+
+  return parsed;
 }
 
 function parseRequiredBoolean(value: MultipartFieldValue | null, name: string): boolean {

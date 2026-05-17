@@ -74,6 +74,16 @@ describe("media helpers", () => {
     ["non-positive duration", { durationMs: "0" }, "durationMs must be a positive number"],
     ["decimal duration", { durationMs: "2500.5" }, "durationMs must be a positive integer"],
     ["exponent duration", { durationMs: "1e3" }, "durationMs must be a positive integer"],
+    [
+      "unsafe duration integer",
+      { durationMs: "9007199254740992" },
+      "durationMs must be a safe integer",
+    ],
+    [
+      "non-finite timestamp integer",
+      { recordingStartedAt: "1".padEnd(310, "0") },
+      "recordingStartedAt must be a safe integer",
+    ],
     ["duration above maximum", { durationMs: "90001" }, "durationMs must be 90000 or less"],
     [
       "invalid dimensions",
