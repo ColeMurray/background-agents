@@ -13,7 +13,7 @@ import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
 import { resolveAppName, timingSafeEqual } from "@open-inspect/shared";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { getGitHubAppConfig, getCachedInstallationToken } from "../auth/github-app";
-import { createModalClient } from "../sandbox/client";
+import { buildModalSandboxDashboardUrl, createModalClient } from "../sandbox/client";
 import { createDaytonaRestClient } from "../sandbox/daytona-rest-client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
 import { createDaytonaProvider } from "../sandbox/providers/daytona-provider";
@@ -110,6 +110,12 @@ const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /** Statuses that indicate a session is finished — metrics are synced to D1 on these transitions. */
 const TERMINAL_STATUSES: SessionStatus[] = ["completed", "failed", "cancelled"];
+const SANDBOX_DASHBOARD_URL_BLOCKED_STATUSES = new Set<SandboxStatus>([
+  "spawning",
+  "stale",
+  "stopped",
+  "failed",
+]);
 
 export class SessionDO extends DurableObject<Env> {
   private sql: SqlStorage;
@@ -728,6 +734,11 @@ export class SessionDO extends DurableObject<Env> {
       };
     }
 
+    const sandboxDashboardUrlBuilder =
+      sandboxBackend === "modal"
+        ? (providerObjectId: string) => this.getSandboxDashboardUrl(providerObjectId)
+        : undefined;
+
     const config = {
       ...DEFAULT_LIFECYCLE_CONFIG,
       controlPlaneUrl,
@@ -739,6 +750,7 @@ export class SessionDO extends DurableObject<Env> {
       },
       mcpServerLookup,
       slackAgentNotifyLookup,
+      sandboxDashboardUrlBuilder,
     };
 
     // Create repo image lookup if D1 is available (Modal-only — Daytona doesn't use repo images)
@@ -1676,7 +1688,20 @@ export class SessionDO extends DurableObject<Env> {
       tunnelUrls: sandbox?.tunnel_urls ? this.safeParseTunnelUrls(sandbox.tunnel_urls) : null,
       ttydUrl: sandbox?.ttyd_url ?? null,
       ttydToken,
+      sandboxDashboardUrl: this.getSandboxDashboardUrl(sandbox?.modal_object_id, sandbox?.status),
     };
+  }
+
+  private getSandboxDashboardUrl(
+    providerObjectId: string | null | undefined,
+    sandboxStatus?: SandboxStatus | null
+  ): string | null {
+    if (resolveSandboxBackendName(this.env.SANDBOX_PROVIDER) !== "modal") return null;
+    if (sandboxStatus && SANDBOX_DASHBOARD_URL_BLOCKED_STATUSES.has(sandboxStatus)) return null;
+    return buildModalSandboxDashboardUrl({
+      workspace: this.env.MODAL_WORKSPACE,
+      providerObjectId,
+    });
   }
 
   /**

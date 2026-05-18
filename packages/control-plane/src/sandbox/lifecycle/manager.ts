@@ -166,6 +166,8 @@ export interface SandboxLifecycleConfig {
   mcpServerLookup?: McpServerLookup;
   /** Resolves the spawn-time agent-slack-notify gate. */
   slackAgentNotifyLookup?: SlackAgentNotifyLookup;
+  /** Builds a provider dashboard URL for a persisted provider object ID. */
+  sandboxDashboardUrlBuilder?: (providerObjectId: string) => string | null;
 }
 
 /**
@@ -454,7 +456,7 @@ export class SandboxLifecycleManager {
       });
 
       if (result.providerObjectId) {
-        this.storage.updateSandboxModalObjectId(result.providerObjectId);
+        this.storeAndBroadcastProviderObjectId(result.providerObjectId);
       }
       if (result.codeServerUrl && result.codeServerPassword) {
         await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
@@ -636,7 +638,7 @@ export class SandboxLifecycleManager {
         });
 
         if (result.providerObjectId) {
-          this.storage.updateSandboxModalObjectId(result.providerObjectId);
+          this.storeAndBroadcastProviderObjectId(result.providerObjectId);
         }
         if (result.codeServerUrl && result.codeServerPassword) {
           await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
@@ -751,7 +753,7 @@ export class SandboxLifecycleManager {
       }
 
       if (result.providerObjectId && result.providerObjectId !== providerObjectId) {
-        this.storage.updateSandboxModalObjectId(result.providerObjectId);
+        this.storeAndBroadcastProviderObjectId(result.providerObjectId);
       }
 
       if (result.codeServerUrl && result.codeServerPassword) {
@@ -1144,6 +1146,14 @@ export class SandboxLifecycleManager {
    */
   private getConnectedClientCount(): number {
     return this.wsManager.getConnectedClientCount();
+  }
+
+  private storeAndBroadcastProviderObjectId(providerObjectId: string): void {
+    this.storage.updateSandboxModalObjectId(providerObjectId);
+    const url = this.config.sandboxDashboardUrlBuilder?.(providerObjectId);
+    if (url) {
+      this.broadcaster.broadcast({ type: "sandbox_dashboard_url", url });
+    }
   }
 
   /**

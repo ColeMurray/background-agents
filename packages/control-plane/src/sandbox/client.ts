@@ -14,6 +14,7 @@ const log = createLogger("modal-client");
 
 // Modal app name
 const MODAL_APP_NAME = "open-inspect";
+const DEFAULT_MODAL_DASHBOARD_ENVIRONMENT = "main";
 
 /**
  * Construct the Modal base URL from workspace name.
@@ -21,6 +22,16 @@ const MODAL_APP_NAME = "open-inspect";
  */
 function getModalBaseUrl(workspace: string): string {
   return `https://${workspace}--${MODAL_APP_NAME}`;
+}
+
+export function buildModalSandboxDashboardUrl(params: {
+  workspace: string | undefined;
+  environment?: string | undefined;
+  providerObjectId: string | null | undefined;
+}): string | null {
+  if (!params.workspace || !params.providerObjectId) return null;
+  const environment = params.environment || DEFAULT_MODAL_DASHBOARD_ENVIRONMENT;
+  return `https://modal.com/apps/${params.workspace}/${environment}/deployed/${MODAL_APP_NAME}?activeTab=sandboxes&sandboxId=${params.providerObjectId}`;
 }
 
 export interface CreateSandboxRequest {

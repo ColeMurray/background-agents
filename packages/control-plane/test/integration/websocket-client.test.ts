@@ -31,6 +31,42 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     ws.close();
   });
 
+  it("subscribe hydrates dashboard URL only for accessible sandbox states", async () => {
+    const cases = [
+      {
+        status: "connecting",
+        expectedDashboardUrl:
+          "https://modal.com/apps/test-workspace/main/deployed/open-inspect?activeTab=sandboxes&sandboxId=provider-obj-123",
+      },
+      { status: "spawning", expectedDashboardUrl: null },
+      { status: "stale", expectedDashboardUrl: null },
+      { status: "stopped", expectedDashboardUrl: null },
+      { status: "failed", expectedDashboardUrl: null },
+    ];
+
+    for (const [index, testCase] of cases.entries()) {
+      const name = `ws-client-dashboard-url-${testCase.status}-${Date.now()}-${index}`;
+      const { stub } = await initNamedSession(name);
+      await queryDO(
+        stub,
+        `UPDATE sandbox
+           SET status = ?, modal_object_id = ?
+         WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+        testCase.status,
+        "provider-obj-123"
+      );
+
+      const { ws, messages } = await openClientWs(name, { subscribe: true });
+      const subscribed = messages!.find((m) => m.type === "subscribed") as Record<string, unknown>;
+      const state = subscribed.state as Record<string, unknown>;
+
+      expect(state.sandboxStatus).toBe(testCase.status);
+      expect(state.sandboxDashboardUrl).toBe(testCase.expectedDashboardUrl);
+
+      ws.close();
+    }
+  });
+
   it("subscribe with invalid token closes socket 4001", async () => {
     const name = `ws-client-badtoken-${Date.now()}`;
     await initNamedSession(name);

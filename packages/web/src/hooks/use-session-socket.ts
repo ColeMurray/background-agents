@@ -34,6 +34,15 @@ type SessionState = SharedSessionState;
 type Participant = ParticipantPresence;
 type WsMessage = ServerMessage;
 
+const CLEARED_SANDBOX_ACCESS_STATE = {
+  codeServerUrl: undefined,
+  codeServerPassword: undefined,
+  tunnelUrls: undefined,
+  ttydUrl: undefined,
+  ttydToken: undefined,
+  sandboxDashboardUrl: undefined,
+} satisfies Partial<SessionState>;
+
 interface UseSessionSocketReturn {
   connected: boolean;
   connecting: boolean;
@@ -377,31 +386,24 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
               ? {
                   ...prev,
                   sandboxStatus: "spawning",
-                  codeServerUrl: undefined,
-                  codeServerPassword: undefined,
-                  tunnelUrls: undefined,
-                  ttydUrl: undefined,
-                  ttydToken: undefined,
+                  ...CLEARED_SANDBOX_ACCESS_STATE,
                 }
               : null
           );
           break;
 
         case "sandbox_status": {
-          const isTerminal =
-            data.status === "stale" || data.status === "stopped" || data.status === "failed";
+          const shouldClearAccessState =
+            data.status === "spawning" ||
+            data.status === "stale" ||
+            data.status === "stopped" ||
+            data.status === "failed";
           setSessionState((prev) =>
             prev
               ? {
                   ...prev,
                   sandboxStatus: data.status,
-                  ...(isTerminal && {
-                    codeServerUrl: undefined,
-                    codeServerPassword: undefined,
-                    tunnelUrls: undefined,
-                    ttydUrl: undefined,
-                    ttydToken: undefined,
-                  }),
+                  ...(shouldClearAccessState && CLEARED_SANDBOX_ACCESS_STATE),
                 }
               : null
           );
@@ -422,6 +424,10 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
 
         case "tunnel_urls":
           setSessionState((prev) => (prev ? { ...prev, tunnelUrls: data.urls } : null));
+          break;
+
+        case "sandbox_dashboard_url":
+          setSessionState((prev) => (prev ? { ...prev, sandboxDashboardUrl: data.url } : null));
           break;
 
         case "sandbox_ready":
@@ -471,7 +477,15 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
 
         case "sandbox_error":
           console.error("Sandbox error:", data.error);
-          setSessionState((prev) => (prev ? { ...prev, sandboxStatus: "failed" } : null));
+          setSessionState((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  sandboxStatus: "failed",
+                  ...CLEARED_SANDBOX_ACCESS_STATE,
+                }
+              : null
+          );
           break;
 
         case "pong":
