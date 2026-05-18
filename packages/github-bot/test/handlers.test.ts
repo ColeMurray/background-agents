@@ -31,6 +31,7 @@ vi.mock("../src/utils/integration-config", () => ({
     allowedTriggerUsers: null,
     codeReviewInstructions: null,
     commentActionInstructions: null,
+    allowInlineDirectiveOverride: true,
   }),
 }));
 
@@ -42,6 +43,7 @@ const defaultConfig: ResolvedGitHubConfig = {
   allowedTriggerUsers: null,
   codeReviewInstructions: null,
   commentActionInstructions: null,
+  allowInlineDirectiveOverride: true,
 };
 
 import {
@@ -689,6 +691,7 @@ describe("integration config", () => {
       allowedTriggerUsers: [],
       codeReviewInstructions: null,
       commentActionInstructions: null,
+      allowInlineDirectiveOverride: true,
     });
     const env = createMockEnv();
     const log = createMockLogger();
@@ -913,6 +916,115 @@ describe("integration config", () => {
     const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
     expect(promptBody.content).toContain("## Custom Instructions");
     expect(promptBody.content).toContain("Prefer minimal diffs.");
+  });
+
+  it("inline directive in @mention overrides model and strips token from prompt", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload: IssueCommentPayload = {
+      ...issueCommentPayload,
+      comment: {
+        ...issueCommentPayload.comment,
+        body: "@test-bot[bot] model: opus reasoning: max please review carefully",
+      },
+    };
+
+    await handleIssueComment(env, log, payload, "trace-directive");
+
+    const cpFetch = getControlPlaneFetch(env);
+    const sessionBody = JSON.parse(cpFetch.mock.calls[0][1].body);
+    expect(sessionBody.model).toBe("anthropic/claude-opus-4-7");
+    expect(sessionBody.reasoningEffort).toBe("max");
+
+    const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
+    expect(promptBody.content).toContain("please review carefully");
+    expect(promptBody.content).not.toMatch(/\bmodel:/i);
+    expect(promptBody.content).not.toMatch(/\breasoning:/i);
+
+    expect(log.info).toHaveBeenCalledWith(
+      "session.created",
+      expect.objectContaining({
+        directive_applied: true,
+        directive_model: "anthropic/claude-opus-4-7",
+        directive_reasoning: "max",
+      })
+    );
+  });
+
+  it("inline directive ignored when allowInlineDirectiveOverride=false but tokens still stripped", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      model: "anthropic/claude-sonnet-4-6",
+      reasoningEffort: "high",
+      allowInlineDirectiveOverride: false,
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload: IssueCommentPayload = {
+      ...issueCommentPayload,
+      comment: {
+        ...issueCommentPayload.comment,
+        body: "@test-bot[bot] model: opus please review",
+      },
+    };
+
+    await handleIssueComment(env, log, payload, "trace-directive-disabled");
+
+    const cpFetch = getControlPlaneFetch(env);
+    const sessionBody = JSON.parse(cpFetch.mock.calls[0][1].body);
+    expect(sessionBody.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(sessionBody.reasoningEffort).toBe("high");
+
+    const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
+    expect(promptBody.content).not.toMatch(/\bmodel:/i);
+
+    expect(log.info).toHaveBeenCalledWith(
+      "session.created",
+      expect.objectContaining({ directive_applied: false })
+    );
+  });
+
+  it("inline directive in review comment overrides model and strips token", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload: ReviewCommentPayload = {
+      ...reviewCommentPayload,
+      comment: {
+        ...reviewCommentPayload.comment,
+        body: "@test-bot[bot] model: opus fix this code",
+      },
+    };
+
+    await handleReviewComment(env, log, payload, "trace-rc-directive");
+
+    const cpFetch = getControlPlaneFetch(env);
+    const sessionBody = JSON.parse(cpFetch.mock.calls[0][1].body);
+    expect(sessionBody.model).toBe("anthropic/claude-opus-4-7");
+
+    const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
+    expect(promptBody.content).toContain("fix this code");
+    expect(promptBody.content).not.toMatch(/\bmodel:/i);
+  });
+
+  it("auto-review uses env default when config has no model", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      model: "anthropic/claude-haiku-4-5",
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-auto-default");
+
+    const cpFetch = getControlPlaneFetch(env);
+    const sessionBody = JSON.parse(cpFetch.mock.calls[0][1].body);
+    // Even with no directive, resolveSessionModelSettings normalizes the chosen model.
+    expect(sessionBody.model).toBe("anthropic/claude-haiku-4-5");
+
+    expect(log.info).toHaveBeenCalledWith(
+      "session.created",
+      expect.objectContaining({ directive_applied: false })
+    );
   });
 
   it("null instructions produce no Custom Instructions section (backward compat)", async () => {
