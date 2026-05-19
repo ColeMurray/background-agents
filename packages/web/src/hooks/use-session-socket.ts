@@ -11,6 +11,7 @@ import type {
   ServerMessage,
   SessionArtifact,
   SessionState as SharedSessionState,
+  VideoArtifactMetadata,
 } from "@open-inspect/shared";
 
 // WebSocket URL (should come from env in production)
@@ -113,14 +114,28 @@ function toUiSandboxEvent(event: SharedSandboxEvent): SandboxEvent {
 
 type PrState = NonNullable<NonNullable<Artifact["metadata"]>["prState"]>;
 const PR_STATES = new Set<string>(["open", "merged", "closed", "draft"]);
-const SCREENSHOT_MIME_TYPES = new Set<ScreenshotArtifactMetadata["mimeType"]>([
+type MediaMimeType = ScreenshotArtifactMetadata["mimeType"] | VideoArtifactMetadata["mimeType"];
+const MEDIA_MIME_TYPES = new Set<MediaMimeType>([
   "image/png",
   "image/jpeg",
   "image/webp",
+  "video/mp4",
 ]);
 
-function isScreenshotMimeType(value: string): value is ScreenshotArtifactMetadata["mimeType"] {
-  return SCREENSHOT_MIME_TYPES.has(value as ScreenshotArtifactMetadata["mimeType"]);
+function isMediaMimeType(value: string): value is MediaMimeType {
+  return MEDIA_MIME_TYPES.has(value as MediaMimeType);
+}
+
+function narrowDimensions(value: unknown): { width: number; height: number } | undefined {
+  if (
+    value &&
+    typeof value === "object" &&
+    typeof (value as { width?: unknown }).width === "number" &&
+    typeof (value as { height?: unknown }).height === "number"
+  ) {
+    return value as { width: number; height: number };
+  }
+  return undefined;
 }
 
 function toUiArtifact(artifact: SessionArtifact): Artifact {
@@ -145,33 +160,24 @@ function toUiArtifact(artifact: SessionArtifact): Artifact {
           filename: typeof meta.filename === "string" ? meta.filename : undefined,
           objectKey: typeof meta.objectKey === "string" ? meta.objectKey : undefined,
           mimeType:
-            typeof meta.mimeType === "string" && isScreenshotMimeType(meta.mimeType)
+            typeof meta.mimeType === "string" && isMediaMimeType(meta.mimeType)
               ? meta.mimeType
               : undefined,
-          sizeBytes:
-            typeof meta.sizeBytes === "number" &&
-            Number.isFinite(meta.sizeBytes) &&
-            meta.sizeBytes >= 0
-              ? meta.sizeBytes
-              : undefined,
-          viewport:
-            meta.viewport &&
-            typeof meta.viewport === "object" &&
-            typeof (meta.viewport as { width?: unknown }).width === "number" &&
-            Number.isFinite((meta.viewport as { width: number }).width) &&
-            (meta.viewport as { width: number }).width > 0 &&
-            typeof (meta.viewport as { height?: unknown }).height === "number" &&
-            Number.isFinite((meta.viewport as { height: number }).height) &&
-            (meta.viewport as { height: number }).height > 0
-              ? {
-                  width: (meta.viewport as { width: number }).width,
-                  height: (meta.viewport as { height: number }).height,
-                }
-              : undefined,
+          sizeBytes: typeof meta.sizeBytes === "number" ? meta.sizeBytes : undefined,
+          viewport: narrowDimensions(meta.viewport),
           sourceUrl: typeof meta.sourceUrl === "string" ? meta.sourceUrl : undefined,
+          endUrl: typeof meta.endUrl === "string" ? meta.endUrl : undefined,
           fullPage: typeof meta.fullPage === "boolean" ? meta.fullPage : undefined,
           annotated: typeof meta.annotated === "boolean" ? meta.annotated : undefined,
           caption: typeof meta.caption === "string" ? meta.caption : undefined,
+          durationMs: typeof meta.durationMs === "number" ? meta.durationMs : undefined,
+          recordingStartedAt:
+            typeof meta.recordingStartedAt === "number" ? meta.recordingStartedAt : undefined,
+          recordingEndedAt:
+            typeof meta.recordingEndedAt === "number" ? meta.recordingEndedAt : undefined,
+          dimensions: narrowDimensions(meta.dimensions),
+          truncated: typeof meta.truncated === "boolean" ? meta.truncated : undefined,
+          hasAudio: meta.hasAudio === false ? false : undefined,
           previewStatus:
             meta.previewStatus === "active" ||
             meta.previewStatus === "outdated" ||

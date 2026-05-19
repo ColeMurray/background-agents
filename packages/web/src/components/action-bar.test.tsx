@@ -39,7 +39,7 @@ describe("ActionBar", () => {
     expect(link).toHaveAttribute("href", "https://github.com/acme/web-app/pull/42");
   });
 
-  it("renders a screenshot count indicator when screenshots exist", () => {
+  it("renders a media count indicator when screenshots or videos exist", () => {
     render(
       <ActionBar
         sessionId="session-1"
@@ -67,16 +67,27 @@ describe("ActionBar", () => {
             },
             createdAt: 1235,
           },
+          {
+            id: "artifact-video-1",
+            type: "video",
+            url: "sessions/session-1/media/artifact-video-1.mp4",
+            metadata: {
+              objectKey: "sessions/session-1/media/artifact-video-1.mp4",
+              mimeType: "video/mp4",
+              sizeBytes: 2048,
+            },
+            createdAt: 1236,
+          },
         ]}
       />
     );
 
-    expect(screen.getByText("Screenshots (2)")).toBeInTheDocument();
+    expect(screen.getByText("Media (3)")).toBeInTheDocument();
   });
 
-  it("does not render a screenshot count indicator when no screenshots exist", () => {
+  it("does not render a media count indicator when no media artifacts exist", () => {
     render(<ActionBar sessionId="session-1" sessionStatus="active" artifacts={[]} />);
 
-    expect(screen.queryByText(/Screenshots/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Media/)).not.toBeInTheDocument();
   });
 });

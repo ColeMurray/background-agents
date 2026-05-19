@@ -6,7 +6,11 @@ import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { buildSessionHref, type SessionItem } from "@/components/session-sidebar";
-import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
+import {
+  SIDEBAR_SESSIONS_KEY,
+  removeSessionFromList,
+  type SessionListResponse,
+} from "@/lib/session-list";
 import { formatRelativeTime } from "@/lib/time";
 
 const PAGE_SIZE = 20;
@@ -14,23 +18,21 @@ const ARCHIVED_SESSIONS_KEY = `/api/sessions?status=archived&limit=${PAGE_SIZE}&
 
 export function DataControlsSettings() {
   const [extraSessions, setExtraSessions] = useState<SessionItem[]>([]);
-  const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [offset, setOffset] = useState(0);
 
-  const { data, isLoading: loading } = useSWR<{ sessions: SessionItem[] }>(ARCHIVED_SESSIONS_KEY, {
+  const { data, isLoading: loading } = useSWR<SessionListResponse>(ARCHIVED_SESSIONS_KEY, {
     onSuccess: (data) => {
       const fetched = data.sessions || [];
       setHasMore(fetched.length === PAGE_SIZE);
       setOffset(fetched.length);
       setExtraSessions([]);
-      setHiddenIds(new Set());
     },
   });
 
   const firstPageSessions = data?.sessions ?? [];
-  const sessions = [...firstPageSessions, ...extraSessions].filter((s) => !hiddenIds.has(s.id));
+  const sessions = [...firstPageSessions, ...extraSessions];
 
   const handleLoadMore = useCallback(async () => {
     setLoadingMore(true);
@@ -51,21 +53,29 @@ export function DataControlsSettings() {
   }, [offset]);
 
   const handleUnarchive = async (sessionId: string) => {
-    // Optimistically hide from both first-page and extra sessions
-    setHiddenIds((prev) => new Set(prev).add(sessionId));
     try {
       const res = await fetch(`/api/sessions/${sessionId}/unarchive`, { method: "POST" });
-      if (res.ok) {
-        toast.success("Session unarchived");
-        mutate(SIDEBAR_SESSIONS_KEY);
-        mutate(ARCHIVED_SESSIONS_KEY);
-      } else {
+      if (!res.ok) {
         toast.error("Failed to unarchive session");
-        mutate(ARCHIVED_SESSIONS_KEY);
+        return;
       }
+      toast.success("Session unarchived");
+      await mutate<SessionListResponse>(
+        ARCHIVED_SESSIONS_KEY,
+        (current) =>
+          current
+            ? { ...current, sessions: removeSessionFromList(current.sessions, sessionId) }
+            : current,
+        { revalidate: false, populateCache: true }
+      );
+      setExtraSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      // Server-side list shifts down by one, so the next Load more must
+      // start one offset earlier to avoid skipping the session that took
+      // this row's slot.
+      setOffset((prev) => prev - 1);
+      mutate(SIDEBAR_SESSIONS_KEY);
     } catch {
       toast.error("Failed to unarchive session");
-      mutate(ARCHIVED_SESSIONS_KEY);
     }
   };
 

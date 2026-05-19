@@ -30,9 +30,11 @@ import {
   type IdGenerator,
   type RepoImageLookup,
   type McpServerLookup,
+  type SlackAgentNotifyLookup,
 } from "../sandbox/lifecycle/manager";
 import { RepoImageStore } from "../db/repo-images";
 import { McpServerStore } from "../db/mcp-servers";
+import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { DEFAULT_EXECUTION_TIMEOUT_MS } from "../sandbox/lifecycle/decisions";
 import {
@@ -699,13 +701,30 @@ export class SessionDO extends DurableObject<Env> {
     const sessionId = session?.session_name || session?.id || this.ctx.id.toString();
 
     // Create D1-backed lookups if database is available
-    // Create D1-backed lookups if database is available
     let mcpServerLookup: McpServerLookup | undefined;
     if (this.env.DB) {
       const mcpStore = new McpServerStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
       mcpServerLookup = {
         getDecryptedForSession: (repoOwner, repoName) =>
           mcpStore.getDecryptedForSession(repoOwner, repoName),
+      };
+    }
+
+    // Token absence short-circuits to false so a misconfigured deployment
+    // never installs a tool that would 503 on every call.
+    let slackAgentNotifyLookup: SlackAgentNotifyLookup | undefined;
+    if (this.env.DB) {
+      const tokenPresent = !!this.env.SLACK_BOT_TOKEN;
+      const settingsStore = new IntegrationSettingsStore(this.env.DB);
+      slackAgentNotifyLookup = {
+        isEnabledForRepo: async (repoOwner, repoName) => {
+          if (!tokenPresent) return false;
+          const { settings } = await settingsStore.getResolvedConfig(
+            "slack",
+            `${repoOwner}/${repoName}`
+          );
+          return resolveSlackSettings(settings).agentNotificationsEnabled;
+        },
       };
     }
 
@@ -719,6 +738,7 @@ export class SessionDO extends DurableObject<Env> {
         timeoutMs: parseInt(this.env.SANDBOX_INACTIVITY_TIMEOUT_MS || "600000", 10),
       },
       mcpServerLookup,
+      slackAgentNotifyLookup,
     };
 
     // Create repo image lookup if D1 is available (Modal-only — Daytona doesn't use repo images)
@@ -998,7 +1018,17 @@ export class SessionDO extends DurableObject<Env> {
       } else {
         const client = this.wsManager.removeClient(ws);
         if (client) {
-          this.broadcast({ type: "presence_leave", userId: client.userId });
+          // If the participant still has other authenticated sockets (e.g. another
+          // browser tab), don't send presence_leave — the client filters by userId
+          // and would remove them entirely. Broadcast a refresh instead.
+          const stillPresent = Array.from(this.wsManager.getAuthenticatedClients()).some(
+            (c) => c.participantId === client.participantId
+          );
+          if (stillPresent) {
+            this.presenceService.broadcastPresence();
+          } else {
+            this.broadcast({ type: "presence_leave", userId: client.userId });
+          }
         }
       }
     } finally {

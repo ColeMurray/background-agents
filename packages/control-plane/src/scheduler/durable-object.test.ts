@@ -53,9 +53,11 @@ vi.mock("../db/automation-store", () => ({
 }));
 
 const mockSessionStoreCreate = vi.fn().mockResolvedValue(undefined);
+const mockSessionStoreUpdateStatus = vi.fn().mockResolvedValue(undefined);
 vi.mock("../db/session-index", () => ({
   SessionIndexStore: vi.fn().mockImplementation(() => ({
     create: mockSessionStoreCreate,
+    updateStatus: mockSessionStoreUpdateStatus,
   })),
 }));
 
@@ -83,10 +85,70 @@ function createMockSessionStub(): DurableObjectStub {
   } as never;
 }
 
+function createEmptyDbMock(): D1Database {
+  return {
+    prepare: vi.fn(() => ({
+      bind: vi.fn(() => ({
+        first: vi.fn(async () => null),
+      })),
+    })),
+  } as unknown as D1Database;
+}
+
+function createIntegrationSettingsDbMock(): D1Database {
+  return {
+    prepare: vi.fn((query: string) => ({
+      bind: vi.fn((integrationId: string, repo?: string) => ({
+        first: vi.fn(async () => {
+          if (query.includes("integration_settings")) {
+            if (integrationId === "code-server") {
+              return {
+                settings: JSON.stringify({ enabledRepos: null, defaults: { enabled: true } }),
+              };
+            }
+            if (integrationId === "sandbox") {
+              return {
+                settings: JSON.stringify({
+                  enabledRepos: null,
+                  defaults: { tunnelPorts: [3000], terminalEnabled: true },
+                }),
+              };
+            }
+          }
+
+          if (query.includes("integration_repo_settings") && repo === "acme/web-app") {
+            if (integrationId === "sandbox") {
+              return { settings: JSON.stringify({ tunnelPorts: [5173] }) };
+            }
+          }
+
+          return null;
+        }),
+      })),
+    })),
+  } as unknown as D1Database;
+}
+
+async function getInitBody(fetchMock: ReturnType<typeof vi.fn>): Promise<Record<string, unknown>> {
+  const initCall = fetchMock.mock.calls.find((call) => {
+    const input = call[0];
+    const url =
+      typeof input === "string" ? input : input instanceof Request ? input.url : String(input);
+    return new URL(url).pathname === "/internal/init";
+  });
+
+  expect(initCall).toBeDefined();
+  const [input, init] = initCall!;
+  if (input instanceof Request) {
+    return (await input.json()) as Record<string, unknown>;
+  }
+  return JSON.parse(String(init?.body)) as Record<string, unknown>;
+}
+
 function createEnv(overrides?: Partial<Env>): Env {
   const sessionStub = createMockSessionStub();
   return {
-    DB: {} as D1Database,
+    DB: createEmptyDbMock(),
     SESSION: {
       idFromName: vi.fn().mockReturnValue("fake-do-id"),
       get: vi.fn().mockReturnValue(sessionStub),
@@ -200,16 +262,26 @@ describe("SchedulerDO", () => {
       );
 
       expect(res.status).toBe(200);
-      const initCall = fetchMock.mock.calls.find((call) => {
-        const input = call[0];
-        const url =
-          typeof input === "string" ? input : input instanceof Request ? input.url : String(input);
-        return new URL(url).pathname === "/internal/init";
-      });
-
-      expect(initCall).toBeDefined();
-      const initBody = JSON.parse(String(initCall?.[1]?.body));
+      const initBody = await getInitBody(fetchMock);
       expect(initBody.reasoningEffort).toBe("high");
+    });
+
+    it("passes resolved code-server and sandbox settings into automation sessions", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+
+      const env = createEnv({ DB: createIntegrationSettingsDbMock() });
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      const initBody = await getInitBody(fetchMock);
+      expect(initBody.codeServerEnabled).toBe(true);
+      expect(initBody.sandboxSettings).toEqual({ tunnelPorts: [5173], terminalEnabled: true });
     });
 
     it("skips automation with active run (concurrency guard)", async () => {

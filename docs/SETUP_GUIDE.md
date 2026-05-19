@@ -97,10 +97,8 @@ ALLOWED_EMAIL_DOMAINS=
 # inlined into the client bundle at build time — restart `npm run dev`
 # after changing them.
 NEXT_PUBLIC_APP_NAME=Open-Inspect
-# Short label for the sidebar header (next to the logo). Defaults to
-# "Inspect" when unset; falls through to NEXT_PUBLIC_APP_NAME when only
-# the long name is overridden.
-NEXT_PUBLIC_APP_SHORT_NAME=
+# Short label for the sidebar header.
+NEXT_PUBLIC_APP_SHORT_NAME=Inspect
 NEXT_PUBLIC_APP_ICON_URL=
 ```
 
@@ -232,6 +230,8 @@ Control plane cannot reach Modal (or Modal is not properly configured/deployed).
 
 - Architecture and internals: [docs/HOW_IT_WORKS.md](./HOW_IT_WORKS.md)
 - Full production deployment: [docs/GETTING_STARTED.md](./GETTING_STARTED.md)
+- GitHub integration usage: [docs/integrations/GITHUB.md](./integrations/GITHUB.md)
+- Linear integration usage: [docs/integrations/LINEAR.md](./integrations/LINEAR.md)
 - Debugging and observability: [docs/DEBUGGING_PLAYBOOK.md](./DEBUGGING_PLAYBOOK.md)
 - OpenAI model setup: [docs/OPENAI_MODELS.md](./OPENAI_MODELS.md)
 - Theming and design tokens: [docs/THEMING.md](./THEMING.md)

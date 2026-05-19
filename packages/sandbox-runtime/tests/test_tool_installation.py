@@ -228,6 +228,27 @@ class TestInstallTools:
         js_files = list(tool_dest.glob("*.js"))
         assert len(js_files) == 3
 
+    def test_slack_notify_installed_when_enabled(self, tmp_path):
+        """slack-notify.js should be installed when AGENT_SLACK_NOTIFY_ENABLED=true."""
+        sup = _make_supervisor()
+        workdir = tmp_path / "workspace"
+        workdir.mkdir()
+
+        tools_dir = tmp_path / "app" / "sandbox" / "tools"
+        tools_dir.mkdir(parents=True)
+        (tools_dir / "slack-notify.js").write_text("// slack-notify")
+        (tools_dir / "spawn-task.js").write_text("// spawn-task")
+
+        with (
+            patch.dict("os.environ", {"AGENT_SLACK_NOTIFY_ENABLED": "true"}),
+            _patch_paths(legacy=tmp_path / "no-legacy", tools=tools_dir),
+        ):
+            sup._install_tools(workdir)
+
+        tool_dest = workdir / ".opencode" / "tool"
+        assert (tool_dest / "slack-notify.js").exists()
+        assert (tool_dest / "spawn-task.js").exists()
+
 
 class TestInstallBinScripts:
     """Cases for _install_bin_scripts() standalone CLI installation."""

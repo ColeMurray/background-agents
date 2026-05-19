@@ -28,6 +28,11 @@ from .log_config import configure_logging, get_logger
 configure_logging()
 
 
+AGENT_TOOLS_GATED_ON_ENV: dict[str, str] = {
+    "slack-notify.js": "AGENT_SLACK_NOTIFY_ENABLED",
+}
+
+
 class SandboxSupervisor:
     """
     Supervisor process for sandbox lifecycle management.
@@ -311,11 +316,17 @@ class SandboxSupervisor:
         if legacy_tool.exists():
             shutil.copy(legacy_tool, tool_dest / "create-pull-request.js")
 
-        # Copy all .js files from tools/ — these must export tool() for OpenCode
+        # Copy all .js files from tools/ — these must export tool() for OpenCode.
+        # Tools listed in AGENT_TOOLS_GATED_ON_ENV are skipped unless their gate
+        # env var is "true".
         if tools_dir.exists():
             for tool_file in tools_dir.iterdir():
-                if tool_file.is_file() and tool_file.suffix == ".js":
-                    shutil.copy(tool_file, tool_dest / tool_file.name)
+                if not (tool_file.is_file() and tool_file.suffix == ".js"):
+                    continue
+                gate_env = AGENT_TOOLS_GATED_ON_ENV.get(tool_file.name)
+                if gate_env and os.environ.get(gate_env, "").lower() != "true":
+                    continue
+                shutil.copy(tool_file, tool_dest / tool_file.name)
 
         # Copy pre-built deps (package.json, package-lock.json, node_modules)
         # from the image staging directory.  This gives OpenCode a lockfile

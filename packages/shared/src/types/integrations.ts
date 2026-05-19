@@ -1,12 +1,15 @@
 // Integration settings types
 
-export type IntegrationId = "github" | "linear" | "code-server" | "sandbox";
+export type IntegrationId = "github" | "linear" | "code-server" | "sandbox" | "slack";
 
 /** Enforces the common shape for all integration configurations. */
-export interface IntegrationEntry<TRepo extends object = Record<string, unknown>> {
+export interface IntegrationEntry<
+  TRepo extends object = Record<string, unknown>,
+  TGlobalDefaults extends object = TRepo,
+> {
   global: {
     enabledRepos?: string[];
-    defaults?: TRepo;
+    defaults?: TGlobalDefaults;
   };
   repo: TRepo;
 }
@@ -47,12 +50,25 @@ export interface SandboxSettings {
   terminalEnabled?: boolean;
 }
 
+export type SlackMentionsPolicy = "allow" | "escape" | "strip";
+
+/** Per-repo Slack overrides. Mentions policy is workspace-wide and cannot be overridden per repo. */
+export interface SlackRepoSettings {
+  agentNotificationsEnabled?: boolean;
+}
+
+/** Global Slack defaults: per-repo fields plus workspace-wide policy controls. */
+export interface SlackGlobalSettings extends SlackRepoSettings {
+  mentionsPolicy?: SlackMentionsPolicy;
+}
+
 /** Maps each integration ID to its global and per-repo settings types. */
 export interface IntegrationSettingsMap {
   github: IntegrationEntry<GitHubBotSettings>;
   linear: IntegrationEntry<LinearBotSettings>;
   "code-server": IntegrationEntry<CodeServerSettings>;
   sandbox: IntegrationEntry<SandboxSettings>;
+  slack: IntegrationEntry<SlackRepoSettings, SlackGlobalSettings>;
 }
 
 /** Derived type for the GitHub bot global config. */
@@ -60,6 +76,7 @@ export type GitHubGlobalConfig = IntegrationSettingsMap["github"]["global"];
 export type LinearGlobalConfig = IntegrationSettingsMap["linear"]["global"];
 export type CodeServerGlobalConfig = IntegrationSettingsMap["code-server"]["global"];
 export type SandboxGlobalConfig = IntegrationSettingsMap["sandbox"]["global"];
+export type SlackGlobalConfig = IntegrationSettingsMap["slack"]["global"];
 
 /** Full MCP server config with decrypted credentials. Internal use only. */
 export interface McpServerConfig {
@@ -111,5 +128,10 @@ export const INTEGRATION_DEFINITIONS: {
     id: "sandbox",
     name: "Sandbox",
     description: "Sandbox environment settings (tunnel ports, timeouts, etc.)",
+  },
+  {
+    id: "slack",
+    name: "Slack",
+    description: "Agent-driven Slack notifications and mention policy",
   },
 ];

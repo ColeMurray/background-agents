@@ -8,9 +8,8 @@
 
 import type { Env, RepoConfig, ControlPlaneRepo, ControlPlaneReposResponse } from "../types";
 import { normalizeRepoId } from "../utils/repo";
-import { buildInternalAuthHeaders } from "../utils/internal";
+import { buildInternalAuthHeaders, createKvCacheStore } from "@open-inspect/shared";
 import { createLogger } from "../logger";
-import { createKvCacheStore } from "@open-inspect/shared";
 
 const log = createLogger("repos");
 

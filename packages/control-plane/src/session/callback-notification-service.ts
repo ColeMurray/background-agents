@@ -249,6 +249,7 @@ export class CallbackNotificationService {
       type: string;
       tool?: string;
       args?: Record<string, unknown>;
+      callId?: string;
       call_id?: string;
       status?: string;
     }
@@ -295,12 +296,13 @@ export class CallbackNotificationService {
 
     const sessionId = this.getSessionId();
     const context = JSON.parse(message.callback_context);
+    const callId = event.callId ?? event.call_id ?? "";
 
     const payloadData = {
       sessionId,
       tool,
       args: event.args ?? {},
-      callId: event.call_id ?? "",
+      callId,
       status: event.status,
       timestamp: now,
       context,

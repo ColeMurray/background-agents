@@ -2,13 +2,13 @@
  * Callback handlers for control-plane notifications.
  */
 
-import { computeHmacHex, timingSafeEqual } from "@open-inspect/shared";
+import { computeHmacHex, postMessage, removeReaction, timingSafeEqual } from "@open-inspect/shared";
 import { Hono } from "hono";
-import type { Env, CompletionCallback } from "./types";
+import type { Env, CompletionCallback, ToolCallCallback } from "./types";
 import { extractAgentResponse } from "./completion/extractor";
 import { buildCompletionBlocks, getFallbackText, truncateError } from "./completion/blocks";
-import { postMessage, removeReaction } from "./utils/slack-client";
 import { createLogger } from "./logger";
+import { formatToolStatus, setAssistantThreadStatusBestEffort } from "./activity-status";
 
 const log = createLogger("callback");
 
@@ -40,8 +40,8 @@ async function clearThinkingReaction(
  * Verify internal callback signature using shared secret.
  * Prevents external callers from forging completion callbacks.
  */
-async function verifyCallbackSignature(
-  payload: CompletionCallback,
+async function verifyCallbackSignature<T extends { signature: string }>(
+  payload: T,
   secret: string
 ): Promise<boolean> {
   const { signature, ...data } = payload;
@@ -49,22 +49,51 @@ async function verifyCallbackSignature(
   return timingSafeEqual(signature, expectedHex);
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 /**
  * Validate callback payload shape.
  */
 function isValidPayload(payload: unknown): payload is CompletionCallback {
-  if (!payload || typeof payload !== "object") return false;
-  const p = payload as Record<string, unknown>;
+  if (!isPlainRecord(payload)) return false;
+  const p = payload;
   return (
     typeof p.sessionId === "string" &&
     typeof p.messageId === "string" &&
     typeof p.success === "boolean" &&
     typeof p.timestamp === "number" &&
     typeof p.signature === "string" &&
-    p.context !== null &&
-    typeof p.context === "object" &&
-    typeof (p.context as Record<string, unknown>).channel === "string" &&
-    typeof (p.context as Record<string, unknown>).threadTs === "string"
+    isPlainRecord(p.context) &&
+    typeof p.context.channel === "string" &&
+    typeof p.context.threadTs === "string"
+  );
+}
+
+function isValidSlackCallbackContext(context: unknown): boolean {
+  return (
+    isPlainRecord(context) &&
+    context.source === "slack" &&
+    typeof context.channel === "string" &&
+    typeof context.threadTs === "string"
+  );
+}
+
+/**
+ * Validate tool-call callback payload shape.
+ */
+function isValidToolCallPayload(payload: unknown): payload is ToolCallCallback {
+  if (!isPlainRecord(payload)) return false;
+  const p = payload;
+  return (
+    typeof p.sessionId === "string" &&
+    typeof p.tool === "string" &&
+    isPlainRecord(p.args) &&
+    typeof p.callId === "string" &&
+    typeof p.timestamp === "number" &&
+    typeof p.signature === "string" &&
+    isValidSlackCallbackContext(p.context)
   );
 }
 
@@ -137,6 +166,118 @@ callbacksRouter.post("/complete", async (c) => {
 
   return c.json({ ok: true });
 });
+
+/**
+ * Callback endpoint for in-flight tool-call notifications.
+ */
+callbacksRouter.post("/tool_call", async (c) => {
+  const startTime = Date.now();
+  const traceId = c.req.header("x-trace-id") || crypto.randomUUID();
+  let payload: unknown;
+
+  try {
+    payload = await c.req.json();
+  } catch {
+    log.warn("http.request", {
+      trace_id: traceId,
+      http_method: "POST",
+      http_path: "/callbacks/tool_call",
+      http_status: 400,
+      outcome: "rejected",
+      reject_reason: "invalid_json",
+      duration_ms: Date.now() - startTime,
+    });
+    return c.json({ error: "invalid payload" }, 400);
+  }
+
+  if (!isValidToolCallPayload(payload)) {
+    log.warn("http.request", {
+      trace_id: traceId,
+      http_method: "POST",
+      http_path: "/callbacks/tool_call",
+      http_status: 400,
+      outcome: "rejected",
+      reject_reason: "invalid_payload",
+      duration_ms: Date.now() - startTime,
+    });
+    return c.json({ error: "invalid payload" }, 400);
+  }
+
+  if (!c.env.INTERNAL_CALLBACK_SECRET) {
+    log.error("http.request", {
+      trace_id: traceId,
+      http_method: "POST",
+      http_path: "/callbacks/tool_call",
+      http_status: 500,
+      outcome: "error",
+      reject_reason: "secret_not_configured",
+      duration_ms: Date.now() - startTime,
+    });
+    return c.json({ error: "not configured" }, 500);
+  }
+
+  const isValid = await verifyCallbackSignature(payload, c.env.INTERNAL_CALLBACK_SECRET);
+  if (!isValid) {
+    log.warn("http.request", {
+      trace_id: traceId,
+      http_method: "POST",
+      http_path: "/callbacks/tool_call",
+      http_status: 401,
+      outcome: "rejected",
+      reject_reason: "invalid_signature",
+      session_id: payload.sessionId,
+      duration_ms: Date.now() - startTime,
+    });
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  c.executionCtx.waitUntil(handleToolCallCallback(payload, c.env, traceId));
+
+  log.info("http.request", {
+    trace_id: traceId,
+    http_method: "POST",
+    http_path: "/callbacks/tool_call",
+    http_status: 200,
+    session_id: payload.sessionId,
+    tool: payload.tool,
+    call_id: payload.callId,
+    duration_ms: Date.now() - startTime,
+  });
+
+  return c.json({ ok: true });
+});
+
+async function handleToolCallCallback(
+  payload: ToolCallCallback,
+  env: Env,
+  traceId?: string
+): Promise<void> {
+  const startTime = Date.now();
+  const { context } = payload;
+  const base = {
+    trace_id: traceId,
+    session_id: payload.sessionId,
+    tool: payload.tool,
+    call_id: payload.callId,
+    channel: context.channel,
+    thread_ts: context.threadTs,
+  };
+
+  const status = formatToolStatus(payload.tool, payload.args);
+  await setAssistantThreadStatusBestEffort(env, context.channel, context.threadTs, status, {
+    event: "tool_call",
+    traceId,
+    sessionId: payload.sessionId,
+    tool: payload.tool,
+    callId: payload.callId,
+  });
+
+  log.info("callback.tool_call", {
+    ...base,
+    outcome: "success",
+    duration_ms: Date.now() - startTime,
+  });
+}
 
 /**
  * Handle completion callback - fetch events and post to Slack.

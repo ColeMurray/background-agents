@@ -2,6 +2,7 @@
 
 import type { SandboxEvent } from "@/types/session";
 import { formatToolCall } from "@/lib/tool-formatters";
+import { SlackNotifyEvent } from "./slack-notify-event";
 import {
   ChevronRightIcon,
   FileIcon,
@@ -49,6 +50,17 @@ function ToolIcon({ name }: { name: string | null }) {
 }
 
 export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: ToolCallItemProps) {
+  if (event.tool === "slack-notify") {
+    return (
+      <SlackNotifyEvent
+        event={event}
+        isExpanded={isExpanded}
+        onToggle={onToggle}
+        showTime={showTime}
+      />
+    );
+  }
+
   const formatted = formatToolCall(event);
   const isApplyPatch = event.tool?.toLowerCase() === "apply_patch";
   const time = new Date(event.timestamp * 1000).toLocaleTimeString([], {

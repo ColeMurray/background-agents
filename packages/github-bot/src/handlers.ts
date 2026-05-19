@@ -1,4 +1,4 @@
-import { resolveAppName } from "@open-inspect/shared";
+import { buildInternalAuthHeaders, resolveAppName } from "@open-inspect/shared";
 import type {
   Env,
   PullRequestOpenedPayload,
@@ -9,7 +9,6 @@ import type {
 import type { Logger } from "./logger";
 import { generateInstallationToken, postReaction, checkSenderPermission } from "./github-auth";
 import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
-import { buildInternalAuthHeaders } from "./utils/internal";
 import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
 
 export type HandlerResult =

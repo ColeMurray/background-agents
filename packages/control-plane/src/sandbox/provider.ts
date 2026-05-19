@@ -65,6 +65,12 @@ export interface CreateSandboxConfig {
   branch?: string;
   /** Whether to enable code-server (browser-based editor) in the sandbox */
   codeServerEnabled?: boolean;
+  /**
+   * Whether to install the agent-initiated slack-notify tool. Fixed for the
+   * lifetime of the sandbox; per-call authorization is re-evaluated by the
+   * control-plane endpoint.
+   */
+  agentSlackNotifyEnabled?: boolean;
   /** MCP servers to inject into the agent session */
   mcpServers?: McpServerConfig[];
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
@@ -127,6 +133,8 @@ export interface RestoreConfig {
   correlation?: CorrelationContext;
   /** Whether to enable code-server (browser-based editor) in the sandbox */
   codeServerEnabled?: boolean;
+  /** Resolved fresh on each restore — see CreateSandboxConfig. */
+  agentSlackNotifyEnabled?: boolean;
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
   sandboxSettings?: SandboxSettings;
 }

@@ -25,7 +25,7 @@ export type SandboxStatus =
 export type GitSyncStatus = "pending" | "in_progress" | "completed" | "failed";
 export type MessageStatus = "pending" | "processing" | "completed" | "failed";
 export type MessageSource = "web" | "slack" | "linear" | "extension" | "github" | "automation";
-export type ArtifactType = "pr" | "screenshot" | "preview" | "branch";
+export type ArtifactType = "pr" | "screenshot" | "video" | "preview" | "branch";
 export type EventType =
   | "heartbeat"
   | "token"
@@ -148,6 +148,40 @@ export interface ScreenshotArtifactMetadata {
   annotated?: boolean;
   /** Caption or description provided by the agent */
   caption?: string;
+}
+
+/** Metadata stored on video recording artifacts. */
+export interface VideoArtifactMetadata {
+  /** R2 object key */
+  objectKey: string;
+  /** MIME type for saved recordings. */
+  mimeType: "video/mp4";
+  /** File size in bytes */
+  sizeBytes: number;
+  /** Agent-provided title or description of the validation recording */
+  caption: string;
+  /** Recording duration in milliseconds */
+  durationMs: number;
+  /** Artifact creation time as epoch milliseconds */
+  createdAt: number;
+  /** Recording start time as epoch milliseconds */
+  recordingStartedAt: number;
+  /** Recording end time as epoch milliseconds */
+  recordingEndedAt: number;
+  /** Captured viewport dimensions */
+  dimensions: { width: number; height: number };
+  /** Whether recording stopped at the maximum duration */
+  truncated: boolean;
+  /** Recordings must not include audio */
+  hasAudio?: false;
+  /** Captured surface for v1 */
+  captureSurface?: "browser";
+  /** Artifact source */
+  source?: "agent";
+  /** URL at recording start */
+  sourceUrl?: string;
+  /** URL when recording stopped */
+  endUrl?: string;
 }
 
 // Pull request info

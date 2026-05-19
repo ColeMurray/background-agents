@@ -1,12 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type * as ClientModule from "./client";
 
 const { mockGetUserInfo } = vi.hoisted(() => ({
   mockGetUserInfo: vi.fn(),
 }));
 
-vi.mock("./slack-client", () => ({
-  getUserInfo: mockGetUserInfo,
-}));
+vi.mock("./client", async () => {
+  const actual = await vi.importActual<typeof ClientModule>("./client");
+  return {
+    ...actual,
+    getUserInfo: mockGetUserInfo,
+  };
+});
 
 import { resolveUserNames } from "./resolve-users";
 

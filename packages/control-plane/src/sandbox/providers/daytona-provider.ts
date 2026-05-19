@@ -222,6 +222,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       envVars.CODE_SERVER_PASSWORD = await this.deriveCodeServerPassword(config.sandboxId);
     }
 
+    if (config.agentSlackNotifyEnabled) {
+      envVars.AGENT_SLACK_NOTIFY_ENABLED = "true";
+    }
+
     if (this.providerConfig.scmProvider === "gitlab") {
       envVars.VCS_HOST = "gitlab.com";
       envVars.VCS_CLONE_USERNAME = "oauth2";

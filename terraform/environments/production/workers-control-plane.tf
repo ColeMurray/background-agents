@@ -98,6 +98,12 @@ module "control_plane_worker" {
     ] : [],
     local.use_daytona_backend ? [
       { name = "DAYTONA_API_KEY", value = var.daytona_api_key },
+    ] : [],
+    # Slack bot token enables the agent-initiated `slack-notify` endpoint.
+    # Shares the variable with the slack-bot worker; bound here so the same
+    # token can authorize chat.postMessage from agent tool calls.
+    length(var.slack_bot_token) > 0 ? [
+      { name = "SLACK_BOT_TOKEN", value = var.slack_bot_token },
     ] : []
   )
 
