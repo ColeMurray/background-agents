@@ -63,6 +63,7 @@ base_image = (
         "jq",
         "unzip",  # Required for Bun installation
         "ffmpeg",
+        "postgresql-client",
         # Shared libraries required by headless Chromium
         "libnss3",
         "libnspr4",
@@ -88,6 +89,14 @@ base_image = (
         " https://cli.github.com/packages stable main'"
         " > /etc/apt/sources.list.d/github-cli.list",
         "apt-get update && apt-get install -y gh && rm -rf /var/lib/apt/lists/*",
+    )
+    # Install AWS CLI (for agent-direct AWS interaction via aws API)
+    .run_commands(
+        "curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip",
+        "unzip -q /tmp/awscliv2.zip -d /tmp",
+        "/tmp/aws/install",
+        "rm -rf /tmp/aws /tmp/awscliv2.zip",
+        "aws --version",
     )
     # Install Node.js 22 LTS
     .run_commands(

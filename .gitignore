@@ -60,6 +60,9 @@ coverage/
 # Private keys
 *.pem
 
+# CI/CD
+.secrets
+
 # TypeScript build cache
 *.tsbuildinfo
 
