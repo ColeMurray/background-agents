@@ -215,21 +215,23 @@ access.
    - Issues: **Read & Write** _(required if enabling GitHub bot)_
    - Pull requests: **Read & Write**
    - Metadata: **Read-only**
-6. Click **"Create GitHub App"**
-7. Note the **App ID** and **Client ID** (top of page)
-8. Under **"Client secrets"**, click **"Generate a new client secret"** and note the **Client
+6. Set **Organization permissions**:
+   - Members: **Read-only** _(required when using `ALLOWED_GITHUB_ORGS`)_
+7. Click **"Create GitHub App"**
+8. Note the **App ID** and **Client ID** (top of page)
+9. Under **"Client secrets"**, click **"Generate a new client secret"** and note the **Client
    Secret**
-9. Scroll down to **"Private keys"** and click **"Generate a private key"** (downloads a .pem file)
-10. **Convert the key to PKCS#8 format** (required for Cloudflare Workers):
+10. Scroll down to **"Private keys"** and click **"Generate a private key"** (downloads a .pem file)
+11. **Convert the key to PKCS#8 format** (required for Cloudflare Workers):
     ```bash
     openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt \
       -in ~/Downloads/your-app-name.*.private-key.pem \
       -out private-key-pkcs8.pem
     ```
-11. **Install the app** on your account/organization:
+12. **Install the app** on your account/organization:
     - Click "Install App" in the sidebar
     - Select the repositories you want Open-Inspect to access
-12. Note the **Installation ID** from the URL after installing:
+13. Note the **Installation ID** from the URL after installing:
     ```
     https://github.com/settings/installations/INSTALLATION_ID
     ```
@@ -416,15 +418,17 @@ enable_service_bindings        = false
 # Access Control (set at least one allowlist for production)
 allowed_users         = "your-github-username"  # Comma-separated GitHub usernames, or empty
 allowed_email_domains = ""                      # Comma-separated domains (e.g., "example.com,corp.io")
+allowed_github_orgs   = ""                      # Comma-separated orgs whose active members can sign in
 
 # Explicitly opt into open access only if you want any authenticated GitHub user
-# to be able to sign in when both allowlists are empty.
+# to be able to sign in when all allowlists are empty.
 unsafe_allow_all_users = false
 ```
 
-> **Note**: Review `allowed_users` and `allowed_email_domains` carefully - these control who can
-> sign in. Terraform now fails if both are empty unless you explicitly set
-> `unsafe_allow_all_users = true`.
+> **Note**: Review `allowed_users`, `allowed_email_domains`, and `allowed_github_orgs` carefully -
+> these control who can sign in. Terraform now fails if all are empty unless you explicitly set
+> `unsafe_allow_all_users = true`. `allowed_github_orgs` checks active GitHub organization
+> membership and requires GitHub App Organization permissions: Members read-only.
 
 ---
 
@@ -683,8 +687,9 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `INTERNAL_CALLBACK_SECRET`    | Generated callback secret                                                     |
 | `MODAL_API_SECRET`            | Generated Modal API secret                                                    |
 | `NEXTAUTH_SECRET`             | Generated NextAuth secret                                                     |
-| `ALLOWED_USERS`               | Comma-separated GitHub usernames (or empty for all users)                     |
-| `ALLOWED_EMAIL_DOMAINS`       | Comma-separated email domains (or empty for all domains)                      |
+| `ALLOWED_USERS`               | Comma-separated GitHub usernames allowed to sign in                           |
+| `ALLOWED_EMAIL_DOMAINS`       | Comma-separated email domains allowed to sign in                              |
+| `ALLOWED_GITHUB_ORGS`         | Comma-separated GitHub orgs whose active members can sign in                  |
 | `ENABLE_GITHUB_BOT`           | `true` to deploy GitHub bot worker (or empty to skip)                         |
 | `GH_WEBHOOK_SECRET`           | GitHub webhook secret (required if GitHub bot enabled)                        |
 | `GH_BOT_USERNAME`             | GitHub App bot username, e.g., `my-app[bot]` (required if GitHub bot enabled) |

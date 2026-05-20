@@ -60,7 +60,9 @@ built for internal use where all employees are trusted and have access to compan
    web interface
 2. **Install GitHub App only on intended repositories** - The App's installation scope defines what
    the system can access
-3. **Use GitHub's repository selection** - When installing the App, select specific repositories
+3. **Restrict sign-in** - Configure allowed GitHub users, email domains, or active GitHub
+   organization membership (`ALLOWED_GITHUB_ORGS`)
+4. **Use GitHub's repository selection** - When installing the App, select specific repositories
    rather than "All repositories"
 
 ## Architecture
