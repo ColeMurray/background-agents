@@ -100,6 +100,12 @@ module "web_app" {
       sensitive = false
     },
     {
+      key       = "ALLOWED_GITHUB_ORGS"
+      value     = var.allowed_github_orgs
+      targets   = ["production", "preview"]
+      sensitive = false
+    },
+    {
       key       = "UNSAFE_ALLOW_ALL_USERS"
       value     = tostring(var.unsafe_allow_all_users)
       targets   = ["production", "preview"]

@@ -406,19 +406,25 @@ variable "r2_media_bucket_name" {
 # =============================================================================
 
 variable "allowed_users" {
-  description = "Comma-separated list of GitHub usernames allowed to sign in. Leave empty only when allowed_email_domains is set or unsafe_allow_all_users is true."
+  description = "Comma-separated list of GitHub usernames allowed to sign in. Leave empty only when another allowlist is set or unsafe_allow_all_users is true."
   type        = string
   default     = ""
 }
 
 variable "allowed_email_domains" {
-  description = "Comma-separated list of email domains allowed to sign in (e.g., 'example.com,corp.io'). Leave empty only when allowed_users is set or unsafe_allow_all_users is true."
+  description = "Comma-separated list of email domains allowed to sign in (e.g., 'example.com,corp.io'). Leave empty only when another allowlist is set or unsafe_allow_all_users is true."
+  type        = string
+  default     = ""
+}
+
+variable "allowed_github_orgs" {
+  description = "Comma-separated list of GitHub organization logins whose active members are allowed to sign in. Leave empty only when another allowlist is set or unsafe_allow_all_users is true."
   type        = string
   default     = ""
 }
 
 variable "unsafe_allow_all_users" {
-  description = "Bypass Terraform's access-control safety check and allow any authenticated GitHub user to sign in when both allowlists are empty. Set to true only for intentionally open deployments."
+  description = "Bypass Terraform's access-control safety check and allow any authenticated GitHub user to sign in when all allowlists are empty. Set to true only for intentionally open deployments."
   type        = bool
   default     = false
 }

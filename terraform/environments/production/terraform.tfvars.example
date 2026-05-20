@@ -280,6 +280,10 @@ allowed_users = ""
 # Example: "example.com,corp.io"
 allowed_email_domains = ""
 
+# Comma-separated list of GitHub organizations whose active members can sign in
+# Requires GitHub App Organization permissions: Members read-only.
+allowed_github_orgs = ""
+
 # Explicitly bypass the Terraform access-control safety check and allow any
-# authenticated GitHub user to sign in when both allowlists are empty.
+# authenticated GitHub user to sign in when all allowlists are empty.
 unsafe_allow_all_users = false
