@@ -41,7 +41,9 @@ export function ActionBar({
 
   const prArtifact = artifacts.find((a) => a.type === "pr");
   const previewArtifact = artifacts.find((a) => a.type === "preview");
-  const screenshotCount = artifacts.filter((artifact) => artifact.type === "screenshot").length;
+  const mediaCount = artifacts.filter(
+    (artifact) => artifact.type === "screenshot" || artifact.type === "video"
+  ).length;
   const previewUrl = getSafeExternalUrl(previewArtifact?.url);
   const prUrl = getSafeExternalUrl(prArtifact?.url);
 
@@ -115,9 +117,9 @@ export function ActionBar({
           <span>{isArchived ? "Unarchive" : "Archive"}</span>
         </Button>
 
-        {screenshotCount > 0 && (
+        {mediaCount > 0 && (
           <div className="inline-flex items-center rounded-md border border-border-muted px-3 text-sm text-muted-foreground">
-            Screenshots ({screenshotCount})
+            Media ({mediaCount})
           </div>
         )}
 

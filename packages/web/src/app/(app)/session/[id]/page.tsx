@@ -696,13 +696,14 @@ function SessionContent({
 
   // Deduplicate and group events for rendering
   const groupedEvents = useMemo(() => dedupeAndGroupEvents(events), [events]);
-  const screenshotArtifacts = useMemo(
-    () => artifacts.filter((artifact) => artifact.type === "screenshot"),
+  const mediaArtifacts = useMemo(
+    () =>
+      artifacts.filter((artifact) => artifact.type === "screenshot" || artifact.type === "video"),
     [artifacts]
   );
   const selectedMediaArtifact = useMemo(
-    () => screenshotArtifacts.find((artifact) => artifact.id === selectedMediaArtifactId) ?? null,
-    [screenshotArtifacts, selectedMediaArtifactId]
+    () => mediaArtifacts.find((artifact) => artifact.id === selectedMediaArtifactId) ?? null,
+    [mediaArtifacts, selectedMediaArtifactId]
   );
 
   const sessionDisplayInfo = useMemo(
@@ -1365,19 +1366,25 @@ const EventItem = memo(function EventItem({
       );
 
     case "artifact":
-      if (event.artifactType !== "screenshot" || !event.artifactId) {
+      if (
+        (event.artifactType !== "screenshot" && event.artifactType !== "video") ||
+        !event.artifactId
+      ) {
         return null;
       }
 
       return (
         <div className="space-y-2 border border-border-muted bg-card p-4">
           <div className="flex items-center justify-between">
-            <span className="text-xs text-muted-foreground">Screenshot</span>
+            <span className="text-xs text-muted-foreground">
+              {event.artifactType === "video" ? "Video" : "Screenshot"}
+            </span>
             <span className="text-xs text-secondary-foreground">{time}</span>
           </div>
           <ScreenshotArtifactCard
             sessionId={sessionId}
             artifactId={event.artifactId}
+            artifactType={event.artifactType}
             metadata={event.metadata as Artifact["metadata"] | undefined}
             onOpen={onOpenMedia}
           />

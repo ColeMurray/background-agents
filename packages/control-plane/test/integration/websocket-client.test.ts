@@ -263,6 +263,55 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     ws.close();
   });
 
+  it("closing one of multiple sockets for the same participant sends presence_update, not presence_leave", async () => {
+    const name = `ws-client-presence-multi-${Date.now()}`;
+    await initNamedSession(name);
+
+    // Two tabs for the same user → same participantId
+    const tab1 = await openClientWs(name, { subscribe: true, userId: "user-1" });
+    const tab2 = await openClientWs(name, { subscribe: true, userId: "user-1" });
+    expect(tab1.participantId).toBe(tab2.participantId);
+
+    const collector = collectMessages(tab1.ws, {
+      until: (msg) => msg.type === "presence_update" || msg.type === "presence_leave",
+      timeoutMs: 2000,
+    });
+
+    tab2.ws.close();
+
+    const messages = await collector;
+    expect(messages.some((m) => m.type === "presence_leave")).toBe(false);
+    const update = messages.find((m) => m.type === "presence_update") as Record<string, unknown>;
+    expect(update).toBeDefined();
+    const participants = update.participants as Array<{ participantId: string }>;
+    expect(participants.some((p) => p.participantId === tab1.participantId)).toBe(true);
+
+    tab1.ws.close();
+  });
+
+  it("closing the only socket for a participant broadcasts presence_leave", async () => {
+    const name = `ws-client-presence-leave-${Date.now()}`;
+    await initNamedSession(name);
+
+    // Two distinct users so the watcher remains connected after the target leaves
+    const watcher = await openClientWs(name, { subscribe: true, userId: "user-1" });
+    const leaver = await openClientWs(name, { subscribe: true, userId: "user-2" });
+
+    const collector = collectMessages(watcher.ws, {
+      until: (msg) => msg.type === "presence_leave",
+      timeoutMs: 2000,
+    });
+
+    leaver.ws.close();
+
+    const messages = await collector;
+    const leave = messages.find((m) => m.type === "presence_leave") as Record<string, unknown>;
+    expect(leave).toBeDefined();
+    expect(leave.userId).toBe("user-2");
+
+    watcher.ws.close();
+  });
+
   it("sandbox event is broadcast to subscribed client", async () => {
     const name = `ws-client-broadcast-${Date.now()}`;
     const { stub } = await initNamedSession(name);

@@ -1,9 +1,61 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { initSession, queryDO, seedEvents } from "./helpers";
 import type { SpawnContext, ChildSessionDetail } from "@open-inspect/shared";
 
+const originalFetch = globalThis.fetch;
+
+function installModalFetchMock(): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+      if (!url.includes(".modal.run")) {
+        return originalFetch(input, init);
+      }
+
+      const body = JSON.parse(String(init?.body ?? "{}")) as { sandbox_id?: string };
+      const sandboxId = body.sandbox_id ?? "sandbox-test";
+
+      return Response.json({
+        success: true,
+        data: {
+          sandbox_id: sandboxId,
+          modal_object_id: `modal-${sandboxId}`,
+          status: "running",
+          created_at: Date.now(),
+        },
+      });
+    })
+  );
+}
+
+async function waitForSandboxSpawn(stub: DurableObjectStub): Promise<void> {
+  const deadline = Date.now() + 1000;
+
+  while (Date.now() < deadline) {
+    const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox LIMIT 1");
+    const status = rows[0]?.status;
+    if (status === "connecting" || status === "running") {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  throw new Error("Timed out waiting for sandbox spawn");
+}
+
 describe("DO internal sub-session routes", () => {
+  beforeEach(() => {
+    installModalFetchMock();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   describe("GET /internal/spawn-context", () => {
     it("returns SpawnContext with session and owner info", async () => {
       const { stub } = await initSession({
@@ -189,6 +241,8 @@ describe("DO internal sub-session routes", () => {
         repoName: "web-app",
         userId: "user-1",
       });
+
+      await waitForSandboxSpawn(stub);
 
       // Set session to active to simulate a running session
       await queryDO(stub, "UPDATE session SET status = 'active'");

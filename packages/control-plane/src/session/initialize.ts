@@ -47,6 +47,8 @@ export interface SessionInitInput {
   parentSessionId?: string | null;
   spawnSource?: SpawnSource;
   spawnDepth?: number;
+  automationId?: string | null;
+  automationRunId?: string | null;
 }
 
 /**
@@ -78,6 +80,8 @@ export async function initializeSession(
     parentSessionId: input.parentSessionId,
     spawnSource: input.spawnSource,
     spawnDepth: input.spawnDepth,
+    automationId: input.automationId,
+    automationRunId: input.automationRunId,
     scmLogin: input.scmLogin || null,
     userId: input.platformUserId,
     createdAt: now,

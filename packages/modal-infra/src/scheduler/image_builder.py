@@ -52,6 +52,22 @@ class BuildError(Exception):
     pass
 
 
+async def _terminate_build_sandbox(handle, build_id: str, reason: str) -> bool:
+    """Terminate a build sandbox, logging but not failing the build on cleanup errors."""
+    try:
+        await handle.modal_sandbox.terminate.aio()
+        log.info("build.sandbox_terminated", build_id=build_id, reason=reason)
+        return True
+    except Exception as e:
+        log.warn(
+            "build.sandbox_terminate_failed",
+            build_id=build_id,
+            reason=reason,
+            error=str(e),
+        )
+        return False
+
+
 def _outbound_secret() -> str:
     """Get INTERNAL_CALLBACK_SECRET for authenticating outbound calls to the control plane."""
     secret = os.environ.get("INTERNAL_CALLBACK_SECRET")
@@ -199,7 +215,7 @@ async def build_repo_image(
         build_id: Build identifier from the control plane
         user_env_vars: User-defined environment variables (repo secrets) injected into the build sandbox
     """
-    from ..sandbox.manager import SandboxManager
+    from ..sandbox.manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS, SandboxManager
 
     # Validate callback URL against allowed hosts to prevent SSRF
     if callback_url and not validate_control_plane_url(callback_url):
@@ -208,6 +224,8 @@ async def build_repo_image(
 
     start_time = time.time()
     manager = SandboxManager()
+    handle = None
+    sandbox_terminated = False
 
     try:
         clone_token = _generate_clone_token()
@@ -236,11 +254,13 @@ async def build_repo_image(
             raise BuildError(f"Build sandbox exited without completing (exit_code={exit_code})")
 
         # 4. Snapshot the running sandbox's filesystem
-        image = await handle.modal_sandbox.snapshot_filesystem.aio()
+        image = await handle.modal_sandbox.snapshot_filesystem.aio(
+            timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
+        )
         provider_image_id = image.object_id
 
         # 5. Terminate the sandbox (no longer needed after snapshot)
-        await handle.modal_sandbox.terminate.aio()
+        sandbox_terminated = await _terminate_build_sandbox(handle, build_id, "snapshot_complete")
 
         build_duration = time.time() - start_time
 
@@ -266,6 +286,9 @@ async def build_repo_image(
 
     except Exception as e:
         build_duration = time.time() - start_time
+        if handle is not None and not sandbox_terminated:
+            sandbox_terminated = await _terminate_build_sandbox(handle, build_id, "build_failed")
+
         log.error(
             "build.failed",
             build_id=build_id,
@@ -284,6 +307,9 @@ async def build_repo_image(
                     "error": str(e),
                 },
             )
+    finally:
+        if handle is not None and not sandbox_terminated:
+            await _terminate_build_sandbox(handle, build_id, "cleanup")
 
 
 # ---------------------------------------------------------------------------

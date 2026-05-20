@@ -18,12 +18,17 @@ import {
   type TriggerConfig,
 } from "@open-inspect/shared";
 import { AutomationStore, toAutomationRun, type AutomationRow } from "../db/automation-store";
-import { SessionIndexStore } from "../db/session-index";
 import { UserStore } from "../db/user-store";
+import { createRequestMetrics } from "../db/instrumented-d1";
 import { generateId } from "../auth/crypto";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import type { Env } from "../types";
+import { initializeSession } from "../session/initialize";
+import {
+  resolveCodeServerEnabled,
+  resolveSandboxSettings,
+} from "../session/integration-settings-resolution";
 
 /** Max automations to process per tick (backpressure). */
 const MAX_PER_TICK = 25;
@@ -542,30 +547,6 @@ export class SchedulerDO extends DurableObject<Env> {
     runId: string
   ): Promise<{ sessionId: string }> {
     const sessionId = generateId();
-    const doId = this.env.SESSION.idFromName(sessionId);
-    const stub = this.env.SESSION.get(doId);
-
-    // Initialize the session DO
-    const initResponse = await stub.fetch("http://internal/internal/init", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionName: sessionId,
-        repoOwner: automation.repo_owner,
-        repoName: automation.repo_name,
-        repoId: automation.repo_id,
-        defaultBranch: automation.base_branch,
-        model: automation.model,
-        reasoningEffort: automation.reasoning_effort,
-        title: `[Auto] ${automation.name}`,
-        userId: automation.created_by,
-        spawnSource: "automation",
-      }),
-    });
-
-    if (!initResponse.ok) {
-      throw new Error(`Session init failed with status ${initResponse.status}`);
-    }
 
     // Resolve the canonical user_id for the session index.
     // New automations (post-Phase 5) have user_id populated at creation time, so this
@@ -587,26 +568,39 @@ export class SchedulerDO extends DurableObject<Env> {
       }
     }
 
-    // Index the session in D1
-    const now = Date.now();
-    const sessionStore = new SessionIndexStore(this.env.DB);
-    await sessionStore.create({
-      id: sessionId,
-      title: `[Auto] ${automation.name}`,
-      repoOwner: automation.repo_owner,
-      repoName: automation.repo_name,
-      model: automation.model,
-      reasoningEffort: automation.reasoning_effort,
-      baseBranch: automation.base_branch,
-      status: "created",
-      spawnSource: "automation",
-      spawnDepth: 0,
-      automationId: automation.id,
-      automationRunId: runId,
-      userId,
-      createdAt: now,
-      updatedAt: now,
-    });
+    const [codeServerEnabled, sandboxSettings] = await Promise.all([
+      resolveCodeServerEnabled(this.env.DB, automation.repo_owner, automation.repo_name),
+      resolveSandboxSettings(this.env.DB, automation.repo_owner, automation.repo_name),
+    ]);
+
+    await initializeSession(
+      this.env,
+      {
+        sessionId,
+        repoOwner: automation.repo_owner,
+        repoName: automation.repo_name,
+        repoId: automation.repo_id,
+        defaultBranch: automation.base_branch,
+        title: `[Auto] ${automation.name}`,
+        model: automation.model,
+        reasoningEffort: automation.reasoning_effort,
+        participantUserId: automation.created_by,
+        platformUserId: userId,
+        scmTokenEncrypted: null,
+        scmRefreshTokenEncrypted: null,
+        codeServerEnabled,
+        sandboxSettings,
+        spawnSource: "automation",
+        spawnDepth: 0,
+        automationId: automation.id,
+        automationRunId: runId,
+      },
+      {
+        trace_id: `automation:${automation.id}`,
+        request_id: runId,
+        metrics: createRequestMetrics(),
+      }
+    );
 
     return { sessionId };
   }

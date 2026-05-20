@@ -58,7 +58,14 @@ describe("site-config", () => {
     expect(APP_SHORT_NAME).toBe("Inspect");
   });
 
-  it("APP_SHORT_NAME falls through to APP_NAME when only NEXT_PUBLIC_APP_NAME is set", async () => {
+  it("APP_SHORT_NAME defaults to 'Inspect' when NEXT_PUBLIC_APP_NAME is the built-in default", async () => {
+    process.env.NEXT_PUBLIC_APP_NAME = "Open-Inspect";
+    delete process.env.NEXT_PUBLIC_APP_SHORT_NAME;
+    const { APP_SHORT_NAME } = await import("./site-config");
+    expect(APP_SHORT_NAME).toBe("Inspect");
+  });
+
+  it("APP_SHORT_NAME falls through to custom APP_NAME when only NEXT_PUBLIC_APP_NAME is set", async () => {
     process.env.NEXT_PUBLIC_APP_NAME = "Acme Bot";
     delete process.env.NEXT_PUBLIC_APP_SHORT_NAME;
     const { APP_SHORT_NAME } = await import("./site-config");

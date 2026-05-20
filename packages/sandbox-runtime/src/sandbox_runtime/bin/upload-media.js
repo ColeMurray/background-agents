@@ -57,7 +57,15 @@ async function main() {
   const mimeType = getMimeType(resolvedFilePath);
 
   if (!mimeType) {
-    throw new Error("upload-media.js only supports .png, .jpg, .jpeg, and .webp files");
+    throw new Error("upload-media.js only supports .png, .jpg, .jpeg, .webp, and .mp4 files");
+  }
+
+  const artifactType = parsed.artifactType ?? "screenshot";
+  if (mimeType === "video/mp4" && artifactType !== "video") {
+    throw new Error("MP4 files must be uploaded with --artifact-type video");
+  }
+  if (artifactType === "video") {
+    validateVideoOptions(parsed);
   }
 
   const formData = new FormData();
@@ -66,13 +74,25 @@ async function main() {
     new Blob([fileBytes], { type: mimeType }),
     path.basename(resolvedFilePath)
   );
-  formData.append("artifactType", "screenshot");
+  formData.append("artifactType", artifactType);
 
-  if (parsed.caption) formData.append("caption", parsed.caption);
-  if (parsed.sourceUrl) formData.append("sourceUrl", parsed.sourceUrl);
-  if (parsed.fullPage) formData.append("fullPage", "true");
-  if (parsed.annotated) formData.append("annotated", "true");
-  if (parsed.viewport) formData.append("viewport", parsed.viewport);
+  if (artifactType === "video") {
+    formData.append("caption", parsed.caption);
+    formData.append("durationMs", parsed.durationMs);
+    formData.append("recordingStartedAt", parsed.recordingStartedAt);
+    formData.append("recordingEndedAt", parsed.recordingEndedAt);
+    formData.append("dimensions", parsed.dimensions);
+    formData.append("truncated", parsed.truncated);
+    formData.append("hasAudio", parsed.hasAudio ?? "false");
+    if (parsed.sourceUrl) formData.append("sourceUrl", parsed.sourceUrl);
+    if (parsed.endUrl) formData.append("endUrl", parsed.endUrl);
+  } else {
+    if (parsed.caption) formData.append("caption", parsed.caption);
+    if (parsed.sourceUrl) formData.append("sourceUrl", parsed.sourceUrl);
+    if (parsed.fullPage) formData.append("fullPage", "true");
+    if (parsed.annotated) formData.append("annotated", "true");
+    if (parsed.viewport) formData.append("viewport", parsed.viewport);
+  }
 
   const response = await bridgeFetch("/media", {
     method: "POST",
@@ -95,21 +115,35 @@ function parseArgs(args) {
   const filePath = args[0];
   const options = {
     filePath,
+    artifactType: undefined,
     caption: undefined,
     sourceUrl: undefined,
+    endUrl: undefined,
     fullPage: false,
     annotated: false,
     viewport: undefined,
+    durationMs: undefined,
+    recordingStartedAt: undefined,
+    recordingEndedAt: undefined,
+    dimensions: undefined,
+    truncated: undefined,
+    hasAudio: undefined,
   };
 
   for (let index = 1; index < args.length; index += 1) {
     const arg = args[index];
     switch (arg) {
+      case "--artifact-type":
+        options.artifactType = parseArtifactType(requireValue(args, ++index, "--artifact-type"));
+        break;
       case "--caption":
         options.caption = requireValue(args, ++index, "--caption");
         break;
       case "--source-url":
         options.sourceUrl = requireValue(args, ++index, "--source-url");
+        break;
+      case "--end-url":
+        options.endUrl = requireValue(args, ++index, "--end-url");
         break;
       case "--full-page":
         options.fullPage = true;
@@ -120,6 +154,24 @@ function parseArgs(args) {
       case "--viewport":
         options.viewport = requireValue(args, ++index, "--viewport");
         break;
+      case "--duration-ms":
+        options.durationMs = requireValue(args, ++index, "--duration-ms");
+        break;
+      case "--recording-started-at":
+        options.recordingStartedAt = requireValue(args, ++index, "--recording-started-at");
+        break;
+      case "--recording-ended-at":
+        options.recordingEndedAt = requireValue(args, ++index, "--recording-ended-at");
+        break;
+      case "--dimensions":
+        options.dimensions = requireValue(args, ++index, "--dimensions");
+        break;
+      case "--truncated":
+        options.truncated = requireValue(args, ++index, "--truncated");
+        break;
+      case "--has-audio":
+        options.hasAudio = requireValue(args, ++index, "--has-audio");
+        break;
       default:
         throw new Error(`Unknown argument: ${arg}`);
     }
@@ -128,12 +180,34 @@ function parseArgs(args) {
   return options;
 }
 
+function parseArtifactType(value) {
+  if (value === "screenshot" || value === "video") {
+    return value;
+  }
+  throw new Error("--artifact-type must be screenshot or video");
+}
+
 function requireValue(args, index, flagName) {
   const value = args[index];
   if (!value) {
     throw new Error(`${flagName} requires a value`);
   }
   return value;
+}
+
+function validateVideoOptions(options) {
+  requireVideoValue(options.caption, "--caption");
+  requireVideoValue(options.durationMs, "--duration-ms");
+  requireVideoValue(options.recordingStartedAt, "--recording-started-at");
+  requireVideoValue(options.recordingEndedAt, "--recording-ended-at");
+  requireVideoValue(options.dimensions, "--dimensions");
+  requireVideoValue(options.truncated, "--truncated");
+}
+
+function requireVideoValue(value, flagName) {
+  if (!value) {
+    throw new Error(`${flagName} requires a value for video uploads`);
+  }
 }
 
 function getMimeType(filePath) {
@@ -146,6 +220,8 @@ function getMimeType(filePath) {
       return "image/jpeg";
     case ".webp":
       return "image/webp";
+    case ".mp4":
+      return "video/mp4";
     default:
       return null;
   }
@@ -155,6 +231,7 @@ function printUsageAndExit(exitCode) {
   const usage = `
 Usage:
   upload-media <file-path> [--caption "..."] [--source-url "..."] [--full-page] [--annotated] [--viewport '{"width":1280,"height":720}']
+  upload-media <recording.mp4> --artifact-type video --caption "..." --duration-ms <ms> --recording-started-at <epoch-ms> --recording-ended-at <epoch-ms> --dimensions '{"width":1280,"height":720}' --truncated false
 `;
   if (exitCode === 0) {
     console.log(usage.trim());

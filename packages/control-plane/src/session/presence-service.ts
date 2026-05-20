@@ -35,16 +35,30 @@ export class PresenceService {
 
   /**
    * Get list of present participants.
+   *
+   * A single participant can hold multiple WebSocket connections (e.g. two
+   * browser tabs), so we dedupe by participantId: any active socket marks the
+   * participant active, and we take the most recent lastSeen across sockets.
    */
   getPresenceList(): ParticipantPresence[] {
-    return Array.from(this.deps.getAuthenticatedClients()).map((c) => ({
-      participantId: c.participantId,
-      userId: c.userId,
-      name: c.name,
-      avatar: c.avatar,
-      status: c.status,
-      lastSeen: c.lastSeen,
-    }));
+    const byId = new Map<string, ParticipantPresence>();
+    for (const c of this.deps.getAuthenticatedClients()) {
+      const existing = byId.get(c.participantId);
+      if (!existing) {
+        byId.set(c.participantId, {
+          participantId: c.participantId,
+          userId: c.userId,
+          name: c.name,
+          avatar: c.avatar,
+          status: c.status,
+          lastSeen: c.lastSeen,
+        });
+        continue;
+      }
+      if (c.status === "active") existing.status = "active";
+      if (c.lastSeen > existing.lastSeen) existing.lastSeen = c.lastSeen;
+    }
+    return Array.from(byId.values());
   }
 
   /**

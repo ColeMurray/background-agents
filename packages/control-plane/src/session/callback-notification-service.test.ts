@@ -249,7 +249,7 @@ describe("CallbackNotificationService", () => {
         type: "tool_call",
         tool: "bash",
         args: { cmd: "ls" },
-        call_id: "call-1",
+        callId: "call-1",
         status: "running",
       });
 

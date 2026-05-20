@@ -164,11 +164,11 @@ export class SessionSandboxEventProcessor {
     }
 
     if (event.type === "execution_complete") {
+      const completionMessageId = messageId;
       if (messageId) {
         this.deps.repository.upsertExecutionCompleteEvent(messageId, event, now);
       }
 
-      const completionMessageId = messageId;
       const isStillProcessing =
         completionMessageId != null && processingMessage?.id === completionMessageId;
 

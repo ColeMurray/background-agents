@@ -3,10 +3,13 @@
 A stateless Cloudflare Worker that translates GitHub webhook events into Open-Inspect coding agent
 sessions. It provides two capabilities:
 
-1. **Code Review** — Assign the bot as a PR reviewer; it performs an automated code review and
-   submits structured feedback.
+1. **Code Review** — Review newly opened PRs when auto-review is enabled and submit structured
+   feedback.
 2. **Comment-Triggered Actions** — @mention the bot in a PR comment; it reads the PR context and
-   executes the requested action (typically making code changes and pushing commits).
+   responds with analysis, a summary comment, or a review-thread reply.
+
+For day-to-day usage, see the user-facing
+[GitHub integration guide](../../docs/integrations/GITHUB.md).
 
 The bot is a **webhook-to-session translator** — it verifies webhooks, posts an acknowledgment
 reaction, creates a session via the control plane, and sends a prompt. The agent in the sandbox
@@ -46,9 +49,8 @@ Key design decisions:
 - **Unidirectional service binding**: The bot calls the control plane to create sessions and send
   prompts. There is no reverse binding — the agent posts results to GitHub directly from the
   sandbox.
-- **No session reuse**: Every non-duplicate webhook delivery creates a fresh session. Git provides
-  continuity (the agent clones the latest branch state). Delivery dedupe is handled separately in KV
-  using `X-GitHub-Delivery`.
+- **No session reuse**: Every non-duplicate webhook delivery creates a fresh session. Delivery
+  dedupe is handled separately in KV using `X-GitHub-Delivery`.
 - **No PR context fetching**: The bot only uses metadata already in the webhook payload. The agent
   gathers additional context (diffs, prior comments, file contents) itself using `gh` CLI.
 
@@ -102,7 +104,7 @@ For the agent to interact with GitHub from the sandbox, two prerequisites must b
 | Event                         | Action             | Trigger                     | Handler                   |
 | ----------------------------- | ------------------ | --------------------------- | ------------------------- |
 | `pull_request`                | `opened`           | Non-draft PR opened         | `handlePullRequestOpened` |
-| `pull_request`                | `review_requested` | Bot assigned as reviewer    | `handleReviewRequested`   |
+| `pull_request`                | `review_requested` | Compatibility event path    | `handleReviewRequested`   |
 | `issue_comment`               | `created`          | @mention in a PR comment    | `handleIssueComment`      |
 | `pull_request_review_comment` | `created`          | @mention in a review thread | `handleReviewComment`     |
 
@@ -119,7 +121,10 @@ All events are processed asynchronously via `executionCtx.waitUntil()`. The webh
 4. Create session via control plane
 5. Send code review prompt (includes PR metadata + `gh` CLI instructions)
 
-**Review Requested:**
+**Review Requested (compatibility path):**
+
+This handler is retained for webhook compatibility. The user-facing GitHub workflow does not ask
+people to request the GitHub App bot through the PR reviewer picker.
 
 1. Check `requested_reviewer.login` matches `GITHUB_BOT_USERNAME` — return early if not
 2. Post eyes reaction on the PR (fire-and-forget)

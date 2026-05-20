@@ -4,6 +4,9 @@ Cloudflare Worker that integrates [Linear](https://linear.app) with Open-Inspect
 **Linear Agent**. Users can `@mention` or assign the agent on issues to trigger background coding
 sessions.
 
+For day-to-day usage, see the user-facing
+[Linear integration guide](../../docs/integrations/LINEAR.md).
+
 ## How It Works
 
 ```

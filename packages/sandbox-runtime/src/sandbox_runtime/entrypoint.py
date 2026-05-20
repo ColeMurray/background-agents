@@ -376,8 +376,14 @@ class SandboxSupervisor:
                 continue
 
             dest_dir = skills_dest / skill_dir.name
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy(skill_file, dest_dir / "SKILL.md")
+            # Preserve symlinks rather than dereferencing paths outside the bundled skill.
+            shutil.copytree(
+                skill_dir,
+                dest_dir,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"),
+                symlinks=True,
+            )
             installed_any = True
 
         if installed_any:

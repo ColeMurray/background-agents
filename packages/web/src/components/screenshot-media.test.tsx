@@ -57,6 +57,31 @@ describe("ScreenshotArtifactCard", () => {
     fireEvent.error(screen.getByAltText("Screenshot"));
     expect(screen.getByText("Preview unavailable")).toBeInTheDocument();
   });
+
+  it("renders a video preview and opens the selected artifact", () => {
+    const onOpen = vi.fn();
+
+    render(
+      <ScreenshotArtifactCard
+        sessionId="session-1"
+        artifactId="artifact-video-1"
+        artifactType="video"
+        metadata={{
+          caption: "Menu interaction",
+          durationMs: 1450,
+          dimensions: { width: 1280, height: 720 },
+        }}
+        onOpen={onOpen}
+      />
+    );
+
+    const video = screen.getByLabelText("Menu interaction video preview");
+    fireEvent.loadedMetadata(video);
+    expect(video).toHaveAttribute("src", "/api/sessions/session-1/media/artifact-video-1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Menu interaction" }));
+    expect(onOpen).toHaveBeenCalledWith("artifact-video-1");
+  });
 });
 
 describe("MediaLightbox", () => {
@@ -90,12 +115,40 @@ describe("MediaLightbox", () => {
     );
   });
 
+  it("renders the selected video preview with controls", () => {
+    render(
+      <MediaLightbox
+        sessionId="session-1"
+        artifact={{
+          id: "artifact-video-1",
+          type: "video",
+          url: "sessions/session-1/media/artifact-video-1.mp4",
+          metadata: {
+            caption: "Checkout flow",
+            sourceUrl: "https://app.example.com/checkout",
+            durationMs: 3000,
+            dimensions: { width: 1280, height: 720 },
+          },
+          createdAt: 1234,
+        }}
+        open={true}
+        onOpenChange={vi.fn()}
+      />
+    );
+
+    const video = screen.getByLabelText("Checkout flow video");
+    fireEvent.loadedMetadata(video);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(video).toHaveAttribute("controls");
+    expect(video).toHaveAttribute("src", "/api/sessions/session-1/media/artifact-video-1");
+  });
+
   it("renders loading and empty states distinctly", () => {
     const { rerender } = render(
       <MediaLightbox sessionId="session-1" artifact={null} open={true} onOpenChange={vi.fn()} />
     );
 
-    expect(screen.getByText("No screenshot selected")).toBeInTheDocument();
+    expect(screen.getByText("No media selected")).toBeInTheDocument();
 
     rerender(
       <MediaLightbox
@@ -137,23 +190,23 @@ describe("MediaLightbox", () => {
 });
 
 describe("MediaSection", () => {
-  it("renders nothing when there are no screenshots", () => {
+  it("renders nothing when there are no media artifacts", () => {
     const onOpenMedia = vi.fn();
     const { container } = render(
-      <MediaSection sessionId="session-1" screenshots={[]} onOpenMedia={onOpenMedia} />
+      <MediaSection sessionId="session-1" mediaArtifacts={[]} onOpenMedia={onOpenMedia} />
     );
 
     expect(container.firstChild).toBeNull();
     expect(onOpenMedia).not.toHaveBeenCalled();
   });
 
-  it("renders one card per screenshot and hides source URLs in compact mode", () => {
+  it("renders one card per media artifact and hides source URLs in compact mode", () => {
     const onOpenMedia = vi.fn();
 
     render(
       <MediaSection
         sessionId="session-1"
-        screenshots={[
+        mediaArtifacts={[
           {
             id: "artifact-1",
             type: "screenshot",
@@ -164,6 +217,18 @@ describe("MediaSection", () => {
             },
             createdAt: 1234,
           },
+          {
+            id: "artifact-video-1",
+            type: "video",
+            url: "sessions/session-1/media/artifact-video-1.mp4",
+            metadata: {
+              caption: "Sidebar recording",
+              sourceUrl: "https://app.example.com/sidebar",
+              durationMs: 1450,
+              dimensions: { width: 1280, height: 720 },
+            },
+            createdAt: 1235,
+          },
         ]}
         onOpenMedia={onOpenMedia}
       />
@@ -172,6 +237,7 @@ describe("MediaSection", () => {
     fireEvent.load(screen.getByAltText("Sidebar shot"));
     fireEvent.click(screen.getByRole("button", { name: "Sidebar shot" }));
     expect(onOpenMedia).toHaveBeenCalledWith("artifact-1");
+    expect(screen.getByLabelText("Sidebar recording video preview")).toBeInTheDocument();
     expect(screen.queryByText("https://app.example.com/sidebar")).not.toBeInTheDocument();
   });
 });

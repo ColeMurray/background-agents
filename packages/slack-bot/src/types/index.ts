@@ -161,6 +161,19 @@ export interface CompletionCallback {
 }
 
 /**
+ * Tool-call callback payload from control-plane.
+ */
+export interface ToolCallCallback {
+  sessionId: string;
+  tool: string;
+  args: Record<string, unknown>;
+  callId: string;
+  timestamp: number;
+  signature: string;
+  context: SlackCallbackContext;
+}
+
+/**
  * Event response from control-plane events API.
  */
 export type {

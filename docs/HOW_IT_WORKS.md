@@ -162,9 +162,11 @@ can make HTTP requests and maintain WebSocket connections can participate.
 
 - **Web**: Next.js app with real-time streaming, session management, and settings
 - **Slack**: Bot that responds to @mentions and direct messages, classifies repos, and posts results
+- **GitHub**: Bot that reviews PRs and responds to PR `@mentions`
+- **Linear**: Agent workflow that starts sessions from Linear issue activity
 
-All clients see the same session state. Send a prompt from Slack, watch the results on web. This
-works because state lives in the control plane, not the client.
+All clients see the same session state. Send a prompt from Slack or GitHub, watch the results on
+web. This works because state lives in the control plane, not the client.
 
 ---
 

@@ -204,7 +204,7 @@ async function fetchSessionArtifacts(
 
     const data = (await response.json()) as ListArtifactsResponse;
     return data.artifacts
-      .filter((artifact) => artifact.type !== "screenshot")
+      .filter((artifact) => artifact.type !== "screenshot" && artifact.type !== "video")
       .map((artifact) => ({
         type: artifact.type,
         url: artifact.url ? String(artifact.url) : "",
@@ -286,7 +286,7 @@ export function getArtifactLabelFromArtifact(
  */
 export function toEventArtifactInfo(data: Record<string, unknown>): ArtifactInfo | null {
   const type = toArtifactType(data.artifactType);
-  if (!type || type === "screenshot") return null;
+  if (!type || type === "screenshot" || type === "video") return null;
 
   return {
     type,
@@ -299,7 +299,11 @@ export function toEventArtifactInfo(data: Record<string, unknown>): ArtifactInfo
  * Narrow an unknown value to a known ArtifactType or return null.
  */
 export function toArtifactType(value: unknown): ArtifactType | null {
-  return value === "pr" || value === "screenshot" || value === "preview" || value === "branch"
+  return value === "pr" ||
+    value === "screenshot" ||
+    value === "video" ||
+    value === "preview" ||
+    value === "branch"
     ? value
     : null;
 }

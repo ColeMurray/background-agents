@@ -107,6 +107,74 @@ describe("PresenceService", () => {
       const result = harness.service.getPresenceList();
       expect(result).toEqual([]);
     });
+
+    it("dedupes by participantId when the same user is connected on multiple sockets", () => {
+      // Same user connected from two tabs → two ClientInfo entries sharing one participantId.
+      // Presence should report the participant exactly once so the UI doesn't render
+      // duplicate avatars / log a React duplicate-key warning.
+      const tab1 = createMockClient({
+        participantId: "part-1",
+        userId: "user-1",
+        name: "Alice",
+        status: "idle",
+        lastSeen: 1000,
+        clientId: "client-tab-1",
+      });
+      const tab2 = createMockClient({
+        participantId: "part-1",
+        userId: "user-1",
+        name: "Alice",
+        status: "active",
+        lastSeen: 5000,
+        clientId: "client-tab-2",
+      });
+      harness.clients.push(tab1, tab2);
+
+      const result = harness.service.getPresenceList();
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({
+        participantId: "part-1",
+        userId: "user-1",
+        name: "Alice",
+        avatar: "https://example.com/avatar.png",
+        // any socket being active → participant is active
+        status: "active",
+        // most recent socket activity wins
+        lastSeen: 5000,
+      });
+    });
+
+    it("keeps distinct participants distinct while deduping shared ones", () => {
+      const aliceTab1 = createMockClient({
+        participantId: "part-1",
+        userId: "user-1",
+        name: "Alice",
+        status: "idle",
+        lastSeen: 1000,
+      });
+      const aliceTab2 = createMockClient({
+        participantId: "part-1",
+        userId: "user-1",
+        name: "Alice",
+        status: "active",
+        lastSeen: 2000,
+      });
+      const bob = createMockClient({
+        participantId: "part-2",
+        userId: "user-2",
+        name: "Bob",
+        status: "idle",
+        lastSeen: 3000,
+      });
+      harness.clients.push(aliceTab1, aliceTab2, bob);
+
+      const result = harness.service.getPresenceList();
+
+      expect(result).toHaveLength(2);
+      const ids = result.map((p) => p.participantId).sort();
+      expect(ids).toEqual(["part-1", "part-2"]);
+    });
   });
 
   describe("sendPresence", () => {
