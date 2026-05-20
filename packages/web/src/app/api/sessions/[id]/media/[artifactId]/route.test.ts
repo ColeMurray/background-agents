@@ -104,6 +104,50 @@ describe("session media API route", () => {
     );
   });
 
+  it("forwards range requests and range response headers", async () => {
+    vi.mocked(getServerSession).mockResolvedValue({
+      user: { id: "user-1" },
+    } as never);
+    const upstreamBody = Uint8Array.from([0x66, 0x74, 0x79, 0x70]);
+    vi.mocked(controlPlaneFetch).mockResolvedValue(
+      new Response(upstreamBody, {
+        status: 206,
+        headers: {
+          "Content-Type": "video/mp4",
+          "Content-Length": String(upstreamBody.byteLength),
+          "Content-Range": "bytes 4-7/24",
+          "Accept-Ranges": "bytes",
+          ETag: '"video-etag"',
+        },
+      })
+    );
+
+    const response = await GET(
+      new Request("http://localhost/api/sessions/session-1/media/a1", {
+        headers: { Range: "bytes=4-7" },
+      }),
+      {
+        params: Promise.resolve({
+          id: "session-1",
+          artifactId: "artifact-1",
+        }),
+      }
+    );
+
+    expect(controlPlaneFetch).toHaveBeenCalledWith("/sessions/session-1/media/artifact-1", {
+      headers: { Range: "bytes=4-7" },
+    });
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Type")).toBe("video/mp4");
+    expect(response.headers.get("Content-Length")).toBe(String(upstreamBody.byteLength));
+    expect(response.headers.get("Content-Range")).toBe("bytes 4-7/24");
+    expect(response.headers.get("Accept-Ranges")).toBe("bytes");
+    expect(response.headers.get("ETag")).toBe('"video-etag"');
+    expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual(
+      Array.from(upstreamBody)
+    );
+  });
+
   it("passes through upstream error statuses", async () => {
     vi.mocked(getServerSession).mockResolvedValue({
       user: { id: "user-1" },

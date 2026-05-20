@@ -279,13 +279,13 @@ describe("automation route handlers", () => {
       expect(res.status).toBe(400);
     });
 
-    it("returns 400 when instructions exceeds 10K chars", async () => {
+    it("returns 400 when instructions exceeds the maximum length", async () => {
       const res = await callRoute("POST", "/automations", {
-        body: { ...validBody, instructions: "x".repeat(10_001) },
+        body: { ...validBody, instructions: "x".repeat(15_001) },
       });
       expect(res.status).toBe(400);
       const body = await res.json<{ error: string }>();
-      expect(body.error).toContain("10000");
+      expect(body.error).toContain("15000");
     });
 
     it("returns 400 when repoOwner is missing", async () => {

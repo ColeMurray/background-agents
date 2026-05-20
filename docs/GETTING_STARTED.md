@@ -101,7 +101,13 @@ cd packages/modal-infra && uv sync --frozen && cd -
    of the panel for `*.YOUR-SUBDOMAIN.workers.dev`
 4. **Create API Token** at [API Tokens](https://dash.cloudflare.com/profile/api-tokens):
    - Use template: "Edit Cloudflare Workers"
-   - Add permissions: Workers KV Storage (Edit), Workers R2 Storage (Edit)
+   - Verify it has these permissions:
+     - Account | Workers KV Storage | Edit (should be included with template)
+     - Account | Workers R2 Storage | Edit (should be included with template)
+     - Account | D1 | Edit
+   - Set "Account Resources" to include your account
+   - Set "Zone Resources" to include all zones from your account
+   - Click "Continue to summary" and "Update token"
 5. **Enable R2**: Must add payment info, but first 10 GB/month is free
 
 ### Cloudflare R2 (Terraform State Backend)
@@ -397,12 +403,10 @@ project_root    = "../../../"
 # Display name shown in the web UI tab title, sign-in page, landing hero, bot
 # messages (Slack/Linear), PR body footer, and outbound HTTP User-Agent.
 # app_name = "Open-Inspect"
-# Short brand label shown only in the sidebar header (next to the logo).
-# Leave empty to default to "Inspect" (or to follow app_name when app_name
-# is overridden). Set this when app_name is too wide for the sidebar.
-# app_short_name = ""
+# Short brand label shown only in the sidebar header.
+# app_short_name = "Inspect"
 # Optional URL (absolute or root-relative) to a custom logo/favicon. When set,
-# replaces the built-in icon in the web sidebar and browser favicon.
+# replaces the built-in icon in the command menu and browser favicon.
 # app_icon_url = ""
 
 # Initial deployment: set both to false (see Step 7)
@@ -561,9 +565,12 @@ Or construct it from your App's slug: if your app is named `My-Inspect-App`, the
 
 ### Usage
 
-- **Code Review**: Assign the bot as a PR reviewer — it performs an automated review
+- **Code Review**: Open a non-draft PR in a repository where auto-review is enabled — it performs an
+  automated review
 - **Comment Actions**: @mention the bot in a PR comment with instructions (e.g.,
-  `@my-app[bot] fix the failing test`)
+  `@my-app[bot] explain why this test is failing`)
+
+For day-to-day workflows, see [GitHub Integration](./integrations/GITHUB.md).
 
 ---
 
@@ -827,7 +834,7 @@ If the bot doesn't see the original message when tagged in a thread reply:
 2. Check the webhook secret matches `github_webhook_secret` in terraform.tfvars
 3. Confirm `enable_github_bot = true` in terraform.tfvars and the worker is deployed
 4. Check that `github_bot_username` matches your App's bot login (e.g., `my-app[bot]`)
-5. For PR reviews, ensure the bot is assigned as a reviewer (not just mentioned)
+5. For PR reviews, ensure auto-review is enabled for the repository and the PR is not a draft
 6. For comment actions, ensure the bot is @mentioned in a **PR** comment (not an issue)
 
 ### "Model not found" errors (Daytona provider)
@@ -881,20 +888,19 @@ Add these to your `terraform.tfvars`:
 
 ```hcl
 # Display name shown in:
-#   - Web tab title, sidebar logo, sign-in page, landing hero
+#   - Web tab title, sign-in page, landing hero
 #   - Slack App Home settings page
 #   - Linear OAuth success page and completion comments
 #   - PR body footer ("Created with [<app_name>](<session-url>)")
 #   - Outbound HTTP User-Agent headers (GitHub, GitLab API)
 app_name = "Acme Bot"
 
-# Optional short label for the sidebar header next to the logo. When empty,
-# falls through to app_name (or "Inspect" if app_name is also unset). Set this
-# when app_name is too wide for the sidebar.
+# Optional short label for the sidebar header. Set this when app_name is too
+# wide for the sidebar.
 app_short_name = "Acme"
 
 # Optional URL to a custom logo image (SVG/PNG). When set, replaces the
-# built-in icon in the web sidebar, command menu, and browser favicon.
+# built-in icon in the command menu and browser favicon.
 # Use an absolute URL or a root-relative path served from packages/web/public/.
 app_icon_url = "/branding/logo.svg"   # or "https://cdn.example.com/logo.svg"
 ```

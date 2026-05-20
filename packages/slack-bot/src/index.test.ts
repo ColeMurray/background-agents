@@ -133,6 +133,428 @@ async function flushWaitUntil(ctx: ReturnType<typeof makeCtx>, callIndex = 0): P
   await ctx.waitUntil.mock.calls[callIndex]?.[0];
 }
 
+function makeSessionEnv(order: string[] = []): Env {
+  const env = makeEnv();
+  (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+    async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/repos")) {
+        order.push("repos");
+        return new Response(
+          JSON.stringify({
+            repos: [
+              {
+                id: "acme/app",
+                owner: "acme",
+                name: "app",
+                fullName: "acme/app",
+                defaultBranch: "main",
+                private: true,
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
+
+      if (url.endsWith("/sessions")) {
+        order.push("session");
+        return new Response(JSON.stringify({ sessionId: "session-1", status: "running" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      if (url.includes("/prompt")) {
+        order.push("prompt");
+        return new Response(JSON.stringify({ messageId: "msg-1" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  );
+  return env;
+}
+
+function mockSlackFetch(
+  order: string[] = [],
+  options: { statusResponse?: Response | Promise<Response>; threadMessages?: unknown[] } = {}
+) {
+  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.includes("assistant.threads.setStatus")) {
+      order.push("status");
+      return (
+        options.statusResponse ??
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      );
+    }
+
+    if (url.includes("conversations.info")) {
+      order.push("channelInfo");
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          channel: { id: "C123", name: "eng", topic: { value: "" }, purpose: { value: "" } },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    if (url.includes("conversations.replies")) {
+      return new Response(JSON.stringify({ ok: true, messages: options.threadMessages ?? [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (url.includes("chat.postMessage")) {
+      order.push("post");
+      return new Response(JSON.stringify({ ok: true, channel: "C123", ts: "222.333" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (url.includes("chat.update")) {
+      order.push("update");
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (url.includes("reactions.add")) {
+      order.push("reaction");
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    throw new Error(`Unexpected Slack fetch: ${url} ${JSON.stringify(init)}`);
+  });
+}
+
+function statusFetchBodies(fetchMock: { mock: { calls: readonly (readonly unknown[])[] } }) {
+  return fetchMock.mock.calls
+    .filter(([input]) => {
+      const url = typeof input === "string" ? input : String(input);
+      return url.includes("assistant.threads.setStatus");
+    })
+    .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+}
+
+function startingStatusBodies(fetchMock: { mock: { calls: readonly (readonly unknown[])[] } }) {
+  return statusFetchBodies(fetchMock).filter((body) => {
+    const loadingMessages = body.loading_messages;
+    return (
+      body.status === "Starting..." &&
+      Array.isArray(loadingMessages) &&
+      loadingMessages[0] === "Starting..."
+    );
+  });
+}
+
+function slackApiBodies(
+  fetchMock: { mock: { calls: readonly (readonly unknown[])[] } },
+  method: string
+) {
+  return fetchMock.mock.calls
+    .filter(([input]) => {
+      const url = typeof input === "string" ? input : String(input);
+      return url.includes(method);
+    })
+    .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+}
+
+function promptFetchBodies(fetchMock: { mock: { calls: readonly (readonly unknown[])[] } }) {
+  return fetchMock.mock.calls
+    .filter(([input]) => {
+      const url = typeof input === "string" ? input : String(input);
+      return url.includes("/prompt");
+    })
+    .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+}
+
+function slackEventRequest(event: Record<string, unknown>, eventId = crypto.randomUUID()): Request {
+  return new Request("http://localhost/events", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-slack-signature": "v0=test",
+      "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
+    },
+    body: JSON.stringify({
+      type: "event_callback",
+      event_id: eventId,
+      event_time: Math.floor(Date.now() / 1000),
+      team_id: "T123",
+      event,
+    }),
+  });
+}
+
+describe("POST /events", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearLocalCache();
+    mockVerifySlackSignature.mockResolvedValue(true);
+    mockGetUserInfo.mockResolvedValue({ ok: true, user: undefined });
+  });
+
+  it("sets Starting status for a new app mention before session creation", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order);
+    const env = makeSessionEnv(order);
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> fix the auth tests",
+        user: "U123",
+        channel: "C123",
+        ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+
+    await flushWaitUntil(ctx);
+    await flushWaitUntil(ctx, 1);
+    expect(ctx.waitUntil).toHaveBeenCalledTimes(4);
+
+    expect(statusFetchBodies(slackFetch)).toContainEqual({
+      channel_id: "C123",
+      thread_ts: "111.222",
+      status: "Starting...",
+      loading_messages: ["Starting..."],
+    });
+    expect(startingStatusBodies(slackFetch)).toHaveLength(3);
+    expect(order.indexOf("status")).toBeLessThan(order.indexOf("channelInfo"));
+    expect(order.indexOf("status")).toBeLessThan(order.indexOf("session"));
+
+    const postBodies = slackApiBodies(slackFetch, "chat.postMessage");
+    expect(postBodies.some((body) => String(body.text).includes("Session started!"))).toBe(false);
+
+    const updateBodies = slackApiBodies(slackFetch, "chat.update");
+    expect(updateBodies).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channel: "C123",
+          ts: "222.333",
+          text: "Working on *acme/app*...",
+          blocks: expect.arrayContaining([
+            expect.objectContaining({
+              type: "actions",
+              elements: expect.arrayContaining([
+                expect.objectContaining({
+                  type: "button",
+                  text: { type: "plain_text", text: "View Session" },
+                  url: "https://app.test/session/session-1",
+                  action_id: "view_session",
+                }),
+              ]),
+            }),
+          ]),
+        }),
+      ])
+    );
+
+    slackFetch.mockRestore();
+  });
+
+  it("sets Starting status for a direct message", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order);
+    const env = makeSessionEnv(order);
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "message",
+        text: "fix the auth tests",
+        user: "U123",
+        channel: "D123",
+        ts: "444.555",
+        channel_type: "im",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(statusFetchBodies(slackFetch)).toContainEqual({
+      channel_id: "D123",
+      thread_ts: "444.555",
+      status: "Starting...",
+      loading_messages: ["Starting..."],
+    });
+    expect(startingStatusBodies(slackFetch)).toHaveLength(3);
+    expect(order.indexOf("status")).toBeLessThan(order.indexOf("session"));
+
+    slackFetch.mockRestore();
+  });
+
+  it("sets Starting status for follow-up prompts in existing threads", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order, {
+      threadMessages: [
+        {
+          type: "message",
+          text: "The latest commit is:\n\n- `3b23cf7` - `Add Linear integration guide (#645)`",
+          bot_id: "B123",
+          ts: "222.333",
+        },
+      ],
+    });
+    const env = makeSessionEnv(order);
+    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+      "thread:C123:111.222",
+      JSON.stringify({
+        sessionId: "session-1",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "max",
+        createdAt: Date.now(),
+      })
+    );
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> now add coverage",
+        user: "U123",
+        channel: "C123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(statusFetchBodies(slackFetch)).toContainEqual({
+      channel_id: "C123",
+      thread_ts: "111.222",
+      status: "Starting...",
+      loading_messages: ["Starting..."],
+    });
+    expect(order.indexOf("status")).toBeLessThan(order.indexOf("prompt"));
+    expect(order).not.toContain("session");
+
+    const promptBodies = promptFetchBodies(
+      env.CONTROL_PLANE.fetch as unknown as { mock: { calls: readonly (readonly unknown[])[] } }
+    );
+    expect(promptBodies).toHaveLength(1);
+    expect(promptBodies[0].content).toContain("now add coverage");
+    expect(promptBodies[0].content).toContain("Slack channel context");
+    expect(promptBodies[0].content).not.toContain("Context from the Slack thread");
+    expect(promptBodies[0].content).not.toContain("The latest commit is");
+
+    slackFetch.mockRestore();
+  });
+
+  it("does not set Starting status for empty app mentions", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order);
+    const env = makeSessionEnv(order);
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123>    ",
+        user: "U123",
+        channel: "C123",
+        ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(statusFetchBodies(slackFetch)).toEqual([]);
+    expect(order).not.toContain("status");
+
+    slackFetch.mockRestore();
+  });
+
+  it("does not wait for Starting status before creating a session", async () => {
+    const statusDeferred = createDeferred<Response>();
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order, { statusResponse: statusDeferred.promise });
+    const env = makeSessionEnv(order);
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "message",
+        text: "fix the auth tests",
+        user: "U123",
+        channel: "D123",
+        ts: "444.555",
+        channel_type: "im",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    const backgroundPromise = ctx.waitUntil.mock.calls[0]?.[0] as Promise<void>;
+    const backgroundOutcome = await Promise.race([
+      backgroundPromise.then(() => "complete"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("blocked"), 25)),
+    ]);
+
+    expect(backgroundOutcome).toBe("complete");
+    expect(order).toContain("session");
+    expect(order).toContain("prompt");
+    expect(ctx.waitUntil).toHaveBeenCalledTimes(4);
+
+    const statusPromise = ctx.waitUntil.mock.calls[1]?.[0] as Promise<void>;
+    const statusOutcome = await Promise.race([
+      statusPromise.then(() => "complete"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 25)),
+    ]);
+    expect(statusOutcome).toBe("pending");
+
+    statusDeferred.resolve(
+      new Response(JSON.stringify({ ok: false, error: "missing_scope" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    slackFetch.mockRestore();
+  });
+});
+
 describe("POST /interactions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -140,6 +562,150 @@ describe("POST /interactions", () => {
     mockVerifySlackSignature.mockResolvedValue(true);
     mockOpenView.mockResolvedValue({ ok: true });
     mockGetUserInfo.mockResolvedValue({ ok: true, user: undefined });
+  });
+
+  it("sets Starting status for repo-selection starts before session creation", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order);
+    const env = makeSessionEnv(order);
+    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+      "pending:C123:111.222",
+      JSON.stringify({
+        message: "Please handle this",
+        userId: "U123",
+      })
+    );
+
+    const payload = {
+      type: "block_actions",
+      user: { id: "U123" },
+      channel: { id: "C123" },
+      message: { ts: "111.222" },
+      actions: [
+        {
+          action_id: "select_repo",
+          selected_option: { value: "acme/app" },
+        },
+      ],
+    };
+    const request = new Request("http://localhost/interactions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "x-slack-signature": "v0=test",
+        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
+      },
+      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
+    });
+    const ctx = makeCtx();
+
+    const response = await app.fetch(request, env, ctx);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+
+    await flushWaitUntil(ctx);
+    await flushWaitUntil(ctx, 1);
+    expect(ctx.waitUntil).toHaveBeenCalledTimes(4);
+
+    expect(statusFetchBodies(slackFetch)).toContainEqual({
+      channel_id: "C123",
+      thread_ts: "111.222",
+      status: "Starting...",
+      loading_messages: ["Starting..."],
+    });
+    expect(startingStatusBodies(slackFetch)).toHaveLength(3);
+    expect(order.indexOf("repos")).toBeLessThan(order.indexOf("status"));
+    expect(order.indexOf("status")).toBeLessThan(order.indexOf("session"));
+
+    const postBodies = slackApiBodies(slackFetch, "chat.postMessage");
+    expect(postBodies.some((body) => String(body.text).includes("Session started!"))).toBe(false);
+
+    const updateBodies = slackApiBodies(slackFetch, "chat.update");
+    expect(updateBodies).toEqual([
+      expect.objectContaining({
+        channel: "C123",
+        ts: "222.333",
+        text: "Working on *acme/app*...",
+        blocks: expect.arrayContaining([
+          expect.objectContaining({
+            type: "actions",
+            elements: expect.arrayContaining([
+              expect.objectContaining({
+                type: "button",
+                text: { type: "plain_text", text: "View Session" },
+                url: "https://app.test/session/session-1",
+                action_id: "view_session",
+              }),
+            ]),
+          }),
+        ]),
+      }),
+    ]);
+
+    slackFetch.mockRestore();
+  });
+
+  it("does not set Starting status when selected repo is no longer available", async () => {
+    const slackFetch = mockSlackFetch([]);
+    const env = makeEnv();
+    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+      "pending:C123:111.222",
+      JSON.stringify({
+        message: "Please handle this",
+        userId: "U123",
+      })
+    );
+
+    (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/repos")) {
+          return new Response(JSON.stringify({ repos: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ enabledModels: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    );
+
+    const payload = {
+      type: "block_actions",
+      user: { id: "U123" },
+      channel: { id: "C123" },
+      message: { ts: "111.222" },
+      actions: [
+        {
+          action_id: "select_repo",
+          selected_option: { value: "acme/app" },
+        },
+      ],
+    };
+    const request = new Request("http://localhost/interactions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "x-slack-signature": "v0=test",
+        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
+      },
+      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
+    });
+    const ctx = makeCtx();
+
+    const response = await app.fetch(request, env, ctx);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+
+    await flushWaitUntil(ctx);
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+    expect(statusFetchBodies(slackFetch)).toEqual([]);
+
+    slackFetch.mockRestore();
   });
 
   it.each(["foo..bar", "release/", "-bad", "@", "foo/.bar", "foo.lock"])(
@@ -545,9 +1111,10 @@ describe("POST /interactions", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
-    expect(ctx.waitUntil).toHaveBeenCalledOnce();
 
     await flushWaitUntil(ctx);
+    await flushWaitUntil(ctx, 1);
+    expect(ctx.waitUntil).toHaveBeenCalledTimes(4);
 
     const sessionCall = (
       env.CONTROL_PLANE.fetch as unknown as { mock: { calls: unknown[][] } }

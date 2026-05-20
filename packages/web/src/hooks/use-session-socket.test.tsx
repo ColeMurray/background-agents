@@ -220,7 +220,7 @@ describe("useSessionSocket", () => {
     });
   });
 
-  it("drops invalid numeric screenshot metadata from subscribed artifacts", async () => {
+  it("hydrates video metadata from subscribed artifacts", async () => {
     const { result } = renderHook(() => useSessionSocket("session-1"));
 
     await waitFor(() => {
@@ -236,14 +236,22 @@ describe("useSessionSocket", () => {
       socket.receive(
         createSubscribedMessage([
           {
-            id: "artifact-shot-invalid",
-            type: "screenshot",
-            url: "sessions/session-1/media/artifact-shot-invalid.png",
+            id: "artifact-video-1",
+            type: "video",
+            url: "sessions/session-1/media/artifact-video-1.mp4",
             metadata: {
-              objectKey: "sessions/session-1/media/artifact-shot-invalid.png",
-              mimeType: "image/png",
-              sizeBytes: -1,
-              viewport: { width: 0, height: -100 },
+              objectKey: "sessions/session-1/media/artifact-video-1.mp4",
+              mimeType: "video/mp4",
+              sizeBytes: 4096,
+              caption: "Menu interaction",
+              sourceUrl: "http://127.0.0.1:3000/start",
+              endUrl: "http://127.0.0.1:3000/end",
+              durationMs: 1450,
+              recordingStartedAt: 1000,
+              recordingEndedAt: 2450,
+              dimensions: { width: 1280, height: 720 },
+              truncated: false,
+              hasAudio: false,
             },
             createdAt: 1234,
           },
@@ -254,11 +262,68 @@ describe("useSessionSocket", () => {
     await waitFor(() => {
       expect(result.current.artifacts).toEqual([
         {
-          id: "artifact-shot-invalid",
-          type: "screenshot",
-          url: "sessions/session-1/media/artifact-shot-invalid.png",
+          id: "artifact-video-1",
+          type: "video",
+          url: "sessions/session-1/media/artifact-video-1.mp4",
           metadata: expect.objectContaining({
-            objectKey: "sessions/session-1/media/artifact-shot-invalid.png",
+            objectKey: "sessions/session-1/media/artifact-video-1.mp4",
+            mimeType: "video/mp4",
+            sizeBytes: 4096,
+            caption: "Menu interaction",
+            sourceUrl: "http://127.0.0.1:3000/start",
+            endUrl: "http://127.0.0.1:3000/end",
+            durationMs: 1450,
+            recordingStartedAt: 1000,
+            recordingEndedAt: 2450,
+            dimensions: { width: 1280, height: 720 },
+            truncated: false,
+            hasAudio: false,
+          }),
+          createdAt: 1234,
+        },
+      ]);
+    });
+  });
+
+  it("drops wrong-type metadata fields during narrowing", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1"));
+
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+    });
+
+    act(() => {
+      socket.receive(
+        createSubscribedMessage([
+          {
+            id: "artifact-shot-wrong-types",
+            type: "screenshot",
+            url: "sessions/session-1/media/artifact-shot-wrong-types.png",
+            metadata: {
+              objectKey: "sessions/session-1/media/artifact-shot-wrong-types.png",
+              mimeType: "image/png",
+              sizeBytes: "five",
+              viewport: "not-an-object",
+            },
+            createdAt: 1234,
+          },
+        ])
+      );
+    });
+
+    await waitFor(() => {
+      expect(result.current.artifacts).toEqual([
+        {
+          id: "artifact-shot-wrong-types",
+          type: "screenshot",
+          url: "sessions/session-1/media/artifact-shot-wrong-types.png",
+          metadata: expect.objectContaining({
+            objectKey: "sessions/session-1/media/artifact-shot-wrong-types.png",
             mimeType: "image/png",
             sizeBytes: undefined,
             viewport: undefined,
