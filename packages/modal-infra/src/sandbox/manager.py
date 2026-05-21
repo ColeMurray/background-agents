@@ -33,6 +33,11 @@ DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200  # 2 hours
 SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS = 300
 MAX_TUNNEL_PORTS = 10
 
+# Path inside the sandbox where extra tunnel URLs are exposed in dotenv format.
+# Local services can consume via `--env-file=.tunnels.env` (Node, Bun, Vite,
+# docker compose) or read directly. Format is `TUNNEL_<port>=<url>` per line.
+TUNNEL_ENV_FILE_PATH = "/workspace/.tunnels.env"
+
 
 @dataclass
 class SandboxConfig:
@@ -203,7 +208,46 @@ class SandboxManager:
         ttyd_url = resolved.pop(TTYD_PROXY_PORT, None)
         extra_urls = resolved if resolved else None
 
+        if extra_urls:
+            await SandboxManager._write_tunnel_env_file(sandbox, sandbox_id, extra_urls)
+
         return code_server_url, ttyd_url, extra_urls
+
+    @staticmethod
+    async def _write_tunnel_env_file(
+        sandbox: modal.Sandbox,
+        sandbox_id: str,
+        tunnel_urls: dict[int, str],
+    ) -> None:
+        """Write tunnel URLs to TUNNEL_ENV_FILE_PATH as a dotenv file.
+
+        Local services started by the agent inside the sandbox can consume the
+        URLs via `--env-file=.tunnels.env` or by reading the file directly.
+
+        Failures are logged but do not block sandbox creation — the URLs are
+        also returned to the control plane via the SandboxHandle.
+        """
+        lines = [f"TUNNEL_{port}={url}" for port, url in sorted(tunnel_urls.items())]
+        content = "\n".join(lines) + "\n"
+        try:
+            f = await sandbox.open.aio(TUNNEL_ENV_FILE_PATH, "w")
+            try:
+                await f.write.aio(content)
+            finally:
+                await f.close.aio()
+            log.info(
+                "tunnel.urls_written",
+                sandbox_id=sandbox_id,
+                path=TUNNEL_ENV_FILE_PATH,
+                ports=list(tunnel_urls.keys()),
+            )
+        except Exception as e:
+            log.warn(
+                "tunnel.urls_write_failed",
+                sandbox_id=sandbox_id,
+                path=TUNNEL_ENV_FILE_PATH,
+                exc=e,
+            )
 
     @staticmethod
     def _inject_vcs_env_vars(env_vars: dict[str, str], clone_token: str | None) -> None:
