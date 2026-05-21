@@ -20,7 +20,12 @@ from typing import Any
 
 import modal
 
-from sandbox_runtime.constants import CODE_SERVER_PORT, TTYD_PROXY_PORT
+from sandbox_runtime.constants import (
+    CODE_SERVER_PORT,
+    EXPECTED_TUNNEL_PORTS_ENV_VAR,
+    TTYD_PROXY_PORT,
+    TUNNEL_ENV_FILE_PATH,
+)
 from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.types import SandboxStatus, SessionConfig
 
@@ -32,11 +37,6 @@ log = get_logger("manager")
 DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200  # 2 hours
 SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS = 300
 MAX_TUNNEL_PORTS = 10
-
-# Path inside the sandbox where extra tunnel URLs are exposed in dotenv format.
-# Local services can consume via `--env-file=.tunnels.env` (Node, Bun, Vite,
-# docker compose) or read directly. Format is `TUNNEL_<port>=<url>` per line.
-TUNNEL_ENV_FILE_PATH = "/workspace/.tunnels.env"
 
 
 @dataclass
@@ -353,6 +353,10 @@ class SandboxManager:
         )
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports
+        if tunnel_ports:
+            # Signals the entrypoint to (a) clear any stale tunnel env file
+            # from a snapshot and (b) wait for fresh URLs before start.sh.
+            env_vars[EXPECTED_TUNNEL_PORTS_ENV_VAR] = ",".join(str(p) for p in tunnel_ports)
 
         sandbox = await modal.Sandbox.create.aio(
             "python",
@@ -671,6 +675,10 @@ class SandboxManager:
         )
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports
+        if tunnel_ports:
+            # Signals the entrypoint to (a) clear any stale tunnel env file
+            # from the snapshot and (b) wait for fresh URLs before start.sh.
+            env_vars[EXPECTED_TUNNEL_PORTS_ENV_VAR] = ",".join(str(p) for p in tunnel_ports)
 
         sandbox = await modal.Sandbox.create.aio(
             "python",

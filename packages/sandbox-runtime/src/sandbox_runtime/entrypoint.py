@@ -22,7 +22,13 @@ from pathlib import Path
 
 import httpx
 
-from .constants import CODE_SERVER_PORT, TTYD_PORT, TTYD_PROXY_PORT
+from .constants import (
+    CODE_SERVER_PORT,
+    EXPECTED_TUNNEL_PORTS_ENV_VAR,
+    TTYD_PORT,
+    TTYD_PROXY_PORT,
+    TUNNEL_ENV_FILE_PATH,
+)
 from .log_config import configure_logging, get_logger
 
 configure_logging()
@@ -54,6 +60,8 @@ class SandboxSupervisor:
     START_SCRIPT_PATH = ".openinspect/start.sh"
     DEFAULT_SETUP_TIMEOUT_SECONDS = 300
     DEFAULT_START_TIMEOUT_SECONDS = 120
+    DEFAULT_TUNNEL_WAIT_TIMEOUT_SECONDS = 30
+    TUNNEL_WAIT_POLL_INTERVAL_SECONDS = 0.2
     CLONE_DEPTH_COMMITS = 100
     SIDECAR_TIMEOUT_SECONDS = 5
     MCP_PACKAGE_INSTALL_TIMEOUT_SECONDS = 180
@@ -1146,6 +1154,87 @@ class SandboxSupervisor:
             default_timeout_seconds=self.DEFAULT_START_TIMEOUT_SECONDS,
         )
 
+    def _expected_tunnel_ports(self) -> list[int]:
+        """Parse EXPECTED_TUNNEL_PORTS env var into a list of port ints."""
+        raw = os.environ.get(EXPECTED_TUNNEL_PORTS_ENV_VAR, "")
+        if not raw:
+            return []
+        ports: list[int] = []
+        for piece in raw.split(","):
+            piece = piece.strip()
+            if not piece:
+                continue
+            try:
+                ports.append(int(piece))
+            except ValueError:
+                self.log.warn("tunnel.expected_ports_parse_failed", value=piece, raw=raw)
+        return ports
+
+    def _clear_stale_tunnel_env_file(self) -> None:
+        """Remove any pre-existing tunnel env file before the manager writes fresh URLs.
+
+        On snapshot restore the file is carried over from the previous session and
+        contains URLs bound to a sandbox that no longer exists. Clearing it here
+        eliminates the window where start.sh could read dead URLs before the
+        manager's overwrite arrives.
+        """
+        path = Path(TUNNEL_ENV_FILE_PATH)
+        try:
+            path.unlink(missing_ok=True)
+            self.log.info("tunnel.stale_file_cleared", path=str(path))
+        except Exception as e:
+            self.log.warn("tunnel.stale_file_clear_failed", path=str(path), exc=e)
+
+    async def _wait_for_tunnel_env_file(self, expected_ports: list[int]) -> bool:
+        """Block until TUNNEL_ENV_FILE_PATH contains entries for all expected ports.
+
+        Bounded by DEFAULT_TUNNEL_WAIT_TIMEOUT_SECONDS (override via
+        TUNNEL_WAIT_TIMEOUT_SECONDS env var). On timeout, log and return False so
+        start.sh proceeds anyway — a Modal-side outage should degrade rather than
+        block the session forever.
+
+        Returns True if the file became ready within the timeout, False otherwise.
+        """
+        if not expected_ports:
+            return True
+
+        timeout_raw = os.environ.get("TUNNEL_WAIT_TIMEOUT_SECONDS")
+        try:
+            timeout = (
+                float(timeout_raw) if timeout_raw else self.DEFAULT_TUNNEL_WAIT_TIMEOUT_SECONDS
+            )
+        except ValueError:
+            timeout = self.DEFAULT_TUNNEL_WAIT_TIMEOUT_SECONDS
+
+        path = Path(TUNNEL_ENV_FILE_PATH)
+        expected_prefixes = [f"TUNNEL_{p}=" for p in expected_ports]
+        start_time = time.time()
+        deadline = start_time + timeout
+
+        while time.time() < deadline:
+            if path.exists():
+                try:
+                    lines = path.read_text().splitlines()
+                    if all(any(ln.startswith(pfx) for ln in lines) for pfx in expected_prefixes):
+                        self.log.info(
+                            "tunnel.env_file_ready",
+                            path=str(path),
+                            ports=expected_ports,
+                            wait_ms=int((time.time() - start_time) * 1000),
+                        )
+                        return True
+                except Exception as e:
+                    self.log.warn("tunnel.env_file_read_failed", path=str(path), exc=e)
+            await asyncio.sleep(self.TUNNEL_WAIT_POLL_INTERVAL_SECONDS)
+
+        self.log.warn(
+            "tunnel.env_file_wait_timeout",
+            path=str(path),
+            ports=expected_ports,
+            timeout_seconds=timeout,
+        )
+        return False
+
     async def run(self) -> None:
         """Main supervisor loop."""
         startup_start = time.time()
@@ -1181,6 +1270,14 @@ class SandboxSupervisor:
             repo_image_sha = os.environ.get("REPO_IMAGE_SHA", "unknown")
             self.log.info("supervisor.from_repo_image", build_sha=repo_image_sha)
 
+        # If tunnels are expected this boot, clear any stale env file before
+        # repo hooks (setup/start) can observe it. The manager will write
+        # fresh URLs after Sandbox.create() returns; we block on that file
+        # below in Phase 3 right before start.sh runs.
+        expected_tunnel_ports = self._expected_tunnel_ports()
+        if expected_tunnel_ports:
+            self._clear_stale_tunnel_env_file()
+
         # Set up signal handlers
         loop = asyncio.get_event_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
@@ -1211,8 +1308,11 @@ class SandboxSupervisor:
                     raise RuntimeError("setup hook failed in build mode")
 
             # Phase 3: Run runtime start hook for all non-build boots.
+            # Block on the tunnel env file first so dev servers booted by
+            # start.sh observe fresh URLs rather than absent/stale ones.
             start_success: bool | None = None
             if self.boot_mode != "build":
+                await self._wait_for_tunnel_env_file(expected_tunnel_ports)
                 start_success = await self.run_start_script()
                 if not start_success:
                     raise RuntimeError("start hook failed")

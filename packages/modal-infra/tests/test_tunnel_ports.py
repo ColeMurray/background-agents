@@ -4,8 +4,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from sandbox_runtime.constants import TTYD_PROXY_PORT
-from src.sandbox.manager import CODE_SERVER_PORT, TUNNEL_ENV_FILE_PATH, SandboxManager
+from sandbox_runtime.constants import (
+    EXPECTED_TUNNEL_PORTS_ENV_VAR,
+    TTYD_PROXY_PORT,
+    TUNNEL_ENV_FILE_PATH,
+)
+from src.sandbox.manager import CODE_SERVER_PORT, SandboxConfig, SandboxManager
 
 
 def _mock_sandbox_with_open() -> tuple[MagicMock, AsyncMock]:
@@ -268,6 +272,106 @@ class TestResolveAndSetupTunnelsWritesFile:
             )
 
         assert extra == {3000: "https://tunnel-3000.example.com"}
+
+
+class TestExpectedTunnelPortsEnvVar:
+    """create_sandbox / restore_from_snapshot set EXPECTED_TUNNEL_PORTS env var."""
+
+    @pytest.mark.asyncio
+    async def test_create_sandbox_sets_env_var_when_tunnel_ports_configured(self, monkeypatch):
+        captured: dict[str, dict[str, str]] = {}
+
+        async def fake_create_aio(*args, **kwargs):
+            captured["env"] = kwargs.get("env") or {}
+
+            class FakeSandbox:
+                object_id = "obj-1"
+                stdout = None
+
+            return FakeSandbox()
+
+        fake_create_aio.aio = fake_create_aio
+        monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create_aio)
+        monkeypatch.setattr(
+            SandboxManager,
+            "_resolve_and_setup_tunnels",
+            AsyncMock(return_value=(None, None, None)),
+        )
+
+        manager = SandboxManager()
+        await manager.create_sandbox(
+            SandboxConfig(
+                repo_owner="acme",
+                repo_name="repo",
+                settings={"tunnelPorts": [3000, 5173]},
+            )
+        )
+
+        assert captured["env"][EXPECTED_TUNNEL_PORTS_ENV_VAR] == "3000,5173"
+
+    @pytest.mark.asyncio
+    async def test_create_sandbox_omits_env_var_when_no_tunnel_ports(self, monkeypatch):
+        captured: dict[str, dict[str, str]] = {}
+
+        async def fake_create_aio(*args, **kwargs):
+            captured["env"] = kwargs.get("env") or {}
+
+            class FakeSandbox:
+                object_id = "obj-1"
+                stdout = None
+
+            return FakeSandbox()
+
+        fake_create_aio.aio = fake_create_aio
+        monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create_aio)
+        monkeypatch.setattr(
+            SandboxManager,
+            "_resolve_and_setup_tunnels",
+            AsyncMock(return_value=(None, None, None)),
+        )
+
+        manager = SandboxManager()
+        await manager.create_sandbox(SandboxConfig(repo_owner="acme", repo_name="repo"))
+
+        assert EXPECTED_TUNNEL_PORTS_ENV_VAR not in captured["env"]
+
+    @pytest.mark.asyncio
+    async def test_restore_from_snapshot_sets_env_var_when_tunnel_ports_configured(
+        self, monkeypatch
+    ):
+        captured: dict[str, dict[str, str]] = {}
+
+        class FakeImage:
+            object_id = "img-1"
+
+        async def fake_create_aio(*args, **kwargs):
+            captured["env"] = kwargs.get("env") or {}
+
+            class FakeSandbox:
+                object_id = "obj-1"
+                stdout = None
+
+            return FakeSandbox()
+
+        fake_create_aio.aio = fake_create_aio
+        monkeypatch.setattr(
+            "src.sandbox.manager.modal.Image.from_id", lambda *_a, **_kw: FakeImage()
+        )
+        monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create_aio)
+        monkeypatch.setattr(
+            SandboxManager,
+            "_resolve_and_setup_tunnels",
+            AsyncMock(return_value=(None, None, None)),
+        )
+
+        manager = SandboxManager()
+        await manager.restore_from_snapshot(
+            snapshot_image_id="img-abc",
+            session_config={"repo_owner": "acme", "repo_name": "repo"},
+            settings={"tunnelPorts": [3000]},
+        )
+
+        assert captured["env"][EXPECTED_TUNNEL_PORTS_ENV_VAR] == "3000"
 
 
 class TestCollectExposedPorts:
