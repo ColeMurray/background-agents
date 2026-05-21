@@ -1,5 +1,10 @@
-import { describe, it, expect } from "vitest";
-import { parseAllowlist, parseBooleanEnv, checkAccessAllowed } from "./access-control";
+import { describe, it, expect, vi } from "vitest";
+import {
+  parseAllowlist,
+  parseBooleanEnv,
+  checkAccessAllowed,
+  checkGitHubOrganizationAccess,
+} from "./access-control";
 
 describe("parseAllowlist", () => {
   it("returns empty array for undefined", () => {
@@ -62,6 +67,28 @@ describe("checkAccessAllowed", () => {
       expect(checkAccessAllowed(config, {})).toBe(true);
       expect(checkAccessAllowed(config, { githubUsername: "anyuser" })).toBe(true);
       expect(checkAccessAllowed(config, { email: "anyone@example.com" })).toBe(true);
+    });
+  });
+
+  describe("when allowedOrganizations is set", () => {
+    const config = {
+      allowedDomains: [],
+      allowedUsers: [],
+      allowedOrganizations: ["Acme"],
+      unsafeAllowAllUsers: false,
+    };
+
+    it("allows users with active org membership", () => {
+      expect(checkAccessAllowed(config, { activeOrganizations: ["acme"] })).toBe(true);
+    });
+
+    it("allows users with different org case", () => {
+      expect(checkAccessAllowed(config, { activeOrganizations: ["Acme"] })).toBe(true);
+    });
+
+    it("denies users without matching active org membership", () => {
+      expect(checkAccessAllowed(config, { activeOrganizations: ["other"] })).toBe(false);
+      expect(checkAccessAllowed(config, {})).toBe(false);
     });
   });
 
@@ -157,6 +184,29 @@ describe("checkAccessAllowed", () => {
     });
   });
 
+  describe("when allowedUsers, allowedDomains, and allowedOrganizations are set (OR logic)", () => {
+    const config = {
+      allowedDomains: ["company.com"],
+      allowedUsers: ["specialuser"],
+      allowedOrganizations: ["acme"],
+      unsafeAllowAllUsers: false,
+    };
+
+    it("allows users matching org membership", () => {
+      expect(checkAccessAllowed(config, { activeOrganizations: ["acme"] })).toBe(true);
+    });
+
+    it("denies users matching none of the configured policies", () => {
+      expect(
+        checkAccessAllowed(config, {
+          githubUsername: "randomuser",
+          email: "user@other.com",
+          activeOrganizations: ["other"],
+        })
+      ).toBe(false);
+    });
+  });
+
   describe("when unsafeAllowAllUsers is true with populated allowlists", () => {
     const config = {
       allowedDomains: ["company.com"],
@@ -191,5 +241,86 @@ describe("checkAccessAllowed", () => {
       expect(checkAccessAllowed(config, { email: "user@company.com" })).toBe(true);
       expect(checkAccessAllowed(config, { email: "user@partner.org" })).toBe(true);
     });
+  });
+});
+
+describe("checkGitHubOrganizationAccess", () => {
+  it("returns true when any configured organization membership is active", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ state: "pending" })))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ state: "active" }))
+      ) as unknown as typeof fetch;
+
+    await expect(
+      checkGitHubOrganizationAccess({
+        accessToken: "token",
+        allowedOrganizations: ["pending-org", "active-org"],
+        fetchImpl,
+        userAgent: "Test App",
+      })
+    ).resolves.toBe(true);
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://api.github.com/user/memberships/orgs/active-org",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer token",
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": "Test App",
+        }) as HeadersInit,
+      })
+    );
+  });
+
+  it("returns false for pending membership", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ state: "pending" })));
+
+    await expect(
+      checkGitHubOrganizationAccess({
+        accessToken: "token",
+        allowedOrganizations: ["acme"],
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      })
+    ).resolves.toBe(false);
+  });
+
+  it("returns false for denied GitHub responses", async () => {
+    const fetchImpl = vi.fn(async () => new Response("Not Found", { status: 404 }));
+
+    await expect(
+      checkGitHubOrganizationAccess({
+        accessToken: "token",
+        allowedOrganizations: ["acme"],
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      })
+    ).resolves.toBe(false);
+  });
+
+  it("returns false without an access token or org allowlist", async () => {
+    await expect(
+      checkGitHubOrganizationAccess({ accessToken: undefined, allowedOrganizations: ["acme"] })
+    ).resolves.toBe(false);
+
+    await expect(
+      checkGitHubOrganizationAccess({ accessToken: "token", allowedOrganizations: [] })
+    ).resolves.toBe(false);
+  });
+
+  it("URL-encodes organization names", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ state: "active" })));
+
+    await checkGitHubOrganizationAccess({
+      accessToken: "token",
+      allowedOrganizations: ["acme labs"],
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://api.github.com/user/memberships/orgs/acme%20labs",
+      expect.any(Object)
+    );
   });
 });

@@ -1,6 +1,12 @@
 import type { NextAuthOptions } from "next-auth";
 import GitHubProvider from "next-auth/providers/github";
-import { checkAccessAllowed, parseAllowlist, parseBooleanEnv } from "./access-control";
+import { DEFAULT_APP_NAME } from "@open-inspect/shared";
+import {
+  checkAccessAllowed,
+  checkGitHubOrganizationAccess,
+  parseAllowlist,
+  parseBooleanEnv,
+} from "./access-control";
 
 // Extend NextAuth types to include GitHub-specific user info
 declare module "next-auth" {
@@ -33,29 +39,37 @@ export const authOptions: NextAuthOptions = {
       clientSecret: process.env.GITHUB_CLIENT_SECRET!,
       authorization: {
         params: {
-          scope: "read:user user:email repo",
+          scope: "read:user user:email repo read:org",
         },
       },
     }),
   ],
   callbacks: {
-    async signIn({ profile, user }) {
+    async signIn({ account, profile, user }) {
       const config = {
         allowedDomains: parseAllowlist(process.env.ALLOWED_EMAIL_DOMAINS),
         allowedUsers: parseAllowlist(process.env.ALLOWED_USERS),
+        allowedOrganizations: parseAllowlist(process.env.ALLOWED_GITHUB_ORGS),
         unsafeAllowAllUsers: parseBooleanEnv(process.env.UNSAFE_ALLOW_ALL_USERS),
       };
 
       const githubProfile = profile as { login?: string };
-      const isAllowed = checkAccessAllowed(config, {
+      const isAllowedByStaticPolicy = checkAccessAllowed(config, {
         githubUsername: githubProfile.login,
         email: user.email ?? undefined,
       });
 
-      if (!isAllowed) {
-        return false;
+      if (isAllowedByStaticPolicy) {
+        return true;
       }
-      return true;
+
+      const isAllowedByOrgMembership = await checkGitHubOrganizationAccess({
+        accessToken: account?.access_token,
+        allowedOrganizations: config.allowedOrganizations,
+        userAgent: process.env.NEXT_PUBLIC_APP_NAME?.trim() || DEFAULT_APP_NAME,
+      });
+
+      return isAllowedByOrgMembership;
     },
     async jwt({ token, account, profile }) {
       if (account) {
