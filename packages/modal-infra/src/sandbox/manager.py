@@ -221,11 +221,8 @@ class SandboxManager:
     ) -> None:
         """Write tunnel URLs to TUNNEL_ENV_FILE_PATH as a dotenv file.
 
-        Local services started by the agent inside the sandbox can consume the
-        URLs via `--env-file=.tunnels.env` or by reading the file directly.
-
-        Failures are logged but do not block sandbox creation — the URLs are
-        also returned to the control plane via the SandboxHandle.
+        Failures are logged but do not block sandbox creation; URLs are also
+        returned to the control plane via the SandboxHandle.
         """
         lines = [f"TUNNEL_{port}={url}" for port, url in sorted(tunnel_urls.items())]
         content = "\n".join(lines) + "\n"
@@ -338,8 +335,12 @@ class SandboxManager:
         else:
             image = base_image
 
-        # Create the sandbox
-        # The entrypoint command is passed as positional args
+        exposed_ports, tunnel_ports = self._collect_exposed_ports(
+            config.code_server_enabled, terminal_enabled, config.settings
+        )
+        if tunnel_ports:
+            env_vars[EXPECTED_TUNNEL_PORTS_ENV_VAR] = ",".join(str(p) for p in tunnel_ports)
+
         create_kwargs: dict = {
             "image": image,
             "app": app,
@@ -348,15 +349,8 @@ class SandboxManager:
             "workdir": "/workspace",
             "env": env_vars,
         }
-        exposed_ports, tunnel_ports = self._collect_exposed_ports(
-            config.code_server_enabled, terminal_enabled, config.settings
-        )
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports
-        if tunnel_ports:
-            # Signals the entrypoint to (a) clear any stale tunnel env file
-            # from a snapshot and (b) wait for fresh URLs before start.sh.
-            env_vars[EXPECTED_TUNNEL_PORTS_ENV_VAR] = ",".join(str(p) for p in tunnel_ports)
 
         sandbox = await modal.Sandbox.create.aio(
             "python",
@@ -661,24 +655,22 @@ class SandboxManager:
         if agent_slack_notify_enabled:
             env_vars["AGENT_SLACK_NOTIFY_ENABLED"] = "true"
 
-        # Create the sandbox from the snapshot image
+        exposed_ports, tunnel_ports = self._collect_exposed_ports(
+            code_server_enabled, terminal_enabled, settings
+        )
+        if tunnel_ports:
+            env_vars[EXPECTED_TUNNEL_PORTS_ENV_VAR] = ",".join(str(p) for p in tunnel_ports)
+
         create_kwargs: dict = {
-            "image": image,  # Use the snapshot image directly
+            "image": image,
             "app": app,
             "secrets": [llm_secrets],
             "timeout": timeout_seconds,
             "workdir": "/workspace",
             "env": env_vars,
         }
-        exposed_ports, tunnel_ports = self._collect_exposed_ports(
-            code_server_enabled, terminal_enabled, settings
-        )
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports
-        if tunnel_ports:
-            # Signals the entrypoint to (a) clear any stale tunnel env file
-            # from the snapshot and (b) wait for fresh URLs before start.sh.
-            env_vars[EXPECTED_TUNNEL_PORTS_ENV_VAR] = ",".join(str(p) for p in tunnel_ports)
 
         sandbox = await modal.Sandbox.create.aio(
             "python",

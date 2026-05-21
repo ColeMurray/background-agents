@@ -1171,13 +1171,7 @@ class SandboxSupervisor:
         return ports
 
     def _clear_stale_tunnel_env_file(self) -> None:
-        """Remove any pre-existing tunnel env file before the manager writes fresh URLs.
-
-        On snapshot restore the file is carried over from the previous session and
-        contains URLs bound to a sandbox that no longer exists. Clearing it here
-        eliminates the window where start.sh could read dead URLs before the
-        manager's overwrite arrives.
-        """
+        """Remove any pre-existing tunnel env file inherited from a snapshot."""
         path = Path(TUNNEL_ENV_FILE_PATH)
         try:
             path.unlink(missing_ok=True)
@@ -1188,28 +1182,26 @@ class SandboxSupervisor:
     async def _wait_for_tunnel_env_file(self, expected_ports: list[int]) -> bool:
         """Block until TUNNEL_ENV_FILE_PATH contains entries for all expected ports.
 
-        Bounded by DEFAULT_TUNNEL_WAIT_TIMEOUT_SECONDS (override via
-        TUNNEL_WAIT_TIMEOUT_SECONDS env var). On timeout, log and return False so
-        start.sh proceeds anyway — a Modal-side outage should degrade rather than
-        block the session forever.
-
-        Returns True if the file became ready within the timeout, False otherwise.
+        On timeout, log and return False so start.sh proceeds with degraded data
+        rather than hanging on a Modal-side outage.
         """
         if not expected_ports:
             return True
 
-        timeout_raw = os.environ.get("TUNNEL_WAIT_TIMEOUT_SECONDS")
+        timeout_seconds_raw = os.environ.get("TUNNEL_WAIT_TIMEOUT_SECONDS")
         try:
-            timeout = (
-                float(timeout_raw) if timeout_raw else self.DEFAULT_TUNNEL_WAIT_TIMEOUT_SECONDS
+            timeout_seconds = (
+                float(timeout_seconds_raw)
+                if timeout_seconds_raw
+                else self.DEFAULT_TUNNEL_WAIT_TIMEOUT_SECONDS
             )
         except ValueError:
-            timeout = self.DEFAULT_TUNNEL_WAIT_TIMEOUT_SECONDS
+            timeout_seconds = self.DEFAULT_TUNNEL_WAIT_TIMEOUT_SECONDS
 
         path = Path(TUNNEL_ENV_FILE_PATH)
         expected_prefixes = [f"TUNNEL_{p}=" for p in expected_ports]
         start_time = time.time()
-        deadline = start_time + timeout
+        deadline = start_time + timeout_seconds
 
         while time.time() < deadline:
             if path.exists():
@@ -1231,7 +1223,7 @@ class SandboxSupervisor:
             "tunnel.env_file_wait_timeout",
             path=str(path),
             ports=expected_ports,
-            timeout_seconds=timeout,
+            timeout_seconds=timeout_seconds,
         )
         return False
 
@@ -1270,12 +1262,11 @@ class SandboxSupervisor:
             repo_image_sha = os.environ.get("REPO_IMAGE_SHA", "unknown")
             self.log.info("supervisor.from_repo_image", build_sha=repo_image_sha)
 
-        # If tunnels are expected this boot, clear any stale env file before
-        # repo hooks (setup/start) can observe it. The manager will write
-        # fresh URLs after Sandbox.create() returns; we block on that file
-        # below in Phase 3 right before start.sh runs.
+        # Clear stale tunnel file on every restore: a snapshot taken with
+        # tunnels configured retains the previous session's URLs even if this
+        # session has no tunnel ports.
         expected_tunnel_ports = self._expected_tunnel_ports()
-        if expected_tunnel_ports:
+        if restored_from_snapshot or expected_tunnel_ports:
             self._clear_stale_tunnel_env_file()
 
         # Set up signal handlers
@@ -1307,9 +1298,8 @@ class SandboxSupervisor:
                 if image_build_mode and not setup_success:
                     raise RuntimeError("setup hook failed in build mode")
 
-            # Phase 3: Run runtime start hook for all non-build boots.
-            # Block on the tunnel env file first so dev servers booted by
-            # start.sh observe fresh URLs rather than absent/stale ones.
+            # Phase 3: Run runtime start hook for all non-build boots. Wait for
+            # tunnel URLs first so dev servers booted by start.sh see fresh data.
             start_success: bool | None = None
             if self.boot_mode != "build":
                 await self._wait_for_tunnel_env_file(expected_tunnel_ports)
