@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
+import { cleanD1Tables } from "./cleanup";
 import { initSession, queryDO } from "./helpers";
 
 /**
@@ -10,6 +11,8 @@ import { initSession, queryDO } from "./helpers";
  * These tests assert the dispatch happens regardless of caller.
  */
 describe("POST /internal/plan/approve dispatches implementation prompt", () => {
+  beforeEach(cleanD1Tables);
+
   async function setupApprovedSession() {
     const { stub } = await initSession({ planMode: true });
 
