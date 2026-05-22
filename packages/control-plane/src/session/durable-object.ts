@@ -401,18 +401,17 @@ export class SessionDO extends DurableObject<Env> {
           // — clients only call /plan/approve. The session row already
           // carries the chosen impl model/effort (written by approvePlan),
           // so processMessageQueue picks them up via normal resolution.
+          //
+          // enqueuePromptFromApi flushes the queue itself at the end, so the
+          // gate-lifted queue (planMode && status === "approved") picks up
+          // both this prompt AND any user messages that landed during
+          // awaiting_approval — no separate flush needed here.
           await this.messageService.enqueuePrompt({
             content: buildPlanImplementationPrompt(planVersion),
             authorId: SYSTEM_USER_ID,
             authorDisplayName: SYSTEM_DISPLAY_NAME,
             source: "system",
           });
-        },
-        onPlanApproved: async () => {
-          // Flush any user message that arrived while we were awaiting approval,
-          // plus the implementation prompt just enqueued above. The queue gate
-          // (planMode && status !== "approved") is now lifted.
-          await this.messageQueue.processMessageQueue();
         },
       });
     }

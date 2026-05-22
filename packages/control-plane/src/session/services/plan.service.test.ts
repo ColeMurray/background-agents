@@ -6,13 +6,11 @@ import { buildPlanImplementationPrompt, MAX_PLAN_CONTENT_BYTES, PlanService } fr
 interface CreateServiceOptions {
   now?: number;
   onDispatchImplementationPrompt?: (planVersion: number) => void | Promise<void>;
-  onPlanApproved?: () => void | Promise<void>;
 }
 
 function createService({
   now = 1_700_000_000_000,
   onDispatchImplementationPrompt,
-  onPlanApproved,
 }: CreateServiceOptions = {}) {
   let nextId = 0;
   const repository = {
@@ -33,7 +31,6 @@ function createService({
       generateId: () => `plan-${++nextId}`,
       now: () => now,
       onDispatchImplementationPrompt,
-      onPlanApproved,
     }),
     repository,
   };
@@ -226,18 +223,9 @@ describe("PlanService.approvePlan", () => {
 });
 
 describe("PlanService.approvePlanAndFlush", () => {
-  it("dispatches the implementation prompt with the plan version before flushing the queue", async () => {
-    const calls: string[] = [];
-    const onDispatchImplementationPrompt = vi.fn(async (version: number) => {
-      calls.push(`dispatch:${version}`);
-    });
-    const onPlanApproved = vi.fn(async () => {
-      calls.push("flush");
-    });
-    const { service, repository } = createService({
-      onDispatchImplementationPrompt,
-      onPlanApproved,
-    });
+  it("dispatches the implementation prompt with the approved plan version", async () => {
+    const onDispatchImplementationPrompt = vi.fn();
+    const { service, repository } = createService({ onDispatchImplementationPrompt });
     vi.mocked(repository.getSession).mockReturnValue({
       plan_mode: 1,
       plan_approval_status: "awaiting_approval",
@@ -258,16 +246,22 @@ describe("PlanService.approvePlanAndFlush", () => {
     const result = await service.approvePlanAndFlush();
 
     expect(onDispatchImplementationPrompt).toHaveBeenCalledExactlyOnceWith(7);
-    expect(onPlanApproved).toHaveBeenCalledOnce();
-    // Dispatch MUST run before flush — otherwise processMessageQueue may
-    // drain queued user messages without picking up the synthetic prompt.
-    expect(calls).toEqual(["dispatch:7", "flush"]);
     expect(result.plan.version).toBe(7);
   });
 
-  it("still flushes when no dispatch callback is wired (legacy callers)", async () => {
-    const onPlanApproved = vi.fn();
-    const { service, repository } = createService({ onPlanApproved });
+  it("dispatches AFTER the session model/effort has been written (so the dispatched prompt picks them up)", async () => {
+    const seen: Array<{ updates: number }> = [];
+    const { service, repository } = createService({
+      onDispatchImplementationPrompt: async () => {
+        // Capture call ordering: by the time the dispatch fires, the
+        // session-model updates must already have happened.
+        seen.push({
+          updates:
+            vi.mocked(repository.updateSessionModel).mock.calls.length +
+            vi.mocked(repository.updateSessionReasoningEffort).mock.calls.length,
+        });
+      },
+    });
     vi.mocked(repository.getSession).mockReturnValue({
       plan_mode: 1,
       plan_approval_status: "awaiting_approval",
@@ -282,9 +276,34 @@ describe("PlanService.approvePlanAndFlush", () => {
       created_at: 100,
     });
 
-    await service.approvePlanAndFlush();
+    await service.approvePlanAndFlush({
+      implementationModel: "anthropic/claude-sonnet-4-6",
+      implementationReasoningEffort: "high",
+    });
 
-    expect(onPlanApproved).toHaveBeenCalledOnce();
+    expect(seen).toHaveLength(1);
+    expect(seen[0].updates).toBe(2);
+  });
+
+  it("is a no-op (beyond approvePlan) when no dispatch callback is wired", async () => {
+    const { service, repository } = createService();
+    vi.mocked(repository.getSession).mockReturnValue({
+      plan_mode: 1,
+      plan_approval_status: "awaiting_approval",
+    } as never);
+    vi.mocked(repository.getCurrentPlan).mockReturnValue({
+      id: "p1",
+      version: 1,
+      content: "plan",
+      created_by_author_id: null,
+      created_by_message_id: null,
+      source: "api",
+      created_at: 100,
+    });
+
+    await expect(service.approvePlanAndFlush()).resolves.toEqual(
+      expect.objectContaining({ status: "approved" })
+    );
   });
 });
 

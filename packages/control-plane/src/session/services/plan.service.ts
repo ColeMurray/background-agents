@@ -82,19 +82,13 @@ interface PlanServiceDeps {
   generateId: () => string;
   now: () => number;
   /**
-   * Invoked after a plan is approved (status flipped to "approved") and
-   * BEFORE onPlanApproved flushes the queue. Used to enqueue the synthetic
-   * implementation prompt so processMessageQueue picks it up alongside any
-   * messages that arrived during plan mode.
+   * Invoked after a plan is approved (status flipped to "approved"). The
+   * session DO uses this to enqueue the synthetic implementation prompt
+   * that kicks off the build turn. The DO's enqueue path already flushes
+   * the message queue itself, so any user messages that piled up during
+   * awaiting_approval get dispatched in the same pass.
    */
   onDispatchImplementationPrompt?: (planVersion: number) => void | Promise<void>;
-  /**
-   * Invoked after a plan is approved (status flipped to "approved").
-   * The session DO uses this to flush any queued user message: a follow-up
-   * sent while the plan was awaiting approval should be dispatched as the
-   * first implementation turn.
-   */
-  onPlanApproved?: () => void | Promise<void>;
 }
 
 function toResponse(row: PlanRow): PlanResponse {
@@ -182,9 +176,6 @@ export class PlanService {
     const result = this.approvePlan(request);
     if (this.deps.onDispatchImplementationPrompt) {
       await this.deps.onDispatchImplementationPrompt(result.plan.version);
-    }
-    if (this.deps.onPlanApproved) {
-      await this.deps.onPlanApproved();
     }
     return result;
   }
