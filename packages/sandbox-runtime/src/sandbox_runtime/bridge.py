@@ -22,7 +22,7 @@ import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, ClassVar
-from xml.sax.saxutils import escape as xml_escape
+from xml.sax.saxutils import escape as xml_escape, quoteattr as xml_quoteattr
 
 import httpx
 import websockets
@@ -645,10 +645,14 @@ class AgentBridge:
         # Plan content is untrusted (markdown from the agent's own output or a
         # user-amended draft). Escape XML special chars before interpolating
         # into the <saved_plan> element so a malicious `</saved_plan>` inside
-        # the plan body can't break out of the wrapper.
+        # the plan body can't break out of the wrapper. `quoteattr` is used
+        # for the version attribute because `xml_escape` does NOT escape `"`,
+        # so a quote-containing version value could break the attribute
+        # boundary; `quoteattr` returns the value with surrounding quotes
+        # included (hence no quotes around it in the f-string).
         return (
             "<resume_context>\n"
-            f'<saved_plan version="{xml_escape(str(version))}">\n'
+            f"<saved_plan version={xml_quoteattr(str(version))}>\n"
             f"{xml_escape(plan_content.strip())}\n"
             "</saved_plan>\n"
             "<instructions_for_this_turn>\n"
@@ -682,9 +686,11 @@ class AgentBridge:
             if isinstance(plan_content, str) and plan_content.strip():
                 # Escape XML special chars in the prior plan body for the same
                 # reason as _build_resume_preamble: prevent a malicious
-                # `</previous_plan>` from breaking out of the wrapper.
+                # `</previous_plan>` from breaking out of the wrapper. The
+                # version attribute uses `quoteattr` so embedded `"` characters
+                # can't break the attribute boundary.
                 previous_section = (
-                    f'<previous_plan version="{xml_escape(str(version))}">\n'
+                    f"<previous_plan version={xml_quoteattr(str(version))}>\n"
                     f"{xml_escape(plan_content.strip())}\n"
                     "</previous_plan>\n"
                     "<amendment_instruction>\n"

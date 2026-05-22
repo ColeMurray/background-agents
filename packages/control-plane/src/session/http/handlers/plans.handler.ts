@@ -125,10 +125,25 @@ export function createPlansHandler(deps: PlansHandlerDeps): PlansHandler {
               { status: 400 }
             );
           }
-          implementationReasoningEffort = deps.validateReasoningEffort(
+          // validateReasoningEffort returns null for unsupported effort values,
+          // but null is also our explicit "clear the persisted effort" sentinel.
+          // Reject the invalid-value case with 400 rather than silently treating
+          // it as a clear request — otherwise a typo in the effort string would
+          // wipe the session's reasoning_effort instead of being rejected.
+          const normalized = deps.validateReasoningEffort(
             implementationModel,
             body.implementationReasoningEffort
           );
+          if (normalized === null) {
+            return Response.json(
+              {
+                error: `Invalid implementationReasoningEffort "${body.implementationReasoningEffort}" for model ${implementationModel}`,
+                code: "invalid_reasoning_effort",
+              },
+              { status: 400 }
+            );
+          }
+          implementationReasoningEffort = normalized;
         }
 
         const result = await deps.planService.approvePlanAndFlush({
