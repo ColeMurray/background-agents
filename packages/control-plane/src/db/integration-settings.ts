@@ -314,6 +314,13 @@ export class IntegrationSettingsStore {
     if (settings.terminalEnabled !== undefined && typeof settings.terminalEnabled !== "boolean") {
       throw new IntegrationSettingsValidationError("terminalEnabled must be a boolean");
     }
+
+    this.validatePositiveIntegerSetting(
+      settings.maxConcurrentChildSessions,
+      "maxConcurrentChildSessions"
+    );
+    this.validatePositiveIntegerSetting(settings.maxTotalChildSessions, "maxTotalChildSessions");
+
     if (settings.tunnelPorts !== undefined) {
       if (!Array.isArray(settings.tunnelPorts)) {
         throw new IntegrationSettingsValidationError("tunnelPorts must be an array of numbers");
@@ -334,6 +341,13 @@ export class IntegrationSettingsStore {
       return { ...settings, tunnelPorts: dedupedPorts };
     }
     return settings;
+  }
+
+  private validatePositiveIntegerSetting(value: unknown, name: string): void {
+    if (value === undefined) return;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+      throw new IntegrationSettingsValidationError(`${name} must be a positive integer`);
+    }
   }
 
   private validateSlackSettings(

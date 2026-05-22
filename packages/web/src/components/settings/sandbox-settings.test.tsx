@@ -6,7 +6,11 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { SWRConfig } from "swr";
-import { MAX_TUNNEL_PORTS } from "@open-inspect/shared";
+import {
+  DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
+  DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+  MAX_TUNNEL_PORTS,
+} from "@open-inspect/shared";
 import { SandboxSettingsPage } from "./sandbox-settings";
 
 expect.extend(matchers);
@@ -17,10 +21,14 @@ vi.mock("@/hooks/use-repos", () => ({
 
 const SETTINGS_KEY = "/api/integration-settings/sandbox";
 
-function globalSettings(tunnelPorts: number[], enabledRepos?: string[]) {
+function globalSettings(
+  tunnelPorts: number[],
+  enabledRepos?: string[],
+  limits?: { maxConcurrentChildSessions?: number; maxTotalChildSessions?: number }
+) {
   return {
     integrationId: "sandbox",
-    settings: { defaults: { tunnelPorts }, enabledRepos },
+    settings: { defaults: { tunnelPorts, ...limits }, enabledRepos },
   };
 }
 
@@ -168,13 +176,97 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
           method: "PUT",
           body: JSON.stringify({
             settings: {
-              defaults: { tunnelPorts: [8080], terminalEnabled: false },
+              defaults: {
+                tunnelPorts: [8080],
+                terminalEnabled: false,
+                maxConcurrentChildSessions: DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
+                maxTotalChildSessions: DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+              },
               enabledRepos: ["acme/app"],
             },
           }),
         })
       );
     });
+  });
+
+  it("renders child session limits from settings", () => {
+    renderWithSWR(
+      globalSettings([], undefined, {
+        maxConcurrentChildSessions: 3,
+        maxTotalChildSessions: 9,
+      })
+    );
+
+    expect(screen.getByLabelText("Max concurrent child sessions")).toHaveValue(3);
+    expect(screen.getByLabelText("Max total child sessions")).toHaveValue(9);
+  });
+
+  it("sends child session limits in the global payload", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: { [SETTINGS_KEY]: globalSettings([], ["acme/app"]) },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    await user.clear(screen.getByLabelText("Max concurrent child sessions"));
+    await user.type(screen.getByLabelText("Max concurrent child sessions"), "2");
+    await user.clear(screen.getByLabelText("Max total child sessions"));
+    await user.type(screen.getByLabelText("Max total child sessions"), "7");
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        SETTINGS_KEY,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({
+            settings: {
+              defaults: {
+                tunnelPorts: [],
+                terminalEnabled: false,
+                maxConcurrentChildSessions: 2,
+                maxTotalChildSessions: 7,
+              },
+              enabledRepos: ["acme/app"],
+            },
+          }),
+        })
+      );
+    });
+  });
+
+  it("blocks invalid child session limits", async () => {
+    const { fetchMock } = renderWithSWR(globalSettings([]));
+
+    await user.clear(screen.getByLabelText("Max concurrent child sessions"));
+    await user.type(screen.getByLabelText("Max concurrent child sessions"), "0");
+    await user.click(screen.getByText("Save Settings"));
+
+    expect(
+      screen.getByText("Child session limits must be positive whole numbers.")
+    ).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      SETTINGS_KEY,
+      expect.objectContaining({ method: "PUT" })
+    );
   });
 
   it("deduplicates ports on save", async () => {
@@ -216,7 +308,14 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
         SETTINGS_KEY,
         expect.objectContaining({
           body: JSON.stringify({
-            settings: { defaults: { tunnelPorts: [3000], terminalEnabled: false } },
+            settings: {
+              defaults: {
+                tunnelPorts: [3000],
+                terminalEnabled: false,
+                maxConcurrentChildSessions: DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
+                maxTotalChildSessions: DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+              },
+            },
           }),
         })
       );

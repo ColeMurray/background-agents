@@ -359,6 +359,9 @@ async function handleGetResolvedConfig(
       repo,
       config: {
         tunnelPorts: sandboxSettings.tunnelPorts ?? [],
+        terminalEnabled: sandboxSettings.terminalEnabled ?? false,
+        maxConcurrentChildSessions: sandboxSettings.maxConcurrentChildSessions,
+        maxTotalChildSessions: sandboxSettings.maxTotalChildSessions,
         enabledRepos,
       },
     });

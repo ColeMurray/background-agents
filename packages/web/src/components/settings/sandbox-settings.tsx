@@ -8,7 +8,11 @@ import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import useSWR from "swr";
 import type { SandboxSettings } from "@open-inspect/shared";
-import { MAX_TUNNEL_PORTS } from "@open-inspect/shared";
+import {
+  DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
+  DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+  MAX_TUNNEL_PORTS,
+} from "@open-inspect/shared";
 
 const GLOBAL_SCOPE = "__global__";
 
@@ -27,6 +31,10 @@ const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 function isValidPort(value: string): boolean {
   return /^\d+$/.test(value) && Number(value) >= 1 && Number(value) <= 65535;
+}
+
+function isPositiveInteger(value: string): boolean {
+  return /^\d+$/.test(value) && Number(value) >= 1;
 }
 
 function SandboxSettingsEditor({
@@ -56,8 +64,22 @@ function SandboxSettingsEditor({
     ? ((data as GlobalSettingsResponse)?.settings?.defaults?.terminalEnabled ?? false)
     : ((data as RepoSettingsResponse)?.settings?.terminalEnabled ?? false);
 
+  const currentMaxConcurrentChildSessions: number = isGlobal
+    ? ((data as GlobalSettingsResponse)?.settings?.defaults?.maxConcurrentChildSessions ??
+      DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS)
+    : ((data as RepoSettingsResponse)?.settings?.maxConcurrentChildSessions ??
+      DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS);
+
+  const currentMaxTotalChildSessions: number = isGlobal
+    ? ((data as GlobalSettingsResponse)?.settings?.defaults?.maxTotalChildSessions ??
+      DEFAULT_MAX_TOTAL_CHILD_SESSIONS)
+    : ((data as RepoSettingsResponse)?.settings?.maxTotalChildSessions ??
+      DEFAULT_MAX_TOTAL_CHILD_SESSIONS);
+
   const [portRows, setPortRows] = useState<string[] | null>(null);
   const [terminalEnabled, setTerminalEnabled] = useState<boolean | null>(null);
+  const [maxConcurrentChildSessions, setMaxConcurrentChildSessions] = useState<string | null>(null);
+  const [maxTotalChildSessions, setMaxTotalChildSessions] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -67,6 +89,10 @@ function SandboxSettingsEditor({
 
   // Use server state unless user is editing
   const rows = portRows ?? currentPorts.map(String);
+  const resolvedMaxConcurrentChildSessions =
+    maxConcurrentChildSessions ?? String(currentMaxConcurrentChildSessions);
+  const resolvedMaxTotalChildSessions =
+    maxTotalChildSessions ?? String(currentMaxTotalChildSessions);
 
   const handleAddRow = () => {
     if (rows.length >= MAX_TUNNEL_PORTS) return;
@@ -104,12 +130,25 @@ function SandboxSettingsEditor({
       return;
     }
 
+    if (
+      !isPositiveInteger(resolvedMaxConcurrentChildSessions) ||
+      !isPositiveInteger(resolvedMaxTotalChildSessions)
+    ) {
+      setError("Child session limits must be positive whole numbers.");
+      return;
+    }
+
     setSaving(true);
     try {
       const existingEnabledRepos = isGlobal
         ? (data as GlobalSettingsResponse)?.settings?.enabledRepos
         : undefined;
-      const settingsPayload = { tunnelPorts: ports, terminalEnabled: resolvedTerminalEnabled };
+      const settingsPayload = {
+        tunnelPorts: ports,
+        terminalEnabled: resolvedTerminalEnabled,
+        maxConcurrentChildSessions: Number(resolvedMaxConcurrentChildSessions),
+        maxTotalChildSessions: Number(resolvedMaxTotalChildSessions),
+      };
       const body = isGlobal
         ? { settings: { defaults: settingsPayload, enabledRepos: existingEnabledRepos } }
         : { settings: settingsPayload };
@@ -128,6 +167,8 @@ function SandboxSettingsEditor({
       await mutate();
       setPortRows(null);
       setTerminalEnabled(null);
+      setMaxConcurrentChildSessions(null);
+      setMaxTotalChildSessions(null);
       setSuccess(true);
       setTimeout(() => setSuccess(false), 2000);
     } catch (e) {
@@ -135,13 +176,29 @@ function SandboxSettingsEditor({
     } finally {
       setSaving(false);
     }
-  }, [rows, isGlobal, apiUrl, mutate, data, resolvedTerminalEnabled]);
+  }, [
+    rows,
+    isGlobal,
+    apiUrl,
+    mutate,
+    data,
+    resolvedTerminalEnabled,
+    resolvedMaxConcurrentChildSessions,
+    resolvedMaxTotalChildSessions,
+  ]);
 
   const hasPortChanges =
     portRows !== null &&
     JSON.stringify(normalizePorts(portRows).ports) !== JSON.stringify(currentPorts);
   const hasTerminalChange = terminalEnabled !== null && terminalEnabled !== currentTerminalEnabled;
-  const hasChanges = hasPortChanges || hasTerminalChange;
+  const hasConcurrentLimitChange =
+    maxConcurrentChildSessions !== null &&
+    maxConcurrentChildSessions !== String(currentMaxConcurrentChildSessions);
+  const hasTotalLimitChange =
+    maxTotalChildSessions !== null &&
+    maxTotalChildSessions !== String(currentMaxTotalChildSessions);
+  const hasChanges =
+    hasPortChanges || hasTerminalChange || hasConcurrentLimitChange || hasTotalLimitChange;
 
   if (isLoading) {
     return <p className="text-sm text-muted-foreground">Loading...</p>;
@@ -219,6 +276,47 @@ function SandboxSettingsEditor({
               </div>
             ))
           )}
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-foreground mb-1.5">Child Sessions</label>
+        <p className="text-xs text-muted-foreground mb-2">
+          Limit agent-spawned child sessions to prevent runaway sandbox usage.
+        </p>
+        <div className="grid gap-3 max-w-sm sm:grid-cols-2">
+          <div>
+            <label
+              htmlFor="max-concurrent-child-sessions"
+              className="block text-xs font-medium text-muted-foreground mb-1"
+            >
+              Max concurrent child sessions
+            </label>
+            <Input
+              id="max-concurrent-child-sessions"
+              type="number"
+              min="1"
+              inputMode="numeric"
+              value={resolvedMaxConcurrentChildSessions}
+              onChange={(e) => setMaxConcurrentChildSessions(e.target.value)}
+            />
+          </div>
+          <div>
+            <label
+              htmlFor="max-total-child-sessions"
+              className="block text-xs font-medium text-muted-foreground mb-1"
+            >
+              Max total child sessions
+            </label>
+            <Input
+              id="max-total-child-sessions"
+              type="number"
+              min="1"
+              inputMode="numeric"
+              value={resolvedMaxTotalChildSessions}
+              onChange={(e) => setMaxTotalChildSessions(e.target.value)}
+            />
+          </div>
         </div>
       </div>
 
