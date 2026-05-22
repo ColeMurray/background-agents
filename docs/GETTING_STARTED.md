@@ -215,8 +215,10 @@ access.
    - Issues: **Read & Write** _(required if enabling GitHub bot)_
    - Pull requests: **Read & Write**
    - Metadata: **Read-only**
-6. Set **Organization permissions**:
-   - Members: **Read-only** _(required when using `ALLOWED_GITHUB_ORGS`)_
+6. If using `ALLOWED_GITHUB_ORGS`/`allowed_github_orgs`, set **Organization permissions**:
+   - Members: **Read-only**
+   - For existing GitHub Apps, republish the permission change and request/approve installation
+     updates before testing org membership sign-in.
 7. Click **"Create GitHub App"**
 8. Note the **App ID** and **Client ID** (top of page)
 9. Under **"Client secrets"**, click **"Generate a new client secret"** and note the **Client
@@ -427,8 +429,11 @@ unsafe_allow_all_users = false
 
 > **Note**: Review `allowed_users`, `allowed_email_domains`, and `allowed_github_orgs` carefully -
 > these control who can sign in. Terraform now fails if all are empty unless you explicitly set
-> `unsafe_allow_all_users = true`. `allowed_github_orgs` checks active GitHub organization
-> membership and requires GitHub App Organization permissions: Members read-only.
+> `unsafe_allow_all_users = true`. **Allowlists use OR semantics**: matching any configured
+> username, email domain, or active GitHub org membership grants access. `allowed_github_orgs`
+> checks membership at sign-in only with the signing-in user's OAuth token; existing sessions last
+> until session expiry. The `read:org` OAuth scope is requested only when org access is configured.
+> GitHub Apps using org access need Organization permissions: Members read-only.
 
 ---
 

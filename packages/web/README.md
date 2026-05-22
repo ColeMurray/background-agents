@@ -95,8 +95,12 @@ NEXT_PUBLIC_WS_URL=ws://localhost:8787
 > **Access Control**: If `ALLOWED_USERS`, `ALLOWED_EMAIL_DOMAINS`, and `ALLOWED_GITHUB_ORGS` are all
 > empty, sign-in is denied unless `UNSAFE_ALLOW_ALL_USERS=true`. For Terraform-managed production
 > deploys, Terraform also fails validation unless you set at least one allowlist or explicitly opt
-> in with `unsafe_allow_all_users = true`. `ALLOWED_GITHUB_ORGS` requires GitHub App Organization
-> permissions: Members read-only.
+> in with `unsafe_allow_all_users = true`. **Allowlists use OR semantics**: matching any configured
+> username, email domain, or active GitHub org membership grants access. `ALLOWED_GITHUB_ORGS` is
+> checked at sign-in with the signing-in user's OAuth token; existing sessions last until session
+> expiry. The `read:org` OAuth scope is requested only when `ALLOWED_GITHUB_ORGS` is configured.
+> GitHub Apps using org access need Organization permissions: Members read-only; existing GitHub
+> Apps must republish/request approval after that permission changes.
 
 ### Development
 

@@ -90,6 +90,10 @@ NEXT_PUBLIC_WS_URL=wss://open-inspect-control-plane-<name>.<subdomain>.workers.d
 INTERNAL_CALLBACK_SECRET=your_shared_secret
 
 # Optional access control
+# Allowlists are OR-based: matching any configured user, email domain, or GitHub org grants access.
+# ALLOWED_GITHUB_ORGS requests read:org only when set, then checks active org membership
+# with the signing-in user's OAuth token. Existing sessions last until session expiry.
+# Requires GitHub App Organization permissions: Members read-only.
 ALLOWED_USERS=
 ALLOWED_EMAIL_DOMAINS=
 ALLOWED_GITHUB_ORGS=
@@ -215,7 +219,9 @@ Your GitHub callback URL does not exactly match the running app URL.
 ### Access denied after sign-in
 
 Check `ALLOWED_USERS`, `ALLOWED_EMAIL_DOMAINS`, and `ALLOWED_GITHUB_ORGS` in
-`packages/web/.env.local`.
+`packages/web/.env.local`. If `ALLOWED_GITHUB_ORGS` is set, make sure your GitHub App has
+Organization permissions: Members read-only and that the updated permission was republished and
+approved for the installation.
 
 ### Web can load, but session APIs return 401
 

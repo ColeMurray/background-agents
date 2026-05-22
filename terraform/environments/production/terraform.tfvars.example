@@ -271,6 +271,8 @@ enable_service_bindings = false
 # =============================================================================
 # Access Control
 # =============================================================================
+# Allowlists are OR-based: matching any configured user, email domain, or GitHub
+# org grants access.
 # Comma-separated list of GitHub usernames allowed to sign in
 # Set at least one access-control allowlist unless you intentionally opt into
 # open access with unsafe_allow_all_users = true.
@@ -281,7 +283,10 @@ allowed_users = ""
 allowed_email_domains = ""
 
 # Comma-separated list of GitHub organizations whose active members can sign in
-# Requires GitHub App Organization permissions: Members read-only.
+# Requests read:org only when set, then checks membership at sign-in with the
+# signing-in user's OAuth token. Existing sessions last until session expiry.
+# Requires GitHub App Organization permissions: Members read-only; existing apps
+# must republish/request approval after this permission changes.
 allowed_github_orgs = ""
 
 # Explicitly bypass the Terraform access-control safety check and allow any
