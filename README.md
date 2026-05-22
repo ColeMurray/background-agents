@@ -209,7 +209,9 @@ Every session runs in an isolated Modal sandbox with a full development environm
   and UI verification
 - **Code-server:** Optional browser-based VS Code connected to the session workspace
 - **Web terminal:** ttyd-powered terminal accessible from the session UI
-- **Port tunneling:** Expose up to 10 dev server ports via encrypted tunnels
+- **Port tunneling:** Expose up to 10 dev server ports via encrypted tunnels. URLs are available
+  in-sandbox at `/workspace/.tunnels.env` before `.openinspect/start.sh` runs
+  ([details](docs/HOW_IT_WORKS.md#tunnel-urls-inside-the-sandbox))
 - **Repo secrets:** AES-256-GCM encrypted, scoped per-repo or globally, injected as env vars at
   spawn time. Supports bulk `.env` paste import
 

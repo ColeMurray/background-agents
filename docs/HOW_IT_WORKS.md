@@ -240,6 +240,32 @@ To minimize perceived latency, sandboxes warm proactively:
 - By the time you hit enter, the sandbox may already be ready
 - If restore is fast enough, you won't notice any delay
 
+### Tunnel URLs Inside the Sandbox
+
+When a session uses the `tunnelPorts` sandbox setting, the resolved tunnel URLs are written to
+`/workspace/.tunnels.env` so processes started by `.openinspect/start.sh` (or by the agent later)
+can read them locally.
+
+```dotenv
+# /workspace/.tunnels.env
+TUNNEL_3000=https://abc123-3000.modal.host
+TUNNEL_5173=https://abc123-5173.modal.host
+```
+
+This dotenv shape is consumed directly by `node --env-file=...`, `bun --env-file=...`, Vite,
+`docker compose --env-file=...`, and other dotenv loaders — no parsing required.
+
+**Boot ordering.** On every non-build boot, the supervisor:
+
+1. Clears any stale file inherited from a snapshot.
+2. Waits up to `TUNNEL_WAIT_TIMEOUT_SECONDS` (default `30`) for fresh URLs.
+3. Runs `.openinspect/start.sh`.
+
+If the wait times out (e.g. a Modal-side outage), `start.sh` proceeds without fresh local URLs and
+the supervisor logs `tunnel.env_file_wait_timeout`. The control plane still receives and broadcasts
+the URLs to clients on a separate path. The file is not written when `tunnelPorts` is empty or in
+build mode.
+
 ---
 
 ## How Prompts Flow Through the System
