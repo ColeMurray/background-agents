@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SessionRepository } from "../repository";
 import type { PlanRow } from "../types";
-import { PlanService } from "./plan.service";
+import { MAX_PLAN_CONTENT_BYTES, PlanService } from "./plan.service";
 
 function createService(now = 1_700_000_000_000) {
   let nextId = 0;
@@ -95,6 +95,66 @@ describe("PlanService.savePlan", () => {
   it("rejects empty content", () => {
     const { service, repository } = createService();
     expect(() => service.savePlan({ content: "   " })).toThrow(/empty/i);
+    expect(repository.savePlan).not.toHaveBeenCalled();
+  });
+
+  it("does not dedup when messageId is null even with identical content", () => {
+    // Regression test for CodeRabbit #671 item 1.4: messageId is the dedup
+    // token, so a null messageId means two identical-body events are
+    // legitimately distinct saves and must each produce a new version.
+    const { service, repository } = createService();
+    vi.mocked(repository.getCurrentPlan).mockReturnValue({
+      id: "plan-existing",
+      version: 3,
+      content: "same body",
+      created_by_author_id: null,
+      created_by_message_id: null,
+      source: "api",
+      created_at: 1000,
+    } as PlanRow);
+    vi.mocked(repository.savePlan).mockImplementation(
+      (data) =>
+        ({
+          id: data.id,
+          version: 4,
+          content: data.content,
+          created_by_author_id: data.createdByAuthorId,
+          created_by_message_id: data.createdByMessageId,
+          source: data.source,
+          created_at: data.createdAt,
+        }) as PlanRow
+    );
+
+    const response = service.savePlan({ content: "same body" }); // messageId omitted → null
+
+    expect(repository.savePlan).toHaveBeenCalledTimes(1);
+    expect(response.deduped).toBe(false);
+  });
+
+  it("accepts content exactly at MAX_PLAN_CONTENT_BYTES", () => {
+    const { service, repository } = createService();
+    vi.mocked(repository.savePlan).mockImplementation(
+      (data) =>
+        ({
+          id: data.id,
+          version: 1,
+          content: data.content,
+          created_by_author_id: null,
+          created_by_message_id: null,
+          source: data.source,
+          created_at: data.createdAt,
+        }) as PlanRow
+    );
+
+    const body = "a".repeat(MAX_PLAN_CONTENT_BYTES);
+    expect(() => service.savePlan({ content: body })).not.toThrow();
+    expect(repository.savePlan).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects content over MAX_PLAN_CONTENT_BYTES", () => {
+    const { service, repository } = createService();
+    const body = "a".repeat(MAX_PLAN_CONTENT_BYTES + 1);
+    expect(() => service.savePlan({ content: body })).toThrow(/exceeds/i);
     expect(repository.savePlan).not.toHaveBeenCalled();
   });
 });

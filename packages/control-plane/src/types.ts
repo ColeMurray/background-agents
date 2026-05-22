@@ -91,7 +91,7 @@ export interface Env {
   DAYTONA_TARGET?: string; // Optional Daytona target name
 
   // Sandbox lifecycle configuration
-  SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 900000 = 15 min)
+  SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms. Defaults to DEFAULT_SANDBOX_INACTIVITY_TIMEOUT_MS in session/durable-object.ts.
   EXECUTION_TIMEOUT_MS?: string; // Max processing time before auto-fail (default: 5400000 = 90 min)
 
   // Default models surfaced to the web UI via GET /model-preferences so the

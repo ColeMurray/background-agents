@@ -113,10 +113,17 @@ export class PlanService {
     // Idempotent dedup: if the last plan has the same content AND was created
     // for the same message id, return it rather than bumping the version. This
     // covers callback retries that re-deliver the same save_plan event.
+    //
+    // Restricted to non-null messageId: messageId is the dedup token, so when
+    // it's null (e.g. user-initiated saves outside an LLM turn) two identical
+    // bodies are legitimately distinct events and must each create a new
+    // version. Previously the null-vs-null comparison incorrectly deduped
+    // these.
     const previous = this.deps.repository.getCurrentPlan();
     const requestMessageId = request.messageId ?? null;
     if (
       previous &&
+      requestMessageId !== null &&
       previous.content === content &&
       previous.created_by_message_id === requestMessageId
     ) {

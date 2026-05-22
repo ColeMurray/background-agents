@@ -50,13 +50,19 @@ export function buildUntrustedUserContentBlock(params: UntrustedContentParams): 
 
   // Defensive escape: neutralize any literal opening/closing tags (and the
   // already-escaped backslash variants) inside the body so a hostile payload
-  // can't break out of the wrapper. Done in two passes so we don't re-escape
-  // legitimate backslash content the caller may already have escaped.
+  // can't break out of the wrapper.
+  //
+  // Patterns are case-insensitive and whitespace-tolerant so variants like
+  // `<USER_CONTENT>`, `< user_content >`, `</ user_content >`, mixed case, or
+  // tags with attributes (`<user_content source="x">`) all get neutralized.
+  // We do the escaped (`<\user_content`) double-escape pass first so already-
+  // escaped sequences don't get re-escaped into invalid forms by the second
+  // pass.
   const escapedContent = content
-    .replaceAll("<\\user_content", "<\\\\user_content")
-    .replaceAll("<\\/user_content>", "<\\\\/user_content>")
-    .replaceAll("<user_content", "<\\user_content")
-    .replaceAll("</user_content>", "<\\/user_content>");
+    .replace(/<\\\s*user_content\b/gi, "<\\\\user_content")
+    .replace(/<\\\s*\/\s*user_content\s*>/gi, "<\\\\/user_content>")
+    .replace(/<\s*user_content\b/gi, "<\\user_content")
+    .replace(/<\s*\/\s*user_content\s*>/gi, "<\\/user_content>");
 
   const trailingGuidance = extraGuidance ? `\n${extraGuidance}` : "";
 

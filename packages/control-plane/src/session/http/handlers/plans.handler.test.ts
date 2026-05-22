@@ -8,6 +8,8 @@ function createHandler() {
     savePlan: vi.fn(),
     getCurrentPlan: vi.fn(),
     listPlans: vi.fn(),
+    approvePlanAndFlush: vi.fn(),
+    rejectPlan: vi.fn(),
   } as unknown as PlanService;
 
   const log = {
@@ -147,5 +149,60 @@ describe("plansHandler.listPlans", () => {
 
     handler.listPlans(new URL("http://internal/internal/plans?limit=abc"));
     expect(planService.listPlans).toHaveBeenLastCalledWith(20);
+  });
+});
+
+describe("plansHandler.approvePlan / rejectPlan body validation", () => {
+  // Regression tests for CodeRabbit #671 item 1.3: readApprovalBody used to
+  // catch JSON.parse errors and silently return {}, masking malformed
+  // client requests. It now throws InvalidApprovalBodyError, which the
+  // approve/reject handlers map to HTTP 400.
+
+  it("approvePlan returns HTTP 400 on malformed JSON body", async () => {
+    const { handler, planService } = createHandler();
+    const req = new Request("http://internal/internal/plan/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "content-length": "5" },
+      body: "{not-json",
+    });
+    const res = await handler.approvePlan(req);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code?: string };
+    expect(body.code).toBe("invalid_body");
+    expect(planService.approvePlanAndFlush).not.toHaveBeenCalled();
+  });
+
+  it("rejectPlan returns HTTP 400 on malformed JSON body", async () => {
+    const { handler, planService } = createHandler();
+    const req = new Request("http://internal/internal/plan/reject", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "content-length": "5" },
+      body: "garbage",
+    });
+    const res = await handler.rejectPlan(req);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code?: string };
+    expect(body.code).toBe("invalid_body");
+    expect(planService.rejectPlan).not.toHaveBeenCalled();
+  });
+
+  it("approvePlan accepts empty body (no parse attempted)", async () => {
+    const { handler, planService } = createHandler();
+    vi.mocked(planService.approvePlanAndFlush).mockResolvedValue({
+      plan: null,
+      status: "approved",
+      postApproval: undefined,
+    } as unknown as Awaited<ReturnType<PlanService["approvePlanAndFlush"]>>);
+    const req = new Request("http://internal/internal/plan/approve", {
+      method: "POST",
+      headers: { "content-length": "0" },
+    });
+    const res = await handler.approvePlan(req);
+    expect(res.status).toBe(200);
+    expect(planService.approvePlanAndFlush).toHaveBeenCalledWith({
+      approverAuthorId: undefined,
+      implementationModel: null,
+      implementationReasoningEffort: undefined,
+    });
   });
 });

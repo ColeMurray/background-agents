@@ -22,11 +22,17 @@ import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, ClassVar
+from xml.sax.saxutils import escape as xml_escape
 
 import httpx
 import websockets
 from websockets import ClientConnection, State
 from websockets.exceptions import InvalidStatus
+
+# How long the sandbox waits for the control plane to acknowledge a plan
+# save before raising. Plan saves run end-of-turn and shouldn't block the
+# event loop indefinitely if the control plane is unresponsive.
+PLAN_SAVE_TIMEOUT_SECONDS = 30.0
 
 from .log_config import configure_logging, get_logger
 from .types import GitUser
@@ -636,10 +642,14 @@ class AgentBridge:
         if not isinstance(plan_content, str) or not plan_content.strip():
             return None
         version = current_plan.get("version", "?")
+        # Plan content is untrusted (markdown from the agent's own output or a
+        # user-amended draft). Escape XML special chars before interpolating
+        # into the <saved_plan> element so a malicious `</saved_plan>` inside
+        # the plan body can't break out of the wrapper.
         return (
             "<resume_context>\n"
-            f'<saved_plan version="{version}">\n'
-            f"{plan_content.strip()}\n"
+            f'<saved_plan version="{xml_escape(str(version))}">\n'
+            f"{xml_escape(plan_content.strip())}\n"
             "</saved_plan>\n"
             "<instructions_for_this_turn>\n"
             "Before any tool call that modifies files or runs destructive commands, "
@@ -670,9 +680,12 @@ class AgentBridge:
             plan_content = current_plan.get("content")
             version = current_plan.get("version", "?")
             if isinstance(plan_content, str) and plan_content.strip():
+                # Escape XML special chars in the prior plan body for the same
+                # reason as _build_resume_preamble: prevent a malicious
+                # `</previous_plan>` from breaking out of the wrapper.
                 previous_section = (
-                    f'<previous_plan version="{version}">\n'
-                    f"{plan_content.strip()}\n"
+                    f'<previous_plan version="{xml_escape(str(version))}">\n'
+                    f"{xml_escape(plan_content.strip())}\n"
                     "</previous_plan>\n"
                     "<amendment_instruction>\n"
                     "Amend the previous plan based on the new user instruction below. "
@@ -741,8 +754,12 @@ class AgentBridge:
             plan_mode=plan_mode,
         )
 
-        # Buffer the agent's textual output during the turn so we can capture
-        # it as a plan when planMode=True. Cheap (string concat in append-mode).
+        # Hold the agent's latest cumulative token snapshot during the turn so
+        # we can capture it as a plan when planMode=True. OpenCode emits each
+        # token event with the FULL accumulated text since the start of the
+        # response, so we overwrite this single-element buffer rather than
+        # appending — appending would compound prefixes and produce a corrupt
+        # plan body at end-of-turn.
         text_buffer: list[str] = []
 
         try:
@@ -769,7 +786,8 @@ class AgentBridge:
                 if plan_mode and event.get("type") == "token":
                     token_text = event.get("content")
                     if isinstance(token_text, str):
-                        text_buffer.append(token_text)
+                        # Cumulative snapshot: overwrite, don't append.
+                        text_buffer[:] = [token_text]
                 await self._send_event(event)
 
             if had_error:
@@ -841,7 +859,9 @@ class AgentBridge:
             "source": "agent",
             "messageId": message_id,
         }
-        resp = await self.http_client.post(url, json=payload, headers=headers, timeout=30.0)
+        resp = await self.http_client.post(
+            url, json=payload, headers=headers, timeout=PLAN_SAVE_TIMEOUT_SECONDS
+        )
         if resp.status_code >= 400:
             raise RuntimeError(
                 f"control plane refused plan save: HTTP {resp.status_code} {resp.text[:300]}"

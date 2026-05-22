@@ -130,7 +130,7 @@ plan.
 
 ## Architecture (high level)
 
-```
+```text
 @mention / label / web prompt
         │
         ▼

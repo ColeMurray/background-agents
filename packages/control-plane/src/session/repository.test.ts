@@ -113,6 +113,29 @@ describe("SessionRepository", () => {
         2000,
       ]);
     });
+
+    it("persists planMode=true and planModel when provided", () => {
+      repo.upsertSession({
+        id: "sess-plan",
+        sessionName: "plan-session",
+        title: "Plan Title",
+        repoOwner: "owner",
+        repoName: "repo",
+        model: "claude-sonnet-4",
+        status: "created",
+        planMode: true,
+        planModel: "anthropic/claude-opus-4-6",
+        createdAt: 1000,
+        updatedAt: 2000,
+      });
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("INSERT OR REPLACE INTO session");
+      // plan_mode is the 16th param (0-indexed 15), plan_model is the 18th (0-indexed 17).
+      const params = mock.calls[0].params;
+      expect(params[15]).toBe(1); // plan_mode = 1 when planMode=true
+      expect(params[17]).toBe("anthropic/claude-opus-4-6"); // plan_model
+    });
   });
 
   describe("updateSessionRepoId", () => {

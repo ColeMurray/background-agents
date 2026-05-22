@@ -72,9 +72,10 @@ The control plane provides:
 
 ### Plan Mode
 
-When a session opts into plan mode the agent emits a markdown plan and the message queue is gated
-until the user approves, rejects, or amends. See [docs/PLAN_MODE.md](../../docs/PLAN_MODE.md) for
-the workflow.
+When a session opts into plan mode the agent emits a markdown plan. While the plan is awaiting
+approval, prompts continue to queue and are processed but are dispatched as **planning turns**
+(re-anchored on the current plan) until the user approves, rejects, or amends. See
+[docs/PLAN_MODE.md](../../docs/PLAN_MODE.md) for the workflow.
 
 | Endpoint                     | Method | Description                                                        |
 | ---------------------------- | ------ | ------------------------------------------------------------------ |

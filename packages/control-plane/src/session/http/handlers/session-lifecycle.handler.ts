@@ -113,11 +113,20 @@ export function createSessionLifecycleHandler(
       const reasoningEffort = deps.validateReasoningEffort(model, body.reasoningEffort);
       const baseBranch = body.branch || body.defaultBranch || "main";
       const planMode = body.planMode === true;
-      const planModel = planMode
-        ? body.planModel && isValidModel(body.planModel)
-          ? getValidModelOrDefault(body.planModel)
-          : DEFAULT_PLAN_MODEL
-        : null;
+      let planModel: string | null = null;
+      if (planMode) {
+        if (body.planModel && isValidModel(body.planModel)) {
+          planModel = body.planModel;
+        } else {
+          planModel = DEFAULT_PLAN_MODEL;
+          if (body.planModel) {
+            deps.getLog().warn("Invalid plan model, using default", {
+              requested_plan_model: body.planModel,
+              default_plan_model: planModel,
+            });
+          }
+        }
+      }
 
       deps.repository.upsertSession({
         id: sessionId,

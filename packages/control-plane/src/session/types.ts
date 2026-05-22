@@ -15,7 +15,10 @@ import type {
   EventType,
   PlanApprovalStatus,
 } from "../types";
+import type { PlanSource } from "@open-inspect/shared";
 import type { GitPushSpec } from "../source-control";
+
+export type { PlanSource };
 
 // Database row types (match SQLite schema)
 
@@ -105,8 +108,6 @@ export interface PlanRow {
   source: PlanSource;
   created_at: number;
 }
-
-export type PlanSource = "api" | "agent" | "web";
 
 export interface SandboxRow {
   id: string;

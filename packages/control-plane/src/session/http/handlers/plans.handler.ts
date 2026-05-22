@@ -90,34 +90,34 @@ export function createPlansHandler(deps: PlansHandlerDeps): PlansHandler {
     },
 
     async approvePlan(request: Request): Promise<Response> {
-      const body = await readApprovalBody(request, deps.getLog());
+      try {
+        const body = await readApprovalBody(request, deps.getLog());
 
-      let implementationModel: string | null = null;
-      if (body.implementationModel) {
-        if (!isValidModel(body.implementationModel)) {
-          return Response.json(
-            { error: "Invalid implementationModel", code: "invalid_model" },
-            { status: 400 }
+        let implementationModel: string | null = null;
+        if (body.implementationModel) {
+          if (!isValidModel(body.implementationModel)) {
+            return Response.json(
+              { error: "Invalid implementationModel", code: "invalid_model" },
+              { status: 400 }
+            );
+          }
+          implementationModel = getValidModelOrDefault(body.implementationModel);
+        }
+
+        // Validate reasoning effort regardless of whether the user picked an
+        // impl-model override. When no override is provided we pass an empty
+        // target — validateReasoningEffort then returns null (effort can't be
+        // checked without a model), which drops unvalidated input rather than
+        // persisting potentially-invalid effort that would fail at dispatch.
+        let implementationReasoningEffort: string | null | undefined = undefined;
+        if (body.implementationReasoningEffort !== undefined) {
+          const target = implementationModel ?? "";
+          implementationReasoningEffort = deps.validateReasoningEffort(
+            target,
+            body.implementationReasoningEffort ?? undefined
           );
         }
-        implementationModel = getValidModelOrDefault(body.implementationModel);
-      }
 
-      // Validate reasoning effort regardless of whether the user picked an
-      // impl-model override. When no override is provided we pass an empty
-      // target — validateReasoningEffort then returns null (effort can't be
-      // checked without a model), which drops unvalidated input rather than
-      // persisting potentially-invalid effort that would fail at dispatch.
-      let implementationReasoningEffort: string | null | undefined = undefined;
-      if (body.implementationReasoningEffort !== undefined) {
-        const target = implementationModel ?? "";
-        implementationReasoningEffort = deps.validateReasoningEffort(
-          target,
-          body.implementationReasoningEffort ?? undefined
-        );
-      }
-
-      try {
         const result = await deps.planService.approvePlanAndFlush({
           approverAuthorId: body.approverAuthorId,
           implementationModel,
@@ -138,8 +138,8 @@ export function createPlansHandler(deps: PlansHandlerDeps): PlansHandler {
     },
 
     async rejectPlan(request: Request): Promise<Response> {
-      const body = await readApprovalBody(request, deps.getLog());
       try {
+        const body = await readApprovalBody(request, deps.getLog());
         const result = deps.planService.rejectPlan({
           approverAuthorId: body.approverAuthorId,
           reason: body.reason,
@@ -153,19 +153,36 @@ export function createPlansHandler(deps: PlansHandlerDeps): PlansHandler {
   };
 }
 
+/**
+ * Thrown by readApprovalBody when the request body exists but is not valid
+ * JSON. Mapped to HTTP 400 by errorResponseForApproval; previously the body
+ * was silently coerced to {} which masked client bugs and could leak partial
+ * approve/reject parameters into downstream calls.
+ */
+class InvalidApprovalBodyError extends Error {
+  constructor(cause: unknown) {
+    super(`Invalid approval body: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = "InvalidApprovalBodyError";
+  }
+}
+
 async function readApprovalBody(request: Request, log: Logger): Promise<ApprovalRequestBody> {
   if (request.headers.get("content-length") === "0") return {};
+  const text = await request.text();
+  if (!text.trim()) return {};
   try {
-    const text = await request.text();
-    if (!text.trim()) return {};
     return JSON.parse(text) as ApprovalRequestBody;
   } catch (e) {
     log.warn("plans.approval.invalid_body", { error: e instanceof Error ? e : String(e) });
-    return {};
+    throw new InvalidApprovalBodyError(e);
   }
 }
 
 function errorResponseForApproval(e: unknown, log: Logger, logEvent: string): Response {
+  if (e instanceof InvalidApprovalBodyError) {
+    log.info(logEvent, { code: "invalid_body", message: e.message });
+    return Response.json({ error: e.message, code: "invalid_body" }, { status: 400 });
+  }
   if (e instanceof PlanApprovalError) {
     const status = e.code === "invalid_status" ? 409 : 400;
     log.info(logEvent, { code: e.code, message: e.message });

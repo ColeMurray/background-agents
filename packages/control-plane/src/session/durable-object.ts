@@ -96,6 +96,13 @@ import { MessageService } from "./services/message.service";
 import { createAlarmHandler, type AlarmHandler } from "./alarm/handler";
 
 /**
+ * Default inactivity timeout for sandboxes (in milliseconds).
+ * After this many milliseconds without activity, the sandbox lifecycle
+ * manager marks the sandbox idle and tears it down. Operators can override
+ * via env `SANDBOX_INACTIVITY_TIMEOUT_MS`.
+ */
+const DEFAULT_SANDBOX_INACTIVITY_TIMEOUT_MS = 900_000; // 15 minutes
+
 /**
  * Timeout for WebSocket authentication (in milliseconds).
  * Client WebSockets must send a valid 'subscribe' message within this time
@@ -776,7 +783,10 @@ export class SessionDO extends DurableObject<Env> {
       sessionId,
       inactivity: {
         ...DEFAULT_LIFECYCLE_CONFIG.inactivity,
-        timeoutMs: parseInt(this.env.SANDBOX_INACTIVITY_TIMEOUT_MS || "900000", 10),
+        timeoutMs: parseInt(
+          this.env.SANDBOX_INACTIVITY_TIMEOUT_MS || String(DEFAULT_SANDBOX_INACTIVITY_TIMEOUT_MS),
+          10
+        ),
       },
       mcpServerLookup,
       slackAgentNotifyLookup,

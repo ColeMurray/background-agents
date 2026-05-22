@@ -35,7 +35,11 @@ import {
 import { SessionIndexStore } from "./db/session-index";
 import { UserScmTokenStore, DEFAULT_TOKEN_LIFETIME_MS } from "./db/user-scm-tokens";
 import { UserStore, type ProviderIdentity } from "./db/user-store";
-import { buildSessionInternalUrl, SessionInternalPaths } from "./session/contracts";
+import {
+  buildSessionInternalUrl,
+  SessionInternalPaths,
+  type SessionInternalPath,
+} from "./session/contracts";
 import { initializeSession, type SessionInitInput } from "./session/initialize";
 import {
   resolveCodeServerEnabled,
@@ -2211,7 +2215,7 @@ async function forwardPlanApproval(
   env: Env,
   match: RegExpMatchArray,
   ctx: RequestContext,
-  internalPath: string
+  internalPath: SessionInternalPath
 ): Promise<Response> {
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
@@ -2226,7 +2230,7 @@ async function forwardPlanApproval(
   const stub = env.SESSION.get(env.SESSION.idFromName(sessionId));
   return stub.fetch(
     internalRequest(
-      buildSessionInternalUrl(internalPath as never),
+      buildSessionInternalUrl(internalPath),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
