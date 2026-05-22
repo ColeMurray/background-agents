@@ -103,6 +103,32 @@ describe("matchesConditions", () => {
       ];
       expect(matchesConditions(conditions, event, conditionRegistry)).toBe(false);
     });
+
+    it("matches with the exact operator", () => {
+      const event = buildMockEvent("github", {
+        branch: "feature/x",
+        targetBranch: "release/v1",
+      });
+      const conditions = [
+        {
+          type: "target_branch" as const,
+          operator: "exact" as const,
+          value: ["release/v1", "main"],
+        },
+      ];
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(true);
+    });
+
+    it("does not match with the exact operator when no value equals the target", () => {
+      const event = buildMockEvent("github", {
+        branch: "feature/x",
+        targetBranch: "release/v1",
+      });
+      const conditions = [
+        { type: "target_branch" as const, operator: "exact" as const, value: ["release"] },
+      ];
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(false);
+    });
   });
 });
 

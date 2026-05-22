@@ -186,7 +186,7 @@ function ConditionEditor({
         <TagInput
           values={condition.value}
           onChange={(value) => onChange({ ...condition, value })}
-          placeholder="Target branch pattern (merge base, e.g. main, stable)..."
+          placeholder="PR merge base pattern (PR events only, e.g. main, release/*)..."
         />
       );
     case "label":

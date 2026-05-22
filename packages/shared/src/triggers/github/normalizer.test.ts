@@ -146,7 +146,12 @@ describe("normalizeGitHubEvent", () => {
       expect(event!.contextBlock).toContain("pull_request.opened");
       expect(event!.contextBlock).toContain("acme-org/my-app");
       expect(event!.contextBlock).toContain("PR #42");
-      expect(event!.meta).toMatchObject({ prNumber: 42, sha: "abc1234def5678", action: "opened" });
+      expect(event!.meta).toMatchObject({
+        prNumber: 42,
+        sha: "abc1234def5678",
+        action: "opened",
+        targetBranch: "main",
+      });
     });
   });
 
@@ -232,7 +237,11 @@ describe("normalizeGitHubEvent", () => {
       expect(event!.targetBranch).toBe("main");
       expect(event!.actor).toBe("dev-user");
       expect(event!.contextBlock).toContain("pull_request_review_comment.created");
-      expect(event!.meta).toMatchObject({ commentId: 5555, prNumber: 42 });
+      expect(event!.meta).toMatchObject({
+        commentId: 5555,
+        prNumber: 42,
+        targetBranch: "main",
+      });
     });
   });
 

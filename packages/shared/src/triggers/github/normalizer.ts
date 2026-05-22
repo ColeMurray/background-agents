@@ -189,6 +189,7 @@ function normalizePullRequest(
       prNumber,
       sha: headSha,
       action,
+      targetBranch,
     },
   };
 }
@@ -265,6 +266,7 @@ function normalizeReviewComment(
     meta: {
       commentId,
       prNumber,
+      targetBranch,
     },
   };
 }
