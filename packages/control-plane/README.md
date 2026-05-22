@@ -70,6 +70,30 @@ The control plane provides:
 | `/sessions/:id/archive`      | POST      | Archive session          |
 | `/sessions/:id/unarchive`    | POST      | Unarchive session        |
 
+### Plan Mode
+
+When a session opts into plan mode the agent emits a markdown plan and the message queue is gated
+until the user approves, rejects, or amends. See [docs/PLAN_MODE.md](../../docs/PLAN_MODE.md) for
+the workflow.
+
+| Endpoint                     | Method | Description                                                        |
+| ---------------------------- | ------ | ------------------------------------------------------------------ |
+| `/sessions/:id/plan`         | GET    | Current plan + approval status                                     |
+| `/sessions/:id/plan`         | POST   | Save a new plan version (agent-source; bumps the version)          |
+| `/sessions/:id/plans`        | GET    | List all plan versions for a session                               |
+| `/sessions/:id/plan/approve` | POST   | Flip status to `approved`; optional `implementationModel` override |
+| `/sessions/:id/plan/reject`  | POST   | Flip status to `rejected` with optional reason                     |
+
+### Model Preferences
+
+Deployment-wide model settings. Bots fetch these at session-creation time. Fallback chain when
+unreachable: `D1 > env var > shared constant`.
+
+| Endpoint             | Method | Description                                                                              |
+| -------------------- | ------ | ---------------------------------------------------------------------------------------- |
+| `/model-preferences` | GET    | Returns `{ enabledModels, defaultModel, defaultPlanModel }`                              |
+| `/model-preferences` | PUT    | Atomic update of the three fields; rejects when `defaultModel` is not in `enabledModels` |
+
 ### Create PR Payload
 
 `POST /sessions/:id/pr` accepts:

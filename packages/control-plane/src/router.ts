@@ -153,6 +153,8 @@ const SANDBOX_AUTH_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/children\/[^/]+$/, // GET child detail
   /^\/sessions\/[^/]+\/children\/[^/]+\/cancel$/, // POST cancel child
   /^\/sessions\/[^/]+\/slack-notify$/, // Agent-initiated Slack notification
+  /^\/sessions\/[^/]+\/plan$/, // Agent-saved plan artifact (POST/GET)
+  /^\/sessions\/[^/]+\/plans$/, // Plan history list (GET)
 ];
 
 type CachedScmProvider =
@@ -460,6 +462,34 @@ const routes: Route[] = [
     method: "POST",
     pattern: parsePattern("/sessions/:id/unarchive"),
     handler: handleUnarchiveSession,
+  },
+
+  // Plan persistence
+  {
+    method: "POST",
+    pattern: parsePattern("/sessions/:id/plan"),
+    handler: handleSavePlan,
+  },
+  {
+    method: "GET",
+    pattern: parsePattern("/sessions/:id/plan"),
+    handler: handleGetCurrentPlan,
+  },
+  {
+    method: "GET",
+    pattern: parsePattern("/sessions/:id/plans"),
+    handler: handleListPlans,
+  },
+  // Plan HITL gate — user/bot only (HMAC). Not exposed to sandbox auth.
+  {
+    method: "POST",
+    pattern: parsePattern("/sessions/:id/plan/approve"),
+    handler: handleApprovePlan,
+  },
+  {
+    method: "POST",
+    pattern: parsePattern("/sessions/:id/plan/reject"),
+    handler: handleRejectPlan,
   },
 
   // Agent-initiated Slack notification (sandbox-authenticated)
@@ -942,6 +972,15 @@ async function handleCreateSession(
 
   const sessionId = generateId();
 
+  // Drop an invalid plan-model silently rather than persisting garbage that
+  // would crash the planning-turn dispatch later. When the field ends up null,
+  // the dispatch falls back to session.model (and the sandbox to the shared
+  // DEFAULT_PLAN_MODEL) via the normal resolution path.
+  const planModel =
+    body.planMode === true && body.planModel && isValidModel(body.planModel)
+      ? body.planModel
+      : undefined;
+
   const input: SessionInitInput = {
     sessionId,
     repoOwner,
@@ -964,6 +1003,8 @@ async function handleCreateSession(
     codeServerEnabled,
     sandboxSettings,
     spawnSource: body.spawnSource,
+    planMode: body.planMode === true,
+    planModel,
   };
 
   try {
@@ -2079,6 +2120,121 @@ async function handleUnarchiveSession(
   );
 
   return response;
+}
+
+async function handleSavePlan(
+  request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const sessionId = match.groups?.id;
+  if (!sessionId) return error("Session ID required");
+
+  let bodyText: string;
+  try {
+    bodyText = await request.text();
+  } catch {
+    return error("Invalid request body");
+  }
+
+  const stub = env.SESSION.get(env.SESSION.idFromName(sessionId));
+  return stub.fetch(
+    internalRequest(
+      buildSessionInternalUrl(SessionInternalPaths.plan),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: bodyText,
+      },
+      ctx
+    )
+  );
+}
+
+async function handleGetCurrentPlan(
+  _request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const sessionId = match.groups?.id;
+  if (!sessionId) return error("Session ID required");
+
+  const stub = env.SESSION.get(env.SESSION.idFromName(sessionId));
+  return stub.fetch(
+    internalRequest(buildSessionInternalUrl(SessionInternalPaths.plan), { method: "GET" }, ctx)
+  );
+}
+
+async function handleListPlans(
+  request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const sessionId = match.groups?.id;
+  if (!sessionId) return error("Session ID required");
+
+  const url = new URL(request.url);
+  const search = url.search; // preserve ?limit=...
+  const stub = env.SESSION.get(env.SESSION.idFromName(sessionId));
+  return stub.fetch(
+    internalRequest(
+      buildSessionInternalUrl(SessionInternalPaths.plans, search),
+      { method: "GET" },
+      ctx
+    )
+  );
+}
+
+async function handleApprovePlan(
+  request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  return forwardPlanApproval(request, env, match, ctx, SessionInternalPaths.planApprove);
+}
+
+async function handleRejectPlan(
+  request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  return forwardPlanApproval(request, env, match, ctx, SessionInternalPaths.planReject);
+}
+
+async function forwardPlanApproval(
+  request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext,
+  internalPath: string
+): Promise<Response> {
+  const sessionId = match.groups?.id;
+  if (!sessionId) return error("Session ID required");
+
+  let bodyText = "";
+  try {
+    bodyText = await request.text();
+  } catch {
+    // tolerate empty body
+  }
+
+  const stub = env.SESSION.get(env.SESSION.idFromName(sessionId));
+  return stub.fetch(
+    internalRequest(
+      buildSessionInternalUrl(internalPath as never),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: bodyText,
+      },
+      ctx
+    )
+  );
 }
 
 // Child session handlers

@@ -39,7 +39,12 @@ export type EventType =
   | "artifact"
   | "push_complete"
   | "push_error"
-  | "user_message";
+  | "user_message"
+  | "plan_saved"
+  | "plan_approved"
+  | "plan_rejected";
+export type PlanApprovalStatus = "awaiting_approval" | "approved" | "rejected";
+export type PlanSource = "api" | "agent" | "web";
 export type ParticipantRole = "owner" | "member";
 export type SpawnSource =
   | "user"
@@ -75,8 +80,22 @@ export interface Session {
   parentSessionId: string | null;
   spawnSource: SpawnSource;
   spawnDepth: number;
+  planMode: boolean;
+  planModel: string | null;
+  planApprovalStatus: PlanApprovalStatus | null;
   createdAt: number;
   updatedAt: number;
+}
+
+// Plan artifact returned by /sessions/:id/plan and surfaced in WebSocket events
+export interface PlanArtifact {
+  id: string;
+  version: number;
+  content: string;
+  createdByAuthorId: string | null;
+  createdByMessageId: string | null;
+  source: PlanSource;
+  createdAt: number;
 }
 
 // Message in a session
@@ -358,6 +377,17 @@ export type ServerMessage =
   | { type: "session_status"; status: SessionStatus }
   | { type: "session_title"; title: string }
   | {
+      type: "plan_status";
+      status: PlanApprovalStatus | null;
+      plan: PlanArtifact | null;
+      // Approval flips additional session state in one transaction. We piggyback
+      // those fields onto the same broadcast so the client doesn't have to
+      // refetch — and so the sidebar's Build line / cost tooltip update in lockstep.
+      model?: string;
+      reasoningEffort?: string | null;
+      planCostSnapshot?: number | null;
+    }
+  | {
       type: "child_session_update";
       childSessionId: string;
       status: SessionStatus;
@@ -390,6 +420,11 @@ export interface SessionState {
   tunnelUrls?: Record<string, string> | null;
   ttydUrl?: string | null;
   ttydToken?: string | null;
+  planMode?: boolean;
+  planModel?: string | null;
+  planApprovalStatus?: PlanApprovalStatus | null;
+  planCostSnapshot?: number | null;
+  currentPlan?: PlanArtifact | null;
 }
 
 // Participant presence info
@@ -457,6 +492,16 @@ export interface ClassificationResult {
   reasoning: string;
   alternatives?: RepoConfig[];
   needsClarification: boolean;
+  /**
+   * Plan-vs-build intent inferred from the same LLM call. True when the
+   * prompt warrants a human-approved plan before code changes (multi-step
+   * refactor, design question, architectural decision). False for trivial
+   * fixes or questions. Undefined when no classification was run (e.g. no
+   * repos available).
+   */
+  shouldPlan?: boolean;
+  /** Brief explanation of the plan-vs-build decision. */
+  planReasoning?: string;
 }
 
 export interface EventResponse {
@@ -510,6 +555,10 @@ export interface UserPreferences {
   model: string;
   reasoningEffort?: string;
   branch?: string;
+  /** When true, sessions started by this user default to plan-first HITL mode. */
+  planModeDefault?: boolean;
+  /** Model used for planning turns when plan-mode is active. Falls back to DEFAULT_PLAN_MODEL when unset. */
+  planModel?: string;
   updatedAt: number;
 }
 
@@ -565,6 +614,20 @@ export interface CreateSessionRequest {
   model?: string;
   reasoningEffort?: string;
   branch?: string;
+  /**
+   * When true, the session is gated on an explicit human approval of a plan
+   * before any implementation step runs. The agent must call the save_plan
+   * tool to end its first turn; subsequent prompts are dispatched in planning
+   * mode (read-only tools) until POST /sessions/:id/plan/approve flips the
+   * gate to approved.
+   */
+  planMode?: boolean;
+  /**
+   * Model used for planning turns. Ignored when planMode is false. When
+   * planMode is true and this is unset, the control plane falls back to
+   * DEFAULT_PLAN_MODEL.
+   */
+  planModel?: string;
 }
 
 export interface CreateSessionResponse {
@@ -775,3 +838,13 @@ export interface ListAutomationRunsResponse {
 }
 
 export * from "./integrations";
+
+// ─── OpenCode Config API ──────────────────────────────────────────────────────
+
+/**
+ * Response shape for GET /opencode-config and GET /repos/:owner/:name/opencode-config.
+ * config is a raw JSON string (the user-supplied OpenCode config blob), or null if not set.
+ */
+export interface OpencodeConfigResponse {
+  config: string | null;
+}

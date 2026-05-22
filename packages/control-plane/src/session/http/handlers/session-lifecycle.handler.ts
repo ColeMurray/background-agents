@@ -3,7 +3,7 @@ import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
 import type { SandboxSettings } from "@open-inspect/shared";
 import type { SandboxStatus, ServerMessage, SessionStatus, SpawnSource } from "../../../types";
 import type { SessionRepository } from "../../repository";
-import { getValidModelOrDefault, isValidModel } from "../../../utils/models";
+import { DEFAULT_PLAN_MODEL, getValidModelOrDefault, isValidModel } from "../../../utils/models";
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "archived", "cancelled", "failed"]);
 
@@ -36,6 +36,8 @@ interface InitRequest {
   spawnDepth?: number;
   codeServerEnabled?: boolean;
   sandboxSettings?: SandboxSettings;
+  planMode?: boolean;
+  planModel?: string | null;
 }
 
 export interface SessionLifecycleHandlerDeps {
@@ -110,6 +112,12 @@ export function createSessionLifecycleHandler(
 
       const reasoningEffort = deps.validateReasoningEffort(model, body.reasoningEffort);
       const baseBranch = body.branch || body.defaultBranch || "main";
+      const planMode = body.planMode === true;
+      const planModel = planMode
+        ? body.planModel && isValidModel(body.planModel)
+          ? getValidModelOrDefault(body.planModel)
+          : DEFAULT_PLAN_MODEL
+        : null;
 
       deps.repository.upsertSession({
         id: sessionId,
@@ -127,6 +135,8 @@ export function createSessionLifecycleHandler(
         spawnDepth: body.spawnDepth ?? 0,
         codeServerEnabled: body.codeServerEnabled ?? false,
         sandboxSettings: body.sandboxSettings ? JSON.stringify(body.sandboxSettings) : null,
+        planMode,
+        planModel,
         createdAt: now,
         updatedAt: now,
       });

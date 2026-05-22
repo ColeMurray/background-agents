@@ -5,6 +5,7 @@
  * to enable unit testing via mock injection and reduce coupling.
  */
 
+import { normalizeBranchName } from "@open-inspect/shared";
 import type {
   SessionRow,
   ParticipantRow,
@@ -12,6 +13,8 @@ import type {
   EventRow,
   ArtifactRow,
   SandboxRow,
+  PlanRow,
+  PlanSource,
 } from "./types";
 import type {
   SessionStatus,
@@ -23,6 +26,7 @@ import type {
   SpawnSource,
   ArtifactType,
   SandboxEvent,
+  PlanApprovalStatus,
 } from "../types";
 
 type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
@@ -72,6 +76,8 @@ export interface UpsertSessionData {
   spawnDepth?: number;
   codeServerEnabled?: boolean;
   sandboxSettings?: string | null;
+  planMode?: boolean;
+  planModel?: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -233,8 +239,8 @@ export class SessionRepository {
 
   upsertSession(data: UpsertSessionData): void {
     this.sql.exec(
-      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, sandbox_settings, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, sandbox_settings, plan_mode, plan_approval_status, plan_model, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.sessionName,
       data.title,
@@ -250,6 +256,9 @@ export class SessionRepository {
       data.spawnDepth ?? 0,
       data.codeServerEnabled ? 1 : 0,
       data.sandboxSettings ?? null,
+      data.planMode ? 1 : 0,
+      null, // plan_approval_status is null until the agent saves a plan
+      data.planMode ? (data.planModel ?? null) : null,
       data.createdAt,
       data.updatedAt
     );
@@ -263,7 +272,11 @@ export class SessionRepository {
   }
 
   updateSessionBranch(sessionId: string, branchName: string): void {
-    this.sql.exec(`UPDATE session SET branch_name = ? WHERE id = ?`, branchName, sessionId);
+    this.sql.exec(
+      `UPDATE session SET branch_name = ? WHERE id = ?`,
+      normalizeBranchName(branchName),
+      sessionId
+    );
   }
 
   updateSessionCurrentSha(sha: string): void {
@@ -298,6 +311,61 @@ export class SessionRepository {
        SET total_cost = total_cost + ?, updated_at = ?
        WHERE id = (SELECT id FROM session LIMIT 1)`,
       cost,
+      updatedAt
+    );
+  }
+
+  updatePlanApprovalStatus(status: PlanApprovalStatus | null, updatedAt: number): void {
+    this.sql.exec(
+      `UPDATE session
+       SET plan_approval_status = ?, updated_at = ?
+       WHERE id = (SELECT id FROM session LIMIT 1)`,
+      status,
+      updatedAt
+    );
+  }
+
+  /**
+   * Freeze the current total_cost into plan_cost_snapshot so the UI can split
+   * planning vs. build spend. Idempotent: only writes when the snapshot is unset
+   * to keep the boundary stable even if approval fires more than once.
+   */
+  snapshotPlanCost(updatedAt: number): void {
+    this.sql.exec(
+      `UPDATE session
+       SET plan_cost_snapshot = total_cost, updated_at = ?
+       WHERE id = (SELECT id FROM session LIMIT 1)
+         AND plan_cost_snapshot IS NULL`,
+      updatedAt
+    );
+  }
+
+  setPlanMode(planMode: boolean, updatedAt: number): void {
+    this.sql.exec(
+      `UPDATE session
+       SET plan_mode = ?, updated_at = ?
+       WHERE id = (SELECT id FROM session LIMIT 1)`,
+      planMode ? 1 : 0,
+      updatedAt
+    );
+  }
+
+  updateSessionModel(model: string, updatedAt: number): void {
+    this.sql.exec(
+      `UPDATE session
+       SET model = ?, updated_at = ?
+       WHERE id = (SELECT id FROM session LIMIT 1)`,
+      model,
+      updatedAt
+    );
+  }
+
+  updateSessionReasoningEffort(effort: string | null, updatedAt: number): void {
+    this.sql.exec(
+      `UPDATE session
+       SET reasoning_effort = ?, updated_at = ?
+       WHERE id = (SELECT id FROM session LIMIT 1)`,
+      effort,
       updatedAt
     );
   }
@@ -869,6 +937,74 @@ export class SessionRepository {
       `SELECT author_id FROM messages WHERE status = 'processing' LIMIT 1`
     );
     const rows = result.toArray() as Array<{ author_id: string }>;
+    return rows[0] ?? null;
+  }
+
+  // === PLANS ===
+
+  /**
+   * Persist a new plan version. Version is auto-incremented from the current max,
+   * starting at 1. Returns the inserted row.
+   */
+  savePlan(data: {
+    id: string;
+    content: string;
+    createdByAuthorId: string | null;
+    createdByMessageId: string | null;
+    source: PlanSource;
+    createdAt: number;
+  }): PlanRow {
+    const maxRow = this.sql
+      .exec(`SELECT COALESCE(MAX(version), 0) as max_version FROM plans`)
+      .one() as { max_version: number };
+    const version = maxRow.max_version + 1;
+
+    this.sql.exec(
+      `INSERT INTO plans (id, version, content, created_by_author_id, created_by_message_id, source, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      data.id,
+      version,
+      data.content,
+      data.createdByAuthorId,
+      data.createdByMessageId,
+      data.source,
+      data.createdAt
+    );
+
+    return {
+      id: data.id,
+      version,
+      content: data.content,
+      created_by_author_id: data.createdByAuthorId,
+      created_by_message_id: data.createdByMessageId,
+      source: data.source,
+      created_at: data.createdAt,
+    };
+  }
+
+  /**
+   * Get the most recent plan version, or null if none exists.
+   */
+  getCurrentPlan(): PlanRow | null {
+    const rows = this.sql
+      .exec(`SELECT * FROM plans ORDER BY version DESC LIMIT 1`)
+      .toArray() as PlanRow[];
+    return rows[0] ?? null;
+  }
+
+  /**
+   * List plan versions in descending order (newest first).
+   */
+  listPlans(limit = 20): PlanRow[] {
+    return this.sql
+      .exec(`SELECT * FROM plans ORDER BY version DESC LIMIT ?`, limit)
+      .toArray() as PlanRow[];
+  }
+
+  getPlanByVersion(version: number): PlanRow | null {
+    const rows = this.sql
+      .exec(`SELECT * FROM plans WHERE version = ? LIMIT 1`, version)
+      .toArray() as PlanRow[];
     return rows[0] ?? null;
   }
 }

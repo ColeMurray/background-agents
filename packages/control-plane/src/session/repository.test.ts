@@ -106,6 +106,9 @@ describe("SessionRepository", () => {
         0,
         0,
         null,
+        0, // plan_mode default
+        null, // plan_approval_status default
+        null, // plan_model default
         1000,
         2000,
       ]);
@@ -123,12 +126,12 @@ describe("SessionRepository", () => {
   });
 
   describe("updateSessionBranch", () => {
-    it("updates branch for correct session", () => {
-      repo.updateSessionBranch("sess-1", "feature-branch");
+    it("stores branch names in lowercase for the correct session", () => {
+      repo.updateSessionBranch("sess-1", "Feature/Branch");
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("UPDATE session SET branch_name");
-      expect(mock.calls[0].params).toEqual(["feature-branch", "sess-1"]);
+      expect(mock.calls[0].params).toEqual(["feature/branch", "sess-1"]);
     });
   });
 

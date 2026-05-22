@@ -13,6 +13,7 @@ import type {
   SpawnSource,
   ArtifactType,
   EventType,
+  PlanApprovalStatus,
 } from "../types";
 import type { GitPushSpec } from "../source-control";
 
@@ -39,6 +40,10 @@ export interface SessionRow {
   code_server_enabled: number; // 0 = disabled (default), 1 = enabled
   total_cost: number; // Running aggregate of step_finish event costs
   sandbox_settings: string | null; // JSON blob of SandboxSettings
+  plan_mode: number; // 0 = normal, 1 = plan-first HITL session (immuable post-creation)
+  plan_approval_status: PlanApprovalStatus | null;
+  plan_model: string | null; // Model used for planning turns (NULL when plan_mode=0)
+  plan_cost_snapshot: number | null; // total_cost captured at plan approval; NULL until then
   created_at: number;
   updated_at: number;
 }
@@ -91,6 +96,18 @@ export interface ArtifactRow {
   created_at: number;
 }
 
+export interface PlanRow {
+  id: string;
+  version: number;
+  content: string;
+  created_by_author_id: string | null;
+  created_by_message_id: string | null;
+  source: PlanSource;
+  created_at: number;
+}
+
+export type PlanSource = "api" | "agent" | "web";
+
 export interface SandboxRow {
   id: string;
   modal_sandbox_id: string | null; // Our generated sandbox ID
@@ -115,6 +132,15 @@ export interface SandboxRow {
 
 // Command types for sandbox communication
 
+export interface PromptResumeContext {
+  /** Plan content at the time this prompt was dispatched, if any plan is saved. */
+  currentPlan: {
+    version: number;
+    content: string;
+    createdAt: number;
+  };
+}
+
 export interface PromptCommand {
   type: "prompt";
   messageId: string;
@@ -127,6 +153,21 @@ export interface PromptCommand {
     scmEmail: string | null;
   };
   attachments?: Attachment[];
+  /**
+   * Resume context attached when a saved plan exists. Sandbox behavior depends on
+   * `planMode`:
+   *   - planMode === true: use the previous plan as a base to amend during this
+   *     planning turn (read-only tools + save_plan).
+   *   - planMode === false: prepend a restate-and-confirm instruction so the
+   *     agent re-anchors on the approved plan before any destructive action.
+   */
+  resumeContext?: PromptResumeContext;
+  /**
+   * True when this prompt is a planning turn (session is plan-mode and the
+   * current plan has not been approved). The bridge must restrict tools to
+   * read-only + save_plan and surface a planning-specific preamble.
+   */
+  planMode?: boolean;
 }
 
 export interface StopCommand {

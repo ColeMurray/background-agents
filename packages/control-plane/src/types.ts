@@ -23,6 +23,8 @@ export type {
   MessageStatus,
   ParticipantRole,
   ParticipantPresence,
+  PlanApprovalStatus,
+  PlanArtifact,
   SpawnSource,
   SandboxEvent,
   SandboxStatus,
@@ -89,8 +91,14 @@ export interface Env {
   DAYTONA_TARGET?: string; // Optional Daytona target name
 
   // Sandbox lifecycle configuration
-  SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)
+  SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 900000 = 15 min)
   EXECUTION_TIMEOUT_MS?: string; // Max processing time before auto-fail (default: 5400000 = 90 min)
+
+  // Default models surfaced to the web UI via GET /model-preferences so the
+  // dropdown's initial selection matches the deployment instead of the shared
+  // library constant. Mirror DEFAULT_MODEL / DEFAULT_PLAN_MODEL on the bot workers.
+  DEFAULT_MODEL?: string;
+  DEFAULT_PLAN_MODEL?: string;
 
   // Logging
   LOG_LEVEL?: string; // "debug" | "info" | "warn" | "error" (default: "info")
