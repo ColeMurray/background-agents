@@ -68,6 +68,19 @@ const log = createLogger("handler");
 
 const MAX_REPO_SUGGESTION_OPTIONS = 100;
 
+/**
+ * Deployment-controlled directive appended to every prompt sent to a Slack-
+ * originated session. Tells the agent not to call `slack-notify` itself, since
+ * the bot already posts a follow-up notification on its behalf when the turn
+ * ends. Wrapped in `<system_instruction>` (not `<user_content>`) because the
+ * directive is trusted infrastructure, not arbitrary user input. Appended on
+ * every turn — the agent's conversation history can be compacted and the
+ * plan-mode preamble adds its own competing instructions, so we re-state the
+ * rule each time rather than relying on the model remembering turn 1.
+ */
+export const SLACK_NOTIFY_GUARD_INSTRUCTION =
+  "\n\n<system_instruction>\nDo not use the `slack-notify` tool in this session. Slack sessions automatically post a follow-up notification when triggered from Slack.\n</system_instruction>";
+
 export function buildAppHomeIntroText(appName: string): string {
   return `Configure your ${appName} preferences below.`;
 }
@@ -1482,11 +1495,8 @@ async function startSessionAndSendPrompt(
   // Build prompt content with channel and thread context if available
   const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
   const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
-  // Deployment-controlled directive, wrapped so it's cleanly separated from the
-  // live user instruction. Not `<user_content>` because it's not untrusted.
-  const slackInstruction =
-    "\n\n<system_instruction>\nDo not use the `slack-notify` tool in this session. Slack sessions automatically post a follow-up notification when triggered from Slack.\n</system_instruction>";
-  const promptContent = channelContext + threadContext + messageText + slackInstruction;
+  const promptContent =
+    channelContext + threadContext + messageText + SLACK_NOTIFY_GUARD_INSTRUCTION;
 
   // Send the prompt to the session
   const promptResult = await sendPrompt(
@@ -1901,7 +1911,8 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         ? formatChannelContext(channelName, channelDescription)
         : "";
       const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
-      const promptContent = channelContext + threadContext + messageText;
+      const promptContent =
+        channelContext + threadContext + messageText + SLACK_NOTIFY_GUARD_INSTRUCTION;
 
       const promptResult = await sendPrompt(
         env,
@@ -2136,9 +2147,19 @@ async function handleAppMention(
     if (channelInfo.ok && channelInfo.channel) {
       channelName = channelInfo.channel.name;
       channelDescription = channelInfo.channel.topic?.value || channelInfo.channel.purpose?.value;
+    } else {
+      log.warn("slack.channel_info.missing", {
+        trace_id: traceId,
+        channel: event.channel,
+        slack_error: channelInfo.ok ? "no_channel_field" : channelInfo.error,
+      });
     }
-  } catch {
-    // Channel info not available
+  } catch (e) {
+    log.warn("slack.channel_info.error", {
+      trace_id: traceId,
+      channel: event.channel,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
   }
 
   await handleIncomingMessage({
