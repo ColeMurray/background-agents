@@ -252,8 +252,9 @@ TUNNEL_3000=https://abc123-3000.modal.host
 TUNNEL_5173=https://abc123-5173.modal.host
 ```
 
-This dotenv shape is consumed directly by `node --env-file=...`, `bun --env-file=...`, Vite,
-`docker compose --env-file=...`, and other dotenv loaders — no parsing required.
+This dotenv shape works directly with tools that accept an env-file path — `node --env-file=...`,
+`bun --env-file=...`, `docker compose --env-file=...`. The format is plain `KEY=value`, so any other
+dotenv consumer can read it without parsing.
 
 **Boot ordering.** On every non-build boot, the supervisor:
 
