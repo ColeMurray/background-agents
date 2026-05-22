@@ -13,7 +13,7 @@
 
 import { buildInternalAuthHeaders } from "./auth";
 import type { ControlPlaneFetcher } from "./completion/extractor";
-import { DEFAULT_MODEL, DEFAULT_PLAN_MODEL } from "./models";
+import { DEFAULT_MODEL, DEFAULT_PLAN_MODEL, isValidModel, normalizeModelId } from "./models";
 
 export interface ModelDefaults {
   defaultModel: string;
@@ -63,7 +63,27 @@ export async function fetchModelDefaults(env: FetchModelDefaultsEnv): Promise<Mo
     // Service-binding / network failure — fall through to env-or-shared
   }
   return {
-    defaultModel: dbDefaultModel || env.DEFAULT_MODEL || DEFAULT_MODEL,
-    defaultPlanModel: dbDefaultPlanModel || env.DEFAULT_PLAN_MODEL || DEFAULT_PLAN_MODEL,
+    defaultModel:
+      normalizeFallback(dbDefaultModel) || normalizeFallback(env.DEFAULT_MODEL) || DEFAULT_MODEL,
+    defaultPlanModel:
+      normalizeFallback(dbDefaultPlanModel) ||
+      normalizeFallback(env.DEFAULT_PLAN_MODEL) ||
+      DEFAULT_PLAN_MODEL,
   };
+}
+
+/**
+ * Resolve a candidate value (from DB or env) to a fully-qualified, valid
+ * model ID. Returns undefined for missing / invalid values so the caller
+ * can fall through to the next link in the fallback chain.
+ *
+ * The control plane's `/model-preferences` already returns normalized IDs,
+ * but operator-configured env vars sometimes carry bare names (e.g.
+ * `claude-sonnet-4-6` instead of `anthropic/claude-sonnet-4-6`). Without
+ * this normalization, an env-var fallback during a CP outage could surface
+ * a bare ID to callers that expect the qualified form.
+ */
+function normalizeFallback(candidate: string | undefined): string | undefined {
+  if (!candidate) return undefined;
+  return isValidModel(candidate) ? normalizeModelId(candidate) : undefined;
 }
