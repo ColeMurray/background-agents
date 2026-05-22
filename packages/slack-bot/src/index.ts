@@ -2147,15 +2147,26 @@ async function handleAppMention(
     if (channelInfo.ok && channelInfo.channel) {
       channelName = channelInfo.channel.name;
       channelDescription = channelInfo.channel.topic?.value || channelInfo.channel.purpose?.value;
+    } else if (!channelInfo.ok) {
+      // Slack API returned a structured error (missing_scope, channel_not_found, etc.).
+      // Operator-actionable — typically a permission or configuration issue.
+      log.warn("slack.channel_info.api_error", {
+        trace_id: traceId,
+        channel: event.channel,
+        slack_error: channelInfo.error,
+      });
     } else {
+      // Slack returned ok:true but without a channel field — should not happen
+      // per the conversations.info contract; treat as a Slack-side anomaly.
       log.warn("slack.channel_info.missing", {
         trace_id: traceId,
         channel: event.channel,
-        slack_error: channelInfo.ok ? "no_channel_field" : channelInfo.error,
+        slack_error: "no_channel_field",
       });
     }
   } catch (e) {
-    log.warn("slack.channel_info.error", {
+    // Transport-level failure (fetch threw before any envelope was parsed).
+    log.warn("slack.channel_info.fetch_failed", {
       trace_id: traceId,
       channel: event.channel,
       error: e instanceof Error ? e : new Error(String(e)),
