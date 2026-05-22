@@ -182,7 +182,9 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       delete (values as Partial<AutomationFormValues>).scheduleTz;
 
       if (eventType) values.eventType = eventType;
-      if (conditions.length > 0) values.triggerConfig = { conditions };
+      // Always send triggerConfig so clearing all conditions persists (PUT skips
+      // trigger_config when triggerConfig is omitted).
+      values.triggerConfig = { conditions };
       if (triggerType === "sentry" && mode === "create" && sentryClientSecret.trim()) {
         values.sentryClientSecret = sentryClientSecret.trim();
       }

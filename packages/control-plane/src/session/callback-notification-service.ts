@@ -41,18 +41,35 @@ export interface CallbackServiceDeps {
   getSessionId: () => string;
 }
 
+/**
+ * Per-session cap on remembered tool callIds. Used to dedupe notifications
+ * across provider lifecycles (Anthropic emits running+completed, OpenAI may
+ * emit only completed). FIFO eviction; the failure mode on overflow is a
+ * single duplicate Linear/Slack activity, not data loss.
+ */
+const NOTIFIED_CALL_IDS_CAP = 500;
+
 export class CallbackNotificationService {
   private readonly repository: CallbackRepository;
   private readonly env: CallbackServiceEnv;
   private readonly log: Logger;
   private readonly getSessionId: () => string;
   private _lastToolCallCallbackTs = 0;
+  private readonly notifiedCallIds = new Set<string>();
 
   constructor(deps: CallbackServiceDeps) {
     this.repository = deps.repository;
     this.env = deps.env;
     this.log = deps.log;
     this.getSessionId = deps.getSessionId;
+  }
+
+  private markCallIdNotified(callId: string): void {
+    this.notifiedCallIds.add(callId);
+    if (this.notifiedCallIds.size > NOTIFIED_CALL_IDS_CAP) {
+      const oldest = this.notifiedCallIds.values().next().value;
+      if (oldest !== undefined) this.notifiedCallIds.delete(oldest);
+    }
   }
 
   /**
@@ -254,6 +271,15 @@ export class CallbackNotificationService {
       status?: string;
     }
   ): Promise<void> {
+    const callId = event.callId ?? event.call_id ?? "";
+
+    // Dedup before throttle so a skipped duplicate doesn't burn the rate-limit
+    // window. Anthropic emits running+completed for the same callId; OpenAI's
+    // Responses API may emit only completed. Fire once per successfully
+    // delivered callId either way — failed deliveries do not mark the set, so
+    // a later event for the same callId can retry.
+    if (callId && this.notifiedCallIds.has(callId)) return;
+
     // Throttle: max 1 per 3 seconds
     const now = Date.now();
     if (now - this._lastToolCallCallbackTs < 3000) return;
@@ -296,7 +322,6 @@ export class CallbackNotificationService {
 
     const sessionId = this.getSessionId();
     const context = JSON.parse(message.callback_context);
-    const callId = event.callId ?? event.call_id ?? "";
 
     const payloadData = {
       sessionId,
@@ -319,6 +344,10 @@ export class CallbackNotificationService {
       });
 
       if (response.ok) {
+        // Mark only on success so a transient failure doesn't dedupe the next
+        // event for this callId (Anthropic's running and completed may be
+        // seconds apart for long-running tools — the second event should retry).
+        if (callId) this.markCallIdNotified(callId);
         this.log.info("callback.tool_call", {
           message_id: messageId,
           session_id: sessionId,

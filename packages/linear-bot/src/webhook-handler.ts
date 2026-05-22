@@ -297,7 +297,7 @@ async function handleFollowUp(
 
   if (promptRes.ok) {
     await emitAgentActivity(client, agentSessionId, {
-      type: "response",
+      type: "thought",
       body: `Follow-up sent to existing session.\n\n[View session](${env.WEB_APP_URL}/session/${existingSession.sessionId})`,
     });
   } else {
@@ -644,7 +644,7 @@ async function handleNewSession(
   }
 
   await emitAgentActivity(client, agentSessionId, {
-    type: "response",
+    type: "thought",
     body: `Working on \`${repoFullName}\` with **${model}**.\n\n${classificationReasoning ? `*${classificationReasoning}*\n\n` : ""}[View session](${env.WEB_APP_URL}/session/${session.sessionId})`,
   });
 

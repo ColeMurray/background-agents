@@ -104,20 +104,38 @@ callbacksRouter.post("/complete", async (c) => {
 
 // ─── Tool Call Callback ──────────────────────────────────────────────────────
 
-export function formatToolAction(tool: string, args: Record<string, unknown>): string {
+/**
+ * Linear's Agent API requires `action`-typed activities to carry `action` and
+ * `parameter` fields (not `body`). The `action` is the verb shown in the UI,
+ * the `parameter` is the operand. Both fields must be present and non-empty.
+ */
+export function formatToolAction(
+  tool: string,
+  args: Record<string, unknown>
+): { action: string; parameter: string } {
   switch (tool) {
     case "edit_file":
     case "write_file":
-      return `Editing \`${args.filepath || args.path || "file"}\``;
+      return { action: "Edit", parameter: String(args.filepath || args.path || "file") };
     case "read_file":
-      return `Reading \`${args.filepath || args.path || "file"}\``;
+      return { action: "Read", parameter: String(args.filepath || args.path || "file") };
     case "bash":
     case "execute_command": {
       const cmd = String(args.command || args.cmd || "");
-      return `Running \`${cmd.length > 80 ? cmd.slice(0, 77) + "..." : cmd}\``;
+      return {
+        action: "Run",
+        parameter: cmd.length > 80 ? cmd.slice(0, 77) + "..." : cmd || "(no command)",
+      };
     }
-    default:
-      return `Using tool: ${tool}`;
+    default: {
+      const firstStringArg = Object.values(args).find((v) => typeof v === "string");
+      return {
+        // Linear rejects activities with an empty `action`; the upstream
+        // validator allows tool === "" so guard here.
+        action: tool || "Tool",
+        parameter: firstStringArg ? String(firstStringArg).slice(0, 200) : "(no args)",
+      };
+    }
   }
 }
 
@@ -224,11 +242,11 @@ callbacksRouter.post("/tool_call", async (c) => {
       }
 
       try {
-        const description = formatToolAction(payload.tool, payload.args);
+        const { action, parameter } = formatToolAction(payload.tool, payload.args);
         await emitAgentActivity(
           client,
           context.agentSessionId,
-          { type: "action", body: description },
+          { type: "action", action, parameter },
           true
         );
         log.info("callback.tool_call", {

@@ -5,60 +5,96 @@ import { formatCompletionComment, formatToolAction, isValidToolCallPayload } fro
 
 describe("formatToolAction", () => {
   it("edit_file with filepath", () => {
-    expect(formatToolAction("edit_file", { filepath: "src/main.ts" })).toBe(
-      "Editing `src/main.ts`"
-    );
+    expect(formatToolAction("edit_file", { filepath: "src/main.ts" })).toEqual({
+      action: "Edit",
+      parameter: "src/main.ts",
+    });
   });
 
   it("write_file with path", () => {
-    expect(formatToolAction("write_file", { path: "out/bundle.js" })).toBe(
-      "Editing `out/bundle.js`"
-    );
+    expect(formatToolAction("write_file", { path: "out/bundle.js" })).toEqual({
+      action: "Edit",
+      parameter: "out/bundle.js",
+    });
   });
 
   it("edit_file falls back to 'file' when no filepath or path", () => {
-    expect(formatToolAction("edit_file", {})).toBe("Editing `file`");
+    expect(formatToolAction("edit_file", {})).toEqual({ action: "Edit", parameter: "file" });
   });
 
   it("read_file with filepath", () => {
-    expect(formatToolAction("read_file", { filepath: "README.md" })).toBe("Reading `README.md`");
+    expect(formatToolAction("read_file", { filepath: "README.md" })).toEqual({
+      action: "Read",
+      parameter: "README.md",
+    });
   });
 
   it("read_file with path", () => {
-    expect(formatToolAction("read_file", { path: "docs/guide.md" })).toBe(
-      "Reading `docs/guide.md`"
-    );
+    expect(formatToolAction("read_file", { path: "docs/guide.md" })).toEqual({
+      action: "Read",
+      parameter: "docs/guide.md",
+    });
   });
 
   it("read_file falls back to 'file' when no filepath or path", () => {
-    expect(formatToolAction("read_file", {})).toBe("Reading `file`");
+    expect(formatToolAction("read_file", {})).toEqual({ action: "Read", parameter: "file" });
   });
 
   it("bash with command", () => {
-    expect(formatToolAction("bash", { command: "npm test" })).toBe("Running `npm test`");
+    expect(formatToolAction("bash", { command: "npm test" })).toEqual({
+      action: "Run",
+      parameter: "npm test",
+    });
   });
 
   it("execute_command with cmd", () => {
-    expect(formatToolAction("execute_command", { cmd: "ls -la" })).toBe("Running `ls -la`");
+    expect(formatToolAction("execute_command", { cmd: "ls -la" })).toEqual({
+      action: "Run",
+      parameter: "ls -la",
+    });
   });
 
   it("bash with command >80 chars truncates to 77 + ...", () => {
     const longCmd = "a".repeat(100);
-    const result = formatToolAction("bash", { command: longCmd });
-    expect(result).toBe(`Running \`${"a".repeat(77)}...\``);
+    expect(formatToolAction("bash", { command: longCmd })).toEqual({
+      action: "Run",
+      parameter: `${"a".repeat(77)}...`,
+    });
   });
 
   it("bash with command exactly 80 chars is not truncated", () => {
     const cmd = "a".repeat(80);
-    expect(formatToolAction("bash", { command: cmd })).toBe(`Running \`${cmd}\``);
+    expect(formatToolAction("bash", { command: cmd })).toEqual({
+      action: "Run",
+      parameter: cmd,
+    });
   });
 
-  it("bash with no command renders empty", () => {
-    expect(formatToolAction("bash", {})).toBe("Running ``");
+  it("bash with no command falls back to a placeholder so parameter is never empty", () => {
+    // Linear's API rejects action activities with empty `parameter` fields.
+    expect(formatToolAction("bash", {})).toEqual({ action: "Run", parameter: "(no command)" });
   });
 
-  it("unknown tool → 'Using tool: {name}'", () => {
-    expect(formatToolAction("search_files", { query: "foo" })).toBe("Using tool: search_files");
+  it("unknown tool uses the tool name as action and a string arg as parameter", () => {
+    expect(formatToolAction("search_files", { query: "foo" })).toEqual({
+      action: "search_files",
+      parameter: "foo",
+    });
+  });
+
+  it("unknown tool with no string args falls back to a placeholder parameter", () => {
+    expect(formatToolAction("noop", { count: 3 })).toEqual({
+      action: "noop",
+      parameter: "(no args)",
+    });
+  });
+
+  it("unknown tool truncates very long string args to 200 chars", () => {
+    const long = "x".repeat(500);
+    const result = formatToolAction("fetch_url", { url: long });
+    expect(result.action).toBe("fetch_url");
+    expect(result.parameter).toHaveLength(200);
+    expect(result.parameter).toBe("x".repeat(200));
   });
 });
 
