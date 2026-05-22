@@ -3,6 +3,8 @@
  */
 
 import {
+  DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
+  DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
   isValidReasoningEffort,
   type CodeServerSettings,
   type GitHubBotSettings,
@@ -360,8 +362,10 @@ async function handleGetResolvedConfig(
       config: {
         tunnelPorts: sandboxSettings.tunnelPorts ?? [],
         terminalEnabled: sandboxSettings.terminalEnabled ?? false,
-        maxConcurrentChildSessions: sandboxSettings.maxConcurrentChildSessions,
-        maxTotalChildSessions: sandboxSettings.maxTotalChildSessions,
+        maxConcurrentChildSessions:
+          sandboxSettings.maxConcurrentChildSessions ?? DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
+        maxTotalChildSessions:
+          sandboxSettings.maxTotalChildSessions ?? DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
         enabledRepos,
       },
     });

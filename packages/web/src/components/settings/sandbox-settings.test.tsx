@@ -15,8 +15,21 @@ import { SandboxSettingsPage } from "./sandbox-settings";
 
 expect.extend(matchers);
 
+const reposMock = vi.hoisted(() => ({
+  repos: [] as Array<{
+    id: number;
+    fullName: string;
+    owner: string;
+    name: string;
+    description: string | null;
+    private: boolean;
+    defaultBranch: string;
+  }>,
+  loading: false,
+}));
+
 vi.mock("@/hooks/use-repos", () => ({
-  useRepos: () => ({ repos: [], loading: false }),
+  useRepos: () => ({ repos: reposMock.repos, loading: reposMock.loading }),
 }));
 
 const SETTINGS_KEY = "/api/integration-settings/sandbox";
@@ -58,6 +71,8 @@ function renderWithSWR(fallbackData: unknown) {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  reposMock.repos = [];
+  reposMock.loading = false;
 });
 
 describe("SandboxSettingsPage — tunnel ports editor", () => {
@@ -267,6 +282,72 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
       SETTINGS_KEY,
       expect.objectContaining({ method: "PUT" })
     );
+  });
+
+  it("shows inherited repo child session limits without saving them as overrides", async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    reposMock.repos = [
+      {
+        id: 1,
+        fullName: "acme/app",
+        owner: "acme",
+        name: "app",
+        description: null,
+        private: false,
+        defaultBranch: "main",
+      },
+    ];
+    const repoSettingsKey = "/api/integration-settings/sandbox/repos/acme/app";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: {
+            [SETTINGS_KEY]: globalSettings([], undefined, {
+              maxConcurrentChildSessions: 2,
+              maxTotalChildSessions: 7,
+            }),
+            [repoSettingsKey]: { integrationId: "sandbox", repo: "acme/app", settings: null },
+          },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    await user.click(screen.getByText("All Repositories (Global)"));
+    await user.click(screen.getByRole("option", { name: /app/ }));
+
+    expect(screen.getByLabelText("Max concurrent child sessions")).toHaveValue(2);
+    expect(screen.getByLabelText("Max total child sessions")).toHaveValue(7);
+
+    await user.click(screen.getByText("Add port"));
+    await user.type(screen.getByPlaceholderText("e.g. 3000"), "3000");
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        repoSettingsKey,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({
+            settings: { tunnelPorts: [3000], terminalEnabled: false },
+          }),
+        })
+      );
+    });
   });
 
   it("deduplicates ports on save", async () => {

@@ -47,14 +47,24 @@ function SandboxSettingsEditor({
   name?: string;
 }) {
   const isGlobal = scope === "global";
+  const globalApiUrl = "/api/integration-settings/sandbox";
   const apiUrl = isGlobal
-    ? "/api/integration-settings/sandbox"
+    ? globalApiUrl
     : `/api/integration-settings/sandbox/repos/${owner}/${name}`;
 
   const { data, mutate, isLoading } = useSWR<GlobalSettingsResponse | RepoSettingsResponse>(
     apiUrl,
     fetcher
   );
+  const { data: globalData, isLoading: isLoadingGlobal } = useSWR<GlobalSettingsResponse>(
+    isGlobal ? null : globalApiUrl,
+    fetcher
+  );
+
+  const globalDefaults = isGlobal
+    ? (data as GlobalSettingsResponse | undefined)?.settings?.defaults
+    : globalData?.settings?.defaults;
+  const repoSettings = isGlobal ? undefined : (data as RepoSettingsResponse | undefined)?.settings;
 
   const currentPorts: number[] = isGlobal
     ? ((data as GlobalSettingsResponse)?.settings?.defaults?.tunnelPorts ?? [])
@@ -65,15 +75,15 @@ function SandboxSettingsEditor({
     : ((data as RepoSettingsResponse)?.settings?.terminalEnabled ?? false);
 
   const currentMaxConcurrentChildSessions: number = isGlobal
-    ? ((data as GlobalSettingsResponse)?.settings?.defaults?.maxConcurrentChildSessions ??
-      DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS)
-    : ((data as RepoSettingsResponse)?.settings?.maxConcurrentChildSessions ??
+    ? (globalDefaults?.maxConcurrentChildSessions ?? DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS)
+    : (repoSettings?.maxConcurrentChildSessions ??
+      globalDefaults?.maxConcurrentChildSessions ??
       DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS);
 
   const currentMaxTotalChildSessions: number = isGlobal
-    ? ((data as GlobalSettingsResponse)?.settings?.defaults?.maxTotalChildSessions ??
-      DEFAULT_MAX_TOTAL_CHILD_SESSIONS)
-    : ((data as RepoSettingsResponse)?.settings?.maxTotalChildSessions ??
+    ? (globalDefaults?.maxTotalChildSessions ?? DEFAULT_MAX_TOTAL_CHILD_SESSIONS)
+    : (repoSettings?.maxTotalChildSessions ??
+      globalDefaults?.maxTotalChildSessions ??
       DEFAULT_MAX_TOTAL_CHILD_SESSIONS);
 
   const [portRows, setPortRows] = useState<string[] | null>(null);
@@ -143,12 +153,24 @@ function SandboxSettingsEditor({
       const existingEnabledRepos = isGlobal
         ? (data as GlobalSettingsResponse)?.settings?.enabledRepos
         : undefined;
-      const settingsPayload = {
+      const settingsPayload: SandboxSettings = {
         tunnelPorts: ports,
         terminalEnabled: resolvedTerminalEnabled,
-        maxConcurrentChildSessions: Number(resolvedMaxConcurrentChildSessions),
-        maxTotalChildSessions: Number(resolvedMaxTotalChildSessions),
       };
+      if (
+        isGlobal ||
+        maxConcurrentChildSessions !== null ||
+        repoSettings?.maxConcurrentChildSessions !== undefined
+      ) {
+        settingsPayload.maxConcurrentChildSessions = Number(resolvedMaxConcurrentChildSessions);
+      }
+      if (
+        isGlobal ||
+        maxTotalChildSessions !== null ||
+        repoSettings?.maxTotalChildSessions !== undefined
+      ) {
+        settingsPayload.maxTotalChildSessions = Number(resolvedMaxTotalChildSessions);
+      }
       const body = isGlobal
         ? { settings: { defaults: settingsPayload, enabledRepos: existingEnabledRepos } }
         : { settings: settingsPayload };
@@ -185,6 +207,10 @@ function SandboxSettingsEditor({
     resolvedTerminalEnabled,
     resolvedMaxConcurrentChildSessions,
     resolvedMaxTotalChildSessions,
+    maxConcurrentChildSessions,
+    maxTotalChildSessions,
+    repoSettings?.maxConcurrentChildSessions,
+    repoSettings?.maxTotalChildSessions,
   ]);
 
   const hasPortChanges =
@@ -200,7 +226,7 @@ function SandboxSettingsEditor({
   const hasChanges =
     hasPortChanges || hasTerminalChange || hasConcurrentLimitChange || hasTotalLimitChange;
 
-  if (isLoading) {
+  if (isLoading || isLoadingGlobal) {
     return <p className="text-sm text-muted-foreground">Loading...</p>;
   }
 

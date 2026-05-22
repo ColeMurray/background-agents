@@ -320,6 +320,15 @@ export class IntegrationSettingsStore {
       "maxConcurrentChildSessions"
     );
     this.validatePositiveIntegerSetting(settings.maxTotalChildSessions, "maxTotalChildSessions");
+    if (
+      settings.maxConcurrentChildSessions !== undefined &&
+      settings.maxTotalChildSessions !== undefined &&
+      settings.maxConcurrentChildSessions > settings.maxTotalChildSessions
+    ) {
+      throw new IntegrationSettingsValidationError(
+        "maxConcurrentChildSessions must be less than or equal to maxTotalChildSessions"
+      );
+    }
 
     if (settings.tunnelPorts !== undefined) {
       if (!Array.isArray(settings.tunnelPorts)) {

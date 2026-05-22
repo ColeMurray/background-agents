@@ -745,6 +745,14 @@ describe("IntegrationSettingsStore", () => {
         store.setGlobal("sandbox", { defaults: { maxTotalChildSessions: -1 } })
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
+
+    it("rejects concurrent child session limits greater than total limits", async () => {
+      await expect(
+        store.setGlobal("sandbox", {
+          defaults: { maxConcurrentChildSessions: 6, maxTotalChildSessions: 5 },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
   });
 
   describe("linear settings", () => {
