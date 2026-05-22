@@ -204,6 +204,7 @@ jobs:
           TF_VAR_modal_api_secret: ${{ secrets.MODAL_API_SECRET }}
           TF_VAR_allowed_users: ${{ secrets.ALLOWED_USERS }}
           TF_VAR_allowed_email_domains: ${{ secrets.ALLOWED_EMAIL_DOMAINS }}
+          TF_VAR_allowed_github_orgs: ${{ secrets.ALLOWED_GITHUB_ORGS }}
           TF_VAR_deployment_name: ${{ secrets.DEPLOYMENT_NAME }}
           TF_VAR_enable_github_bot: "${{ secrets.ENABLE_GITHUB_BOT || 'false' }}"
           TF_VAR_github_webhook_secret: ${{ secrets.GH_WEBHOOK_SECRET }}
@@ -335,6 +336,7 @@ jobs:
           TF_VAR_modal_api_secret: ${{ secrets.MODAL_API_SECRET }}
           TF_VAR_allowed_users: ${{ secrets.ALLOWED_USERS }}
           TF_VAR_allowed_email_domains: ${{ secrets.ALLOWED_EMAIL_DOMAINS }}
+          TF_VAR_allowed_github_orgs: ${{ secrets.ALLOWED_GITHUB_ORGS }}
           TF_VAR_deployment_name: ${{ secrets.DEPLOYMENT_NAME }}
           TF_VAR_enable_github_bot: "${{ secrets.ENABLE_GITHUB_BOT || 'false' }}"
           TF_VAR_github_webhook_secret: ${{ secrets.GH_WEBHOOK_SECRET }}
