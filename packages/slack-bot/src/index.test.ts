@@ -22,7 +22,12 @@ vi.mock("@open-inspect/shared", async () => {
   };
 });
 
-import app, { buildAppHomeIntroText, formatChannelContext, formatThreadContext } from "./index";
+import app, {
+  buildAppHomeIntroText,
+  formatChannelContext,
+  formatThreadContext,
+  SLACK_NOTIFY_GUARD_INSTRUCTION,
+} from "./index";
 import { clearLocalCache } from "./classifier/repos";
 
 describe("buildAppHomeIntroText", () => {
@@ -71,6 +76,19 @@ describe("formatChannelContext", () => {
     const out = formatChannelContext("dev-team", "Engineering discussions");
     expect(out).toContain("Channel: #dev-team");
     expect(out).toContain("Description: Engineering discussions");
+  });
+});
+
+describe("SLACK_NOTIFY_GUARD_INSTRUCTION", () => {
+  it("forbids the slack-notify tool inside a system_instruction block", () => {
+    expect(SLACK_NOTIFY_GUARD_INSTRUCTION).toContain("<system_instruction>");
+    expect(SLACK_NOTIFY_GUARD_INSTRUCTION).toContain("</system_instruction>");
+    expect(SLACK_NOTIFY_GUARD_INSTRUCTION).toContain("`slack-notify`");
+    expect(SLACK_NOTIFY_GUARD_INSTRUCTION).toContain("Do not use");
+  });
+
+  it("leads with blank lines so it separates cleanly from the live user instruction", () => {
+    expect(SLACK_NOTIFY_GUARD_INSTRUCTION.startsWith("\n\n")).toBe(true);
   });
 });
 
