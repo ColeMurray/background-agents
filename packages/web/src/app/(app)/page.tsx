@@ -34,6 +34,10 @@ import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 
 const LAST_SELECTED_REPO_STORAGE_KEY = "open-inspect-last-selected-repo";
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
+// Set to "true" when the stored model came from an explicit user pick (not
+// an auto-switch from the Plan toggle or API default). Gates whether the
+// stored model is restored on hydration.
+const LAST_SELECTED_MODEL_USER_PICKED_STORAGE_KEY = "open-inspect-last-selected-model-user-picked";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
 
 export default function Home() {
@@ -41,6 +45,7 @@ export default function Home() {
   const router = useRouter();
   const { repos, loading: loadingRepos } = useRepos();
   const [selectedRepo, setSelectedRepo] = useState<string>("");
+  const [planMode, setPlanMode] = useState<boolean>(false);
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
     getDefaultReasoningEffort(DEFAULT_MODEL)
@@ -55,7 +60,12 @@ export default function Home() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const pendingConfigRef = useRef<{ repo: string; model: string; branch: string } | null>(null);
   const [hasHydratedModelPreferences, setHasHydratedModelPreferences] = useState(false);
-  const { enabledModels, enabledModelOptions } = useEnabledModels();
+  // Tracks whether the user has explicitly picked a model (either via the
+  // dropdown this session, or via a localStorage value carried over from a
+  // previous session). When false, toggling Plan auto-swaps between the
+  // deployment's defaultModel and defaultPlanModel.
+  const userPickedModelRef = useRef(false);
+  const { enabledModels, enabledModelOptions, defaultModel, defaultPlanModel } = useEnabledModels();
   const selectedRepoOwner = selectedRepo.split("/")[0] ?? "";
   const selectedRepoName = selectedRepo.split("/")[1] ?? "";
   const { branches, loading: loadingBranches } = useBranches(selectedRepoOwner, selectedRepoName);
@@ -82,10 +92,24 @@ export default function Home() {
     if (enabledModels.length === 0 || hasHydratedModelPreferences) return;
 
     const storedModel = localStorage.getItem(LAST_SELECTED_MODEL_STORAGE_KEY);
-    const selectedModelFromStorage =
-      storedModel && enabledModels.includes(storedModel)
-        ? storedModel
+    const storedUserPicked =
+      localStorage.getItem(LAST_SELECTED_MODEL_USER_PICKED_STORAGE_KEY) === "true";
+    // Only restore the stored model when it was an explicit user pick. Auto-
+    // switched values from a prior session (Plan toggle, API default) must not
+    // sticky-override the API defaults, otherwise toggling Plan once would
+    // lock the user onto that model on every subsequent reload.
+    const storedModelIsValid =
+      storedUserPicked && !!storedModel && enabledModels.includes(storedModel);
+    const initialDefault = planMode ? defaultPlanModel : defaultModel;
+    const selectedModelFromStorage = storedModelIsValid
+      ? storedModel!
+      : enabledModels.includes(initialDefault)
+        ? initialDefault
         : (enabledModels[0] ?? DEFAULT_MODEL);
+
+    if (storedModelIsValid) {
+      userPickedModelRef.current = true;
+    }
 
     const storedReasoningEffort = localStorage.getItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
     const reasoningEffortFromStorage =
@@ -97,18 +121,24 @@ export default function Home() {
     setSelectedModel(selectedModelFromStorage);
     setReasoningEffort(reasoningEffortFromStorage);
     setHasHydratedModelPreferences(true);
-  }, [enabledModels, hasHydratedModelPreferences]);
+  }, [enabledModels, hasHydratedModelPreferences, defaultModel, defaultPlanModel, planMode]);
 
   useEffect(() => {
     if (!hasHydratedModelPreferences) return;
-    localStorage.setItem(LAST_SELECTED_MODEL_STORAGE_KEY, selectedModel);
+
+    if (userPickedModelRef.current) {
+      localStorage.setItem(LAST_SELECTED_MODEL_STORAGE_KEY, selectedModel);
+      localStorage.setItem(LAST_SELECTED_MODEL_USER_PICKED_STORAGE_KEY, "true");
+    } else {
+      localStorage.removeItem(LAST_SELECTED_MODEL_STORAGE_KEY);
+      localStorage.removeItem(LAST_SELECTED_MODEL_USER_PICKED_STORAGE_KEY);
+    }
 
     if (reasoningEffort) {
       localStorage.setItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY, reasoningEffort);
-      return;
+    } else {
+      localStorage.removeItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
     }
-
-    localStorage.removeItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
   }, [hasHydratedModelPreferences, selectedModel, reasoningEffort]);
 
   useEffect(() => {
@@ -146,6 +176,7 @@ export default function Home() {
             model: selectedModel,
             reasoningEffort,
             branch: selectedBranch || undefined,
+            planMode,
           }),
           signal: abortController.signal,
         });
@@ -180,14 +211,30 @@ export default function Home() {
 
     sessionCreationPromise.current = promise;
     return promise;
-  }, [selectedRepo, selectedModel, reasoningEffort, selectedBranch, pendingSessionId]);
+  }, [selectedRepo, selectedModel, reasoningEffort, selectedBranch, planMode, pendingSessionId]);
+
+  // Toggling plan-mode invalidates any pre-warmed session so the next
+  // submission creates a session with the matching planMode flag.
+  useEffect(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setPendingSessionId(null);
+    setIsCreatingSession(false);
+    sessionCreationPromise.current = null;
+    pendingConfigRef.current = null;
+  }, [planMode]);
 
   // Reset selections when model preferences change (only after hydration)
   useEffect(() => {
     if (!hasHydratedModelPreferences) return;
 
     if (enabledModels.length > 0 && !enabledModels.includes(selectedModel)) {
-      const fallback = enabledModels[0] ?? DEFAULT_MODEL;
+      const preferred = planMode ? defaultPlanModel : defaultModel;
+      const fallback = enabledModels.includes(preferred)
+        ? preferred
+        : (enabledModels[0] ?? DEFAULT_MODEL);
       setSelectedModel(fallback);
       setReasoningEffort(getDefaultReasoningEffort(fallback));
       return;
@@ -196,7 +243,37 @@ export default function Home() {
     if (reasoningEffort && !isValidReasoningEffort(selectedModel, reasoningEffort)) {
       setReasoningEffort(getDefaultReasoningEffort(selectedModel));
     }
-  }, [hasHydratedModelPreferences, enabledModels, selectedModel, reasoningEffort]);
+  }, [
+    hasHydratedModelPreferences,
+    enabledModels,
+    selectedModel,
+    reasoningEffort,
+    defaultModel,
+    defaultPlanModel,
+    planMode,
+  ]);
+
+  // Auto-switch selectedModel when the Plan toggle flips, as long as the user
+  // hasn't explicitly picked a model. Switches between defaultModel and
+  // defaultPlanModel; respects user picks once made.
+  useEffect(() => {
+    if (!hasHydratedModelPreferences) return;
+    if (userPickedModelRef.current) return;
+
+    const target = planMode ? defaultPlanModel : defaultModel;
+    if (!enabledModels.includes(target)) return;
+    if (target === selectedModel) return;
+
+    setSelectedModel(target);
+    setReasoningEffort(getDefaultReasoningEffort(target));
+  }, [
+    planMode,
+    hasHydratedModelPreferences,
+    defaultModel,
+    defaultPlanModel,
+    enabledModels,
+    selectedModel,
+  ]);
 
   const handleRepoChange = useCallback(
     (repoFullName: string) => {
@@ -208,6 +285,7 @@ export default function Home() {
   );
 
   const handleModelChange = useCallback((model: string) => {
+    userPickedModelRef.current = true;
     setSelectedModel(model);
     setReasoningEffort(getDefaultReasoningEffort(model));
   }, []);
@@ -282,6 +360,8 @@ export default function Home() {
       setSelectedModel={handleModelChange}
       reasoningEffort={reasoningEffort}
       setReasoningEffort={setReasoningEffort}
+      planMode={planMode}
+      setPlanMode={setPlanMode}
       prompt={prompt}
       handlePromptChange={handlePromptChange}
       creating={creating}
@@ -307,6 +387,8 @@ function HomeContent({
   setSelectedModel,
   reasoningEffort,
   setReasoningEffort,
+  planMode,
+  setPlanMode,
   prompt,
   handlePromptChange,
   creating,
@@ -328,6 +410,8 @@ function HomeContent({
   setSelectedModel: (value: string) => void;
   reasoningEffort: string | undefined;
   setReasoningEffort: (value: string | undefined) => void;
+  planMode: boolean;
+  setPlanMode: (value: boolean) => void;
   prompt: string;
   handlePromptChange: (value: string) => void;
   creating: boolean;
@@ -510,11 +594,32 @@ function HomeContent({
                       onSelect={setReasoningEffort}
                       disabled={creating}
                     />
+
+                    {/* Plan-first toggle: when on, the agent proposes a plan
+                        that must be approved before any code is written. */}
+                    <button
+                      type="button"
+                      onClick={() => setPlanMode(!planMode)}
+                      disabled={creating}
+                      aria-pressed={planMode}
+                      className={`rounded border px-2 py-0.5 text-xs transition disabled:opacity-50 disabled:cursor-not-allowed ${
+                        planMode
+                          ? "border-accent bg-accent-muted text-accent"
+                          : "border-border text-muted-foreground hover:text-foreground"
+                      }`}
+                      title={
+                        planMode
+                          ? "Plan mode is ON — the agent will wait for your approval before coding"
+                          : "Turn on plan mode — the agent will propose a plan and wait for your approval"
+                      }
+                    >
+                      Plan
+                    </button>
                   </div>
 
-                  {/* Right side - Agent label */}
+                  {/* Right side - Agent label, mirrors the Plan toggle */}
                   <span className="hidden sm:inline text-sm text-muted-foreground">
-                    build agent
+                    {planMode ? "plan agent" : "build agent"}
                   </span>
                 </div>
               </div>

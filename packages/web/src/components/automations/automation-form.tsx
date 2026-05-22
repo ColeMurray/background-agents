@@ -1,8 +1,7 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
-  DEFAULT_MODEL,
   getReasoningConfig,
   isValidCron,
   isValidReasoningEffort,
@@ -103,7 +102,7 @@ interface AutomationFormProps {
 
 export function AutomationForm({ mode, initialValues, onSubmit, submitting }: AutomationFormProps) {
   const { repos, loading: loadingRepos } = useRepos();
-  const { enabledModelOptions } = useEnabledModels();
+  const { enabledModelOptions, defaultModel } = useEnabledModels();
 
   const [name, setName] = useState(initialValues?.name ?? "");
   const [selectedRepo, setSelectedRepo] = useState(
@@ -115,8 +114,17 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const repoName = selectedRepo.split("/")[1] ?? "";
   const { branches, loading: loadingBranches } = useBranches(repoOwner, repoName);
   const [baseBranch, setBaseBranch] = useState(initialValues?.baseBranch ?? "");
-  const [model, setModel] = useState(initialValues?.model ?? DEFAULT_MODEL);
+  const [model, setModel] = useState(initialValues?.model ?? defaultModel);
   const [reasoningEffort, setReasoningEffort] = useState(initialValues?.reasoningEffort ?? "");
+  // One-shot sync: when the SWR-backed defaultModel resolves after first render
+  // and the user hasn't touched the picker (and we're not editing an existing
+  // automation), adopt the deployment's default.
+  const userPickedModelRef = useRef(!!initialValues?.model);
+  useEffect(() => {
+    if (userPickedModelRef.current) return;
+    setModel(defaultModel);
+    userPickedModelRef.current = true;
+  }, [defaultModel]);
   const [scheduleCron, setScheduleCron] = useState(initialValues?.scheduleCron ?? "0 9 * * *");
   const [scheduleTz, setScheduleTz] = useState(
     initialValues?.scheduleTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -333,6 +341,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         <Combobox
           value={model}
           onChange={(nextModel) => {
+            userPickedModelRef.current = true;
             setModel(nextModel);
             if (reasoningEffort && !isValidReasoningEffort(nextModel, reasoningEffort)) {
               setReasoningEffort("");
@@ -513,7 +522,9 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
                 ? "Investigate this Sentry error. Find the root cause in the codebase, then open a PR with a fix."
                 : triggerType === "github_event"
                   ? "Review this pull request and provide feedback. Check for code quality issues, potential bugs, and suggest improvements."
-                  : "Process this webhook payload and take the appropriate action."
+                  : triggerType === "linear_event"
+                    ? "Investigate this Linear issue. Identify the relevant code, implement a fix, and open a PR."
+                    : "Process this webhook payload and take the appropriate action."
           }
           maxLength={INSTRUCTIONS_MAX_LENGTH}
           required
