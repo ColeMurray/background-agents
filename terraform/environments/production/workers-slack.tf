@@ -48,7 +48,7 @@ module "slack_bot_worker" {
     { name = "DEPLOYMENT_NAME", value = var.deployment_name },
     { name = "APP_NAME", value = var.app_name },
     { name = "DEFAULT_MODEL", value = "claude-haiku-4-5" },
-    { name = "DEFAULT_PLAN_MODEL", value = "claude-opus-4-6" },
+    { name = "DEFAULT_PLAN_MODEL", value = "anthropic/claude-opus-4-6" },
     { name = "CLASSIFICATION_MODEL", value = "claude-haiku-4-5" },
   ]
 

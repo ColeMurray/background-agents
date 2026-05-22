@@ -41,6 +41,13 @@ interface ModelPreferencesResponse {
  * to the env-var path, so bots stay functional during a CP outage.
  */
 export async function fetchModelDefaults(env: FetchModelDefaultsEnv): Promise<ModelDefaults> {
+  // Per-field fallback chain — each field independently resolves
+  // `DB row > env var > shared constant`. The previous all-or-nothing
+  // gate discarded a present `defaultModel` from the DB whenever
+  // `defaultPlanModel` was null (or vice versa), forcing both fields
+  // to fall back to env/constants together.
+  let dbDefaultModel: string | undefined;
+  let dbDefaultPlanModel: string | undefined;
   try {
     const headers = await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET);
     const res = await env.CONTROL_PLANE.fetch("https://internal/model-preferences", {
@@ -49,18 +56,14 @@ export async function fetchModelDefaults(env: FetchModelDefaultsEnv): Promise<Mo
     });
     if (res.ok) {
       const data = (await res.json()) as ModelPreferencesResponse;
-      if (data.defaultModel && data.defaultPlanModel) {
-        return {
-          defaultModel: data.defaultModel,
-          defaultPlanModel: data.defaultPlanModel,
-        };
-      }
+      dbDefaultModel = data.defaultModel ?? undefined;
+      dbDefaultPlanModel = data.defaultPlanModel ?? undefined;
     }
   } catch {
     // Service-binding / network failure — fall through to env-or-shared
   }
   return {
-    defaultModel: env.DEFAULT_MODEL || DEFAULT_MODEL,
-    defaultPlanModel: env.DEFAULT_PLAN_MODEL || DEFAULT_PLAN_MODEL,
+    defaultModel: dbDefaultModel || env.DEFAULT_MODEL || DEFAULT_MODEL,
+    defaultPlanModel: dbDefaultPlanModel || env.DEFAULT_PLAN_MODEL || DEFAULT_PLAN_MODEL,
   };
 }
