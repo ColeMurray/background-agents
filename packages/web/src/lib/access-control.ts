@@ -16,7 +16,16 @@ export interface GitHubOrganizationAccessParams {
   allowedOrganizations: string[];
   fetchImpl?: typeof fetch;
   userAgent?: string;
+  timeoutMs?: number;
 }
+
+export const GITHUB_MEMBERSHIP_CHECK_TIMEOUT_MS = 10_000;
+
+export type AccessAllowReason =
+  | "unsafe_allow_all"
+  | "username_allowlist"
+  | "email_domain_allowlist"
+  | "org_membership";
 
 /**
  * Parse comma-separated environment variable into a lowercase, trimmed array
@@ -48,6 +57,13 @@ export function checkAccessAllowed(
   config: AccessControlConfig,
   params: AccessCheckParams
 ): boolean {
+  return getAccessAllowReason(config, params) !== null;
+}
+
+export function getAccessAllowReason(
+  config: AccessControlConfig,
+  params: AccessCheckParams
+): AccessAllowReason | null {
   const { allowedDomains, allowedUsers, unsafeAllowAllUsers } = config;
   const allowedOrganizations = (config.allowedOrganizations ?? []).map((org) => org.toLowerCase());
   const { githubUsername, email, activeOrganizations } = params;
@@ -58,19 +74,19 @@ export function checkAccessAllowed(
     allowedUsers.length === 0 &&
     allowedOrganizations.length === 0
   ) {
-    return unsafeAllowAllUsers;
+    return unsafeAllowAllUsers ? "unsafe_allow_all" : null;
   }
 
   // Check explicit user allowlist (GitHub username)
   if (githubUsername && allowedUsers.includes(githubUsername.toLowerCase())) {
-    return true;
+    return "username_allowlist";
   }
 
   // Check email domain allowlist
   if (email) {
     const domain = email.toLowerCase().split("@")[1];
     if (domain && allowedDomains.includes(domain)) {
-      return true;
+      return "email_domain_allowlist";
     }
   }
 
@@ -78,11 +94,11 @@ export function checkAccessAllowed(
   if (activeOrganizations) {
     const normalizedActiveOrganizations = activeOrganizations.map((org) => org.toLowerCase());
     if (allowedOrganizations.some((org) => normalizedActiveOrganizations.includes(org))) {
-      return true;
+      return "org_membership";
     }
   }
 
-  return false;
+  return null;
 }
 
 /**
@@ -93,12 +109,24 @@ export async function checkGitHubOrganizationAccess({
   allowedOrganizations,
   fetchImpl = fetch,
   userAgent = "Open-Inspect",
+  timeoutMs = GITHUB_MEMBERSHIP_CHECK_TIMEOUT_MS,
 }: GitHubOrganizationAccessParams): Promise<boolean> {
-  if (!accessToken || allowedOrganizations.length === 0) {
+  if (allowedOrganizations.length === 0) {
     return false;
   }
 
-  const checks = allowedOrganizations.map(async (org) => {
+  if (!accessToken) {
+    console.warn("[github-org-access] membership check skipped", {
+      reason: "missing_access_token",
+      organizationCount: allowedOrganizations.length,
+    });
+    return false;
+  }
+
+  for (const org of allowedOrganizations) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
     try {
       const response = await fetchImpl(
         `https://api.github.com/user/memberships/orgs/${encodeURIComponent(org)}`,
@@ -109,19 +137,62 @@ export async function checkGitHubOrganizationAccess({
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": userAgent,
           },
+          signal: controller.signal,
         }
       );
 
       if (!response.ok) {
-        return false;
+        console.warn("[github-org-access] membership request failed", {
+          org,
+          status: response.status,
+          hint: getGitHubMembershipFailureHint(response.status),
+        });
+        continue;
       }
 
-      const membership = (await response.json()) as { state?: string };
-      return membership.state === "active";
-    } catch {
-      return false;
-    }
-  });
+      const membership = (await response.json()) as { state?: string | null };
+      if (membership.state === "active") {
+        return true;
+      }
 
-  return (await Promise.all(checks)).some(Boolean);
+      if (membership.state == null) {
+        console.warn("[github-org-access] membership response missing state", {
+          org,
+          state: membership.state ?? null,
+        });
+      } else if (membership.state === "pending") {
+        console.info("[github-org-access] membership not active", {
+          org,
+          state: membership.state,
+        });
+      } else {
+        console.warn("[github-org-access] membership response unexpected state", {
+          org,
+          state: membership.state,
+        });
+      }
+    } catch (error) {
+      console.warn("[github-org-access] membership request error", {
+        org,
+        error: error instanceof Error ? error.name : "unknown",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  return false;
+}
+
+function getGitHubMembershipFailureHint(status: number): string | undefined {
+  if (status === 403) {
+    return "Verify the GitHub OAuth token has read:org access and any organization SAML requirements are satisfied. If this deployment also uses a GitHub App, make sure membership read permission changes were republished and approved.";
+  }
+
+  if (status === 404) {
+    return "GitHub returns 404 when the user is not an organization member or the token cannot read that membership.";
+  }
+
+  return undefined;
 }

@@ -2,8 +2,9 @@ import type { NextAuthOptions } from "next-auth";
 import GitHubProvider from "next-auth/providers/github";
 import { DEFAULT_APP_NAME } from "@open-inspect/shared";
 import {
-  checkAccessAllowed,
+  type AccessControlConfig,
   checkGitHubOrganizationAccess,
+  getAccessAllowReason,
   parseAllowlist,
   parseBooleanEnv,
 } from "./access-control";
@@ -41,6 +42,27 @@ export function buildGitHubOAuthScope(
     : BASE_GITHUB_OAUTH_SCOPE;
 }
 
+function getAccessControlConfig(): AccessControlConfig {
+  return {
+    allowedDomains: parseAllowlist(process.env.ALLOWED_EMAIL_DOMAINS),
+    allowedUsers: parseAllowlist(process.env.ALLOWED_USERS),
+    allowedOrganizations: parseAllowlist(process.env.ALLOWED_GITHUB_ORGS),
+    unsafeAllowAllUsers: parseBooleanEnv(process.env.UNSAFE_ALLOW_ALL_USERS),
+  };
+}
+
+function logSignInDecision(
+  login: string | undefined,
+  decision: "allow" | "deny",
+  reason: string
+): void {
+  console.info("[auth] sign-in decision", {
+    login: login ?? null,
+    decision,
+    reason,
+  });
+}
+
 export const authOptions: NextAuthOptions = {
   debug: process.env.NODE_ENV === "development" || process.env.NEXTAUTH_DEBUG === "true",
   providers: [
@@ -56,28 +78,35 @@ export const authOptions: NextAuthOptions = {
   ],
   callbacks: {
     async signIn({ account, profile, user }) {
-      const config = {
-        allowedDomains: parseAllowlist(process.env.ALLOWED_EMAIL_DOMAINS),
-        allowedUsers: parseAllowlist(process.env.ALLOWED_USERS),
-        allowedOrganizations: parseAllowlist(process.env.ALLOWED_GITHUB_ORGS),
-        unsafeAllowAllUsers: parseBooleanEnv(process.env.UNSAFE_ALLOW_ALL_USERS),
-      };
-
+      const config = getAccessControlConfig();
+      const allowedOrganizations = config.allowedOrganizations ?? [];
       const githubProfile = profile as { login?: string };
-      const isAllowedByStaticPolicy = checkAccessAllowed(config, {
+      const staticAllowReason = getAccessAllowReason(config, {
         githubUsername: githubProfile.login,
         email: user.email ?? undefined,
       });
 
-      if (isAllowedByStaticPolicy) {
+      if (staticAllowReason) {
+        logSignInDecision(githubProfile.login, "allow", staticAllowReason);
         return true;
+      }
+
+      if (allowedOrganizations.length === 0) {
+        logSignInDecision(githubProfile.login, "deny", "no_matching_policy");
+        return false;
       }
 
       const isAllowedByOrgMembership = await checkGitHubOrganizationAccess({
         accessToken: account?.access_token,
-        allowedOrganizations: config.allowedOrganizations,
+        allowedOrganizations,
         userAgent: process.env.NEXT_PUBLIC_APP_NAME?.trim() || DEFAULT_APP_NAME,
       });
+
+      logSignInDecision(
+        githubProfile.login,
+        isAllowedByOrgMembership ? "allow" : "deny",
+        isAllowedByOrgMembership ? "org_membership" : "org_membership_denied"
+      );
 
       return isAllowedByOrgMembership;
     },
