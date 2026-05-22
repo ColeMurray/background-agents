@@ -47,6 +47,35 @@ function resolveDefaults(
   return { defaultModel, defaultPlanModel };
 }
 
+/**
+ * Reconcile resolved defaults against the enabled-models set.
+ *
+ * setPreferences() enforces `defaultModel ∈ enabledModels` (same for
+ * defaultPlanModel), but the GET path's fallback chain can produce
+ * env/shared defaults that aren't members of the configured enabledModels.
+ * Returning that mismatched state breaks the invariant — a subsequent PUT
+ * with the unchanged tuple would fail validation, leaving the Settings
+ * page unable to save.
+ *
+ * If a resolved default isn't in the enabled set we substitute the first
+ * enabled model (the same fallback the web Settings UI applies when the
+ * stored default is disabled).
+ */
+function reconcileDefaultsWithEnabled(
+  enabledModels: readonly string[],
+  defaults: { defaultModel: string; defaultPlanModel: string }
+): { defaultModel: string; defaultPlanModel: string } {
+  if (enabledModels.length === 0) return defaults;
+  const enabledSet = new Set(enabledModels);
+  const fallback = enabledModels[0];
+  return {
+    defaultModel: enabledSet.has(defaults.defaultModel) ? defaults.defaultModel : fallback,
+    defaultPlanModel: enabledSet.has(defaults.defaultPlanModel)
+      ? defaults.defaultPlanModel
+      : fallback,
+  };
+}
+
 async function handleGetModelPreferences(
   _request: Request,
   env: Env,
@@ -54,7 +83,10 @@ async function handleGetModelPreferences(
   ctx: RequestContext
 ): Promise<Response> {
   if (!env.DB) {
-    const defaults = resolveDefaults(env, null);
+    const defaults = reconcileDefaultsWithEnabled(
+      DEFAULT_ENABLED_MODELS,
+      resolveDefaults(env, null)
+    );
     return json({ enabledModels: DEFAULT_ENABLED_MODELS, ...defaults });
   }
 
@@ -62,18 +94,19 @@ async function handleGetModelPreferences(
 
   try {
     const prefs = await store.getPreferences();
-    const defaults = resolveDefaults(env, prefs);
-    return json({
-      enabledModels: prefs?.enabledModels ?? DEFAULT_ENABLED_MODELS,
-      ...defaults,
-    });
+    const enabledModels = prefs?.enabledModels ?? DEFAULT_ENABLED_MODELS;
+    const defaults = reconcileDefaultsWithEnabled(enabledModels, resolveDefaults(env, prefs));
+    return json({ enabledModels, ...defaults });
   } catch (e) {
     logger.error("Failed to get model preferences", {
       error: e instanceof Error ? e.message : String(e),
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
-    const defaults = resolveDefaults(env, null);
+    const defaults = reconcileDefaultsWithEnabled(
+      DEFAULT_ENABLED_MODELS,
+      resolveDefaults(env, null)
+    );
     return json({ enabledModels: DEFAULT_ENABLED_MODELS, ...defaults });
   }
 }

@@ -94,9 +94,9 @@ describe("GET /model-preferences", () => {
     expect(body.enabledModels).toEqual(DEFAULT_ENABLED_MODELS);
   });
 
-  it("uses env vars (normalized) when DB row has null defaults", async () => {
+  it("uses env vars (normalized) when DB row has null defaults and env values are enabled", async () => {
     mockStore.getPreferences.mockResolvedValue({
-      enabledModels: ["anthropic/claude-sonnet-4-6"],
+      enabledModels: ["anthropic/claude-haiku-4-5", "anthropic/claude-opus-4-6"],
       defaultModel: null,
       defaultPlanModel: null,
     });
@@ -110,6 +110,28 @@ describe("GET /model-preferences", () => {
 
     expect(body.defaultModel).toBe("anthropic/claude-haiku-4-5");
     expect(body.defaultPlanModel).toBe("anthropic/claude-opus-4-6");
+  });
+
+  it("reconciles env-var defaults that aren't in enabledModels by substituting the first enabled model", async () => {
+    // Regression test for CodeRabbit #672 follow-up: returning defaults
+    // that aren't members of enabledModels broke the invariant enforced
+    // by setPreferences — the Settings page couldn't re-save the
+    // returned tuple without first picking a different default.
+    mockStore.getPreferences.mockResolvedValue({
+      enabledModels: ["anthropic/claude-sonnet-4-6"],
+      defaultModel: null,
+      defaultPlanModel: null,
+    });
+    const res = await callGet(
+      createEnv({
+        DEFAULT_MODEL: "claude-haiku-4-5", // NOT in enabledModels
+        DEFAULT_PLAN_MODEL: "claude-opus-4-6", // also NOT in enabledModels
+      })
+    );
+    const body = (await res.json()) as { defaultModel: string; defaultPlanModel: string };
+
+    expect(body.defaultModel).toBe("anthropic/claude-sonnet-4-6");
+    expect(body.defaultPlanModel).toBe("anthropic/claude-sonnet-4-6");
   });
 
   it("prefers DB defaults over env vars (DB > env > shared)", async () => {
