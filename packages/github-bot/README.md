@@ -65,19 +65,20 @@ The bot is deployed via Terraform as a standalone Cloudflare Worker alongside th
 
 ### Environment Bindings
 
-| Binding                      | Type                  | Description                                                                         |
-| ---------------------------- | --------------------- | ----------------------------------------------------------------------------------- |
-| `GITHUB_KV`                  | KV namespace          | Delivery dedupe store keyed by `X-GitHub-Delivery`                                  |
-| `CONTROL_PLANE`              | Service binding       | Fetcher to the control plane worker                                                 |
-| `DEPLOYMENT_NAME`            | Plain text            | Deployment identifier for logging                                                   |
-| `DEFAULT_MODEL`              | Plain text            | Model ID for new sessions (e.g., `anthropic/claude-haiku-4-5`)                      |
-| `GITHUB_BOT_USERNAME`        | Plain text            | Bot's GitHub login (e.g., `my-app[bot]`) for @mention detection and loop prevention |
-| `GITHUB_APP_ID`              | Secret                | GitHub App ID for JWT generation                                                    |
-| `GITHUB_APP_PRIVATE_KEY`     | Secret                | GitHub App private key (must be PKCS#8 format)                                      |
-| `GITHUB_APP_INSTALLATION_ID` | Secret                | GitHub App installation ID for token exchange                                       |
-| `GITHUB_WEBHOOK_SECRET`      | Secret                | Shared secret for verifying webhook signatures                                      |
-| `INTERNAL_CALLBACK_SECRET`   | Secret                | Shared secret for HMAC auth to the control plane                                    |
-| `LOG_LEVEL`                  | Plain text (optional) | Log level override (`debug`, `info`, `warn`, `error`)                               |
+| Binding                      | Type                  | Description                                                                                                                                                                                                       |
+| ---------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GITHUB_KV`                  | KV namespace          | Delivery dedupe store keyed by `X-GitHub-Delivery`                                                                                                                                                                |
+| `CONTROL_PLANE`              | Service binding       | Fetcher to the control plane worker                                                                                                                                                                               |
+| `DEPLOYMENT_NAME`            | Plain text            | Deployment identifier for logging                                                                                                                                                                                 |
+| `DEFAULT_MODEL`              | Plain text            | Fallback build model when D1 `model_preferences` is unreachable (e.g., `anthropic/claude-haiku-4-5`). Resolution: `D1 > env var > shared constant`. Set the primary value via **Settings → Models** in the web UI |
+| `DEFAULT_PLAN_MODEL`         | Plain text            | Fallback plan-turn model when D1 is unreachable (e.g., `anthropic/claude-opus-4-7`). Same fallback chain as `DEFAULT_MODEL`                                                                                       |
+| `GITHUB_BOT_USERNAME`        | Plain text            | Bot's GitHub login (e.g., `my-app[bot]`) for @mention detection and loop prevention                                                                                                                               |
+| `GITHUB_APP_ID`              | Secret                | GitHub App ID for JWT generation                                                                                                                                                                                  |
+| `GITHUB_APP_PRIVATE_KEY`     | Secret                | GitHub App private key (must be PKCS#8 format)                                                                                                                                                                    |
+| `GITHUB_APP_INSTALLATION_ID` | Secret                | GitHub App installation ID for token exchange                                                                                                                                                                     |
+| `GITHUB_WEBHOOK_SECRET`      | Secret                | Shared secret for verifying webhook signatures                                                                                                                                                                    |
+| `INTERNAL_CALLBACK_SECRET`   | Secret                | Shared secret for HMAC auth to the control plane                                                                                                                                                                  |
+| `LOG_LEVEL`                  | Plain text (optional) | Log level override (`debug`, `info`, `warn`, `error`)                                                                                                                                                             |
 
 ### GitHub App Configuration
 
@@ -170,21 +171,31 @@ mechanism as the Slack bot). The token is sent as a `Bearer` token in the `Autho
 
 ## Prompt Construction
 
-Two prompt templates in `src/prompts.ts`:
+Three prompt templates in `src/prompts.ts`:
 
 **`buildCodeReviewPrompt`** — Includes PR title, body, author, branches, and instructions to:
 
 - Run `gh pr diff` for the full diff
-- Submit a review via `gh api .../reviews`
-- Post inline comments via `gh api .../comments`
+- Avoid submitting a review via `gh api .../reviews` for now
+- Post inline `suggestion` comments via `gh api .../pulls/{n}/comments`
+- Use `gh pr view ... --json headRefOid` for `commit_id`, temp markdown files for body, and
+  `side=RIGHT`
 
 **`buildCommentActionPrompt`** — Includes the user's request (with @mention stripped) and
 instructions to:
 
 - Check prior conversation via `gh pr view --comments`
 - Make code changes and push, or respond with analysis
-- Post a summary comment via `gh api .../issues/{n}/comments`
+- Post inline `suggestion` comments via `gh api .../pulls/{n}/comments` (instead of summary PR
+  comments)
 - Reply to a specific review thread (when `commentId` is present)
+
+**`buildFailedChecksPrompt`** — Includes check context and instructions to:
+
+- Inspect failing checks and logs
+- Make minimal safe fixes and validate locally
+- Push fixes to the existing PR branch
+- Use inline `suggestion` comments for any manual follow-up code changes the PR author must apply
 
 The prompts embed only metadata from the webhook payload. The agent gathers everything else.
 

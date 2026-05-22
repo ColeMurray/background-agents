@@ -1,10 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type {
   Env,
   PullRequestOpenedPayload,
   ReviewRequestedPayload,
   IssueCommentPayload,
   ReviewCommentPayload,
+  CheckSuiteCompletedPayload,
 } from "../src/types";
 import type { Logger } from "../src/logger";
 import type { ResolvedGitHubConfig } from "../src/utils/integration-config";
@@ -27,6 +28,7 @@ vi.mock("../src/utils/integration-config", () => ({
     model: "anthropic/claude-haiku-4-5",
     reasoningEffort: null,
     autoReviewOnOpen: true,
+    autoApproveOnOpen: false,
     enabledRepos: null,
     allowedTriggerUsers: null,
     codeReviewInstructions: null,
@@ -38,6 +40,7 @@ const defaultConfig: ResolvedGitHubConfig = {
   model: "anthropic/claude-haiku-4-5",
   reasoningEffort: null,
   autoReviewOnOpen: true,
+  autoApproveOnOpen: false,
   enabledRepos: null,
   allowedTriggerUsers: null,
   codeReviewInstructions: null,
@@ -49,6 +52,7 @@ import {
   handleReviewRequested,
   handleIssueComment,
   handleReviewComment,
+  handleCheckSuiteCompleted,
 } from "../src/handlers";
 import { generateInstallationToken, postReaction, checkSenderPermission } from "../src/github-auth";
 import { getGitHubConfig } from "../src/utils/integration-config";
@@ -161,6 +165,16 @@ const reviewCommentPayload: ReviewCommentPayload = {
   },
   repository: { owner: { login: "acme" }, name: "widgets", private: false },
   sender: { login: "carol", id: 1003, avatar_url: "https://avatars.githubusercontent.com/u/1003" },
+};
+
+const failedCheckSuitePayload: CheckSuiteCompletedPayload = {
+  action: "completed",
+  check_suite: {
+    conclusion: "failure",
+    pull_requests: [{ number: 42 }],
+  },
+  repository: { owner: { login: "acme" }, name: "widgets", private: false },
+  sender: { login: "github-actions[bot]" },
 };
 
 beforeEach(() => {
@@ -334,6 +348,191 @@ describe("handlePullRequestOpened", () => {
   });
 });
 
+describe("handleCheckSuiteCompleted", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reuses existing session and sends failed-check fix prompt for bot-authored PRs", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            number: 42,
+            title: "Fix lint errors",
+            body: "Automated update",
+            user: { login: "test-bot[bot]" },
+            head: { ref: "open-inspect/session-123", sha: "abc123" },
+            base: { ref: "main" },
+            draft: false,
+            state: "open",
+          }),
+          { status: 200 }
+        )
+      )
+    );
+
+    const result = await handleCheckSuiteCompleted(env, log, failedCheckSuitePayload, "trace-cs-1");
+
+    expect(result).toEqual({
+      outcome: "processed",
+      session_id: "session-123",
+      message_id: "msg-456",
+      handler_action: "failed_checks",
+    });
+
+    const cpFetch = getControlPlaneFetch(env);
+    expect(cpFetch).toHaveBeenCalledTimes(1);
+    expect(cpFetch.mock.calls[0][0]).toBe("https://internal/sessions/session-123/prompt");
+
+    const promptBody = JSON.parse(cpFetch.mock.calls[0][1].body);
+    expect(promptBody.authorId).toBe("github:test-bot[bot]");
+    expect(promptBody.content).toContain("auto-fix attempt 1 of 3");
+    expect(promptBody.content).toContain("gh pr checks 42");
+    expect(promptBody.content).toContain("Commit your changes to the current PR branch and push");
+
+    const kvPut = env.GITHUB_KV.put as unknown as ReturnType<typeof vi.fn>;
+    expect(kvPut).toHaveBeenCalledWith("failed-check-fix:acme/widgets:pr:42", "1", {
+      expirationTtl: 30 * 24 * 60 * 60,
+    });
+  });
+
+  it("skips when check suite conclusion is success", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload: CheckSuiteCompletedPayload = {
+      ...failedCheckSuitePayload,
+      check_suite: { ...failedCheckSuitePayload.check_suite, conclusion: "success" },
+    };
+
+    const result = await handleCheckSuiteCompleted(env, log, payload, "trace-cs-2");
+
+    expect(result).toEqual({ outcome: "skipped", skip_reason: "non_failed_check_suite" });
+    expect(generateInstallationToken).not.toHaveBeenCalled();
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+  });
+
+  it("skips when check suite has no pull requests", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload: CheckSuiteCompletedPayload = {
+      ...failedCheckSuitePayload,
+      check_suite: { ...failedCheckSuitePayload.check_suite, pull_requests: [] },
+    };
+
+    const result = await handleCheckSuiteCompleted(env, log, payload, "trace-cs-3");
+
+    expect(result).toEqual({ outcome: "skipped", skip_reason: "no_pull_requests" });
+    expect(generateInstallationToken).not.toHaveBeenCalled();
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+  });
+
+  it("processes when PR author is not the bot if branch is an open-inspect session branch", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            number: 42,
+            title: "Feature work",
+            body: "Authored by alice",
+            user: { login: "alice" },
+            head: { ref: "open-inspect/session-123", sha: "abc123" },
+            base: { ref: "main" },
+            draft: false,
+            state: "open",
+          }),
+          { status: 200 }
+        )
+      )
+    );
+
+    const result = await handleCheckSuiteCompleted(env, log, failedCheckSuitePayload, "trace-cs-4");
+
+    expect(result).toEqual({
+      outcome: "processed",
+      session_id: "session-123",
+      message_id: "msg-456",
+      handler_action: "failed_checks",
+    });
+    expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips when PR branch does not include an Open-Inspect session id", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            number: 42,
+            title: "Feature work",
+            body: "Bot-authored but custom branch",
+            user: { login: "test-bot[bot]" },
+            head: { ref: "feature/custom-branch", sha: "abc123" },
+            base: { ref: "main" },
+            draft: false,
+            state: "open",
+          }),
+          { status: 200 }
+        )
+      )
+    );
+
+    const result = await handleCheckSuiteCompleted(
+      env,
+      log,
+      failedCheckSuitePayload,
+      "trace-cs-branch"
+    );
+
+    expect(result).toEqual({ outcome: "skipped", skip_reason: "no_eligible_pull_request" });
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+  });
+
+  it("stops after the third failed-check fix attempt for a PR", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            number: 42,
+            title: "Fix lint errors",
+            body: "Automated update",
+            user: { login: "test-bot[bot]" },
+            head: { ref: "open-inspect/session-123", sha: "abc123" },
+            base: { ref: "main" },
+            draft: false,
+            state: "open",
+          }),
+          { status: 200 }
+        )
+      )
+    );
+
+    const kvStore = env.GITHUB_KV as unknown as {
+      get: ReturnType<typeof vi.fn>;
+    };
+    kvStore.get.mockResolvedValue("3");
+
+    const result = await handleCheckSuiteCompleted(env, log, failedCheckSuitePayload, "trace-cs-5");
+
+    expect(result).toEqual({
+      outcome: "skipped",
+      skip_reason: "max_failed_check_attempts_reached",
+    });
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+  });
+});
+
 describe("handleReviewRequested", () => {
   it("creates session, posts reaction, and sends prompt", async () => {
     const env = createMockEnv();
@@ -479,6 +678,63 @@ describe("handleIssueComment", () => {
     expect(promptBody.authorId).toBe("github:1002");
   });
 
+  it("treats @mention of app slug without [bot] as a bot mention", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload: IssueCommentPayload = {
+      ...issueCommentPayload,
+      comment: {
+        ...issueCommentPayload.comment,
+        body: "@test-bot please fix the error handling",
+      },
+    };
+
+    const result = await handleIssueComment(env, log, payload, "trace-2");
+
+    expect(result.outcome).toBe("processed");
+    const cpFetch = getControlPlaneFetch(env);
+    const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
+    expect(promptBody.content).toContain("please fix the error handling");
+    expect(promptBody.content).not.toContain("@test-bot");
+  });
+
+  it("responds to @reef mention when REEF_ALIAS_ENABLED is true", async () => {
+    const env = { ...createMockEnv(), REEF_ALIAS_ENABLED: "true" };
+    const log = createMockLogger();
+    const payload: IssueCommentPayload = {
+      ...issueCommentPayload,
+      comment: {
+        ...issueCommentPayload.comment,
+        body: "@reef please fix the error handling",
+      },
+    };
+
+    const result = await handleIssueComment(env, log, payload, "trace-2");
+
+    expect(result.outcome).toBe("processed");
+    const cpFetch = getControlPlaneFetch(env as unknown as Env);
+    const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
+    expect(promptBody.content).toContain("please fix the error handling");
+    expect(promptBody.content).not.toContain("@reef");
+  });
+
+  it("ignores @reef mention when REEF_ALIAS_ENABLED is not set", async () => {
+    const env = createMockEnv(); // REEF_ALIAS_ENABLED is absent
+    const log = createMockLogger();
+    const payload: IssueCommentPayload = {
+      ...issueCommentPayload,
+      comment: {
+        ...issueCommentPayload.comment,
+        body: "@reef please fix the error handling",
+      },
+    };
+
+    const result = await handleIssueComment(env, log, payload, "trace-2");
+
+    expect(result).toEqual({ outcome: "skipped", skip_reason: "no_mention" });
+    expect(generateInstallationToken).not.toHaveBeenCalled();
+  });
+
   it("returns early if not a PR", async () => {
     const env = createMockEnv();
     const log = createMockLogger();
@@ -576,6 +832,54 @@ describe("handleReviewComment", () => {
     expect(promptBody.content).toContain("const cache = new Map()");
     expect(promptBody.content).toContain("comments/200/replies");
     expect(promptBody.authorId).toBe("github:1003");
+  });
+
+  it("treats @mention of app slug without [bot] as a bot mention on review comments", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload: ReviewCommentPayload = {
+      ...reviewCommentPayload,
+      comment: { ...reviewCommentPayload.comment, body: "@test-bot can you fix this?" },
+    };
+
+    const result = await handleReviewComment(env, log, payload, "trace-3");
+
+    expect(result.outcome).toBe("processed");
+    const cpFetch = getControlPlaneFetch(env);
+    const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
+    expect(promptBody.content).toContain("can you fix this?");
+    expect(promptBody.content).not.toContain("@test-bot");
+  });
+
+  it("responds to @reef mention on review comments when REEF_ALIAS_ENABLED is true", async () => {
+    const env = { ...createMockEnv(), REEF_ALIAS_ENABLED: "true" };
+    const log = createMockLogger();
+    const payload: ReviewCommentPayload = {
+      ...reviewCommentPayload,
+      comment: { ...reviewCommentPayload.comment, body: "@reef can you fix this?" },
+    };
+
+    const result = await handleReviewComment(env, log, payload, "trace-3");
+
+    expect(result.outcome).toBe("processed");
+    const cpFetch = getControlPlaneFetch(env as unknown as Env);
+    const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
+    expect(promptBody.content).toContain("can you fix this?");
+    expect(promptBody.content).not.toContain("@reef");
+  });
+
+  it("ignores @reef mention on review comments when REEF_ALIAS_ENABLED is not set", async () => {
+    const env = createMockEnv(); // REEF_ALIAS_ENABLED is absent
+    const log = createMockLogger();
+    const payload: ReviewCommentPayload = {
+      ...reviewCommentPayload,
+      comment: { ...reviewCommentPayload.comment, body: "@reef can you fix this?" },
+    };
+
+    const result = await handleReviewComment(env, log, payload, "trace-3");
+
+    expect(result).toEqual({ outcome: "skipped", skip_reason: "no_mention" });
+    expect(generateInstallationToken).not.toHaveBeenCalled();
   });
 
   it("returns early if no @mention", async () => {
@@ -925,5 +1229,63 @@ describe("integration config", () => {
     const cpFetch = getControlPlaneFetch(env);
     const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
     expect(promptBody.content).not.toContain("## Custom Instructions");
+  });
+
+  it("includes APPROVE/REQUEST_CHANGES instruction when autoApproveOnOpen is true", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      autoApproveOnOpen: true,
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleReviewRequested(env, log, reviewRequestedPayload, "trace-aa-review");
+
+    const cpFetch = getControlPlaneFetch(env);
+    const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
+    expect(promptBody.content).toContain('event="APPROVE|REQUEST_CHANGES|COMMENT"');
+    expect(promptBody.content).not.toContain("Do not submit a pull request review.");
+  });
+
+  it("omits APPROVE instruction and forbids review submission when autoApproveOnOpen is false", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleReviewRequested(env, log, reviewRequestedPayload, "trace-no-aa-review");
+
+    const cpFetch = getControlPlaneFetch(env);
+    const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
+    expect(promptBody.content).toContain("Do not submit a pull request review.");
+    expect(promptBody.content).not.toContain("APPROVE|REQUEST_CHANGES");
+  });
+});
+
+describe("handlePullRequestOpened autoApproveOnOpen", () => {
+  it("includes APPROVE/REQUEST_CHANGES instruction in prompt when autoApproveOnOpen is true", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      autoApproveOnOpen: true,
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-aa-open");
+
+    const cpFetch = getControlPlaneFetch(env);
+    const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
+    expect(promptBody.content).toContain('event="APPROVE|REQUEST_CHANGES|COMMENT"');
+    expect(promptBody.content).not.toContain("Do not submit a pull request review.");
+  });
+
+  it("omits APPROVE instruction when autoApproveOnOpen is false", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-no-aa-open");
+
+    const cpFetch = getControlPlaneFetch(env);
+    const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
+    expect(promptBody.content).toContain("Do not submit a pull request review.");
+    expect(promptBody.content).not.toContain("APPROVE|REQUEST_CHANGES");
   });
 });
