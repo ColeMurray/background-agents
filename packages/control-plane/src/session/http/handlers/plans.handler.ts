@@ -183,12 +183,26 @@ async function readApprovalBody(request: Request, log: Logger): Promise<Approval
   if (request.headers.get("content-length") === "0") return {};
   const text = await request.text();
   if (!text.trim()) return {};
+  let parsed: unknown;
   try {
-    return JSON.parse(text) as ApprovalRequestBody;
+    parsed = JSON.parse(text);
   } catch (e) {
     log.warn("plans.approval.invalid_body", { error: e instanceof Error ? e : String(e) });
     throw new InvalidApprovalBodyError(e);
   }
+  // JSON.parse("null") returns null, JSON.parse("[1]") returns an array,
+  // and JSON.parse("42") returns a number — all syntactically valid JSON
+  // but not the object payload we expect. Treat them as malformed bodies
+  // so callers don't dereference properties on non-objects (which would
+  // either crash with TypeError on null, or silently no-op on primitives
+  // and let arrays through as objects).
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    log.warn("plans.approval.invalid_body", {
+      error: `Expected JSON object, got ${parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed}`,
+    });
+    throw new InvalidApprovalBodyError(new Error("Expected JSON object"));
+  }
+  return parsed as ApprovalRequestBody;
 }
 
 function errorResponseForApproval(e: unknown, log: Logger, logEvent: string): Response {

@@ -224,6 +224,36 @@ describe("plansHandler.approvePlan / rejectPlan body validation", () => {
     expect(planService.approvePlanAndFlush).not.toHaveBeenCalled();
   });
 
+  it("approvePlan returns 400 when body is JSON null (not an object)", async () => {
+    // Regression test for CodeRabbit #672 follow-up: JSON.parse("null")
+    // succeeds with value null; the previous code then crashed later when
+    // dereferencing body.implementationModel. The guard rejects non-object
+    // payloads early.
+    const { handler, planService } = createHandler();
+    const req = new Request("http://internal/internal/plan/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "null",
+    });
+    const res = await handler.approvePlan(req);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code?: string };
+    expect(body.code).toBe("invalid_body");
+    expect(planService.approvePlanAndFlush).not.toHaveBeenCalled();
+  });
+
+  it("approvePlan returns 400 when body is a JSON array", async () => {
+    const { handler, planService } = createHandler();
+    const req = new Request("http://internal/internal/plan/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "[1,2,3]",
+    });
+    const res = await handler.approvePlan(req);
+    expect(res.status).toBe(400);
+    expect(planService.approvePlanAndFlush).not.toHaveBeenCalled();
+  });
+
   it("approvePlan forwards explicit null reasoning effort to clear the value", async () => {
     const { handler, planService } = createHandler();
     vi.mocked(planService.approvePlanAndFlush).mockResolvedValue({
