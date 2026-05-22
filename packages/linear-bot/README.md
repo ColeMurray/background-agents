@@ -128,8 +128,20 @@ On any Linear issue:
 - Type `@OpenInspect` in a comment → agent picks up the issue
 - Assign the issue to `OpenInspect` → agent picks it up
 - Agent status is visible directly in Linear (thinking, working, done)
-- Add a `model:<name>` label to override the model (e.g., `model:opus`, `model:sonnet`,
-  `model:haiku`, `model:gpt-5.4`, `model:gpt-5.2-codex`)
+- Apply labels to opt into plan mode or override which model runs:
+
+| Label            | Effect                                                       |
+| ---------------- | ------------------------------------------------------------ |
+| `plan`           | Trigger plan mode (plan model = deployment default)          |
+| `plan-<alias>`   | Trigger plan mode AND override the plan model                |
+| `model-<alias>`  | Override the build model (e.g. `model-sonnet`, `model-opus`) |
+| `build-<alias>`  | Same as `model-<alias>`, reads more naturally in plan mode   |
+| `review-<alias>` | Override the model used to auto-review a PR                  |
+
+Labels are dash-separated because Linear forbids `:` in label names — the same conventions apply on
+GitHub. `<alias>` is a short name (`sonnet`, `opus`, `haiku`, `gpt-5.4`, etc.) defined in
+`MODEL_ALIAS_MAP` in `@open-inspect/shared`. See [docs/PLAN_MODE.md](../../docs/PLAN_MODE.md) for
+the full plan-mode workflow (approve / reject / amend).
 
 ## Repo Resolution
 
