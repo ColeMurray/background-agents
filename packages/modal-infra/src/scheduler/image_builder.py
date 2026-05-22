@@ -48,19 +48,9 @@ CALLBACK_BACKOFF_BASE = 2  # seconds: 2, 4, 8
 
 # Build log errors are surfaced through callbacks; keep them concise.
 BUILD_FAILURE_MESSAGE_MAX_CHARS = 500
-BUILD_FAILURE_REDACT_MIN_CHARS = 4
 
-_BUILD_LOG_EVENTS = (
-    "git.sync_complete",
-    "image_build.complete",
-    "setup.failed",
-    "setup.timeout",
-    "setup.error",
-    "supervisor.error",
-    "supervisor.fatal",
-)
 _SETUP_FAILURE_EVENTS = {"setup.failed", "setup.timeout", "setup.error"}
-_BUILD_FAILURE_EVENTS = _SETUP_FAILURE_EVENTS | {"supervisor.error", "supervisor.fatal"}
+_SUPERVISOR_FAILURE_EVENTS = {"supervisor.error", "supervisor.fatal"}
 
 
 class BuildError(Exception):
@@ -74,40 +64,25 @@ def _format_build_failure_event(entry: dict, redact_values: Iterable[str] = ()) 
     event = entry.get("event")
     if not isinstance(event, str):
         return None
-    if event not in _BUILD_FAILURE_EVENTS:
+    if event not in _SETUP_FAILURE_EVENTS | _SUPERVISOR_FAILURE_EVENTS:
         return None
 
     if event in {"setup.failed", "setup.timeout"}:
-        message = _trim_build_failure_message(entry.get("output_tail"), redact_values)
+        raw_message = entry.get("output_tail")
+    else:
+        raw_message = entry.get("error_message") or entry.get("error")
+
+    message = raw_message.strip() if isinstance(raw_message, str) else ""
+    for redact_value in sorted({value for value in redact_values if value}, key=len, reverse=True):
+        message = message.replace(redact_value, "***")
+
+    if event in {"setup.failed", "setup.timeout"}:
         if not message and entry.get("exit_code") is not None:
             message = f"exit_code={entry['exit_code']}"
-    else:
-        message = _trim_build_failure_message(
-            entry.get("error_message") or entry.get("error"), redact_values
-        )
 
     if not message:
         return event
-    return f"{event}: {message}"
-
-
-def _trim_build_failure_message(value: object, redact_values: Iterable[str] = ()) -> str:
-    """Keep callback errors compact while preserving the most relevant tail."""
-    if not isinstance(value, str):
-        return ""
-    message = value.strip()
-    redactions = sorted(
-        {
-            redact_value
-            for redact_value in redact_values
-            if len(redact_value) >= BUILD_FAILURE_REDACT_MIN_CHARS
-        },
-        key=len,
-        reverse=True,
-    )
-    for redact_value in redactions:
-        message = message.replace(redact_value, "***")
-    return message[-BUILD_FAILURE_MESSAGE_MAX_CHARS:]
+    return f"{event}: {message[-BUILD_FAILURE_MESSAGE_MAX_CHARS:]}"
 
 
 async def _terminate_build_sandbox(handle, build_id: str, reason: str) -> bool:
@@ -231,13 +206,11 @@ async def _stream_build_logs(
         (head_sha, build_complete, error_message) tuple. head_sha is empty string if not found.
     """
     head_sha = ""
-    error_message: str | None = None
-    has_setup_failure = False
+    setup_error: str | None = None
+    supervisor_error: str | None = None
     redact_values = tuple(redact_values)
     try:
         async for line in sandbox.stdout:
-            if not any(event in line for event in _BUILD_LOG_EVENTS):
-                continue
             try:
                 entry = json.loads(line)
                 if not isinstance(entry, dict):
@@ -251,17 +224,15 @@ async def _stream_build_logs(
                     return head_sha, True, None
 
                 failure_message = _format_build_failure_event(entry, redact_values)
-                is_setup_failure = event in _SETUP_FAILURE_EVENTS
-                if failure_message and (
-                    error_message is None or (is_setup_failure and not has_setup_failure)
-                ):
-                    error_message = failure_message
-                    has_setup_failure = is_setup_failure
+                if failure_message and event in _SETUP_FAILURE_EVENTS and setup_error is None:
+                    setup_error = failure_message
+                elif failure_message and supervisor_error is None:
+                    supervisor_error = failure_message
             except json.JSONDecodeError:
                 continue
     except Exception as e:
         log.warn("build.stream_error", error=str(e))
-    return head_sha, False, error_message
+    return head_sha, False, setup_error or supervisor_error
 
 
 @app.function(

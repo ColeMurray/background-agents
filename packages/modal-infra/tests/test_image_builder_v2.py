@@ -448,7 +448,7 @@ class TestBuildRepoImage:
                 json.dumps(
                     {
                         "event": "setup.failed",
-                        "output_tail": "npm install failed: abcd1234",
+                        "output_tail": "npm install failed: PIN=123 TOKEN=abcd1234",
                     }
                 ),
                 json.dumps(
@@ -477,7 +477,7 @@ class TestBuildRepoImage:
                 repo_name="repo",
                 callback_url="https://cp.test/repo-images/build-complete",
                 build_id="img-1",
-                user_env_vars={"SHORT_TOKEN": "abcd", "API_TOKEN": "abcd1234"},
+                user_env_vars={"PIN": "123", "API_TOKEN": "abcd1234"},
             )
 
         snapshot_aio.assert_not_awaited()
@@ -487,5 +487,5 @@ class TestBuildRepoImage:
         assert failure_url == "https://cp.test/repo-images/build-failed"
         assert failure_payload == {
             "build_id": "img-1",
-            "error": "Build sandbox exited without completing: setup.failed: npm install failed: ***",
+            "error": "Build sandbox exited without completing: setup.failed: npm install failed: PIN=*** TOKEN=***",
         }
