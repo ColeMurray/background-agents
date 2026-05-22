@@ -438,6 +438,55 @@ describe("CallbackNotificationService", () => {
         await harness.service.notifyToolCall("msg-1", { type: "tool_call", tool: "read" });
         expect(fetchMock).toHaveBeenCalledTimes(2);
       });
+
+      it("retries on a later event when the first delivery for a callId fails", async () => {
+        // markCallIdNotified runs only on response.ok, so a transient failure
+        // (e.g. network error or non-2xx) on Anthropic's "running" event must
+        // not prevent the subsequent "completed" event from re-delivering.
+        vi.useFakeTimers();
+        const start = 1_700_000_000_000;
+        vi.setSystemTime(start);
+
+        vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+          callback_context: JSON.stringify({ channel: "C123" }),
+          source: "slack",
+        });
+        const fetchMock = vi.mocked(
+          (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
+        );
+        fetchMock
+          .mockRejectedValueOnce(new Error("network"))
+          .mockResolvedValue(new Response("ok", { status: 200 }));
+
+        await harness.service.notifyToolCall("msg-1", {
+          type: "tool_call",
+          tool: "bash",
+          callId: "call-retry",
+          status: "running",
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        // Advance past the throttle window so the retry is eligible.
+        vi.setSystemTime(start + 5_000);
+
+        await harness.service.notifyToolCall("msg-1", {
+          type: "tool_call",
+          tool: "bash",
+          callId: "call-retry",
+          status: "completed",
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+
+        // Third event for the same callId after a successful delivery should dedupe.
+        vi.setSystemTime(start + 10_000);
+        await harness.service.notifyToolCall("msg-1", {
+          type: "tool_call",
+          tool: "bash",
+          callId: "call-retry",
+          status: "completed",
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+      });
     });
   });
 

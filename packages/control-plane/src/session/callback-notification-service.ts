@@ -275,15 +275,15 @@ export class CallbackNotificationService {
 
     // Dedup before throttle so a skipped duplicate doesn't burn the rate-limit
     // window. Anthropic emits running+completed for the same callId; OpenAI's
-    // Responses API may emit only completed. Fire once per callId either way.
+    // Responses API may emit only completed. Fire once per successfully
+    // delivered callId either way — failed deliveries do not mark the set, so
+    // a later event for the same callId can retry.
     if (callId && this.notifiedCallIds.has(callId)) return;
 
     // Throttle: max 1 per 3 seconds
     const now = Date.now();
     if (now - this._lastToolCallCallbackTs < 3000) return;
     this._lastToolCallCallbackTs = now;
-
-    if (callId) this.markCallIdNotified(callId);
 
     const tool = event.tool ?? "unknown";
 
@@ -344,6 +344,10 @@ export class CallbackNotificationService {
       });
 
       if (response.ok) {
+        // Mark only on success so a transient failure doesn't dedupe the next
+        // event for this callId (Anthropic's running and completed may be
+        // seconds apart for long-running tools — the second event should retry).
+        if (callId) this.markCallIdNotified(callId);
         this.log.info("callback.tool_call", {
           message_id: messageId,
           session_id: sessionId,

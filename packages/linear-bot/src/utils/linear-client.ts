@@ -93,8 +93,29 @@ export async function getOAuthToken(env: Env, orgId: string): Promise<string | n
     });
 
     if (!res.ok) {
-      const errBody = await res.text();
-      log.error("oauth.refresh_failed", { org_id: orgId, status: res.status, body: errBody });
+      // RFC 6749 OAuth error responses carry `error` and `error_description` fields.
+      // Extract those so we can distinguish invalid_grant from invalid_client without
+      // logging the raw body (which contained client_secret and refresh_token in the
+      // request — and could be reflected by a misconfigured upstream).
+      const rawBody = await res.text();
+      let oauthError: string | undefined;
+      let oauthErrorDescription: string | undefined;
+      try {
+        const parsed = JSON.parse(rawBody) as { error?: unknown; error_description?: unknown };
+        if (typeof parsed.error === "string") oauthError = parsed.error;
+        if (typeof parsed.error_description === "string") {
+          oauthErrorDescription = parsed.error_description;
+        }
+      } catch {
+        // Non-JSON body — fall back to a bounded truncation below.
+      }
+      log.error("oauth.refresh_failed", {
+        org_id: orgId,
+        status: res.status,
+        oauth_error: oauthError,
+        oauth_error_description: oauthErrorDescription,
+        body_snippet: oauthError ? undefined : rawBody.slice(0, 500),
+      });
       return null;
     }
 
