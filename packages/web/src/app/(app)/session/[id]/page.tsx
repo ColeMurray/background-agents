@@ -489,7 +489,6 @@ function SessionPageContent() {
       sessionId={sessionId}
       selectedMediaArtifactId={selectedMediaArtifactId}
       setSelectedMediaArtifactId={setSelectedMediaArtifactId}
-      dispatchImplPrompt={sendPrompt}
     />
   );
 }
@@ -531,7 +530,6 @@ function SessionContent({
   sessionId,
   selectedMediaArtifactId,
   setSelectedMediaArtifactId,
-  dispatchImplPrompt,
 }: {
   sessionState: SessionState;
   connected: boolean;
@@ -569,7 +567,6 @@ function SessionContent({
   sessionId: string;
   selectedMediaArtifactId: string | null;
   setSelectedMediaArtifactId: (artifactId: string | null) => void;
-  dispatchImplPrompt: (content: string, model?: string, reasoningEffort?: string) => void;
 }) {
   const { isOpen, toggle } = useSidebarContext();
   const isBelowLg = useMediaQuery("(max-width: 1023px)");
@@ -1201,7 +1198,6 @@ function SessionContent({
               defaultModel={defaultImplementationModel}
               defaultReasoningEffort={getDefaultReasoningEffort(defaultImplementationModel)}
               modelOptions={modelOptions}
-              onDispatchImplPrompt={dispatchImplPrompt}
             />
           )}
 

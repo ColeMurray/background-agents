@@ -14,11 +14,6 @@ interface PlanApprovalBannerProps {
   defaultReasoningEffort?: string | null;
   /** Enabled model options grouped by category (same source as the input area selector). */
   modelOptions: ModelCategory[];
-  /**
-   * Dispatched by the parent (session page) to send the auto-generated impl prompt.
-   * Must call `sendPrompt(content, model, reasoningEffort)`.
-   */
-  onDispatchImplPrompt?: (content: string, model: string, reasoningEffort?: string) => void;
 }
 
 export function PlanApprovalBanner({
@@ -28,7 +23,6 @@ export function PlanApprovalBanner({
   defaultModel,
   defaultReasoningEffort,
   modelOptions,
-  onDispatchImplPrompt,
 }: PlanApprovalBannerProps) {
   const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -97,18 +91,9 @@ export function PlanApprovalBanner({
         setErrorMessage(data.error || `Failed to approve plan (HTTP ${res.status})`);
         return;
       }
-      // Control-plane persisted impl model on session.model; now dispatch a
-      // synthetic prompt to actually start the implementation turn. The
-      // dispatched message inherits session.model so the impl runs with the
-      // chosen model.
-      if (onDispatchImplPrompt && plan) {
-        const versionLabel = `v${plan.version}`;
-        onDispatchImplPrompt(
-          `Implement the approved plan ${versionLabel}. Follow its steps exactly; flag any deviation before applying it.`,
-          implModel,
-          implReasoningEffort
-        );
-      }
+      // Control-plane persists the impl model on session.model AND dispatches
+      // the implementation prompt server-side, so we have nothing else to do
+      // here — every client (web + bots) goes through the same path.
     } catch (e) {
       setErrorMessage(e instanceof Error ? e.message : String(e));
     } finally {
