@@ -53,7 +53,6 @@ export function SessionRightSidebarContent({
     () => buildAuthenticatedUrl(sessionState?.ttydUrl, sessionState?.ttydToken),
     [sessionState?.ttydUrl, sessionState?.ttydToken]
   );
-
   if (!sessionState) {
     return (
       <div className="p-4">
@@ -79,6 +78,10 @@ export function SessionRightSidebarContent({
           createdAt={sessionState.createdAt}
           model={sessionState.model}
           reasoningEffort={sessionState.reasoningEffort}
+          planMode={sessionState.planMode}
+          planModel={sessionState.planModel}
+          planApprovalStatus={sessionState.planApprovalStatus}
+          planCostSnapshot={sessionState.planCostSnapshot}
           baseBranch={sessionState.baseBranch}
           branchName={sessionState.branchName || undefined}
           repoOwner={sessionState.repoOwner}

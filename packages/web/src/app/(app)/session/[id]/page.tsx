@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { mutate } from "swr";
+import useSWR, { mutate } from "swr";
 import useSWRMutation from "swr/mutation";
 import {
   Suspense,
@@ -27,6 +27,7 @@ import {
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { TerminalPanel } from "@/components/terminal-panel";
 import { ActionBar } from "@/components/action-bar";
+import { PlanApprovalBanner } from "@/components/plan-approval-banner";
 import { copyToClipboard, formatModelNameLower } from "@/lib/format";
 import { archiveSession } from "@/lib/archive-session";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
@@ -36,7 +37,13 @@ import {
   type SessionListResponse,
 } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { DEFAULT_MODEL, getDefaultReasoningEffort, type ModelCategory } from "@open-inspect/shared";
+import {
+  DEFAULT_MODEL,
+  getDefaultReasoningEffort,
+  isValidReasoningEffort,
+  type ModelCategory,
+  type PlanArtifact,
+} from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 import type { Artifact, SandboxEvent } from "@/types/session";
@@ -48,6 +55,8 @@ import {
   StopIcon,
   CopyIcon,
   ErrorIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
 } from "@/components/ui/icons";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 
@@ -58,6 +67,12 @@ import type { SessionItem } from "@/components/session-sidebar";
 type EventGroup =
   | { type: "tool_group"; events: ToolCallEvent[]; id: string }
   | { type: "single"; event: SandboxEvent; id: string };
+
+type PlanBubbleStatus = "awaiting" | "approved" | "rejected" | "superseded";
+
+type TimelineItem =
+  | EventGroup
+  | { type: "plan"; plan: PlanArtifact; status: PlanBubbleStatus; id: string };
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -113,13 +128,51 @@ function groupEvents(events: SandboxEvent[]): EventGroup[] {
   return groups;
 }
 
-function dedupeAndGroupEvents(events: SandboxEvent[]): EventGroup[] {
+const KNOWN_EVENT_TYPES = new Set<SandboxEvent["type"]>([
+  "heartbeat",
+  "token",
+  "tool_call",
+  "step_start",
+  "step_finish",
+  "tool_result",
+  "git_sync",
+  "error",
+  "execution_complete",
+  "artifact",
+  "push_complete",
+  "push_error",
+  "user_message",
+]);
+
+function dedupeAndGroupEvents(
+  events: SandboxEvent[],
+  suppressedPlanMessageIds: Set<string>
+): EventGroup[] {
   const filteredEvents: Array<SandboxEvent | null> = [];
   const seenToolCalls = new Map<string, number>();
   const seenCompletions = new Set<string>();
   const seenTokens = new Map<string, number>();
 
   for (const event of events) {
+    // Drop events with no recognized type. The server replays internal event
+    // rows (e.g. `plan_saved`) whose `data` blob carries no `type` field, so
+    // they arrive as untyped objects with a fallback timestamp = now, which
+    // would otherwise confuse chronological insertion logic downstream.
+    if (!event.type || !KNOWN_EVENT_TYPES.has(event.type)) {
+      continue;
+    }
+    // Suppress the streamed assistant text for planning turns once the plan
+    // has been persisted — the PlanBubble below already renders the same
+    // content. During streaming (before the plan POST lands) the set is empty,
+    // so the live tokens show normally; once the plan saves the token event
+    // disappears on the next render.
+    if (
+      event.type === "token" &&
+      event.messageId &&
+      suppressedPlanMessageIds.has(event.messageId)
+    ) {
+      continue;
+    }
     if (event.type === "tool_call" && event.callId) {
       // Deduplicate tool_call events by callId - keep the latest (most complete) one
       const existingIdx = seenToolCalls.get(event.callId);
@@ -299,13 +352,20 @@ function SessionPageContent() {
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
     getDefaultReasoningEffort(DEFAULT_MODEL)
   );
+  // Per-prompt opt-in toggle for plan mode. Default OFF: the user enables it
+  // when they want the next prompt to generate a plan rather than build.
+  const [planToggle, setPlanToggle] = useState(false);
+  // Set when the user explicitly picks a model on this page. Until then, the
+  // Plan toggle auto-swaps between the session baseline and defaultPlanModel.
+  const userPickedModelRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const { enabledModels, enabledModelOptions } = useEnabledModels();
+  const { enabledModels, enabledModelOptions, defaultModel, defaultPlanModel } = useEnabledModels();
 
   const handleModelChange = useCallback((model: string) => {
+    userPickedModelRef.current = true;
     setSelectedModel(model);
     setReasoningEffort(getDefaultReasoningEffort(model));
   }, []);
@@ -329,11 +389,42 @@ function SessionPageContent() {
     }
   }, [sessionState?.model, sessionState?.reasoningEffort]);
 
+  // Auto-switch the per-prompt model when the Plan toggle flips, as long as the
+  // user hasn't explicitly picked a model on this page. The baseline (toggle
+  // OFF) is the session's model — that's what the user implicitly chose at
+  // session creation. Toggle ON switches to the deployment's defaultPlanModel.
+  useEffect(() => {
+    if (userPickedModelRef.current) return;
+    const baseline = sessionState?.model ?? defaultModel;
+    const target = planToggle ? defaultPlanModel : baseline;
+    if (!target) return;
+    if (enabledModels.length > 0 && !enabledModels.includes(target)) return;
+    if (target === selectedModel) return;
+    setSelectedModel(target);
+    // Preserve the user's current reasoning effort across the auto-switch when
+    // it's valid for the target model — otherwise fall back to the target's
+    // default. Avoids surprising the user by promoting them to "max" just
+    // because the plan-default model's default reasoning happens to be max.
+    setReasoningEffort(
+      reasoningEffort && isValidReasoningEffort(target, reasoningEffort)
+        ? reasoningEffort
+        : getDefaultReasoningEffort(target)
+    );
+  }, [
+    planToggle,
+    sessionState?.model,
+    defaultModel,
+    defaultPlanModel,
+    enabledModels,
+    selectedModel,
+    reasoningEffort,
+  ]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!prompt.trim() || isProcessing) return;
 
-    sendPrompt(prompt, selectedModel, reasoningEffort);
+    sendPrompt(prompt, selectedModel, reasoningEffort, planToggle || undefined);
     setPrompt("");
     // Revalidate sidebar so this session bubbles to the top
     mutate(SIDEBAR_SESSIONS_KEY);
@@ -378,6 +469,8 @@ function SessionPageContent() {
       isProcessing={isProcessing}
       selectedModel={selectedModel}
       reasoningEffort={reasoningEffort}
+      planToggle={planToggle}
+      setPlanToggle={setPlanToggle}
       inputRef={inputRef}
       handleSubmit={handleSubmit}
       handleInputChange={handleInputChange}
@@ -391,10 +484,12 @@ function SessionPageContent() {
       loadingHistory={loadingHistory}
       loadOlderEvents={loadOlderEvents}
       modelOptions={enabledModelOptions}
+      defaultImplementationModel={defaultModel}
       fallbackSessionInfo={fallbackSessionInfo}
       sessionId={sessionId}
       selectedMediaArtifactId={selectedMediaArtifactId}
       setSelectedMediaArtifactId={setSelectedMediaArtifactId}
+      dispatchImplPrompt={sendPrompt}
     />
   );
 }
@@ -416,6 +511,8 @@ function SessionContent({
   isProcessing,
   selectedModel,
   reasoningEffort,
+  planToggle,
+  setPlanToggle,
   inputRef,
   handleSubmit,
   handleInputChange,
@@ -429,10 +526,12 @@ function SessionContent({
   loadingHistory,
   loadOlderEvents,
   modelOptions,
+  defaultImplementationModel,
   fallbackSessionInfo,
   sessionId,
   selectedMediaArtifactId,
   setSelectedMediaArtifactId,
+  dispatchImplPrompt,
 }: {
   sessionState: SessionState;
   connected: boolean;
@@ -450,6 +549,8 @@ function SessionContent({
   isProcessing: boolean;
   selectedModel: string;
   reasoningEffort: string | undefined;
+  planToggle: boolean;
+  setPlanToggle: (v: boolean) => void;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
   handleSubmit: (e: React.FormEvent) => void;
   handleInputChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
@@ -463,10 +564,12 @@ function SessionContent({
   loadingHistory: boolean;
   loadOlderEvents: () => void;
   modelOptions: ModelCategory[];
+  defaultImplementationModel: string;
   fallbackSessionInfo: FallbackSessionInfo;
   sessionId: string;
   selectedMediaArtifactId: string | null;
   setSelectedMediaArtifactId: (artifactId: string | null) => void;
+  dispatchImplPrompt: (content: string, model?: string, reasoningEffort?: string) => void;
 }) {
   const { isOpen, toggle } = useSidebarContext();
   const isBelowLg = useMediaQuery("(max-width: 1023px)");
@@ -694,8 +797,96 @@ function SessionContent({
     }
   }, [events, messagesEndRef]);
 
+  const isPlanAwaiting =
+    sessionState?.planMode === true && sessionState?.planApprovalStatus === "awaiting_approval";
+  // Plan-locked form: applies while the session is in plan mode and the plan
+  // is not yet in a terminal state (awaiting *or* still streaming). The model
+  // and reasoning effort are locked to the planning model during this window;
+  // exposing the impl-mode selector would be misleading. Mirrors the "plan
+  // agent" label condition further down.
+  const isPlanLocked =
+    sessionState?.planMode === true &&
+    sessionState?.planApprovalStatus !== "approved" &&
+    sessionState?.planApprovalStatus !== "rejected";
+
+  // Fetch the full plan history so old versions render collapsed inline
+  // alongside the latest. Skipped for non-plan sessions.
+  const plansKey = sessionState?.planMode ? `/api/sessions/${sessionId}/plans` : null;
+  const { data: plansData, mutate: mutatePlans } = useSWR<{ plans: PlanArtifact[] }>(plansKey);
+
+  // Revalidate the plan list whenever the WebSocket signals a new plan
+  // version. `currentPlan.id` changes per save, so this fires once per
+  // version.
+  const currentPlanId = sessionState?.currentPlan?.id ?? null;
+  useEffect(() => {
+    if (currentPlanId) mutatePlans();
+  }, [currentPlanId, mutatePlans]);
+
+  const plans = useMemo<PlanArtifact[]>(() => {
+    const fromApi = plansData?.plans ?? [];
+    // If the API hasn't returned yet but the WS already pushed the current
+    // plan, surface it immediately so the bubble doesn't flash empty.
+    if (fromApi.length === 0 && sessionState?.currentPlan) {
+      return [sessionState.currentPlan];
+    }
+    return fromApi;
+  }, [plansData?.plans, sessionState?.currentPlan]);
+
+  // Every saved plan was produced by an assistant turn whose streamed tokens
+  // carry the same messageId. We hide those token events so the PlanBubble is
+  // the sole representation of the plan.
+  const suppressedPlanMessageIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const plan of plans) {
+      if (plan.createdByMessageId) ids.add(plan.createdByMessageId);
+    }
+    return ids;
+  }, [plans]);
+
   // Deduplicate and group events for rendering
-  const groupedEvents = useMemo(() => dedupeAndGroupEvents(events), [events]);
+  const groupedEvents = useMemo(
+    () => dedupeAndGroupEvents(events, suppressedPlanMessageIds),
+    [events, suppressedPlanMessageIds]
+  );
+
+  // Interleave every plan version chronologically. The highest-version plan
+  // inherits the session's plan_approval_status (awaiting/approved/rejected);
+  // every older version is "superseded".
+  const timelineItems = useMemo<TimelineItem[]>(() => {
+    if (plans.length === 0) return groupedEvents;
+
+    const latestVersion = plans.reduce((max, p) => Math.max(max, p.version), -Infinity);
+    const latestStatus: PlanBubbleStatus = (() => {
+      const s = sessionState?.planApprovalStatus;
+      if (s === "approved") return "approved";
+      if (s === "rejected") return "rejected";
+      return "awaiting";
+    })();
+    const plansAsc = [...plans].sort((a, b) => a.createdAt - b.createdAt);
+    const planItems = plansAsc.map((plan) => ({
+      type: "plan" as const,
+      plan,
+      status: plan.version === latestVersion ? latestStatus : ("superseded" as const),
+      id: `plan-${plan.id}`,
+    }));
+
+    const result: TimelineItem[] = [];
+    let pi = 0;
+    for (const group of groupedEvents) {
+      const groupTs =
+        group.type === "tool_group" ? (group.events[0]?.timestamp ?? 0) : group.event.timestamp;
+      while (pi < planItems.length && planItems[pi].plan.createdAt / 1000 <= groupTs) {
+        result.push(planItems[pi]);
+        pi++;
+      }
+      result.push(group);
+    }
+    while (pi < planItems.length) {
+      result.push(planItems[pi]);
+      pi++;
+    }
+    return result;
+  }, [groupedEvents, plans, sessionState?.planApprovalStatus]);
   const mediaArtifacts = useMemo(
     () =>
       artifacts.filter((artifact) => artifact.type === "screenshot" || artifact.type === "video"),
@@ -831,19 +1022,25 @@ function SessionContent({
                   {showTimelineSkeleton ? (
                     <TimelineSkeleton />
                   ) : (
-                    groupedEvents.map((group) =>
-                      group.type === "tool_group" ? (
-                        <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />
-                      ) : (
+                    timelineItems.map((item) => {
+                      if (item.type === "tool_group") {
+                        return (
+                          <ToolCallGroup key={item.id} events={item.events} groupId={item.id} />
+                        );
+                      }
+                      if (item.type === "plan") {
+                        return <PlanBubble key={item.id} plan={item.plan} status={item.status} />;
+                      }
+                      return (
                         <EventItem
-                          key={group.id}
-                          event={group.event}
+                          key={item.id}
+                          event={item.event}
                           sessionId={sessionId}
                           currentParticipantId={currentParticipantId}
                           onOpenMedia={setSelectedMediaArtifactId}
                         />
-                      )
-                    )
+                      );
+                    })
                   )}
                   {isProcessing && <ThinkingIndicator />}
 
@@ -993,6 +1190,21 @@ function SessionContent({
             />
           </div>
 
+          {/* Plan approval gate — visible whenever the session has a plan
+              status (awaiting/approved/rejected). The plan content itself
+              lives in the timeline as a bubble; this is just the action bar. */}
+          {sessionState?.planMode && sessionState?.planApprovalStatus && (
+            <PlanApprovalBanner
+              sessionId={sessionId}
+              status={sessionState.planApprovalStatus}
+              plan={sessionState.currentPlan ?? null}
+              defaultModel={defaultImplementationModel}
+              defaultReasoningEffort={getDefaultReasoningEffort(defaultImplementationModel)}
+              modelOptions={modelOptions}
+              onDispatchImplPrompt={dispatchImplPrompt}
+            />
+          )}
+
           {/* Input container */}
           <div className="border border-border bg-input">
             {/* Text input area with floating send button */}
@@ -1002,7 +1214,17 @@ function SessionContent({
                 value={prompt}
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
-                placeholder={isProcessing ? "Type your next message..." : "Ask or build anything"}
+                placeholder={
+                  isPlanAwaiting
+                    ? "Amend the plan…"
+                    : isPlanLocked && isProcessing
+                      ? "Generating plan…"
+                      : isProcessing
+                        ? "Type your next message..."
+                        : isPlanLocked || planToggle
+                          ? "Describe what to plan"
+                          : "Ask or build anything"
+                }
                 className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-foreground placeholder:text-secondary-foreground"
                 rows={3}
               />
@@ -1041,45 +1263,82 @@ function SessionContent({
               </div>
             </div>
 
-            {/* Footer row with model selector, reasoning pills, and agent label */}
+            {/* Footer row with model selector, reasoning pills, and agent
+                label. In plan-locked mode (planning turn streaming or plan
+                awaiting approval) the model selector + pills are hidden
+                because the planning model is locked for the duration; only
+                the agent label remains. */}
             <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">
-              {/* Left side - Model selector + Reasoning pills */}
-              <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
-                <Combobox
-                  value={selectedModel}
-                  onChange={setSelectedModel}
-                  items={
-                    modelOptions.map((group) => ({
-                      category: group.category,
-                      options: group.models.map((model) => ({
-                        value: model.id,
-                        label: model.name,
-                        description: model.description,
-                      })),
-                    })) as ComboboxGroup[]
-                  }
-                  direction="up"
-                  dropdownWidth="w-56"
-                  disabled={isProcessing}
-                  triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
-                >
-                  <ModelIcon className="w-3.5 h-3.5" />
-                  <span className="truncate max-w-[9rem] sm:max-w-none">
-                    {formatModelNameLower(selectedModel)}
-                  </span>
-                </Combobox>
+              {!isPlanLocked && (
+                <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
+                  <Combobox
+                    value={selectedModel}
+                    onChange={setSelectedModel}
+                    items={
+                      modelOptions.map((group) => ({
+                        category: group.category,
+                        options: group.models.map((model) => ({
+                          value: model.id,
+                          label: model.name,
+                          description: model.description,
+                        })),
+                      })) as ComboboxGroup[]
+                    }
+                    direction="up"
+                    dropdownWidth="w-56"
+                    disabled={isProcessing}
+                    triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
+                  >
+                    <ModelIcon className="w-3.5 h-3.5" />
+                    <span className="truncate max-w-[9rem] sm:max-w-none">
+                      {formatModelNameLower(selectedModel)}
+                    </span>
+                  </Combobox>
 
-                {/* Reasoning effort pills */}
-                <ReasoningEffortPills
-                  selectedModel={selectedModel}
-                  reasoningEffort={reasoningEffort}
-                  onSelect={setReasoningEffort}
-                  disabled={isProcessing}
-                />
-              </div>
+                  <ReasoningEffortPills
+                    selectedModel={selectedModel}
+                    reasoningEffort={reasoningEffort}
+                    onSelect={setReasoningEffort}
+                    disabled={isProcessing}
+                  />
 
-              {/* Right side - Agent label */}
-              <span className="hidden sm:inline text-sm text-muted-foreground">build agent</span>
+                  {/* Per-prompt plan toggle. OFF by default; clicking ON
+                      sends `planMode: true` with the next prompt so the
+                      server runs it as a planning turn. */}
+                  <button
+                    type="button"
+                    onClick={() => setPlanToggle(!planToggle)}
+                    disabled={isProcessing}
+                    aria-pressed={planToggle}
+                    className={`rounded border px-2 py-0.5 text-xs transition disabled:opacity-50 disabled:cursor-not-allowed ${
+                      planToggle
+                        ? "border-accent bg-accent-muted text-accent"
+                        : "border-border text-muted-foreground hover:text-foreground"
+                    }`}
+                    title={
+                      planToggle
+                        ? "Plan mode ON — next prompt will generate a plan"
+                        : "Plan mode OFF — next prompt will build directly"
+                    }
+                  >
+                    Plan
+                  </button>
+                </div>
+              )}
+
+              {/* Agent label. Plan-mode sessions run planning turns until
+                  the plan reaches a terminal status (approved or rejected);
+                  any terminal state reverts to the build agent. The per-prompt
+                  planToggle also flips the label so the user sees what the
+                  next prompt will run as. */}
+              <span className="hidden sm:inline text-sm text-muted-foreground sm:ml-auto">
+                {planToggle ||
+                (sessionState?.planMode &&
+                  sessionState?.planApprovalStatus !== "approved" &&
+                  sessionState?.planApprovalStatus !== "rejected")
+                  ? "plan agent"
+                  : "build agent"}
+              </span>
             </div>
           </div>
         </form>
@@ -1174,6 +1433,102 @@ function ThinkingIndicator() {
     <div className="bg-card p-4 flex items-center gap-2">
       <span className="inline-block w-2 h-2 bg-accent rounded-full animate-pulse" />
       <span className="text-sm text-muted-foreground">Thinking...</span>
+    </div>
+  );
+}
+
+function PlanBubble({ plan, status }: { plan: PlanArtifact; status: PlanBubbleStatus }) {
+  // The awaiting plan is pinned open (the user must read it to approve);
+  // every terminal/older state defaults to collapsed and is togglable.
+  const isAwaiting = status === "awaiting";
+  const [expanded, setExpanded] = useState(isAwaiting);
+  const time = new Date(plan.createdAt).toLocaleTimeString();
+  const showContent = isAwaiting || expanded;
+
+  const styles: Record<
+    PlanBubbleStatus,
+    { container: string; titleStrike: boolean; badge: { text: string; className: string } | null }
+  > = {
+    awaiting: {
+      container: "bg-card p-4 border-l-2 border-accent",
+      titleStrike: false,
+      badge: null,
+    },
+    approved: {
+      container: "bg-card p-4 border-l-2 border-success",
+      titleStrike: false,
+      badge: {
+        text: "accepted",
+        className: "bg-success-muted text-success-foreground",
+      },
+    },
+    rejected: {
+      container:
+        "bg-destructive-muted/15 p-4 border-l-2 border-dashed border-destructive opacity-75",
+      titleStrike: true,
+      badge: {
+        text: "rejected",
+        className: "bg-destructive-muted text-destructive-foreground",
+      },
+    },
+    superseded: {
+      container: "bg-muted/20 p-4 border-l-2 border-dashed border-border-muted opacity-75",
+      titleStrike: true,
+      badge: {
+        text: "superseded",
+        className: "bg-muted text-secondary-foreground",
+      },
+    },
+  };
+
+  const { container, titleStrike, badge } = styles[status];
+
+  const headerLabel = (
+    <>
+      <span className={titleStrike ? "line-through" : ""}>Plan v{plan.version}</span>
+      {badge && (
+        <span
+          className={`ml-1 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${badge.className}`}
+        >
+          {badge.text}
+        </span>
+      )}
+    </>
+  );
+
+  return (
+    <div id={`plan-${plan.id}`} className={container}>
+      {isAwaiting ? (
+        <div className="flex w-full items-center justify-between mb-2">
+          <span className="flex items-center gap-1 text-xs text-muted-foreground">
+            {headerLabel}
+          </span>
+          <span className="text-xs text-secondary-foreground">{time}</span>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="flex w-full items-center justify-between mb-2 text-left hover:opacity-80 transition"
+          aria-expanded={expanded}
+        >
+          <span className="flex items-center gap-1 text-xs text-muted-foreground">
+            {expanded ? (
+              <ChevronDownIcon className="w-3.5 h-3.5" />
+            ) : (
+              <ChevronRightIcon className="w-3.5 h-3.5" />
+            )}
+            {headerLabel}
+          </span>
+          <span className="text-xs text-secondary-foreground">{time}</span>
+        </button>
+      )}
+      {showContent &&
+        (plan.content ? (
+          <SafeMarkdown content={plan.content} className="text-sm" />
+        ) : (
+          <p className="text-xs text-secondary-foreground">No plan content available.</p>
+        ))}
     </div>
   );
 }
