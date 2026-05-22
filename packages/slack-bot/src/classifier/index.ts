@@ -18,7 +18,7 @@ const CONFIDENCE_LEVELS: ClassificationResult["confidence"][] = ["high", "medium
 const CLASSIFY_REPO_TOOL: Anthropic.Messages.Tool = {
   name: CLASSIFY_REPO_TOOL_NAME,
   description:
-    "Classify which repository a Slack message refers to. Use repoId as null when uncertain.",
+    "Classify which repository a Slack message refers to AND whether the task warrants a human-approved plan before code changes.",
   input_schema: {
     type: "object",
     properties: {
@@ -32,18 +32,76 @@ const CLASSIFY_REPO_TOOL: Anthropic.Messages.Tool = {
       },
       reasoning: {
         type: "string",
-        description: "Brief explanation of classification decision.",
+        description: "Brief explanation of repository classification decision.",
       },
       alternatives: {
         type: "array",
         items: { type: "string" },
         description: "Alternative repository IDs/fullNames when confidence is not high.",
       },
+      shouldPlan: {
+        type: "boolean",
+        description:
+          "True if the task is non-trivial enough to warrant a plan before code changes (multi-step refactor, design question, architectural decision, multi-file changes). False for trivial fixes, well-scoped small changes, questions, or quick tweaks. Default to false when uncertain to reduce friction.",
+      },
+      planReasoning: {
+        type: "string",
+        description: "Brief explanation of the plan-vs-build decision.",
+      },
     },
-    required: ["repoId", "confidence", "reasoning", "alternatives"],
+    required: ["repoId", "confidence", "reasoning", "alternatives", "shouldPlan", "planReasoning"],
     additionalProperties: false,
   },
 };
+
+const CLASSIFY_PLAN_TOOL_NAME = "classify_plan_intent";
+const CLASSIFY_PLAN_TOOL: Anthropic.Messages.Tool = {
+  name: CLASSIFY_PLAN_TOOL_NAME,
+  description:
+    "Decide whether a Slack coding request warrants a human-approved plan before code changes.",
+  input_schema: {
+    type: "object",
+    properties: {
+      shouldPlan: {
+        type: "boolean",
+        description:
+          "True if the task is non-trivial (multi-step refactor, design question, architectural decision). False for trivial fixes, well-scoped small changes, questions, or quick tweaks. Default to false when uncertain to reduce friction.",
+      },
+      planReasoning: {
+        type: "string",
+        description: "Brief explanation of the decision.",
+      },
+    },
+    required: ["shouldPlan", "planReasoning"],
+    additionalProperties: false,
+  },
+};
+
+function buildPlanIntentPrompt(message: string, threadContext: string): string {
+  return `You are deciding whether a coding agent should propose a plan before making code changes, or build directly.
+
+## User's message
+${message}${threadContext}
+
+## Decision rules
+
+Set \`shouldPlan: true\` when the task is non-trivial:
+- Multi-step refactor, redesign, or migration
+- New feature spanning multiple files
+- Architectural decision or "how should we" questions
+- Anything where reviewing the approach before code changes adds clear value
+
+Set \`shouldPlan: false\` when the task is well-scoped and quick:
+- Bug fix with a clear scope
+- Typo, rename, or small enhancement
+- Questions that don't require code changes
+- Explicit "just do X", "quick fix", "small change", or similar
+- Pure investigation / read-only requests
+
+When uncertain, prefer \`false\` (build mode) to reduce friction.
+
+Call the ${CLASSIFY_PLAN_TOOL_NAME} tool with your decision.`;
+}
 
 /**
  * Build the classification prompt for the LLM.
@@ -73,7 +131,9 @@ ${context.previousMessages.map((m) => `- ${m}`).join("\n")}`
 }`;
   }
 
-  return `You are a repository classifier for a coding agent. Your job is to determine which code repository a Slack message is referring to.
+  return `You are a classifier for a coding agent triggered from Slack. You have two decisions to make:
+1. Which repository the user's message refers to.
+2. Whether the task warrants a human-approved plan before any code changes ("plan mode"), or should go straight to building ("build mode").
 
 ## Available Repositories
 ${repoDescriptions}
@@ -83,9 +143,7 @@ ${contextSection}
 ## User's Message
 ${message}
 
-## Your Task
-
-Analyze the message and context to determine which repository the user is referring to.
+## Repository Decision
 
 Consider:
 1. Explicit mentions of repository names or aliases
@@ -94,13 +152,32 @@ Consider:
 4. Channel associations (some channels are associated with specific repos)
 5. Context from previous messages in the thread
 
+## Plan-vs-Build Decision
+
+Set \`shouldPlan: true\` when the task is non-trivial:
+- Multi-step refactor, redesign, or migration
+- New feature spanning multiple files
+- Architectural decision or "how should we" questions
+- Anything where reviewing the approach before code changes adds clear value
+
+Set \`shouldPlan: false\` when the task is well-scoped and quick:
+- Bug fix with a clear scope
+- Typo, rename, or small enhancement
+- Questions that don't require code changes
+- Explicit "just do X", "quick fix", "small change", or similar
+- Pure investigation / read-only requests
+
+When uncertain, prefer \`false\` (build mode) to reduce friction. The user can always re-prompt for a plan.
+
 ## Response Format
 
-Return your decision by calling the ${CLASSIFY_REPO_TOOL_NAME} tool with:
+Call the ${CLASSIFY_REPO_TOOL_NAME} tool with:
 - repoId: "owner/name" or null if unclear
-- confidence: "high" | "medium" | "low"
-- reasoning: brief explanation
-- alternatives: other possible repos when confidence is not high`;
+- confidence: "high" | "medium" | "low" (for the repo choice)
+- reasoning: brief explanation of the repo choice
+- alternatives: other possible repos when confidence is not high
+- shouldPlan: true | false
+- planReasoning: brief explanation of the plan-vs-build choice`;
 }
 
 /**
@@ -111,6 +188,8 @@ interface LLMResponse {
   confidence: ConfidenceLevel;
   reasoning: string;
   alternatives: string[];
+  shouldPlan: boolean;
+  planReasoning: string;
 }
 
 function normalizeModelResponse(raw: unknown): LLMResponse {
@@ -150,11 +229,21 @@ function normalizeModelResponse(raw: unknown): LLMResponse {
     throw new Error("Invalid alternatives in LLM response");
   }
 
+  if (typeof input.shouldPlan !== "boolean") {
+    throw new Error("Missing or invalid shouldPlan in LLM response");
+  }
+
+  if (typeof input.planReasoning !== "string" || input.planReasoning.trim().length === 0) {
+    throw new Error("Missing planReasoning in LLM response");
+  }
+
   return {
     repoId,
     confidence: confidence as ClassificationResult["confidence"],
     reasoning: input.reasoning.trim(),
     alternatives: [...new Set(alternatives)],
+    shouldPlan: input.shouldPlan,
+    planReasoning: input.planReasoning.trim(),
   };
 }
 
@@ -206,25 +295,30 @@ export class RepoClassifier {
       };
     }
 
-    // If only one repo, skip classification
+    // Fast paths still need a plan-vs-build classification so single-repo
+    // users benefit from smart plan detection. We make a lightweight LLM
+    // call for that signal and skip the (trivial) repo classification.
     if (repos.length === 1) {
+      const plan = await this.classifyPlanIntent(message, context, traceId);
       return {
         repo: repos[0],
         confidence: "high",
         reasoning: "Only one repository is available.",
         needsClarification: false,
+        ...plan,
       };
     }
 
-    // Check for channel-specific repos first
     if (context?.channelId) {
       const channelRepos = await getReposByChannel(this.env, context.channelId, traceId);
       if (channelRepos.length === 1) {
+        const plan = await this.classifyPlanIntent(message, context, traceId);
         return {
           repo: channelRepos[0],
           confidence: "high",
           reasoning: `Channel is associated with repository ${channelRepos[0].fullName}`,
           needsClarification: false,
+          ...plan,
         };
       }
     }
@@ -286,6 +380,8 @@ export class RepoClassifier {
           !matchedRepo ||
           llmResult.confidence === "low" ||
           (llmResult.confidence === "medium" && alternatives.length > 0),
+        shouldPlan: llmResult.shouldPlan,
+        planReasoning: llmResult.planReasoning,
       };
     } catch (e) {
       log.error("classifier.classify", {
@@ -304,6 +400,64 @@ export class RepoClassifier {
         alternatives: repos.slice(0, 5),
         needsClarification: true,
       };
+    }
+  }
+
+  /**
+   * Lightweight LLM call that decides plan-vs-build for the given prompt.
+   * Used by the fast paths (single repo, channel-bound) so users with only
+   * one repo configured still benefit from smart plan detection.
+   *
+   * Returns `{ shouldPlan: false }` on any error so a classifier failure
+   * never blocks a build — the user can still re-prompt for a plan.
+   */
+  private async classifyPlanIntent(
+    message: string,
+    context?: ThreadContext,
+    traceId?: string
+  ): Promise<{ shouldPlan?: boolean; planReasoning?: string }> {
+    try {
+      const threadContext = context?.previousMessages?.length
+        ? `\n\n## Previous messages in thread\n${context.previousMessages.map((m) => `- ${m}`).join("\n")}`
+        : "";
+
+      const response = await this.client.messages.create({
+        model: this.env.CLASSIFICATION_MODEL || "claude-haiku-4-5",
+        max_tokens: 200,
+        temperature: 0,
+        tools: [CLASSIFY_PLAN_TOOL],
+        tool_choice: {
+          type: "tool",
+          name: CLASSIFY_PLAN_TOOL_NAME,
+          disable_parallel_tool_use: true,
+        },
+        messages: [
+          {
+            role: "user",
+            content: buildPlanIntentPrompt(message, threadContext),
+          },
+        ],
+      });
+
+      const toolUseBlock = response.content.find(
+        (block): block is Anthropic.Messages.ToolUseBlock =>
+          block.type === "tool_use" && block.name === CLASSIFY_PLAN_TOOL_NAME
+      );
+      if (!toolUseBlock) return { shouldPlan: false };
+      const input = toolUseBlock.input as Record<string, unknown>;
+      const shouldPlan = typeof input.shouldPlan === "boolean" ? input.shouldPlan : false;
+      const planReasoning =
+        typeof input.planReasoning === "string" && input.planReasoning.trim().length > 0
+          ? input.planReasoning.trim()
+          : undefined;
+      return { shouldPlan, planReasoning };
+    } catch (e) {
+      log.warn("classifier.classify_plan_intent", {
+        trace_id: traceId,
+        outcome: "error",
+        error: e instanceof Error ? e : new Error(String(e)),
+      });
+      return { shouldPlan: false };
     }
   }
 }
