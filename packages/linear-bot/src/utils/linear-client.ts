@@ -93,7 +93,8 @@ export async function getOAuthToken(env: Env, orgId: string): Promise<string | n
     });
 
     if (!res.ok) {
-      log.error("oauth.refresh_failed", { org_id: orgId, status: res.status });
+      const errBody = await res.text();
+      log.error("oauth.refresh_failed", { org_id: orgId, status: res.status, body: errBody });
       return null;
     }
 
