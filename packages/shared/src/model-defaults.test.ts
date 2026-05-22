@@ -88,4 +88,46 @@ describe("fetchModelDefaults", () => {
       defaultPlanModel: DEFAULT_PLAN_MODEL,
     });
   });
+
+  it("applies per-field fallback when only defaultModel is in the CP response", async () => {
+    // Regression test for CodeRabbit #672 item 2.1: previously, an
+    // all-or-nothing gate required BOTH fields in the CP response.
+    // Missing one would discard the other and force both fields to fall
+    // back together. Now they resolve independently — DB > env > constant.
+    const fetcher = vi.fn().mockResolvedValue(
+      jsonResponse({
+        enabledModels: ["anthropic/claude-haiku-4-5"],
+        defaultModel: "anthropic/claude-haiku-4-5",
+        // defaultPlanModel omitted
+      })
+    );
+
+    const result = await fetchModelDefaults({
+      CONTROL_PLANE: { fetch: fetcher } as never,
+      DEFAULT_MODEL: "env-should-not-win",
+      DEFAULT_PLAN_MODEL: "env-plan-wins-here",
+    });
+
+    expect(result.defaultModel).toBe("anthropic/claude-haiku-4-5"); // from DB
+    expect(result.defaultPlanModel).toBe("env-plan-wins-here"); // from env, since DB omitted it
+  });
+
+  it("applies per-field fallback when only defaultPlanModel is in the CP response", async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      jsonResponse({
+        enabledModels: ["anthropic/claude-opus-4-6"],
+        defaultPlanModel: "anthropic/claude-opus-4-6",
+        // defaultModel omitted
+      })
+    );
+
+    const result = await fetchModelDefaults({
+      CONTROL_PLANE: { fetch: fetcher } as never,
+      DEFAULT_MODEL: "env-model-wins-here",
+      DEFAULT_PLAN_MODEL: "env-should-not-win",
+    });
+
+    expect(result.defaultModel).toBe("env-model-wins-here"); // from env, since DB omitted it
+    expect(result.defaultPlanModel).toBe("anthropic/claude-opus-4-6"); // from DB
+  });
 });

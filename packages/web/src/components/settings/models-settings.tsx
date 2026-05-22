@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import {
@@ -32,16 +32,19 @@ export function ModelsSettings() {
   const [dirty, setDirty] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
 
-  // Sync SWR data into local state once on initial load
-  if (data && !initialized) {
+  // Sync SWR data into local state once on initial load. Effect (not render-
+  // phase setState) so React doesn't warn about an in-render update.
+  useEffect(() => {
+    if (!data || initialized) return;
     setEnabledModels(new Set(data.enabledModels));
     if (data.defaultModel) setDefaultModel(data.defaultModel);
     if (data.defaultPlanModel) setDefaultPlanModel(data.defaultPlanModel);
     setInitialized(true);
-  }
+  }, [data, initialized]);
 
   const toggleModel = (modelId: string) => {
     setToggleError(null);
+    let changed = false;
     setEnabledModels((prev) => {
       const next = new Set(prev);
       if (next.has(modelId)) {
@@ -56,25 +59,33 @@ export function ModelsSettings() {
       } else {
         next.add(modelId);
       }
+      changed = true;
       return next;
     });
-    setDirty(true);
+    if (changed) setDirty(true);
   };
 
   const toggleCategory = (category: (typeof MODEL_OPTIONS)[number], enable: boolean) => {
     setToggleError(null);
+    let changed = false;
     setEnabledModels((prev) => {
       const next = new Set(prev);
       let blockedDefault: string | null = null;
       for (const model of category.models) {
         if (enable) {
-          next.add(model.id);
+          if (!next.has(model.id)) {
+            next.add(model.id);
+            changed = true;
+          }
         } else {
           if (model.id === defaultModel || model.id === defaultPlanModel) {
             blockedDefault = model.id;
             continue;
           }
-          next.delete(model.id);
+          if (next.has(model.id)) {
+            next.delete(model.id);
+            changed = true;
+          }
         }
       }
       if (next.size === 0) return prev;
@@ -85,7 +96,7 @@ export function ModelsSettings() {
       }
       return next;
     });
-    setDirty(true);
+    if (changed) setDirty(true);
   };
 
   const handleDefaultChange = (which: "model" | "plan", value: string) => {
