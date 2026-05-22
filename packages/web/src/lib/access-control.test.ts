@@ -310,7 +310,7 @@ describe("checkGitHubOrganizationAccess", () => {
         fetchImpl,
         userAgent: "Test App",
       })
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ allowed: true, reason: "active_membership", organization: "active-org" });
 
     expect(fetchImpl).toHaveBeenCalledWith(
       "https://api.github.com/user/memberships/orgs/active-org",
@@ -334,7 +334,7 @@ describe("checkGitHubOrganizationAccess", () => {
         allowedOrganizations: ["active-org", "other-org"],
         fetchImpl: fetchImpl as unknown as typeof fetch,
       })
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ allowed: true, reason: "active_membership", organization: "active-org" });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
@@ -349,17 +349,32 @@ describe("checkGitHubOrganizationAccess", () => {
         allowedOrganizations: ["acme"],
         fetchImpl: fetchImpl as unknown as typeof fetch,
       })
-    ).resolves.toBe(false);
+    ).resolves.toEqual({ allowed: false, reason: "not_member" });
 
-    expect(info).toHaveBeenCalledWith("[github-org-access] membership not active", {
-      org: "acme",
-      state: "pending",
-    });
+    expect(info).toHaveBeenCalledWith(
+      "[github-org-access] membership not active",
+      expect.objectContaining({
+        org: "acme",
+        state: "pending",
+        elapsedMs: expect.any(Number),
+      })
+    );
   });
 
-  it("returns false for denied GitHub responses", async () => {
+  it("returns not_member for denied GitHub responses", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const fetchImpl = vi.fn(async () => new Response("Not Found", { status: 404 }));
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response("Not Found", {
+          status: 404,
+          headers: {
+            "x-github-request-id": "github-request-id",
+            "x-ratelimit-limit": "60",
+            "x-ratelimit-remaining": "59",
+            "x-ratelimit-reset": "1710000000",
+          },
+        })
+    );
 
     await expect(
       checkGitHubOrganizationAccess({
@@ -367,13 +382,56 @@ describe("checkGitHubOrganizationAccess", () => {
         allowedOrganizations: ["acme"],
         fetchImpl: fetchImpl as unknown as typeof fetch,
       })
-    ).resolves.toBe(false);
+    ).resolves.toEqual({ allowed: false, reason: "not_member" });
 
-    expect(warn).toHaveBeenCalledWith("[github-org-access] membership request failed", {
-      org: "acme",
-      status: 404,
-      hint: expect.any(String),
-    });
+    expect(warn).toHaveBeenCalledWith(
+      "[github-org-access] membership request failed",
+      expect.objectContaining({
+        org: "acme",
+        status: 404,
+        requestId: "github-request-id",
+        rateLimitLimit: "60",
+        rateLimitRemaining: "59",
+        rateLimitReset: "1710000000",
+        elapsedMs: expect.any(Number),
+        hint: expect.any(String),
+      })
+    );
+  });
+
+  it("returns unavailable for operational GitHub responses", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response("rate limited", {
+          status: 429,
+          headers: {
+            "x-github-request-id": "github-request-id",
+            "x-ratelimit-remaining": "0",
+            "retry-after": "30",
+          },
+        })
+    );
+
+    await expect(
+      checkGitHubOrganizationAccess({
+        accessToken: "token",
+        allowedOrganizations: ["acme"],
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      })
+    ).resolves.toEqual({ allowed: false, reason: "unavailable" });
+
+    expect(warn).toHaveBeenCalledWith(
+      "[github-org-access] membership request failed",
+      expect.objectContaining({
+        org: "acme",
+        status: 429,
+        requestId: "github-request-id",
+        rateLimitRemaining: "0",
+        retryAfter: "30",
+        elapsedMs: expect.any(Number),
+      })
+    );
   });
 
   it("returns false without an access token or org allowlist", async () => {
@@ -381,11 +439,11 @@ describe("checkGitHubOrganizationAccess", () => {
 
     await expect(
       checkGitHubOrganizationAccess({ accessToken: undefined, allowedOrganizations: ["acme"] })
-    ).resolves.toBe(false);
+    ).resolves.toEqual({ allowed: false, reason: "unavailable" });
 
     await expect(
       checkGitHubOrganizationAccess({ accessToken: "token", allowedOrganizations: [] })
-    ).resolves.toBe(false);
+    ).resolves.toEqual({ allowed: false, reason: "not_member" });
 
     expect(warn).toHaveBeenCalledWith("[github-org-access] membership check skipped", {
       reason: "missing_access_token",
@@ -418,12 +476,16 @@ describe("checkGitHubOrganizationAccess", () => {
         allowedOrganizations: ["acme"],
         fetchImpl: fetchImpl as unknown as typeof fetch,
       })
-    ).resolves.toBe(false);
+    ).resolves.toEqual({ allowed: false, reason: "unavailable" });
 
-    expect(warn).toHaveBeenCalledWith("[github-org-access] membership response missing state", {
-      org: "acme",
-      state: null,
-    });
+    expect(warn).toHaveBeenCalledWith(
+      "[github-org-access] membership response missing state",
+      expect.objectContaining({
+        org: "acme",
+        state: null,
+        elapsedMs: expect.any(Number),
+      })
+    );
   });
 
   it("logs unexpected membership state", async () => {
@@ -436,12 +498,39 @@ describe("checkGitHubOrganizationAccess", () => {
         allowedOrganizations: ["acme"],
         fetchImpl: fetchImpl as unknown as typeof fetch,
       })
-    ).resolves.toBe(false);
+    ).resolves.toEqual({ allowed: false, reason: "unavailable" });
 
-    expect(warn).toHaveBeenCalledWith("[github-org-access] membership response unexpected state", {
-      org: "acme",
-      state: "unknown",
-    });
+    expect(warn).toHaveBeenCalledWith(
+      "[github-org-access] membership response unexpected state",
+      expect.objectContaining({
+        org: "acme",
+        state: "unknown",
+        elapsedMs: expect.any(Number),
+      })
+    );
+  });
+
+  it("returns unavailable for malformed membership responses", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchImpl = vi.fn(async () => new Response("not-json"));
+
+    await expect(
+      checkGitHubOrganizationAccess({
+        accessToken: "token",
+        allowedOrganizations: ["acme"],
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      })
+    ).resolves.toEqual({ allowed: false, reason: "unavailable" });
+
+    expect(warn).toHaveBeenCalledWith(
+      "[github-org-access] membership request error",
+      expect.objectContaining({
+        org: "acme",
+        error: expect.any(String),
+        message: expect.any(String),
+        elapsedMs: expect.any(Number),
+      })
+    );
   });
 
   it("aborts timed out membership requests", async () => {
@@ -464,11 +553,15 @@ describe("checkGitHubOrganizationAccess", () => {
     });
 
     await vi.advanceTimersByTimeAsync(50);
-    await expect(result).resolves.toBe(false);
-    expect(warn).toHaveBeenCalledWith("[github-org-access] membership request error", {
-      org: "acme",
-      error: "AbortError",
-      message: "Aborted",
-    });
+    await expect(result).resolves.toEqual({ allowed: false, reason: "unavailable" });
+    expect(warn).toHaveBeenCalledWith(
+      "[github-org-access] membership request error",
+      expect.objectContaining({
+        org: "acme",
+        error: "AbortError",
+        message: "Aborted",
+        elapsedMs: expect.any(Number),
+      })
+    );
   });
 });

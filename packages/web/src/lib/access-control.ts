@@ -21,6 +21,17 @@ export interface GitHubOrganizationAccessParams {
 
 export const GITHUB_MEMBERSHIP_CHECK_TIMEOUT_MS = 10_000;
 
+export type GitHubOrganizationAccessResult =
+  | {
+      allowed: true;
+      reason: "active_membership";
+      organization: string;
+    }
+  | {
+      allowed: false;
+      reason: "not_member" | "unavailable";
+    };
+
 export type AccessAllowReason =
   | "unsafe_allow_all"
   | "username_allowlist"
@@ -110,9 +121,9 @@ export async function checkGitHubOrganizationAccess({
   fetchImpl = fetch,
   userAgent = "Open-Inspect",
   timeoutMs = GITHUB_MEMBERSHIP_CHECK_TIMEOUT_MS,
-}: GitHubOrganizationAccessParams): Promise<boolean> {
+}: GitHubOrganizationAccessParams): Promise<GitHubOrganizationAccessResult> {
   if (allowedOrganizations.length === 0) {
-    return false;
+    return { allowed: false, reason: "not_member" };
   }
 
   if (!accessToken) {
@@ -120,12 +131,15 @@ export async function checkGitHubOrganizationAccess({
       reason: "missing_access_token",
       organizationCount: allowedOrganizations.length,
     });
-    return false;
+    return { allowed: false, reason: "unavailable" };
   }
+
+  let isUnavailable = false;
 
   for (const org of allowedOrganizations) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const startedAt = performance.now();
 
     try {
       const response = await fetchImpl(
@@ -145,54 +159,96 @@ export async function checkGitHubOrganizationAccess({
         console.warn("[github-org-access] membership request failed", {
           org,
           status: response.status,
+          ...getGitHubResponseDiagnostics(response, startedAt),
           hint: getGitHubMembershipFailureHint(response.status),
         });
+        if (isGitHubMembershipUnavailableStatus(response.status)) {
+          isUnavailable = true;
+        }
         continue;
       }
 
       const membership = (await response.json()) as { state?: string | null };
       if (membership.state === "active") {
-        return true;
+        return { allowed: true, reason: "active_membership", organization: org };
       }
 
       if (membership.state == null) {
+        isUnavailable = true;
         console.warn("[github-org-access] membership response missing state", {
           org,
           state: membership.state ?? null,
+          ...getGitHubResponseDiagnostics(response, startedAt),
         });
       } else if (membership.state === "pending") {
         console.info("[github-org-access] membership not active", {
           org,
           state: membership.state,
+          ...getGitHubResponseDiagnostics(response, startedAt),
         });
       } else {
+        isUnavailable = true;
         console.warn("[github-org-access] membership response unexpected state", {
           org,
           state: membership.state,
+          ...getGitHubResponseDiagnostics(response, startedAt),
         });
       }
     } catch (error) {
+      isUnavailable = true;
       console.warn("[github-org-access] membership request error", {
         org,
         error: error instanceof Error ? error.name : "unknown",
         message: error instanceof Error ? error.message : String(error),
+        elapsedMs: getElapsedMs(startedAt),
       });
     } finally {
       clearTimeout(timeout);
     }
   }
 
-  return false;
+  return { allowed: false, reason: isUnavailable ? "unavailable" : "not_member" };
 }
 
 function getGitHubMembershipFailureHint(status: number): string | undefined {
+  if (status === 401) {
+    return "GitHub rejected the OAuth token while checking organization membership.";
+  }
+
   if (status === 403) {
     return "Verify the GitHub OAuth token has read:org access and any organization SAML requirements are satisfied. If this deployment also uses a GitHub App, make sure membership read permission changes were republished and approved.";
+  }
+
+  if (status === 429) {
+    return "GitHub rate limited the organization membership check.";
   }
 
   if (status === 404) {
     return "GitHub returns 404 when the user is not an organization member or the token cannot read that membership.";
   }
 
+  if (status >= 500) {
+    return "GitHub returned a server error while checking organization membership.";
+  }
+
   return undefined;
+}
+
+function isGitHubMembershipUnavailableStatus(status: number): boolean {
+  return status !== 404;
+}
+
+function getGitHubResponseDiagnostics(response: Response, startedAt: number) {
+  return {
+    requestId: response.headers.get("x-github-request-id"),
+    rateLimitLimit: response.headers.get("x-ratelimit-limit"),
+    rateLimitRemaining: response.headers.get("x-ratelimit-remaining"),
+    rateLimitReset: response.headers.get("x-ratelimit-reset"),
+    retryAfter: response.headers.get("retry-after"),
+    elapsedMs: getElapsedMs(startedAt),
+  };
+}
+
+function getElapsedMs(startedAt: number): number {
+  return Math.round(performance.now() - startedAt);
 }

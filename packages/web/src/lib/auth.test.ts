@@ -136,7 +136,7 @@ describe("authOptions signIn", () => {
     expect(info).toHaveBeenCalledWith("[auth] sign-in decision", {
       login: "member",
       decision: "deny",
-      reason: "org_membership_denied",
+      reason: "org_membership_unavailable",
     });
   });
 
@@ -159,6 +159,40 @@ describe("authOptions signIn", () => {
         user: { email: "member@example.com" },
       } as never)
     ).resolves.toBe(false);
+  });
+
+  it.each([
+    ["429 response", () => new Response("Rate Limited", { status: 429 })],
+    ["server error", () => new Response("Server Error", { status: 500 })],
+    [
+      "network error",
+      () => {
+        throw new TypeError("fetch failed");
+      },
+    ],
+    ["malformed JSON", () => new Response("not-json")],
+  ])("reports organization verification unavailable for %s", async (_label, responseFactory) => {
+    const { authOptions } = await importAuthModule({
+      ALLOWED_GITHUB_ORGS: "acme",
+    });
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchImpl = vi.fn(async () => responseFactory()) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchImpl);
+
+    await expect(
+      getSignIn(authOptions)({
+        account: { access_token: "oauth-token" },
+        profile: { login: "member" },
+        user: { email: "member@example.com" },
+      } as never)
+    ).resolves.toBe(false);
+
+    expect(info).toHaveBeenCalledWith("[auth] sign-in decision", {
+      login: "member",
+      decision: "deny",
+      reason: "org_membership_unavailable",
+    });
   });
 
   it("does not let unsafe open access bypass configured org allowlists", async () => {

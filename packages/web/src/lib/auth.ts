@@ -96,7 +96,7 @@ export const authOptions: NextAuthOptions = {
         return false;
       }
 
-      const isAllowedByOrgMembership = await checkGitHubOrganizationAccess({
+      const orgMembership = await checkGitHubOrganizationAccess({
         accessToken: account?.access_token,
         allowedOrganizations,
         userAgent: process.env.NEXT_PUBLIC_APP_NAME?.trim() || DEFAULT_APP_NAME,
@@ -104,11 +104,11 @@ export const authOptions: NextAuthOptions = {
 
       logSignInDecision(
         githubProfile.login,
-        isAllowedByOrgMembership ? "allow" : "deny",
-        isAllowedByOrgMembership ? "org_membership" : "org_membership_denied"
+        orgMembership.allowed ? "allow" : "deny",
+        getOrgMembershipDecisionReason(orgMembership)
       );
 
-      return isAllowedByOrgMembership;
+      return orgMembership.allowed;
     },
     async jwt({ token, account, profile }) {
       if (account) {
@@ -141,3 +141,15 @@ export const authOptions: NextAuthOptions = {
     error: "/access-denied",
   },
 };
+
+function getOrgMembershipDecisionReason(
+  orgMembership: Awaited<ReturnType<typeof checkGitHubOrganizationAccess>>
+): string {
+  if (orgMembership.allowed) {
+    return "org_membership";
+  }
+
+  return orgMembership.reason === "unavailable"
+    ? "org_membership_unavailable"
+    : "org_membership_denied";
+}
