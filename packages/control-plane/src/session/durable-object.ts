@@ -73,7 +73,7 @@ import { SessionSandboxEventProcessor } from "./sandbox-events";
 import { createSessionInternalRoutes } from "./http/routes";
 import { createMessagesHandler, type MessagesHandler } from "./http/handlers/messages.handler";
 import { createPlansHandler, type PlansHandler } from "./http/handlers/plans.handler";
-import { PlanService } from "./services/plan.service";
+import { buildPlanImplementationPrompt, PlanService } from "./services/plan.service";
 import {
   createChildSessionsHandler,
   type ChildSessionsHandler,
@@ -132,6 +132,15 @@ const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /** Statuses that indicate a session is finished — metrics are synced to D1 on these transitions. */
 const TERMINAL_STATUSES: SessionStatus[] = ["completed", "failed", "cancelled"];
+
+/**
+ * Stable identity for system-generated prompts (e.g. the implementation
+ * prompt dispatched after plan approval). The first system enqueue per
+ * session lazily creates a participant row with this user_id; later ones
+ * reuse it. Surfaces to the timeline as a message authored by SYSTEM_DISPLAY_NAME.
+ */
+const SYSTEM_USER_ID = "system";
+const SYSTEM_DISPLAY_NAME = "System";
 
 export class SessionDO extends DurableObject<Env> {
   private sql: SqlStorage;
@@ -386,9 +395,23 @@ export class SessionDO extends DurableObject<Env> {
         repository: this.repository,
         generateId: () => generateId(),
         now: () => Date.now(),
+        onDispatchImplementationPrompt: async (planVersion) => {
+          // Enqueue the synthetic implementation prompt so every client
+          // (web + Slack/Linear/GitHub bots) triggers the same build turn
+          // — clients only call /plan/approve. The session row already
+          // carries the chosen impl model/effort (written by approvePlan),
+          // so processMessageQueue picks them up via normal resolution.
+          await this.messageService.enqueuePrompt({
+            content: buildPlanImplementationPrompt(planVersion),
+            authorId: SYSTEM_USER_ID,
+            authorDisplayName: SYSTEM_DISPLAY_NAME,
+            source: "system",
+          });
+        },
         onPlanApproved: async () => {
-          // Flush any user message that arrived while we were awaiting approval.
-          // The queue gate (planMode && status !== "approved") is now lifted.
+          // Flush any user message that arrived while we were awaiting approval,
+          // plus the implementation prompt just enqueued above. The queue gate
+          // (planMode && status !== "approved") is now lifted.
           await this.messageQueue.processMessageQueue();
         },
       });

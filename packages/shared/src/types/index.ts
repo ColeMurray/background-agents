@@ -24,7 +24,14 @@ export type SandboxStatus =
   | "failed";
 export type GitSyncStatus = "pending" | "in_progress" | "completed" | "failed";
 export type MessageStatus = "pending" | "processing" | "completed" | "failed";
-export type MessageSource = "web" | "slack" | "linear" | "extension" | "github" | "automation";
+export type MessageSource =
+  | "web"
+  | "slack"
+  | "linear"
+  | "extension"
+  | "github"
+  | "automation"
+  | "system";
 export type ArtifactType = "pr" | "screenshot" | "video" | "preview" | "branch";
 export type EventType =
   | "heartbeat"
