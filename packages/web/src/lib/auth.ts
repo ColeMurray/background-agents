@@ -31,6 +31,16 @@ declare module "next-auth/jwt" {
   }
 }
 
+export const BASE_GITHUB_OAUTH_SCOPE = "read:user user:email repo";
+
+export function buildGitHubOAuthScope(
+  allowedOrganizations = parseAllowlist(process.env.ALLOWED_GITHUB_ORGS)
+): string {
+  return allowedOrganizations.length > 0
+    ? `${BASE_GITHUB_OAUTH_SCOPE} read:org`
+    : BASE_GITHUB_OAUTH_SCOPE;
+}
+
 export const authOptions: NextAuthOptions = {
   debug: process.env.NODE_ENV === "development" || process.env.NEXTAUTH_DEBUG === "true",
   providers: [
@@ -39,7 +49,7 @@ export const authOptions: NextAuthOptions = {
       clientSecret: process.env.GITHUB_CLIENT_SECRET!,
       authorization: {
         params: {
-          scope: "read:user user:email repo read:org",
+          scope: buildGitHubOAuthScope(),
         },
       },
     }),
