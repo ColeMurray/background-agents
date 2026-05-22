@@ -229,6 +229,19 @@ describe("checkAccessAllowed", () => {
       expect(checkAccessAllowed(config, { githubUsername: "randomuser" })).toBe(false);
       expect(checkAccessAllowed(config, { email: "user@other.com" })).toBe(false);
     });
+
+    it("does not bypass populated organization allowlists", () => {
+      const orgConfig = {
+        allowedDomains: [],
+        allowedUsers: [],
+        allowedOrganizations: ["acme"],
+        unsafeAllowAllUsers: true,
+      };
+
+      expect(checkAccessAllowed(orgConfig, {})).toBe(false);
+      expect(checkAccessAllowed(orgConfig, { activeOrganizations: ["other"] })).toBe(false);
+      expect(checkAccessAllowed(orgConfig, { activeOrganizations: ["acme"] })).toBe(true);
+    });
   });
 
   describe("multiple values in allowlists", () => {
