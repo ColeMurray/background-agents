@@ -13,8 +13,10 @@ import {
 } from "./utils/linear-client";
 import { extractAgentResponse, formatAgentResponse } from "./completion/extractor";
 import { resolveAppName, timingSafeEqual } from "@open-inspect/shared";
+import type { PlanApprovalStatus, PlanArtifact } from "@open-inspect/shared";
 import { computeHmacHex } from "./utils/crypto";
 import { makePlan } from "./plan";
+import { buildInternalAuthHeaders } from "./utils/internal";
 import { createLogger } from "./logger";
 
 const log = createLogger("callback");
@@ -36,6 +38,59 @@ export function formatCompletionComment(
   return success
     ? `## 🤖 ${appName} completed\n\n${message}`
     : `## ⚠️ ${appName} encountered an issue\n\n${message}`;
+}
+
+function formatPlanAwaitingApproval(
+  plan: PlanArtifact,
+  webSessionUrl: string,
+  appName: string
+): string {
+  const planBody =
+    plan.content.length > 4000 ? `${plan.content.slice(0, 4000)}\n\n…` : plan.content;
+  return (
+    `### Plan ready — awaiting your approval\n\n` +
+    `${appName} proposed the plan below for this issue (version ${plan.version}).\n\n` +
+    `**To proceed, reply in this thread:**\n` +
+    `- \`approve\` — start the build (uses the model from a \`model-<alias>\` ` +
+    `or \`build-<alias>\` label on this issue, else the default)\n` +
+    `- \`reject\` — discard this plan; optionally add a reason on the same line\n\n` +
+    `To switch the build model, add a label like \`build-sonnet\` or ` +
+    `\`model-opus\` to this issue before approving. Or ` +
+    `[open the session in the web app](${webSessionUrl}#plan) to approve from the web. ` +
+    `Any other reply will ask the agent to amend the plan.\n\n` +
+    `---\n\n` +
+    planBody
+  );
+}
+
+async function fetchPlanSnapshot(
+  env: Env,
+  sessionId: string,
+  traceId?: string
+): Promise<{ status: PlanApprovalStatus | null; plan: PlanArtifact | null } | null> {
+  try {
+    const headers = await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId);
+    const stateRes = await env.CONTROL_PLANE.fetch(`https://internal/sessions/${sessionId}/plan`, {
+      method: "GET",
+      headers,
+    });
+    if (!stateRes.ok) return null;
+    const stateBody = (await stateRes.json()) as {
+      plan: PlanArtifact | null;
+      status: PlanApprovalStatus | null;
+    };
+    return {
+      status: stateBody.status ?? null,
+      plan: stateBody.plan ?? null,
+    };
+  } catch (e) {
+    log.warn("callback.plan_snapshot_failed", {
+      trace_id: traceId,
+      session_id: sessionId,
+      error: e instanceof Error ? e : String(e),
+    });
+    return null;
+  }
 }
 
 export function isValidPayload(payload: unknown): payload is CompletionCallback {
@@ -288,10 +343,30 @@ async function handleCompletionCallback(
     // Extract rich agent response from events
     const agentResponse = await extractAgentResponse(env, sessionId, payload.messageId, traceId);
 
-    let message: string;
-    let activityType: "response" | "error";
+    // If this was a planning turn for a plan-mode session, the agent's response
+    // has already been persisted as the current plan version by the bridge
+    // (POST /sessions/:id/plan with source=agent). The control-plane has
+    // flipped plan_approval_status to "awaiting_approval". Surface that to
+    // Linear as a distinct "plan ready, please approve" activity instead of
+    // the regular completion message.
+    const planSnapshot = payload.success ? await fetchPlanSnapshot(env, sessionId, traceId) : null;
+    const awaitingApproval =
+      payload.success && planSnapshot?.status === "awaiting_approval" && planSnapshot.plan;
 
-    if (payload.success) {
+    let message: string;
+    let activityType: "response" | "error" | "elicitation";
+
+    if (awaitingApproval) {
+      // Use elicitation so Linear surfaces this as an explicit "agent waiting
+      // on you" state and prompts a follow-up reply (which the bot then
+      // parses for approve/reject — see parsePlanCommand in webhook-handler).
+      activityType = "elicitation";
+      message = formatPlanAwaitingApproval(
+        planSnapshot!.plan!,
+        `${env.WEB_APP_URL}/session/${sessionId}`,
+        resolveAppName(env)
+      );
+    } else if (payload.success) {
       activityType = "response";
       message = formatAgentResponse(agentResponse);
     } else {
@@ -312,9 +387,15 @@ async function handleCompletionCallback(
           body: message,
         });
 
-        // Update plan to completed/failed
+        // Update Linear's plan widget: don't mark complete while a plan is
+        // awaiting approval — the impl steps haven't run yet.
+        const stage = awaitingApproval
+          ? "plan_awaiting_approval"
+          : payload.success
+            ? "completed"
+            : "failed";
         await updateAgentSession(client, context.agentSessionId, {
-          plan: makePlan(payload.success ? "completed" : "failed"),
+          plan: makePlan(stage),
         });
 
         // Update externalUrls with PR link if available
