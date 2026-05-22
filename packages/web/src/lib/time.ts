@@ -2,6 +2,18 @@
  * Time formatting utilities for displaying relative timestamps.
  */
 
+const SESSION_EVENT_TIME_FORMAT: Intl.DateTimeFormatOptions = {
+  hour: "2-digit",
+  minute: "2-digit",
+};
+
+/**
+ * Format a session event timestamp, stored in seconds, as a compact local time.
+ */
+export function formatSessionEventTime(timestampSeconds: number): string {
+  return new Date(timestampSeconds * 1000).toLocaleTimeString([], SESSION_EVENT_TIME_FORMAT);
+}
+
 /**
  * Format a timestamp as a relative time string (e.g., "2d", "3h", "5m").
  * Returns "just now" for very recent timestamps.

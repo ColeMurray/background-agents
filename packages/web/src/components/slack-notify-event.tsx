@@ -7,6 +7,7 @@ import {
   type SlackNotifyToolEnvelope,
 } from "@open-inspect/shared";
 import type { SandboxEvent } from "@/types/session";
+import { formatSessionEventTime } from "@/lib/time";
 import { getSafeExternalUrl } from "@/lib/urls";
 import { ChevronRightIcon, ErrorIcon, LinkIcon, SlackIcon } from "@/components/ui/icons";
 
@@ -96,10 +97,7 @@ export function SlackNotifyEvent({
   const argsChannel = event.args?.channel;
   const channelInput =
     success?.channelInput ?? (typeof argsChannel === "string" ? argsChannel : undefined);
-  const time = new Date(event.timestamp * 1000).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const time = formatSessionEventTime(event.timestamp);
 
   let summaryLine: string;
   if (success) {
