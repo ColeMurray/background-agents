@@ -205,4 +205,43 @@ describe("plansHandler.approvePlan / rejectPlan body validation", () => {
       implementationReasoningEffort: undefined,
     });
   });
+
+  it("approvePlan returns 400 when implementationReasoningEffort is sent without implementationModel", async () => {
+    // Regression test for CodeRabbit #671 follow-up: previously the handler
+    // silently coerced an effort sent without a model into `null`, which the
+    // service treated as an explicit clear and wiped the session's existing
+    // reasoning_effort.
+    const { handler, planService } = createHandler();
+    const req = new Request("http://internal/internal/plan/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ implementationReasoningEffort: "high" }),
+    });
+    const res = await handler.approvePlan(req);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code?: string };
+    expect(body.code).toBe("invalid_reasoning_effort");
+    expect(planService.approvePlanAndFlush).not.toHaveBeenCalled();
+  });
+
+  it("approvePlan forwards explicit null reasoning effort to clear the value", async () => {
+    const { handler, planService } = createHandler();
+    vi.mocked(planService.approvePlanAndFlush).mockResolvedValue({
+      plan: null,
+      status: "approved",
+      postApproval: undefined,
+    } as unknown as Awaited<ReturnType<PlanService["approvePlanAndFlush"]>>);
+    const req = new Request("http://internal/internal/plan/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ implementationReasoningEffort: null }),
+    });
+    const res = await handler.approvePlan(req);
+    expect(res.status).toBe(200);
+    expect(planService.approvePlanAndFlush).toHaveBeenCalledWith({
+      approverAuthorId: undefined,
+      implementationModel: null,
+      implementationReasoningEffort: null,
+    });
+  });
 });

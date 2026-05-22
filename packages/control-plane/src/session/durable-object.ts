@@ -101,7 +101,19 @@ import { createAlarmHandler, type AlarmHandler } from "./alarm/handler";
  * manager marks the sandbox idle and tears it down. Operators can override
  * via env `SANDBOX_INACTIVITY_TIMEOUT_MS`.
  */
-const DEFAULT_SANDBOX_INACTIVITY_TIMEOUT_MS = 900_000; // 15 minutes
+const DEFAULT_SANDBOX_INACTIVITY_TIMEOUT_MS = 900_000;
+
+/**
+ * Parse the SANDBOX_INACTIVITY_TIMEOUT_MS env var with safe fallback.
+ * Returns DEFAULT_SANDBOX_INACTIVITY_TIMEOUT_MS for unset, empty, NaN, or
+ * non-positive values — the lifecycle manager must receive a positive
+ * finite number so it doesn't schedule alarms in the past.
+ */
+function parseSandboxInactivityTimeoutMs(raw: string | undefined): number {
+  if (!raw) return DEFAULT_SANDBOX_INACTIVITY_TIMEOUT_MS;
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SANDBOX_INACTIVITY_TIMEOUT_MS;
+}
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -783,10 +795,7 @@ export class SessionDO extends DurableObject<Env> {
       sessionId,
       inactivity: {
         ...DEFAULT_LIFECYCLE_CONFIG.inactivity,
-        timeoutMs: parseInt(
-          this.env.SANDBOX_INACTIVITY_TIMEOUT_MS || String(DEFAULT_SANDBOX_INACTIVITY_TIMEOUT_MS),
-          10
-        ),
+        timeoutMs: parseSandboxInactivityTimeoutMs(this.env.SANDBOX_INACTIVITY_TIMEOUT_MS),
       },
       mcpServerLookup,
       slackAgentNotifyLookup,

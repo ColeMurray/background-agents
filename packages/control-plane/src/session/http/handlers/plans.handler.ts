@@ -104,17 +104,30 @@ export function createPlansHandler(deps: PlansHandlerDeps): PlansHandler {
           implementationModel = getValidModelOrDefault(body.implementationModel);
         }
 
-        // Validate reasoning effort regardless of whether the user picked an
-        // impl-model override. When no override is provided we pass an empty
-        // target — validateReasoningEffort then returns null (effort can't be
-        // checked without a model), which drops unvalidated input rather than
-        // persisting potentially-invalid effort that would fail at dispatch.
+        // Reasoning effort handling:
+        //  - undefined (omitted)     → no change; service won't update the field.
+        //  - null (explicit clear)   → forwarded as null; service clears it.
+        //  - string + model override → validated against the model.
+        //  - string without override → reject with 400. Previously we coerced
+        //    a non-null string into null (the validation target was ""), which
+        //    the service treated as an explicit "clear effort" and wiped the
+        //    session's persisted reasoning_effort.
         let implementationReasoningEffort: string | null | undefined = undefined;
-        if (body.implementationReasoningEffort !== undefined) {
-          const target = implementationModel ?? "";
+        if (body.implementationReasoningEffort === null) {
+          implementationReasoningEffort = null;
+        } else if (body.implementationReasoningEffort !== undefined) {
+          if (!implementationModel) {
+            return Response.json(
+              {
+                error: "implementationReasoningEffort requires implementationModel",
+                code: "invalid_reasoning_effort",
+              },
+              { status: 400 }
+            );
+          }
           implementationReasoningEffort = deps.validateReasoningEffort(
-            target,
-            body.implementationReasoningEffort ?? undefined
+            implementationModel,
+            body.implementationReasoningEffort
           );
         }
 
