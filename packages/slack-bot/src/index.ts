@@ -6,7 +6,7 @@
  */
 
 import { Hono } from "hono";
-import { resolveAppName } from "@open-inspect/shared";
+import { buildUntrustedUserContentBlock, resolveAppName } from "@open-inspect/shared";
 import type {
   Env,
   RepoConfig,
@@ -31,6 +31,8 @@ import { resolveUserNames } from "@open-inspect/shared";
 import { createClassifier } from "./classifier";
 import { getAvailableRepos } from "./classifier/repos";
 import { callbacksRouter } from "./callbacks";
+import { buildPlanDecidedBlocks } from "./completion/blocks";
+import type { PlanArtifact } from "@open-inspect/shared";
 import { buildInternalAuthHeaders } from "@open-inspect/shared";
 import { createLogger } from "./logger";
 import { createKvCacheStore } from "@open-inspect/shared";
@@ -53,20 +55,18 @@ import {
 } from "./branch-preferences";
 import {
   MODEL_OPTIONS,
-  DEFAULT_MODEL,
   DEFAULT_ENABLED_MODELS,
+  fetchModelDefaults,
   isValidModel,
   getValidModelOrDefault,
   getReasoningConfig,
   getDefaultReasoningEffort,
   isValidReasoningEffort,
 } from "@open-inspect/shared";
-import { setAssistantThreadStatusBestEffort } from "./activity-status";
 
 const log = createLogger("handler");
 
 const MAX_REPO_SUGGESTION_OPTIONS = 100;
-type BackgroundTaskScheduler = (promise: Promise<void>) => void;
 
 export function buildAppHomeIntroText(appName: string): string {
   return `Configure your ${appName} preferences below.`;
@@ -95,7 +95,9 @@ async function createSession(
   traceId?: string,
   slackUserId?: string,
   actorDisplayName?: string,
-  actorEmail?: string
+  actorEmail?: string,
+  planMode?: boolean,
+  planModel?: string
 ): Promise<{ sessionId: string; status: string } | null> {
   const startTime = Date.now();
   const base = {
@@ -106,6 +108,8 @@ async function createSession(
     reasoning_effort: reasoningEffort,
     branch,
     slack_user_id: slackUserId,
+    plan_mode: planMode === true,
+    plan_model: planMode ? (planModel ?? null) : null,
   };
   try {
     const headers = await getAuthHeaders(env, traceId);
@@ -123,6 +127,8 @@ async function createSession(
         actorUserId: slackUserId,
         actorDisplayName,
         actorEmail,
+        planMode: planMode === true,
+        ...(planMode && planModel ? { planModel } : {}),
       }),
     });
 
@@ -396,15 +402,56 @@ async function saveUserPreferences(
       });
       return false;
     }
+    // Preserve plan-mode prefs across other-pref updates by merging with the
+    // current value. saveUserPlanPreferences is the only writer that toggles
+    // plan-mode fields, so we never want this function to clobber them.
+    const existing = await getUserPreferences(env, userId);
     const prefs: UserPreferences = {
       userId,
       model,
       reasoningEffort,
       branch: normalizedBranch,
+      planModeDefault: existing?.planModeDefault,
+      planModel: existing?.planModel,
       updatedAt: Date.now(),
     };
     // No TTL - preferences persist indefinitely
     await createKvCacheStore(env.SLACK_KV).put(key, JSON.stringify(prefs));
+    return true;
+  } catch (e) {
+    log.error("kv.put", {
+      key_prefix: "user_prefs",
+      user_id: userId,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
+    return false;
+  }
+}
+
+/**
+ * Save plan-mode preferences (toggle + plan model) without touching the
+ * other UserPreferences fields. Used by the App Home plan-mode handlers.
+ */
+async function saveUserPlanPreferences(
+  env: Env,
+  userId: string,
+  patch: { planModeDefault?: boolean; planModel?: string }
+): Promise<boolean> {
+  try {
+    const key = getUserPreferencesKey(userId);
+    const existing = await getUserPreferences(env, userId);
+    const { defaultModel } = await fetchModelDefaults(env);
+    const next: UserPreferences = {
+      userId,
+      model: existing?.model ?? defaultModel,
+      reasoningEffort: existing?.reasoningEffort,
+      branch: existing?.branch,
+      planModeDefault:
+        patch.planModeDefault !== undefined ? patch.planModeDefault : existing?.planModeDefault,
+      planModel: patch.planModel !== undefined ? patch.planModel : existing?.planModel,
+      updatedAt: Date.now(),
+    };
+    await createKvCacheStore(env.SLACK_KV).put(key, JSON.stringify(next));
     return true;
   } catch (e) {
     log.error("kv.put", {
@@ -464,9 +511,9 @@ async function getRepoBranchSuggestionOptions(
  */
 async function publishAppHome(env: Env, userId: string): Promise<void> {
   const prefs = await getUserPreferences(env, userId);
-  const fallback = env.DEFAULT_MODEL || DEFAULT_MODEL;
+  const { defaultModel, defaultPlanModel } = await fetchModelDefaults(env);
   // Normalize model to ensure it's valid - UI and behavior will be consistent
-  const currentModel = getValidModelOrDefault(prefs?.model ?? fallback);
+  const currentModel = getValidModelOrDefault(prefs?.model ?? defaultModel);
   const availableModels = await getAvailableModels(env);
   const currentModelInfo =
     availableModels.find((m) => m.value === currentModel) || availableModels[0];
@@ -555,6 +602,75 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
       }
     );
   }
+
+  // ─── Plan mode preferences ─────────────────────────────────────────────────
+  // Plan-mode is opt-in per user. When ON, every new session you start is
+  // gated by a human-approved plan. When OFF (the default), the bot decides
+  // plan-vs-build automatically based on the prompt text (see classifier).
+  // Plan model defaults to the deployment's configured plan model
+  // (Settings → Models) until the user picks a different one here.
+  const planModeForced = prefs?.planModeDefault === true;
+  const currentPlanModel = getValidModelOrDefault(prefs?.planModel ?? defaultPlanModel);
+  const currentPlanModelInfo =
+    availableModels.find((m) => m.value === currentPlanModel) || availableModels[0];
+  const planModeOption = {
+    text: {
+      type: "plain_text" as const,
+      text: "Plan first, then build",
+    },
+    description: {
+      type: "plain_text" as const,
+      text: "Force a plan on every session. When off, the bot decides automatically based on your message.",
+    },
+    value: "plan_mode_on",
+  };
+
+  blocks.push(
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "*Plan mode*\nBy default the bot decides plan-vs-build automatically from your prompt. Turn this on to force a plan on every session you start.",
+      },
+    },
+    {
+      type: "actions",
+      block_id: "plan_mode_selection",
+      elements: [
+        {
+          type: "checkboxes",
+          action_id: "select_plan_mode_default",
+          options: [planModeOption],
+          ...(planModeForced ? { initial_options: [planModeOption] } : {}),
+        },
+      ],
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "*Plan model*\nModel used to propose the plan (you can pick a different build model at approve time).",
+      },
+    },
+    {
+      type: "actions",
+      block_id: "plan_model_selection",
+      elements: [
+        {
+          type: "static_select",
+          action_id: "select_plan_model",
+          initial_option: {
+            text: { type: "plain_text", text: currentPlanModelInfo.label },
+            value: currentPlanModelInfo.value,
+          },
+          options: availableModels.map((m) => ({
+            text: { type: "plain_text", text: m.label },
+            value: m.value,
+          })),
+        },
+      ],
+    }
+  );
 
   blocks.push(
     {
@@ -692,6 +808,372 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
   const result = await publishView(env.SLACK_BOT_TOKEN, userId, view);
   if (!result.ok) {
     log.error("slack.app_home", { user_id: userId, outcome: "error", slack_error: result.error });
+  }
+}
+
+// ─── Plan approve / reject modals ──────────────────────────────────────────
+
+const PLAN_APPROVE_MODAL_CALLBACK_ID = "plan_approve_modal";
+const PLAN_REJECT_MODAL_CALLBACK_ID = "plan_reject_modal";
+const PLAN_APPROVE_MODEL_BLOCK_ID = "plan_approve_model_block";
+const PLAN_APPROVE_MODEL_ACTION_ID = "plan_approve_model_select";
+const PLAN_REJECT_REASON_BLOCK_ID = "plan_reject_reason_block";
+const PLAN_REJECT_REASON_ACTION_ID = "plan_reject_reason_input";
+
+interface PlanModalMetadata {
+  sessionId: string;
+  /**
+   * Origin block_actions message — when set, the submission handler will
+   * `chat.update` it to remove the buttons and show the verdict. Optional so
+   * older modal payloads still deserialize.
+   */
+  channel?: string;
+  messageTs?: string;
+}
+
+/**
+ * Open a modal asking the user to confirm plan approval. The model picker
+ * defaults to the session's plan_model (or DEFAULT_PLAN_MODEL) so the user
+ * can switch to a cheaper / faster impl model before implementation runs.
+ */
+async function openPlanApproveModal(
+  env: Env,
+  triggerId: string,
+  sessionId: string,
+  slackUserId: string | undefined,
+  originMessage?: { channel: string; ts: string }
+): Promise<void> {
+  // Best-effort: fetch the session state so we can default the impl selector
+  // to whatever was used for planning (plan_model when set, else session.model).
+  const { defaultModel } = await fetchModelDefaults(env);
+  let defaultImplModel = defaultModel;
+  try {
+    const headers = await getAuthHeaders(env);
+    const stateRes = await env.CONTROL_PLANE.fetch(`https://internal/sessions/${sessionId}/state`, {
+      method: "GET",
+      headers,
+    });
+    if (stateRes.ok) {
+      const state = (await stateRes.json()) as {
+        model?: string;
+        planModel?: string | null;
+      };
+      defaultImplModel = state.planModel || state.model || defaultImplModel;
+    }
+  } catch (e) {
+    log.warn("slack.plan_modal.state_fetch_failed", {
+      session_id: sessionId,
+      user_id: slackUserId,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
+  }
+
+  const availableModels = await getAvailableModels(env);
+  const defaultOption =
+    availableModels.find((m) => m.value === defaultImplModel) || availableModels[0];
+
+  const view = {
+    type: "modal",
+    callback_id: PLAN_APPROVE_MODAL_CALLBACK_ID,
+    title: { type: "plain_text", text: "Approve plan" },
+    submit: { type: "plain_text", text: "Approve" },
+    close: { type: "plain_text", text: "Cancel" },
+    private_metadata: JSON.stringify({
+      sessionId,
+      ...(originMessage ? { channel: originMessage.channel, messageTs: originMessage.ts } : {}),
+    } satisfies PlanModalMetadata),
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "The plan will run with the selected build model. Defaults to the model used for planning.",
+        },
+      },
+      {
+        type: "input",
+        block_id: PLAN_APPROVE_MODEL_BLOCK_ID,
+        label: { type: "plain_text", text: "Build model" },
+        element: {
+          type: "static_select",
+          action_id: PLAN_APPROVE_MODEL_ACTION_ID,
+          initial_option: {
+            text: { type: "plain_text", text: defaultOption.label },
+            value: defaultOption.value,
+          },
+          options: availableModels.map((m) => ({
+            text: { type: "plain_text", text: m.label },
+            value: m.value,
+          })),
+        },
+      },
+    ],
+  };
+
+  const result = await openView(env.SLACK_BOT_TOKEN, triggerId, view);
+  if (!result.ok) {
+    log.error("slack.open_plan_approve_modal", {
+      session_id: sessionId,
+      user_id: slackUserId,
+      slack_error: result.error,
+    });
+  }
+}
+
+async function openPlanRejectModal(
+  env: Env,
+  triggerId: string,
+  sessionId: string,
+  originMessage?: { channel: string; ts: string }
+): Promise<void> {
+  const view = {
+    type: "modal",
+    callback_id: PLAN_REJECT_MODAL_CALLBACK_ID,
+    title: { type: "plain_text", text: "Reject plan" },
+    submit: { type: "plain_text", text: "Reject" },
+    close: { type: "plain_text", text: "Cancel" },
+    private_metadata: JSON.stringify({
+      sessionId,
+      ...(originMessage ? { channel: originMessage.channel, messageTs: originMessage.ts } : {}),
+    } satisfies PlanModalMetadata),
+    blocks: [
+      {
+        type: "input",
+        block_id: PLAN_REJECT_REASON_BLOCK_ID,
+        optional: true,
+        label: { type: "plain_text", text: "Reason (optional)" },
+        element: {
+          type: "plain_text_input",
+          action_id: PLAN_REJECT_REASON_ACTION_ID,
+          multiline: true,
+          // Cap input client-side so a long reason can't exceed Slack's
+          // 2000-char limit on `context` block mrkdwn elements when the
+          // origin message is updated post-submit. Without this cap the
+          // chat.update silently fails and the buttons would stay clickable.
+          max_length: 500,
+          placeholder: {
+            type: "plain_text",
+            text: "What needs to change in the plan?",
+          },
+        },
+      },
+    ],
+  };
+
+  const result = await openView(env.SLACK_BOT_TOKEN, triggerId, view);
+  if (!result.ok) {
+    log.error("slack.open_plan_reject_modal", {
+      session_id: sessionId,
+      slack_error: result.error,
+    });
+  }
+}
+
+function parsePlanModalMetadata(raw: string | undefined): PlanModalMetadata | null {
+  if (!raw) return null;
+  try {
+    const meta = JSON.parse(raw) as PlanModalMetadata;
+    return typeof meta.sessionId === "string" ? meta : null;
+  } catch {
+    return null;
+  }
+}
+
+async function handlePlanApproveSubmission(
+  payload: SlackInteractionPayload,
+  env: Env,
+  userId: string | undefined,
+  traceId?: string
+): Promise<void> {
+  const meta = parsePlanModalMetadata(payload.view?.private_metadata);
+  if (!meta) {
+    log.warn("slack.plan_approve_submission.missing_metadata", { trace_id: traceId });
+    return;
+  }
+
+  const selected =
+    payload.view?.state?.values?.[PLAN_APPROVE_MODEL_BLOCK_ID]?.[PLAN_APPROVE_MODEL_ACTION_ID];
+  const implementationModel =
+    selected && "selected_option" in selected
+      ? ((selected as { selected_option?: { value?: string } }).selected_option?.value ?? null)
+      : null;
+
+  const headers = await getAuthHeaders(env, traceId);
+  const body: Record<string, unknown> = {
+    approverAuthorId: userId ? `slack:${userId}` : "slack:unknown",
+  };
+  if (implementationModel && isValidModel(implementationModel)) {
+    body.implementationModel = implementationModel;
+  }
+
+  const res = await env.CONTROL_PLANE.fetch(
+    `https://internal/sessions/${meta.sessionId}/plan/approve`,
+    { method: "POST", headers, body: JSON.stringify(body) }
+  );
+
+  log.info("slack.plan_approve", {
+    trace_id: traceId,
+    session_id: meta.sessionId,
+    user_id: userId,
+    impl_model: implementationModel,
+    http_status: res.status,
+    ok: res.ok,
+  });
+
+  if (res.ok && meta.channel && meta.messageTs) {
+    const approveResponse = await parsePlanResponse(res);
+    if (approveResponse?.plan) {
+      await updateOriginPlanMessage(env, meta.channel, meta.messageTs, {
+        sessionId: meta.sessionId,
+        plan: approveResponse.plan,
+        verdict: "approved",
+        actorMention: userId ? `<@${userId}>` : "someone",
+        implementationModelLabel: implementationModel
+          ? await resolveModelLabel(env, implementationModel)
+          : undefined,
+        traceId,
+      });
+    }
+  }
+}
+
+async function handlePlanRejectSubmission(
+  payload: SlackInteractionPayload,
+  env: Env,
+  userId: string | undefined,
+  traceId?: string
+): Promise<void> {
+  const meta = parsePlanModalMetadata(payload.view?.private_metadata);
+  if (!meta) {
+    log.warn("slack.plan_reject_submission.missing_metadata", { trace_id: traceId });
+    return;
+  }
+
+  const reasonField =
+    payload.view?.state?.values?.[PLAN_REJECT_REASON_BLOCK_ID]?.[PLAN_REJECT_REASON_ACTION_ID];
+  const reason = reasonField?.value?.trim() || null;
+
+  const headers = await getAuthHeaders(env, traceId);
+  const res = await env.CONTROL_PLANE.fetch(
+    `https://internal/sessions/${meta.sessionId}/plan/reject`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        approverAuthorId: userId ? `slack:${userId}` : "slack:unknown",
+        ...(reason ? { reason } : {}),
+      }),
+    }
+  );
+
+  log.info("slack.plan_reject", {
+    trace_id: traceId,
+    session_id: meta.sessionId,
+    user_id: userId,
+    has_reason: Boolean(reason),
+    http_status: res.status,
+    ok: res.ok,
+  });
+
+  if (res.ok && meta.channel && meta.messageTs) {
+    const rejectResponse = await parsePlanResponse(res);
+    if (rejectResponse?.plan) {
+      await updateOriginPlanMessage(env, meta.channel, meta.messageTs, {
+        sessionId: meta.sessionId,
+        plan: rejectResponse.plan,
+        verdict: "rejected",
+        actorMention: userId ? `<@${userId}>` : "someone",
+        reason,
+        traceId,
+      });
+    }
+  }
+}
+
+/**
+ * Parse the `{plan, status}` payload returned by `/plan/{approve,reject}`.
+ * Returns null on any parse failure — the caller skips the message update,
+ * which is preferable to crashing the submission handler.
+ */
+async function parsePlanResponse(
+  res: Response
+): Promise<{ plan: PlanArtifact | null; status: string } | null> {
+  try {
+    return (await res.json()) as { plan: PlanArtifact | null; status: string };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Best-effort: map a canonical model id (e.g. `anthropic/claude-sonnet-4-5`)
+ * to the user-facing label shown in the model picker (e.g. "Claude Sonnet").
+ * Falls back to the raw id when no match exists or the lookup throws.
+ */
+async function resolveModelLabel(env: Env, modelId: string): Promise<string> {
+  try {
+    const models = await getAvailableModels(env);
+    return models.find((m) => m.value === modelId)?.label ?? modelId;
+  } catch {
+    return modelId;
+  }
+}
+
+/**
+ * Rebuild the plan-awaiting-approval message into its terminal-verdict form
+ * (no buttons, status header, context line) and post the update via
+ * `chat.update`. Failures are logged but never thrown so a Slack hiccup
+ * doesn't fail the submission handler — the control-plane already committed
+ * the verdict at this point.
+ */
+async function updateOriginPlanMessage(
+  env: Env,
+  channel: string,
+  messageTs: string,
+  params: {
+    sessionId: string;
+    plan: PlanArtifact;
+    verdict: "approved" | "rejected";
+    actorMention: string;
+    implementationModelLabel?: string;
+    reason?: string | null;
+    traceId?: string;
+  }
+): Promise<void> {
+  try {
+    const blocks = buildPlanDecidedBlocks({
+      sessionId: params.sessionId,
+      plan: params.plan,
+      webAppUrl: env.WEB_APP_URL,
+      verdict: params.verdict,
+      actorMention: params.actorMention,
+      implementationModelLabel: params.implementationModelLabel,
+      reason: params.reason,
+    });
+    const fallback =
+      params.verdict === "approved"
+        ? `Plan v${params.plan.version} approved`
+        : `Plan v${params.plan.version} rejected`;
+    const result = await updateMessage(env.SLACK_BOT_TOKEN, channel, messageTs, fallback, {
+      blocks,
+    });
+    if (!result.ok) {
+      log.warn("slack.plan_message.update_failed", {
+        trace_id: params.traceId,
+        session_id: params.sessionId,
+        channel,
+        message_ts: messageTs,
+        slack_error: result.error,
+      });
+    }
+  } catch (e) {
+    log.warn("slack.plan_message.update_error", {
+      trace_id: params.traceId,
+      session_id: params.sessionId,
+      channel,
+      message_ts: messageTs,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
   }
 }
 
@@ -846,80 +1328,41 @@ function buildThreadSession(
 }
 
 /**
- * Format thread context for inclusion in a prompt.
- * Returns a formatted string with previous messages from the thread.
+ * Format thread context for inclusion in a prompt. Wraps the previous Slack
+ * messages in a `<user_content>` block per Anthropic's prompting guidance —
+ * thread messages are arbitrary user-generated content and a hostile sender
+ * could otherwise smuggle instructions into the prompt. Each message is
+ * already prefixed with `[username]:` by the caller for attribution.
  */
-function formatThreadContext(previousMessages: string[]): string {
+export function formatThreadContext(previousMessages: string[]): string {
   if (previousMessages.length === 0) {
     return "";
   }
 
-  const context = previousMessages.join("\n");
-  return `Context from the Slack thread:\n---\n${context}\n---\n\n`;
+  return `${buildUntrustedUserContentBlock({
+    source: "slack_thread",
+    author: "slack",
+    content: previousMessages.join("\n"),
+    origin: "a Slack thread",
+  })}\n\n`;
 }
 
 /**
- * Format channel context for inclusion in a prompt.
- * Returns a formatted string with the channel name and optional description.
+ * Format channel context for inclusion in a prompt. Channel name / description
+ * are Slack-controlled but still wrapped for consistency and so the agent can
+ * cleanly distinguish workspace metadata from the live instruction.
  */
-function formatChannelContext(channelName: string, channelDescription?: string): string {
-  let context = `Slack channel context:\n---\nChannel: #${channelName}`;
+export function formatChannelContext(channelName: string, channelDescription?: string): string {
+  let content = `Channel: #${channelName}`;
   if (channelDescription) {
-    context += `\nDescription: ${channelDescription}`;
+    content += `\nDescription: ${channelDescription}`;
   }
-  context += "\n---\n\n";
-  return context;
-}
-
-function scheduleStartingStatus(
-  scheduleBackground: BackgroundTaskScheduler,
-  env: Env,
-  channel: string,
-  threadTs: string,
-  traceId?: string
-): void {
-  scheduleBackground(
-    setAssistantThreadStatusBestEffort(env, channel, threadTs, "Starting...", {
-      event: "start",
-      traceId,
-    })
-  );
-}
-
-function buildWorkingMessageBlocks(
-  repoFullName: string,
-  options: { reasoning?: string; sessionId?: string; webAppUrl?: string } = {}
-): Array<Record<string, unknown>> {
-  const blocks: Array<Record<string, unknown>> = [
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: options.reasoning
-          ? `Working on *${repoFullName}*...\n_${options.reasoning}_`
-          : `Working on *${repoFullName}*...`,
-      },
-    },
-  ];
-
-  if (options.sessionId && options.webAppUrl) {
-    blocks.push({
-      type: "actions",
-      elements: [
-        {
-          type: "button",
-          text: {
-            type: "plain_text",
-            text: "View Session",
-          },
-          url: `${options.webAppUrl}/session/${options.sessionId}`,
-          action_id: "view_session",
-        },
-      ],
-    });
-  }
-
-  return blocks;
+  return `${buildUntrustedUserContentBlock({
+    source: "slack_channel",
+    author: "slack",
+    content,
+    origin: "a Slack channel",
+  })}\n\n`;
 }
 
 /**
@@ -938,12 +1381,18 @@ async function startSessionAndSendPrompt(
   previousMessages?: string[],
   channelName?: string,
   channelDescription?: string,
-  traceId?: string
-): Promise<{ sessionId: string } | null> {
+  traceId?: string,
+  /**
+   * Plan-vs-build intent inferred from the prompt by the repo classifier.
+   * When the user's App Home toggle is OFF, this flag decides plan mode.
+   * When the toggle is ON, plan mode is forced regardless of this value.
+   */
+  classifierShouldPlan?: boolean
+): Promise<{ sessionId: string; planMode: boolean } | null> {
   // Fetch user's preferred model and reasoning effort
   const userPrefs = await getUserPreferences(env, userId);
-  const fallback = env.DEFAULT_MODEL || DEFAULT_MODEL;
-  const model = getValidModelOrDefault(userPrefs?.model ?? fallback);
+  const { defaultModel, defaultPlanModel } = await fetchModelDefaults(env);
+  const model = getValidModelOrDefault(userPrefs?.model ?? defaultModel);
   const reasoningEffort =
     userPrefs?.reasoningEffort && isValidReasoningEffort(model, userPrefs.reasoningEffort)
       ? userPrefs.reasoningEffort
@@ -951,6 +1400,14 @@ async function startSessionAndSendPrompt(
   const globalBranch = getValidatedBranch(userPrefs?.branch);
   const repoBranch = await getUserRepoBranchPreference(env, userId, repo.id);
   const branch = repoBranch ?? globalBranch;
+
+  // Plan-mode is opt-in via the App Home toggle (saves `planModeDefault:
+  // true`). When the toggle is OFF (the default), the bot infers plan-vs-
+  // build intent from the prompt text via the repo classifier — see
+  // `classifierShouldPlan`. Plan-turn model defaults to the App Home plan
+  // model, then the deployment's defaultPlanModel.
+  const planMode = userPrefs?.planModeDefault === true || classifierShouldPlan === true;
+  const planModel = planMode ? userPrefs?.planModel || defaultPlanModel : undefined;
 
   // Best-effort user info resolution for identity linking
   let displayName: string | undefined;
@@ -980,7 +1437,9 @@ async function startSessionAndSendPrompt(
     traceId,
     userId,
     displayName,
-    email
+    email,
+    planMode,
+    planModel
   );
 
   if (!session) {
@@ -1000,6 +1459,16 @@ async function startSessionAndSendPrompt(
     buildThreadSession(session.sessionId, repo, model, reasoningEffort)
   );
 
+  if (planMode) {
+    await postMessage(
+      env.SLACK_BOT_TOKEN,
+      channel,
+      `_Plan mode_: a plan will be proposed before any code change. ` +
+        `Approve or reject it from ${env.WEB_APP_URL}/session/${session.sessionId}#plan.`,
+      { thread_ts: threadTs }
+    );
+  }
+
   // Build callback context for follow-up notification
   const callbackContext: CallbackContext = {
     source: "slack",
@@ -1013,7 +1482,11 @@ async function startSessionAndSendPrompt(
   // Build prompt content with channel and thread context if available
   const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
   const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
-  const promptContent = channelContext + threadContext + messageText;
+  // Deployment-controlled directive, wrapped so it's cleanly separated from the
+  // live user instruction. Not `<user_content>` because it's not untrusted.
+  const slackInstruction =
+    "\n\n<system_instruction>\nDo not use the `slack-notify` tool in this session. Slack sessions automatically post a follow-up notification when triggered from Slack.\n</system_instruction>";
+  const promptContent = channelContext + threadContext + messageText + slackInstruction;
 
   // Send the prompt to the session
   const promptResult = await sendPrompt(
@@ -1035,7 +1508,24 @@ async function startSessionAndSendPrompt(
     return null;
   }
 
-  return { sessionId: session.sessionId };
+  return { sessionId: session.sessionId, planMode };
+}
+
+/**
+ * Post the "session started" notification to Slack.
+ */
+async function postSessionStartedMessage(
+  env: Env,
+  channel: string,
+  threadTs: string,
+  sessionId: string
+): Promise<void> {
+  await postMessage(
+    env.SLACK_BOT_TOKEN,
+    channel,
+    `Session started! The agent is now working on your request.\n\nView progress: ${env.WEB_APP_URL}/session/${sessionId}`,
+    { thread_ts: threadTs }
+  );
 }
 
 const app = new Hono<{ Bindings: Env }>();
@@ -1109,13 +1599,8 @@ app.post("/events", async (c) => {
     await cacheStore.put(dedupeKey, "1", { expirationTtl: 3600 });
   }
 
-  const scheduleBackground = (promise: Promise<void>) => c.executionCtx.waitUntil(promise);
-  const eventTask = Promise.resolve().then(() =>
-    handleSlackEvent(payload, c.env, traceId, scheduleBackground)
-  );
-
   // Process event asynchronously
-  c.executionCtx.waitUntil(eventTask);
+  c.executionCtx.waitUntil(handleSlackEvent(payload, c.env, traceId));
 
   log.info("http.request", {
     trace_id: traceId,
@@ -1223,15 +1708,10 @@ app.post("/interactions", async (c) => {
   const shouldOpenModalInline =
     actionId === "open_branch_modal" || actionId === REPO_BRANCH_SELECTOR_ACTION_ID;
 
-  const scheduleBackground = (promise: Promise<void>) => c.executionCtx.waitUntil(promise);
-
   if (shouldOpenModalInline) {
-    await handleSlackInteraction(payload, c.env, traceId, scheduleBackground);
+    await handleSlackInteraction(payload, c.env, traceId);
   } else {
-    const interactionTask = Promise.resolve().then(() =>
-      handleSlackInteraction(payload, c.env, traceId, scheduleBackground)
-    );
-    c.executionCtx.waitUntil(interactionTask);
+    c.executionCtx.waitUntil(handleSlackInteraction(payload, c.env, traceId));
   }
 
   log.info("http.request", {
@@ -1245,7 +1725,11 @@ app.post("/interactions", async (c) => {
     duration_ms: Date.now() - startTime,
   });
 
-  if (isViewSubmission && isBranchModalCallbackId(payload.view?.callback_id)) {
+  // Slack view_submission responses must be either an empty body, a
+  // `response_action`, or it will surface "Problèmes de connexion" in the
+  // modal even though the work succeeded server-side. Always close the modal
+  // for view_submissions; non-modal interactions get the plain `{ok: true}`.
+  if (isViewSubmission) {
     return c.json({ response_action: "clear" });
   }
 
@@ -1283,8 +1767,7 @@ async function handleSlackEvent(
     };
   },
   env: Env,
-  traceId: string | undefined,
-  scheduleBackground: BackgroundTaskScheduler
+  traceId?: string
 ): Promise<void> {
   if (payload.type !== "event_callback" || !payload.event) {
     return;
@@ -1316,15 +1799,14 @@ async function handleSlackEvent(
         channel_type: event.channel_type,
       },
       env,
-      traceId,
-      scheduleBackground
+      traceId
     );
     return;
   }
 
   // Handle app_mention events
   if (event.type === "app_mention" && event.text && event.channel && event.ts) {
-    await handleAppMention(event as Required<typeof event>, env, traceId, scheduleBackground);
+    await handleAppMention(event as Required<typeof event>, env, traceId);
   }
 }
 
@@ -1341,7 +1823,6 @@ interface IncomingMessageParams {
   channelDescription?: string;
   env: Env;
   traceId?: string;
-  scheduleBackground: BackgroundTaskScheduler;
 }
 
 /**
@@ -1353,6 +1834,7 @@ interface IncomingMessageParams {
  * - Repo classification
  * - Clarification / repo selection UI
  * - Ack message + session creation
+ * - Session started message
  */
 async function handleIncomingMessage(params: IncomingMessageParams): Promise<void> {
   const {
@@ -1365,7 +1847,6 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     channelDescription,
     env,
     traceId,
-    scheduleBackground,
   } = params;
 
   if (!messageText) {
@@ -1419,8 +1900,8 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       const channelContext = channelName
         ? formatChannelContext(channelName, channelDescription)
         : "";
-      // Existing sessions already have prior turns; adding Slack bot replies again can echo stale answers.
-      const promptContent = channelContext + messageText;
+      const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
+      const promptContent = channelContext + threadContext + messageText;
 
       const promptResult = await sendPrompt(
         env,
@@ -1484,7 +1965,11 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       return;
     }
 
-    // Store original message in KV for later retrieval when user selects a repo
+    // Store original message in KV for later retrieval when user selects a
+    // repo. `shouldPlan` rides along so the classifier's plan-vs-build verdict
+    // survives the repo-picker detour — otherwise the manual selection path
+    // would silently fall back to build mode even when the prompt warranted
+    // a plan.
     const pendingKey = `pending:${channel}:${threadTs || ts}`;
     await createKvCacheStore(env.SLACK_KV).put(
       pendingKey,
@@ -1494,6 +1979,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         previousMessages,
         channelName,
         channelDescription,
+        shouldPlan: result.shouldPlan,
       }),
       { expirationTtl: 3600 } // Expire after 1 hour
     );
@@ -1558,14 +2044,23 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     `Working on *${repo.fullName}*...`,
     {
       thread_ts: threadKey,
-      blocks: buildWorkingMessageBlocks(repo.fullName, { reasoning: result.reasoning }),
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `Working on *${repo.fullName}*...\n_${result.reasoning}_`,
+          },
+        },
+      ],
     }
   );
 
   const ackTs = ackResult.ok ? ackResult.ts : undefined;
-  scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
 
-  // Create session and send prompt using shared logic
+  // Create session and send prompt using shared logic. The classifier's
+  // plan-vs-build verdict feeds into plan-mode resolution: the App Home
+  // toggle wins when ON; otherwise the classifier decides.
   const sessionResult = await startSessionAndSendPrompt(
     env,
     repo,
@@ -1576,24 +2071,42 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     previousMessages,
     channelName,
     channelDescription,
-    traceId
+    traceId,
+    result.shouldPlan
   );
 
   if (!sessionResult) {
     return;
   }
 
-  // Update the acknowledgment message with session link button
+  // Update the acknowledgment message with session link button.
   if (ackTs) {
     await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, `Working on *${repo.fullName}*...`, {
-      blocks: buildWorkingMessageBlocks(repo.fullName, {
-        reasoning: result.reasoning,
-        sessionId: sessionResult.sessionId,
-        webAppUrl: env.WEB_APP_URL,
-      }),
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `Working on *${repo.fullName}*...\n_${result.reasoning}_`,
+          },
+        },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              text: { type: "plain_text", text: "View Session" },
+              url: `${env.WEB_APP_URL}/session/${sessionResult.sessionId}`,
+              action_id: "view_session",
+            },
+          ],
+        },
+      ],
     });
-    scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
   }
+
+  // Post that the agent is working
+  await postSessionStartedMessage(env, channel, threadKey, sessionResult.sessionId);
 }
 
 /**
@@ -1609,31 +2122,23 @@ async function handleAppMention(
     thread_ts?: string;
   },
   env: Env,
-  traceId: string | undefined,
-  scheduleBackground: BackgroundTaskScheduler
+  traceId?: string
 ): Promise<void> {
   // Remove the bot mention from the text
   const messageText = stripMentions(event.text);
-  const threadKey = event.thread_ts || event.ts;
-
-  if (messageText) {
-    scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
-  }
 
   // Get channel context
   let channelName: string | undefined;
   let channelDescription: string | undefined;
 
-  if (messageText) {
-    try {
-      const channelInfo = await getChannelInfo(env.SLACK_BOT_TOKEN, event.channel);
-      if (channelInfo.ok && channelInfo.channel) {
-        channelName = channelInfo.channel.name;
-        channelDescription = channelInfo.channel.topic?.value || channelInfo.channel.purpose?.value;
-      }
-    } catch {
-      // Channel info not available
+  try {
+    const channelInfo = await getChannelInfo(env.SLACK_BOT_TOKEN, event.channel);
+    if (channelInfo.ok && channelInfo.channel) {
+      channelName = channelInfo.channel.name;
+      channelDescription = channelInfo.channel.topic?.value || channelInfo.channel.purpose?.value;
     }
+  } catch {
+    // Channel info not available
   }
 
   await handleIncomingMessage({
@@ -1646,7 +2151,6 @@ async function handleAppMention(
     channelDescription,
     env,
     traceId,
-    scheduleBackground,
   });
 }
 
@@ -1665,18 +2169,12 @@ async function handleDirectMessage(
     channel_type?: string;
   },
   env: Env,
-  traceId: string | undefined,
-  scheduleBackground: BackgroundTaskScheduler
+  traceId?: string
 ): Promise<void> {
   log.info("slack.dm.received", { trace_id: traceId, user: event.user, channel: event.channel });
 
   // Strip any @mentions (users may type "@Bot <request>" in DMs)
   const messageText = stripMentions(event.text);
-  const threadKey = event.thread_ts || event.ts;
-
-  if (messageText) {
-    scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
-  }
 
   await handleIncomingMessage({
     text: messageText,
@@ -1686,7 +2184,6 @@ async function handleDirectMessage(
     threadTs: event.thread_ts,
     env,
     traceId,
-    scheduleBackground,
   });
 }
 
@@ -1699,8 +2196,7 @@ async function handleRepoSelection(
   messageTs: string,
   threadTs: string | undefined,
   env: Env,
-  traceId: string | undefined,
-  scheduleBackground: BackgroundTaskScheduler
+  traceId?: string
 ): Promise<void> {
   // Retrieve pending message from KV
   const pendingKey = `pending:${channel}:${threadTs || messageTs}`;
@@ -1722,15 +2218,15 @@ async function handleRepoSelection(
     previousMessages,
     channelName,
     channelDescription,
+    shouldPlan,
   } = pendingData as {
     message: string;
     userId: string;
     previousMessages?: string[];
     channelName?: string;
     channelDescription?: string;
+    shouldPlan?: boolean;
   };
-
-  const threadKey = threadTs || messageTs;
 
   // Find the repo config
   const repos = await getAvailableRepos(env, traceId);
@@ -1746,22 +2242,16 @@ async function handleRepoSelection(
     return;
   }
 
-  scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
-
   // Post acknowledgment
-  const ackResult = await postMessage(
-    env.SLACK_BOT_TOKEN,
-    channel,
-    `Working on *${repo.fullName}*...`,
-    {
-      thread_ts: threadKey,
-      blocks: buildWorkingMessageBlocks(repo.fullName),
-    }
-  );
-  const ackTs = ackResult.ok ? ackResult.ts : undefined;
-  scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
+  await postMessage(env.SLACK_BOT_TOKEN, channel, `Working on *${repo.fullName}*...`, {
+    thread_ts: threadTs || messageTs,
+  });
 
-  // Create session and send prompt using shared logic
+  const threadKey = threadTs || messageTs;
+
+  // Create session and send prompt using shared logic. `shouldPlan` from the
+  // pre-picker classification feeds plan-mode resolution so the manual repo
+  // selection path benefits from smart detection too.
   const sessionResult = await startSessionAndSendPrompt(
     env,
     repo,
@@ -1772,7 +2262,8 @@ async function handleRepoSelection(
     previousMessages,
     channelName,
     channelDescription,
-    traceId
+    traceId,
+    shouldPlan
   );
 
   if (!sessionResult) {
@@ -1782,15 +2273,8 @@ async function handleRepoSelection(
   // Clean up pending message
   await createKvCacheStore(env.SLACK_KV).delete(pendingKey);
 
-  if (ackTs) {
-    await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, `Working on *${repo.fullName}*...`, {
-      blocks: buildWorkingMessageBlocks(repo.fullName, {
-        sessionId: sessionResult.sessionId,
-        webAppUrl: env.WEB_APP_URL,
-      }),
-    });
-    scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
-  }
+  // Post that the agent is working
+  await postSessionStartedMessage(env, channel, threadKey, sessionResult.sessionId);
 }
 
 /**
@@ -1799,12 +2283,23 @@ async function handleRepoSelection(
 async function handleSlackInteraction(
   payload: SlackInteractionPayload,
   env: Env,
-  traceId: string | undefined,
-  scheduleBackground: BackgroundTaskScheduler
+  traceId?: string
 ): Promise<void> {
   const userId = payload.user?.id;
 
   if (payload.type === "view_submission") {
+    // Plan approve / reject modal submissions take precedence over the branch
+    // modal early-return below: they carry the session id in private_metadata
+    // and call the control-plane plan endpoint directly.
+    if (payload.view?.callback_id === PLAN_APPROVE_MODAL_CALLBACK_ID) {
+      await handlePlanApproveSubmission(payload, env, userId, traceId);
+      return;
+    }
+    if (payload.view?.callback_id === PLAN_REJECT_MODAL_CALLBACK_ID) {
+      await handlePlanRejectSubmission(payload, env, userId, traceId);
+      return;
+    }
+
     if (!isBranchModalCallbackId(payload.view?.callback_id) || !userId) {
       return;
     }
@@ -1824,9 +2319,8 @@ async function handleSlackInteraction(
 
     if (payload.view?.callback_id === BRANCH_MODAL_CALLBACK_ID) {
       const currentPrefs = await getUserPreferences(env, userId);
-      const model = getValidModelOrDefault(
-        currentPrefs?.model ?? env.DEFAULT_MODEL ?? DEFAULT_MODEL
-      );
+      const { defaultModel } = await fetchModelDefaults(env);
+      const model = getValidModelOrDefault(currentPrefs?.model ?? defaultModel);
       const reasoningEffort =
         currentPrefs?.reasoningEffort && isValidReasoningEffort(model, currentPrefs.reasoningEffort)
           ? currentPrefs.reasoningEffort
@@ -1912,9 +2406,8 @@ async function handleSlackInteraction(
       const selectedEffort = action.selected_option?.value;
       if (selectedEffort && userId) {
         const currentPrefs = await getUserPreferences(env, userId);
-        const currentModel = getValidModelOrDefault(
-          currentPrefs?.model ?? env.DEFAULT_MODEL ?? DEFAULT_MODEL
-        );
+        const { defaultModel } = await fetchModelDefaults(env);
+        const currentModel = getValidModelOrDefault(currentPrefs?.model ?? defaultModel);
         const preservedBranch = getValidatedBranch(currentPrefs?.branch);
         if (isValidReasoningEffort(currentModel, selectedEffort)) {
           await saveUserPreferences(env, userId, currentModel, selectedEffort, preservedBranch);
@@ -1967,9 +2460,8 @@ async function handleSlackInteraction(
     case "clear_branch_preference": {
       if (!userId) return;
       const currentPrefs = await getUserPreferences(env, userId);
-      const model = getValidModelOrDefault(
-        currentPrefs?.model ?? env.DEFAULT_MODEL ?? DEFAULT_MODEL
-      );
+      const { defaultModel } = await fetchModelDefaults(env);
+      const model = getValidModelOrDefault(currentPrefs?.model ?? defaultModel);
       const reasoningEffort =
         currentPrefs?.reasoningEffort && isValidReasoningEffort(model, currentPrefs.reasoningEffort)
           ? currentPrefs.reasoningEffort
@@ -1983,21 +2475,72 @@ async function handleSlackInteraction(
       if (!channel || !messageTs) return;
       const repoId = action.selected_option?.value;
       if (repoId) {
-        await handleRepoSelection(
-          repoId,
-          channel,
-          messageTs,
-          threadTs,
-          env,
-          traceId,
-          scheduleBackground
-        );
+        await handleRepoSelection(repoId, channel, messageTs, threadTs, env, traceId);
       }
       break;
     }
 
     case "view_session": {
       // This is a URL button, no action needed
+      break;
+    }
+
+    case "select_plan_mode_default": {
+      // Checkbox: ON if the user ticked the option, OFF otherwise.
+      if (!userId) return;
+      const checked = Boolean(
+        action.selected_options &&
+        Array.isArray(action.selected_options) &&
+        action.selected_options.some((o) => o.value === "plan_mode_on")
+      );
+      await saveUserPlanPreferences(env, userId, { planModeDefault: checked });
+      await publishAppHome(env, userId);
+      break;
+    }
+
+    case "select_plan_model": {
+      if (!userId) return;
+      const selectedModel = action.selected_option?.value;
+      if (selectedModel && isValidModel(selectedModel)) {
+        await saveUserPlanPreferences(env, userId, {
+          planModel: getValidModelOrDefault(selectedModel),
+        });
+        await publishAppHome(env, userId);
+      }
+      break;
+    }
+
+    case "plan_approve": {
+      // Open a modal so the user can override the build model before
+      // approval. action.value carries the session id; payload.channel + .message
+      // identify the plan-awaiting-approval message so the submission handler
+      // can update it (remove buttons, show verdict) on success.
+      if (!payload.trigger_id) return;
+      const sessionId = action.value;
+      if (!sessionId) return;
+      const originMessage =
+        payload.channel?.id && payload.message?.ts
+          ? { channel: payload.channel.id, ts: payload.message.ts }
+          : undefined;
+      await openPlanApproveModal(
+        env,
+        payload.trigger_id,
+        sessionId,
+        userId ?? undefined,
+        originMessage
+      );
+      break;
+    }
+
+    case "plan_reject": {
+      if (!payload.trigger_id) return;
+      const sessionId = action.value;
+      if (!sessionId) return;
+      const originMessage =
+        payload.channel?.id && payload.message?.ts
+          ? { channel: payload.channel.id, ts: payload.message.ts }
+          : undefined;
+      await openPlanRejectModal(env, payload.trigger_id, sessionId, originMessage);
       break;
     }
   }

@@ -111,6 +111,7 @@ export type SlackInteractionPayload = {
   actions?: Array<{
     action_id: string;
     selected_option?: { value: string };
+    selected_options?: Array<{ value: string }>;
     value?: string;
   }>;
   channel?: { id: string };
