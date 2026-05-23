@@ -432,7 +432,7 @@ describe("useSessionSocket", () => {
     });
   });
 
-  it("clears stale sandbox access state when a sandbox is replaced or becomes terminal", async () => {
+  it("clears credentials on spawn and terminal statuses without dropping diagnostic links early", async () => {
     const { result } = renderHook(() => useSessionSocket("session-1"));
 
     await waitFor(() => {
@@ -459,34 +459,13 @@ describe("useSessionSocket", () => {
 
     await waitFor(() => {
       expect(result.current.sessionState?.sandboxStatus).toBe("spawning");
-      expect(result.current.sessionState?.sandboxDashboardUrl).toBeUndefined();
+      expect(result.current.sessionState?.sandboxDashboardUrl).toBe(
+        "https://provider.example/old-sandbox"
+      );
       expect(result.current.sessionState?.codeServerUrl).toBeUndefined();
     });
 
     act(() => {
-      sendSandboxAccessMessages(socket, "new-sandbox");
-      socket.receive({ type: "sandbox_status", status: "failed" });
-    });
-
-    await waitFor(() => {
-      expect(result.current.sessionState?.sandboxStatus).toBe("failed");
-      expect(result.current.sessionState?.sandboxDashboardUrl).toBeUndefined();
-      expect(result.current.sessionState?.codeServerUrl).toBeUndefined();
-    });
-  });
-
-  it("clears stale sandbox access state on status spawning and sandbox_error", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1"));
-
-    await waitFor(() => {
-      expect(FakeWebSocket.instances).toHaveLength(1);
-    });
-
-    const socket = FakeWebSocket.instances[0];
-    act(() => {
-      socket.open();
-      socket.receive(createSubscribedMessage());
-      sendSandboxAccessMessages(socket, "old-sandbox");
       socket.receive({ type: "sandbox_status", status: "spawning" });
     });
 
@@ -498,12 +477,69 @@ describe("useSessionSocket", () => {
 
     act(() => {
       sendSandboxAccessMessages(socket, "new-sandbox");
+      socket.receive({ type: "sandbox_status", status: "failed" });
+    });
+
+    await waitFor(() => {
+      expect(result.current.sessionState?.sandboxStatus).toBe("failed");
+      expect(result.current.sessionState?.sandboxDashboardUrl).toBe(
+        "https://provider.example/new-sandbox"
+      );
+      expect(result.current.sessionState?.codeServerUrl).toBeUndefined();
+    });
+  });
+
+  it("clears dashboard URL only for replacement starts, not sandbox errors", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1"));
+
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+      sendSandboxAccessMessages(socket, "old-sandbox");
+    });
+
+    await waitFor(() => {
+      expect(result.current.sessionState?.sandboxDashboardUrl).toBe(
+        "https://provider.example/old-sandbox"
+      );
+      expect(result.current.sessionState?.codeServerUrl).toBe("https://code.example/old-sandbox");
+    });
+
+    act(() => {
+      socket.receive({ type: "sandbox_status", status: "spawning" });
+    });
+
+    await waitFor(() => {
+      expect(result.current.sessionState?.sandboxStatus).toBe("spawning");
+      expect(result.current.sessionState?.sandboxDashboardUrl).toBeUndefined();
+      expect(result.current.sessionState?.codeServerUrl).toBeUndefined();
+    });
+
+    act(() => {
+      sendSandboxAccessMessages(socket, "new-sandbox");
+    });
+
+    await waitFor(() => {
+      expect(result.current.sessionState?.sandboxDashboardUrl).toBe(
+        "https://provider.example/new-sandbox"
+      );
+      expect(result.current.sessionState?.codeServerUrl).toBe("https://code.example/new-sandbox");
+    });
+
+    act(() => {
       socket.receive({ type: "sandbox_error", error: "spawn failed" });
     });
 
     await waitFor(() => {
       expect(result.current.sessionState?.sandboxStatus).toBe("failed");
-      expect(result.current.sessionState?.sandboxDashboardUrl).toBeUndefined();
+      expect(result.current.sessionState?.sandboxDashboardUrl).toBe(
+        "https://provider.example/new-sandbox"
+      );
       expect(result.current.sessionState?.codeServerUrl).toBeUndefined();
     });
   });

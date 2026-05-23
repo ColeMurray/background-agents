@@ -110,12 +110,6 @@ const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /** Statuses that indicate a session is finished — metrics are synced to D1 on these transitions. */
 const TERMINAL_STATUSES: SessionStatus[] = ["completed", "failed", "cancelled"];
-const SANDBOX_DASHBOARD_URL_BLOCKED_STATUSES = new Set<SandboxStatus>([
-  "spawning",
-  "stale",
-  "stopped",
-  "failed",
-]);
 
 export class SessionDO extends DurableObject<Env> {
   private sql: SqlStorage;
@@ -1688,16 +1682,12 @@ export class SessionDO extends DurableObject<Env> {
       tunnelUrls: sandbox?.tunnel_urls ? this.safeParseTunnelUrls(sandbox.tunnel_urls) : null,
       ttydUrl: sandbox?.ttyd_url ?? null,
       ttydToken,
-      sandboxDashboardUrl: this.getSandboxDashboardUrl(sandbox?.modal_object_id, sandbox?.status),
+      sandboxDashboardUrl: this.getSandboxDashboardUrl(sandbox?.modal_object_id),
     };
   }
 
-  private getSandboxDashboardUrl(
-    providerObjectId: string | null | undefined,
-    sandboxStatus?: SandboxStatus | null
-  ): string | null {
+  private getSandboxDashboardUrl(providerObjectId: string | null | undefined): string | null {
     if (resolveSandboxBackendName(this.env.SANDBOX_PROVIDER) !== "modal") return null;
-    if (sandboxStatus && SANDBOX_DASHBOARD_URL_BLOCKED_STATUSES.has(sandboxStatus)) return null;
     return buildModalSandboxDashboardUrl({
       workspace: this.env.MODAL_WORKSPACE,
       providerObjectId,

@@ -25,6 +25,18 @@ describe("buildModalSandboxDashboardUrl", () => {
     );
   });
 
+  it("encodes URL components", () => {
+    expect(
+      buildModalSandboxDashboardUrl({
+        workspace: "acme team",
+        environment: "prod/main",
+        providerObjectId: "sb 123/456?x=1",
+      })
+    ).toBe(
+      "https://modal.com/apps/acme%20team/prod%2Fmain/deployed/open-inspect?activeTab=sandboxes&sandboxId=sb%20123%2F456%3Fx%3D1"
+    );
+  });
+
   it("returns null when required inputs are missing", () => {
     expect(
       buildModalSandboxDashboardUrl({

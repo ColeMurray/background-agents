@@ -40,7 +40,6 @@ const CLEARED_SANDBOX_ACCESS_STATE = {
   tunnelUrls: undefined,
   ttydUrl: undefined,
   ttydToken: undefined,
-  sandboxDashboardUrl: undefined,
 } satisfies Partial<SessionState>;
 
 interface UseSessionSocketReturn {
@@ -393,8 +392,9 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           break;
 
         case "sandbox_status": {
+          const isReplacementStart = data.status === "spawning";
           const shouldClearAccessState =
-            data.status === "spawning" ||
+            isReplacementStart ||
             data.status === "stale" ||
             data.status === "stopped" ||
             data.status === "failed";
@@ -404,6 +404,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
                   ...prev,
                   sandboxStatus: data.status,
                   ...(shouldClearAccessState && CLEARED_SANDBOX_ACCESS_STATE),
+                  ...(isReplacementStart && { sandboxDashboardUrl: undefined }),
                 }
               : null
           );

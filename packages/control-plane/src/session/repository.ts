@@ -345,7 +345,8 @@ export class SessionRepository {
          created_at = ?,
          auth_token_hash = ?,
          auth_token = NULL,
-         modal_sandbox_id = ?
+         modal_sandbox_id = ?,
+         modal_object_id = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,

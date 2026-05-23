@@ -31,21 +31,36 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     ws.close();
   });
 
-  it("subscribe hydrates dashboard URL only for accessible sandbox states", async () => {
+  it("subscribe hydrates dashboard URL when provider object id exists", async () => {
+    const dashboardUrl =
+      "https://modal.com/apps/test-workspace/main/deployed/open-inspect?activeTab=sandboxes&sandboxId=provider-obj-123";
     const cases = [
       {
         status: "connecting",
-        expectedDashboardUrl:
-          "https://modal.com/apps/test-workspace/main/deployed/open-inspect?activeTab=sandboxes&sandboxId=provider-obj-123",
+        providerObjectId: "provider-obj-123",
+        expectedDashboardUrl: dashboardUrl,
       },
-      { status: "spawning", expectedDashboardUrl: null },
-      { status: "stale", expectedDashboardUrl: null },
-      { status: "stopped", expectedDashboardUrl: null },
-      { status: "failed", expectedDashboardUrl: null },
+      {
+        status: "spawning",
+        providerObjectId: "provider-obj-123",
+        expectedDashboardUrl: dashboardUrl,
+      },
+      { status: "spawning", providerObjectId: null, expectedDashboardUrl: null },
+      { status: "stale", providerObjectId: "provider-obj-123", expectedDashboardUrl: dashboardUrl },
+      {
+        status: "stopped",
+        providerObjectId: "provider-obj-123",
+        expectedDashboardUrl: dashboardUrl,
+      },
+      {
+        status: "failed",
+        providerObjectId: "provider-obj-123",
+        expectedDashboardUrl: dashboardUrl,
+      },
     ];
 
     for (const [index, testCase] of cases.entries()) {
-      const name = `ws-client-dashboard-url-${testCase.status}-${Date.now()}-${index}`;
+      const name = `ws-client-dashboard-url-${testCase.status}-${testCase.providerObjectId ? "with-id" : "without-id"}-${Date.now()}-${index}`;
       const { stub } = await initNamedSession(name);
       await queryDO(
         stub,
@@ -53,7 +68,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
            SET status = ?, modal_object_id = ?
          WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
         testCase.status,
-        "provider-obj-123"
+        testCase.providerObjectId
       );
 
       const { ws, messages } = await openClientWs(name, { subscribe: true });

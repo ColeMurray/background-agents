@@ -14,6 +14,8 @@ const log = createLogger("modal-client");
 
 // Modal app name
 const MODAL_APP_NAME = "open-inspect";
+
+// Modal's default environment name; unrelated to the git branch named "main".
 const DEFAULT_MODAL_DASHBOARD_ENVIRONMENT = "main";
 
 /**
@@ -30,8 +32,10 @@ export function buildModalSandboxDashboardUrl(params: {
   providerObjectId: string | null | undefined;
 }): string | null {
   if (!params.workspace || !params.providerObjectId) return null;
-  const environment = params.environment || DEFAULT_MODAL_DASHBOARD_ENVIRONMENT;
-  return `https://modal.com/apps/${params.workspace}/${environment}/deployed/${MODAL_APP_NAME}?activeTab=sandboxes&sandboxId=${params.providerObjectId}`;
+  const workspace = encodeURIComponent(params.workspace);
+  const environment = encodeURIComponent(params.environment || DEFAULT_MODAL_DASHBOARD_ENVIRONMENT);
+  const providerObjectId = encodeURIComponent(params.providerObjectId);
+  return `https://modal.com/apps/${workspace}/${environment}/deployed/${MODAL_APP_NAME}?activeTab=sandboxes&sandboxId=${providerObjectId}`;
 }
 
 export interface CreateSandboxRequest {

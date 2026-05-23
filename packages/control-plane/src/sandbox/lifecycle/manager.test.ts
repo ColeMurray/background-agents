@@ -130,6 +130,7 @@ function createMockStorage(
         sandbox.auth_token_hash = data.authTokenHash;
         sandbox.auth_token = null;
         sandbox.modal_sandbox_id = data.modalSandboxId;
+        sandbox.modal_object_id = null;
       }
     }),
     updateSandboxModalObjectId: vi.fn((id: string) => {
@@ -671,6 +672,50 @@ describe("SandboxLifecycleManager", () => {
         {
           type: "sandbox_dashboard_url",
           url: "https://provider.example/new-provider-obj",
+        },
+      ]);
+    });
+
+    it("broadcasts sandbox_dashboard_url after resume when provider object id is unchanged", async () => {
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        modal_object_id: "same-provider-obj",
+        snapshot_image_id: null,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const provider = createMockProvider({
+        capabilities: { supportsPersistentResume: true },
+        resumeSandbox: vi.fn(async () => ({
+          success: true,
+          providerObjectId: "same-provider-obj",
+        })),
+      });
+      const config = {
+        ...createTestConfig(),
+        sandboxDashboardUrlBuilder: (id: string) => `https://provider.example/${id}`,
+      };
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        broadcaster,
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        config
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.resumeSandbox).toHaveBeenCalled();
+      expect(storage.calls).not.toContain("updateSandboxModalObjectId:same-provider-obj");
+      expect(
+        broadcaster.messages.filter((m) => (m as { type: string }).type === "sandbox_dashboard_url")
+      ).toEqual([
+        {
+          type: "sandbox_dashboard_url",
+          url: "https://provider.example/same-provider-obj",
         },
       ]);
     });
