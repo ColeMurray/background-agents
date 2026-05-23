@@ -792,8 +792,11 @@ class TestEnsureCredentialHelperConfigured:
     async def test_warns_when_credential_helper_shim_cannot_be_written(self, base_env):
         supervisor = _make_supervisor(base_env)
         supervisor.log = MagicMock()
+        git_config_calls = []
 
         async def fake_subprocess(*args, **kwargs):
+            if "config" in args:
+                git_config_calls.append(args)
             proc = MagicMock()
             proc.communicate = AsyncMock(return_value=(b"", b""))
             proc.returncode = 0
@@ -813,3 +816,6 @@ class TestEnsureCredentialHelperConfigured:
             "credential_helper.shim_write_failed",
             error="read-only",
         )
+        pairs = {(c[4], c[5]) for c in git_config_calls}
+        assert ("credential.helper", "/usr/local/bin/oi-git-credentials") not in pairs
+        assert ("credential.useHttpPath", "true") in pairs

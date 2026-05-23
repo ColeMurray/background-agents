@@ -50,8 +50,9 @@ AGENT_TOOLS_GATED_ON_ENV: dict[str, str] = {
 #     token is marked with OI_GITHUB_TOKEN_IS_FALLBACK=1 and is NOT treated
 #     as user-provided, so a helper-capable restored snapshot still refreshes
 #     rather than reusing the soon-expired restore token. gh reads GH_TOKEN
-#     before GITHUB_TOKEN; GITHUB_APP_TOKEN is checked only as a
-#     user-provided-token sentinel.
+#     before GITHUB_TOKEN. The manager's fallback aliases are matching
+#     GITHUB_TOKEN/GITHUB_APP_TOKEN values, so a later user override differs
+#     and wins.
 GH_WRAPPER_REAL_PATH = "/usr/bin/gh"
 GH_WRAPPER_BODY = (
     "#!/bin/sh\n"
@@ -60,8 +61,16 @@ GH_WRAPPER_BODY = (
     '  exec "$REAL_GH" "$@"\n'
     "fi\n"
     "# A real user token wins; a marked fallback token does not.\n"
+    'if [ -n "$GH_TOKEN" ]; then\n'
+    '  exec "$REAL_GH" "$@"\n'
+    "fi\n"
     'if [ "$OI_GITHUB_TOKEN_IS_FALLBACK" != "1" ] && '
-    '{ [ -n "$GH_TOKEN" ] || [ -n "$GITHUB_TOKEN" ] || [ -n "$GITHUB_APP_TOKEN" ]; }; then\n'
+    '{ [ -n "$GITHUB_TOKEN" ] || [ -n "$GITHUB_APP_TOKEN" ]; }; then\n'
+    '  exec "$REAL_GH" "$@"\n'
+    "fi\n"
+    'if [ "$OI_GITHUB_TOKEN_IS_FALLBACK" = "1" ] && '
+    '[ -n "$GITHUB_TOKEN" ] && [ -n "$GITHUB_APP_TOKEN" ] && '
+    '[ "$GITHUB_TOKEN" != "$GITHUB_APP_TOKEN" ]; then\n'
     '  exec "$REAL_GH" "$@"\n'
     "fi\n"
     # stderr is left attached so the helper's diagnostic surfaces when a
@@ -227,10 +236,14 @@ class SandboxSupervisor:
         shim_body = (
             '#!/bin/sh\nexec python3 -m sandbox_runtime.credentials.git_credential_helper "$@"\n'
         )
+        shim_available = False
         try:
-            if not shim_path.exists() or shim_path.read_text() != shim_body:
+            if shim_path.exists() and shim_path.read_text() == shim_body:
+                shim_available = True
+            else:
                 shim_path.write_text(shim_body)
                 shim_path.chmod(0o755)
+                shim_available = True
         except OSError as e:
             # /usr/local/bin not writable in some sandboxed runs; the system
             # config baked into the image is the primary path anyway.
@@ -239,10 +252,11 @@ class SandboxSupervisor:
         # credential.useHttpPath makes git pass the repo path to the helper,
         # which it needs to scope credentials to the session repo (not just
         # the host).
-        for key, value in (
-            ("credential.helper", str(shim_path)),
-            ("credential.useHttpPath", "true"),
-        ):
+        configs = [("credential.useHttpPath", "true")]
+        if shim_available:
+            configs.insert(0, ("credential.helper", str(shim_path)))
+
+        for key, value in configs:
             proc = await asyncio.create_subprocess_exec(
                 "git",
                 "config",

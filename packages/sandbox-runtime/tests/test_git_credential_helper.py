@@ -15,6 +15,7 @@ import pytest
 import sandbox_runtime.credentials.git_credential_helper as helper
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
 
 
@@ -40,6 +41,37 @@ def env_set(monkeypatch: pytest.MonkeyPatch) -> None:
 
 # A credential request as git emits it with credential.useHttpPath=true.
 SESSION_REPO_REQUEST = "protocol=https\nhost=github.com\npath=acme/web.git\n\n"
+DEFAULT_CREDENTIAL_TTL_SECONDS = 60 * 60
+NEAR_EXPIRY_SECONDS = 60
+CONCURRENT_REFRESH_DELAY_SECONDS = 0.1
+
+
+class _ThreadLocalTextIO:
+    """Proxy stdio calls to streams registered by the current thread."""
+
+    def __init__(self) -> None:
+        self._local = threading.local()
+
+    def set(self, stream: io.StringIO) -> None:
+        self._local.stream = stream
+
+    def _stream(self) -> io.StringIO:
+        stream = getattr(self._local, "stream", None)
+        if stream is None:
+            raise RuntimeError("thread-local stream is not configured")
+        return stream
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._stream())
+
+    def read(self, *args: Any) -> str:
+        return self._stream().read(*args)
+
+    def write(self, *args: Any) -> int:
+        return self._stream().write(*args)
+
+    def flush(self) -> None:
+        self._stream().flush()
 
 
 def _run(stdin_text: str, action: str = "get") -> tuple[int, str, str]:
@@ -87,7 +119,7 @@ def test_get_returns_credentials_on_success(cache_dir: Path, env_set: None) -> N
         {
             "username": "x-access-token",
             "password": "ghs_abc",
-            "expires_at_epoch_ms": int((time.time() + 3600) * 1000),
+            "expires_at_epoch_ms": int((time.time() + DEFAULT_CREDENTIAL_TTL_SECONDS) * 1000),
             "scm_provider": "github",
         }
     )
@@ -110,7 +142,7 @@ def test_does_not_echo_input_username_or_password(cache_dir: Path, env_set: None
         {
             "username": "x-access-token",
             "password": "ghs_fresh",
-            "expires_at_epoch_ms": int((time.time() + 3600) * 1000),
+            "expires_at_epoch_ms": int((time.time() + DEFAULT_CREDENTIAL_TTL_SECONDS) * 1000),
             "scm_provider": "github",
         }
     )
@@ -163,7 +195,7 @@ def test_matches_repo_path_case_insensitively_and_without_dotgit(
         {
             "username": "x-access-token",
             "password": "ghs_ok",
-            "expires_at_epoch_ms": int((time.time() + 3600) * 1000),
+            "expires_at_epoch_ms": int((time.time() + DEFAULT_CREDENTIAL_TTL_SECONDS) * 1000),
             "scm_provider": "github",
         }
     )
@@ -182,7 +214,7 @@ def test_matches_repo_path_with_trailing_slashes(cache_dir: Path, env_set: None,
         {
             "username": "x-access-token",
             "password": "ghs_trailing",
-            "expires_at_epoch_ms": int((time.time() + 3600) * 1000),
+            "expires_at_epoch_ms": int((time.time() + DEFAULT_CREDENTIAL_TTL_SECONDS) * 1000),
             "scm_provider": "github",
         }
     )
@@ -200,7 +232,7 @@ def test_allows_same_repo_git_lfs_endpoint(cache_dir: Path, env_set: None) -> No
         {
             "username": "x-access-token",
             "password": "ghs_lfs",
-            "expires_at_epoch_ms": int((time.time() + 3600) * 1000),
+            "expires_at_epoch_ms": int((time.time() + DEFAULT_CREDENTIAL_TTL_SECONDS) * 1000),
             "scm_provider": "github",
         }
     )
@@ -220,7 +252,7 @@ def test_uses_cache_within_buffer(cache_dir: Path, env_set: None) -> None:
             {
                 "username": "x-access-token",
                 "password": "ghs_cached",
-                "expires_at_epoch_ms": int((time.time() + 3600) * 1000),
+                "expires_at_epoch_ms": int((time.time() + DEFAULT_CREDENTIAL_TTL_SECONDS) * 1000),
                 "scm_provider": "github",
             }
         )
@@ -243,7 +275,7 @@ def test_refreshes_when_cache_within_expiry_buffer(cache_dir: Path, env_set: Non
             {
                 "username": "x-access-token",
                 "password": "ghs_stale",
-                "expires_at_epoch_ms": int((time.time() + 60) * 1000),
+                "expires_at_epoch_ms": int((time.time() + NEAR_EXPIRY_SECONDS) * 1000),
                 "scm_provider": "github",
             }
         )
@@ -253,7 +285,7 @@ def test_refreshes_when_cache_within_expiry_buffer(cache_dir: Path, env_set: Non
         {
             "username": "x-access-token",
             "password": "ghs_new",
-            "expires_at_epoch_ms": int((time.time() + 3600) * 1000),
+            "expires_at_epoch_ms": int((time.time() + DEFAULT_CREDENTIAL_TTL_SECONDS) * 1000),
             "scm_provider": "github",
         }
     )
@@ -276,7 +308,7 @@ def test_failure_does_not_fall_back_to_stale_cache(cache_dir: Path, env_set: Non
             {
                 "username": "x-access-token",
                 "password": "ghs_stale",
-                "expires_at_epoch_ms": int((time.time() - 60) * 1000),  # expired
+                "expires_at_epoch_ms": int((time.time() - NEAR_EXPIRY_SECONDS) * 1000),  # expired
                 "scm_provider": "github",
             }
         )
@@ -397,7 +429,7 @@ def test_malformed_cache_json_triggers_refresh(cache_dir: Path, env_set: None) -
         {
             "username": "x-access-token",
             "password": "ghs_recovered",
-            "expires_at_epoch_ms": int((time.time() + 3600) * 1000),
+            "expires_at_epoch_ms": int((time.time() + DEFAULT_CREDENTIAL_TTL_SECONDS) * 1000),
             "scm_provider": "github",
         }
     )
@@ -416,7 +448,7 @@ def test_cache_missing_password_triggers_refresh(cache_dir: Path, env_set: None)
         json.dumps(
             {
                 "username": "x-access-token",
-                "expires_at_epoch_ms": int((time.time() + 3600) * 1000),
+                "expires_at_epoch_ms": int((time.time() + DEFAULT_CREDENTIAL_TTL_SECONDS) * 1000),
             }
         )
     )
@@ -425,7 +457,7 @@ def test_cache_missing_password_triggers_refresh(cache_dir: Path, env_set: None)
         {
             "username": "x-access-token",
             "password": "ghs_recovered",
-            "expires_at_epoch_ms": int((time.time() + 3600) * 1000),
+            "expires_at_epoch_ms": int((time.time() + DEFAULT_CREDENTIAL_TTL_SECONDS) * 1000),
             "scm_provider": "github",
         }
     )
@@ -472,7 +504,7 @@ def test_token_action_prints_bare_token(cache_dir: Path, env_set: None) -> None:
         {
             "username": "x-access-token",
             "password": "ghs_for_gh",
-            "expires_at_epoch_ms": int((time.time() + 3600) * 1000),
+            "expires_at_epoch_ms": int((time.time() + DEFAULT_CREDENTIAL_TTL_SECONDS) * 1000),
             "scm_provider": "github",
         }
     )
@@ -526,7 +558,7 @@ def test_concurrent_invocations_share_one_refresh(cache_dir: Path, env_set: None
     payload = {
         "username": "x-access-token",
         "password": "ghs_locked",
-        "expires_at_epoch_ms": int((time.time() + 3600) * 1000),
+        "expires_at_epoch_ms": int((time.time() + DEFAULT_CREDENTIAL_TTL_SECONDS) * 1000),
         "scm_provider": "github",
     }
 
@@ -537,7 +569,7 @@ def test_concurrent_invocations_share_one_refresh(cache_dir: Path, env_set: None
         nonlocal call_count
         with call_lock:
             call_count += 1
-        time.sleep(0.1)
+        time.sleep(CONCURRENT_REFRESH_DELAY_SECONDS)
         return httpx.Response(200, json=payload)
 
     real_client_cls = httpx.Client
@@ -546,20 +578,28 @@ def test_concurrent_invocations_share_one_refresh(cache_dir: Path, env_set: None
         kwargs.pop("transport", None)
         return real_client_cls(*args, transport=httpx.MockTransport(slow_handler), **kwargs)
 
-    results: list[int] = []
+    stdin_proxy = _ThreadLocalTextIO()
+    stdout_proxy = _ThreadLocalTextIO()
+    stderr_proxy = _ThreadLocalTextIO()
+    results: list[tuple[int, str, str]] = []
+    results_lock = threading.Lock()
 
     def run_one() -> None:
-        stdin = io.StringIO(SESSION_REPO_REQUEST)
         stdout = io.StringIO()
         stderr = io.StringIO()
-        with (
-            patch.object(helper.sys, "stdin", stdin),
-            patch.object(helper.sys, "stdout", stdout),
-            patch.object(helper.sys, "stderr", stderr),
-        ):
-            results.append(helper.main(["get"]))
+        stdin_proxy.set(io.StringIO(SESSION_REPO_REQUEST))
+        stdout_proxy.set(stdout)
+        stderr_proxy.set(stderr)
+        code = helper.main(["get"])
+        with results_lock:
+            results.append((code, stdout.getvalue(), stderr.getvalue()))
 
-    with patch.object(helper.httpx, "Client", factory):
+    with (
+        patch.object(helper.httpx, "Client", factory),
+        patch.object(helper.sys, "stdin", stdin_proxy),
+        patch.object(helper.sys, "stdout", stdout_proxy),
+        patch.object(helper.sys, "stderr", stderr_proxy),
+    ):
         t1 = threading.Thread(target=run_one)
         t2 = threading.Thread(target=run_one)
         t1.start()
@@ -567,7 +607,9 @@ def test_concurrent_invocations_share_one_refresh(cache_dir: Path, env_set: None
         t1.join()
         t2.join()
 
-    assert results == [0, 0]
+    assert len(results) == 2
+    assert all(code == 0 for code, _out, _err in results)
+    assert all("password=ghs_locked" in out for _code, out, _err in results)
     assert call_count == 1
     # Cache contains the locked password.
     assert json.loads(helper.CACHE_FILE.read_text())["password"] == "ghs_locked"
@@ -578,7 +620,7 @@ def test_cache_file_is_mode_0600(cache_dir: Path, env_set: None) -> None:
         {
             "username": "x-access-token",
             "password": "ghs_secret",
-            "expires_at_epoch_ms": int((time.time() + 3600) * 1000),
+            "expires_at_epoch_ms": int((time.time() + DEFAULT_CREDENTIAL_TTL_SECONDS) * 1000),
             "scm_provider": "github",
         }
     )

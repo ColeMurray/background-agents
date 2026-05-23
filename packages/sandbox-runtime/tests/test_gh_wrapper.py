@@ -86,6 +86,40 @@ def test_respects_explicit_user_app_token(tmp_path: Path) -> None:
     assert "GITHUB_APP_TOKEN=user_app_token" in out
 
 
+def test_respects_user_app_token_when_fallback_marker_remains(tmp_path: Path) -> None:
+    """A user override after boot should win over a marked fallback token."""
+    wrapper = _build_wrapper(tmp_path, fresh_token="ghs_fresh")
+    out = _run(
+        wrapper,
+        {
+            "VCS_HOST": "github.com",
+            "GITHUB_TOKEN": "stale_restore_token",
+            "GITHUB_APP_TOKEN": "user_app_token",
+            "OI_GITHUB_TOKEN_IS_FALLBACK": "1",
+        },
+    )
+    assert "GH_TOKEN=ghs_fresh" not in out
+    assert "GITHUB_TOKEN=stale_restore_token" in out
+    assert "GITHUB_APP_TOKEN=user_app_token" in out
+
+
+def test_respects_user_gh_token_when_fallback_marker_remains(tmp_path: Path) -> None:
+    """The manager never injects GH_TOKEN as a fallback, so it is always user-owned."""
+    wrapper = _build_wrapper(tmp_path, fresh_token="ghs_fresh")
+    out = _run(
+        wrapper,
+        {
+            "VCS_HOST": "github.com",
+            "GH_TOKEN": "user_gh_token",
+            "GITHUB_TOKEN": "stale_restore_token",
+            "GITHUB_APP_TOKEN": "stale_restore_token",
+            "OI_GITHUB_TOKEN_IS_FALLBACK": "1",
+        },
+    )
+    assert "GH_TOKEN=user_gh_token" in out
+    assert "GH_TOKEN=ghs_fresh" not in out
+
+
 def test_refreshes_past_marked_fallback_token(tmp_path: Path) -> None:
     """A manager-injected fallback token must be refreshed, not reused."""
     wrapper = _build_wrapper(tmp_path, fresh_token="ghs_fresh")
@@ -98,6 +132,21 @@ def test_refreshes_past_marked_fallback_token(tmp_path: Path) -> None:
         },
     )
     # gh prefers GH_TOKEN, and we set it to the fresh value.
+    assert "GH_TOKEN=ghs_fresh" in out
+
+
+def test_refreshes_past_marked_fallback_app_token(tmp_path: Path) -> None:
+    """The manager injects matching GITHUB_TOKEN/GITHUB_APP_TOKEN fallbacks."""
+    wrapper = _build_wrapper(tmp_path, fresh_token="ghs_fresh")
+    out = _run(
+        wrapper,
+        {
+            "VCS_HOST": "github.com",
+            "GITHUB_TOKEN": "stale_restore_token",
+            "GITHUB_APP_TOKEN": "stale_restore_token",
+            "OI_GITHUB_TOKEN_IS_FALLBACK": "1",
+        },
+    )
     assert "GH_TOKEN=ghs_fresh" in out
 
 
