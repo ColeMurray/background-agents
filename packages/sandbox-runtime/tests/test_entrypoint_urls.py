@@ -1,4 +1,10 @@
-"""Tests for SandboxSupervisor._build_repo_url()."""
+"""Tests for SandboxSupervisor._build_repo_url().
+
+The supervisor no longer embeds credentials in remote URLs — authentication
+flows through the system-wide git credential helper, which fetches fresh
+tokens from the control plane per request. The URL builder is therefore
+purely a function of host, owner, and name.
+"""
 
 from unittest.mock import patch
 
@@ -21,74 +27,25 @@ def _make_supervisor(env_overrides: dict[str, str] | None = None) -> SandboxSupe
 
 
 class TestBuildRepoUrl:
-    def test_github_authenticated(self):
-        sup = _make_supervisor(
-            {
-                "VCS_HOST": "github.com",
-                "VCS_CLONE_USERNAME": "x-access-token",
-                "VCS_CLONE_TOKEN": "ghp_abc123",
-            }
-        )
-        url = sup._build_repo_url()
-        assert url == "https://x-access-token:ghp_abc123@github.com/acme/app.git"
+    def test_github_default(self) -> None:
+        sup = _make_supervisor({"VCS_HOST": "github.com"})
+        assert sup._build_repo_url() == "https://github.com/acme/app.git"
 
-    def test_github_unauthenticated(self):
-        sup = _make_supervisor(
-            {
-                "VCS_HOST": "github.com",
-                "VCS_CLONE_USERNAME": "x-access-token",
-            }
-        )
-        url = sup._build_repo_url()
-        assert url == "https://github.com/acme/app.git"
+    def test_bitbucket(self) -> None:
+        sup = _make_supervisor({"VCS_HOST": "bitbucket.org"})
+        assert sup._build_repo_url() == "https://bitbucket.org/acme/app.git"
 
-    def test_bitbucket_authenticated(self):
-        sup = _make_supervisor(
-            {
-                "VCS_HOST": "bitbucket.org",
-                "VCS_CLONE_USERNAME": "x-token-auth",
-                "VCS_CLONE_TOKEN": "bb_token_xyz",
-            }
-        )
-        url = sup._build_repo_url()
-        assert url == "https://x-token-auth:bb_token_xyz@bitbucket.org/acme/app.git"
-
-    def test_bitbucket_unauthenticated(self):
-        sup = _make_supervisor(
-            {
-                "VCS_HOST": "bitbucket.org",
-                "VCS_CLONE_USERNAME": "x-token-auth",
-            }
-        )
-        url = sup._build_repo_url()
-        assert url == "https://bitbucket.org/acme/app.git"
-
-    def test_authenticated_false_with_token(self):
-        """authenticated=False returns unauthenticated URL even when token is present."""
-        sup = _make_supervisor(
-            {
-                "VCS_HOST": "github.com",
-                "VCS_CLONE_USERNAME": "x-access-token",
-                "VCS_CLONE_TOKEN": "ghp_abc123",
-            }
-        )
-        url = sup._build_repo_url(authenticated=False)
-        assert url == "https://github.com/acme/app.git"
-
-    def test_defaults_to_github(self):
-        """No VCS_* env vars → falls back to github.com defaults."""
+    def test_defaults_to_github(self) -> None:
         sup = _make_supervisor()
-        url = sup._build_repo_url()
-        assert url == "https://github.com/acme/app.git"
+        assert sup._build_repo_url() == "https://github.com/acme/app.git"
 
-    def test_legacy_github_app_token_fallback(self):
-        """VCS_CLONE_TOKEN unset, GITHUB_APP_TOKEN set → uses legacy fallback."""
+    def test_token_env_vars_are_ignored(self) -> None:
+        """Stale snapshot tokens in env must NOT leak into the remote URL."""
         sup = _make_supervisor(
             {
-                "VCS_HOST": "github.com",
-                "VCS_CLONE_USERNAME": "x-access-token",
+                "VCS_CLONE_TOKEN": "ghp_stale",
                 "GITHUB_APP_TOKEN": "ghp_legacy",
+                "GITHUB_TOKEN": "ghp_legacy_2",
             }
         )
-        url = sup._build_repo_url()
-        assert url == "https://x-access-token:ghp_legacy@github.com/acme/app.git"
+        assert sup._build_repo_url() == "https://github.com/acme/app.git"

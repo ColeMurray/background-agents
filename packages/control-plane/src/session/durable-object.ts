@@ -12,7 +12,6 @@ import { initSchema } from "./schema";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
 import { resolveAppName, timingSafeEqual } from "@open-inspect/shared";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
-import { getGitHubAppConfig, getCachedInstallationToken } from "../auth/github-app";
 import { createModalClient } from "../sandbox/client";
 import { createDaytonaRestClient } from "../sandbox/daytona-rest-client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
@@ -38,7 +37,7 @@ import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integratio
 import { SessionIndexStore } from "../db/session-index";
 import { DEFAULT_EXECUTION_TIMEOUT_MS } from "../sandbox/lifecycle/decisions";
 import {
-  createSourceControlProvider as createSourceControlProviderImpl,
+  createSourceControlProviderFromEnv,
   resolveScmProviderFromEnv,
   type SourceControlProvider,
   type GitPushSpec,
@@ -56,13 +55,13 @@ import type {
 } from "../types";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
-import { createKvCacheStore } from "@open-inspect/shared";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
 import { SessionPullRequestService } from "./pull-request-service";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
+import { ScmCredentialsService } from "./scm-credentials-service";
 import { ParticipantService, getAvatarUrl } from "./participant-service";
 import { UserScmTokenStore } from "../db/user-scm-tokens";
 import { CallbackNotificationService } from "./callback-notification-service";
@@ -171,6 +170,7 @@ export class SessionDO extends DurableObject<Env> {
     unarchive: (request) => this.sessionLifecycleHandler.unarchive(request),
     verifySandboxToken: (request) => this.sandboxHandler.verifySandboxToken(request),
     openaiTokenRefresh: () => this.sandboxHandler.openaiTokenRefresh(),
+    scmCredentials: () => this.sandboxHandler.scmCredentials(),
     spawnContext: () => this.childSessionsHandler.getSpawnContext(),
     childSummary: () => this.childSessionsHandler.getChildSummary(),
     cancel: () => this.sessionLifecycleHandler.cancel(),
@@ -382,6 +382,8 @@ export class SessionDO extends DurableObject<Env> {
         },
         isOpenAISecretsConfigured: () =>
           Boolean(this.env.DB && this.env.REPO_SECRETS_ENCRYPTION_KEY),
+        getScmCredentials: () =>
+          new ScmCredentialsService(this.sourceControlProvider, this.log).getCredentials(),
         broadcast: (message) => this.broadcast(message),
         generateId: () => generateId(),
         now: () => Date.now(),
@@ -533,16 +535,7 @@ export class SessionDO extends DurableObject<Env> {
    * Create the source control provider.
    */
   private createSourceControlProvider(): SourceControlProvider {
-    const appConfig = getGitHubAppConfig(this.env);
-    const provider = resolveScmProviderFromEnv(this.env.SCM_PROVIDER);
-
-    return createSourceControlProviderImpl({
-      provider,
-      github: {
-        appConfig: appConfig ?? undefined,
-        cacheStore: createKvCacheStore(this.env.REPOS_CACHE),
-      },
-    });
+    return createSourceControlProviderFromEnv(this.env);
   }
 
   /**
@@ -580,30 +573,14 @@ export class SessionDO extends DurableObject<Env> {
             });
 
             const scmProvider = resolveScmProviderFromEnv(this.env.SCM_PROVIDER);
-            const appConfig = getGitHubAppConfig(this.env);
 
-            const getCloneToken: () => Promise<string | null> =
-              scmProvider === "gitlab"
-                ? () => Promise.resolve(this.env.GITLAB_ACCESS_TOKEN ?? null)
-                : appConfig
-                  ? () =>
-                      getCachedInstallationToken(appConfig, {
-                        cacheStore: createKvCacheStore(this.env.REPOS_CACHE),
-                        userAgent: resolveAppName(this.env),
-                      })
-                  : () => Promise.resolve(null);
-
-            return createDaytonaProvider(
-              daytonaClient,
-              {
-                scmProvider,
-                gitlabAccessToken: this.env.GITLAB_ACCESS_TOKEN,
-                // Reuses API key as HMAC secret for code-server password derivation
-                // (distinct message prefix prevents collision with auth use)
-                codeServerPasswordSecret: this.env.DAYTONA_API_KEY,
-              },
-              getCloneToken
-            );
+            return createDaytonaProvider(daytonaClient, {
+              scmProvider,
+              gitlabAccessToken: this.env.GITLAB_ACCESS_TOKEN,
+              // Reuses API key as HMAC secret for code-server password derivation
+              // (distinct message prefix prevents collision with auth use)
+              codeServerPasswordSecret: this.env.DAYTONA_API_KEY,
+            });
           })()
         : (() => {
             if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {

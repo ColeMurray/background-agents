@@ -17,6 +17,8 @@ Use this checklist before opening a pull request for a new source-control provid
       hardcoding).
 - [ ] Manual PR fallback URL is built via provider method (`buildManualPullRequestUrl`).
 - [ ] Push transport spec is built via provider method (`buildGitPushSpec`).
+- [ ] Sandbox credential-helper auth is generated via provider method
+      (`generateCredentialHelperAuth`).
 
 ## Tests Checklist
 
@@ -24,6 +26,7 @@ Use this checklist before opening a pull request for a new source-control provid
 - [ ] Provider implementation tests cover:
   - [ ] manual PR URL building
   - [ ] push spec building
+  - [ ] credential-helper auth generation or explicit unsupported-provider behavior
   - [ ] basic API mapping behavior
 - [ ] Existing create-PR branch consistency tests still pass.
 - [ ] Slack manual-PR button tests still pass.
