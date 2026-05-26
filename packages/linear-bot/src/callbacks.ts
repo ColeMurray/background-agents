@@ -4,7 +4,7 @@
  */
 
 import { Hono } from "hono";
-import type { Env, CompletionCallback, ToolCallCallback } from "./types";
+import type { Env, CompletionCallback, PlanStatusCallback, ToolCallCallback } from "./types";
 import {
   getLinearClient,
   emitAgentActivity,
@@ -466,4 +466,165 @@ async function handleCompletionCallback(
       duration_ms: Date.now() - startTime,
     });
   }
+}
+
+// ─── Plan Status Callback ────────────────────────────────────────────────────
+
+/**
+ * Validate plan-status callback payload shape.
+ */
+export function isValidPlanStatusPayload(payload: unknown): payload is PlanStatusCallback {
+  if (!payload || typeof payload !== "object") return false;
+  const p = payload as Record<string, unknown>;
+  return (
+    typeof p.sessionId === "string" &&
+    typeof p.planVersion === "number" &&
+    typeof p.signature === "string" &&
+    typeof p.timestamp === "number" &&
+    (p.verdict === "approved" || p.verdict === "rejected") &&
+    p.plan !== null &&
+    typeof p.plan === "object" &&
+    p.context !== null &&
+    typeof p.context === "object" &&
+    typeof (p.context as Record<string, unknown>).issueId === "string"
+  );
+}
+
+/**
+ * Cross-channel plan-verdict callback. Triggered when the user approved
+ * or rejected the plan via a surface other than Linear (most commonly
+ * the web UI). We emit a follow-up `response` activity in the Linear
+ * agent session so the verdict is visible in the issue, and update the
+ * Agent Session's plan widget to reflect the terminal state — the
+ * elicitation activity above stays in place as a historical record.
+ *
+ * Same-channel (Linear-driven) verdicts continue to flow through
+ * webhook-handler's existing `handlePlanCommand` path — the
+ * control-plane's notifyPlanStatus skips firing in that case.
+ */
+callbacksRouter.post("/plan-status", async (c) => {
+  const startTime = Date.now();
+  const traceId = c.req.header("x-trace-id") || crypto.randomUUID();
+  const payload = await c.req.json().catch(() => null);
+
+  if (!isValidPlanStatusPayload(payload)) {
+    log.warn("http.request", {
+      trace_id: traceId,
+      http_path: "/callbacks/plan-status",
+      http_status: 400,
+      outcome: "rejected",
+      reject_reason: "invalid_payload",
+      duration_ms: Date.now() - startTime,
+    });
+    return c.json({ error: "invalid payload" }, 400);
+  }
+
+  if (!c.env.INTERNAL_CALLBACK_SECRET) {
+    log.error("http.request", {
+      trace_id: traceId,
+      http_path: "/callbacks/plan-status",
+      http_status: 500,
+      outcome: "error",
+      reject_reason: "secret_not_configured",
+      duration_ms: Date.now() - startTime,
+    });
+    return c.json({ error: "not configured" }, 500);
+  }
+
+  const isValid = await verifyCallbackSignature(payload, c.env.INTERNAL_CALLBACK_SECRET);
+  if (!isValid) {
+    log.warn("http.request", {
+      trace_id: traceId,
+      http_path: "/callbacks/plan-status",
+      http_status: 401,
+      outcome: "rejected",
+      reject_reason: "invalid_signature",
+      duration_ms: Date.now() - startTime,
+    });
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  c.executionCtx.waitUntil(handlePlanStatusCallback(payload, c.env, traceId));
+  return c.json({ ok: true });
+});
+
+async function handlePlanStatusCallback(
+  payload: PlanStatusCallback,
+  env: Env,
+  traceId: string
+): Promise<void> {
+  const { sessionId, planVersion, verdict, context } = payload;
+  const base = {
+    trace_id: traceId,
+    session_id: sessionId,
+    plan_version: planVersion,
+    verdict,
+    issue_id: context.issueId,
+  };
+
+  // No agent session id = can't update Linear's activity stream. This is
+  // the same precondition as the completion callback; the issue-comment
+  // fallback path doesn't apply for plan-status updates (the elicitation
+  // activity is the right surface).
+  if (!context.agentSessionId || !context.organizationId) {
+    log.info("callback.plan_status", {
+      ...base,
+      outcome: "noop",
+      reason: "no_agent_session_context",
+    });
+    return;
+  }
+
+  const client = await getLinearClient(env, context.organizationId);
+  if (!client) {
+    log.warn("callback.plan_status.no_oauth_token", {
+      ...base,
+      org_id: context.organizationId,
+    });
+    return;
+  }
+
+  const actorMention = formatCrossChannelActor(payload.approverAuthorId);
+  const body =
+    verdict === "approved"
+      ? `Plan v${planVersion} approved by ${actorMention}. Implementation is starting.`
+      : `Plan v${planVersion} rejected by ${actorMention}${
+          payload.reason ? `: ${payload.reason}` : ""
+        }.`;
+
+  try {
+    await emitAgentActivity(client, context.agentSessionId, {
+      type: "response",
+      body,
+    });
+
+    await updateAgentSession(client, context.agentSessionId, {
+      plan: makePlan(verdict === "approved" ? "completed" : "failed"),
+    });
+
+    log.info("callback.plan_status", {
+      ...base,
+      outcome: "updated",
+      delivery: "agent_activity",
+    });
+  } catch (e) {
+    log.error("callback.plan_status.update_error", {
+      ...base,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
+  }
+}
+
+/**
+ * Render a human-readable actor label for a cross-channel verdict.
+ * Approvers come in as `"web:<userId>"`, `"slack:<id>"`, etc. — for
+ * Linear's activity stream we can't resolve that to a Linear handle,
+ * so collapse to "someone in <source>".
+ */
+export function formatCrossChannelActor(approverAuthorId: string | null): string {
+  if (!approverAuthorId) return "someone";
+  const idx = approverAuthorId.indexOf(":");
+  if (idx <= 0) return "someone";
+  const source = approverAuthorId.slice(0, idx);
+  return `someone in ${source}`;
 }

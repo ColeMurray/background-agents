@@ -113,7 +113,7 @@ export interface IssueSession {
 
 // Re-export CallbackContext types from shared
 export type { LinearCallbackContext, CallbackContext } from "@open-inspect/shared";
-import type { LinearCallbackContext } from "@open-inspect/shared";
+import type { LinearCallbackContext, PlanArtifact } from "@open-inspect/shared";
 
 /**
  * Completion callback payload from control-plane.
@@ -140,6 +140,30 @@ export interface ToolCallCallback {
   timestamp: number;
   context: LinearCallbackContext;
   signature: string;
+}
+
+/**
+ * Plan-status callback payload from control-plane. Fired when a plan
+ * verdict (approve/reject) was set from a different channel than Linear
+ * — e.g. the user approved a Linear-triggered plan from the web UI — so
+ * the Linear bot can emit a follow-up agent activity and update the
+ * Agent Session's plan widget. The Linear elicitation activity stays
+ * in the issue thread; we add a `response` activity announcing the
+ * verdict on top.
+ *
+ * Mirrors the wire shape of `notifyPlanStatus` in the control-plane.
+ */
+export interface PlanStatusCallback {
+  sessionId: string;
+  planVersion: number;
+  plan: PlanArtifact;
+  verdict: "approved" | "rejected";
+  approverAuthorId: string | null;
+  implementationModel?: string;
+  reason?: string;
+  timestamp: number;
+  signature: string;
+  context: LinearCallbackContext;
 }
 
 // ─── Classification Types ────────────────────────────────────────────────────
