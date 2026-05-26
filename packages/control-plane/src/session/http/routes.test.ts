@@ -31,6 +31,11 @@ describe("createSessionInternalRoutes", () => {
       childSummary: noopHandler(),
       cancel: noopHandler(),
       childSessionUpdate: noopHandler(),
+      savePlan: noopHandler(),
+      getCurrentPlan: noopHandler(),
+      listPlans: noopHandler(),
+      approvePlan: noopHandler(),
+      rejectPlan: noopHandler(),
     });
 
     const methodPathSet = new Set(routes.map((route) => `${route.method} ${route.path}`));
@@ -59,6 +64,11 @@ describe("createSessionInternalRoutes", () => {
         `GET ${SessionInternalPaths.childSummary}`,
         `POST ${SessionInternalPaths.cancel}`,
         `POST ${SessionInternalPaths.childSessionUpdate}`,
+        `POST ${SessionInternalPaths.plan}`,
+        `GET ${SessionInternalPaths.plan}`,
+        `GET ${SessionInternalPaths.plans}`,
+        `POST ${SessionInternalPaths.planApprove}`,
+        `POST ${SessionInternalPaths.planReject}`,
       ])
     );
   });

@@ -29,6 +29,13 @@ interface PromptMessageData {
   model?: string;
   reasoningEffort?: string;
   attachments?: Array<{ type: string; name: string; url?: string; content?: string }>;
+  /**
+   * When true, the next dispatch runs as a planning turn even if the
+   * session wasn't created with plan_mode=1. The DO flips plan_mode on and
+   * clears any terminal status (approved/rejected) before enqueueing so the
+   * standard isPlanningTurn gate picks it up.
+   */
+  planMode?: boolean;
 }
 
 interface MessageQueueDeps {
@@ -53,6 +60,40 @@ interface MessageQueueDeps {
 
 interface StopExecutionOptions {
   suppressStatusReconcile?: boolean;
+}
+
+type ProcessingFailureReason =
+  | "execution_timeout"
+  | "heartbeat_stale"
+  | "inactivity_timeout"
+  | "connecting_timeout"
+  | (string & {});
+
+type ProcessingFailure = {
+  reason: ProcessingFailureReason;
+  error?: string;
+};
+
+const FAILURE_REASON_TO_ERROR: Record<ProcessingFailureReason, string> = {
+  execution_timeout: "Execution timed out (stuck processing)",
+  heartbeat_stale: "Execution interrupted: sandbox heartbeat timed out",
+  inactivity_timeout: "Execution interrupted: sandbox stopped due to inactivity",
+  connecting_timeout: "Execution interrupted: sandbox failed to connect",
+};
+
+function resolveProcessingFailure(failure: ProcessingFailureReason | ProcessingFailure): {
+  reason: string;
+  error: string;
+} {
+  const reason = typeof failure === "string" ? failure : failure.reason;
+  const normalizedReason = reason.trim() || "unknown";
+  const explicitError = typeof failure === "string" ? undefined : failure.error?.trim();
+  const mappedError = FAILURE_REASON_TO_ERROR[normalizedReason];
+
+  return {
+    reason: normalizedReason,
+    error: explicitError || mappedError || `Execution interrupted: ${normalizedReason}`,
+  };
 }
 
 export class SessionMessageQueue {
@@ -91,6 +132,22 @@ export class SessionMessageQueue {
       effectiveModelForEffort,
       data.reasoningEffort
     );
+
+    // Per-prompt plan toggle: turn plan_mode on and clear any terminal
+    // status so the dispatch runs as a planning turn. No-op when the
+    // session is already mid-plan.
+    if (data.planMode) {
+      const currentSession = this.deps.getSession();
+      if (currentSession && currentSession.plan_mode !== 1) {
+        this.deps.repository.setPlanMode(true, now);
+      }
+      if (
+        currentSession?.plan_approval_status === "approved" ||
+        currentSession?.plan_approval_status === "rejected"
+      ) {
+        this.deps.repository.updatePlanApprovalStatus(null, now);
+      }
+    }
 
     this.deps.repository.createMessage({
       id: messageId,
@@ -184,11 +241,41 @@ export class SessionMessageQueue {
 
     const author = this.deps.repository.getParticipantById(message.author_id);
     const session = this.deps.getSession();
-    const resolvedModel = getValidModelOrDefault(message.model || session?.model);
+
+    // Plan-mode gating:
+    //  - The session runs as a "planning turn" until the current plan reaches
+    //    a terminal status (approved or rejected). Once terminal, the
+    //    session reverts to a normal build flow so the next prompt is
+    //    dispatched to the build agent — rejecting effectively exits plan
+    //    mode for subsequent prompts without flipping plan_mode itself
+    //    (which would hide the plan-bubble history in the UI).
+    //  - While awaiting_approval, processMessageQueue() returns earlier;
+    //    the gate is message-driven, so the queue naturally idles.
+    const isPlanningTurn =
+      session?.plan_mode === 1 &&
+      session?.plan_approval_status !== "approved" &&
+      session?.plan_approval_status !== "rejected";
+
+    // Planning turns use plan_model (if configured) instead of the session's
+    // implementation model. Per-message overrides still win over both.
+    const sessionPreferredModel =
+      isPlanningTurn && session?.plan_model ? session.plan_model : session?.model;
+    const resolvedModel = getValidModelOrDefault(message.model || sessionPreferredModel);
     const resolvedEffort =
       message.reasoning_effort ??
       session?.reasoning_effort ??
       getDefaultReasoningEffort(resolvedModel);
+
+    const currentPlan = this.deps.repository.getCurrentPlan();
+    const resumeContext = currentPlan
+      ? {
+          currentPlan: {
+            version: currentPlan.version,
+            content: currentPlan.content,
+            createdAt: currentPlan.created_at,
+          },
+        }
+      : undefined;
 
     const command: SandboxCommand = {
       type: "prompt",
@@ -202,6 +289,8 @@ export class SessionMessageQueue {
         scmEmail: author?.scm_email ?? null,
       },
       attachments: message.attachments ? JSON.parse(message.attachments) : undefined,
+      resumeContext,
+      planMode: isPlanningTurn,
     };
 
     const sent = this.deps.wsManager.send(sandboxWs, command);
@@ -277,27 +366,35 @@ export class SessionMessageQueue {
    * to the sandbox or call processMessageQueue(). This avoids races where a new
    * prompt could be dispatched to a sandbox being shut down.
    */
-  async failStuckProcessingMessage(): Promise<void> {
+  async failStuckProcessingMessage(
+    failure: ProcessingFailureReason | ProcessingFailure = "execution_timeout"
+  ): Promise<void> {
     const now = Date.now();
     const processingMessage = this.deps.repository.getProcessingMessage();
     if (!processingMessage) return;
 
     this.deps.repository.updateMessageCompletion(processingMessage.id, "failed", now);
 
-    const stuckError = "Execution timed out (stuck processing)";
+    const { reason, error } = resolveProcessingFailure(failure);
     const syntheticEvent: Extract<SandboxEvent, { type: "execution_complete" }> = {
       type: "execution_complete",
       messageId: processingMessage.id,
       success: false,
-      error: stuckError,
+      error,
       sandboxId: "",
       timestamp: now / 1000,
     };
     this.deps.repository.upsertExecutionCompleteEvent(processingMessage.id, syntheticEvent, now);
+    this.deps.log.warn("prompt.fail_processing", {
+      event: "prompt.fail_processing",
+      message_id: processingMessage.id,
+      reason,
+      error,
+    });
     this.deps.broadcast({ type: "sandbox_event", event: syntheticEvent });
     this.deps.broadcast({ type: "processing_status", isProcessing: false });
     this.deps.ctx.waitUntil(
-      this.deps.callbackService.notifyComplete(processingMessage.id, false, stuckError)
+      this.deps.callbackService.notifyComplete(processingMessage.id, false, error)
     );
     await this.deps.reconcileSessionStatusAfterExecution(false);
   }

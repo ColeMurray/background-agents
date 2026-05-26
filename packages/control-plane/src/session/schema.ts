@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS session (
   base_sha TEXT,                                    -- SHA of base branch at session start
   current_sha TEXT,                                 -- Current HEAD SHA
   opencode_session_id TEXT,                         -- OpenCode session ID (for 1:1 mapping)
-  model TEXT DEFAULT 'anthropic/claude-haiku-4-5',   -- LLM model to use
+  model TEXT DEFAULT 'anthropic/claude-sonnet-4-6',   -- LLM model to use
   reasoning_effort TEXT,                            -- Session-level reasoning effort default
   status TEXT DEFAULT 'created',                    -- 'created', 'active', 'completed', 'failed', 'archived', 'cancelled'
   parent_session_id TEXT,                           -- Parent session ID (NULL for top-level)
@@ -28,6 +28,10 @@ CREATE TABLE IF NOT EXISTS session (
   code_server_enabled INTEGER NOT NULL DEFAULT 0,   -- 0 = disabled, 1 = enabled (opt-in)
   total_cost REAL NOT NULL DEFAULT 0,              -- Running session cost from step_finish events
   sandbox_settings TEXT DEFAULT NULL,               -- JSON blob of SandboxSettings (resolved at session creation)
+  plan_mode INTEGER NOT NULL DEFAULT 0,             -- 0 = normal session, 1 = plan-first HITL session
+  plan_approval_status TEXT,                        -- NULL | 'awaiting_approval' | 'approved' | 'rejected'
+  plan_model TEXT,                                  -- Model used for planning turns (NULL when plan_mode=0)
+  plan_cost_snapshot REAL,                          -- total_cost captured at plan approval; NULL until then. Build cost = total_cost - this.
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -121,6 +125,19 @@ CREATE TABLE IF NOT EXISTS ws_client_mapping (
   FOREIGN KEY (participant_id) REFERENCES participants(id)
 );
 
+-- Versioned plan artifacts. Persists the agent's working plan across turns so a
+-- fresh prompt can re-anchor on it instead of relying on conversational memory.
+CREATE TABLE IF NOT EXISTS plans (
+  id TEXT PRIMARY KEY,
+  version INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  created_by_author_id TEXT,
+  created_by_message_id TEXT,
+  source TEXT NOT NULL DEFAULT 'api',     -- 'api', 'agent', 'web'
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (created_by_author_id) REFERENCES participants(id)
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
 CREATE INDEX IF NOT EXISTS idx_messages_author ON messages(author_id);
@@ -128,6 +145,7 @@ CREATE INDEX IF NOT EXISTS idx_events_message ON events(message_id);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
 CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at, id);
 CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user_id);
+CREATE INDEX IF NOT EXISTS idx_plans_version ON plans(version DESC);
 `;
 
 import { createLogger } from "../logger";
@@ -382,6 +400,43 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 30,
     description: "Add total_cost to session",
     run: `ALTER TABLE session ADD COLUMN total_cost REAL NOT NULL DEFAULT 0`,
+  },
+  {
+    id: 31,
+    description: "Create plans table for versioned plan artifacts",
+    run: (sql) => {
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS plans (
+          id TEXT PRIMARY KEY,
+          version INTEGER NOT NULL,
+          content TEXT NOT NULL,
+          created_by_author_id TEXT,
+          created_by_message_id TEXT,
+          source TEXT NOT NULL DEFAULT 'api',
+          created_at INTEGER NOT NULL,
+          FOREIGN KEY (created_by_author_id) REFERENCES participants(id)
+        )
+      `);
+      sql.exec(`CREATE INDEX IF NOT EXISTS idx_plans_version ON plans(version DESC)`);
+    },
+  },
+  {
+    id: 32,
+    description: "Add plan_mode and plan_approval_status to session for HITL plan gate",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE session ADD COLUMN plan_mode INTEGER NOT NULL DEFAULT 0`);
+      runMigration(sql, `ALTER TABLE session ADD COLUMN plan_approval_status TEXT`);
+    },
+  },
+  {
+    id: 33,
+    description: "Add plan_model to session for plan-turn model override",
+    run: `ALTER TABLE session ADD COLUMN plan_model TEXT`,
+  },
+  {
+    id: 34,
+    description: "Add plan_cost_snapshot to session for plan/build cost breakdown",
+    run: `ALTER TABLE session ADD COLUMN plan_cost_snapshot REAL`,
   },
 ];
 

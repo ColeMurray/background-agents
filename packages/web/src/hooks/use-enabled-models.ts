@@ -1,11 +1,19 @@
 import { useMemo } from "react";
 import useSWR from "swr";
-import { MODEL_OPTIONS, DEFAULT_ENABLED_MODELS, type ModelCategory } from "@open-inspect/shared";
+import {
+  MODEL_OPTIONS,
+  DEFAULT_ENABLED_MODELS,
+  DEFAULT_MODEL,
+  DEFAULT_PLAN_MODEL,
+  type ModelCategory,
+} from "@open-inspect/shared";
 
 export const MODEL_PREFERENCES_KEY = "/api/model-preferences";
 
 interface ModelPreferencesResponse {
   enabledModels: string[];
+  defaultModel?: string;
+  defaultPlanModel?: string;
 }
 
 export function useEnabledModels() {
@@ -24,5 +32,16 @@ export function useEnabledModels() {
     })).filter((group) => group.models.length > 0);
   }, [enabledModels]);
 
-  return { enabledModels, enabledModelOptions, loading: isLoading };
+  // Deployment-wide defaults (env vars on control-plane, mirrored from the bot
+  // workers). Fall back to the shared constants until the API responds.
+  const defaultModel = data?.defaultModel ?? DEFAULT_MODEL;
+  const defaultPlanModel = data?.defaultPlanModel ?? DEFAULT_PLAN_MODEL;
+
+  return {
+    enabledModels,
+    enabledModelOptions,
+    defaultModel,
+    defaultPlanModel,
+    loading: isLoading,
+  };
 }
