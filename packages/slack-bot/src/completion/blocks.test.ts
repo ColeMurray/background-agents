@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { buildCompletionBlocks } from "./blocks";
+import { buildCompletionBlocks, buildPlanDecidedBlocks } from "./blocks";
 import type { AgentResponse, SlackCallbackContext } from "../types";
+import type { PlanArtifact } from "@open-inspect/shared";
 
 const BASE_CONTEXT: SlackCallbackContext = {
   source: "slack",
@@ -163,5 +164,119 @@ describe("buildCompletionBlocks", () => {
 
     expect(createPrButton).toBeDefined();
     expect(createPrButton?.url).toBe(fallbackUrl);
+  });
+});
+
+// ─── buildPlanDecidedBlocks ──────────────────────────────────────────────────
+// Used to update the original plan-awaiting-approval Slack message after the
+// user submits the approve / reject modal — removes the buttons, swaps the
+// header for a verdict, and appends a context line. Without this update the
+// buttons stay clickable even though the plan is in a terminal state.
+
+const BASE_PLAN: PlanArtifact = {
+  id: "plan-1",
+  version: 3,
+  content: "## Plan\n- step A\n- step B",
+  createdByAuthorId: null,
+  createdByMessageId: null,
+  source: "agent",
+  createdAt: 1700000000,
+};
+
+describe("buildPlanDecidedBlocks", () => {
+  it("renders the approved verdict with no action buttons", () => {
+    const blocks = buildPlanDecidedBlocks({
+      sessionId: "sess-1",
+      plan: BASE_PLAN,
+      webAppUrl: "https://app.openinspect.dev",
+      verdict: "approved",
+      actorMention: "<@U123>",
+      implementationModelLabel: "Claude Sonnet",
+    });
+
+    // Header carries the verdict + version
+    expect(blocks[0]?.text?.text).toContain(":white_check_mark:");
+    expect(blocks[0]?.text?.text).toContain("Plan v3");
+    expect(blocks[0]?.text?.text).toContain("approved");
+
+    // Plan body is preserved
+    expect(blocks[1]?.text?.text).toContain("step A");
+
+    // No actions block — buttons must be gone
+    expect(blocks.find((b) => b.type === "actions")).toBeUndefined();
+
+    // Context line includes actor + impl model + web link
+    const context = blocks.find((b) => b.type === "context");
+    const contextText = (context?.elements?.[0] as { text?: string } | undefined)?.text ?? "";
+    expect(contextText).toContain("<@U123>");
+    expect(contextText).toContain("Claude Sonnet");
+    expect(contextText).toContain("https://app.openinspect.dev/session/sess-1");
+  });
+
+  it("renders the rejected verdict with reason and no buttons", () => {
+    const blocks = buildPlanDecidedBlocks({
+      sessionId: "sess-1",
+      plan: BASE_PLAN,
+      webAppUrl: "https://app.openinspect.dev",
+      verdict: "rejected",
+      actorMention: "<@U123>",
+      reason: "Plan misses the auth flow",
+    });
+
+    expect(blocks[0]?.text?.text).toContain(":x:");
+    expect(blocks[0]?.text?.text).toContain("rejected");
+    expect(blocks.find((b) => b.type === "actions")).toBeUndefined();
+
+    const context = blocks.find((b) => b.type === "context");
+    const contextText = (context?.elements?.[0] as { text?: string } | undefined)?.text ?? "";
+    expect(contextText).toContain("Reason");
+    expect(contextText).toContain("Plan misses the auth flow");
+  });
+
+  it("omits the reason segment when reason is null or empty", () => {
+    const blocks = buildPlanDecidedBlocks({
+      sessionId: "sess-1",
+      plan: BASE_PLAN,
+      webAppUrl: "https://app.openinspect.dev",
+      verdict: "rejected",
+      actorMention: "<@U123>",
+      reason: null,
+    });
+    const context = blocks.find((b) => b.type === "context");
+    const contextText = (context?.elements?.[0] as { text?: string } | undefined)?.text ?? "";
+    expect(contextText).not.toContain("Reason");
+  });
+
+  it("truncates a long reject reason so the context line stays under Slack's 2000-char limit", () => {
+    // The reject modal caps input at 500 chars; this asserts the defensive
+    // truncate that catches any future programmatic / API call site too.
+    const longReason = "x".repeat(3000);
+    const blocks = buildPlanDecidedBlocks({
+      sessionId: "sess-1",
+      plan: BASE_PLAN,
+      webAppUrl: "https://app.openinspect.dev",
+      verdict: "rejected",
+      actorMention: "<@U123>",
+      reason: longReason,
+    });
+    const context = blocks.find((b) => b.type === "context");
+    const contextText = (context?.elements?.[0] as { text?: string } | undefined)?.text ?? "";
+    expect(contextText.length).toBeLessThan(2000);
+    expect(contextText).toContain("…");
+    expect(contextText).toMatch(/Reason: "x{500}…"/);
+  });
+
+  it("truncates long plan bodies the same way as the awaiting variant", () => {
+    const longPlan: PlanArtifact = { ...BASE_PLAN, content: "x".repeat(5000) };
+    const blocks = buildPlanDecidedBlocks({
+      sessionId: "sess-1",
+      plan: longPlan,
+      webAppUrl: "https://app.openinspect.dev",
+      verdict: "approved",
+      actorMention: "<@U123>",
+    });
+    expect(blocks[1]?.text?.text).toContain("…truncated");
+    // The plan body block must stay well under Slack's 3000-char section limit.
+    expect((blocks[1]?.text?.text ?? "").length).toBeLessThanOrEqual(2600);
   });
 });

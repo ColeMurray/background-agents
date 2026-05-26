@@ -72,6 +72,8 @@ import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
 import { createSessionInternalRoutes } from "./http/routes";
 import { createMessagesHandler, type MessagesHandler } from "./http/handlers/messages.handler";
+import { createPlansHandler, type PlansHandler } from "./http/handlers/plans.handler";
+import { buildPlanImplementationPrompt, PlanService } from "./services/plan.service";
 import {
   createChildSessionsHandler,
   type ChildSessionsHandler,
@@ -94,6 +96,26 @@ import { MessageService } from "./services/message.service";
 import { createAlarmHandler, type AlarmHandler } from "./alarm/handler";
 
 /**
+ * Default inactivity timeout for sandboxes (in milliseconds).
+ * After this many milliseconds without activity, the sandbox lifecycle
+ * manager marks the sandbox idle and tears it down. Operators can override
+ * via env `SANDBOX_INACTIVITY_TIMEOUT_MS`.
+ */
+const DEFAULT_SANDBOX_INACTIVITY_TIMEOUT_MS = 900_000;
+
+/**
+ * Parse the SANDBOX_INACTIVITY_TIMEOUT_MS env var with safe fallback.
+ * Returns DEFAULT_SANDBOX_INACTIVITY_TIMEOUT_MS for unset, empty, NaN, or
+ * non-positive values — the lifecycle manager must receive a positive
+ * finite number so it doesn't schedule alarms in the past.
+ */
+function parseSandboxInactivityTimeoutMs(raw: string | undefined): number {
+  if (!raw) return DEFAULT_SANDBOX_INACTIVITY_TIMEOUT_MS;
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SANDBOX_INACTIVITY_TIMEOUT_MS;
+}
+
+/**
  * Timeout for WebSocket authentication (in milliseconds).
  * Client WebSockets must send a valid 'subscribe' message within this time
  * or the connection will be closed. This prevents resource abuse from
@@ -110,6 +132,15 @@ const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /** Statuses that indicate a session is finished — metrics are synced to D1 on these transitions. */
 const TERMINAL_STATUSES: SessionStatus[] = ["completed", "failed", "cancelled"];
+
+/**
+ * Stable identity for system-generated prompts (e.g. the implementation
+ * prompt dispatched after plan approval). The first system enqueue per
+ * session lazily creates a participant row with this user_id; later ones
+ * reuse it. Surfaces to the timeline as a message authored by SYSTEM_DISPLAY_NAME.
+ */
+const SYSTEM_USER_ID = "system";
+const SYSTEM_DISPLAY_NAME = "System";
 
 export class SessionDO extends DurableObject<Env> {
   private sql: SqlStorage;
@@ -134,6 +165,10 @@ export class SessionDO extends DurableObject<Env> {
   private _messageService: MessageService | null = null;
   // Messages handler (lazily initialized)
   private _messagesHandler: MessagesHandler | null = null;
+  // Plan service (lazily initialized)
+  private _planService: PlanService | null = null;
+  // Plans handler (lazily initialized)
+  private _plansHandler: PlansHandler | null = null;
   // Child sessions handler (lazily initialized)
   private _childSessionsHandler: ChildSessionsHandler | null = null;
   // Sandbox handler (lazily initialized)
@@ -175,6 +210,11 @@ export class SessionDO extends DurableObject<Env> {
     childSummary: () => this.childSessionsHandler.getChildSummary(),
     cancel: () => this.sessionLifecycleHandler.cancel(),
     childSessionUpdate: (request) => this.childSessionsHandler.childSessionUpdate(request),
+    savePlan: (request) => this.plansHandler.savePlan(request),
+    getCurrentPlan: () => this.plansHandler.getCurrentPlan(),
+    listPlans: (_request, url) => this.plansHandler.listPlans(url),
+    approvePlan: (request) => this.plansHandler.approvePlan(request),
+    rejectPlan: (request) => this.plansHandler.rejectPlan(request),
   });
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -347,6 +387,48 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     return this._messagesHandler;
+  }
+
+  private get planService(): PlanService {
+    if (!this._planService) {
+      this._planService = new PlanService({
+        repository: this.repository,
+        generateId: () => generateId(),
+        now: () => Date.now(),
+        onDispatchImplementationPrompt: async (planVersion) => {
+          // Enqueue the synthetic implementation prompt so every client
+          // (web + Slack/Linear/GitHub bots) triggers the same build turn
+          // — clients only call /plan/approve. The session row already
+          // carries the chosen impl model/effort (written by approvePlan),
+          // so processMessageQueue picks them up via normal resolution.
+          //
+          // enqueuePromptFromApi flushes the queue itself at the end, so the
+          // gate-lifted queue (planMode && status === "approved") picks up
+          // both this prompt AND any user messages that landed during
+          // awaiting_approval — no separate flush needed here.
+          await this.messageService.enqueuePrompt({
+            content: buildPlanImplementationPrompt(planVersion),
+            authorId: SYSTEM_USER_ID,
+            authorDisplayName: SYSTEM_DISPLAY_NAME,
+            source: "system",
+          });
+        },
+      });
+    }
+    return this._planService;
+  }
+
+  private get plansHandler(): PlansHandler {
+    if (!this._plansHandler) {
+      this._plansHandler = createPlansHandler({
+        planService: this.planService,
+        getLog: () => this.log,
+        broadcast: (message) => this.broadcast(message),
+        getPlanApprovalStatus: () => this.repository.getSession()?.plan_approval_status ?? null,
+        validateReasoningEffort: (model, effort) => this.validateReasoningEffort(model, effort),
+      });
+    }
+    return this._plansHandler;
   }
 
   private get childSessionsHandler(): ChildSessionsHandler {
@@ -735,7 +817,7 @@ export class SessionDO extends DurableObject<Env> {
       sessionId,
       inactivity: {
         ...DEFAULT_LIFECYCLE_CONFIG.inactivity,
-        timeoutMs: parseInt(this.env.SANDBOX_INACTIVITY_TIMEOUT_MS || "600000", 10),
+        timeoutMs: parseSandboxInactivityTimeoutMs(this.env.SANDBOX_INACTIVITY_TIMEOUT_MS),
       },
       mcpServerLookup,
       slackAgentNotifyLookup,
@@ -1655,6 +1737,8 @@ export class SessionDO extends DurableObject<Env> {
       }
     }
 
+    const currentPlanRow = session?.plan_mode === 1 ? this.repository.getCurrentPlan() : null;
+
     return {
       id: this.getPublicSessionId(session),
       title: session?.title ?? null,
@@ -1676,6 +1760,21 @@ export class SessionDO extends DurableObject<Env> {
       tunnelUrls: sandbox?.tunnel_urls ? this.safeParseTunnelUrls(sandbox.tunnel_urls) : null,
       ttydUrl: sandbox?.ttyd_url ?? null,
       ttydToken,
+      planMode: session?.plan_mode === 1,
+      planModel: session?.plan_model ?? null,
+      planApprovalStatus: session?.plan_approval_status ?? null,
+      planCostSnapshot: session?.plan_cost_snapshot ?? null,
+      currentPlan: currentPlanRow
+        ? {
+            id: currentPlanRow.id,
+            version: currentPlanRow.version,
+            content: currentPlanRow.content,
+            createdByAuthorId: currentPlanRow.created_by_author_id,
+            createdByMessageId: currentPlanRow.created_by_message_id,
+            source: currentPlanRow.source,
+            createdAt: currentPlanRow.created_at,
+          }
+        : null,
     };
   }
 

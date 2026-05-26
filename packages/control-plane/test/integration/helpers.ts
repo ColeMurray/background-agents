@@ -15,6 +15,8 @@ export async function initSession(overrides?: {
   reasoningEffort?: string;
   userId?: string;
   scmLogin?: string;
+  planMode?: boolean;
+  planModel?: string;
 }) {
   const id = env.SESSION.newUniqueId();
   const stub = env.SESSION.get(id);
