@@ -30,7 +30,7 @@ import {
 import { resolveUserNames } from "@open-inspect/shared";
 import { createClassifier } from "./classifier";
 import { getAvailableRepos } from "./classifier/repos";
-import { callbacksRouter } from "./callbacks";
+import { callbacksRouter, planAwaitingMessageKvKey } from "./callbacks";
 import { buildPlanDecidedBlocks } from "./completion/blocks";
 import type { PlanArtifact } from "@open-inspect/shared";
 import { buildInternalAuthHeaders } from "@open-inspect/shared";
@@ -982,6 +982,28 @@ async function openPlanRejectModal(
   }
 }
 
+/**
+ * Best-effort cleanup of the awaiting-message KV ref after a modal-driven
+ * verdict. Without this the ref sits until its TTL expires, which both
+ * wastes KV storage and risks a late-arriving cross-channel callback
+ * re-updating the message after the modal handler already settled it.
+ */
+async function clearPlanAwaitingKvRef(
+  env: Env,
+  sessionId: string,
+  traceId?: string
+): Promise<void> {
+  try {
+    await env.SLACK_KV.delete(planAwaitingMessageKvKey(sessionId));
+  } catch (e) {
+    log.warn("slack.plan_awaiting_msg.kv_delete_failed", {
+      trace_id: traceId,
+      session_id: sessionId,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
+  }
+}
+
 function parsePlanModalMetadata(raw: string | undefined): PlanModalMetadata | null {
   if (!raw) return null;
   try {
@@ -1047,6 +1069,7 @@ async function handlePlanApproveSubmission(
         traceId,
       });
     }
+    await clearPlanAwaitingKvRef(env, meta.sessionId, traceId);
   }
 }
 
@@ -1100,6 +1123,7 @@ async function handlePlanRejectSubmission(
         traceId,
       });
     }
+    await clearPlanAwaitingKvRef(env, meta.sessionId, traceId);
   }
 }
 

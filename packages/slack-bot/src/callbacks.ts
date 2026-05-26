@@ -27,14 +27,15 @@ import { formatToolStatus, setAssistantThreadStatusBestEffort } from "./activity
 /**
  * KV key for the message-ts of the "Plan vN awaiting approval" message
  * the slack-bot posted for a given session. Lets us `chat.update` it
- * when a cross-channel verdict (e.g. web approval) lands. TTL is short
- * by design — plans are decided in minutes, not hours.
+ * when a cross-channel verdict (e.g. web approval) lands. Cleared on
+ * verdict (both modal-driven and cross-channel paths); the TTL is a
+ * floor for sessions whose awaiting message is abandoned.
  */
-function planAwaitingMessageKvKey(sessionId: string): string {
+export function planAwaitingMessageKvKey(sessionId: string): string {
   return `plan-awaiting-msg:${sessionId}`;
 }
 
-const PLAN_AWAITING_MSG_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
+const PLAN_AWAITING_MSG_TTL_SECONDS = 60 * 60 * 24; // 24 hours
 
 interface PlanAwaitingMessageRef {
   channel: string;
