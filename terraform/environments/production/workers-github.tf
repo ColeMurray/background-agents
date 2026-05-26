@@ -44,6 +44,7 @@ module "github_bot_worker" {
     { name = "DEPLOYMENT_NAME", value = var.deployment_name },
     { name = "APP_NAME", value = var.app_name },
     { name = "DEFAULT_MODEL", value = "anthropic/claude-haiku-4-5" },
+    { name = "DEFAULT_PLAN_MODEL", value = "anthropic/claude-opus-4-6" },
     { name = "GITHUB_BOT_USERNAME", value = var.github_bot_username },
   ]
 

@@ -8,6 +8,7 @@ export {
   VALID_MODELS,
   type ValidModel,
   DEFAULT_MODEL,
+  DEFAULT_PLAN_MODEL,
   type ReasoningEffort,
   type ModelReasoningConfig,
   MODEL_REASONING_CONFIG,

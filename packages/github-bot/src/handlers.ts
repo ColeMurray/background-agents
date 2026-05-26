@@ -1,15 +1,34 @@
-import { buildInternalAuthHeaders, resolveAppName } from "@open-inspect/shared";
+import {
+  buildInternalAuthHeaders,
+  fetchModelDefaults,
+  resolveAppName,
+  parsePlanCommand,
+  type PlanCommand,
+} from "@open-inspect/shared";
 import type {
   Env,
   PullRequestOpenedPayload,
   ReviewRequestedPayload,
   IssueCommentPayload,
   ReviewCommentPayload,
+  CheckSuiteCompletedPayload,
 } from "./types";
 import type { Logger } from "./logger";
+import { extractSessionIdFromBranch } from "@open-inspect/shared";
 import { generateInstallationToken, postReaction, checkSenderPermission } from "./github-auth";
-import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
+import {
+  buildCodeReviewPrompt,
+  buildCommentActionPrompt,
+  buildFailedChecksPrompt,
+} from "./prompts";
 import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
+import {
+  extractModelFromLabels,
+  extractPlanModelFromLabels,
+  extractReviewModelFromLabels,
+  hasPlanLabel,
+  type GitHubLabel,
+} from "./label-resolution";
 
 export type HandlerResult =
   | { outcome: "processed"; session_id: string; message_id: string; handler_action: string }
@@ -34,6 +53,8 @@ async function createSession(
     scmLogin: string;
     scmUserId: string;
     scmAvatarUrl: string;
+    planMode?: boolean;
+    planModel?: string;
   }
 ): Promise<string> {
   const body: Record<string, unknown> = {
@@ -49,6 +70,10 @@ async function createSession(
   if (params.reasoningEffort) {
     body.reasoningEffort = params.reasoningEffort;
   }
+  if (params.planMode) {
+    body.planMode = true;
+    if (params.planModel) body.planModel = params.planModel;
+  }
   const response = await controlPlane.fetch("https://internal/sessions", {
     method: "POST",
     headers,
@@ -60,6 +85,83 @@ async function createSession(
   }
   const result = (await response.json()) as { sessionId: string };
   return result.sessionId;
+}
+
+/**
+ * Resolve the plan model for a label-driven session creation.
+ * Precedence: `plan-<alias>` label → control-plane defaults (DB > env > shared).
+ */
+async function resolvePlanModel(env: Env, labels: GitHubLabel[]): Promise<string> {
+  const labelModel = extractPlanModelFromLabels(labels);
+  if (labelModel) return labelModel;
+  const { defaultPlanModel } = await fetchModelDefaults(env);
+  return defaultPlanModel;
+}
+
+// ─── PR → session mapping (KV) ───────────────────────────────────────────────
+// Stored so that approve/reject comments can resolve which plan-mode session
+// they target. Keyed by `pr:<owner>/<repo>:<number>` with a 7-day TTL.
+
+const PR_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+function getPrSessionKey(repoFullName: string, prNumber: number): string {
+  return `pr-session:${repoFullName}:${prNumber}`;
+}
+
+async function rememberPrSession(
+  env: Env,
+  repoFullName: string,
+  prNumber: number,
+  sessionId: string
+): Promise<void> {
+  await env.GITHUB_KV.put(getPrSessionKey(repoFullName, prNumber), sessionId, {
+    expirationTtl: PR_SESSION_TTL_SECONDS,
+  });
+}
+
+async function lookupPrSession(
+  env: Env,
+  repoFullName: string,
+  prNumber: number
+): Promise<string | null> {
+  return env.GITHUB_KV.get(getPrSessionKey(repoFullName, prNumber));
+}
+
+// ─── Plan approve/reject parsing ─────────────────────────────────────────────
+// parsePlanCommand lives in @open-inspect/shared so command syntax stays in
+// sync between Linear and GitHub. See its docstring for the recognized forms.
+
+async function callPlanCommand(
+  command: PlanCommand,
+  controlPlane: Fetcher,
+  headers: Record<string, string>,
+  sessionId: string,
+  approverLogin: string
+): Promise<{ ok: boolean; status: number; body: string }> {
+  const path =
+    command.command === "approve"
+      ? `https://internal/sessions/${sessionId}/plan/approve`
+      : `https://internal/sessions/${sessionId}/plan/reject`;
+
+  const body: Record<string, unknown> = {
+    approverAuthorId: `github:${approverLogin}`,
+  };
+  if (command.command === "reject" && command.reason) {
+    body.reason = command.reason;
+  }
+
+  const res = await controlPlane.fetch(path, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+  let text = "";
+  try {
+    text = await res.text();
+  } catch {
+    /* ignore */
+  }
+  return { ok: res.ok, status: res.status, body: text };
 }
 
 async function sendPrompt(
@@ -81,9 +183,44 @@ async function sendPrompt(
   return result.messageId;
 }
 
-function stripMention(body: string, botUsername: string): string {
-  const escaped = botUsername.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return body.replace(new RegExp(`@${escaped}`, "gi"), "").trim();
+function escapeForRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getTriggerMentions(env: Env): string[] {
+  // Keep existing @GITHUB_BOT_USERNAME behavior, but also allow @reef as a stable alias.
+  // GitHub App logins end with [bot]; users often type the handle without that suffix.
+  // List the full login first so stripMentions removes it before the shorter alias.
+  const full = env.GITHUB_BOT_USERNAME;
+  const withoutBotSuffix = full.replace(/\[bot\]$/i, "");
+  const mentions = [full];
+  if (withoutBotSuffix !== full) mentions.push(withoutBotSuffix);
+  // @reef is a stable alias that only the production environment should respond to.
+  if (env.REEF_ALIAS_ENABLED === "true") mentions.push("reef");
+  return mentions;
+}
+
+function stripMarkdownBlockquotes(body: string): string {
+  // GitHub "quote reply" uses Markdown blockquotes (`>`). Mentions inside quoted text should not
+  // trigger the bot.
+  return body
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith(">"))
+    .join("\n");
+}
+
+function hasAnyMention(body: string, mentions: string[]): boolean {
+  const bodyLower = stripMarkdownBlockquotes(body).toLowerCase();
+  return mentions.some((m) => bodyLower.includes(`@${m.toLowerCase()}`));
+}
+
+function stripMentions(body: string, mentions: string[]): string {
+  let result = stripMarkdownBlockquotes(body);
+  for (const mention of mentions) {
+    const escaped = escapeForRegex(mention);
+    result = result.replace(new RegExp(`@${escaped}`, "gi"), "");
+  }
+  return result.trim();
 }
 
 function fireAndForgetReaction(
@@ -100,6 +237,67 @@ function fireAndForgetReaction(
     },
     () => log.warn("acknowledgment.failed", meta)
   );
+}
+
+const FAILED_CHECK_SUITE_CONCLUSIONS = new Set(["failure"]);
+const MAX_FAILED_CHECK_FIX_ATTEMPTS = 3;
+const FAILED_CHECK_FIX_COUNTER_TTL_SECONDS = 30 * 24 * 60 * 60;
+
+interface GitHubPullRequestDetails {
+  number: number;
+  title: string;
+  body: string | null;
+  user: { login: string };
+  head: { ref: string; sha: string };
+  base: { ref: string };
+  draft: boolean;
+  state: string;
+}
+
+function getFailedCheckAttemptKey(repoFullName: string, pullNumber: number): string {
+  return `failed-check-fix:${repoFullName}:pr:${pullNumber}`;
+}
+
+async function readFailedCheckAttempt(
+  env: Env,
+  repoFullName: string,
+  pullNumber: number
+): Promise<number> {
+  const rawAttempt = await env.GITHUB_KV.get(getFailedCheckAttemptKey(repoFullName, pullNumber));
+  const parsedAttempt = Number.parseInt(rawAttempt ?? "0", 10);
+  return Number.isFinite(parsedAttempt) && parsedAttempt >= 0 ? parsedAttempt : 0;
+}
+
+async function writeFailedCheckAttempt(
+  env: Env,
+  repoFullName: string,
+  pullNumber: number,
+  attempt: number
+): Promise<void> {
+  await env.GITHUB_KV.put(getFailedCheckAttemptKey(repoFullName, pullNumber), String(attempt), {
+    expirationTtl: FAILED_CHECK_FIX_COUNTER_TTL_SECONDS,
+  });
+}
+
+async function fetchPullRequestDetails(
+  token: string,
+  owner: string,
+  repo: string,
+  pullNumber: number
+): Promise<GitHubPullRequestDetails | null> {
+  const response = await fetch(
+    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${pullNumber}`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "Open-Inspect",
+      },
+    }
+  );
+  if (!response.ok) return null;
+  return (await response.json()) as GitHubPullRequestDetails;
 }
 
 type CallerGatingResult =
@@ -210,17 +408,27 @@ export async function handleReviewRequested(
     meta
   );
 
+  // `review-<alias>` label overrides the configured model for PR reviews only.
+  // It must be applied before the PR is opened or the review request fires.
+  const reviewLabels: GitHubLabel[] = pr.labels ?? [];
+  const reviewModel = extractReviewModelFromLabels(reviewLabels) ?? config.model;
+
   const sessionId = await createSession(env.CONTROL_PLANE, headers, {
     repoOwner: owner,
     repoName,
     title: `GitHub: Review PR #${pr.number}`,
-    model: config.model,
+    model: reviewModel,
     reasoningEffort: config.reasoningEffort,
     scmLogin: sender.login,
     scmUserId: String(sender.id),
     scmAvatarUrl: sender.avatar_url,
   });
-  log.info("session.created", { ...meta, session_id: sessionId, action: "review" });
+  log.info("session.created", {
+    ...meta,
+    session_id: sessionId,
+    action: "review",
+    review_model: reviewModel,
+  });
 
   const prompt = buildCodeReviewPrompt({
     owner,
@@ -233,6 +441,7 @@ export async function handleReviewRequested(
     head: pr.head.ref,
     isPublic: !repo.private,
     codeReviewInstructions: config.codeReviewInstructions,
+    autoApproveOnOpen: config.autoApproveOnOpen,
   });
 
   const messageId = await sendPrompt(env.CONTROL_PLANE, headers, sessionId, {
@@ -310,17 +519,27 @@ export async function handlePullRequestOpened(
     meta
   );
 
+  // `review-<alias>` label overrides the configured model for the auto-review.
+  // Must be applied before the PR is opened.
+  const autoReviewLabels: GitHubLabel[] = pr.labels ?? [];
+  const autoReviewModel = extractReviewModelFromLabels(autoReviewLabels) ?? config.model;
+
   const sessionId = await createSession(env.CONTROL_PLANE, headers, {
     repoOwner: owner,
     repoName,
     title: `GitHub: Review PR #${pr.number}`,
-    model: config.model,
+    model: autoReviewModel,
     reasoningEffort: config.reasoningEffort,
     scmLogin: sender.login,
     scmUserId: String(sender.id),
     scmAvatarUrl: sender.avatar_url,
   });
-  log.info("session.created", { ...meta, session_id: sessionId, action: "auto_review" });
+  log.info("session.created", {
+    ...meta,
+    session_id: sessionId,
+    action: "auto_review",
+    review_model: autoReviewModel,
+  });
 
   const prompt = buildCodeReviewPrompt({
     owner,
@@ -333,6 +552,7 @@ export async function handlePullRequestOpened(
     head: pr.head.ref,
     isPublic: !repo.private,
     codeReviewInstructions: config.codeReviewInstructions,
+    autoApproveOnOpen: config.autoApproveOnOpen,
   });
 
   const messageId = await sendPrompt(env.CONTROL_PLANE, headers, sessionId, {
@@ -355,6 +575,154 @@ export async function handlePullRequestOpened(
   };
 }
 
+export async function handleCheckSuiteCompleted(
+  env: Env,
+  log: Logger,
+  payload: CheckSuiteCompletedPayload,
+  traceId: string
+): Promise<HandlerResult> {
+  const { check_suite: checkSuite, repository: repo } = payload;
+  const owner = repo.owner.login;
+  const repoName = repo.name;
+  const repoFullName = `${owner}/${repoName}`.toLowerCase();
+  const conclusion = checkSuite.conclusion;
+
+  if (!conclusion || !FAILED_CHECK_SUITE_CONCLUSIONS.has(conclusion)) {
+    log.debug("handler.non_failed_check_suite", {
+      trace_id: traceId,
+      repo: repoFullName,
+      conclusion,
+    });
+    return { outcome: "skipped", skip_reason: "non_failed_check_suite" };
+  }
+
+  if (!checkSuite.pull_requests.length) {
+    log.debug("handler.check_suite_no_pull_requests", {
+      trace_id: traceId,
+      repo: repoFullName,
+      conclusion,
+    });
+    return { outcome: "skipped", skip_reason: "no_pull_requests" };
+  }
+
+  const config = await getGitHubConfig(env, repoFullName, log);
+  if (config.enabledRepos !== null && !config.enabledRepos.includes(repoFullName)) {
+    log.debug("handler.repo_not_enabled", { trace_id: traceId, repo: repoFullName });
+    return { outcome: "skipped", skip_reason: "repo_not_enabled" };
+  }
+
+  const [ghToken, headers] = await Promise.all([
+    generateInstallationToken({
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_APP_PRIVATE_KEY,
+      installationId: env.GITHUB_APP_INSTALLATION_ID,
+    }),
+    getAuthHeaders(env, traceId),
+  ]);
+
+  for (const pullRef of checkSuite.pull_requests) {
+    const pullNumber = pullRef.number;
+    const pr = await fetchPullRequestDetails(ghToken, owner, repoName, pullNumber);
+    if (!pr) {
+      log.warn("handler.failed_check_pr_fetch_failed", {
+        trace_id: traceId,
+        repo: repoFullName,
+        pull_number: pullNumber,
+      });
+      continue;
+    }
+
+    if (pr.state !== "open") {
+      log.debug("handler.failed_check_pr_not_open", {
+        trace_id: traceId,
+        repo: repoFullName,
+        pull_number: pullNumber,
+        pr_state: pr.state,
+      });
+      continue;
+    }
+
+    const sessionId = extractSessionIdFromBranch(pr.head.ref);
+    if (!sessionId) {
+      log.debug("handler.failed_check_branch_not_session_branch", {
+        trace_id: traceId,
+        repo: repoFullName,
+        pull_number: pullNumber,
+        head_ref: pr.head.ref,
+      });
+      continue;
+    }
+
+    const currentAttempt = await readFailedCheckAttempt(env, repoFullName, pullNumber);
+    if (currentAttempt >= MAX_FAILED_CHECK_FIX_ATTEMPTS) {
+      log.info("handler.failed_check_max_attempts_reached", {
+        trace_id: traceId,
+        repo: repoFullName,
+        pull_number: pullNumber,
+        max_attempts: MAX_FAILED_CHECK_FIX_ATTEMPTS,
+      });
+      return { outcome: "skipped", skip_reason: "max_failed_check_attempts_reached" };
+    }
+
+    const nextAttempt = currentAttempt + 1;
+    await writeFailedCheckAttempt(env, repoFullName, pullNumber, nextAttempt);
+
+    const meta = {
+      trace_id: traceId,
+      repo: repoFullName,
+      pull_number: pullNumber,
+      check_suite_conclusion: conclusion,
+      attempt: nextAttempt,
+      max_attempts: MAX_FAILED_CHECK_FIX_ATTEMPTS,
+    };
+
+    fireAndForgetReaction(
+      log,
+      ghToken,
+      `https://api.github.com/repos/${owner}/${repoName}/issues/${pullNumber}/reactions`,
+      resolveAppName(env),
+      meta
+    );
+
+    log.info("session.reused", { ...meta, session_id: sessionId, action: "failed_checks" });
+
+    const prompt = buildFailedChecksPrompt({
+      owner,
+      repo: repoName,
+      number: pullNumber,
+      title: pr.title,
+      author: pr.user.login,
+      base: pr.base.ref,
+      head: pr.head.ref,
+      attempt: nextAttempt,
+      maxAttempts: MAX_FAILED_CHECK_FIX_ATTEMPTS,
+      checkSuiteConclusion: conclusion,
+      isPublic: !repo.private,
+    });
+
+    const messageId = await sendPrompt(env.CONTROL_PLANE, headers, sessionId, {
+      content: prompt,
+      authorId: `github:${env.GITHUB_BOT_USERNAME}`,
+    });
+    log.info("prompt.sent", {
+      ...meta,
+      session_id: sessionId,
+      message_id: messageId,
+      source: "github",
+      content_length: prompt.length,
+    });
+
+    return {
+      outcome: "processed",
+      session_id: sessionId,
+      message_id: messageId,
+      handler_action: "failed_checks",
+    };
+  }
+
+  return { outcome: "skipped", skip_reason: "no_eligible_pull_request" };
+}
+
 export async function handleIssueComment(
   env: Env,
   log: Logger,
@@ -371,7 +739,7 @@ export async function handleIssueComment(
     return { outcome: "skipped", skip_reason: "not_a_pr" };
   }
 
-  if (!comment.body.toLowerCase().includes(`@${env.GITHUB_BOT_USERNAME.toLowerCase()}`)) {
+  if (!hasAnyMention(comment.body, getTriggerMentions(env))) {
     log.debug("handler.no_mention", {
       trace_id: traceId,
       issue_number: issue.number,
@@ -405,7 +773,63 @@ export async function handleIssueComment(
   if (!gating.allowed) return { outcome: "skipped", skip_reason: gating.reason };
   const { ghToken, headers } = gating;
 
-  const commentBody = stripMention(comment.body, env.GITHUB_BOT_USERNAME);
+  const rawCommentBody = stripMentions(comment.body, getTriggerMentions(env));
+
+  // Plan-approval shortcut: if the comment (after stripping the @mention) is
+  // `approve` / `reject` (optionally with extras), route it to the existing
+  // plan-mode session for this PR instead of creating a new session. The
+  // PR→session mapping was written when the plan-mode session was created.
+  const planCommand = parsePlanCommand(rawCommentBody);
+  if (planCommand) {
+    const existingSessionId = await lookupPrSession(env, repoFullName, issue.number);
+    const meta = { trace_id: traceId, repo: repoFullName, pull_number: issue.number };
+    fireAndForgetReaction(
+      log,
+      ghToken,
+      `https://api.github.com/repos/${owner}/${repoName}/issues/comments/${comment.id}/reactions`,
+      resolveAppName(env),
+      meta
+    );
+
+    if (!existingSessionId) {
+      log.info("plan_command.no_session", { ...meta, command: planCommand.command });
+      return { outcome: "skipped", skip_reason: "no_plan_session_for_pr" };
+    }
+
+    const result = await callPlanCommand(
+      planCommand,
+      env.CONTROL_PLANE,
+      headers,
+      existingSessionId,
+      sender.login
+    );
+
+    log.info("plan_command.completed", {
+      ...meta,
+      session_id: existingSessionId,
+      command: planCommand.command,
+      http_status: result.status,
+      ok: result.ok,
+    });
+
+    return {
+      outcome: "processed",
+      session_id: existingSessionId,
+      message_id: "",
+      handler_action: planCommand.command === "approve" ? "plan_approve" : "plan_reject",
+    };
+  }
+
+  // Label-based plan / model overrides (dash-separated, unified with Linear).
+  //   - `plan`              → opt into plan-mode for this trigger
+  //   - `plan-<alias>`      → plan-turn model override
+  //   - `model-<alias>`     → build-turn model override
+  //   - `build-<alias>`     → alias of `model-<alias>` (more readable in plan-mode)
+  const issueLabels: GitHubLabel[] = issue.labels ?? [];
+  const planMode = hasPlanLabel(issueLabels);
+  const implModel = extractModelFromLabels(issueLabels) ?? config.model;
+  const planModel = planMode ? await resolvePlanModel(env, issueLabels) : undefined;
+  const commentBody = rawCommentBody;
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: issue.number };
   fireAndForgetReaction(
@@ -420,13 +844,28 @@ export async function handleIssueComment(
     repoOwner: owner,
     repoName,
     title: `GitHub: PR #${issue.number} comment`,
-    model: config.model,
+    model: implModel,
     reasoningEffort: config.reasoningEffort,
     scmLogin: sender.login,
     scmUserId: String(sender.id),
     scmAvatarUrl: sender.avatar_url,
+    planMode,
+    planModel,
   });
-  log.info("session.created", { ...meta, session_id: sessionId, action: "comment" });
+  log.info("session.created", {
+    ...meta,
+    session_id: sessionId,
+    action: "comment",
+    plan_mode: planMode,
+    plan_model: planModel ?? null,
+    impl_model: implModel,
+  });
+
+  // Plan-mode sessions need a PR→session mapping so subsequent approve/reject
+  // comments resolve to this session.
+  if (planMode) {
+    await rememberPrSession(env, repoFullName, issue.number, sessionId);
+  }
 
   const prompt = buildCommentActionPrompt({
     owner,
@@ -470,7 +909,7 @@ export async function handleReviewComment(
   const repoName = repo.name;
   const repoFullName = `${owner}/${repoName}`.toLowerCase();
 
-  if (!comment.body.toLowerCase().includes(`@${env.GITHUB_BOT_USERNAME.toLowerCase()}`)) {
+  if (!hasAnyMention(comment.body, getTriggerMentions(env))) {
     log.debug("handler.no_mention", {
       trace_id: traceId,
       pull_number: pr.number,
@@ -504,7 +943,7 @@ export async function handleReviewComment(
   if (!gating.allowed) return { outcome: "skipped", skip_reason: gating.reason };
   const { ghToken, headers } = gating;
 
-  const commentBody = stripMention(comment.body, env.GITHUB_BOT_USERNAME);
+  const commentBody = stripMentions(comment.body, getTriggerMentions(env));
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
   fireAndForgetReaction(

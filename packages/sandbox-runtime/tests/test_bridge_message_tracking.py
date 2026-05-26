@@ -10,6 +10,8 @@ which tests the parentID-based correlation mechanism used for attributing
 events to the correct prompt.
 """
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 from sandbox_runtime.bridge import AgentBridge, OpenCodeIdentifier
@@ -167,6 +169,47 @@ class TestBuildPromptRequestBody:
         assert "model" not in body
         assert "messageID" not in body
 
+    def test_prepends_env_prompt_suffix(self, monkeypatch: pytest.MonkeyPatch):
+        """Should append PROMPT_SUFFIX wrapped in <system_instruction> tags."""
+        monkeypatch.setenv("PROMPT_SUFFIX", "Always include this text.")
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+
+        body = bridge._build_prompt_request_body("Hello", None)
+
+        # PROMPT_SUFFIX is operator-controlled; wrapping it in
+        # <system_instruction> keeps it cleanly separated from the user content
+        # above and matches the rest of the runtime's tag convention.
+        assert body["parts"] == [
+            {
+                "type": "text",
+                "text": (
+                    "Hello\n\n"
+                    "<system_instruction>\n"
+                    "Always include this text.\n"
+                    "</system_instruction>"
+                ),
+            }
+        ]
+
+    def test_skips_env_prompt_suffix_when_disabled(self, monkeypatch: pytest.MonkeyPatch):
+        """Should not append PROMPT_SUFFIX when include_prompt_suffix=False."""
+        monkeypatch.setenv("PROMPT_SUFFIX", "Always include this text.")
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+
+        body = bridge._build_prompt_request_body("Hello", None, include_prompt_suffix=False)
+
+        assert body["parts"] == [{"type": "text", "text": "Hello"}]
+
     def test_with_opencode_message_id(self, bridge: AgentBridge):
         """Should include messageID when provided (expects OpenCode format)."""
         # The function now expects an already-formatted OpenCode ID
@@ -240,6 +283,36 @@ class TestBuildPromptRequestBody:
             "thinking": {"type": "adaptive"},
             "outputConfig": {"effort": "high"},
         }
+
+    @pytest.mark.asyncio
+    async def test_prompt_suffix_applies_only_on_first_prompt(
+        self, monkeypatch: pytest.MonkeyPatch, bridge: AgentBridge
+    ):
+        """PROMPT_SUFFIX should be included for first prompt only."""
+        monkeypatch.setenv("PROMPT_SUFFIX", "Always include this text.")
+
+        bridge._session_has_user_prompt = AsyncMock(return_value=False)
+
+        first = await bridge._should_include_prompt_suffix()
+        assert first is True
+
+        bridge._has_sent_prompt_in_session = True
+        second = await bridge._should_include_prompt_suffix()
+        assert second is False
+
+    @pytest.mark.asyncio
+    async def test_prompt_suffix_skipped_for_existing_session_prompt_history(
+        self, monkeypatch: pytest.MonkeyPatch, bridge: AgentBridge
+    ):
+        """PROMPT_SUFFIX should be skipped when session already has user prompts."""
+        monkeypatch.setenv("PROMPT_SUFFIX", "Always include this text.")
+        bridge._has_sent_prompt_in_session = None
+        bridge._session_has_user_prompt = AsyncMock(return_value=True)
+
+        include_suffix = await bridge._should_include_prompt_suffix()
+
+        assert include_suffix is False
+        assert bridge._has_sent_prompt_in_session is True
 
 
 class TestOpenCodeIdentifier:

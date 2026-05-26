@@ -44,6 +44,10 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     code_server_enabled: 0,
     total_cost: 0,
     sandbox_settings: null,
+    plan_mode: 0,
+    plan_approval_status: null,
+    plan_model: null,
+    plan_cost_snapshot: null,
     created_at: 1000,
     updated_at: 1000,
     ...overrides,
@@ -94,6 +98,18 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
     updateParticipantCoalesce: vi.fn(),
     updateMessageCompletion: vi.fn(),
     upsertExecutionCompleteEvent: vi.fn(),
+    getCurrentPlan: vi.fn(
+      () =>
+        null as null | {
+          id: string;
+          version: number;
+          content: string;
+          created_by_author_id: string | null;
+          created_by_message_id: string | null;
+          source: "api" | "agent" | "web";
+          created_at: number;
+        }
+    ),
   };
 
   const wsManager = {
@@ -149,6 +165,7 @@ function buildQueue(options?: { getClientInfo?: (ws: WebSocket) => ClientInfo | 
     participantService,
     broadcast,
     spawnSandbox,
+    callbackService,
     setSessionStatus,
     reconcileSessionStatusAfterExecution,
     waitUntil,
@@ -207,6 +224,50 @@ describe("SessionMessageQueue", () => {
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: true });
   });
 
+  it("omits resumeContext when no plan is saved", async () => {
+    const h = buildQueue();
+    const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+    h.repository.getCurrentPlan.mockReturnValue(null);
+
+    await h.queue.processMessageQueue();
+
+    const promptCall = h.wsManager.send.mock.calls.find(
+      (call: unknown[]) => (call[1] as { type?: string } | undefined)?.type === "prompt"
+    ) as unknown[] | undefined;
+    expect(promptCall).toBeDefined();
+    const command = promptCall![1] as { resumeContext?: unknown };
+    expect(command.resumeContext).toBeUndefined();
+  });
+
+  it("attaches resumeContext when a plan is saved", async () => {
+    const h = buildQueue();
+    const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+    h.repository.getCurrentPlan.mockReturnValue({
+      id: "p-1",
+      version: 3,
+      content: "## Plan\n- step 1",
+      created_by_author_id: "a-1",
+      created_by_message_id: null,
+      source: "agent",
+      created_at: 42,
+    });
+
+    await h.queue.processMessageQueue();
+
+    const promptCall = h.wsManager.send.mock.calls.find(
+      (call: unknown[]) => (call[1] as { type?: string } | undefined)?.type === "prompt"
+    ) as unknown[] | undefined;
+    expect(promptCall).toBeDefined();
+    const command = promptCall![1] as { resumeContext: unknown };
+    expect(command.resumeContext).toEqual({
+      currentPlan: { version: 3, content: "## Plan\n- step 1", createdAt: 42 },
+    });
+  });
+
   it("marks processing message failed and broadcasts synthetic completion on stop", async () => {
     const h = buildQueue();
     const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
@@ -244,9 +305,43 @@ describe("SessionMessageQueue", () => {
     const h = buildQueue();
     h.repository.getProcessingMessage.mockReturnValue({ id: "msg-timeout" });
 
-    await h.queue.failStuckProcessingMessage();
+    await h.queue.failStuckProcessingMessage("inactivity_timeout");
 
     expect(h.reconcileSessionStatusAfterExecution).toHaveBeenCalledWith(false);
+    expect(h.callbackService.notifyComplete).toHaveBeenCalledWith(
+      "msg-timeout",
+      false,
+      "Execution interrupted: sandbox stopped due to inactivity"
+    );
+  });
+
+  it("uses a generic message for unmapped failure reasons", async () => {
+    const h = buildQueue();
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-generic" });
+
+    await h.queue.failStuckProcessingMessage("sandbox_crashed");
+
+    expect(h.callbackService.notifyComplete).toHaveBeenCalledWith(
+      "msg-generic",
+      false,
+      "Execution interrupted: sandbox_crashed"
+    );
+  });
+
+  it("uses explicit error when provided in failure payload", async () => {
+    const h = buildQueue();
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-custom" });
+
+    await h.queue.failStuckProcessingMessage({
+      reason: "sandbox_crashed",
+      error: "Execution interrupted: sandbox crashed unexpectedly",
+    });
+
+    expect(h.callbackService.notifyComplete).toHaveBeenCalledWith(
+      "msg-custom",
+      false,
+      "Execution interrupted: sandbox crashed unexpectedly"
+    );
   });
 
   describe("enqueuePromptFromApi", () => {
