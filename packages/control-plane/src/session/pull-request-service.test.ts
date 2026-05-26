@@ -42,6 +42,10 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     code_server_enabled: 0,
     total_cost: 0,
     sandbox_settings: null,
+    plan_mode: 0,
+    plan_approval_status: null,
+    plan_model: null,
+    plan_cost_snapshot: null,
     created_at: 1,
     updated_at: 1,
     ...overrides,
@@ -288,6 +292,29 @@ describe("SessionPullRequestService", () => {
       },
       createdAt: expect.any(Number),
     });
+  });
+
+  it("pushes mixed-case head branches using lowercase names", async () => {
+    await harness.service.createPullRequest(
+      createInput({
+        promptingAuth: { authType: "oauth", token: "user-token" },
+        headBranch: "Feature/Mixed-Case",
+      })
+    );
+
+    expect(harness.deps.pushBranchToRemote).toHaveBeenCalledWith(
+      "feature/mixed-case",
+      expect.objectContaining({
+        refspec: "HEAD:refs/heads/feature/mixed-case",
+        targetBranch: "feature/mixed-case",
+      })
+    );
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      { authType: "oauth", token: "user-token" },
+      expect.objectContaining({
+        sourceBranch: "feature/mixed-case",
+      })
+    );
   });
 
   it("uses the configured appName in the PR body footer", async () => {
