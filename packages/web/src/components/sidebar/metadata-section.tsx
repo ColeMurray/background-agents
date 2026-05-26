@@ -8,9 +8,11 @@ import { formatRelativeTime } from "@/lib/time";
 import { getSafeExternalUrl } from "@/lib/urls";
 import { getScmBranchUrl, getScmRepoUrl } from "@/lib/scm";
 import type { Artifact } from "@/types/session";
+import type { PlanApprovalStatus } from "@open-inspect/shared";
 import {
   ClockIcon,
   SparkleIcon,
+  HammerIcon,
   GitPrIcon,
   BranchIcon,
   RepoIcon,
@@ -19,11 +21,16 @@ import {
   LinkIcon,
 } from "@/components/ui/icons";
 import { Badge, prBadgeVariant } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface MetadataSectionProps {
   createdAt: number;
   model?: string;
   reasoningEffort?: string;
+  planMode?: boolean;
+  planModel?: string | null;
+  planApprovalStatus?: PlanApprovalStatus | null;
+  planCostSnapshot?: number | null;
   baseBranch: string;
   branchName?: string;
   repoOwner?: string;
@@ -37,6 +44,10 @@ export function MetadataSection({
   createdAt,
   model,
   reasoningEffort,
+  planMode,
+  planModel,
+  planApprovalStatus,
+  planCostSnapshot,
   baseBranch,
   branchName,
   repoOwner,
@@ -87,8 +98,8 @@ export function MetadataSection({
         </div>
       )}
 
-      {/* Model */}
-      {model && (
+      {/* Model — split into Plan / Build lines when the session is in plan-mode */}
+      {model && !planMode && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <SparkleIcon className="w-4 h-4" />
           <span>
@@ -97,10 +108,67 @@ export function MetadataSection({
           </span>
         </div>
       )}
+      {model && planMode && (
+        <>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <SparkleIcon className="w-4 h-4 text-accent" />
+            <span>
+              <span className="text-xs font-semibold uppercase tracking-wider text-accent mr-1.5">
+                Plan
+              </span>
+              {formatModelName(planModel ?? model)}
+              {reasoningEffort && <span> · {reasoningEffort}</span>}
+            </span>
+          </div>
+          {planApprovalStatus === "approved" && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <HammerIcon className="w-4 h-4 text-accent" />
+              <span>
+                <span className="text-xs font-semibold uppercase tracking-wider text-accent mr-1.5">
+                  Build
+                </span>
+                {formatModelName(model)}
+                {reasoningEffort && <span> · {reasoningEffort}</span>}
+              </span>
+            </div>
+          )}
+        </>
+      )}
 
       {typeof totalCost === "number" && totalCost > 0 && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span>Session cost: {formatSessionCost(totalCost)}</span>
+          {(() => {
+            const costLabel = `Session cost: ${formatSessionCost(totalCost)}`;
+            // The breakdown is only meaningful for plan-mode sessions. Before
+            // approval the entire spend is planning; after approval we split
+            // using the snapshot taken at approval time. Sessions that approved
+            // before this column existed (snapshot=null) skip the tooltip
+            // rather than show a misleading split.
+            const isApproved = planApprovalStatus === "approved";
+            const canBreakdown = planMode && (!isApproved || typeof planCostSnapshot === "number");
+            if (!canBreakdown) {
+              return <span>{costLabel}</span>;
+            }
+            const planCost = isApproved ? (planCostSnapshot ?? 0) : totalCost;
+            const buildCost = isApproved ? Math.max(0, totalCost - (planCostSnapshot ?? 0)) : 0;
+            return (
+              <TooltipProvider delayDuration={150}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="cursor-help underline decoration-dotted underline-offset-2">
+                      {costLabel}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" align="start">
+                    <div className="space-y-0.5">
+                      <div>Plan: {formatSessionCost(planCost)}</div>
+                      {isApproved && <div>Build: {formatSessionCost(buildCost)}</div>}
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            );
+          })()}
         </div>
       )}
 

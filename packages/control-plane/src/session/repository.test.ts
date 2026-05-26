@@ -106,9 +106,35 @@ describe("SessionRepository", () => {
         0,
         0,
         null,
+        0, // plan_mode default
+        null, // plan_approval_status default
+        null, // plan_model default
         1000,
         2000,
       ]);
+    });
+
+    it("persists planMode=true and planModel when provided", () => {
+      repo.upsertSession({
+        id: "sess-plan",
+        sessionName: "plan-session",
+        title: "Plan Title",
+        repoOwner: "owner",
+        repoName: "repo",
+        model: "claude-sonnet-4",
+        status: "created",
+        planMode: true,
+        planModel: "anthropic/claude-opus-4-6",
+        createdAt: 1000,
+        updatedAt: 2000,
+      });
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("INSERT OR REPLACE INTO session");
+      // plan_mode is the 16th param (0-indexed 15), plan_model is the 18th (0-indexed 17).
+      const params = mock.calls[0].params;
+      expect(params[15]).toBe(1); // plan_mode = 1 when planMode=true
+      expect(params[17]).toBe("anthropic/claude-opus-4-6"); // plan_model
     });
   });
 
@@ -123,12 +149,12 @@ describe("SessionRepository", () => {
   });
 
   describe("updateSessionBranch", () => {
-    it("updates branch for correct session", () => {
-      repo.updateSessionBranch("sess-1", "feature-branch");
+    it("stores branch names in lowercase for the correct session", () => {
+      repo.updateSessionBranch("sess-1", "Feature/Branch");
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("UPDATE session SET branch_name");
-      expect(mock.calls[0].params).toEqual(["feature-branch", "sess-1"]);
+      expect(mock.calls[0].params).toEqual(["feature/branch", "sess-1"]);
     });
   });
 

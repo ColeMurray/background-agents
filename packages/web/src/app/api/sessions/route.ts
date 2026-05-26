@@ -67,6 +67,7 @@ export async function POST(request: NextRequest) {
       reasoningEffort: body.reasoningEffort,
       branch: body.branch,
       title: body.title,
+      planMode: body.planMode === true,
       spawnSource: "user" as const,
       scmToken: accessToken,
       scmRefreshToken: jwt?.refreshToken as string | undefined,

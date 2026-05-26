@@ -22,6 +22,8 @@ import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, ClassVar
+from xml.sax.saxutils import escape as xml_escape
+from xml.sax.saxutils import quoteattr as xml_quoteattr
 
 import httpx
 import websockets
@@ -32,6 +34,11 @@ from .log_config import configure_logging, get_logger
 from .types import GitUser
 
 configure_logging()
+
+# How long the sandbox waits for the control plane to acknowledge a plan
+# save before raising. Plan saves run end-of-turn and shouldn't block the
+# event loop indefinitely if the control plane is unresponsive.
+PLAN_SAVE_TIMEOUT_SECONDS = 30.0
 
 # Fallback git identity when prompt author has no SCM name/email configured.
 # Matches the co-author trailer used in generateCommitMessage (shared/git.ts).
@@ -129,12 +136,19 @@ class AgentBridge:
     HEARTBEAT_INTERVAL = 30.0
     RECONNECT_BACKOFF_BASE = 2.0
     RECONNECT_MAX_DELAY = 60.0
-    SSE_INACTIVITY_TIMEOUT = 120.0
+    SSE_INACTIVITY_TIMEOUT = 300.0
     SSE_INACTIVITY_TIMEOUT_MIN = 5.0
     SSE_INACTIVITY_TIMEOUT_MAX = 3600.0
     HTTP_CONNECT_TIMEOUT = 30.0
     HTTP_DEFAULT_TIMEOUT = 30.0
     OPENCODE_REQUEST_TIMEOUT = 30.0
+    OPENCODE_SESSION_CREATE_TIMEOUT_SECONDS = 120.0
+    OPENCODE_SESSION_CREATE_MAX_ATTEMPTS = 2
+    OPENCODE_STOP_RETRIES = 3
+    FINAL_STATE_FETCH_RETRIES = 3
+    HTTP_RETRY_BACKOFF_SECONDS = 0.5
+    SSE_WATCHDOG_INTERVAL_SECONDS = 30.0
+    SSE_EVENT_LOG_SAMPLE_EVERY = 20
     GIT_PUSH_TIMEOUT_SECONDS = 300.0
     GIT_PUSH_TERMINATE_GRACE_SECONDS = 5.0
     PROMPT_MAX_DURATION = 5400.0
@@ -200,6 +214,10 @@ class AgentBridge:
         # Pending ACKs: events sent but not yet acknowledged by the control plane.
         # Keyed by ackId, re-sent on reconnect until the DO confirms receipt.
         self._pending_acks: dict[str, dict[str, Any]] = {}
+
+        # Tracks whether at least one prompt has already been sent in this
+        # OpenCode session. None means unknown (for loaded sessions).
+        self._has_sent_prompt_in_session: bool | None = None
 
     @property
     def ws_url(self) -> str:
@@ -587,6 +605,121 @@ class AgentBridge:
             self.log.debug("bridge.unknown_command", cmd_type=cmd_type)
         return None
 
+    @staticmethod
+    def _escape_user_message_close(content: str) -> str:
+        """Neutralize literal `</user_message>` in bot-assembled content.
+
+        `_handle_prompt` wraps `content` in `<user_message>...</user_message>`
+        when a preamble is prepended. Inner user text is escaped against the
+        `<user_content>` boundary by buildUntrustedUserContentBlock but NOT
+        against `<user_message>`, since that outer wrapper is added here.
+        Without this escape, a user typing `</user_message>` in a Linear issue
+        or PR body could close the wrapper early and place text outside the
+        user-data boundary, bypassing the preamble's instructions. Two-pass to
+        avoid re-escaping caller-pre-escaped variants (defense in depth).
+        """
+        return content.replace("<\\/user_message>", "<\\\\/user_message>").replace(
+            "</user_message>", "<\\/user_message>"
+        )
+
+    @staticmethod
+    def _build_resume_preamble(resume_context: dict[str, Any]) -> str | None:
+        """Build a restate-and-confirm preamble from a resume context payload.
+
+        The control plane attaches `resumeContext.currentPlan` when a saved plan
+        exists for this session. We surface it back to the agent and ask for an
+        explicit restate before any destructive action — this re-anchors the
+        agent on the plan instead of relying on conversational memory that may
+        have been compacted or contaminated by exploration noise.
+
+        Wrapped in XML tags per Anthropic's prompting guidance: the plan body is
+        itself markdown and would otherwise collide with our own headers, making
+        the boundary between embedded data and live instruction ambiguous.
+        """
+        current_plan = resume_context.get("currentPlan") if resume_context else None
+        if not current_plan:
+            return None
+        plan_content = current_plan.get("content")
+        if not isinstance(plan_content, str) or not plan_content.strip():
+            return None
+        version = current_plan.get("version", "?")
+        # Plan content is untrusted (markdown from the agent's own output or a
+        # user-amended draft). Escape XML special chars before interpolating
+        # into the <saved_plan> element so a malicious `</saved_plan>` inside
+        # the plan body can't break out of the wrapper. `quoteattr` is used
+        # for the version attribute because `xml_escape` does NOT escape `"`,
+        # so a quote-containing version value could break the attribute
+        # boundary; `quoteattr` returns the value with surrounding quotes
+        # included (hence no quotes around it in the f-string).
+        return (
+            "<resume_context>\n"
+            f"<saved_plan version={xml_quoteattr(str(version))}>\n"
+            f"{xml_escape(plan_content.strip())}\n"
+            "</saved_plan>\n"
+            "<instructions_for_this_turn>\n"
+            "Before any tool call that modifies files or runs destructive commands, "
+            "restate (a) which step of the saved plan you are executing and (b) how "
+            "the new instruction modifies it. Wait for explicit confirmation if your "
+            "interpretation diverges from the saved plan.\n"
+            "</instructions_for_this_turn>\n"
+            "</resume_context>\n\n"
+            "<user_message>\n"
+        )
+
+    @staticmethod
+    def _build_planning_preamble(resume_context: dict[str, Any]) -> str:
+        """Build the system preamble for a plan-first (HITL) planning turn.
+
+        The agent must output a single markdown plan as its response and stop —
+        no file edits, no shell commands, no PR creation. The bridge captures
+        that response at end-of-turn and POSTs it to /sessions/:id/plan
+        (source=agent), which flips the session into awaiting_approval. The
+        user (web UI / Linear / GitHub / Slack) then approves or rejects.
+
+        Wrapped in XML tags per Anthropic's prompting guidance — see the resume
+        preamble docstring for the rationale.
+        """
+        current_plan = resume_context.get("currentPlan") if resume_context else None
+        previous_section = ""
+        if isinstance(current_plan, dict):
+            plan_content = current_plan.get("content")
+            version = current_plan.get("version", "?")
+            if isinstance(plan_content, str) and plan_content.strip():
+                # Escape XML special chars in the prior plan body for the same
+                # reason as _build_resume_preamble: prevent a malicious
+                # `</previous_plan>` from breaking out of the wrapper. The
+                # version attribute uses `quoteattr` so embedded `"` characters
+                # can't break the attribute boundary.
+                previous_section = (
+                    f"<previous_plan version={xml_quoteattr(str(version))}>\n"
+                    f"{xml_escape(plan_content.strip())}\n"
+                    "</previous_plan>\n"
+                    "<amendment_instruction>\n"
+                    "Amend the previous plan based on the new user instruction below. "
+                    "Reuse what is still correct; do not start from scratch unless the "
+                    "instruction explicitly asks.\n"
+                    "</amendment_instruction>\n"
+                )
+        return (
+            "<planning_turn>\n"
+            "<instructions>\n"
+            "This session is in plan mode. Your output for this turn MUST be a single "
+            "markdown plan that the user will approve, reject, or amend before any code "
+            "is written. Do not edit files, do not run shell commands, do not open a PR. "
+            "Read-only investigation tools (Read, Grep, Glob) are fine when you genuinely "
+            "need to verify an assumption.\n\n"
+            "Structure your plan as:\n"
+            "1. A one-sentence restatement of the user's goal.\n"
+            "2. An ordered list of 3-8 concrete steps (file paths, functions, decisions).\n"
+            '3. A short "Risks & open questions" section if anything is uncertain.\n\n'
+            "Once you have produced the plan, end your turn. Implementation will only run "
+            "after explicit human approval.\n"
+            "</instructions>\n"
+            f"{previous_section}"
+            "</planning_turn>\n\n"
+            "<user_message>\n"
+        )
+
     async def _handle_prompt(self, cmd: dict[str, Any]) -> None:
         """Handle prompt command - send to OpenCode and stream response."""
         message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
@@ -594,15 +727,47 @@ class AgentBridge:
         model = cmd.get("model")
         reasoning_effort = cmd.get("reasoningEffort")
         author_data = cmd.get("author", {})
+        resume_context = cmd.get("resumeContext") or {}
+        plan_mode = bool(cmd.get("planMode"))
         start_time = time.time()
         outcome = "success"
+
+        if plan_mode:
+            # Planning turn: instruct the agent to output a markdown plan and stop.
+            # We do NOT inject the impl-mode restate-and-confirm — the bridge will
+            # capture the textual response and POST it as the new plan version.
+            # The model used is the session's selected model — the runtime stays
+            # provider-agnostic and does not override which LLM produces the plan.
+            safe_content = self._escape_user_message_close(content)
+            content = (
+                self._build_planning_preamble(resume_context) + safe_content + "\n</user_message>"
+            )
+            preamble_kind = "planning"
+        else:
+            preamble = self._build_resume_preamble(resume_context)
+            if preamble:
+                safe_content = self._escape_user_message_close(content)
+                content = preamble + safe_content + "\n</user_message>"
+                preamble_kind = "resume"
+            else:
+                preamble_kind = "none"
 
         self.log.info(
             "prompt.start",
             message_id=message_id,
             model=model,
             reasoning_effort=reasoning_effort,
+            preamble=preamble_kind,
+            plan_mode=plan_mode,
         )
+
+        # Hold the agent's latest cumulative token snapshot during the turn so
+        # we can capture it as a plan when planMode=True. OpenCode emits each
+        # token event with the FULL accumulated text since the start of the
+        # response, so we overwrite this single-element buffer rather than
+        # appending — appending would compound prefixes and produce a corrupt
+        # plan body at end-of-turn.
+        text_buffer: list[str] = []
 
         try:
             scm_name = author_data.get("scmName")
@@ -625,10 +790,30 @@ class AgentBridge:
                 if event.get("type") == "error":
                     had_error = True
                     error_message = event.get("error")
+                if plan_mode and event.get("type") == "token":
+                    token_text = event.get("content")
+                    if isinstance(token_text, str):
+                        # Cumulative snapshot: overwrite, don't append.
+                        text_buffer[:] = [token_text]
                 await self._send_event(event)
 
             if had_error:
                 outcome = "error"
+
+            if plan_mode and not had_error:
+                # Best-effort: persist the agent's response as the new plan version.
+                # If this fails, we still complete the turn — the user will see the
+                # text response and can re-trigger via the bots/UI.
+                plan_text = "".join(text_buffer).strip()
+                if plan_text:
+                    try:
+                        await self._save_agent_plan(plan_text, message_id)
+                    except Exception as plan_err:
+                        self.log.error(
+                            "plan.save_failed",
+                            exc=plan_err,
+                            message_id=message_id,
+                        )
 
             await self._send_event(
                 {
@@ -661,27 +846,80 @@ class AgentBridge:
                 duration_ms=duration_ms,
             )
 
+    async def _save_agent_plan(self, content: str, message_id: str) -> None:
+        """POST the agent's plan content to the control plane.
+
+        Used at end-of-turn when planMode=True. The control plane will flip the
+        session into awaiting_approval (since plan_mode=1) and broadcast a
+        plan_status event to subscribed clients.
+        """
+        if not self.http_client:
+            raise RuntimeError("HTTP client not initialized")
+
+        url = f"{self.control_plane_url}/sessions/{self.session_id}/plan"
+        headers = {
+            "Authorization": f"Bearer {self.auth_token}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "content": content,
+            "source": "agent",
+            "messageId": message_id,
+        }
+        resp = await self.http_client.post(
+            url, json=payload, headers=headers, timeout=PLAN_SAVE_TIMEOUT_SECONDS
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f"control plane refused plan save: HTTP {resp.status_code} {resp.text[:300]}"
+            )
+        self.log.info(
+            "plan.saved",
+            message_id=message_id,
+            http_status=resp.status_code,
+            bytes=len(content),
+        )
+
     async def _create_opencode_session(self) -> None:
         """Create a new OpenCode session."""
         if not self.http_client:
             raise RuntimeError("HTTP client not initialized")
 
-        resp = await self.http_client.post(
-            f"{self.opencode_base_url}/session",
-            json={},
-            timeout=self.OPENCODE_REQUEST_TIMEOUT,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        # First session creation may trigger OpenCode plugin dependency reification
+        # (for example opencode-plugin-langfuse), which can exceed normal request timeouts.
+        for attempt in range(1, self.OPENCODE_SESSION_CREATE_MAX_ATTEMPTS + 1):
+            try:
+                resp = await self.http_client.post(
+                    f"{self.opencode_base_url}/session",
+                    json={},
+                    timeout=self.OPENCODE_SESSION_CREATE_TIMEOUT_SECONDS,
+                )
+                resp.raise_for_status()
+                data = resp.json()
 
-        self.opencode_session_id = data.get("id")
-        self.log.info(
-            "opencode.session.ensure",
-            opencode_session_id=self.opencode_session_id,
-            action="created",
-        )
+                self.opencode_session_id = data.get("id")
+                self.log.info(
+                    "opencode.session.ensure",
+                    opencode_session_id=self.opencode_session_id,
+                    action="created",
+                )
+                self._has_sent_prompt_in_session = False
 
-        await self._save_session_id()
+                await self._save_session_id()
+                return
+            except httpx.TimeoutException as e:
+                if attempt == self.OPENCODE_SESSION_CREATE_MAX_ATTEMPTS:
+                    raise
+
+                retry_delay_seconds = self.HTTP_RETRY_BACKOFF_SECONDS * attempt
+                self.log.warn(
+                    "opencode.session.create_retry",
+                    attempt=attempt,
+                    max_attempts=self.OPENCODE_SESSION_CREATE_MAX_ATTEMPTS,
+                    delay_s=retry_delay_seconds,
+                    error_type=type(e).__name__,
+                )
+                await asyncio.sleep(retry_delay_seconds)
 
     @staticmethod
     def _extract_error_message(error: object) -> str | None:
@@ -769,6 +1007,7 @@ class AgentBridge:
         model: str | None,
         opencode_message_id: str | None = None,
         reasoning_effort: str | None = None,
+        include_prompt_suffix: bool = True,
     ) -> dict[str, Any]:
         """Build request body for OpenCode prompt requests.
 
@@ -780,7 +1019,18 @@ class AgentBridge:
                                  and assistant responses will have parentID pointing to it.
             reasoning_effort: Optional reasoning effort level (e.g., "high", "max")
         """
-        request_body: dict[str, Any] = {"parts": [{"type": "text", "text": content}]}
+        prompt_suffix = os.environ.get("PROMPT_SUFFIX", "").strip() if include_prompt_suffix else ""
+        # Wrap the operator-controlled PROMPT_SUFFIX in <system_instruction> so
+        # the agent can cleanly separate the deployment directive from the user
+        # content above. Defensive escape isn't needed here — PROMPT_SUFFIX is
+        # not user input — but the wrapping matches our convention everywhere
+        # else (resume_context, planning_turn, user_message).
+        prompt_text = (
+            f"{content}\n\n<system_instruction>\n{prompt_suffix}\n</system_instruction>"
+            if prompt_suffix
+            else content
+        )
+        request_body: dict[str, Any] = {"parts": [{"type": "text", "text": prompt_text}]}
 
         if opencode_message_id:
             request_body["messageID"] = opencode_message_id
@@ -890,8 +1140,13 @@ class AgentBridge:
             raise RuntimeError("OpenCode session not initialized")
 
         opencode_message_id = OpenCodeIdentifier.ascending("message")
+        include_prompt_suffix = await self._should_include_prompt_suffix()
         request_body = self._build_prompt_request_body(
-            content, model, opencode_message_id, reasoning_effort
+            content,
+            model,
+            opencode_message_id,
+            reasoning_effort,
+            include_prompt_suffix=include_prompt_suffix,
         )
 
         sse_url = f"{self.opencode_base_url}/event"
@@ -913,6 +1168,12 @@ class AgentBridge:
 
         start_time = time.time()
         loop = asyncio.get_running_loop()
+        last_event_at = loop.time()
+        last_event_type = "none"
+        event_type_counts: dict[str, int] = {}
+        heartbeat_count = 0
+        event_count = 0
+        watchdog_task: asyncio.Task[None] | None = None
 
         def buffer_part(oc_msg_id: str, part: dict[str, Any], delta: Any) -> None:
             nonlocal pending_parts_total
@@ -994,7 +1255,23 @@ class AgentBridge:
                     ev["isSubtask"] = True
             return events
 
+        async def emit_watchdog() -> None:
+            while True:
+                await asyncio.sleep(self.SSE_WATCHDOG_INTERVAL_SECONDS)
+                now_loop = loop.time()
+                self.log.info(
+                    "bridge.sse_watchdog",
+                    message_id=message_id,
+                    elapsed_ms=int((time.time() - start_time) * 1000),
+                    last_event_type=last_event_type,
+                    last_event_age_ms=int((now_loop - last_event_at) * 1000),
+                    heartbeat_count=heartbeat_count,
+                    pending_parts_total=pending_parts_total,
+                    tracked_child_sessions=len(tracked_child_session_ids),
+                )
+
         try:
+            watchdog_task = asyncio.create_task(emit_watchdog())
             deadline = asyncio.get_running_loop().time() + self.sse_inactivity_timeout
             async with asyncio.timeout_at(deadline) as timeout_ctx:
                 async with self.http_client.stream(
@@ -1008,10 +1285,24 @@ class AgentBridge:
                         )
 
                     prompt_start = loop.time()
+                    prompt_request_start = loop.time()
+                    self.log.info(
+                        "bridge.prompt_async_request_start",
+                        message_id=message_id,
+                        timeout_ms=int(self.OPENCODE_REQUEST_TIMEOUT * 1000),
+                    )
                     prompt_response = await self.http_client.post(
                         async_url,
                         json=request_body,
                         timeout=self.OPENCODE_REQUEST_TIMEOUT,
+                    )
+                    prompt_request_latency_ms = int((loop.time() - prompt_request_start) * 1000)
+                    self.log.info(
+                        "bridge.prompt_async_request_complete",
+                        message_id=message_id,
+                        status_code=prompt_response.status_code,
+                        latency_ms=prompt_request_latency_ms,
+                        response_size_bytes=len(prompt_response.content or b""),
                     )
                     if prompt_response.status_code not in [200, 204]:
                         error_body = prompt_response.text
@@ -1023,10 +1314,37 @@ class AgentBridge:
                         raise RuntimeError(
                             f"Async prompt failed: {prompt_response.status_code} - {error_body}"
                         )
+                    self._has_sent_prompt_in_session = True
 
                     async for event in self._parse_sse_stream(sse_response, timeout_ctx):
                         event_type = event.get("type")
                         props = event.get("properties", {})
+                        event_type_name = event_type if isinstance(event_type, str) else "unknown"
+                        event_session_id = props.get("sessionID") or props.get("part", {}).get(
+                            "sessionID"
+                        )
+                        now_loop = loop.time()
+                        since_last_chunk_ms = int((now_loop - last_event_at) * 1000)
+                        last_event_at = now_loop
+                        last_event_type = event_type_name
+                        event_type_counts[event_type_name] = (
+                            event_type_counts.get(event_type_name, 0) + 1
+                        )
+                        event_count += 1
+                        if event_type_name == "server.heartbeat":
+                            heartbeat_count += 1
+
+                        if event_count % self.SSE_EVENT_LOG_SAMPLE_EVERY == 0:
+                            self.log.info(
+                                "bridge.sse_event_received",
+                                message_id=message_id,
+                                event_type=event_type_name,
+                                event_session_id=event_session_id,
+                                raw_event_bytes=len(
+                                    json.dumps(event, separators=(",", ":"), ensure_ascii=False)
+                                ),
+                                since_last_chunk_ms=since_last_chunk_ms,
+                            )
 
                         if event_type == "server.connected":
                             pass
@@ -1254,6 +1572,7 @@ class AgentBridge:
 
         except TimeoutError:
             elapsed = time.time() - start_time
+            now_loop = loop.time()
             self.log.error(
                 "bridge.sse_inactivity_timeout",
                 timeout_name="sse_inactivity",
@@ -1261,6 +1580,18 @@ class AgentBridge:
                 elapsed_ms=int(elapsed * 1000),
                 operation="bridge.sse",
                 message_id=message_id,
+            )
+            self.log.error(
+                "bridge.sse_timeout_snapshot",
+                message_id=message_id,
+                last_event_type=last_event_type,
+                last_event_age_ms=int((now_loop - last_event_at) * 1000),
+                heartbeat_count=heartbeat_count,
+                event_type_counts=event_type_counts,
+                allowed_assistant_msg_ids_count=len(allowed_assistant_msg_ids),
+                pending_parts_total=pending_parts_total,
+                tracked_child_sessions=len(tracked_child_session_ids),
+                compaction_occurred=compaction_occurred,
             )
             await self._request_opencode_stop(reason="inactivity_timeout")
             async for final_event in self._fetch_final_message_state(
@@ -1279,6 +1610,11 @@ class AgentBridge:
         except httpx.ReadError as e:
             self.log.error("bridge.sse_read_error", exc=e)
             raise SSEConnectionError(f"SSE read error: {e}")
+        finally:
+            if watchdog_task:
+                watchdog_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watchdog_task
 
     async def _fetch_final_message_state(
         self,
@@ -1642,11 +1978,57 @@ class AgentBridge:
                                 opencode_session_id=self.opencode_session_id,
                             )
                             self.opencode_session_id = None
+                            self._has_sent_prompt_in_session = None
+                        else:
+                            self._has_sent_prompt_in_session = await self._session_has_user_prompt()
                     except Exception:
                         self.opencode_session_id = None
+                        self._has_sent_prompt_in_session = None
 
             except Exception as e:
                 self.log.error("opencode.session.load_error", exc=e)
+
+    async def _session_has_user_prompt(self) -> bool:
+        """Return True when the current OpenCode session already has a user message."""
+        if not self.http_client or not self.opencode_session_id:
+            return False
+
+        messages_url = f"{self.opencode_base_url}/session/{self.opencode_session_id}/message"
+        try:
+            response = await self.http_client.get(
+                messages_url,
+                timeout=self.OPENCODE_REQUEST_TIMEOUT,
+            )
+            if response.status_code != 200:
+                self.log.warn(
+                    "opencode.session.messages_unavailable",
+                    status_code=response.status_code,
+                )
+                return False
+
+            messages = response.json()
+            if not isinstance(messages, list):
+                return False
+
+            return any(
+                isinstance(msg, dict)
+                and isinstance(msg.get("info"), dict)
+                and msg.get("info", {}).get("role") == "user"
+                for msg in messages
+            )
+        except Exception as e:
+            self.log.warn("opencode.session.messages_lookup_error", exc=e)
+            return False
+
+    async def _should_include_prompt_suffix(self) -> bool:
+        """Use PROMPT_SUFFIX only on the first prompt in the OpenCode session."""
+        if not os.environ.get("PROMPT_SUFFIX", "").strip():
+            return False
+
+        if self._has_sent_prompt_in_session is None:
+            self._has_sent_prompt_in_session = await self._session_has_user_prompt()
+
+        return not self._has_sent_prompt_in_session
 
     async def _save_session_id(self) -> None:
         """Save OpenCode session ID to file for persistence."""

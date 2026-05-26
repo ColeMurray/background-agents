@@ -56,7 +56,12 @@ interface UseSessionSocketReturn {
   isProcessing: boolean;
   hasMoreHistory: boolean;
   loadingHistory: boolean;
-  sendPrompt: (content: string, model?: string, reasoningEffort?: string) => void;
+  sendPrompt: (
+    content: string,
+    model?: string,
+    reasoningEffort?: string,
+    planMode?: boolean
+  ) => void;
   stopExecution: () => void;
   sendTyping: () => void;
   reconnect: () => void;
@@ -263,8 +268,18 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
         ]);
       }
       setEvents((prev) => [...prev, event]);
+    } else if (event.type === "user_message" && event.messageId) {
+      // user_message has a stable server-assigned messageId; the broadcast
+      // can reach this tab more than once (e.g. StrictMode/HMR leaving an
+      // orphan WS subscribed) so dedupe instead of appending blindly.
+      const incomingId = event.messageId;
+      setEvents((prev) =>
+        prev.some((e) => e.type === "user_message" && e.messageId === incomingId)
+          ? prev
+          : [...prev, event]
+      );
     } else {
-      // Other events (tool_call, user_message, git_sync, etc.) - add normally
+      // Other events (tool_call, git_sync, etc.) - add normally
       setEvents((prev) => [...prev, event]);
     }
 
@@ -466,6 +481,28 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
           mutate(SIDEBAR_SESSIONS_KEY);
           break;
 
+        case "plan_status":
+          setSessionState((prev) => {
+            if (!prev) return null;
+            const next = {
+              ...prev,
+              planApprovalStatus: data.status,
+              currentPlan: data.plan,
+            };
+            // Approval also commits an impl-model / effort / cost-snapshot
+            // change in the same transaction. Patch only when the server sent
+            // them so reject (which omits them) doesn't wipe existing state.
+            if (data.model !== undefined) next.model = data.model;
+            if (data.reasoningEffort !== undefined) {
+              next.reasoningEffort = data.reasoningEffort ?? undefined;
+            }
+            if (data.planCostSnapshot !== undefined) {
+              next.planCostSnapshot = data.planCostSnapshot;
+            }
+            return next;
+          });
+          break;
+
         case "child_session_update":
           // Child session spawned or changed status — revalidate child list and sidebar
           mutate(`/api/sessions/${sessionId}/children`);
@@ -647,45 +684,50 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
     };
   }, [sessionId, handleMessage, fetchWsToken]);
 
-  const sendPrompt = useCallback((content: string, model?: string, reasoningEffort?: string) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      console.error("WebSocket not connected");
-      return;
-    }
+  const sendPrompt = useCallback(
+    (content: string, model?: string, reasoningEffort?: string, planMode?: boolean) => {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        console.error("WebSocket not connected");
+        return;
+      }
 
-    if (!subscribedRef.current) {
-      console.error("Not subscribed yet, waiting...");
-      // Retry after a short delay
-      setTimeout(
-        () => sendPrompt(content, model, reasoningEffort),
-        PROMPT_SUBSCRIPTION_RETRY_DELAY_MS
-      );
-      return;
-    }
+      if (!subscribedRef.current) {
+        console.error("Not subscribed yet, waiting...");
+        // Retry after a short delay
+        setTimeout(
+          () => sendPrompt(content, model, reasoningEffort, planMode),
+          PROMPT_SUBSCRIPTION_RETRY_DELAY_MS
+        );
+        return;
+      }
 
-    console.log("Sending prompt", {
-      contentLength: content.length,
-      model,
-      reasoningEffort,
-    });
-
-    // Optimistically set isProcessing for immediate feedback
-    // Server will confirm with processing_status message
-    setSessionState((prev) => (prev ? { ...prev, isProcessing: true } : null));
-
-    // Note: user_message event is NOT inserted optimistically here.
-    // The server writes a user_message event to the events table and broadcasts it
-    // to all clients (including the sender), which handles both display and multiplayer.
-
-    wsRef.current.send(
-      JSON.stringify({
-        type: "prompt",
-        content,
-        model, // Include model for per-message model switching
+      console.log("Sending prompt", {
+        contentLength: content.length,
+        model,
         reasoningEffort,
-      })
-    );
-  }, []);
+        planMode,
+      });
+
+      // Optimistically set isProcessing for immediate feedback
+      // Server will confirm with processing_status message
+      setSessionState((prev) => (prev ? { ...prev, isProcessing: true } : null));
+
+      // Note: user_message event is NOT inserted optimistically here.
+      // The server writes a user_message event to the events table and broadcasts it
+      // to all clients (including the sender), which handles both display and multiplayer.
+
+      wsRef.current.send(
+        JSON.stringify({
+          type: "prompt",
+          content,
+          model, // Include model for per-message model switching
+          reasoningEffort,
+          planMode, // When true, the DO turns plan_mode on for this turn
+        })
+      );
+    },
+    []
+  );
 
   const stopExecution = useCallback(() => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
