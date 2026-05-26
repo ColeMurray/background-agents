@@ -142,6 +142,81 @@ export interface LinearApiClient {
   accessToken: string;
 }
 
+function linearRichTextToPlainText(bodyData: unknown): string {
+  const chunks: string[] = [];
+
+  function visit(node: unknown): void {
+    if (node === null || node === undefined) return;
+
+    if (typeof node === "string") {
+      chunks.push(node);
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      for (const child of node) {
+        visit(child);
+      }
+      return;
+    }
+
+    if (typeof node !== "object") return;
+
+    const richTextNode = node as {
+      type?: unknown;
+      text?: unknown;
+      content?: unknown;
+    };
+
+    if (richTextNode.type === "hardBreak") {
+      chunks.push("\n");
+    }
+
+    if (typeof richTextNode.text === "string") {
+      chunks.push(richTextNode.text);
+    }
+
+    visit(richTextNode.content);
+
+    if (
+      richTextNode.type === "paragraph" ||
+      richTextNode.type === "heading" ||
+      richTextNode.type === "blockquote" ||
+      richTextNode.type === "codeBlock" ||
+      richTextNode.type === "listItem"
+    ) {
+      chunks.push("\n");
+    }
+  }
+
+  visit(bodyData);
+
+  return chunks
+    .join("")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+export function normalizeLinearCommentBody(comment: {
+  body?: unknown;
+  bodyData?: unknown;
+}): string {
+  if (typeof comment.body === "string" && comment.body.trim().length > 0) {
+    return comment.body;
+  }
+
+  let parsedBodyData = comment.bodyData;
+  if (typeof parsedBodyData === "string") {
+    try {
+      parsedBodyData = JSON.parse(parsedBodyData) as unknown;
+    } catch {
+      return String(comment.bodyData);
+    }
+  }
+
+  return linearRichTextToPlainText(parsedBodyData);
+}
+
 export async function getLinearClient(env: Env, orgId: string): Promise<LinearApiClient | null> {
   const token = await getOAuthToken(env, orgId);
   if (!token) return null;
@@ -166,7 +241,15 @@ async function linearGraphQL(
   });
 
   if (!res.ok) {
-    throw new Error(`Linear API error: ${res.status}`);
+    let responseBody = "";
+    try {
+      responseBody = await res.text();
+    } catch {
+      // Ignore body parsing failures for non-OK responses.
+    }
+    throw new Error(
+      `Linear API error: ${res.status}${responseBody ? ` - ${responseBody.slice(0, 300)}` : ""}`
+    );
   }
 
   const json = (await res.json()) as Record<string, unknown>;
@@ -238,6 +321,7 @@ export async function fetchIssueDetails(
           comments(first: 10, orderBy: createdAt) {
             nodes {
               body
+              bodyData
               user { name }
             }
           }
@@ -263,8 +347,14 @@ export async function fetchIssueDetails(
       assignee: issue.assignee as { id: string; name: string } | null,
       team: issue.team as { id: string; key: string; name: string },
       comments:
-        (issue.comments as { nodes: Array<{ body: string; user?: { name: string } }> })?.nodes ||
-        [],
+        (
+          issue.comments as {
+            nodes: Array<{ body?: unknown; bodyData?: unknown; user?: { name: string } }>;
+          }
+        )?.nodes.map((comment) => ({
+          body: normalizeLinearCommentBody(comment),
+          user: comment.user,
+        })) || [],
     };
   } catch (err) {
     log.error("linear.fetch_issue_details", {
@@ -314,6 +404,15 @@ export async function getRepoSuggestions(
   agentSessionId: string,
   candidateRepos: Array<{ hostname: string; repositoryFullName: string }>
 ): Promise<Array<{ repositoryFullName: string; confidence: number }>> {
+  const normalizedCandidates = candidateRepos
+    .filter((repo) => repo.hostname === "github.com")
+    .filter((repo) => repo.repositoryFullName.includes("/"))
+    .slice(0, 100);
+
+  if (normalizedCandidates.length === 0) {
+    return [];
+  }
+
   try {
     const data = await linearGraphQL(
       client,
@@ -331,7 +430,7 @@ export async function getRepoSuggestions(
         }
       }
     `,
-      { issueId, agentSessionId, candidateRepositories: candidateRepos }
+      { issueId, agentSessionId, candidateRepositories: normalizedCandidates }
     );
 
     const result = data as {

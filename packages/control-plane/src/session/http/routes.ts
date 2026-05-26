@@ -34,6 +34,11 @@ export interface SessionInternalRouteHandlers {
   childSummary: SessionInternalRouteHandler;
   cancel: SessionInternalRouteHandler;
   childSessionUpdate: SessionInternalRouteHandler;
+  savePlan: SessionInternalRouteHandler;
+  getCurrentPlan: SessionInternalRouteHandler;
+  listPlans: SessionInternalRouteHandler;
+  approvePlan: SessionInternalRouteHandler;
+  rejectPlan: SessionInternalRouteHandler;
 }
 
 /**
@@ -90,5 +95,10 @@ export function createSessionInternalRoutes(
       path: SessionInternalPaths.childSessionUpdate,
       handler: handlers.childSessionUpdate,
     },
+    { method: "POST", path: SessionInternalPaths.plan, handler: handlers.savePlan },
+    { method: "GET", path: SessionInternalPaths.plan, handler: handlers.getCurrentPlan },
+    { method: "GET", path: SessionInternalPaths.plans, handler: handlers.listPlans },
+    { method: "POST", path: SessionInternalPaths.planApprove, handler: handlers.approvePlan },
+    { method: "POST", path: SessionInternalPaths.planReject, handler: handlers.rejectPlan },
   ];
 }

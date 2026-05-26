@@ -35,6 +35,73 @@ export type ValidModel = (typeof VALID_MODELS)[number];
 export const DEFAULT_MODEL: ValidModel = "anthropic/claude-sonnet-4-6";
 
 /**
+ * Default model used for plan-mode planning turns.
+ *
+ * Distinct from DEFAULT_MODEL: planning benefits from a more capable model
+ * since the resulting plan steers the subsequent implementation. The
+ * implementation phase falls back to DEFAULT_MODEL (or the user's chosen
+ * implementation model at approval time).
+ */
+export const DEFAULT_PLAN_MODEL: ValidModel = "anthropic/claude-opus-4-6";
+
+/**
+ * Map from short alias used in labels to the canonical provider/model
+ * identifier. Used by Linear/GitHub label parsing — labels are dash-separated
+ * (Linear forbids `:` in label names, so we unified on dashes everywhere):
+ * `model-<alias>`, `plan-<alias>`, `build-<alias>`, `review-<alias>`.
+ *
+ * Keep aliases short and memorable — they are user-facing.
+ */
+export const MODEL_ALIAS_MAP: Record<string, ValidModel> = {
+  haiku: "anthropic/claude-haiku-4-5",
+  sonnet: "anthropic/claude-sonnet-4-5",
+  opus: "anthropic/claude-opus-4-5",
+  "opus-4-6": "anthropic/claude-opus-4-6",
+  "opus-4-7": "anthropic/claude-opus-4-7",
+  "gpt-5.2": "openai/gpt-5.2",
+  "gpt-5.4": "openai/gpt-5.4",
+  "gpt-5.5": "openai/gpt-5.5",
+  "gpt-5.2-codex": "openai/gpt-5.2-codex",
+  "gpt-5.3-codex": "openai/gpt-5.3-codex",
+};
+
+/**
+ * Parse a plan approve/reject command from a comment body (after any bot
+ * @mention has been stripped). Returns `null` when the body is a regular
+ * follow-up message.
+ *
+ * Recognized forms (case-insensitive, leading whitespace ignored):
+ *   - `approve`            — accept the current plan; impl uses session.model
+ *     (set from the `model-<alias>` label at session creation, else default)
+ *   - `reject`             — discard the plan; session pauses
+ *   - `reject <reason>`    — reason captured as the trailing text
+ *
+ * The implementation model is decided by labels at session-creation time,
+ * not by an inline override here, so there is intentionally no per-approve
+ * model picker via comments. Web and Slack expose their own picker UI.
+ *
+ * Shared between the Linear and GitHub bots so command syntax stays in sync.
+ */
+export type PlanCommand = { command: "approve" } | { command: "reject"; reason: string | null };
+
+export function parsePlanCommand(body: string): PlanCommand | null {
+  const trimmed = body.trim();
+  if (!trimmed) return null;
+
+  if (/^approve\s*$/i.test(trimmed)) {
+    return { command: "approve" };
+  }
+
+  const rejectMatch = trimmed.match(/^reject(?:\s+(.*))?$/is);
+  if (rejectMatch) {
+    const reason = rejectMatch[1]?.trim();
+    return { command: "reject", reason: reason && reason.length > 0 ? reason : null };
+  }
+
+  return null;
+}
+
+/**
  * Reasoning effort levels supported across providers.
  *
  * - "none": No reasoning (OpenAI only)

@@ -17,6 +17,7 @@ export interface Env {
   CONTROL_PLANE_URL: string;
   WEB_APP_URL: string;
   DEFAULT_MODEL: string;
+  DEFAULT_PLAN_MODEL?: string;
   APP_NAME?: string;
 
   // OAuth app credentials
@@ -32,6 +33,7 @@ export interface Env {
   ANTHROPIC_API_KEY: string;
   INTERNAL_CALLBACK_SECRET?: string;
   LOG_LEVEL?: string;
+  LINEAR_COMMENT_MAX_LENGTH?: string;
 }
 
 // ─── OAuth Types ─────────────────────────────────────────────────────────────
@@ -203,7 +205,7 @@ export interface AgentSessionWebhook {
   agentSession: {
     id: string;
     issue?: AgentSessionWebhookIssue;
-    comment?: { body: string };
+    comment?: { body?: string; bodyData?: unknown };
     promptContext?: string;
   };
   agentActivity?: {

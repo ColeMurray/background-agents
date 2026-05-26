@@ -25,6 +25,10 @@ export const SessionInternalPaths = {
   updateTitle: "/internal/update-title",
   cancel: "/internal/cancel",
   childSessionUpdate: "/internal/child-session-update",
+  plan: "/internal/plan",
+  plans: "/internal/plans",
+  planApprove: "/internal/plan/approve",
+  planReject: "/internal/plan/reject",
 } as const;
 
 export type SessionInternalPath = (typeof SessionInternalPaths)[keyof typeof SessionInternalPaths];

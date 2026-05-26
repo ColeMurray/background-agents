@@ -49,6 +49,17 @@ export interface SessionInitInput {
   spawnDepth?: number;
   automationId?: string | null;
   automationRunId?: string | null;
+
+  /**
+   * When true, the session is gated on an explicit human approval of a plan
+   * before any implementation step runs. See packages/.../plan.service.ts.
+   */
+  planMode?: boolean;
+  /**
+   * Model used for planning turns. Ignored when planMode is false. When
+   * unspecified and planMode is true, the DO falls back to DEFAULT_PLAN_MODEL.
+   */
+  planModel?: string;
 }
 
 /**
@@ -127,6 +138,8 @@ export async function initializeSession(
           parentSessionId: input.parentSessionId,
           spawnSource: input.spawnSource,
           spawnDepth: input.spawnDepth,
+          planMode: input.planMode === true,
+          planModel: input.planMode === true ? (input.planModel ?? null) : null,
         }),
       })
     );
