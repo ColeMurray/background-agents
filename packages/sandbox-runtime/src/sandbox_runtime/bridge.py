@@ -22,22 +22,23 @@ import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, ClassVar
-from xml.sax.saxutils import escape as xml_escape, quoteattr as xml_quoteattr
+from xml.sax.saxutils import escape as xml_escape
+from xml.sax.saxutils import quoteattr as xml_quoteattr
 
 import httpx
 import websockets
 from websockets import ClientConnection, State
 from websockets.exceptions import InvalidStatus
 
-# How long the sandbox waits for the control plane to acknowledge a plan
-# save before raising. Plan saves run end-of-turn and shouldn't block the
-# event loop indefinitely if the control plane is unresponsive.
-PLAN_SAVE_TIMEOUT_SECONDS = 30.0
-
 from .log_config import configure_logging, get_logger
 from .types import GitUser
 
 configure_logging()
+
+# How long the sandbox waits for the control plane to acknowledge a plan
+# save before raising. Plan saves run end-of-turn and shouldn't block the
+# event loop indefinitely if the control plane is unresponsive.
+PLAN_SAVE_TIMEOUT_SECONDS = 30.0
 
 # Fallback git identity when prompt author has no SCM name/email configured.
 # Matches the co-author trailer used in generateCommitMessage (shared/git.ts).
