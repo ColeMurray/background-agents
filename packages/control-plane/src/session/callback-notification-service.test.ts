@@ -643,4 +643,186 @@ describe("CallbackNotificationService", () => {
       expect(slackFetch).not.toHaveBeenCalled();
     });
   });
+
+  describe("notifyPlanStatus", () => {
+    const PLAN = {
+      id: "plan-1",
+      version: 3,
+      content: "step 1\nstep 2",
+      createdByAuthorId: null,
+      createdByMessageId: "msg-1",
+      source: "agent" as const,
+      createdAt: 1_700_000_000_000,
+    };
+
+    it("skips when the trigger message has no callback context", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue(null);
+
+      await harness.service.notifyPlanStatus({
+        triggerMessageId: "msg-1",
+        plan: PLAN,
+        verdict: "approved",
+        approverAuthorId: "web:user-1",
+      });
+
+      const slackFetch = (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
+      expect(slackFetch).not.toHaveBeenCalled();
+    });
+
+    it("skips when the approver source matches the message source (same-channel)", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({ channel: "C1", threadTs: "1.2" }),
+        source: "slack",
+      });
+
+      await harness.service.notifyPlanStatus({
+        triggerMessageId: "msg-1",
+        plan: PLAN,
+        verdict: "approved",
+        approverAuthorId: "slack:U999",
+      });
+
+      const slackFetch = (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
+      expect(slackFetch).not.toHaveBeenCalled();
+      expect(harness.log.debug).toHaveBeenCalledWith(
+        "callback.plan_status",
+        expect.objectContaining({ skip_reason: "same_channel" })
+      );
+    });
+
+    it("fires the callback when the verdict comes from a different channel", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({ channel: "C1", threadTs: "1.2" }),
+        source: "slack",
+      });
+
+      const fetchMock = vi.mocked(
+        (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
+      );
+      fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+
+      await harness.service.notifyPlanStatus({
+        triggerMessageId: "msg-1",
+        plan: PLAN,
+        verdict: "approved",
+        approverAuthorId: "web:user-1",
+        implementationModel: "anthropic/claude-sonnet-4-6",
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://internal/callbacks/plan-status",
+        expect.objectContaining({ method: "POST" })
+      );
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body).toMatchObject({
+        sessionId: "session-123",
+        planVersion: 3,
+        verdict: "approved",
+        approverAuthorId: "web:user-1",
+        implementationModel: "anthropic/claude-sonnet-4-6",
+        context: { channel: "C1", threadTs: "1.2" },
+      });
+      expect(body.signature).toEqual(expect.any(String));
+    });
+
+    it("includes the reason on a reject and routes to LINEAR_BOT for linear-sourced messages", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({ issueId: "LIN-1" }),
+        source: "linear",
+      });
+
+      const fetchMock = vi.mocked(
+        (harness.linearBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
+      );
+      fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+
+      await harness.service.notifyPlanStatus({
+        triggerMessageId: "msg-1",
+        plan: PLAN,
+        verdict: "rejected",
+        approverAuthorId: "web:user-1",
+        reason: "scope too big",
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body).toMatchObject({
+        verdict: "rejected",
+        reason: "scope too big",
+      });
+
+      const slackFetch = (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
+      expect(slackFetch).not.toHaveBeenCalled();
+    });
+
+    it("treats a missing approver prefix as 'always fire' (web-without-prefix or API caller)", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({ channel: "C1", threadTs: "1.2" }),
+        source: "slack",
+      });
+
+      const fetchMock = vi.mocked(
+        (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
+      );
+      fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+
+      await harness.service.notifyPlanStatus({
+        triggerMessageId: "msg-1",
+        plan: PLAN,
+        verdict: "approved",
+        approverAuthorId: null,
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("skips for automation-sourced messages (no user surface to update)", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({
+          source: "automation",
+          automationId: "auto-1",
+          runId: "run-1",
+        }),
+        source: "automation",
+      });
+
+      await harness.service.notifyPlanStatus({
+        triggerMessageId: "msg-1",
+        plan: PLAN,
+        verdict: "approved",
+        approverAuthorId: "web:user-1",
+      });
+
+      const slackFetch = (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
+      expect(slackFetch).not.toHaveBeenCalled();
+      expect(harness.log.debug).toHaveBeenCalledWith(
+        "callback.plan_status",
+        expect.objectContaining({ skip_reason: "automation_source" })
+      );
+    });
+
+    it("retries once on transient binding failure", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({ channel: "C1", threadTs: "1.2" }),
+        source: "slack",
+      });
+
+      const fetchMock = vi.mocked(
+        (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
+      );
+      fetchMock
+        .mockRejectedValueOnce(new Error("transient"))
+        .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+      await harness.service.notifyPlanStatus({
+        triggerMessageId: "msg-1",
+        plan: PLAN,
+        verdict: "approved",
+        approverAuthorId: "web:user-1",
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+  });
 });

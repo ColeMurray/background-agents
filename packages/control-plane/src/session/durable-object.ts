@@ -426,6 +426,27 @@ export class SessionDO extends DurableObject<Env> {
         broadcast: (message) => this.broadcast(message),
         getPlanApprovalStatus: () => this.repository.getSession()?.plan_approval_status ?? null,
         validateReasoningEffort: (model, effort) => this.validateReasoningEffort(model, effort),
+        notifyPlanVerdict: ({ plan, verdict, approverAuthorId, implementationModel, reason }) => {
+          // Cross-channel verdict notification: when approval comes from a
+          // surface that isn't the one that posted the awaiting-approval
+          // message (e.g. web approving a Slack-triggered plan), the
+          // originating bot needs an outbound callback to update its UI —
+          // its own modal/webhook never fired. Same-channel verdicts are
+          // skipped inside notifyPlanStatus (the bot's local handler
+          // already updated). Fire-and-forget; no-op when the plan has no
+          // triggering message id (API-only flow).
+          if (!plan.createdByMessageId) return;
+          this.ctx.waitUntil(
+            this.callbackService.notifyPlanStatus({
+              triggerMessageId: plan.createdByMessageId,
+              plan,
+              verdict,
+              approverAuthorId,
+              implementationModel,
+              reason,
+            })
+          );
+        },
       });
     }
     return this._plansHandler;

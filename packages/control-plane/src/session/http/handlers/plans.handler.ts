@@ -2,6 +2,7 @@ import type { PlanApprovalStatus, ServerMessage } from "@open-inspect/shared";
 import type { Logger } from "../../../logger";
 import {
   PlanApprovalError,
+  type PlanResponse,
   type PlanService,
   type SavePlanRequest,
 } from "../../services/plan.service";
@@ -19,6 +20,20 @@ export interface PlansHandlerDeps {
    * normalized effort, or null when the effort isn't valid for the model.
    */
   validateReasoningEffort: (model: string, effort: string | undefined) => string | null;
+  /**
+   * Fire-and-forget cross-channel plan verdict notification. The handler
+   * calls this after a successful approve/reject; the implementation
+   * routes the call to the originating bot when the verdict came from a
+   * different channel (e.g. web-approving a Slack-triggered plan).
+   * No-op if the bot's own modal/webhook handler already updated the UI.
+   */
+  notifyPlanVerdict?: (params: {
+    plan: PlanResponse;
+    verdict: "approved" | "rejected";
+    approverAuthorId: string | null;
+    implementationModel?: string | null;
+    reason?: string | null;
+  }) => void;
 }
 
 export interface PlansHandler {
@@ -159,6 +174,12 @@ export function createPlansHandler(deps: PlansHandlerDeps): PlansHandler {
           reasoningEffort: result.postApproval?.reasoningEffort,
           planCostSnapshot: result.postApproval?.planCostSnapshot,
         });
+        deps.notifyPlanVerdict?.({
+          plan: result.plan,
+          verdict: "approved",
+          approverAuthorId: body.approverAuthorId ?? null,
+          implementationModel,
+        });
         return Response.json({ status: result.status, plan: result.plan });
       } catch (e) {
         return errorResponseForApproval(e, deps.getLog(), "plans.approve.failed");
@@ -173,6 +194,12 @@ export function createPlansHandler(deps: PlansHandlerDeps): PlansHandler {
           reason: body.reason,
         });
         deps.broadcast({ type: "plan_status", status: result.status, plan: result.plan });
+        deps.notifyPlanVerdict?.({
+          plan: result.plan,
+          verdict: "rejected",
+          approverAuthorId: body.approverAuthorId ?? null,
+          reason: body.reason ?? null,
+        });
         return Response.json({ status: result.status, plan: result.plan });
       } catch (e) {
         return errorResponseForApproval(e, deps.getLog(), "plans.reject.failed");
