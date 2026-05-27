@@ -294,6 +294,7 @@ export class SessionRepository {
       sessionId
     );
 
+    // Intentionally consume result before reading rowsWritten so the count is final.
     result.toArray();
     return (result.rowsWritten ?? 0) > 0;
   }

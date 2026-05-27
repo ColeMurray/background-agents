@@ -494,6 +494,65 @@ class TestSSEStreaming:
         assert sent_events == [{"type": "session_title", "title": "Generated title"}]
 
     @pytest.mark.asyncio
+    async def test_emits_session_title_after_final_state(
+        self, bridge: AgentBridge, opencode_message_id: str
+    ):
+        """Should fetch final text before doing the best-effort session title lookup."""
+        http_client = bridge.http_client
+        http_client.sse_events = [
+            create_sse_event("server.connected", {}),
+            create_sse_event(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "oc-msg-1",
+                        "role": "assistant",
+                        "sessionID": "oc-session-123",
+                        "parentID": opencode_message_id,
+                    }
+                },
+            ),
+            create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
+        ]
+        http_client.get_responses = [
+            MockResponse(
+                200,
+                [
+                    {
+                        "info": {
+                            "id": "oc-msg-1",
+                            "role": "assistant",
+                            "parentID": opencode_message_id,
+                        },
+                        "parts": [
+                            {
+                                "type": "text",
+                                "id": "part-1",
+                                "text": "Final text",
+                            }
+                        ],
+                    }
+                ],
+            ),
+            MockResponse(200, {"title": "Generated title"}),
+        ]
+
+        sent_events = []
+
+        async def capture_event(event: dict[str, Any]) -> None:
+            sent_events.append(event)
+
+        bridge._send_event = capture_event  # type: ignore[method-assign]
+
+        events = []
+        async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
+            events.append(event)
+
+        assert [event["type"] for event in events] == ["token"]
+        assert events[0]["content"] == "Final text"
+        assert sent_events == [{"type": "session_title", "title": "Generated title"}]
+
+    @pytest.mark.asyncio
     async def test_handles_session_error(self, bridge: AgentBridge):
         """Should emit error event on session.error."""
         http_client = bridge.http_client

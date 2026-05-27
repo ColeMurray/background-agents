@@ -456,7 +456,7 @@ describe("createSessionLifecycleHandler", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ title: "New Title" });
     expect(repository.updateSessionTitle).toHaveBeenCalledWith("session-1", "New Title", 1234);
-    expect(syncSessionIndexTitle).toHaveBeenCalledWith("public-session-1", "New Title");
+    expect(syncSessionIndexTitle).toHaveBeenCalledWith("public-session-1", "New Title", 1234);
     expect(broadcast).toHaveBeenCalledWith({ type: "session_title", title: "New Title" });
   });
 

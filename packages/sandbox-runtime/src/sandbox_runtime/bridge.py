@@ -1183,7 +1183,6 @@ class AgentBridge:
                                             elapsed_s=round(elapsed, 1),
                                             tracked_msgs=len(allowed_assistant_msg_ids),
                                         )
-                                        await self._emit_session_title_event()
                                         async for final_event in self._fetch_final_message_state(
                                             message_id,
                                             opencode_message_id,
@@ -1192,6 +1191,7 @@ class AgentBridge:
                                             compaction_occurred=compaction_occurred,
                                         ):
                                             yield final_event
+                                        await self._emit_session_title_event()
                                         return
 
                                 elif event_type == "session.status":
@@ -1208,7 +1208,6 @@ class AgentBridge:
                                             elapsed_s=round(elapsed, 1),
                                             tracked_msgs=len(allowed_assistant_msg_ids),
                                         )
-                                        await self._emit_session_title_event()
                                         async for final_event in self._fetch_final_message_state(
                                             message_id,
                                             opencode_message_id,
@@ -1217,6 +1216,7 @@ class AgentBridge:
                                             compaction_occurred=compaction_occurred,
                                         ):
                                             yield final_event
+                                        await self._emit_session_title_event()
                                         return
 
                                 elif event_type == "session.error":
