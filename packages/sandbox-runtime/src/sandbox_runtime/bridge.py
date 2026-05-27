@@ -699,12 +699,18 @@ class AgentBridge:
 
         await self._save_session_id()
 
-    def _build_session_title_event(self, title: object) -> dict[str, str] | None:
+    def _normalize_forwardable_session_title(self, title: object) -> str | None:
         if not isinstance(title, str):
             return None
 
         trimmed = title.strip()
         if not trimmed or self.OPENCODE_DEFAULT_TITLE_RE.match(trimmed):
+            return None
+        return trimmed
+
+    def _session_title_event_once(self, title: object) -> dict[str, str] | None:
+        trimmed = self._normalize_forwardable_session_title(title)
+        if trimmed is None:
             return None
         if trimmed == self._last_forwarded_session_title:
             return None
@@ -712,9 +718,12 @@ class AgentBridge:
         self._last_forwarded_session_title = trimmed
         return {"type": "session_title", "title": trimmed}
 
-    def _session_title_event_from_opencode_update(
-        self, props: dict[str, Any]
+    def _session_title_event_from_sse(
+        self, event_type: object, props: dict[str, Any]
     ) -> dict[str, str] | None:
+        if event_type != "session.updated":
+            return None
+
         info = props.get("info")
         if not isinstance(info, dict):
             return None
@@ -723,12 +732,16 @@ class AgentBridge:
         if session_id != self.opencode_session_id:
             return None
 
-        return self._build_session_title_event(info.get("title"))
+        return self._session_title_event_once(info.get("title"))
 
     def _schedule_session_title_fallback(self) -> None:
         task = asyncio.create_task(self._emit_session_title_event_after_delay())
         self._session_title_fallback_tasks.add(task)
         task.add_done_callback(self._session_title_fallback_tasks.discard)
+
+    def _schedule_session_title_fallback_if_needed(self) -> None:
+        if not self._last_forwarded_session_title:
+            self._schedule_session_title_fallback()
 
     async def _emit_session_title_event_after_delay(self) -> None:
         await asyncio.sleep(self.SESSION_TITLE_FALLBACK_DELAY_SECONDS)
@@ -753,7 +766,7 @@ class AgentBridge:
         if not isinstance(data, dict):
             return
 
-        event = self._build_session_title_event(data.get("title"))
+        event = self._session_title_event_once(data.get("title"))
         if not event:
             return
 
@@ -1124,6 +1137,12 @@ class AgentBridge:
                                 # and non-matching events would just fall through to no-op.
                                 continue
 
+                            title_event = self._session_title_event_from_sse(event_type, props)
+                            if title_event:
+                                yield title_event
+                            if event_type == "session.updated":
+                                continue
+
                             event_session_id = props.get("sessionID") or props.get("part", {}).get(
                                 "sessionID"
                             )
@@ -1133,14 +1152,7 @@ class AgentBridge:
                                 or event_session_id == self.opencode_session_id
                                 or is_child
                             ):
-                                if event_type == "session.updated":
-                                    title_event = self._session_title_event_from_opencode_update(
-                                        props
-                                    )
-                                    if title_event:
-                                        yield title_event
-
-                                elif event_type == "message.updated":
+                                if event_type == "message.updated":
                                     info = props.get("info", {})
                                     msg_session_id = info.get("sessionID")
                                     if msg_session_id == self.opencode_session_id:
@@ -1250,8 +1262,7 @@ class AgentBridge:
                                             compaction_occurred=compaction_occurred,
                                         ):
                                             yield final_event
-                                        if not self._last_forwarded_session_title:
-                                            self._schedule_session_title_fallback()
+                                        self._schedule_session_title_fallback_if_needed()
                                         return
 
                                 elif event_type == "session.status":
@@ -1276,8 +1287,7 @@ class AgentBridge:
                                             compaction_occurred=compaction_occurred,
                                         ):
                                             yield final_event
-                                        if not self._last_forwarded_session_title:
-                                            self._schedule_session_title_fallback()
+                                        self._schedule_session_title_fallback_if_needed()
                                         return
 
                                 elif event_type == "session.error":

@@ -4,6 +4,11 @@ import type { SandboxSettings } from "@open-inspect/shared";
 import type { SandboxStatus, SessionStatus, SpawnSource } from "../../../types";
 import type { SessionRepository } from "../../repository";
 import { getValidModelOrDefault, isValidModel } from "../../../utils/models";
+import {
+  normalizeSessionTitle,
+  type SessionTitleUpdateOptions,
+  type SessionTitleUpdateResult,
+} from "../../title";
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "archived", "cancelled", "failed"]);
 
@@ -38,35 +43,6 @@ interface InitRequest {
   sandboxSettings?: SandboxSettings;
 }
 
-export interface SessionTitleUpdateOptions {
-  onlyIfUnset?: boolean;
-}
-
-export type SessionTitleValidationResult =
-  | { ok: true; title: string }
-  | { ok: false; error: string };
-
-export type SessionTitleUpdateResult =
-  | { ok: true; title: string }
-  | { ok: false; status: 400 | 404 | 409; error: string };
-
-export function normalizeSessionTitle(title: unknown): SessionTitleValidationResult {
-  if (typeof title !== "string") {
-    return { ok: false, error: "title must be a non-empty string" };
-  }
-
-  const trimmed = title.trim();
-  if (!trimmed) {
-    return { ok: false, error: "title must be a non-empty string" };
-  }
-
-  if (trimmed.length > 200) {
-    return { ok: false, error: "title must be 200 characters or fewer" };
-  }
-
-  return { ok: true, title: trimmed };
-}
-
 export interface SessionLifecycleHandlerDeps {
   repository: Pick<SessionRepository, "upsertSession" | "createSandbox" | "createParticipant">;
   getDurableObjectId: () => string;
@@ -90,6 +66,19 @@ export interface SessionLifecycleHandlerDeps {
   getSandboxSocket: () => WebSocket | null;
   sendToSandbox: (ws: WebSocket, message: string | object) => boolean;
   updateSandboxStatus: (status: SandboxStatus) => void;
+}
+
+function sessionTitleUpdateStatus(
+  result: Extract<SessionTitleUpdateResult, { ok: false }>
+): 400 | 404 | 409 {
+  switch (result.reason) {
+    case "invalid":
+      return 400;
+    case "not_found":
+      return 404;
+    case "already_set":
+      return 409;
+  }
 }
 
 export interface SessionLifecycleHandler {
@@ -255,7 +244,7 @@ export function createSessionLifecycleHandler(
 
       const result = deps.applySessionTitleUpdate(normalizedTitle.title, { onlyIfUnset: false });
       if (!result.ok) {
-        return Response.json({ error: result.error }, { status: result.status });
+        return Response.json({ error: result.error }, { status: sessionTitleUpdateStatus(result) });
       }
 
       return Response.json({ title: result.title });

@@ -80,11 +80,13 @@ import { createSandboxHandler, type SandboxHandler } from "./http/handlers/sandb
 import { createWsTokenHandler, type WsTokenHandler } from "./http/handlers/ws-token.handler";
 import {
   createSessionLifecycleHandler,
-  normalizeSessionTitle,
   type SessionLifecycleHandler,
+} from "./http/handlers/session-lifecycle.handler";
+import {
+  normalizeSessionTitle,
   type SessionTitleUpdateOptions,
   type SessionTitleUpdateResult,
-} from "./http/handlers/session-lifecycle.handler";
+} from "./title";
 import {
   createPullRequestHandler,
   type PullRequestHandler,
@@ -517,6 +519,7 @@ export class SessionDO extends DurableObject<Env> {
         callbackService: this.callbackService,
         wsManager: this.wsManager,
         broadcast: (message) => this.broadcast(message),
+        applySessionTitleUpdate: (title, options) => this.applySessionTitleUpdate(title, options),
         getIsProcessing: () => this.getIsProcessing(),
         triggerSnapshot: (reason) => this.triggerSnapshot(reason),
         reconcileSessionStatusAfterExecution: async (success) => {
@@ -1415,11 +1418,6 @@ export class SessionDO extends DurableObject<Env> {
    * Process sandbox event.
    */
   private async processSandboxEvent(event: SandboxEvent): Promise<void> {
-    if (event.type === "session_title") {
-      this.applySessionTitleUpdate(event.title, { onlyIfUnset: true });
-      return;
-    }
-
     await this.sandboxEventProcessor.processSandboxEvent(event);
   }
 
@@ -1595,20 +1593,20 @@ export class SessionDO extends DurableObject<Env> {
   ): SessionTitleUpdateResult {
     const normalized = normalizeSessionTitle(title);
     if (!normalized.ok) {
-      return { ok: false, status: 400, error: normalized.error };
+      return { ok: false, reason: "invalid", error: normalized.error };
     }
     const titleText = normalized.title;
 
     const session = this.getSession();
     if (!session) {
-      return { ok: false, status: 404, error: "Session not found" };
+      return { ok: false, reason: "not_found", error: "Session not found" };
     }
 
     const updatedAt = Math.max(Date.now(), session.updated_at + 1);
     if (options.onlyIfUnset) {
       const didUpdate = this.repository.updateSessionTitleIfUnset(session.id, titleText, updatedAt);
       if (!didUpdate) {
-        return { ok: false, status: 409, error: "Session title is already set" };
+        return { ok: false, reason: "already_set", error: "Session title is already set" };
       }
     } else {
       this.repository.updateSessionTitle(session.id, titleText, updatedAt);
