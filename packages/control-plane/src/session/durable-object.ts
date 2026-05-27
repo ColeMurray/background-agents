@@ -80,7 +80,10 @@ import { createSandboxHandler, type SandboxHandler } from "./http/handlers/sandb
 import { createWsTokenHandler, type WsTokenHandler } from "./http/handlers/ws-token.handler";
 import {
   createSessionLifecycleHandler,
+  normalizeSessionTitle,
   type SessionLifecycleHandler,
+  type SessionTitleUpdateOptions,
+  type SessionTitleUpdateResult,
 } from "./http/handlers/session-lifecycle.handler";
 import {
   createPullRequestHandler,
@@ -427,13 +430,11 @@ export class SessionDO extends DurableObject<Env> {
         getPublicSessionId: (session) => this.getPublicSessionId(session),
         getParticipantByUserId: (userId) => this.participantService.getByUserId(userId),
         transitionSessionStatus: (status) => this.transitionSessionStatus(status),
-        syncSessionIndexTitle: (sessionId, title, updatedAt) =>
-          this.syncSessionIndexTitle(sessionId, title, updatedAt),
+        applySessionTitleUpdate: (title, options) => this.applySessionTitleUpdate(title, options),
         stopExecution: (options) => this.stopExecution(options),
         getSandboxSocket: () => this.wsManager.getSandboxSocket(),
         sendToSandbox: (ws, message) => this.wsManager.send(ws, message),
         updateSandboxStatus: (status) => this.updateSandboxStatus(status),
-        broadcast: (message) => this.broadcast(message),
       });
     }
 
@@ -1415,7 +1416,7 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async processSandboxEvent(event: SandboxEvent): Promise<void> {
     if (event.type === "session_title") {
-      this.applyGeneratedSessionTitle(event.title);
+      this.applySessionTitleUpdate(event.title, { onlyIfUnset: true });
       return;
     }
 
@@ -1588,29 +1589,43 @@ export class SessionDO extends DurableObject<Env> {
     return true;
   }
 
-  private applyGeneratedSessionTitle(title: string): boolean {
-    const trimmed = title.trim();
-    if (!trimmed) return false;
+  private applySessionTitleUpdate(
+    title: string,
+    options: SessionTitleUpdateOptions = {}
+  ): SessionTitleUpdateResult {
+    const normalized = normalizeSessionTitle(title);
+    if (!normalized.ok) {
+      return { ok: false, status: 400, error: normalized.error };
+    }
+    const titleText = normalized.title;
 
     const session = this.getSession();
-    if (!session) return false;
+    if (!session) {
+      return { ok: false, status: 404, error: "Session not found" };
+    }
 
     const updatedAt = Math.max(Date.now(), session.updated_at + 1);
-    const didUpdate = this.repository.updateSessionTitleIfUnset(session.id, trimmed, updatedAt);
-    if (!didUpdate) return false;
+    if (options.onlyIfUnset) {
+      const didUpdate = this.repository.updateSessionTitleIfUnset(session.id, titleText, updatedAt);
+      if (!didUpdate) {
+        return { ok: false, status: 409, error: "Session title is already set" };
+      }
+    } else {
+      this.repository.updateSessionTitle(session.id, titleText, updatedAt);
+    }
 
     const publicSessionId = this.getPublicSessionId(session);
-    this.syncSessionIndexTitle(publicSessionId, trimmed, updatedAt);
-    this.broadcast({ type: "session_title", title: trimmed });
+    this.syncSessionIndexTitle(publicSessionId, titleText, updatedAt);
+    this.broadcast({ type: "session_title", title: titleText });
 
     if (session.parent_session_id) {
-      this.notifyParentOfChildUpdate({ ...session, title: trimmed }, publicSessionId, {
+      this.notifyParentOfChildUpdate({ ...session, title: titleText }, publicSessionId, {
         status: session.status,
-        title: trimmed,
+        title: titleText,
       });
     }
 
-    return true;
+    return { ok: true, title: titleText };
   }
 
   /**

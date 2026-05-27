@@ -135,12 +135,18 @@ class AgentBridge:
     HTTP_CONNECT_TIMEOUT = 30.0
     HTTP_DEFAULT_TIMEOUT = 30.0
     OPENCODE_REQUEST_TIMEOUT = 30.0
+    SESSION_TITLE_FALLBACK_DELAY_SECONDS = 1.0
+    SESSION_TITLE_FALLBACK_TIMEOUT_SECONDS = 2.0
     GIT_PUSH_TIMEOUT_SECONDS = 300.0
     GIT_PUSH_TERMINATE_GRACE_SECONDS = 5.0
     PROMPT_MAX_DURATION = 5400.0
     GIT_CONFIG_TIMEOUT_SECONDS = 10.0
     MAX_PENDING_PART_EVENTS = 2000
     MAX_EVENT_BUFFER_SIZE = 1000
+    OPENCODE_DEFAULT_TITLE_RE = re.compile(
+        r"^(new session|child session) - " r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$",
+        re.IGNORECASE,
+    )
     CRITICAL_EVENT_TYPES: ClassVar[set[str]] = {
         "execution_complete",
         "error",
@@ -200,6 +206,9 @@ class AgentBridge:
         # Pending ACKs: events sent but not yet acknowledged by the control plane.
         # Keyed by ackId, re-sent on reconnect until the DO confirms receipt.
         self._pending_acks: dict[str, dict[str, Any]] = {}
+
+        self._last_forwarded_session_title: str | None = None
+        self._session_title_fallback_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def ws_url(self) -> str:
@@ -292,6 +301,13 @@ class AgentBridge:
                 self._current_prompt_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await self._current_prompt_task
+            for task in list(self._session_title_fallback_tasks):
+                task.cancel()
+            if self._session_title_fallback_tasks:
+                await asyncio.gather(
+                    *self._session_title_fallback_tasks,
+                    return_exceptions=True,
+                )
             if self.http_client:
                 await self.http_client.aclose()
 
@@ -683,7 +699,42 @@ class AgentBridge:
 
         await self._save_session_id()
 
-    async def _emit_session_title_event(self) -> None:
+    def _build_session_title_event(self, title: object) -> dict[str, str] | None:
+        if not isinstance(title, str):
+            return None
+
+        trimmed = title.strip()
+        if not trimmed or self.OPENCODE_DEFAULT_TITLE_RE.match(trimmed):
+            return None
+        if trimmed == self._last_forwarded_session_title:
+            return None
+
+        self._last_forwarded_session_title = trimmed
+        return {"type": "session_title", "title": trimmed}
+
+    def _session_title_event_from_opencode_update(
+        self, props: dict[str, Any]
+    ) -> dict[str, str] | None:
+        info = props.get("info")
+        if not isinstance(info, dict):
+            return None
+
+        session_id = props.get("sessionID") or info.get("id")
+        if session_id != self.opencode_session_id:
+            return None
+
+        return self._build_session_title_event(info.get("title"))
+
+    def _schedule_session_title_fallback(self) -> None:
+        task = asyncio.create_task(self._emit_session_title_event_after_delay())
+        self._session_title_fallback_tasks.add(task)
+        task.add_done_callback(self._session_title_fallback_tasks.discard)
+
+    async def _emit_session_title_event_after_delay(self) -> None:
+        await asyncio.sleep(self.SESSION_TITLE_FALLBACK_DELAY_SECONDS)
+        await self._emit_session_title_event_from_lookup()
+
+    async def _emit_session_title_event_from_lookup(self) -> None:
         """Fetch the OpenCode session title and forward it when available."""
         if not self.http_client or not self.opencode_session_id:
             return
@@ -691,7 +742,7 @@ class AgentBridge:
         try:
             resp = await self.http_client.get(
                 f"{self.opencode_base_url}/session/{self.opencode_session_id}",
-                timeout=self.OPENCODE_REQUEST_TIMEOUT,
+                timeout=self.SESSION_TITLE_FALLBACK_TIMEOUT_SECONDS,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -702,11 +753,11 @@ class AgentBridge:
         if not isinstance(data, dict):
             return
 
-        title = data.get("title")
-        if not isinstance(title, str) or not title.strip():
+        event = self._build_session_title_event(data.get("title"))
+        if not event:
             return
 
-        await self._send_event({"type": "session_title", "title": title.strip()})
+        await self._send_event(event)
 
     @staticmethod
     def _extract_error_message(error: object) -> str | None:
@@ -928,7 +979,6 @@ class AgentBridge:
         pending_parts: dict[str, list[tuple[dict[str, Any], Any]]] = {}
         pending_parts_total = 0
         pending_drop_logged = False
-
         # Child session tracking (sub-tasks)
         tracked_child_session_ids: set[str] = set()
 
@@ -1052,6 +1102,8 @@ class AgentBridge:
                     async for event in self._parse_sse_stream(sse_response, timeout_ctx):
                         event_type = event.get("type")
                         props = event.get("properties", {})
+                        if not isinstance(props, dict):
+                            props = {}
 
                         if event_type == "server.connected":
                             pass
@@ -1081,7 +1133,14 @@ class AgentBridge:
                                 or event_session_id == self.opencode_session_id
                                 or is_child
                             ):
-                                if event_type == "message.updated":
+                                if event_type == "session.updated":
+                                    title_event = self._session_title_event_from_opencode_update(
+                                        props
+                                    )
+                                    if title_event:
+                                        yield title_event
+
+                                elif event_type == "message.updated":
                                     info = props.get("info", {})
                                     msg_session_id = info.get("sessionID")
                                     if msg_session_id == self.opencode_session_id:
@@ -1191,7 +1250,8 @@ class AgentBridge:
                                             compaction_occurred=compaction_occurred,
                                         ):
                                             yield final_event
-                                        await self._emit_session_title_event()
+                                        if not self._last_forwarded_session_title:
+                                            self._schedule_session_title_fallback()
                                         return
 
                                 elif event_type == "session.status":
@@ -1216,7 +1276,8 @@ class AgentBridge:
                                             compaction_occurred=compaction_occurred,
                                         ):
                                             yield final_event
-                                        await self._emit_session_title_event()
+                                        if not self._last_forwarded_session_title:
+                                            self._schedule_session_title_fallback()
                                         return
 
                                 elif event_type == "session.error":
