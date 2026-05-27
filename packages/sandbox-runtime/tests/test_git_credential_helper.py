@@ -163,17 +163,23 @@ def test_does_not_echo_input_username_or_password(cache_dir: Path, env_set: None
     assert "password=ghs_fresh" in out
 
 
-def test_refuses_same_host_but_different_repo(cache_dir: Path, env_set: None) -> None:
-    """A malicious submodule on the same host but a different repo gets nothing."""
-    transport = _mock_response({"should": "not be called"}, status=500)
+def test_allows_same_host_auxiliary_repo(cache_dir: Path, env_set: None) -> None:
+    """Setup/start hooks can clone sibling repos using installation-wide credentials."""
+    transport = _mock_response(
+        {
+            "username": "x-access-token",
+            "password": "ghs_auxiliary",
+            "expires_at_epoch_ms": int((time.time() + DEFAULT_CREDENTIAL_TTL_SECONDS) * 1000),
+            "scm_provider": "github",
+        }
+    )
     calls = [0]
     with _patch_httpx(transport, calls):
-        code, out, err = _run("protocol=https\nhost=github.com\npath=victim/private.git\n\n")
+        code, out, _err = _run("protocol=https\nhost=github.com\npath=acme/backend.git\n\n")
 
     assert code == 0
-    assert "password=" not in out
-    assert calls[0] == 0
-    assert "refusing to serve credentials" in err
+    assert "password=ghs_auxiliary" in out
+    assert calls[0] == 1
 
 
 def test_refuses_non_https_protocol(cache_dir: Path, env_set: None) -> None:
@@ -188,7 +194,7 @@ def test_refuses_non_https_protocol(cache_dir: Path, env_set: None) -> None:
     assert "not https" in err
 
 
-def test_matches_repo_path_case_insensitively_and_without_dotgit(
+def test_allows_same_host_request_without_repo_path_normalization(
     cache_dir: Path, env_set: None
 ) -> None:
     transport = _mock_response(
@@ -200,16 +206,17 @@ def test_matches_repo_path_case_insensitively_and_without_dotgit(
         }
     )
     calls = [0]
-    # Mixed case, no .git suffix, leading slash — all should normalize to acme/web.
     with _patch_httpx(transport, calls):
-        code, out, _err = _run("protocol=https\nhost=github.com\npath=/Acme/Web\n\n")
+        code, out, _err = _run("protocol=https\nhost=github.com\npath=/Acme/Backend\n\n")
 
     assert code == 0
     assert "password=ghs_ok" in out
 
 
 @pytest.mark.parametrize("path", ["acme/web.git/", "acme/web.git/info/lfs/"])
-def test_matches_repo_path_with_trailing_slashes(cache_dir: Path, env_set: None, path: str) -> None:
+def test_allows_same_host_path_with_trailing_slashes(
+    cache_dir: Path, env_set: None, path: str
+) -> None:
     transport = _mock_response(
         {
             "username": "x-access-token",
@@ -242,6 +249,46 @@ def test_allows_same_repo_git_lfs_endpoint(cache_dir: Path, env_set: None) -> No
 
     assert code == 0
     assert "password=ghs_lfs" in out
+    assert calls[0] == 1
+
+
+def test_does_not_require_session_repo_env(
+    cache_dir: Path, env_set: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("REPO_OWNER")
+    monkeypatch.delenv("REPO_NAME")
+    transport = _mock_response(
+        {
+            "username": "x-access-token",
+            "password": "ghs_host_scoped",
+            "expires_at_epoch_ms": int((time.time() + DEFAULT_CREDENTIAL_TTL_SECONDS) * 1000),
+            "scm_provider": "github",
+        }
+    )
+    calls = [0]
+    with _patch_httpx(transport, calls):
+        code, out, _err = _run("protocol=https\nhost=github.com\npath=acme/backend.git\n\n")
+
+    assert code == 0
+    assert "password=ghs_host_scoped" in out
+    assert calls[0] == 1
+
+
+def test_allows_same_host_request_without_path(cache_dir: Path, env_set: None) -> None:
+    transport = _mock_response(
+        {
+            "username": "x-access-token",
+            "password": "ghs_host_only",
+            "expires_at_epoch_ms": int((time.time() + DEFAULT_CREDENTIAL_TTL_SECONDS) * 1000),
+            "scm_provider": "github",
+        }
+    )
+    calls = [0]
+    with _patch_httpx(transport, calls):
+        code, out, _err = _run("protocol=https\nhost=github.com\n\n")
+
+    assert code == 0
+    assert "password=ghs_host_only" in out
     assert calls[0] == 1
 
 

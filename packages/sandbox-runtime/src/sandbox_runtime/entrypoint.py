@@ -249,9 +249,11 @@ class SandboxSupervisor:
             # config baked into the image is the primary path anyway.
             self.log.warn("credential_helper.shim_write_failed", error=str(e))
 
-        # credential.useHttpPath makes git pass the repo path to the helper,
-        # which it needs to scope credentials to the session repo (not just
-        # the host).
+        # credential.useHttpPath makes git include the repo path in helper
+        # requests. The helper currently authorizes by host to preserve
+        # installation-wide token behavior, but keeping the path available
+        # preserves Git LFS behavior and leaves room for provider-specific
+        # policy later.
         configs = [("credential.useHttpPath", "true")]
         if shim_available:
             configs.insert(0, ("credential.helper", str(shim_path)))
@@ -300,13 +302,14 @@ class SandboxSupervisor:
     async def _ensure_plain_origin(self) -> bool:
         """Rewrite the `origin` remote to a credential-free HTTPS URL.
 
-        Older snapshots (from before the credential-helper migration) embed a
-        stale GitHub App installation token in the `origin` URL. On resume the
-        embedded token may have expired hours ago, so the next `git fetch`
-        would use it and fail before the credential helper ever gets a chance.
+        Older workspaces/images (from before the credential-helper migration)
+        may embed a GitHub App installation token in the `origin` URL. Modal
+        snapshot restores receive a fresh fallback token, but long-running
+        sandboxes and Daytona persistent resumes can outlive embedded tokens.
+        Normalizing `origin` keeps git fetches routed through the helper.
 
-        Returns False on failure — callers must short-circuit, since the stale
-        URL would silently produce an opaque 401 from upstream rather than
+        Returns False on failure — callers must short-circuit, since a
+        credentialed URL can produce an opaque 401 from upstream rather than
         routing through the helper.
 
         Idempotent — safe to call on every boot.

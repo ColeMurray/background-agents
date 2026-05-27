@@ -460,7 +460,11 @@ was built for internal use where all employees have access to company repositori
 
 Fresh sandboxes fetch git credentials on demand through the control plane instead of relying on a
 token embedded in the environment or remote URL. Older snapshots and repo images may still receive
-env-token fallbacks so they can boot through the credential-helper migration.
+env-token fallbacks so they can boot through the credential-helper migration. The helper authorizes
+HTTPS requests for the configured SCM host, preserving existing setup/start hooks that clone other
+private repositories available to the installation. This primarily protects continuously running
+sessions and Daytona persistent resumes from expired embedded credentials; Modal snapshot restores
+already mint a fresh fallback token on restore.
 
 ### Secrets
 

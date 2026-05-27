@@ -253,6 +253,8 @@ docker compose up -d postgres redis
   - `SETUP_TIMEOUT_SECONDS` (default `300`)
   - `START_TIMEOUT_SECONDS` (default `120`)
 - Both hooks receive `OPENINSPECT_BOOT_MODE` (`build`, `fresh`, `repo_image`, `snapshot_restore`)
+- Git operations in hooks can authenticate to other private repos on the configured SCM host when
+  the shared installation has access
 
 ## License
 
