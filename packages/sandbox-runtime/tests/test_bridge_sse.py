@@ -48,7 +48,6 @@ class MockHttpClient:
         self.post_responses: list[Any] = []
         self.get_responses: list[Any] = []
         self.sse_events: list[str] = []
-        self.get_calls: list[tuple[str, float]] = []
         self._post_call_count = 0
         self._get_call_count = 0
 
@@ -60,7 +59,6 @@ class MockHttpClient:
 
     async def get(self, url: str, timeout: float = 10.0) -> Any:
         self._get_call_count += 1
-        self.get_calls.append((url, timeout))
         if self.get_responses:
             return self.get_responses.pop(0)
         return MockResponse(200, [])
@@ -77,7 +75,7 @@ def create_sse_event(event_type: str, properties: dict) -> str:
 
 
 @pytest.fixture
-async def bridge() -> AsyncIterator[AgentBridge]:
+def bridge() -> AgentBridge:
     """Create a bridge instance for testing."""
     bridge = AgentBridge(
         sandbox_id="test-sandbox",
@@ -87,13 +85,7 @@ async def bridge() -> AsyncIterator[AgentBridge]:
     )
     bridge.opencode_session_id = "oc-session-123"
     bridge.http_client = MockHttpClient()
-    yield bridge
-
-    pending_fallbacks = list(bridge._session_title_fallback_tasks)
-    for task in pending_fallbacks:
-        task.cancel()
-    if pending_fallbacks:
-        await asyncio.gather(*pending_fallbacks, return_exceptions=True)
+    return bridge
 
 
 @pytest.fixture
@@ -521,10 +513,6 @@ class TestSSEStreaming:
             events.append(event)
 
         assert {"type": "session_title", "title": "Generated title"} in events
-        title_lookup_calls = [
-            call for call in http_client.get_calls if call[0].endswith("/session/oc-session-123")
-        ]
-        assert title_lookup_calls == []
 
     @pytest.mark.asyncio
     async def test_ignores_default_session_title(
@@ -532,7 +520,6 @@ class TestSSEStreaming:
     ):
         """Should not forward OpenCode's timestamp-based placeholder title."""
         http_client = bridge.http_client
-        bridge.SESSION_TITLE_FALLBACK_DELAY_SECONDS = 0
         http_client.sse_events = [
             create_sse_event("server.connected", {}),
             create_sse_event(
@@ -558,26 +545,12 @@ class TestSSEStreaming:
             ),
             create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
         ]
-        http_client.get_responses = [
-            MockResponse(200, []),
-            MockResponse(200, {"title": "New session - 2026-05-27T01:02:03.456Z"}),
-        ]
-
-        sent_events = []
-
-        async def capture_event(event: dict[str, Any]) -> None:
-            sent_events.append(event)
-
-        bridge._send_event = capture_event  # type: ignore[method-assign]
 
         events = []
         async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
             events.append(event)
 
-        await asyncio.gather(*list(bridge._session_title_fallback_tasks))
-
         assert [event for event in events if event["type"] == "session_title"] == []
-        assert sent_events == []
 
     @pytest.mark.asyncio
     async def test_ignores_session_title_for_other_session(
@@ -585,7 +558,6 @@ class TestSSEStreaming:
     ):
         """Should not forward titles for unrelated OpenCode sessions."""
         http_client = bridge.http_client
-        bridge.SESSION_TITLE_FALLBACK_DELAY_SECONDS = 0
         http_client.sse_events = [
             create_sse_event("server.connected", {}),
             create_sse_event(
@@ -611,23 +583,19 @@ class TestSSEStreaming:
             ),
             create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
         ]
-        http_client.get_responses = [MockResponse(200, []), MockResponse(200, [])]
 
         events = []
         async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
             events.append(event)
 
-        await asyncio.gather(*list(bridge._session_title_fallback_tasks))
-
         assert [event for event in events if event["type"] == "session_title"] == []
 
     @pytest.mark.asyncio
-    async def test_schedules_title_lookup_after_final_state_when_sse_title_missing(
+    async def test_no_session_title_when_session_updated_missing(
         self, bridge: AgentBridge, opencode_message_id: str
     ):
-        """Should keep lookup as a non-blocking fallback for missed title events."""
+        """Should rely only on session.updated for generated title forwarding."""
         http_client = bridge.http_client
-        bridge.SESSION_TITLE_FALLBACK_DELAY_SECONDS = 0
         http_client.sse_events = [
             create_sse_event("server.connected", {}),
             create_sse_event(
@@ -663,15 +631,7 @@ class TestSSEStreaming:
                     }
                 ],
             ),
-            MockResponse(200, {"title": "Generated title"}),
         ]
-
-        sent_events = []
-
-        async def capture_event(event: dict[str, Any]) -> None:
-            sent_events.append(event)
-
-        bridge._send_event = capture_event  # type: ignore[method-assign]
 
         events = []
         async for event in bridge._stream_opencode_response_sse("cp-msg-1", "Test prompt"):
@@ -679,22 +639,7 @@ class TestSSEStreaming:
 
         assert [event["type"] for event in events] == ["token"]
         assert events[0]["content"] == "Final text"
-        assert sent_events == []
-
-        pending_fallbacks = list(bridge._session_title_fallback_tasks)
-        assert len(pending_fallbacks) == 1
-        await asyncio.gather(*pending_fallbacks)
-
-        assert sent_events == [{"type": "session_title", "title": "Generated title"}]
-        title_lookup_calls = [
-            call for call in http_client.get_calls if call[0].endswith("/session/oc-session-123")
-        ]
-        assert title_lookup_calls == [
-            (
-                "http://localhost:4096/session/oc-session-123",
-                bridge.SESSION_TITLE_FALLBACK_TIMEOUT_SECONDS,
-            )
-        ]
+        assert [event for event in events if event["type"] == "session_title"] == []
 
     @pytest.mark.asyncio
     async def test_handles_session_error(self, bridge: AgentBridge):

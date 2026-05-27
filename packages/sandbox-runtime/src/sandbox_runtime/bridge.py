@@ -135,8 +135,6 @@ class AgentBridge:
     HTTP_CONNECT_TIMEOUT = 30.0
     HTTP_DEFAULT_TIMEOUT = 30.0
     OPENCODE_REQUEST_TIMEOUT = 30.0
-    SESSION_TITLE_FALLBACK_DELAY_SECONDS = 1.0
-    SESSION_TITLE_FALLBACK_TIMEOUT_SECONDS = 2.0
     GIT_PUSH_TIMEOUT_SECONDS = 300.0
     GIT_PUSH_TERMINATE_GRACE_SECONDS = 5.0
     PROMPT_MAX_DURATION = 5400.0
@@ -208,7 +206,6 @@ class AgentBridge:
         self._pending_acks: dict[str, dict[str, Any]] = {}
 
         self._last_forwarded_session_title: str | None = None
-        self._session_title_fallback_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def ws_url(self) -> str:
@@ -301,13 +298,6 @@ class AgentBridge:
                 self._current_prompt_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await self._current_prompt_task
-            for task in list(self._session_title_fallback_tasks):
-                task.cancel()
-            if self._session_title_fallback_tasks:
-                await asyncio.gather(
-                    *self._session_title_fallback_tasks,
-                    return_exceptions=True,
-                )
             if self.http_client:
                 await self.http_client.aclose()
 
@@ -733,44 +723,6 @@ class AgentBridge:
             return None
 
         return self._session_title_event_once(info.get("title"))
-
-    def _schedule_session_title_fallback(self) -> None:
-        task = asyncio.create_task(self._emit_session_title_event_after_delay())
-        self._session_title_fallback_tasks.add(task)
-        task.add_done_callback(self._session_title_fallback_tasks.discard)
-
-    def _schedule_session_title_fallback_if_needed(self) -> None:
-        if not self._last_forwarded_session_title:
-            self._schedule_session_title_fallback()
-
-    async def _emit_session_title_event_after_delay(self) -> None:
-        await asyncio.sleep(self.SESSION_TITLE_FALLBACK_DELAY_SECONDS)
-        await self._emit_session_title_event_from_lookup()
-
-    async def _emit_session_title_event_from_lookup(self) -> None:
-        """Fetch the OpenCode session title and forward it when available."""
-        if not self.http_client or not self.opencode_session_id:
-            return
-
-        try:
-            resp = await self.http_client.get(
-                f"{self.opencode_base_url}/session/{self.opencode_session_id}",
-                timeout=self.SESSION_TITLE_FALLBACK_TIMEOUT_SECONDS,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as e:
-            self.log.warn("opencode.session_title_fetch_error", exc=e)
-            return
-
-        if not isinstance(data, dict):
-            return
-
-        event = self._session_title_event_once(data.get("title"))
-        if not event:
-            return
-
-        await self._send_event(event)
 
     @staticmethod
     def _extract_error_message(error: object) -> str | None:
@@ -1262,7 +1214,6 @@ class AgentBridge:
                                             compaction_occurred=compaction_occurred,
                                         ):
                                             yield final_event
-                                        self._schedule_session_title_fallback_if_needed()
                                         return
 
                                 elif event_type == "session.status":
@@ -1287,7 +1238,6 @@ class AgentBridge:
                                             compaction_occurred=compaction_occurred,
                                         ):
                                             yield final_event
-                                        self._schedule_session_title_fallback_if_needed()
                                         return
 
                                 elif event_type == "session.error":
