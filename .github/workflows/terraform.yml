@@ -183,7 +183,7 @@ jobs:
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           TF_VAR_cloudflare_worker_subdomain: ${{ secrets.CLOUDFLARE_WORKER_SUBDOMAIN }}
-          TF_VAR_vercel_api_token: "${{ secrets.VERCEL_API_TOKEN || 'unused' }}"
+          TF_VAR_vercel_api_token: "${{ secrets.VERCEL_API_TOKEN || '000000000000000000000000' }}"
           TF_VAR_vercel_team_id: "${{ secrets.VERCEL_TEAM_ID || 'unused' }}"
           TF_VAR_modal_token_id: ${{ secrets.MODAL_TOKEN_ID }}
           TF_VAR_modal_token_secret: ${{ secrets.MODAL_TOKEN_SECRET }}
@@ -208,6 +208,9 @@ jobs:
           TF_VAR_enable_github_bot: "${{ secrets.ENABLE_GITHUB_BOT || 'false' }}"
           TF_VAR_github_webhook_secret: ${{ secrets.GH_WEBHOOK_SECRET }}
           TF_VAR_github_bot_username: ${{ secrets.GH_BOT_USERNAME }}
+          TF_VAR_app_name: "${{ secrets.APP_NAME || 'Open-Inspect' }}"
+          TF_VAR_app_short_name: ${{ secrets.APP_SHORT_NAME }}
+          TF_VAR_app_icon_url: ${{ secrets.APP_ICON_URL }}
           TF_VAR_enable_linear_bot: "${{ secrets.ENABLE_LINEAR_BOT || 'false' }}"
           TF_VAR_linear_client_id: ${{ secrets.LINEAR_CLIENT_ID }}
           TF_VAR_linear_client_secret: ${{ secrets.LINEAR_CLIENT_SECRET }}
@@ -311,7 +314,7 @@ jobs:
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           TF_VAR_cloudflare_worker_subdomain: ${{ secrets.CLOUDFLARE_WORKER_SUBDOMAIN }}
-          TF_VAR_vercel_api_token: "${{ secrets.VERCEL_API_TOKEN || 'unused' }}"
+          TF_VAR_vercel_api_token: "${{ secrets.VERCEL_API_TOKEN || '000000000000000000000000' }}"
           TF_VAR_vercel_team_id: "${{ secrets.VERCEL_TEAM_ID || 'unused' }}"
           TF_VAR_modal_token_id: ${{ secrets.MODAL_TOKEN_ID }}
           TF_VAR_modal_token_secret: ${{ secrets.MODAL_TOKEN_SECRET }}
@@ -336,6 +339,9 @@ jobs:
           TF_VAR_enable_github_bot: "${{ secrets.ENABLE_GITHUB_BOT || 'false' }}"
           TF_VAR_github_webhook_secret: ${{ secrets.GH_WEBHOOK_SECRET }}
           TF_VAR_github_bot_username: ${{ secrets.GH_BOT_USERNAME }}
+          TF_VAR_app_name: "${{ secrets.APP_NAME || 'Open-Inspect' }}"
+          TF_VAR_app_short_name: ${{ secrets.APP_SHORT_NAME }}
+          TF_VAR_app_icon_url: ${{ secrets.APP_ICON_URL }}
           TF_VAR_enable_linear_bot: "${{ secrets.ENABLE_LINEAR_BOT || 'false' }}"
           TF_VAR_linear_client_id: ${{ secrets.LINEAR_CLIENT_ID }}
           TF_VAR_linear_client_secret: ${{ secrets.LINEAR_CLIENT_SECRET }}

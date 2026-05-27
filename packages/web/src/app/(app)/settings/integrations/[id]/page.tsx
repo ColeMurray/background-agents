@@ -10,6 +10,7 @@ import { useIsMobile } from "@/hooks/use-media-query";
 import { CodeServerIntegrationSettings } from "@/components/settings/integrations/code-server-integration-settings";
 import { GitHubIntegrationSettings } from "@/components/settings/integrations/github-integration-settings";
 import { LinearIntegrationSettings } from "@/components/settings/integrations/linear-integration-settings";
+import { SlackIntegrationSettings } from "@/components/settings/integrations/slack-integration-settings";
 
 function getIntegration(id: string) {
   return INTEGRATION_DEFINITIONS.find((d) => d.id === id);
@@ -19,6 +20,7 @@ function IntegrationDetail({ integrationId }: { integrationId: IntegrationId }) 
   if (integrationId === "github") return <GitHubIntegrationSettings />;
   if (integrationId === "linear") return <LinearIntegrationSettings />;
   if (integrationId === "code-server") return <CodeServerIntegrationSettings />;
+  if (integrationId === "slack") return <SlackIntegrationSettings />;
   return null;
 }
 

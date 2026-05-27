@@ -1,6 +1,25 @@
-import type { NextAuthOptions } from "next-auth";
+import type { NextAuthOptions, Profile } from "next-auth";
 import GitHubProvider from "next-auth/providers/github";
+import type { GithubEmail, GithubProfile } from "next-auth/providers/github";
 import { checkAccessAllowed, parseAllowlist, parseBooleanEnv } from "./access-control";
+
+export async function getVerifiedPrimaryGitHubEmail(
+  accessToken: string | undefined
+): Promise<string | null> {
+  if (!accessToken) return null;
+
+  const response = await fetch("https://api.github.com/user/emails", {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/vnd.github+json",
+    },
+  });
+
+  if (!response.ok) return null;
+
+  const emails = (await response.json()) as GithubEmail[];
+  return emails.find((email) => email.primary && email.verified)?.email ?? null;
+}
 
 // Extend NextAuth types to include GitHub-specific user info
 declare module "next-auth" {
@@ -28,12 +47,20 @@ declare module "next-auth/jwt" {
 export const authOptions: NextAuthOptions = {
   debug: process.env.NODE_ENV === "development" || process.env.NEXTAUTH_DEBUG === "true",
   providers: [
-    GitHubProvider({
+    GitHubProvider<GithubProfile>({
       clientId: process.env.GITHUB_CLIENT_ID!,
       clientSecret: process.env.GITHUB_CLIENT_SECRET!,
       authorization: {
         params: {
           scope: "read:user user:email repo",
+        },
+      },
+      userinfo: {
+        url: "https://api.github.com/user",
+        async request({ client, tokens }) {
+          const profile = (await client.userinfo(tokens.access_token!)) as GithubProfile;
+          profile.email = await getVerifiedPrimaryGitHubEmail(tokens.access_token);
+          return profile as unknown as Profile;
         },
       },
     }),

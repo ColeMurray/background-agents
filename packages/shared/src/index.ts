@@ -11,3 +11,5 @@ export * from "./triggers";
 export * from "./completion/extractor";
 export * from "./logger";
 export * from "./cache-store";
+export * from "./app-name";
+export * from "./slack";

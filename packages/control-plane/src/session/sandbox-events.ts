@@ -138,7 +138,7 @@ export class SessionSandboxEventProcessor {
       }
       this.deps.broadcast({ type: "sandbox_event", event });
 
-      if (messageId && event.status === "running") {
+      if (messageId) {
         this.deps.ctx.waitUntil(
           this.deps.callbackService.notifyToolCall(messageId, event).catch((error) => {
             this.deps.log.error("callback.tool_call.background_error", {
@@ -164,11 +164,11 @@ export class SessionSandboxEventProcessor {
     }
 
     if (event.type === "execution_complete") {
+      const completionMessageId = messageId;
       if (messageId) {
         this.deps.repository.upsertExecutionCompleteEvent(messageId, event, now);
       }
 
-      const completionMessageId = messageId;
       const isStillProcessing =
         completionMessageId != null && processingMessage?.id === completionMessageId;
 

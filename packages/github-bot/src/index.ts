@@ -16,6 +16,7 @@ import type {
 import type { Logger } from "./logger";
 import { createLogger, parseLogLevel } from "./logger";
 import { verifyWebhookSignature } from "./verify";
+import { normalizeGitHubEvent, buildInternalAuthHeaders } from "@open-inspect/shared";
 import {
   handlePullRequestOpened,
   handleReviewRequested,
@@ -185,6 +186,38 @@ async function handleWebhook(
     wideEvent.handler_action = result.handler_action;
   }
   log.info("webhook.handled", wideEvent);
+
+  // Forward normalized event to control-plane for automation triggering.
+  // This is additive — failures here must not affect existing bot behavior.
+  if (event) {
+    const normalizedEvent = normalizeGitHubEvent(event, p);
+    if (normalizedEvent !== null) {
+      try {
+        const body = JSON.stringify(normalizedEvent);
+        const authHeaders = await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId);
+        const response = await env.CONTROL_PLANE.fetch("https://internal/internal/github-event", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders },
+          body,
+        });
+        if (!response.ok) {
+          log.warn("webhook.github_event_forward_failed", {
+            trace_id: traceId,
+            delivery_id: deliveryId,
+            event_type: event,
+            status: response.status,
+          });
+        }
+      } catch (err) {
+        log.warn("webhook.github_event_forward_error", {
+          trace_id: traceId,
+          delivery_id: deliveryId,
+          event_type: event,
+          error: err instanceof Error ? err : new Error(String(err)),
+        });
+      }
+    }
+  }
 }
 
 function dispatchHandler(

@@ -46,7 +46,10 @@ export interface GitHubAutomationEvent extends BaseAutomationEvent {
   source: "github";
   repoOwner: string;
   repoName: string;
+  /** Pull request head ref when the event is tied to a PR (source branch). */
   branch?: string;
+  /** Pull request base ref when the event is tied to a PR (merge target branch). */
+  targetBranch?: string;
   labels?: string[];
   actor?: string;
   changedFiles?: string[];
@@ -105,6 +108,12 @@ export interface TriggerSourceDefinition {
     displayName: string;
     description: string;
   }>;
+
+  /** Whether the UI should expose an event type selector for this trigger source. */
+  supportsEventTypes?: boolean;
+
+  /** Optional UI placeholder for the event type selector for this trigger source. */
+  eventTypePlaceholder?: string;
 
   /** Condition types this source supports (keys into ConditionConfigMap). */
   supportedConditions: ConditionType[];

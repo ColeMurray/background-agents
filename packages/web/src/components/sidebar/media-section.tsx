@@ -5,20 +5,21 @@ import { ScreenshotArtifactCard } from "@/components/screenshot-artifact-card";
 
 interface MediaSectionProps {
   sessionId: string;
-  screenshots: Artifact[];
+  mediaArtifacts: Artifact[];
   onOpenMedia: (artifactId: string) => void;
 }
 
-export function MediaSection({ sessionId, screenshots, onOpenMedia }: MediaSectionProps) {
-  if (screenshots.length === 0) return null;
+export function MediaSection({ sessionId, mediaArtifacts, onOpenMedia }: MediaSectionProps) {
+  if (mediaArtifacts.length === 0) return null;
 
   return (
     <div className="grid grid-cols-1 gap-3">
-      {screenshots.map((artifact) => (
+      {mediaArtifacts.map((artifact) => (
         <ScreenshotArtifactCard
           key={artifact.id}
           sessionId={sessionId}
           artifactId={artifact.id}
+          artifactType={artifact.type}
           metadata={artifact.metadata}
           onOpen={onOpenMedia}
           compact={true}

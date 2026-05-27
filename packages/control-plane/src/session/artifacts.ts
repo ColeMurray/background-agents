@@ -3,6 +3,7 @@ import type { ArtifactType } from "../types";
 const VALID_ARTIFACT_TYPES = [
   "pr",
   "screenshot",
+  "video",
   "preview",
   "branch",
 ] as const satisfies readonly ArtifactType[];

@@ -292,6 +292,25 @@ describe("UserScmTokenStore", () => {
     expect(result).toBeNull();
   });
 
+  it("getEncryptedTokens returns raw ciphertext without decrypting", async () => {
+    const expiresAt = Date.now() + 3600_000;
+    await store.upsertTokens("user-enc", "access-plain", "refresh-plain", expiresAt);
+
+    const encrypted = await store.getEncryptedTokens("user-enc");
+    expect(encrypted).not.toBeNull();
+    expect(encrypted!.expiresAt).toBe(expiresAt);
+    // Values should be ciphertext, not the original plaintext
+    expect(encrypted!.accessTokenEncrypted).toBeTypeOf("string");
+    expect(encrypted!.accessTokenEncrypted).not.toBe("access-plain");
+    expect(encrypted!.refreshTokenEncrypted).toBeTypeOf("string");
+    expect(encrypted!.refreshTokenEncrypted).not.toBe("refresh-plain");
+  });
+
+  it("getEncryptedTokens returns null for unknown user", async () => {
+    const result = await store.getEncryptedTokens("nonexistent");
+    expect(result).toBeNull();
+  });
+
   describe("isTokenFresh", () => {
     it("returns true when token expires well in the future", () => {
       expect(store.isTokenFresh(Date.now() + 120_000)).toBe(true);

@@ -22,10 +22,21 @@ from pathlib import Path
 
 import httpx
 
-from .constants import CODE_SERVER_PORT, TTYD_PORT, TTYD_PROXY_PORT
+from .constants import (
+    CODE_SERVER_PORT,
+    EXPECTED_TUNNEL_PORTS_ENV_VAR,
+    TTYD_PORT,
+    TTYD_PROXY_PORT,
+    TUNNEL_ENV_FILE_PATH,
+)
 from .log_config import configure_logging, get_logger
 
 configure_logging()
+
+
+AGENT_TOOLS_GATED_ON_ENV: dict[str, str] = {
+    "slack-notify.js": "AGENT_SLACK_NOTIFY_ENABLED",
+}
 
 
 class SandboxSupervisor:
@@ -49,6 +60,8 @@ class SandboxSupervisor:
     START_SCRIPT_PATH = ".openinspect/start.sh"
     DEFAULT_SETUP_TIMEOUT_SECONDS = 300
     DEFAULT_START_TIMEOUT_SECONDS = 120
+    DEFAULT_TUNNEL_WAIT_TIMEOUT_SECONDS = 30
+    TUNNEL_WAIT_POLL_INTERVAL_SECONDS = 0.2
     CLONE_DEPTH_COMMITS = 100
     SIDECAR_TIMEOUT_SECONDS = 5
     MCP_PACKAGE_INSTALL_TIMEOUT_SECONDS = 180
@@ -311,11 +324,17 @@ class SandboxSupervisor:
         if legacy_tool.exists():
             shutil.copy(legacy_tool, tool_dest / "create-pull-request.js")
 
-        # Copy all .js files from tools/ — these must export tool() for OpenCode
+        # Copy all .js files from tools/ — these must export tool() for OpenCode.
+        # Tools listed in AGENT_TOOLS_GATED_ON_ENV are skipped unless their gate
+        # env var is "true".
         if tools_dir.exists():
             for tool_file in tools_dir.iterdir():
-                if tool_file.is_file() and tool_file.suffix == ".js":
-                    shutil.copy(tool_file, tool_dest / tool_file.name)
+                if not (tool_file.is_file() and tool_file.suffix == ".js"):
+                    continue
+                gate_env = AGENT_TOOLS_GATED_ON_ENV.get(tool_file.name)
+                if gate_env and os.environ.get(gate_env, "").lower() != "true":
+                    continue
+                shutil.copy(tool_file, tool_dest / tool_file.name)
 
         # Copy pre-built deps (package.json, package-lock.json, node_modules)
         # from the image staging directory.  This gives OpenCode a lockfile
@@ -365,8 +384,14 @@ class SandboxSupervisor:
                 continue
 
             dest_dir = skills_dest / skill_dir.name
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy(skill_file, dest_dir / "SKILL.md")
+            # Preserve symlinks rather than dereferencing paths outside the bundled skill.
+            shutil.copytree(
+                skill_dir,
+                dest_dir,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"),
+                symlinks=True,
+            )
             installed_any = True
 
         if installed_any:
@@ -973,7 +998,7 @@ class SandboxSupervisor:
 
     async def _report_fatal_error(self, message: str) -> None:
         """Report a fatal error to the control plane."""
-        self.log.error("supervisor.fatal", message=message)
+        self.log.error("supervisor.fatal", error_message=message)
 
         if not self.control_plane_url:
             return
@@ -1129,6 +1154,79 @@ class SandboxSupervisor:
             default_timeout_seconds=self.DEFAULT_START_TIMEOUT_SECONDS,
         )
 
+    def _expected_tunnel_ports(self) -> list[int]:
+        """Parse EXPECTED_TUNNEL_PORTS env var into a list of port ints."""
+        raw = os.environ.get(EXPECTED_TUNNEL_PORTS_ENV_VAR, "")
+        if not raw:
+            return []
+        ports: list[int] = []
+        for piece in raw.split(","):
+            piece = piece.strip()
+            if not piece:
+                continue
+            try:
+                ports.append(int(piece))
+            except ValueError:
+                self.log.warn("tunnel.expected_ports_parse_failed", value=piece, raw=raw)
+        return ports
+
+    def _clear_stale_tunnel_env_file(self) -> None:
+        """Remove any pre-existing tunnel env file inherited from a snapshot."""
+        path = Path(TUNNEL_ENV_FILE_PATH)
+        try:
+            path.unlink(missing_ok=True)
+            self.log.info("tunnel.stale_file_cleared", path=str(path))
+        except Exception as e:
+            self.log.warn("tunnel.stale_file_clear_failed", path=str(path), exc=e)
+
+    async def _wait_for_tunnel_env_file(self, expected_ports: list[int]) -> bool:
+        """Block until TUNNEL_ENV_FILE_PATH contains entries for all expected ports.
+
+        On timeout, log and return False so start.sh proceeds with degraded data
+        rather than hanging on a Modal-side outage.
+        """
+        if not expected_ports:
+            return True
+
+        timeout_seconds_raw = os.environ.get("TUNNEL_WAIT_TIMEOUT_SECONDS")
+        try:
+            timeout_seconds = (
+                float(timeout_seconds_raw)
+                if timeout_seconds_raw
+                else self.DEFAULT_TUNNEL_WAIT_TIMEOUT_SECONDS
+            )
+        except ValueError:
+            timeout_seconds = self.DEFAULT_TUNNEL_WAIT_TIMEOUT_SECONDS
+
+        path = Path(TUNNEL_ENV_FILE_PATH)
+        expected_prefixes = [f"TUNNEL_{p}=" for p in expected_ports]
+        start_time = time.time()
+        deadline = start_time + timeout_seconds
+
+        while time.time() < deadline:
+            if path.exists():
+                try:
+                    lines = path.read_text().splitlines()
+                    if all(any(ln.startswith(pfx) for ln in lines) for pfx in expected_prefixes):
+                        self.log.info(
+                            "tunnel.env_file_ready",
+                            path=str(path),
+                            ports=expected_ports,
+                            wait_ms=int((time.time() - start_time) * 1000),
+                        )
+                        return True
+                except Exception as e:
+                    self.log.warn("tunnel.env_file_read_failed", path=str(path), exc=e)
+            await asyncio.sleep(self.TUNNEL_WAIT_POLL_INTERVAL_SECONDS)
+
+        self.log.warn(
+            "tunnel.env_file_wait_timeout",
+            path=str(path),
+            ports=expected_ports,
+            timeout_seconds=timeout_seconds,
+        )
+        return False
+
     async def run(self) -> None:
         """Main supervisor loop."""
         startup_start = time.time()
@@ -1164,6 +1262,13 @@ class SandboxSupervisor:
             repo_image_sha = os.environ.get("REPO_IMAGE_SHA", "unknown")
             self.log.info("supervisor.from_repo_image", build_sha=repo_image_sha)
 
+        # Clear stale tunnel file on every restore: a snapshot taken with
+        # tunnels configured retains the previous session's URLs even if this
+        # session has no tunnel ports.
+        expected_tunnel_ports = self._expected_tunnel_ports()
+        if restored_from_snapshot or expected_tunnel_ports:
+            self._clear_stale_tunnel_env_file()
+
         # Set up signal handlers
         loop = asyncio.get_event_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
@@ -1193,9 +1298,11 @@ class SandboxSupervisor:
                 if image_build_mode and not setup_success:
                     raise RuntimeError("setup hook failed in build mode")
 
-            # Phase 3: Run runtime start hook for all non-build boots.
+            # Phase 3: Run runtime start hook for all non-build boots. Wait for
+            # tunnel URLs first so dev servers booted by start.sh see fresh data.
             start_success: bool | None = None
             if self.boot_mode != "build":
+                await self._wait_for_tunnel_env_file(expected_tunnel_ports)
                 start_success = await self.run_start_script()
                 if not start_success:
                     raise RuntimeError("start hook failed")

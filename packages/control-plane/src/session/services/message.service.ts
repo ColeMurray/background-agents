@@ -11,6 +11,17 @@ export interface EnqueuePromptRequest {
   reasoningEffort?: string;
   attachments?: Array<{ type: string; name: string; url?: string }>;
   callbackContext?: Record<string, unknown>;
+
+  // Identity enrichment (from router D1 lookup at prompt time)
+  authorDisplayName?: string;
+  authorEmail?: string;
+  authorLogin?: string;
+
+  // SCM token enrichment (from cross-provider identity resolution)
+  scmUserId?: string;
+  scmAccessTokenEncrypted?: string;
+  scmRefreshTokenEncrypted?: string;
+  scmTokenExpiresAt?: number;
 }
 
 export interface ListEventsRequest {

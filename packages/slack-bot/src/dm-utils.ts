@@ -1,12 +1,12 @@
+import { applyMentionPolicy } from "@open-inspect/shared";
+
 /**
- * Strip Slack user mention tokens (e.g. <@U12345>) from text.
- * DMs may include self-mentions when users type "@Bot <request>".
+ * Strip Slack user mention tokens (e.g. <@U12345>) from text and collapse
+ * resulting whitespace. DMs may include self-mentions when users type
+ * "@Bot <request>".
  */
 export function stripMentions(text: string): string {
-  return text
-    .replace(/<@[A-Z0-9]+>/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  return applyMentionPolicy(text, "strip").replace(/\s+/g, " ").trim();
 }
 
 /**

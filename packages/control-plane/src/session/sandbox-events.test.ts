@@ -312,6 +312,30 @@ describe("SessionSandboxEventProcessor", () => {
       expect(h.updateLastActivity).toHaveBeenCalledWith(expect.any(Number));
     });
 
+    it("notifies tool_call regardless of status (provider-agnostic)", async () => {
+      // Anthropic lifecycle uses status="running"; OpenAI's Responses API may
+      // only emit status="completed". Both should reach notifyToolCall so the
+      // service-level dedup decides whether to fire.
+      for (const status of ["running", "completed", "in_progress"]) {
+        const h = createProcessor();
+        await h.processor.processSandboxEvent({
+          type: "tool_call",
+          tool: "bash",
+          args: { command: "ls" },
+          callId: `call-${status}`,
+          status,
+          messageId: "msg-1",
+          sandboxId: "sb-1",
+          timestamp: 1000,
+        });
+
+        expect(h.callbackService.notifyToolCall).toHaveBeenCalledWith(
+          "msg-1",
+          expect.objectContaining({ type: "tool_call", status, callId: `call-${status}` })
+        );
+      }
+    });
+
     it("resets activity timer on step_start", async () => {
       const h = createProcessor();
       await h.processor.processSandboxEvent({

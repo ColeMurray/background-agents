@@ -32,6 +32,104 @@ describe("matchesConditions", () => {
     ];
     expect(matchesConditions(conditions, event, conditionRegistry)).toBe(false);
   });
+
+  describe("actor condition (case-insensitive)", () => {
+    it("matches actor with different casing (include)", () => {
+      const event = buildMockEvent("github", { actor: "ColeMurray" });
+      const conditions = [
+        { type: "actor" as const, operator: "include" as const, value: ["colemurray"] },
+      ];
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(true);
+    });
+
+    it("matches actor with different casing (exclude)", () => {
+      const event = buildMockEvent("github", { actor: "ColeMurray" });
+      const conditions = [
+        { type: "actor" as const, operator: "exclude" as const, value: ["COLEMURRAY"] },
+      ];
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(false);
+    });
+
+    it("matches actor with exact casing", () => {
+      const event = buildMockEvent("github", { actor: "octocat" });
+      const conditions = [
+        { type: "actor" as const, operator: "include" as const, value: ["octocat"] },
+      ];
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(true);
+    });
+  });
+
+  describe("label condition (case-insensitive)", () => {
+    it("matches labels with different casing (any_of)", () => {
+      const event = buildMockEvent("github", { labels: ["Bug", "Enhancement"] });
+      const conditions = [{ type: "label" as const, operator: "any_of" as const, value: ["bug"] }];
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(true);
+    });
+
+    it("rejects labels with different casing (none_of)", () => {
+      const event = buildMockEvent("github", { labels: ["Bug"] });
+      const conditions = [{ type: "label" as const, operator: "none_of" as const, value: ["BUG"] }];
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(false);
+    });
+  });
+
+  describe("GitHub target_branch (merge base)", () => {
+    it("matches when merge base ref matches a pattern", () => {
+      const event = buildMockEvent("github", {
+        branch: "feature/x",
+        targetBranch: "stable",
+      });
+      const conditions = [
+        { type: "target_branch" as const, operator: "glob_match" as const, value: ["stable"] },
+      ];
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(true);
+    });
+
+    it("does not match when merge base differs", () => {
+      const event = buildMockEvent("github", {
+        branch: "feature/x",
+        targetBranch: "main",
+      });
+      const conditions = [
+        { type: "target_branch" as const, operator: "glob_match" as const, value: ["stable"] },
+      ];
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(false);
+    });
+
+    it("does not match when the event has no merge base ref", () => {
+      const event = buildMockEvent("github", { branch: "main" });
+      const conditions = [
+        { type: "target_branch" as const, operator: "glob_match" as const, value: ["main"] },
+      ];
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(false);
+    });
+
+    it("matches with the exact operator", () => {
+      const event = buildMockEvent("github", {
+        branch: "feature/x",
+        targetBranch: "release/v1",
+      });
+      const conditions = [
+        {
+          type: "target_branch" as const,
+          operator: "exact" as const,
+          value: ["release/v1", "main"],
+        },
+      ];
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(true);
+    });
+
+    it("does not match with the exact operator when no value equals the target", () => {
+      const event = buildMockEvent("github", {
+        branch: "feature/x",
+        targetBranch: "release/v1",
+      });
+      const conditions = [
+        { type: "target_branch" as const, operator: "exact" as const, value: ["release"] },
+      ];
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(false);
+    });
+  });
 });
 
 describe("validateConditions", () => {
@@ -62,5 +160,24 @@ describe("validateConditions", () => {
     );
     expect(errors).toHaveLength(1);
     expect(errors[0]).toContain("does not apply to webhook triggers");
+  });
+
+  it("returns error for empty target_branch patterns on github", () => {
+    const errors = validateConditions(
+      [{ type: "target_branch", operator: "glob_match", value: [] }],
+      "github",
+      conditionRegistry
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("target branch");
+  });
+
+  it("accepts target_branch for github triggers", () => {
+    const errors = validateConditions(
+      [{ type: "target_branch", operator: "glob_match", value: ["stable", "main"] }],
+      "github",
+      conditionRegistry
+    );
+    expect(errors).toHaveLength(0);
   });
 });

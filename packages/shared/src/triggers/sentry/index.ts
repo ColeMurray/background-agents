@@ -15,6 +15,8 @@ export const sentrySource: TriggerSourceDefinition = {
   triggerType: "sentry",
   displayName: "Sentry",
   description: "Trigger when Sentry detects a new error, regression, or metric alert",
+  supportsEventTypes: true,
+  eventTypePlaceholder: "Select Sentry event type...",
   eventTypes: [
     {
       eventType: "issue.created",

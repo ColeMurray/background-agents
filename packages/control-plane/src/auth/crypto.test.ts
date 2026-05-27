@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { timingSafeEqual } from "@open-inspect/shared";
-import { encryptToken, decryptToken, generateEncryptionKey, generateId, hashToken } from "./crypto";
+import {
+  encryptToken,
+  encryptTokenPair,
+  decryptToken,
+  generateEncryptionKey,
+  generateId,
+  hashToken,
+} from "./crypto";
 
 describe("crypto", () => {
   describe("generateEncryptionKey", () => {
@@ -150,6 +157,53 @@ describe("crypto", () => {
 
       // SHA-256 of empty string is a known value
       expect(hash).toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    });
+  });
+
+  describe("encryptTokenPair", () => {
+    it("returns null for both tokens when both are undefined", async () => {
+      const key = generateEncryptionKey();
+      const result = await encryptTokenPair(undefined, undefined, key);
+      expect(result.accessTokenEncrypted).toBeNull();
+      expect(result.refreshTokenEncrypted).toBeNull();
+    });
+
+    it("encrypts provided access token and returns null for undefined refresh token", async () => {
+      const key = generateEncryptionKey();
+      const result = await encryptTokenPair("access-token-123", undefined, key);
+      expect(result.accessTokenEncrypted).not.toBeNull();
+      expect(result.refreshTokenEncrypted).toBeNull();
+
+      const decrypted = await decryptToken(result.accessTokenEncrypted!, key);
+      expect(decrypted).toBe("access-token-123");
+    });
+
+    it("encrypts provided refresh token and returns null for undefined access token", async () => {
+      const key = generateEncryptionKey();
+      const result = await encryptTokenPair(undefined, "refresh-token-456", key);
+      expect(result.accessTokenEncrypted).toBeNull();
+      expect(result.refreshTokenEncrypted).not.toBeNull();
+
+      const decrypted = await decryptToken(result.refreshTokenEncrypted!, key);
+      expect(decrypted).toBe("refresh-token-456");
+    });
+
+    it("encrypts both tokens when both are provided", async () => {
+      const key = generateEncryptionKey();
+      const result = await encryptTokenPair("access-token", "refresh-token", key);
+      expect(result.accessTokenEncrypted).not.toBeNull();
+      expect(result.refreshTokenEncrypted).not.toBeNull();
+
+      const decryptedAccess = await decryptToken(result.accessTokenEncrypted!, key);
+      const decryptedRefresh = await decryptToken(result.refreshTokenEncrypted!, key);
+      expect(decryptedAccess).toBe("access-token");
+      expect(decryptedRefresh).toBe("refresh-token");
+    });
+
+    it("throws when encryption fails (invalid key)", async () => {
+      await expect(
+        encryptTokenPair("access-token", "refresh-token", "not-a-valid-base64-key!!!")
+      ).rejects.toThrow();
     });
   });
 

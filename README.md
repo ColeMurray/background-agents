@@ -166,11 +166,11 @@ await configureGitIdentity({
 
 Choose the AI model that fits your task, with per-session reasoning effort controls:
 
-| Provider     | Models                                                      |
-| ------------ | ----------------------------------------------------------- |
-| Anthropic    | Claude Haiku 4.5, Sonnet 4.5/4.6, Opus 4.5/4.6              |
-| OpenAI       | GPT 5.2, GPT 5.4, GPT 5.2 Codex, 5.3 Codex, 5.3 Codex Spark |
-| OpenCode Zen | Kimi K2.5, MiniMax M2.5, GLM 5 (opt-in)                     |
+| Provider     | Models                                                               |
+| ------------ | -------------------------------------------------------------------- |
+| Anthropic    | Claude Haiku 4.5, Sonnet 4.5/4.6, Opus 4.5/4.6/4.7                   |
+| OpenAI       | GPT 5.2, GPT 5.4, GPT 5.5, GPT 5.2 Codex, 5.3 Codex, 5.3 Codex Spark |
+| OpenCode Zen | Kimi K2.5, MiniMax M2.5, GLM 5 (opt-in)                              |
 
 OpenAI models work with your existing ChatGPT subscription via OAuth — no separate API key needed.
 See **[docs/OPENAI_MODELS.md](docs/OPENAI_MODELS.md)** for setup instructions.
@@ -182,11 +182,11 @@ Interact with agents from wherever your team already works:
 - **Web UI** — Full session management with real-time streaming, model/reasoning selectors, terminal
   panel, and multiplayer presence
 - **Slack Bot** — @mention or DM to start a session; replies thread back with results. Per-user
-  model and branch preferences via App Home
-- **GitHub Bot** — Auto-review on PR open, respond to @mentions in PR comments, or trigger on
-  reviewer assignment. Configurable per-repo
-- **Linear Bot** — Assign an issue to the agent and it creates a coding session, posts progress
-  activities, and links the resulting PR
+  model and branch preferences via App Home. See [Slack integration](docs/integrations/SLACK.md)
+- **GitHub Bot** — Auto-review on PR open or respond to @mentions in PR comments. Configurable
+  per-repo. See [GitHub integration](docs/integrations/GITHUB.md)
+- **Linear Bot** — Mention or assign the agent on an issue to start a coding session, post progress
+  activities, and link the resulting PR. See [Linear integration](docs/integrations/LINEAR.md)
 - **Webhooks** — Trigger sessions from any external system via authenticated HTTP POST
 
 ### Automations
@@ -209,7 +209,9 @@ Every session runs in an isolated Modal sandbox with a full development environm
   and UI verification
 - **Code-server:** Optional browser-based VS Code connected to the session workspace
 - **Web terminal:** ttyd-powered terminal accessible from the session UI
-- **Port tunneling:** Expose up to 10 dev server ports via encrypted tunnels
+- **Port tunneling:** Expose up to 10 dev server ports via encrypted tunnels. URLs are available
+  in-sandbox at `/workspace/.tunnels.env` before `.openinspect/start.sh` runs
+  ([details](docs/HOW_IT_WORKS.md#tunnel-urls-inside-the-sandbox))
 - **Repo secrets:** AES-256-GCM encrypted, scoped per-repo or globally, injected as env vars at
   spawn time. Supports bulk `.env` paste import
 

@@ -44,8 +44,9 @@ export function SessionRightSidebarContent({
 }: SessionRightSidebarContentProps) {
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
   const filesChanged = useMemo(() => extractChangedFiles(events), [events]);
-  const screenshots = useMemo(
-    () => artifacts.filter((artifact) => artifact.type === "screenshot"),
+  const mediaArtifacts = useMemo(
+    () =>
+      artifacts.filter((artifact) => artifact.type === "screenshot" || artifact.type === "video"),
     [artifacts]
   );
   const terminalUrl = useMemo(
@@ -155,9 +156,13 @@ export function SessionRightSidebarContent({
       )}
 
       {/* Media */}
-      {screenshots.length > 0 && (
-        <CollapsibleSection title={`Media (${screenshots.length})`} defaultOpen={true}>
-          <MediaSection sessionId={sessionId} screenshots={screenshots} onOpenMedia={onOpenMedia} />
+      {mediaArtifacts.length > 0 && (
+        <CollapsibleSection title={`Media (${mediaArtifacts.length})`} defaultOpen={true}>
+          <MediaSection
+            sessionId={sessionId}
+            mediaArtifacts={mediaArtifacts}
+            onOpenMedia={onOpenMedia}
+          />
         </CollapsibleSection>
       )}
 

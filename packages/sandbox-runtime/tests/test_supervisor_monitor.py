@@ -159,3 +159,20 @@ class TestBridgeBackoffTiming:
         # All delays should be <= BACKOFF_MAX
         for delay in sleep_delays:
             assert delay <= sup.BACKOFF_MAX
+
+
+class TestFatalErrorReporting:
+    """Fatal supervisor errors should be loggable and reportable."""
+
+    async def test_report_fatal_error_logs_without_reserved_field_collision(self, caplog):
+        sup = _make_supervisor()
+        sup.control_plane_url = ""
+
+        caplog.set_level("ERROR", logger="supervisor")
+        await sup._report_fatal_error("boom")
+
+        fatal_records = [
+            record for record in caplog.records if record.getMessage() == "supervisor.fatal"
+        ]
+        assert len(fatal_records) == 1
+        assert fatal_records[0].error_message == "boom"

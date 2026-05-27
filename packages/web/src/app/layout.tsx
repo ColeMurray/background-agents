@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Providers } from "./providers";
+import { APP_ICON_URL, APP_NAME } from "@/lib/site-config";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -14,8 +15,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Open-Inspect",
+  title: APP_NAME,
   description: "Background coding agent for your team",
+  ...(APP_ICON_URL ? { icons: { icon: APP_ICON_URL } } : {}),
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

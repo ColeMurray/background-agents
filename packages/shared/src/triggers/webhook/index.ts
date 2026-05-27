@@ -14,6 +14,7 @@ export const webhookSource: TriggerSourceDefinition = {
   triggerType: "webhook",
   displayName: "Inbound Webhook",
   description: "Trigger via HTTP POST from any external system",
+  supportsEventTypes: false,
   eventTypes: [
     {
       eventType: "webhook.received",

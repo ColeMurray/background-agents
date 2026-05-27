@@ -307,6 +307,48 @@ describe("DaytonaSandboxProvider", () => {
       expect(envVars.GITHUB_APP_TOKEN).toBeUndefined();
     });
 
+    it("sets AGENT_SLACK_NOTIFY_ENABLED=true when agentSlackNotifyEnabled is on", async () => {
+      const client = createMockClient();
+      const provider = new DaytonaSandboxProvider(
+        client,
+        defaultProviderConfig,
+        defaultGetCloneToken
+      );
+
+      await provider.createSandbox({ ...baseCreateConfig, agentSlackNotifyEnabled: true });
+
+      const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env;
+      expect(envVars.AGENT_SLACK_NOTIFY_ENABLED).toBe("true");
+    });
+
+    it("omits AGENT_SLACK_NOTIFY_ENABLED when disabled (absent key, not 'false')", async () => {
+      const client = createMockClient();
+      const provider = new DaytonaSandboxProvider(
+        client,
+        defaultProviderConfig,
+        defaultGetCloneToken
+      );
+
+      await provider.createSandbox(baseCreateConfig);
+
+      const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env;
+      expect(envVars.AGENT_SLACK_NOTIFY_ENABLED).toBeUndefined();
+    });
+
+    it("omits AGENT_SLACK_NOTIFY_ENABLED when explicitly false", async () => {
+      const client = createMockClient();
+      const provider = new DaytonaSandboxProvider(
+        client,
+        defaultProviderConfig,
+        defaultGetCloneToken
+      );
+
+      await provider.createSandbox({ ...baseCreateConfig, agentSlackNotifyEnabled: false });
+
+      const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env;
+      expect(envVars.AGENT_SLACK_NOTIFY_ENABLED).toBeUndefined();
+    });
+
     it("classifies DaytonaApiError as SandboxProviderError", async () => {
       const client = createMockClient({
         createSandbox: async () => {

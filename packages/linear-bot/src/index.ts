@@ -14,7 +14,7 @@ import {
 } from "./utils/linear-client";
 import { callbacksRouter } from "./callbacks";
 import { createLogger } from "./logger";
-import { verifyInternalToken } from "@open-inspect/shared";
+import { resolveAppName, verifyInternalToken } from "@open-inspect/shared";
 import { handleAgentSessionEvent, escapeHtml } from "./webhook-handler";
 import {
   getTeamRepoMapping,
@@ -40,6 +40,19 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 function readStringField(record: Record<string, unknown>, key: string): string | null {
   const value = record[key];
   return typeof value === "string" ? value : null;
+}
+
+export function buildOAuthSuccessHtml(appName: string, orgName: string): string {
+  return `
+      <html>
+        <head><title>OAuth Success</title></head>
+        <body>
+          <h1>${escapeHtml(appName)} Agent Installed!</h1>
+          <p>Successfully connected to workspace: <strong>${escapeHtml(orgName)}</strong></p>
+          <p>You can now @mention or assign the agent on Linear issues.</p>
+        </body>
+      </html>
+    `;
 }
 
 function isAgentSessionWebhookPayload(payload: unknown): payload is AgentSessionWebhook {
@@ -81,16 +94,7 @@ app.get("/oauth/callback", async (c) => {
 
   try {
     const { orgName } = await exchangeCodeForToken(c.env, code);
-    return c.html(`
-      <html>
-        <head><title>OAuth Success</title></head>
-        <body>
-          <h1>Open-Inspect Agent Installed!</h1>
-          <p>Successfully connected to workspace: <strong>${escapeHtml(orgName)}</strong></p>
-          <p>You can now @mention or assign the agent on Linear issues.</p>
-        </body>
-      </html>
-    `);
+    return c.html(buildOAuthSuccessHtml(resolveAppName(c.env), orgName));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error("oauth.callback_error", { error: err instanceof Error ? err : new Error(msg) });
@@ -129,28 +133,31 @@ app.post("/webhook", async (c) => {
   const action = readStringField(payload, "action") ?? "unknown";
 
   if (eventType === "AgentSessionEvent") {
-    // Deduplicate by Linear webhook delivery ID.
-    const webhookId = readStringField(payload, "webhookId");
-    if (!webhookId) {
-      log.warn("webhook.invalid_payload", {
-        trace_id: traceId,
-        reason: "missing_webhook_id",
-      });
-      return c.json({ error: "Invalid payload" }, 400);
-    }
-
-    const isDuplicate = await isDuplicateEvent(c.env, webhookId);
-    if (isDuplicate) {
-      log.info("webhook.deduplicated", { trace_id: traceId, event_key: webhookId });
-      return c.json({ ok: true, skipped: true, reason: "duplicate" });
-    }
-
     if (!isAgentSessionWebhookPayload(payload)) {
       log.warn("webhook.invalid_payload", {
         trace_id: traceId,
         reason: "invalid_agent_session_event_shape",
       });
       return c.json({ error: "Invalid payload" }, 400);
+    }
+
+    // Linear's `Linear-Delivery` header is a UUID v4 that uniquely identifies
+    // each delivery. The `webhookId` field in the body is the registered-webhook
+    // configuration ID and is constant across deliveries, so we must not dedup
+    // on it. https://linear.app/developers/webhooks#webhook-payload-details
+    const deliveryId = c.req.header("linear-delivery");
+    if (!deliveryId) {
+      log.warn("webhook.invalid_payload", {
+        trace_id: traceId,
+        reason: "missing_linear_delivery_header",
+      });
+      return c.json({ error: "Missing Linear-Delivery header" }, 400);
+    }
+
+    const isDuplicate = await isDuplicateEvent(c.env, deliveryId);
+    if (isDuplicate) {
+      log.info("webhook.deduplicated", { trace_id: traceId, event_key: deliveryId });
+      return c.json({ ok: true, skipped: true, reason: "duplicate" });
     }
 
     c.executionCtx.waitUntil(handleAgentSessionEvent(payload, c.env, traceId));

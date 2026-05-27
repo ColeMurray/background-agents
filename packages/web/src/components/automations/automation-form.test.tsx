@@ -96,4 +96,109 @@ describe("automation cron submission", () => {
 
     expect(onSubmit).not.toHaveBeenCalled();
   });
+
+  it("requires event type when trigger source exposes event type selector", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Review new PRs",
+          repoOwner: "open-inspect",
+          repoName: "background-agents",
+          baseBranch: "main",
+          model: "openai/gpt-5.4",
+          instructions: "Review incoming PRs for regressions.",
+          triggerType: "github_event",
+        }}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Create Automation" })).toBeDisabled();
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(screen.getByText("Event type is required.")).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("submits triggerConfig with empty conditions for non-schedule automations", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Review PRs",
+          repoOwner: "open-inspect",
+          repoName: "background-agents",
+          baseBranch: "main",
+          model: "openai/gpt-5.4",
+          instructions: "Review incoming PRs.",
+          triggerType: "github_event",
+          eventType: "pull_request.opened",
+          triggerConfig: { conditions: [] },
+        }}
+      />
+    );
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      triggerConfig: { conditions: [] },
+    });
+  });
+});
+
+describe("instructions character counter", () => {
+  const baseInitialValues = {
+    name: "Daily review",
+    repoOwner: "open-inspect",
+    repoName: "background-agents",
+    baseBranch: "main",
+    model: "openai/gpt-5.4",
+    scheduleCron: "0 9 * * *",
+    scheduleTz: "UTC",
+  };
+
+  const renderForm = (instructions: string) =>
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{ ...baseInitialValues, instructions }}
+      />
+    );
+
+  it("shows current length and the 15,000 cap", () => {
+    renderForm("hello");
+    expect(screen.getByText("5 / 15,000")).toBeInTheDocument();
+  });
+
+  it("uses muted color well below the warning threshold", () => {
+    renderForm("hello");
+    const counter = screen.getByText("5 / 15,000");
+    expect(counter).toHaveClass("text-muted-foreground");
+    expect(counter).not.toHaveClass("text-warning");
+    expect(counter).not.toHaveClass("text-destructive");
+  });
+
+  it("switches to warning color at 90% of the cap", () => {
+    renderForm("a".repeat(13500));
+    const counter = screen.getByText("13,500 / 15,000");
+    expect(counter).toHaveClass("text-warning");
+    expect(counter).not.toHaveClass("text-destructive");
+  });
+
+  it("switches to destructive color and shows a notice at the cap", () => {
+    renderForm("a".repeat(15000));
+    const counter = screen.getByText(/15,000 \/ 15,000/);
+    expect(counter).toHaveClass("text-destructive");
+    expect(counter).toHaveTextContent("Maximum length reached.");
+  });
 });

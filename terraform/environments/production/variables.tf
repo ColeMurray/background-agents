@@ -331,6 +331,24 @@ variable "deployment_name" {
   type        = string
 }
 
+variable "app_name" {
+  description = "Display name shown in the web UI tab title, sign-in page, bot messages (Slack, Linear), PR body footer, and outbound HTTP User-Agent headers."
+  type        = string
+  default     = "Open-Inspect"
+}
+
+variable "app_short_name" {
+  description = "Short brand label shown only in the web sidebar header. Defaults to 'Inspect' to keep the sidebar visually compact."
+  type        = string
+  default     = "Inspect"
+}
+
+variable "app_icon_url" {
+  description = "Optional URL (absolute or root-relative) to a custom logo image for the command menu and browser favicon. Leave empty to use the built-in icon."
+  type        = string
+  default     = ""
+}
+
 variable "enable_durable_object_bindings" {
   description = "Enable DO bindings. For initial deployment: set to false (applies migrations), then set to true (adds bindings)."
   type        = bool
@@ -375,6 +393,12 @@ variable "r2_media_location" {
   description = "Cloudflare R2 location hint for the media bucket (e.g. ENAM, WNAM, APAC, WEUR, EEUR)"
   type        = string
   default     = "ENAM"
+}
+
+variable "r2_media_bucket_name" {
+  description = "Override the R2 media bucket name. Leave empty to use the default 'open-inspect-media-<deployment_name>'. Set this when the bucket must be pre-created out-of-band (e.g. when the Terraform credentials cannot create R2 buckets)."
+  type        = string
+  default     = ""
 }
 
 # =============================================================================

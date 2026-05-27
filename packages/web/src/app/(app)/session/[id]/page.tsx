@@ -28,8 +28,13 @@ import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "reac
 import { TerminalPanel } from "@/components/terminal-panel";
 import { ActionBar } from "@/components/action-bar";
 import { copyToClipboard, formatModelNameLower } from "@/lib/format";
+import { archiveSession } from "@/lib/archive-session";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
-import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
+import {
+  removeSessionFromList,
+  SIDEBAR_SESSIONS_KEY,
+  type SessionListResponse,
+} from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { DEFAULT_MODEL, getDefaultReasoningEffort, type ModelCategory } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
@@ -210,21 +215,6 @@ function SessionPageContent() {
     [searchParams]
   );
 
-  const { trigger: triggerArchive } = useSWRMutation(
-    `/api/sessions/${sessionId}/archive`,
-    (url: string) =>
-      fetch(url, { method: "POST" }).then((r) => {
-        if (r.ok) {
-          mutate(SIDEBAR_SESSIONS_KEY);
-          return true;
-        }
-
-        console.error("Failed to archive session");
-        return false;
-      }),
-    { throwOnError: false }
-  );
-
   const { trigger: triggerRename } = useSWRMutation(
     `/api/sessions/${sessionId}/title`,
     (url: string, { arg }: { arg: { title: string } }) =>
@@ -241,11 +231,19 @@ function SessionPageContent() {
   );
 
   const handleArchive = useCallback(async () => {
-    const didArchive = await triggerArchive();
+    const didArchive = await archiveSession(sessionId);
     if (didArchive) {
+      await mutate<SessionListResponse>(
+        SIDEBAR_SESSIONS_KEY,
+        (current) =>
+          current
+            ? { ...current, sessions: removeSessionFromList(current.sessions, sessionId) }
+            : current,
+        { revalidate: false, populateCache: true }
+      );
       router.push("/");
     }
-  }, [router, triggerArchive]);
+  }, [router, sessionId]);
 
   const renameSession = useCallback(
     async (title: string) => {
@@ -698,13 +696,14 @@ function SessionContent({
 
   // Deduplicate and group events for rendering
   const groupedEvents = useMemo(() => dedupeAndGroupEvents(events), [events]);
-  const screenshotArtifacts = useMemo(
-    () => artifacts.filter((artifact) => artifact.type === "screenshot"),
+  const mediaArtifacts = useMemo(
+    () =>
+      artifacts.filter((artifact) => artifact.type === "screenshot" || artifact.type === "video"),
     [artifacts]
   );
   const selectedMediaArtifact = useMemo(
-    () => screenshotArtifacts.find((artifact) => artifact.id === selectedMediaArtifactId) ?? null,
-    [screenshotArtifacts, selectedMediaArtifactId]
+    () => mediaArtifacts.find((artifact) => artifact.id === selectedMediaArtifactId) ?? null,
+    [mediaArtifacts, selectedMediaArtifactId]
   );
 
   const sessionDisplayInfo = useMemo(
@@ -792,7 +791,10 @@ function SessionContent({
             {/* Desktop: full status indicators */}
             <div className="hidden md:contents">
               <ConnectionStatus connected={connected} connecting={connecting} />
-              <SandboxStatus status={sessionState?.sandboxStatus} />
+              <SandboxStatus
+                status={sessionState?.sandboxStatus}
+                dashboardUrl={sessionState?.sandboxDashboardUrl}
+              />
               <ParticipantsList participants={participants} />
             </div>
           </div>
@@ -1116,7 +1118,13 @@ function ConnectionStatus({ connected, connecting }: { connected: boolean; conne
   );
 }
 
-function SandboxStatus({ status }: { status?: string }) {
+function SandboxStatus({
+  status,
+  dashboardUrl,
+}: {
+  status?: string;
+  dashboardUrl?: string | null;
+}) {
   if (!status) return null;
 
   const colors: Record<string, string> = {
@@ -1129,7 +1137,24 @@ function SandboxStatus({ status }: { status?: string }) {
     failed: "text-destructive",
   };
 
-  return <span className={`text-xs ${colors[status] || colors.pending}`}>Sandbox: {status}</span>;
+  const className = `text-xs ${colors[status] || colors.pending}`;
+  const label = `Sandbox: ${status}`;
+
+  if (dashboardUrl) {
+    return (
+      <a
+        href={dashboardUrl}
+        target="_blank"
+        rel="noreferrer noopener"
+        title="Open sandbox in provider dashboard"
+        className={`${className} hover:underline`}
+      >
+        {label}
+      </a>
+    );
+  }
+
+  return <span className={className}>{label}</span>;
 }
 
 function CombinedStatusDot({
@@ -1367,19 +1392,25 @@ const EventItem = memo(function EventItem({
       );
 
     case "artifact":
-      if (event.artifactType !== "screenshot" || !event.artifactId) {
+      if (
+        (event.artifactType !== "screenshot" && event.artifactType !== "video") ||
+        !event.artifactId
+      ) {
         return null;
       }
 
       return (
         <div className="space-y-2 border border-border-muted bg-card p-4">
           <div className="flex items-center justify-between">
-            <span className="text-xs text-muted-foreground">Screenshot</span>
+            <span className="text-xs text-muted-foreground">
+              {event.artifactType === "video" ? "Video" : "Screenshot"}
+            </span>
             <span className="text-xs text-secondary-foreground">{time}</span>
           </div>
           <ScreenshotArtifactCard
             sessionId={sessionId}
             artifactId={event.artifactId}
+            artifactType={event.artifactType}
             metadata={event.metadata as Artifact["metadata"] | undefined}
             onOpen={onOpenMedia}
           />

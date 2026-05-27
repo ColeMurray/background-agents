@@ -10,10 +10,10 @@
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
-import { timingSafeEqual } from "@open-inspect/shared";
+import { resolveAppName, timingSafeEqual } from "@open-inspect/shared";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { getGitHubAppConfig, getCachedInstallationToken } from "../auth/github-app";
-import { createModalClient } from "../sandbox/client";
+import { buildModalSandboxDashboardUrl, createModalClient } from "../sandbox/client";
 import { createDaytonaRestClient } from "../sandbox/daytona-rest-client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
 import { createDaytonaProvider } from "../sandbox/providers/daytona-provider";
@@ -30,9 +30,11 @@ import {
   type IdGenerator,
   type RepoImageLookup,
   type McpServerLookup,
+  type SlackAgentNotifyLookup,
 } from "../sandbox/lifecycle/manager";
 import { RepoImageStore } from "../db/repo-images";
 import { McpServerStore } from "../db/mcp-servers";
+import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { DEFAULT_EXECUTION_TIMEOUT_MS } from "../sandbox/lifecycle/decisions";
 import {
@@ -425,6 +427,7 @@ export class SessionDO extends DurableObject<Env> {
         getPublicSessionId: (session) => this.getPublicSessionId(session),
         getParticipantByUserId: (userId) => this.participantService.getByUserId(userId),
         transitionSessionStatus: (status) => this.transitionSessionStatus(status),
+        syncSessionIndexTitle: (sessionId, title) => this.syncSessionIndexTitle(sessionId, title),
         stopExecution: (options) => this.stopExecution(options),
         getSandboxSocket: () => this.wsManager.getSandboxSocket(),
         sendToSandbox: (ws, message) => this.wsManager.send(ws, message),
@@ -467,6 +470,7 @@ export class SessionDO extends DurableObject<Env> {
                 artifact,
               });
             },
+            appName: resolveAppName(this.env),
           });
 
           return pullRequestService.createPullRequest(input);
@@ -585,6 +589,7 @@ export class SessionDO extends DurableObject<Env> {
                   ? () =>
                       getCachedInstallationToken(appConfig, {
                         cacheStore: createKvCacheStore(this.env.REPOS_CACHE),
+                        userAgent: resolveAppName(this.env),
                       })
                   : () => Promise.resolve(null);
 
@@ -696,7 +701,6 @@ export class SessionDO extends DurableObject<Env> {
     const sessionId = session?.session_name || session?.id || this.ctx.id.toString();
 
     // Create D1-backed lookups if database is available
-    // Create D1-backed lookups if database is available
     let mcpServerLookup: McpServerLookup | undefined;
     if (this.env.DB) {
       const mcpStore = new McpServerStore(this.env.DB, this.env.REPO_SECRETS_ENCRYPTION_KEY);
@@ -705,6 +709,29 @@ export class SessionDO extends DurableObject<Env> {
           mcpStore.getDecryptedForSession(repoOwner, repoName),
       };
     }
+
+    // Token absence short-circuits to false so a misconfigured deployment
+    // never installs a tool that would 503 on every call.
+    let slackAgentNotifyLookup: SlackAgentNotifyLookup | undefined;
+    if (this.env.DB) {
+      const tokenPresent = !!this.env.SLACK_BOT_TOKEN;
+      const settingsStore = new IntegrationSettingsStore(this.env.DB);
+      slackAgentNotifyLookup = {
+        isEnabledForRepo: async (repoOwner, repoName) => {
+          if (!tokenPresent) return false;
+          const { settings } = await settingsStore.getResolvedConfig(
+            "slack",
+            `${repoOwner}/${repoName}`
+          );
+          return resolveSlackSettings(settings).agentNotificationsEnabled;
+        },
+      };
+    }
+
+    const sandboxDashboardUrlBuilder =
+      sandboxBackend === "modal"
+        ? (providerObjectId: string) => this.getSandboxDashboardUrl(providerObjectId)
+        : undefined;
 
     const config = {
       ...DEFAULT_LIFECYCLE_CONFIG,
@@ -716,6 +743,8 @@ export class SessionDO extends DurableObject<Env> {
         timeoutMs: parseInt(this.env.SANDBOX_INACTIVITY_TIMEOUT_MS || "600000", 10),
       },
       mcpServerLookup,
+      slackAgentNotifyLookup,
+      sandboxDashboardUrlBuilder,
     };
 
     // Create repo image lookup if D1 is available (Modal-only — Daytona doesn't use repo images)
@@ -995,7 +1024,17 @@ export class SessionDO extends DurableObject<Env> {
       } else {
         const client = this.wsManager.removeClient(ws);
         if (client) {
-          this.broadcast({ type: "presence_leave", userId: client.userId });
+          // If the participant still has other authenticated sockets (e.g. another
+          // browser tab), don't send presence_leave — the client filters by userId
+          // and would remove them entirely. Broadcast a refresh instead.
+          const stillPresent = Array.from(this.wsManager.getAuthenticatedClients()).some(
+            (c) => c.participantId === client.participantId
+          );
+          if (stillPresent) {
+            this.presenceService.broadcastPresence();
+          } else {
+            this.broadcast({ type: "presence_leave", userId: client.userId });
+          }
         }
       }
     } finally {
@@ -1475,6 +1514,20 @@ export class SessionDO extends DurableObject<Env> {
     );
   }
 
+  private syncSessionIndexTitle(sessionId: string, title: string): void {
+    if (!this.env.DB) return;
+    const sessionStore = new SessionIndexStore(this.env.DB);
+    this.ctx.waitUntil(
+      sessionStore.updateTitle(sessionId, title).catch((error) => {
+        this.log.error("session_index.update_title.background_error", {
+          session_id: sessionId,
+          title,
+          error,
+        });
+      })
+    );
+  }
+
   private syncSessionMetrics(sessionId: string): void {
     if (!this.env.DB) return;
 
@@ -1675,7 +1728,16 @@ export class SessionDO extends DurableObject<Env> {
       tunnelUrls: sandbox?.tunnel_urls ? this.safeParseTunnelUrls(sandbox.tunnel_urls) : null,
       ttydUrl: sandbox?.ttyd_url ?? null,
       ttydToken,
+      sandboxDashboardUrl: this.getSandboxDashboardUrl(sandbox?.modal_object_id),
     };
+  }
+
+  private getSandboxDashboardUrl(providerObjectId: string | null | undefined): string | null {
+    if (resolveSandboxBackendName(this.env.SANDBOX_PROVIDER) !== "modal") return null;
+    return buildModalSandboxDashboardUrl({
+      workspace: this.env.MODAL_WORKSPACE,
+      providerObjectId,
+    });
   }
 
   /**

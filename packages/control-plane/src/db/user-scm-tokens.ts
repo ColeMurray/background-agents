@@ -11,6 +11,12 @@ export interface ScmTokenRecord {
   refreshTokenEncrypted: string;
 }
 
+export interface EncryptedScmTokenRecord {
+  accessTokenEncrypted: string;
+  refreshTokenEncrypted: string;
+  expiresAt: number;
+}
+
 export type CasResult = { ok: true } | { ok: false; reason: "cas_conflict" };
 
 export class UserScmTokenStore {
@@ -18,6 +24,27 @@ export class UserScmTokenStore {
     private readonly db: D1Database,
     private readonly encryptionKey: string
   ) {}
+
+  async getEncryptedTokens(providerUserId: string): Promise<EncryptedScmTokenRecord | null> {
+    const row = await this.db
+      .prepare(
+        "SELECT access_token_encrypted, refresh_token_encrypted, token_expires_at FROM user_scm_tokens WHERE provider_user_id = ?"
+      )
+      .bind(providerUserId)
+      .first<{
+        access_token_encrypted: string;
+        refresh_token_encrypted: string;
+        token_expires_at: number;
+      }>();
+
+    if (!row) return null;
+
+    return {
+      accessTokenEncrypted: row.access_token_encrypted,
+      refreshTokenEncrypted: row.refresh_token_encrypted,
+      expiresAt: row.token_expires_at,
+    };
+  }
 
   async getTokens(providerUserId: string): Promise<ScmTokenRecord | null> {
     const row = await this.db

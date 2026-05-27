@@ -101,7 +101,13 @@ cd packages/modal-infra && uv sync --frozen && cd -
    of the panel for `*.YOUR-SUBDOMAIN.workers.dev`
 4. **Create API Token** at [API Tokens](https://dash.cloudflare.com/profile/api-tokens):
    - Use template: "Edit Cloudflare Workers"
-   - Add permissions: Workers KV Storage (Edit), Workers R2 Storage (Edit)
+   - Verify it has these permissions:
+     - Account | Workers KV Storage | Edit (should be included with template)
+     - Account | Workers R2 Storage | Edit (should be included with template)
+     - Account | D1 | Edit
+   - Set "Account Resources" to include your account
+   - Set "Zone Resources" to include all zones from your account
+   - Click "Continue to summary" and "Update token"
 5. **Enable R2**: Must add payment info, but first 10 GB/month is free
 
 ### Cloudflare R2 (Terraform State Backend)
@@ -393,6 +399,16 @@ nextauth_secret          = "your-generated-value"
 deployment_name = "your-unique-name"  # e.g., "acme", "johndoe", "mycompany"
 project_root    = "../../../"
 
+# Branding (optional — defaults shown)
+# Display name shown in the web UI tab title, sign-in page, landing hero, bot
+# messages (Slack/Linear), PR body footer, and outbound HTTP User-Agent.
+# app_name = "Open-Inspect"
+# Short brand label shown only in the sidebar header.
+# app_short_name = "Inspect"
+# Optional URL (absolute or root-relative) to a custom logo/favicon. When set,
+# replaces the built-in icon in the command menu and browser favicon.
+# app_icon_url = ""
+
 # Initial deployment: set both to false (see Step 7)
 enable_durable_object_bindings = false
 enable_service_bindings        = false
@@ -549,9 +565,12 @@ Or construct it from your App's slug: if your app is named `My-Inspect-App`, the
 
 ### Usage
 
-- **Code Review**: Assign the bot as a PR reviewer — it performs an automated review
+- **Code Review**: Open a non-draft PR in a repository where auto-review is enabled — it performs an
+  automated review
 - **Comment Actions**: @mention the bot in a PR comment with instructions (e.g.,
-  `@my-app[bot] fix the failing test`)
+  `@my-app[bot] explain why this test is failing`)
+
+For day-to-day workflows, see [GitHub Integration](./integrations/GITHUB.md).
 
 ---
 
@@ -669,6 +688,9 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `ENABLE_GITHUB_BOT`           | `true` to deploy GitHub bot worker (or empty to skip)                         |
 | `GH_WEBHOOK_SECRET`           | GitHub webhook secret (required if GitHub bot enabled)                        |
 | `GH_BOT_USERNAME`             | GitHub App bot username, e.g., `my-app[bot]` (required if GitHub bot enabled) |
+| `APP_NAME`                    | Optional display name for whitelabeling (default: `Open-Inspect`)             |
+| `APP_SHORT_NAME`              | Optional short label for sidebar header (default: `Inspect`)                  |
+| `APP_ICON_URL`                | Optional URL to a custom logo/favicon (default: built-in icon)                |
 
 **Bulk upload secrets with `gh` CLI:**
 
@@ -812,7 +834,7 @@ If the bot doesn't see the original message when tagged in a thread reply:
 2. Check the webhook secret matches `github_webhook_secret` in terraform.tfvars
 3. Confirm `enable_github_bot = true` in terraform.tfvars and the worker is deployed
 4. Check that `github_bot_username` matches your App's bot login (e.g., `my-app[bot]`)
-5. For PR reviews, ensure the bot is assigned as a reviewer (not just mentioned)
+5. For PR reviews, ensure auto-review is enabled for the repository and the PR is not a draft
 6. For comment actions, ensure the bot is @mentioned in a **PR** comment (not an issue)
 
 ### "Model not found" errors (Daytona provider)
@@ -854,6 +876,42 @@ This occurs on first deployment. Follow the two-phase deployment process:
 - Rotate secrets periodically using `terraform apply` after updating `terraform.tfvars`
 - Review the [Security Model](../README.md#security-model-single-tenant-only) - this system is
   designed for single-tenant deployment
+
+---
+
+## Customizing the App Name and Icon (Optional)
+
+Open-Inspect can be whitelabeled by overriding the brand name and logo. Both values are optional and
+default to the built-in `Open-Inspect` brand.
+
+Add these to your `terraform.tfvars`:
+
+```hcl
+# Display name shown in:
+#   - Web tab title, sign-in page, landing hero
+#   - Slack App Home settings page
+#   - Linear OAuth success page and completion comments
+#   - PR body footer ("Created with [<app_name>](<session-url>)")
+#   - Outbound HTTP User-Agent headers (GitHub, GitLab API)
+app_name = "Acme Bot"
+
+# Optional short label for the sidebar header. Set this when app_name is too
+# wide for the sidebar.
+app_short_name = "Acme"
+
+# Optional URL to a custom logo image (SVG/PNG). When set, replaces the
+# built-in icon in the command menu and browser favicon.
+# Use an absolute URL or a root-relative path served from packages/web/public/.
+app_icon_url = "/branding/logo.svg"   # or "https://cdn.example.com/logo.svg"
+```
+
+After changing any of these values, run `terraform apply` and (for Vercel) redeploy the web app so
+the new build picks up the `NEXT_PUBLIC_APP_NAME`, `NEXT_PUBLIC_APP_SHORT_NAME`, and
+`NEXT_PUBLIC_APP_ICON_URL` env vars (Cloudflare's web deploy is rebuilt automatically by Terraform).
+
+> **Note**: `NEXT_PUBLIC_*` vars are inlined into the client bundle at build time, so changes
+> require a fresh web build. The bot/control-plane workers read `APP_NAME` at request time, so they
+> pick up the new value immediately after `terraform apply`.
 
 ---
 

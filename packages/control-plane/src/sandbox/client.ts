@@ -15,12 +15,27 @@ const log = createLogger("modal-client");
 // Modal app name
 const MODAL_APP_NAME = "open-inspect";
 
+// Modal's default environment name; unrelated to the git branch named "main".
+const DEFAULT_MODAL_DASHBOARD_ENVIRONMENT = "main";
+
 /**
  * Construct the Modal base URL from workspace name.
  * Modal endpoint URLs follow the pattern: https://{workspace}--{app-name}
  */
 function getModalBaseUrl(workspace: string): string {
   return `https://${workspace}--${MODAL_APP_NAME}`;
+}
+
+export function buildModalSandboxDashboardUrl(params: {
+  workspace: string | undefined;
+  environment?: string | undefined;
+  providerObjectId: string | null | undefined;
+}): string | null {
+  if (!params.workspace || !params.providerObjectId) return null;
+  const workspace = encodeURIComponent(params.workspace);
+  const environment = encodeURIComponent(params.environment || DEFAULT_MODAL_DASHBOARD_ENVIRONMENT);
+  const providerObjectId = encodeURIComponent(params.providerObjectId);
+  return `https://modal.com/apps/${workspace}/${environment}/deployed/${MODAL_APP_NAME}?activeTab=sandboxes&sandboxId=${providerObjectId}`;
 }
 
 export interface CreateSandboxRequest {
@@ -40,6 +55,7 @@ export interface CreateSandboxRequest {
   timeoutSeconds?: number;
   branch?: string;
   codeServerEnabled?: boolean;
+  agentSlackNotifyEnabled?: boolean;
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
 }
@@ -69,6 +85,7 @@ export interface RestoreSandboxRequest {
   timeoutSeconds?: number;
   branch?: string;
   codeServerEnabled?: boolean;
+  agentSlackNotifyEnabled?: boolean;
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
 }
@@ -233,6 +250,7 @@ export class ModalClient {
           timeout_seconds: request.timeoutSeconds || null,
           branch: request.branch || null,
           code_server_enabled: request.codeServerEnabled ?? false,
+          agent_slack_notify_enabled: request.agentSlackNotifyEnabled ?? false,
           mcp_servers: request.mcpServers || null,
           sandbox_settings: request.sandboxSettings ?? null,
         }),
@@ -320,6 +338,7 @@ export class ModalClient {
           user_env_vars: request.userEnvVars || null,
           timeout_seconds: request.timeoutSeconds || null,
           code_server_enabled: request.codeServerEnabled ?? false,
+          agent_slack_notify_enabled: request.agentSlackNotifyEnabled ?? false,
           sandbox_settings: request.sandboxSettings ?? null,
         }),
       });

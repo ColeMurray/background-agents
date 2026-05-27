@@ -11,6 +11,7 @@ import type { AutomationEvent, AutomationEventSource } from "./types";
 
 export interface ConditionConfigMap {
   branch: { operator: "glob_match" | "exact"; value: string[] };
+  target_branch: { operator: "glob_match" | "exact"; value: string[] };
   label: { operator: "any_of" | "none_of"; value: string[] };
   path_glob: { operator: "any_match"; value: string[] };
   actor: { operator: "include" | "exclude"; value: string[] };

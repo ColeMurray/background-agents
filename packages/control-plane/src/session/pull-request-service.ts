@@ -61,6 +61,8 @@ export interface PullRequestServiceDeps {
   pushBranchToRemote: (headBranch: string, pushSpec: GitPushSpec) => Promise<PushBranchResult>;
   broadcastSessionBranch: (branchName: string) => void;
   broadcastArtifactCreated: (artifact: SessionArtifact) => void;
+  /** Display name used in the PR body footer (e.g. "Created with [name](url)"). */
+  appName: string;
 }
 
 /**
@@ -183,7 +185,8 @@ export class SessionPullRequestService {
       // (e.g. sessions triggered from Linear or other integrations without user GitHub OAuth)
       const prAuth = input.promptingAuth ?? appAuth;
 
-      const fullBody = input.body + `\n\n---\n*Created with [Open-Inspect](${input.sessionUrl})*`;
+      const fullBody =
+        input.body + `\n\n---\n*Created with [${this.deps.appName}](${input.sessionUrl})*`;
 
       const prResult = await this.deps.sourceControlProvider.createPullRequest(prAuth, {
         repository: repoInfo,

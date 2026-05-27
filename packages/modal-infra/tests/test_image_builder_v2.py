@@ -2,18 +2,21 @@
 
 import json
 import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
 from sandbox_runtime.auth.internal import generate_internal_token, verify_internal_token
+from src.sandbox.manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
 from src.scheduler.image_builder import (
     CALLBACK_BACKOFF_BASE,
     CALLBACK_MAX_RETRIES,
     BuildError,
     _callback_with_retry,
     _stream_build_logs,
+    build_repo_image,
 )
 
 
@@ -194,9 +197,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete = await _stream_build_logs(mock_sandbox)
+        sha, complete, error = await _stream_build_logs(mock_sandbox)
         assert sha == "abc123def456"
         assert complete is True
+        assert error is None
 
     @pytest.mark.asyncio
     async def test_complete_without_sha(self):
@@ -208,9 +212,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete = await _stream_build_logs(mock_sandbox)
+        sha, complete, error = await _stream_build_logs(mock_sandbox)
         assert sha == ""
         assert complete is True
+        assert error is None
 
     @pytest.mark.asyncio
     async def test_incomplete_when_sandbox_exits(self):
@@ -223,9 +228,78 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete = await _stream_build_logs(mock_sandbox)
+        sha, complete, error = await _stream_build_logs(mock_sandbox)
         assert sha == "abc123"
         assert complete is False
+        assert error is None
+
+    @pytest.mark.asyncio
+    async def test_captures_setup_failure_tail(self):
+        """Should preserve the setup failure that caused a build to exit."""
+        log_lines = [
+            json.dumps({"level": "info", "event": "git.sync_complete", "head_sha": "abc123"}),
+            json.dumps(
+                {
+                    "level": "error",
+                    "event": "supervisor.error",
+                    "error_message": "setup hook failed in build mode",
+                }
+            ),
+            json.dumps(
+                {
+                    "level": "error",
+                    "event": "setup.failed",
+                    "output_tail": "npm install\nmissing dependency",
+                }
+            ),
+        ]
+        mock_sandbox = MagicMock()
+        mock_sandbox.stdout = self._async_stdout(log_lines)
+
+        sha, complete, error = await _stream_build_logs(mock_sandbox)
+        assert sha == "abc123"
+        assert complete is False
+        assert error == "setup.failed: npm install\nmissing dependency"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_supervisor_error(self):
+        """Should use supervisor errors when no setup failure was emitted."""
+        log_lines = [
+            json.dumps(
+                {
+                    "level": "error",
+                    "event": "supervisor.error",
+                    "error_message": "unexpected startup failure",
+                }
+            ),
+        ]
+        mock_sandbox = MagicMock()
+        mock_sandbox.stdout = self._async_stdout(log_lines)
+
+        sha, complete, error = await _stream_build_logs(mock_sandbox)
+        assert sha == ""
+        assert complete is False
+        assert error == "supervisor.error: unexpected startup failure"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_supervisor_fatal(self):
+        """Should use fatal supervisor errors when no setup failure was emitted."""
+        log_lines = [
+            json.dumps(
+                {
+                    "level": "error",
+                    "event": "supervisor.fatal",
+                    "error_message": "unexpected startup failure",
+                }
+            ),
+        ]
+        mock_sandbox = MagicMock()
+        mock_sandbox.stdout = self._async_stdout(log_lines)
+
+        sha, complete, error = await _stream_build_logs(mock_sandbox)
+        assert sha == ""
+        assert complete is False
+        assert error == "supervisor.fatal: unexpected startup failure"
 
     @pytest.mark.asyncio
     async def test_returns_incomplete_on_error(self):
@@ -233,14 +307,15 @@ class TestStreamBuildLogs:
 
         async def _raise():
             raise Exception("stream error")
-            yield  # noqa: unreachable — makes this an async generator
+            yield  # pragma: no cover - makes this an async generator
 
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = _raise()
 
-        sha, complete = await _stream_build_logs(mock_sandbox)
+        sha, complete, error = await _stream_build_logs(mock_sandbox)
         assert sha == ""
         assert complete is False
+        assert error is None
 
     @pytest.mark.asyncio
     async def test_handles_malformed_json(self):
@@ -253,9 +328,10 @@ class TestStreamBuildLogs:
         mock_sandbox = MagicMock()
         mock_sandbox.stdout = self._async_stdout(log_lines)
 
-        sha, complete = await _stream_build_logs(mock_sandbox)
+        sha, complete, error = await _stream_build_logs(mock_sandbox)
         assert sha == "abc123"
         assert complete is True
+        assert error is None
 
 
 class TestBuildError:
@@ -265,3 +341,151 @@ class TestBuildError:
         err = BuildError("sandbox exited with code 1")
         assert isinstance(err, Exception)
         assert str(err) == "sandbox exited with code 1"
+
+
+class TestBuildRepoImage:
+    """Test the async repo image build worker."""
+
+    @staticmethod
+    def _async_stdout(lines):
+        async def _aiter():
+            for line in lines:
+                yield line
+
+        return _aiter()
+
+    def _build_handle(self, *, snapshot_side_effect=None, stdout_lines=None, returncode=0):
+        snapshot_aio = AsyncMock(
+            side_effect=snapshot_side_effect,
+            return_value=SimpleNamespace(object_id="im-test"),
+        )
+        snapshot_filesystem = MagicMock()
+        snapshot_filesystem.aio = snapshot_aio
+        terminate_aio = AsyncMock()
+        terminate = SimpleNamespace(aio=terminate_aio)
+        if stdout_lines is None:
+            stdout_lines = [
+                json.dumps({"event": "git.sync_complete", "head_sha": "abc123"}),
+                json.dumps({"event": "image_build.complete", "duration_ms": 5000}),
+            ]
+        sandbox = SimpleNamespace(
+            stdout=self._async_stdout(stdout_lines),
+            snapshot_filesystem=snapshot_filesystem,
+            terminate=terminate,
+            returncode=returncode,
+        )
+        return SimpleNamespace(modal_sandbox=sandbox), snapshot_aio, terminate_aio
+
+    @pytest.mark.asyncio
+    async def test_uses_snapshot_timeout_and_terminates_on_success(self):
+        handle, snapshot_aio, terminate_aio = self._build_handle()
+        manager = SimpleNamespace(create_build_sandbox=AsyncMock(return_value=handle))
+
+        with (
+            patch("src.scheduler.image_builder.validate_control_plane_url", return_value=True),
+            patch("src.scheduler.image_builder._generate_clone_token", return_value="gh-token"),
+            patch("src.sandbox.manager.SandboxManager", return_value=manager),
+            patch(
+                "src.scheduler.image_builder._callback_with_retry",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as callback,
+        ):
+            await build_repo_image.local(
+                repo_owner="acme",
+                repo_name="repo",
+                callback_url="https://cp.test/repo-images/build-complete",
+                build_id="img-1",
+            )
+
+        snapshot_aio.assert_awaited_once_with(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
+        terminate_aio.assert_awaited_once()
+        callback.assert_awaited_once()
+        callback_payload = callback.await_args.args[1]
+        assert callback_payload["build_id"] == "img-1"
+        assert callback_payload["provider_image_id"] == "im-test"
+        assert callback_payload["base_sha"] == "abc123"
+
+    @pytest.mark.asyncio
+    async def test_terminates_and_reports_failure_when_snapshot_times_out(self):
+        handle, snapshot_aio, terminate_aio = self._build_handle(
+            snapshot_side_effect=TimeoutError("Timed out waiting for image to be created")
+        )
+        manager = SimpleNamespace(create_build_sandbox=AsyncMock(return_value=handle))
+
+        with (
+            patch("src.scheduler.image_builder.validate_control_plane_url", return_value=True),
+            patch("src.scheduler.image_builder._generate_clone_token", return_value="gh-token"),
+            patch("src.sandbox.manager.SandboxManager", return_value=manager),
+            patch(
+                "src.scheduler.image_builder._callback_with_retry",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as callback,
+        ):
+            await build_repo_image.local(
+                repo_owner="acme",
+                repo_name="repo",
+                callback_url="https://cp.test/repo-images/build-complete",
+                build_id="img-1",
+            )
+
+        snapshot_aio.assert_awaited_once_with(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
+        terminate_aio.assert_awaited_once()
+        callback.assert_awaited_once()
+        failure_url, failure_payload = callback.await_args.args
+        assert failure_url == "https://cp.test/repo-images/build-failed"
+        assert failure_payload == {
+            "build_id": "img-1",
+            "error": "Timed out waiting for image to be created",
+        }
+
+    @pytest.mark.asyncio
+    async def test_reports_build_log_failure_when_stream_never_completes(self):
+        handle, snapshot_aio, terminate_aio = self._build_handle(
+            stdout_lines=[
+                json.dumps({"event": "git.sync_complete", "head_sha": "abc123"}),
+                json.dumps(
+                    {
+                        "event": "setup.failed",
+                        "output_tail": "npm install failed: PIN=123 TOKEN=abcd1234",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "event": "supervisor.error",
+                        "error_message": "setup hook failed in build mode",
+                    }
+                ),
+            ],
+            returncode=1,
+        )
+        manager = SimpleNamespace(create_build_sandbox=AsyncMock(return_value=handle))
+
+        with (
+            patch("src.scheduler.image_builder.validate_control_plane_url", return_value=True),
+            patch("src.scheduler.image_builder._generate_clone_token", return_value="gh-token"),
+            patch("src.sandbox.manager.SandboxManager", return_value=manager),
+            patch(
+                "src.scheduler.image_builder._callback_with_retry",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as callback,
+        ):
+            await build_repo_image.local(
+                repo_owner="acme",
+                repo_name="repo",
+                callback_url="https://cp.test/repo-images/build-complete",
+                build_id="img-1",
+                user_env_vars={"PIN": "123", "API_TOKEN": "abcd1234"},
+            )
+
+        snapshot_aio.assert_not_awaited()
+        terminate_aio.assert_awaited_once()
+        callback.assert_awaited_once()
+        failure_url, failure_payload = callback.await_args.args
+        assert failure_url == "https://cp.test/repo-images/build-failed"
+        assert failure_payload == {
+            "build_id": "img-1",
+            "error": "Build sandbox exited without completing: setup.failed: npm install failed: PIN=*** TOKEN=***",
+        }

@@ -6,6 +6,7 @@ import type { ConditionRegistry } from "./conditions";
 import type { TriggerSourceDefinition } from "./types";
 import { sentrySource, sentryConditions } from "./sentry";
 import { webhookSource, webhookConditions } from "./webhook";
+import { githubSource } from "./github";
 
 // GitHub and Linear condition handlers (stubs for Phase 2c).
 // These need to exist so that the ConditionRegistry is complete.
@@ -29,6 +30,18 @@ const sharedConditions = {
       return c.value.some((pattern: string) => matchGlob(pattern, event.branch!));
     },
   },
+  target_branch: {
+    appliesTo: ["github"] as const,
+    validate(c: { value: string[] }) {
+      return c.value.length === 0 ? "At least one target branch pattern required" : null;
+    },
+    evaluate(c: { operator: string; value: string[] }, event: AutomationEvent) {
+      if (event.source !== "github") return true;
+      if (!event.targetBranch) return false;
+      if (c.operator === "exact") return c.value.includes(event.targetBranch);
+      return c.value.some((pattern: string) => matchGlob(pattern, event.targetBranch!));
+    },
+  },
   label: {
     appliesTo: ["github", "linear"] as const,
     validate(c: { value: string[] }) {
@@ -38,7 +51,8 @@ const sharedConditions = {
       if (event.source !== "github" && event.source !== "linear") return true;
       const labels = event.labels;
       if (!labels?.length) return c.operator === "none_of";
-      const hasOverlap = c.value.some((l: string) => labels.includes(l));
+      const lowerLabels = labels.map((l) => l.toLowerCase());
+      const hasOverlap = c.value.some((l: string) => lowerLabels.includes(l.toLowerCase()));
       return c.operator === "any_of" ? hasOverlap : !hasOverlap;
     },
   },
@@ -63,9 +77,10 @@ const sharedConditions = {
     evaluate(c: { operator: string; value: string[] }, event: AutomationEvent) {
       if (event.source !== "github" && event.source !== "linear") return true;
       if (!event.actor) return false;
+      const lowerActor = event.actor.toLowerCase();
       return c.operator === "include"
-        ? c.value.includes(event.actor)
-        : !c.value.includes(event.actor);
+        ? c.value.some((v: string) => v.toLowerCase() === lowerActor)
+        : c.value.every((v: string) => v.toLowerCase() !== lowerActor);
     },
   },
   check_conclusion: {
@@ -105,4 +120,8 @@ export const conditionRegistry: ConditionRegistry = {
  * All registered trigger sources. The UI reads this for the trigger type selector.
  * Only Sentry and Webhook are active in Phase 2a/2b.
  */
-export const triggerSources: TriggerSourceDefinition[] = [sentrySource, webhookSource];
+export const triggerSources: TriggerSourceDefinition[] = [
+  sentrySource,
+  webhookSource,
+  githubSource,
+];

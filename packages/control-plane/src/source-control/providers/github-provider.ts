@@ -46,10 +46,12 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
 
   private readonly appConfig?: GitHubProviderConfig["appConfig"];
   private readonly cacheStore?: GitHubProviderConfig["cacheStore"];
+  private readonly userAgent: string;
 
   constructor(config: GitHubProviderConfig = {}) {
     this.appConfig = config.appConfig;
     this.cacheStore = config.cacheStore;
+    this.userAgent = config.userAgent || USER_AGENT;
   }
 
   /**
@@ -65,7 +67,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         headers: {
           Accept: "application/vnd.github.v3+json",
           Authorization: `Bearer ${auth.token}`,
-          "User-Agent": USER_AGENT,
+          "User-Agent": this.userAgent,
         },
       }
     );
@@ -124,7 +126,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         headers: {
           Accept: "application/vnd.github.v3+json",
           Authorization: `Bearer ${auth.token}`,
-          "User-Agent": USER_AGENT,
+          "User-Agent": this.userAgent,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(requestBody),
@@ -212,12 +214,10 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     }
 
     try {
-      const repo = await getInstallationRepository(
-        this.appConfig,
-        config.owner,
-        config.name,
-        this.cacheStore ? { cacheStore: this.cacheStore } : undefined
-      );
+      const repo = await getInstallationRepository(this.appConfig, config.owner, config.name, {
+        cacheStore: this.cacheStore,
+        userAgent: this.userAgent,
+      });
       if (!repo) {
         return null;
       }
@@ -248,10 +248,10 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     }
 
     try {
-      const result = await listInstallationRepositories(
-        this.appConfig,
-        this.cacheStore ? { cacheStore: this.cacheStore } : undefined
-      );
+      const result = await listInstallationRepositories(this.appConfig, {
+        cacheStore: this.cacheStore,
+        userAgent: this.userAgent,
+      });
       return result.repos;
     } catch (error) {
       throw SourceControlProviderError.fromFetchError(
@@ -274,12 +274,10 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     }
 
     try {
-      return await listRepositoryBranches(
-        this.appConfig,
-        config.owner,
-        config.name,
-        this.cacheStore ? { cacheStore: this.cacheStore } : undefined
-      );
+      return await listRepositoryBranches(this.appConfig, config.owner, config.name, {
+        cacheStore: this.cacheStore,
+        userAgent: this.userAgent,
+      });
     } catch (error) {
       throw SourceControlProviderError.fromFetchError(
         `Failed to list branches: ${error instanceof Error ? error.message : String(error)}`,
@@ -301,7 +299,10 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     }
 
     try {
-      const token = await getCachedInstallationToken(this.appConfig);
+      const token = await getCachedInstallationToken(this.appConfig, {
+        cacheStore: this.cacheStore,
+        userAgent: this.userAgent,
+      });
       return {
         authType: "app",
         token,
@@ -355,7 +356,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
           headers: {
             Accept: "application/vnd.github.v3+json",
             Authorization: `Bearer ${accessToken}`,
-            "User-Agent": USER_AGENT,
+            "User-Agent": this.userAgent,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ labels }),
@@ -390,7 +391,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
           headers: {
             Accept: "application/vnd.github.v3+json",
             Authorization: `Bearer ${accessToken}`,
-            "User-Agent": USER_AGENT,
+            "User-Agent": this.userAgent,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ reviewers }),

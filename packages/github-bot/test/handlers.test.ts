@@ -188,7 +188,8 @@ describe("handlePullRequestOpened", () => {
     expect(postReaction).toHaveBeenCalledWith(
       "test-installation-token",
       "https://api.github.com/repos/acme/widgets/issues/42/reactions",
-      "eyes"
+      "eyes",
+      "Open-Inspect"
     );
 
     const cpFetch = getControlPlaneFetch(env);
@@ -205,7 +206,7 @@ describe("handlePullRequestOpened", () => {
 
     const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
     expect(promptBody.source).toBe("github");
-    expect(promptBody.authorId).toBe("github:alice");
+    expect(promptBody.authorId).toBe("github:1001");
     expect(promptBody.content).toContain("Pull Request #42");
 
     expect(log.info).toHaveBeenCalledWith(
@@ -350,12 +351,14 @@ describe("handleReviewRequested", () => {
       appId: "12345",
       privateKey: "test-key",
       installationId: "67890",
+      userAgent: "Open-Inspect",
     });
 
     expect(postReaction).toHaveBeenCalledWith(
       "test-installation-token",
       "https://api.github.com/repos/acme/widgets/issues/42/reactions",
-      "eyes"
+      "eyes",
+      "Open-Inspect"
     );
 
     const cpFetch = getControlPlaneFetch(env);
@@ -378,7 +381,7 @@ describe("handleReviewRequested", () => {
     expect(promptCall[0]).toBe("https://internal/sessions/session-123/prompt");
     const promptBody = JSON.parse(promptCall[1].body);
     expect(promptBody.source).toBe("github");
-    expect(promptBody.authorId).toBe("github:alice");
+    expect(promptBody.authorId).toBe("github:1001");
     expect(promptBody.content).toContain("Pull Request #42");
     expect(promptBody.content).toContain("acme/widgets");
     expect(promptBody.content).toContain("gh pr diff 42");
@@ -457,7 +460,8 @@ describe("handleIssueComment", () => {
     expect(postReaction).toHaveBeenCalledWith(
       "test-installation-token",
       "https://api.github.com/repos/acme/widgets/issues/comments/100/reactions",
-      "eyes"
+      "eyes",
+      "Open-Inspect"
     );
 
     const cpFetch = getControlPlaneFetch(env);
@@ -472,7 +476,7 @@ describe("handleIssueComment", () => {
     const promptBody = JSON.parse(cpFetch.mock.calls[1][1].body);
     expect(promptBody.content).toContain("please fix the error handling");
     expect(promptBody.content).not.toContain("@test-bot[bot]");
-    expect(promptBody.authorId).toBe("github:bob");
+    expect(promptBody.authorId).toBe("github:1002");
   });
 
   it("returns early if not a PR", async () => {
@@ -555,7 +559,8 @@ describe("handleReviewComment", () => {
     expect(postReaction).toHaveBeenCalledWith(
       "test-installation-token",
       "https://api.github.com/repos/acme/widgets/pulls/comments/200/reactions",
-      "eyes"
+      "eyes",
+      "Open-Inspect"
     );
 
     const cpFetch = getControlPlaneFetch(env);
@@ -570,7 +575,7 @@ describe("handleReviewComment", () => {
     expect(promptBody.content).toContain("src/cache.ts");
     expect(promptBody.content).toContain("const cache = new Map()");
     expect(promptBody.content).toContain("comments/200/replies");
-    expect(promptBody.authorId).toBe("github:carol");
+    expect(promptBody.authorId).toBe("github:1003");
   });
 
   it("returns early if no @mention", async () => {

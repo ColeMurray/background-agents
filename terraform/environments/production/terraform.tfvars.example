@@ -97,6 +97,27 @@ EOF
 
 github_app_installation_id = ""
 
+# GitHub Bot (Optional)
+# Set enable_github_bot = true to deploy the GitHub bot worker for PR reviews
+# and @mention commands. Requires github_webhook_secret and github_bot_username.
+enable_github_bot = false
+
+# Shared secret for verifying GitHub webhook signatures
+# Generate with: openssl rand -hex 32
+# Configure the same value in your GitHub App's webhook settings.
+github_webhook_secret = ""
+
+# GitHub App bot username for @mention detection
+# This is the GitHub App's slug (the name in its profile URL) with the literal
+# "[bot]" suffix that GitHub appends to all GitHub App accounts.
+# Find it at: https://github.com/apps/<your-app-slug> — the slug is the last
+# path segment. The bot's commits/comments will appear as "<slug>[bot]".
+# Examples:
+#   App named "Open Inspect"     -> slug "open-inspect"     -> "open-inspect[bot]"
+#   App named "Acme Code Review" -> slug "acme-code-review" -> "acme-code-review[bot]"
+# The webhook handler uses this to detect @mentions of the bot in PRs/issues.
+github_bot_username = ""
+
 # =============================================================================
 # Slack App Credentials (Optional)
 # =============================================================================
@@ -164,6 +185,11 @@ nextauth_secret = ""
 # - "daytona": direct Daytona REST API integration with stop/start resume
 sandbox_provider = "modal"
 
+# Platform for the web app deployment
+# - "vercel": deploy the Next.js app to Vercel (requires vercel_api_token + vercel_team_id)
+# - "cloudflare": deploy the web app to Cloudflare Workers via OpenNext (no Vercel credentials needed)
+web_platform = "vercel"
+
 # Unique deployment name (used in resource names and URLs)
 # IMPORTANT: This must be globally unique for Vercel URLs.
 # Use something unique like your GitHub username, company name, or a random suffix.
@@ -173,6 +199,58 @@ deployment_name = ""
 
 # Path to project root (relative to this directory)
 project_root = "../../../"
+
+# Display name shown in the web UI, bot messages (Slack, Linear), and PR body footers.
+# Also used as the outbound HTTP User-Agent header. Defaults to "Open-Inspect".
+# app_name = "Open-Inspect"
+
+# Short brand label shown only in the sidebar header.
+# Defaults to "Inspect". Set this when app_name is too wide for the sidebar
+# (e.g. app_name = "Acme Coding Agent", app_short_name = "Acme").
+# app_short_name = "Inspect"
+
+# Optional URL (absolute or root-relative path) to a custom logo image for the
+# command menu and browser favicon. Leave empty to use the built-in icon.
+# Example: "/branding/logo.svg" (file under packages/web/public/) or
+#          "https://cdn.example.com/logo.svg".
+# app_icon_url = ""
+
+# Override the R2 media bucket name (optional)
+# Defaults to "open-inspect-media-<deployment_name>" when left empty.
+# Set this when the bucket must be pre-created out-of-band — for example, when
+# the Cloudflare API token used by Terraform doesn't have permission to create
+# R2 buckets and an admin had to provision one with a specific name.
+#
+# Manual setup requirements (when an admin pre-creates the bucket):
+#   - Must live in the same Cloudflare account as the Workers (cloudflare_account_id).
+#   - Private bucket — do NOT enable public access. The control-plane Worker
+#     reads/writes objects through its binding; clients never hit R2 directly.
+#   - No CORS rules or lifecycle policies are required.
+#   - Location should match r2_media_location (default ENAM).
+#
+# Create with wrangler (equivalent to what Terraform would do):
+#   wrangler r2 bucket create <bucket-name> --location ENAM
+# Or create via the Cloudflare dashboard: R2 -> Create bucket (Standard storage class).
+#
+# After manual creation, import the bucket so Terraform manages the binding without
+# trying to recreate it:
+#   terraform import cloudflare_r2_bucket.media <cloudflare_account_id>/<bucket-name>/default
+#
+# WARNING — renaming an existing Terraform-managed bucket:
+# If you previously deployed without this variable (Terraform owns the default-named
+# bucket) and now set r2_media_bucket_name to a different name WITHOUT first running
+# `terraform import` on the new name, Terraform will destroy the existing bucket and
+# create a new one — permanently deleting all stored objects. Migrate objects first
+# (e.g. with rclone) and import the new bucket before applying.
+#
+# Worker runtime needs (granted automatically through the binding, listed for reference):
+#   - R2 object-level: Read, Write, Delete on this bucket only.
+# The Terraform/Cloudflare API token does NOT need object-level R2 permissions —
+# it only manages the bucket resource and the Worker binding. Required token scopes:
+#   - Workers R2 Storage: Edit (only needed when Terraform creates/manages the bucket;
+#     if the bucket is pre-created and imported, drop to Read or omit)
+#   - Workers Scripts: Edit (to attach the MEDIA_BUCKET binding to the Worker)
+# r2_media_bucket_name = ""
 
 # =============================================================================
 # Initial Deployment Flags

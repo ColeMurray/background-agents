@@ -164,6 +164,10 @@ export interface SandboxLifecycleConfig {
   sessionId?: string;
   /** MCP server lookup for injecting servers into sandboxes. */
   mcpServerLookup?: McpServerLookup;
+  /** Resolves the spawn-time agent-slack-notify gate. */
+  slackAgentNotifyLookup?: SlackAgentNotifyLookup;
+  /** Builds a provider dashboard URL for a persisted provider object ID. */
+  sandboxDashboardUrlBuilder?: (providerObjectId: string) => string | null;
 }
 
 /**
@@ -202,6 +206,16 @@ export interface RepoImageLookup {
     repoName: string,
     baseBranch?: string
   ): Promise<{ provider_image_id: string; base_sha: string } | null>;
+}
+
+// ==================== Slack Agent-Notify Lookup ====================
+
+/**
+ * Resolves the spawn-time agent-slack-notify gate for a given repo.
+ * False (or throwing) means do not install the tool in this sandbox.
+ */
+export interface SlackAgentNotifyLookup {
+  isEnabledForRepo(repoOwner: string, repoName: string): Promise<boolean>;
 }
 
 // ==================== Callbacks ====================
@@ -411,6 +425,7 @@ export class SandboxLifecycleManager {
       const mcpServers = await this.loadMcpServers(session);
 
       const codeServerEnabled = session.code_server_enabled === 1;
+      const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const sandboxSettings = this.parseSandboxSettings(session);
       const createConfig: CreateSandboxConfig = {
         sessionId,
@@ -427,6 +442,7 @@ export class SandboxLifecycleManager {
         timeoutSeconds,
         branch: session.base_branch,
         codeServerEnabled,
+        agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
       };
@@ -440,7 +456,7 @@ export class SandboxLifecycleManager {
       });
 
       if (result.providerObjectId) {
-        this.storage.updateSandboxModalObjectId(result.providerObjectId);
+        this.storeAndBroadcastProviderObjectId(result.providerObjectId);
       }
       if (result.codeServerUrl && result.codeServerPassword) {
         await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
@@ -499,6 +515,22 @@ export class SandboxLifecycleManager {
     }
   }
 
+  private async resolveAgentSlackNotifyEnabled(session: SessionRow): Promise<boolean> {
+    if (!this.config.slackAgentNotifyLookup) return false;
+    try {
+      return await this.config.slackAgentNotifyLookup.isEnabledForRepo(
+        session.repo_owner,
+        session.repo_name
+      );
+    } catch (err) {
+      this.log.warn("Failed to resolve agent slack-notify gate; treating as disabled", {
+        event: "slack_notify.gate_resolve_failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  }
+
   /**
    * Load MCP servers applicable to the current session's repository.
    * Returns undefined if none are found or DB is not configured.
@@ -547,9 +579,6 @@ export class SandboxLifecycleManager {
 
       this.storage.setLastSpawnError(null, null);
 
-      this.storage.updateSandboxStatus("spawning");
-      this.broadcaster.broadcast({ type: "sandbox_status", status: "spawning" });
-
       const now = Date.now();
       const sandboxAuthToken = this.idGenerator.generateId();
       const sandboxAuthTokenHash = await hashToken(sandboxAuthToken);
@@ -562,6 +591,7 @@ export class SandboxLifecycleManager {
         authTokenHash: sandboxAuthTokenHash,
         modalSandboxId: expectedSandboxId,
       });
+      this.broadcaster.broadcast({ type: "sandbox_status", status: "spawning" });
 
       this.log.info("Restoring from snapshot", {
         event: "sandbox.restore",
@@ -576,6 +606,7 @@ export class SandboxLifecycleManager {
         session.spawn_source === "agent" ? CHILD_SANDBOX_TIMEOUT_SECONDS : undefined;
 
       const codeServerEnabled = session.code_server_enabled === 1;
+      const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const mcpServers = await this.loadMcpServers(session);
       const sandboxSettings = this.parseSandboxSettings(session);
       const result = await this.provider.restoreFromSnapshot({
@@ -592,6 +623,7 @@ export class SandboxLifecycleManager {
         timeoutSeconds,
         branch: session.base_branch,
         codeServerEnabled,
+        agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
       });
@@ -604,7 +636,7 @@ export class SandboxLifecycleManager {
         });
 
         if (result.providerObjectId) {
-          this.storage.updateSandboxModalObjectId(result.providerObjectId);
+          this.storeAndBroadcastProviderObjectId(result.providerObjectId);
         }
         if (result.codeServerUrl && result.codeServerPassword) {
           await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
@@ -718,9 +750,11 @@ export class SandboxLifecycleManager {
         throw new Error(result.error || "Failed to resume sandbox");
       }
 
+      const finalProviderObjectId = result.providerObjectId ?? providerObjectId;
       if (result.providerObjectId && result.providerObjectId !== providerObjectId) {
-        this.storage.updateSandboxModalObjectId(result.providerObjectId);
+        this.storeProviderObjectId(result.providerObjectId);
       }
+      this.broadcastSandboxDashboardUrl(finalProviderObjectId);
 
       if (result.codeServerUrl && result.codeServerPassword) {
         await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
@@ -1112,6 +1146,25 @@ export class SandboxLifecycleManager {
    */
   private getConnectedClientCount(): number {
     return this.wsManager.getConnectedClientCount();
+  }
+
+  private storeAndBroadcastProviderObjectId(providerObjectId: string): void {
+    this.storeProviderObjectId(providerObjectId);
+    this.broadcastSandboxDashboardUrl(providerObjectId);
+  }
+
+  private storeProviderObjectId(providerObjectId: string): void {
+    this.storage.updateSandboxModalObjectId(providerObjectId);
+  }
+
+  private broadcastSandboxDashboardUrl(providerObjectId: string): void {
+    const url = this.config.sandboxDashboardUrlBuilder?.(providerObjectId);
+    if (url) {
+      this.log.debug("Broadcasting sandbox dashboard URL", {
+        provider_object_id: providerObjectId,
+      });
+      this.broadcaster.broadcast({ type: "sandbox_dashboard_url", url });
+    }
   }
 
   /**

@@ -2,14 +2,21 @@ import {
   isValidModel,
   isValidReasoningEffort,
   INTEGRATION_DEFINITIONS,
+  DEFAULT_MENTIONS_POLICY,
   type IntegrationId,
   type IntegrationSettingsMap,
   type GitHubBotSettings,
   type LinearBotSettings,
   type CodeServerSettings,
   type SandboxSettings,
+  type SlackGlobalSettings,
+  type SlackMentionsPolicy,
   MAX_TUNNEL_PORTS,
 } from "@open-inspect/shared";
+
+type SettingsLevel = "global" | "repo";
+
+const SLACK_MENTIONS_POLICIES = ["allow", "escape", "strip"] as const;
 
 export class IntegrationSettingsValidationError extends Error {
   constructor(message: string) {
@@ -59,7 +66,7 @@ export class IntegrationSettingsStore {
     if (settings.defaults) {
       settings = {
         ...settings,
-        defaults: this.validateAndNormalizeSettings(integrationId, settings.defaults),
+        defaults: this.validateAndNormalizeSettings(integrationId, settings.defaults, "global"),
       };
     }
 
@@ -103,7 +110,7 @@ export class IntegrationSettingsStore {
     repo: string,
     settings: IntegrationSettingsMap[K]["repo"]
   ): Promise<void> {
-    const normalized = this.validateAndNormalizeSettings(integrationId, settings);
+    const normalized = this.validateAndNormalizeSettings(integrationId, settings, "repo");
 
     const now = Date.now();
     await this.db
@@ -142,7 +149,9 @@ export class IntegrationSettingsStore {
   async getResolvedConfig<K extends IntegrationId>(
     integrationId: K,
     repo: string
-  ): Promise<ResolvedIntegrationConfig<IntegrationSettingsMap[K]["repo"]>> {
+  ): Promise<
+    ResolvedIntegrationConfig<NonNullable<IntegrationSettingsMap[K]["global"]["defaults"]>>
+  > {
     const [globalSettings, repoSettings] = await Promise.all([
       this.getGlobal(integrationId),
       this.getRepoSettings(integrationId, repo),
@@ -164,13 +173,14 @@ export class IntegrationSettingsStore {
     }
 
     return { enabledRepos, settings } as ResolvedIntegrationConfig<
-      IntegrationSettingsMap[K]["repo"]
+      NonNullable<IntegrationSettingsMap[K]["global"]["defaults"]>
     >;
   }
 
   private validateAndNormalizeSettings<K extends IntegrationId>(
     integrationId: K,
-    settings: IntegrationSettingsMap[K]["repo"]
+    settings: IntegrationSettingsMap[K]["repo"],
+    level: SettingsLevel
   ): IntegrationSettingsMap[K]["repo"] {
     if (integrationId === "github") {
       return this.validateAndNormalizeGitHubSettings(
@@ -189,6 +199,13 @@ export class IntegrationSettingsStore {
     if (integrationId === "sandbox") {
       return this.validateSandboxSettings(
         settings as SandboxSettings
+      ) as IntegrationSettingsMap[K]["repo"];
+    }
+
+    if (integrationId === "slack") {
+      return this.validateSlackSettings(
+        settings as SlackGlobalSettings,
+        level
       ) as IntegrationSettingsMap[K]["repo"];
     }
 
@@ -297,6 +314,22 @@ export class IntegrationSettingsStore {
     if (settings.terminalEnabled !== undefined && typeof settings.terminalEnabled !== "boolean") {
       throw new IntegrationSettingsValidationError("terminalEnabled must be a boolean");
     }
+
+    this.validatePositiveIntegerSetting(
+      settings.maxConcurrentChildSessions,
+      "maxConcurrentChildSessions"
+    );
+    this.validatePositiveIntegerSetting(settings.maxTotalChildSessions, "maxTotalChildSessions");
+    if (
+      settings.maxConcurrentChildSessions !== undefined &&
+      settings.maxTotalChildSessions !== undefined &&
+      settings.maxConcurrentChildSessions > settings.maxTotalChildSessions
+    ) {
+      throw new IntegrationSettingsValidationError(
+        "maxConcurrentChildSessions must be less than or equal to maxTotalChildSessions"
+      );
+    }
+
     if (settings.tunnelPorts !== undefined) {
       if (!Array.isArray(settings.tunnelPorts)) {
         throw new IntegrationSettingsValidationError("tunnelPorts must be an array of numbers");
@@ -318,9 +351,69 @@ export class IntegrationSettingsStore {
     }
     return settings;
   }
+
+  private validatePositiveIntegerSetting(value: unknown, name: string): void {
+    if (value === undefined) return;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+      throw new IntegrationSettingsValidationError(`${name} must be a positive integer`);
+    }
+  }
+
+  private validateSlackSettings(
+    settings: SlackGlobalSettings,
+    level: SettingsLevel
+  ): SlackGlobalSettings {
+    const allowedKeys =
+      level === "global"
+        ? new Set(["agentNotificationsEnabled", "mentionsPolicy"])
+        : new Set(["agentNotificationsEnabled"]);
+
+    for (const key of Object.keys(settings)) {
+      if (!allowedKeys.has(key)) {
+        throw new IntegrationSettingsValidationError(`Unknown slack setting: ${key}`);
+      }
+    }
+
+    if (
+      settings.agentNotificationsEnabled !== undefined &&
+      typeof settings.agentNotificationsEnabled !== "boolean"
+    ) {
+      throw new IntegrationSettingsValidationError("agentNotificationsEnabled must be a boolean");
+    }
+
+    if (
+      settings.mentionsPolicy !== undefined &&
+      !SLACK_MENTIONS_POLICIES.includes(settings.mentionsPolicy)
+    ) {
+      throw new IntegrationSettingsValidationError(
+        `mentionsPolicy must be one of: ${SLACK_MENTIONS_POLICIES.join(", ")}`
+      );
+    }
+
+    return settings;
+  }
 }
 
 export interface ResolvedIntegrationConfig<TRepo extends object = Record<string, unknown>> {
   enabledRepos: string[] | null;
   settings: TRepo;
+}
+
+/**
+ * Apply runtime defaults to raw Slack settings.
+ *
+ * Reads the partially-typed shape returned by `getResolvedConfig("slack", ...)`
+ * and produces the canonical view used by the route handler and the DO
+ * lifecycle factory: a definite boolean for the master gate, and a definite
+ * mention policy. Avoids re-applying `=== true` and `?? "allow"` at every
+ * call site.
+ */
+export function resolveSlackSettings(raw: Partial<SlackGlobalSettings> | undefined): {
+  agentNotificationsEnabled: boolean;
+  mentionsPolicy: SlackMentionsPolicy;
+} {
+  return {
+    agentNotificationsEnabled: raw?.agentNotificationsEnabled === true,
+    mentionsPolicy: raw?.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY,
+  };
 }

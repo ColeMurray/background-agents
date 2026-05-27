@@ -11,6 +11,9 @@ export interface Env {
   /** Deployment name for logging/identification. */
   DEPLOYMENT_NAME: string;
 
+  /** Display name shown in user-visible bot messages and HTTP User-Agent headers. */
+  APP_NAME?: string;
+
   /** Default model ID for new sessions. */
   DEFAULT_MODEL: string;
 

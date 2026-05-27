@@ -5,7 +5,7 @@
 import type { CorrelationContext } from "../logger";
 import type { RequestMetrics } from "../db/instrumented-d1";
 import type { Env } from "../types";
-import { createKvCacheStore } from "@open-inspect/shared";
+import { createKvCacheStore, resolveAppName } from "@open-inspect/shared";
 import { getGitHubAppConfig } from "../auth/github-app";
 import type { Logger } from "../logger";
 import {
@@ -71,16 +71,19 @@ export function error(message: string, status = 400): Response {
 export function createRouteSourceControlProvider(env: Env): SourceControlProvider {
   const appConfig = getGitHubAppConfig(env);
   const provider = resolveScmProviderFromEnv(env.SCM_PROVIDER);
+  const userAgent = resolveAppName(env);
   return createSourceControlProvider({
     provider,
     github: {
       appConfig: appConfig ?? undefined,
       cacheStore: createKvCacheStore(env.REPOS_CACHE),
+      userAgent,
     },
     ...(env.GITLAB_ACCESS_TOKEN && {
       gitlab: {
         accessToken: env.GITLAB_ACCESS_TOKEN,
         namespace: env.GITLAB_NAMESPACE,
+        userAgent,
       },
     }),
   });

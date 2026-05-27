@@ -3,6 +3,7 @@ import {
   IntegrationSettingsStore,
   IntegrationSettingsValidationError,
   isValidIntegrationId,
+  resolveSlackSettings,
 } from "./integration-settings";
 
 type GlobalRow = {
@@ -168,11 +169,11 @@ describe("isValidIntegrationId", () => {
   it("accepts known integration IDs", () => {
     expect(isValidIntegrationId("github")).toBe(true);
     expect(isValidIntegrationId("linear")).toBe(true);
+    expect(isValidIntegrationId("slack")).toBe(true);
   });
 
   it("rejects unknown IDs", () => {
     expect(isValidIntegrationId("githb")).toBe(false);
-    expect(isValidIntegrationId("slack")).toBe(false);
     expect(isValidIntegrationId("")).toBe(false);
   });
 });
@@ -659,10 +660,22 @@ describe("IntegrationSettingsStore", () => {
     });
 
     it("round-trips global sandbox settings", async () => {
-      await store.setGlobal("sandbox", { defaults: { tunnelPorts: [3000, 3001] } });
+      await store.setGlobal("sandbox", {
+        defaults: {
+          tunnelPorts: [3000, 3001],
+          maxConcurrentChildSessions: 3,
+          maxTotalChildSessions: 8,
+        },
+      });
 
       const result = await store.getGlobal("sandbox");
-      expect(result).toEqual({ defaults: { tunnelPorts: [3000, 3001] } });
+      expect(result).toEqual({
+        defaults: {
+          tunnelPorts: [3000, 3001],
+          maxConcurrentChildSessions: 3,
+          maxTotalChildSessions: 8,
+        },
+      });
     });
 
     it("round-trips per-repo sandbox settings", async () => {
@@ -688,6 +701,19 @@ describe("IntegrationSettingsStore", () => {
       expect(config.settings.tunnelPorts).toEqual([3000, 3001]);
     });
 
+    it("getResolvedConfig merges child session limit overrides", async () => {
+      await store.setGlobal("sandbox", {
+        defaults: { maxConcurrentChildSessions: 5, maxTotalChildSessions: 15 },
+      });
+      await store.setRepoSettings("sandbox", "acme/app", { maxConcurrentChildSessions: 2 });
+
+      const config = await store.getResolvedConfig("sandbox", "acme/app");
+      expect(config.settings).toEqual({
+        maxConcurrentChildSessions: 2,
+        maxTotalChildSessions: 15,
+      });
+    });
+
     it("rejects non-array tunnelPorts", async () => {
       await expect(
         store.setGlobal("sandbox", {
@@ -706,6 +732,24 @@ describe("IntegrationSettingsStore", () => {
       await expect(
         store.setGlobal("sandbox", {
           defaults: { tunnelPorts: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects invalid child session limits", async () => {
+      await expect(
+        store.setGlobal("sandbox", { defaults: { maxConcurrentChildSessions: 1.5 } })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+
+      await expect(
+        store.setGlobal("sandbox", { defaults: { maxTotalChildSessions: -1 } })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects concurrent child session limits greater than total limits", async () => {
+      await expect(
+        store.setGlobal("sandbox", {
+          defaults: { maxConcurrentChildSessions: 6, maxTotalChildSessions: 5 },
         })
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
@@ -780,6 +824,155 @@ describe("IntegrationSettingsStore", () => {
         allowUserPreferenceOverride: false,
         emitToolProgressActivities: false,
       });
+    });
+  });
+
+  describe("slack settings", () => {
+    it("round-trips global slack settings", async () => {
+      await store.setGlobal("slack", {
+        defaults: { agentNotificationsEnabled: true, mentionsPolicy: "escape" },
+      });
+
+      const result = await store.getGlobal("slack");
+      expect(result).toEqual({
+        defaults: { agentNotificationsEnabled: true, mentionsPolicy: "escape" },
+      });
+    });
+
+    it("accepts every valid mentionsPolicy value at global level", async () => {
+      for (const policy of ["allow", "escape", "strip"] as const) {
+        await store.setGlobal("slack", { defaults: { mentionsPolicy: policy } });
+        const result = await store.getGlobal("slack");
+        expect(result?.defaults?.mentionsPolicy).toBe(policy);
+      }
+    });
+
+    it("rejects invalid mentionsPolicy at global level", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { mentionsPolicy: "yell" as unknown as "allow" },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects non-boolean agentNotificationsEnabled at global level", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { agentNotificationsEnabled: "yes" as unknown as boolean },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects unknown field at global level", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { foo: "bar" } as unknown as { agentNotificationsEnabled?: boolean },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("round-trips per-repo slack settings", async () => {
+      await store.setRepoSettings("slack", "acme/widgets", {
+        agentNotificationsEnabled: false,
+      });
+
+      const result = await store.getRepoSettings("slack", "acme/widgets");
+      expect(result).toEqual({ agentNotificationsEnabled: false });
+    });
+
+    it("rejects mentionsPolicy at per-repo level (global-only field)", async () => {
+      await expect(
+        store.setRepoSettings("slack", "acme/widgets", {
+          mentionsPolicy: "escape",
+        } as unknown as { agentNotificationsEnabled?: boolean })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects unknown field at per-repo level", async () => {
+      await expect(
+        store.setRepoSettings("slack", "acme/widgets", {
+          foo: "bar",
+        } as unknown as { agentNotificationsEnabled?: boolean })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects non-boolean agentNotificationsEnabled at per-repo level", async () => {
+      await expect(
+        store.setRepoSettings("slack", "acme/widgets", {
+          agentNotificationsEnabled: 1 as unknown as boolean,
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("getResolvedConfig: repo agentNotificationsEnabled overrides global", async () => {
+      await store.setGlobal("slack", {
+        defaults: { agentNotificationsEnabled: false, mentionsPolicy: "allow" },
+      });
+      await store.setRepoSettings("slack", "acme/widgets", {
+        agentNotificationsEnabled: true,
+      });
+
+      const config = await store.getResolvedConfig("slack", "acme/widgets");
+      expect(config.settings.agentNotificationsEnabled).toBe(true);
+      expect(config.settings.mentionsPolicy).toBe("allow");
+    });
+
+    it("getResolvedConfig: mentionsPolicy comes from global only", async () => {
+      await store.setGlobal("slack", {
+        defaults: { mentionsPolicy: "strip" },
+      });
+      await store.setRepoSettings("slack", "acme/widgets", {
+        agentNotificationsEnabled: true,
+      });
+
+      const config = await store.getResolvedConfig("slack", "acme/widgets");
+      expect(config.settings.mentionsPolicy).toBe("strip");
+      expect(config.settings.agentNotificationsEnabled).toBe(true);
+    });
+
+    it("getResolvedConfig: returns empty settings when nothing configured", async () => {
+      const config = await store.getResolvedConfig("slack", "acme/widgets");
+      expect(config).toEqual({ enabledRepos: null, settings: {} });
+    });
+
+    it("getResolvedConfig: global agentNotificationsEnabled used when no repo override", async () => {
+      await store.setGlobal("slack", {
+        defaults: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
+      });
+
+      const config = await store.getResolvedConfig("slack", "acme/widgets");
+      expect(config.settings.agentNotificationsEnabled).toBe(true);
+      expect(config.settings.mentionsPolicy).toBe("allow");
+    });
+  });
+
+  describe("resolveSlackSettings", () => {
+    it("treats undefined as disabled with default mention policy", () => {
+      expect(resolveSlackSettings(undefined)).toEqual({
+        agentNotificationsEnabled: false,
+        mentionsPolicy: "allow",
+      });
+    });
+
+    it("treats empty object as disabled with default mention policy", () => {
+      expect(resolveSlackSettings({})).toEqual({
+        agentNotificationsEnabled: false,
+        mentionsPolicy: "allow",
+      });
+    });
+
+    it("returns enabled true only when the flag is exactly true", () => {
+      expect(
+        resolveSlackSettings({ agentNotificationsEnabled: true }).agentNotificationsEnabled
+      ).toBe(true);
+      expect(
+        resolveSlackSettings({ agentNotificationsEnabled: false }).agentNotificationsEnabled
+      ).toBe(false);
+    });
+
+    it("preserves a configured mention policy", () => {
+      expect(resolveSlackSettings({ mentionsPolicy: "strip" }).mentionsPolicy).toBe("strip");
+      expect(resolveSlackSettings({ mentionsPolicy: "escape" }).mentionsPolicy).toBe("escape");
     });
   });
 });

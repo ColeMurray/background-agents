@@ -7,6 +7,11 @@ import { getValidModelOrDefault, isValidModel } from "../../../utils/models";
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "archived", "cancelled", "failed"]);
 
+/**
+ * Request body for the /internal/init endpoint.
+ * The router constructs this from SessionInitInput — see session/initialize.ts.
+ * Note: `userId` here is the participantUserId from SessionInitInput.
+ */
 interface InitRequest {
   sessionName: string;
   repoOwner: string;
@@ -51,6 +56,7 @@ export interface SessionLifecycleHandlerDeps {
   getPublicSessionId: (session: SessionRow) => string;
   getParticipantByUserId: (userId: string) => ParticipantRow | null;
   transitionSessionStatus: (status: SessionStatus) => Promise<boolean>;
+  syncSessionIndexTitle: (sessionId: string, title: string) => void;
   stopExecution: (options?: { suppressStatusReconcile?: boolean }) => Promise<void>;
   getSandboxSocket: () => WebSocket | null;
   sendToSandbox: (ws: WebSocket, message: string | object) => boolean;
@@ -223,6 +229,9 @@ export function createSessionLifecycleHandler(
       }
 
       deps.repository.updateSessionTitle(session.id, body.title, deps.now());
+
+      const publicSessionId = deps.getPublicSessionId(session);
+      deps.syncSessionIndexTitle(publicSessionId, body.title);
 
       deps.broadcast({
         type: "session_title",

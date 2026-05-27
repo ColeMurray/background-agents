@@ -13,6 +13,8 @@ export interface GitHubProviderConfig {
   appConfig?: GitHubAppConfig;
   /** Cache store for caching installation tokens */
   cacheStore?: CacheStore;
+  /** User-Agent value sent on outbound GitHub API requests */
+  userAgent?: string;
 }
 
 /**
@@ -23,4 +25,6 @@ export interface GitLabProviderConfig {
   accessToken: string;
   /** GitLab group namespace to scope repository listing (optional) */
   namespace?: string;
+  /** User-Agent value sent on outbound GitLab API requests */
+  userAgent?: string;
 }
