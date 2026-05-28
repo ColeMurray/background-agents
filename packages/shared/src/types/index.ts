@@ -290,6 +290,12 @@ export type SandboxEvent =
       timestamp: number;
     }
   | {
+      type: "session_title";
+      title: string;
+      sandboxId: string;
+      timestamp: number;
+    }
+  | {
       type: "user_message";
       content: string;
       messageId: string;
@@ -366,6 +372,7 @@ export type ServerMessage =
   | { type: "code_server_info"; url: string; password: string }
   | { type: "ttyd_info"; url: string; token: string }
   | { type: "tunnel_urls"; urls: Record<string, string> }
+  | { type: "sandbox_dashboard_url"; url: string }
   | { type: "error"; code: string; message: string };
 
 // Session state sent to clients
@@ -390,6 +397,7 @@ export interface SessionState {
   tunnelUrls?: Record<string, string> | null;
   ttydUrl?: string | null;
   ttydToken?: string | null;
+  sandboxDashboardUrl?: string | null;
 }
 
 // Participant presence info

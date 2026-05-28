@@ -791,7 +791,10 @@ function SessionContent({
             {/* Desktop: full status indicators */}
             <div className="hidden md:contents">
               <ConnectionStatus connected={connected} connecting={connecting} />
-              <SandboxStatus status={sessionState?.sandboxStatus} />
+              <SandboxStatus
+                status={sessionState?.sandboxStatus}
+                dashboardUrl={sessionState?.sandboxDashboardUrl}
+              />
               <ParticipantsList participants={participants} />
             </div>
           </div>
@@ -1115,7 +1118,13 @@ function ConnectionStatus({ connected, connecting }: { connected: boolean; conne
   );
 }
 
-function SandboxStatus({ status }: { status?: string }) {
+function SandboxStatus({
+  status,
+  dashboardUrl,
+}: {
+  status?: string;
+  dashboardUrl?: string | null;
+}) {
   if (!status) return null;
 
   const colors: Record<string, string> = {
@@ -1128,7 +1137,24 @@ function SandboxStatus({ status }: { status?: string }) {
     failed: "text-destructive",
   };
 
-  return <span className={`text-xs ${colors[status] || colors.pending}`}>Sandbox: {status}</span>;
+  const className = `text-xs ${colors[status] || colors.pending}`;
+  const label = `Sandbox: ${status}`;
+
+  if (dashboardUrl) {
+    return (
+      <a
+        href={dashboardUrl}
+        target="_blank"
+        rel="noreferrer noopener"
+        title="Open sandbox in provider dashboard"
+        className={`${className} hover:underline`}
+      >
+        {label}
+      </a>
+    );
+  }
+
+  return <span className={className}>{label}</span>;
 }
 
 function CombinedStatusDot({
