@@ -247,8 +247,32 @@ class SandboxManager:
             )
 
     @staticmethod
-    def _inject_vcs_env_vars(env_vars: dict[str, str], clone_token: str | None) -> None:
-        """Inject VCS-neutral env vars based on SCM_PROVIDER."""
+    def _inject_vcs_env_vars(
+        env_vars: dict[str, str],
+        clone_token: str | None,
+        *,
+        include_github_cli_aliases: bool = False,
+    ) -> None:
+        """Inject SCM provider metadata into the sandbox environment.
+
+        For interactive sandboxes ``clone_token`` should be ``None``. Git
+        authenticates per-request via the system git credential helper, which
+        fetches a fresh token from the control plane — embedding a token in
+        env would silently fail once it expires (or immediately, for
+        providers with short-lived tokens like GitHub Apps).
+
+        For image-build sandboxes (one-shot, no control-plane access)
+        ``clone_token`` is required: the helper falls back to the env-var
+        token when ``CONTROL_PLANE_URL`` / ``SANDBOX_AUTH_TOKEN`` are unset.
+
+        ``include_github_cli_aliases`` adds fallback ``GITHUB_TOKEN`` /
+        ``GITHUB_APP_TOKEN`` for legacy snapshots/repo images that predate the
+        gh wrapper. These aliases are only injected when the user has not
+        provided a GitHub CLI token. Fallback injection is marked with
+        ``OI_GITHUB_TOKEN_IS_FALLBACK=1`` so helper-capable boots refresh past
+        the static restore token, while genuine user-provided tokens remain
+        authoritative.
+        """
         scm_provider = os.environ.get("SCM_PROVIDER", "github")
         if scm_provider == "bitbucket":
             env_vars["VCS_HOST"] = "bitbucket.org"
@@ -262,10 +286,14 @@ class SandboxManager:
 
         if clone_token:
             env_vars["VCS_CLONE_TOKEN"] = clone_token
-            if scm_provider == "github":
-                # Required by gh CLI and git push operations in the sandbox
-                env_vars["GITHUB_APP_TOKEN"] = clone_token
-                env_vars["GITHUB_TOKEN"] = clone_token
+            if include_github_cli_aliases and scm_provider == "github":
+                has_user_github_cli_token = any(
+                    env_vars.get(key) for key in ("GH_TOKEN", "GITHUB_TOKEN", "GITHUB_APP_TOKEN")
+                )
+                if not has_user_github_cli_token:
+                    env_vars["GITHUB_TOKEN"] = clone_token
+                    env_vars["GITHUB_APP_TOKEN"] = clone_token
+                    env_vars["OI_GITHUB_TOKEN_IS_FALLBACK"] = "1"
 
     async def create_sandbox(
         self,
@@ -308,7 +336,21 @@ class SandboxManager:
             }
         )
 
-        self._inject_vcs_env_vars(env_vars, config.clone_token)
+        # A boot from a pre-built image (session snapshot or repo image) may
+        # run an entrypoint built before the credential-helper migration: no
+        # helper, and the old entrypoint expects VCS_CLONE_TOKEN in env to
+        # rewrite origin. Pass the fresh token through for those (with the
+        # gh-CLI aliases + fallback marker, so helper-capable images refresh
+        # past it). Fresh base-image boots rely on the in-sandbox credential
+        # helper and need no token in env. Repo images are selected by SHA and
+        # aren't rebuilt by a CACHE_BUSTER bump, so we can't assume they're
+        # current.
+        boots_from_prebuilt_image = bool(config.snapshot_id or config.repo_image_id)
+        self._inject_vcs_env_vars(
+            env_vars,
+            clone_token=config.clone_token if boots_from_prebuilt_image else None,
+            include_github_cli_aliases=boots_from_prebuilt_image,
+        )
 
         code_server_password: str | None = None
         if config.code_server_enabled:
@@ -641,7 +683,16 @@ class SandboxManager:
             }
         )
 
-        self._inject_vcs_env_vars(env_vars, clone_token)
+        # Snapshot restore still passes the clone token through. Snapshots
+        # taken before the credential-helper migration ship an entrypoint
+        # that reads VCS_CLONE_TOKEN from env and embeds it in the origin
+        # URL — without it, those legacy snapshots can't fetch. New
+        # entrypoints ignore the env var and route through the helper.
+        # GITHUB_TOKEN/GITHUB_APP_TOKEN aliases are restored too so the gh
+        # CLI keeps working on snapshots predating the gh wrapper.
+        self._inject_vcs_env_vars(
+            env_vars, clone_token=clone_token, include_github_cli_aliases=True
+        )
 
         code_server_password: str | None = None
         if code_server_enabled:

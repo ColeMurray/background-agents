@@ -38,6 +38,51 @@ AGENT_TOOLS_GATED_ON_ENV: dict[str, str] = {
     "slack-notify.js": "AGENT_SLACK_NOTIFY_ENABLED",
 }
 
+# Wrapper installed at /usr/local/bin/gh (ahead of the real /usr/bin/gh in
+# PATH). The git credential helper can't authenticate the GitHub CLI — gh
+# reads GH_TOKEN/GITHUB_TOKEN from the environment, not git's protocol — so
+# instead of baking a short-lived token into env at boot (which goes stale
+# after ~1h), this mints a fresh token per invocation.
+#
+# Skip rules (exec real gh untouched):
+#   * non-github.com deployments — never touch gh's auth;
+#   * a genuine user-provided token. The manager's legacy-snapshot fallback
+#     token is marked with OI_GITHUB_TOKEN_IS_FALLBACK=1 and is NOT treated
+#     as user-provided, so a helper-capable restored snapshot still refreshes
+#     rather than reusing the soon-expired restore token. gh reads GH_TOKEN
+#     before GITHUB_TOKEN. The manager's fallback aliases are matching
+#     GITHUB_TOKEN/GITHUB_APP_TOKEN values, so a later user override differs
+#     and wins.
+GH_WRAPPER_REAL_PATH = "/usr/bin/gh"
+GH_WRAPPER_BODY = (
+    "#!/bin/sh\n"
+    f'REAL_GH="{GH_WRAPPER_REAL_PATH}"\n'
+    'if [ "${VCS_HOST:-github.com}" != "github.com" ]; then\n'
+    '  exec "$REAL_GH" "$@"\n'
+    "fi\n"
+    "# A real user token wins; a marked fallback token does not.\n"
+    'if [ -n "$GH_TOKEN" ]; then\n'
+    '  exec "$REAL_GH" "$@"\n'
+    "fi\n"
+    'if [ "$OI_GITHUB_TOKEN_IS_FALLBACK" != "1" ] && '
+    '{ [ -n "$GITHUB_TOKEN" ] || [ -n "$GITHUB_APP_TOKEN" ]; }; then\n'
+    '  exec "$REAL_GH" "$@"\n'
+    "fi\n"
+    'if [ "$OI_GITHUB_TOKEN_IS_FALLBACK" = "1" ] && '
+    '[ -n "$GITHUB_TOKEN" ] && [ -n "$GITHUB_APP_TOKEN" ] && '
+    '[ "$GITHUB_TOKEN" != "$GITHUB_APP_TOKEN" ]; then\n'
+    '  exec "$REAL_GH" "$@"\n'
+    "fi\n"
+    # stderr is left attached so the helper's diagnostic surfaces when a
+    # refresh fails — otherwise the user just sees an opaque gh 401.
+    "token=$(python3 -m sandbox_runtime.credentials.git_credential_helper token || true)\n"
+    'if [ -n "$token" ]; then\n'
+    '  exec env GH_TOKEN="$token" "$REAL_GH" "$@"\n'
+    "fi\n"
+    "# Refresh unavailable — fall back to whatever was in env (may be stale).\n"
+    'exec "$REAL_GH" "$@"\n'
+)
+
 
 class SandboxSupervisor:
     """
@@ -84,10 +129,10 @@ class SandboxSupervisor:
         self.repo_owner = os.environ.get("REPO_OWNER", "")
         self.repo_name = os.environ.get("REPO_NAME", "")
         self.vcs_host = os.environ.get("VCS_HOST", "github.com")
-        self.vcs_clone_username = os.environ.get("VCS_CLONE_USERNAME", "x-access-token")
-        self.vcs_clone_token = os.environ.get("VCS_CLONE_TOKEN") or os.environ.get(
-            "GITHUB_APP_TOKEN", ""
-        )
+        # Note: VCS credentials are no longer captured at sandbox start. Git
+        # operations authenticate per-call via the system-wide credential
+        # helper (`/usr/local/bin/oi-git-credentials`), which fetches fresh
+        # tokens from the control plane.
 
         # Parse session config if provided
         session_config_json = os.environ.get("SESSION_CONFIG", "{}")
@@ -112,35 +157,37 @@ class SandboxSupervisor:
         """The branch to clone/fetch — defaults to 'main'."""
         return self.session_config.get("branch") or "main"
 
-    def _build_repo_url(self, authenticated: bool = True) -> str:
-        """Build the HTTPS URL for the repository, optionally with clone credentials."""
-        if authenticated and self.vcs_clone_token:
-            return f"https://{self.vcs_clone_username}:{self.vcs_clone_token}@{self.vcs_host}/{self.repo_owner}/{self.repo_name}.git"
+    def _build_repo_url(self) -> str:
+        """Build the plain HTTPS URL for the repository.
+
+        Authentication is supplied per-request by the system git credential
+        helper, so the remote URL itself never carries a secret.
+        """
         return f"https://{self.vcs_host}/{self.repo_owner}/{self.repo_name}.git"
 
     def _redact_git_stderr(self, stderr_text: str) -> str:
-        """Redact credential-bearing URLs from git stderr."""
-        redacted_stderr = stderr_text
-        if self.vcs_clone_token:
-            redacted_stderr = redacted_stderr.replace(
-                self._build_repo_url(),
-                self._build_repo_url(authenticated=False),
-            )
-            redacted_stderr = redacted_stderr.replace(self.vcs_clone_token, "***")
+        """Redact credential-bearing URLs from git stderr.
 
-        return re.sub(r"(https?://)([^/\s@]+)@", r"\1***@", redacted_stderr)
+        The credential helper means our own remotes are token-free, but git
+        may surface upstream URLs (e.g. from submodules or HTTP redirects)
+        that still embed credentials.
+        """
+        return re.sub(r"(https?://)([^/\s@]+)@", r"\1***@", stderr_text)
 
     # ------------------------------------------------------------------
     # Git primitives
     # ------------------------------------------------------------------
 
     async def _clone_repo(self) -> bool:
-        """Shallow-clone the repository."""
+        """Shallow-clone the repository.
+
+        The remote URL is unauthenticated — the system-wide git credential
+        helper supplies short-lived credentials per request.
+        """
         self.log.info(
             "git.clone_start",
             repo_owner=self.repo_owner,
             repo_name=self.repo_name,
-            authenticated=bool(self.vcs_clone_token),
         )
 
         result = await asyncio.create_subprocess_exec(
@@ -168,27 +215,125 @@ class SandboxSupervisor:
         self.log.info("git.clone_complete", repo_path=str(self.repo_path))
         return True
 
-    async def _ensure_remote_auth(self) -> None:
-        """Set the remote URL with auth credentials if a clone token is available."""
-        if not self.vcs_clone_token:
-            return
+    async def _ensure_credential_helper_configured(self) -> None:
+        """Make sure git knows about our credential helper, even on old images.
+
+        New base images install the helper system-wide
+        (``git config --system credential.helper /usr/local/bin/oi-git-credentials``),
+        but a sandbox booting from a snapshot or repo image built *before*
+        this migration won't have that config. We re-apply the equivalent at
+        the global level on every boot so the flow is robust regardless of
+        image age.
+
+        Writing the shim itself is also idempotent: each boot ensures the
+        script is present at ``/usr/local/bin/oi-git-credentials`` and
+        executable, so old images that lack it get patched in place.
+
+        Failures here are logged but not fatal — if git already has the
+        helper configured (the common case on new images), this is a no-op.
+        """
+        shim_path = Path("/usr/local/bin/oi-git-credentials")
+        shim_body = (
+            '#!/bin/sh\nexec python3 -m sandbox_runtime.credentials.git_credential_helper "$@"\n'
+        )
+        shim_available = False
+        try:
+            if shim_path.exists() and shim_path.read_text() == shim_body:
+                shim_available = True
+            else:
+                shim_path.write_text(shim_body)
+                shim_path.chmod(0o755)
+                shim_available = True
+        except OSError as e:
+            # /usr/local/bin not writable in some sandboxed runs; the system
+            # config baked into the image is the primary path anyway.
+            self.log.warn("credential_helper.shim_write_failed", error=str(e))
+
+        # credential.useHttpPath makes git include the repo path in helper
+        # requests. The helper currently authorizes by host to preserve
+        # installation-wide token behavior, but keeping the path available
+        # preserves Git LFS behavior and leaves room for provider-specific
+        # policy later.
+        configs = [("credential.useHttpPath", "true")]
+        if shim_available:
+            configs.insert(0, ("credential.helper", str(shim_path)))
+
+        for key, value in configs:
+            proc = await asyncio.create_subprocess_exec(
+                "git",
+                "config",
+                "--global",
+                "--replace-all",
+                key,
+                value,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _stdout, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                self.log.warn(
+                    "credential_helper.config_failed",
+                    config_key=key,
+                    exit_code=proc.returncode,
+                    stderr=stderr.decode(errors="replace"),
+                )
+
+        self._install_gh_wrapper()
+
+    def _install_gh_wrapper(self) -> None:
+        """Install the gh CLI wrapper at /usr/local/bin/gh.
+
+        See ``GH_WRAPPER_BODY`` for the wrapper's behaviour. Installed at boot
+        (rather than baked into the image) so it also patches snapshots and
+        repo images built before this migration.
+        """
+        wrapper_path = Path("/usr/local/bin/gh")
+        try:
+            # Only install if the real gh exists and we're not about to shadow
+            # ourselves (defensive against a previous wrapper at /usr/bin/gh).
+            if Path(GH_WRAPPER_REAL_PATH).exists() and (
+                not wrapper_path.exists() or wrapper_path.read_text() != GH_WRAPPER_BODY
+            ):
+                wrapper_path.write_text(GH_WRAPPER_BODY)
+                wrapper_path.chmod(0o755)
+        except OSError as e:
+            self.log.debug("gh_wrapper.install_failed", error=str(e))
+
+    async def _ensure_plain_origin(self) -> bool:
+        """Rewrite the `origin` remote to a credential-free HTTPS URL.
+
+        Older workspaces/images (from before the credential-helper migration)
+        may embed a GitHub App installation token in the `origin` URL. Modal
+        snapshot restores receive a fresh fallback token, but long-running
+        sandboxes and Daytona persistent resumes can outlive embedded tokens.
+        Normalizing `origin` keeps git fetches routed through the helper.
+
+        Returns False on failure — callers must short-circuit, since a
+        credentialed URL can produce an opaque 401 from upstream rather than
+        routing through the helper.
+
+        Idempotent — safe to call on every boot.
+        """
+        expected_url = self._build_repo_url()
         proc = await asyncio.create_subprocess_exec(
             "git",
             "remote",
             "set-url",
             "origin",
-            self._build_repo_url(),
+            expected_url,
             cwd=self.repo_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         _stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
-            self.log.warn(
+            self.log.error(
                 "git.set_url_failed",
                 exit_code=proc.returncode,
                 stderr=self._redact_git_stderr(stderr.decode()),
             )
+            return False
+        return True
 
     async def _fetch_branch(self, branch: str) -> bool:
         """Fetch a branch with an explicit refspec.
@@ -253,7 +398,8 @@ class SandboxSupervisor:
             return False
 
         try:
-            await self._ensure_remote_auth()
+            if not await self._ensure_plain_origin():
+                return False
             branch = self.base_branch
             if not await self._fetch_branch(branch):
                 return False
@@ -293,7 +439,6 @@ class SandboxSupervisor:
             repo_owner=self.repo_owner,
             repo_name=self.repo_name,
             repo_path=str(self.repo_path),
-            has_clone_token=bool(self.vcs_clone_token),
         )
 
         if not self.repo_path.exists():
@@ -1277,10 +1422,19 @@ class SandboxSupervisor:
         git_sync_success = False
         opencode_ready = False
         try:
+            # Phase 0: Make sure the git credential helper is configured
+            # before any git operation. New images do this in /etc/gitconfig,
+            # but snapshots/repo-images built before this migration won't.
+            await self._ensure_credential_helper_configured()
+
             # Phase 1: Git sync
             if restored_from_snapshot:
-                await self._update_existing_repo()  # best-effort
-                git_sync_success = True
+                git_sync_success = await self._update_existing_repo()
+                if not git_sync_success:
+                    self.log.warn(
+                        "git.snapshot_resync_failed",
+                        reason="origin rewrite or fetch failed; repo may be stale",
+                    )
             elif from_repo_image:
                 git_sync_success = await self._update_existing_repo()
             else:

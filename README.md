@@ -24,7 +24,9 @@ Open-Inspect provides a hosted background coding agent that can:
 
 ### How It Works
 
-The system uses a shared GitHub App installation for all git operations (clone, push). This means:
+The system uses a shared GitHub App installation for git operations (clone, fetch, push). The
+control plane mints short-lived installation tokens server-side and brokers them to sandboxes
+through the git credential helper on demand. This means:
 
 - **All users share the same GitHub App credentials** - The GitHub App must be installed on your
   organization's repositories, and any user of the system can access any repo the App has access to
@@ -36,11 +38,12 @@ The system uses a shared GitHub App installation for all git operations (clone, 
 
 ### Token Architecture
 
-| Token Type       | Purpose                | Scope                            |
-| ---------------- | ---------------------- | -------------------------------- |
-| GitHub App Token | Clone repos, push code | All repos where App is installed |
-| User OAuth Token | Create PRs, user info  | Repos user has access to         |
-| WebSocket Token  | Real-time session auth | Single session                   |
+| Token Type         | Purpose                                | Scope                            |
+| ------------------ | -------------------------------------- | -------------------------------- |
+| GitHub App Token   | Brokered git clone/fetch/push auth     | All repos where App is installed |
+| User OAuth Token   | Create PRs, user info                  | Repos user has access to         |
+| Sandbox Auth Token | Sandbox-to-control-plane session calls | Single session                   |
+| WebSocket Token    | Real-time session auth                 | Single session                   |
 
 ### Why Single-Tenant Only
 
@@ -250,6 +253,8 @@ docker compose up -d postgres redis
   - `SETUP_TIMEOUT_SECONDS` (default `300`)
   - `START_TIMEOUT_SECONDS` (default `120`)
 - Both hooks receive `OPENINSPECT_BOOT_MODE` (`build`, `fresh`, `repo_image`, `snapshot_restore`)
+- Git operations in hooks can authenticate to other private repos on the configured SCM host when
+  the shared installation has access
 
 ## License
 

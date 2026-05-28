@@ -36,8 +36,8 @@ export class SourceControlProviderError extends Error {
    * Check if an HTTP status code indicates a transient error.
    */
   static isTransientStatus(status: number): boolean {
-    // 429 = Rate Limited, 502/503/504 = Gateway errors
-    return status === 429 || status === 502 || status === 503 || status === 504;
+    // 429 = Rate Limited; 5xx = upstream/server errors.
+    return status === 429 || (status >= 500 && status <= 599);
   }
 
   /**
