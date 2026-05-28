@@ -1,0 +1,295 @@
+# =============================================================================
+# Open-Inspect - Production Terraform Variables
+# =============================================================================
+# Copy this file to terraform.tfvars and fill in the values.
+# NEVER commit terraform.tfvars to source control!
+#
+# Alternatively, set values via environment variables:
+#   export TF_VAR_cloudflare_api_token="your-token"
+# =============================================================================
+
+# =============================================================================
+# Provider Authentication
+# =============================================================================
+
+# Cloudflare API token.
+# Required account permissions:
+#   - Workers Scripts: Edit
+#   - Workers KV Storage: Edit
+#   - Workers R2 Storage: Edit
+#   - D1: Edit
+# Optional if you manage Cloudflare routes/custom domains:
+#   - Workers Routes: Edit
+# Create at: https://dash.cloudflare.com/profile/api-tokens
+cloudflare_api_token = ""
+
+# Cloudflare account ID (found in dashboard URL or account overview)
+cloudflare_account_id = ""
+
+# Cloudflare zone ID (optional, only needed for custom domains)
+# cloudflare_zone_id = ""
+
+# Cloudflare Workers subdomain (found in Workers & Pages -> Overview, bottom-right of panel)
+# This is the subdomain used for workers.dev URLs (e.g., "myaccount" in "worker.myaccount.workers.dev")
+cloudflare_worker_subdomain = ""
+
+# Vercel API token
+# Only required when web_platform = "vercel"
+# Create at: https://vercel.com/account/tokens
+# NOTE: Due to a Terraform provider limitation, the Vercel provider validates this
+# token even when web_platform = "cloudflare". If you're not using Vercel, leave
+# these commented out to use the built-in dummy defaults.
+# vercel_api_token = ""
+
+# Vercel team/account ID (found in Account Settings -> "Your ID")
+# Even personal accounts have an ID (usually starts with "team_")
+# vercel_team_id = ""  # e.g., "team_xxxxxxxxxxxxxxxxxxxx"
+
+# Modal API token
+# Only required when sandbox_provider = "modal"
+# Create at: https://modal.com/settings
+modal_token_id = ""
+modal_token_secret = ""
+
+# Modal workspace name (used in endpoint URLs)
+# Only required when sandbox_provider = "modal"
+# This is your Modal username/workspace (e.g., "myworkspace" in "https://myworkspace--app.modal.run")
+modal_workspace = ""
+
+# Daytona REST API
+# Only required when sandbox_provider = "daytona"
+# Create an API key at https://app.daytona.io with permissions:
+#   Sandboxes: Read, Write  |  Snapshots: Read, Write, Delete
+# Seed the base snapshot with packages/daytona-infra/src/bootstrap.py before enabling.
+daytona_api_url = ""           # e.g., "https://app.daytona.io/api"
+daytona_api_key = ""           # Requires Sandboxes (Read/Write) + Snapshots (Read/Write/Delete)
+daytona_base_snapshot = ""     # Name of the seeded Daytona snapshot
+# daytona_target = ""          # Optional Daytona target name
+
+# =============================================================================
+# GitHub App Credentials
+# =============================================================================
+# Create GitHub App at: https://github.com/settings/apps
+#
+# One GitHub App handles both OAuth (user authentication) and repository access.
+# See docs/GETTING_STARTED.md for detailed setup instructions.
+#
+# Required credentials:
+# - Client ID and Secret: Found in the GitHub App settings page
+# - App ID: Shown at top of the GitHub App settings page
+# - Private Key: Generate and download from GitHub App settings, convert to PKCS#8
+# - Installation ID: Found in URL after installing the app on your account/org
+
+# OAuth credentials (from GitHub App -> "Client secrets" section)
+github_client_id = ""      # e.g., "Iv1.abc123..."
+github_client_secret = ""
+
+# App credentials
+github_app_id = ""
+
+# Private key in PKCS#8 format
+# Convert from PKCS#1: openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in key.pem -out key-pkcs8.pem
+github_app_private_key = <<-EOF
+-----BEGIN PRIVATE KEY-----
+... your private key here ...
+-----END PRIVATE KEY-----
+EOF
+
+github_app_installation_id = ""
+
+# GitHub Bot (Optional)
+# Set enable_github_bot = true to deploy the GitHub bot worker for PR reviews
+# and @mention commands. Requires github_webhook_secret and github_bot_username.
+enable_github_bot = false
+
+# Shared secret for verifying GitHub webhook signatures
+# Generate with: openssl rand -hex 32
+# Configure the same value in your GitHub App's webhook settings.
+github_webhook_secret = ""
+
+# GitHub App bot username for @mention detection
+# This is the GitHub App's slug (the name in its profile URL) with the literal
+# "[bot]" suffix that GitHub appends to all GitHub App accounts.
+# Find it at: https://github.com/apps/<your-app-slug> — the slug is the last
+# path segment. The bot's commits/comments will appear as "<slug>[bot]".
+# Examples:
+#   App named "Open Inspect"     -> slug "open-inspect"     -> "open-inspect[bot]"
+#   App named "Acme Code Review" -> slug "acme-code-review" -> "acme-code-review[bot]"
+# The webhook handler uses this to detect @mentions of the bot in PRs/issues.
+github_bot_username = ""
+
+# =============================================================================
+# Slack App Credentials (Optional)
+# =============================================================================
+# From Slack App dashboard: https://api.slack.com/apps
+# Set enable_slack_bot = false to skip deployment.
+
+enable_slack_bot = false
+
+slack_bot_token = ""       # e.g., "xoxb-..."
+slack_signing_secret = ""
+
+# Linear Agent (Optional)
+# Create an OAuth Application at: https://linear.app/settings/api/applications/new
+# - Enable webhooks, select "Agent session events" + "Issues" + "Comments"
+# - Set Callback URL to: https://<linear-bot-worker-url>/oauth/callback
+# - Set Webhook URL to: https://<linear-bot-worker-url>/webhook
+# - Enable scopes: read, write, app:assignable, app:mentionable
+# After creation, note the Client ID, Client Secret, and Webhook Signing Secret.
+# Then visit https://<linear-bot-worker-url>/oauth/authorize to install the agent
+# in your workspace (requires admin permissions).
+# Leave empty to disable Linear integration.
+
+enable_linear_bot = false
+
+linear_client_id = ""        # OAuth Application Client ID
+linear_client_secret = ""    # OAuth Application Client Secret
+linear_webhook_secret = ""   # Webhook Signing Secret from the application config
+
+# =============================================================================
+# API Keys
+# =============================================================================
+
+# Anthropic API key for Claude
+# From: https://console.anthropic.com/
+anthropic_api_key = ""
+
+# =============================================================================
+# Security Secrets
+# =============================================================================
+# Generate these with: openssl rand -base64 32
+
+# Token encryption key (for encrypting OAuth tokens)
+token_encryption_key = ""
+
+# Repo secrets encryption key (for encrypting repo secrets in D1)
+repo_secrets_encryption_key = ""
+
+# Internal callback secret (shared between services)
+internal_callback_secret = ""
+
+# Modal API secret (for control plane -> Modal authentication)
+# Only required when sandbox_provider = "modal"
+# Generate with: openssl rand -hex 32
+modal_api_secret = ""
+
+# NextAuth.js secret
+nextauth_secret = ""
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+# Sandbox backend for session execution
+# - "modal": existing Modal-based sandboxes with filesystem snapshot restore
+# - "daytona": direct Daytona REST API integration with stop/start resume
+sandbox_provider = "modal"
+
+# Platform for the web app deployment
+# - "vercel": deploy the Next.js app to Vercel (requires vercel_api_token + vercel_team_id)
+# - "cloudflare": deploy the web app to Cloudflare Workers via OpenNext (no Vercel credentials needed)
+web_platform = "vercel"
+
+# Unique deployment name (used in resource names and URLs)
+# IMPORTANT: This must be globally unique for Vercel URLs.
+# Use something unique like your GitHub username, company name, or a random suffix.
+# Example: "acme", "johndoe", "mycompany-prod"
+# The web app URL will be: https://open-inspect-{deployment_name}.vercel.app
+deployment_name = ""
+
+# Optional custom domain for the web app (without https://). Leave empty to use
+# the default *.vercel.app or *.workers.dev URL. Only applied when
+# web_platform = "vercel".
+web_app_custom_domain = ""
+
+# Models used by the Slack bot. Provider-prefixed for non-Anthropic providers
+# (e.g. "openai/gpt-5"). Leave at defaults if unsure.
+default_model        = "claude-haiku-4-5"
+classification_model = "claude-haiku-4-5"
+
+# Path to project root (relative to this directory)
+project_root = "../../../"
+
+# Display name shown in the web UI, bot messages (Slack, Linear), and PR body footers.
+# Also used as the outbound HTTP User-Agent header. Defaults to "Open-Inspect".
+# app_name = "Open-Inspect"
+
+# Short brand label shown only in the sidebar header.
+# Defaults to "Inspect". Set this when app_name is too wide for the sidebar
+# (e.g. app_name = "Acme Coding Agent", app_short_name = "Acme").
+# app_short_name = "Inspect"
+
+# Optional URL (absolute or root-relative path) to a custom logo image for the
+# command menu and browser favicon. Leave empty to use the built-in icon.
+# Example: "/branding/logo.svg" (file under packages/web/public/) or
+#          "https://cdn.example.com/logo.svg".
+# app_icon_url = ""
+
+# Override the R2 media bucket name (optional)
+# Defaults to "open-inspect-media-<deployment_name>" when left empty.
+# Set this when the bucket must be pre-created out-of-band — for example, when
+# the Cloudflare API token used by Terraform doesn't have permission to create
+# R2 buckets and an admin had to provision one with a specific name.
+#
+# Manual setup requirements (when an admin pre-creates the bucket):
+#   - Must live in the same Cloudflare account as the Workers (cloudflare_account_id).
+#   - Private bucket — do NOT enable public access. The control-plane Worker
+#     reads/writes objects through its binding; clients never hit R2 directly.
+#   - No CORS rules or lifecycle policies are required.
+#   - Location should match r2_media_location (default ENAM).
+#
+# Create with wrangler (equivalent to what Terraform would do):
+#   wrangler r2 bucket create <bucket-name> --location ENAM
+# Or create via the Cloudflare dashboard: R2 -> Create bucket (Standard storage class).
+#
+# After manual creation, import the bucket so Terraform manages the binding without
+# trying to recreate it:
+#   terraform import cloudflare_r2_bucket.media <cloudflare_account_id>/<bucket-name>/default
+#
+# WARNING — renaming an existing Terraform-managed bucket:
+# If you previously deployed without this variable (Terraform owns the default-named
+# bucket) and now set r2_media_bucket_name to a different name WITHOUT first running
+# `terraform import` on the new name, Terraform will destroy the existing bucket and
+# create a new one — permanently deleting all stored objects. Migrate objects first
+# (e.g. with rclone) and import the new bucket before applying.
+#
+# Worker runtime needs (granted automatically through the binding, listed for reference):
+#   - R2 object-level: Read, Write, Delete on this bucket only.
+# The Terraform/Cloudflare API token does NOT need object-level R2 permissions —
+# it only manages the bucket resource and the Worker binding. Required token scopes:
+#   - Workers R2 Storage: Edit (only needed when Terraform creates/manages the bucket;
+#     if the bucket is pre-created and imported, drop to Read or omit)
+#   - Workers Scripts: Edit (to attach the MEDIA_BUCKET binding to the Worker)
+# r2_media_bucket_name = ""
+
+# =============================================================================
+# Initial Deployment Flags
+# =============================================================================
+# For first-time deployment, set both to false to avoid chicken-and-egg issues
+# with Durable Objects and service bindings.
+# After the first successful deployment, set both to true and run terraform apply again.
+
+enable_durable_object_bindings = false
+enable_service_bindings = false
+
+# Optional: override these only when an existing deployment needs to re-enter
+# Phase 1 for a later Durable Object migration. Fresh deployments can omit them.
+# control_plane_migration_tag = "v1"
+# control_plane_migration_old_tag = null
+# control_plane_new_sqlite_classes = []
+
+# =============================================================================
+# Access Control
+# =============================================================================
+# Comma-separated list of GitHub usernames allowed to sign in
+# Set at least one access-control allowlist unless you intentionally opt into
+# open access with unsafe_allow_all_users = true.
+allowed_users = ""
+
+# Comma-separated list of email domains allowed to sign in
+# Example: "example.com,corp.io"
+allowed_email_domains = ""
+
+# Explicitly bypass the Terraform access-control safety check and allow any
+# authenticated GitHub user to sign in when both allowlists are empty.
+unsafe_allow_all_users = false
