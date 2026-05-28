@@ -84,6 +84,8 @@ override.tf.json
 .terraformrc
 terraform.rc
 *.tfplan
+tfplan
+tfplan-*
 .vercel
 
 # Internal docs (kept locally)
