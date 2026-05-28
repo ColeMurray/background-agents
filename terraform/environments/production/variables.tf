@@ -331,6 +331,24 @@ variable "deployment_name" {
   type        = string
 }
 
+variable "web_app_custom_domain" {
+  description = "Optional custom domain for the web app (without https://, e.g. 'agents.example.com'). Leave empty to use the default *.vercel.app or *.workers.dev URL. Only applied when web_platform = 'vercel'."
+  type        = string
+  default     = ""
+}
+
+variable "default_model" {
+  description = "Default model identifier used by the Slack bot when no model is specified. Use provider-prefixed form (e.g. 'anthropic/claude-sonnet-4-6')."
+  type        = string
+  default     = "claude-haiku-4-5"
+}
+
+variable "classification_model" {
+  description = "Model used by the Slack bot for lightweight classification tasks (intent detection, routing)."
+  type        = string
+  default     = "claude-haiku-4-5"
+}
+
 variable "app_name" {
   description = "Display name shown in the web UI tab title, sign-in page, bot messages (Slack, Linear), PR body footer, and outbound HTTP User-Agent headers."
   type        = string

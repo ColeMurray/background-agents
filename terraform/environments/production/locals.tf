@@ -8,11 +8,11 @@ locals {
   control_plane_url  = "https://${local.control_plane_host}"
   ws_url             = "wss://${local.control_plane_host}"
 
-  # Web app URL depends on deployment platform
+  # Web app URL depends on deployment platform and optional custom domain
   web_app_url = var.web_platform == "cloudflare" ? (
     "https://open-inspect-web-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev"
     ) : (
-    "https://agents.bandcizer.io"
+    var.web_app_custom_domain != "" ? "https://${var.web_app_custom_domain}" : "https://open-inspect-${local.name_suffix}.vercel.app"
   )
 
   # Worker script paths (deterministic output locations)

@@ -47,8 +47,8 @@ module "slack_bot_worker" {
     { name = "WEB_APP_URL", value = local.web_app_url },
     { name = "DEPLOYMENT_NAME", value = var.deployment_name },
     { name = "APP_NAME", value = var.app_name },
-    { name = "DEFAULT_MODEL", value = "anthropic/claude-sonnet-4-6" },
-    { name = "CLASSIFICATION_MODEL", value = "claude-haiku-4-5" },
+    { name = "DEFAULT_MODEL", value = var.default_model },
+    { name = "CLASSIFICATION_MODEL", value = var.classification_model },
   ]
 
   secrets = [

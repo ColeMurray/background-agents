@@ -197,6 +197,16 @@ web_platform = "vercel"
 # The web app URL will be: https://open-inspect-{deployment_name}.vercel.app
 deployment_name = ""
 
+# Optional custom domain for the web app (without https://). Leave empty to use
+# the default *.vercel.app or *.workers.dev URL. Only applied when
+# web_platform = "vercel".
+web_app_custom_domain = ""
+
+# Models used by the Slack bot. Provider-prefixed for non-Anthropic providers
+# (e.g. "openai/gpt-5"). Leave at defaults if unsure.
+default_model        = "claude-haiku-4-5"
+classification_model = "claude-haiku-4-5"
+
 # Path to project root (relative to this directory)
 project_root = "../../../"
 
