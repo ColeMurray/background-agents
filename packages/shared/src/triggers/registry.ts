@@ -30,6 +30,18 @@ const sharedConditions = {
       return c.value.some((pattern: string) => matchGlob(pattern, event.branch!));
     },
   },
+  target_branch: {
+    appliesTo: ["github"] as const,
+    validate(c: { value: string[] }) {
+      return c.value.length === 0 ? "At least one target branch pattern required" : null;
+    },
+    evaluate(c: { operator: string; value: string[] }, event: AutomationEvent) {
+      if (event.source !== "github") return true;
+      if (!event.targetBranch) return false;
+      if (c.operator === "exact") return c.value.includes(event.targetBranch);
+      return c.value.some((pattern: string) => matchGlob(pattern, event.targetBranch!));
+    },
+  },
   label: {
     appliesTo: ["github", "linear"] as const,
     validate(c: { value: string[] }) {

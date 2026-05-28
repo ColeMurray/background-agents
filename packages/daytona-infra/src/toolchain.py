@@ -22,7 +22,10 @@ from daytona import CreateSnapshotParams, Daytona, Image
 OPENCODE_VERSION = "1.14.41"
 CODE_SERVER_VERSION = "4.109.5"
 AGENT_BROWSER_VERSION = "0.21.2"
-SANDBOX_VERSION = "daytona-v1"
+# Bump when changing image contents to invalidate the Daytona snapshot.
+# daytona-v2: install the SCM credential-helper shim and configure
+# git system-wide so per-request token brokerage matches the Modal base image.
+SANDBOX_VERSION = "daytona-v2-credential-helper"
 
 
 def build_base_image(repo_root: Path) -> Image:
@@ -70,6 +73,19 @@ def build_base_image(repo_root: Path) -> Image:
             f"npm install -g agent-browser@{AGENT_BROWSER_VERSION}",
             "agent-browser install",
             "mkdir -p /workspace /app /tmp/opencode",
+            # Install the SCM credential-helper shim and configure git
+            # system-wide. The shim delegates to the Python helper module
+            # under sandbox_runtime, baked in at build time via add_local_dir
+            # below. Mirror packages/modal-infra/src/images/base.py.
+            "printf '%s\\n'"
+            " '#!/bin/sh'"
+            ' \'exec python3 -m sandbox_runtime.credentials.git_credential_helper "$@"\''
+            " > /usr/local/bin/oi-git-credentials",
+            "chmod 0755 /usr/local/bin/oi-git-credentials",
+            "git config --system credential.helper /usr/local/bin/oi-git-credentials",
+            # Pass the repo path to the helper so it can scope credentials to
+            # the session repo, not just the host.
+            "git config --system credential.useHttpPath true",
         )
         .env(
             {

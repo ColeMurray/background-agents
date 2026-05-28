@@ -1,9 +1,14 @@
 import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
 import type { SandboxSettings } from "@open-inspect/shared";
-import type { SandboxStatus, ServerMessage, SessionStatus, SpawnSource } from "../../../types";
+import type { SandboxStatus, SessionStatus, SpawnSource } from "../../../types";
 import type { SessionRepository } from "../../repository";
 import { getValidModelOrDefault, isValidModel } from "../../../utils/models";
+import {
+  normalizeSessionTitle,
+  type SessionTitleUpdateOptions,
+  type SessionTitleUpdateResult,
+} from "../../title";
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "archived", "cancelled", "failed"]);
 
@@ -39,10 +44,7 @@ interface InitRequest {
 }
 
 export interface SessionLifecycleHandlerDeps {
-  repository: Pick<
-    SessionRepository,
-    "upsertSession" | "createSandbox" | "createParticipant" | "updateSessionTitle"
-  >;
+  repository: Pick<SessionRepository, "upsertSession" | "createSandbox" | "createParticipant">;
   getDurableObjectId: () => string;
   tokenEncryptionKey?: string;
   encryptToken: (token: string, encryptionKey: string) => Promise<string>;
@@ -56,12 +58,27 @@ export interface SessionLifecycleHandlerDeps {
   getPublicSessionId: (session: SessionRow) => string;
   getParticipantByUserId: (userId: string) => ParticipantRow | null;
   transitionSessionStatus: (status: SessionStatus) => Promise<boolean>;
-  syncSessionIndexTitle: (sessionId: string, title: string) => void;
+  applySessionTitleUpdate: (
+    title: string,
+    options?: SessionTitleUpdateOptions
+  ) => SessionTitleUpdateResult;
   stopExecution: (options?: { suppressStatusReconcile?: boolean }) => Promise<void>;
   getSandboxSocket: () => WebSocket | null;
   sendToSandbox: (ws: WebSocket, message: string | object) => boolean;
   updateSandboxStatus: (status: SandboxStatus) => void;
-  broadcast: (message: ServerMessage) => void;
+}
+
+function sessionTitleUpdateStatus(
+  result: Extract<SessionTitleUpdateResult, { ok: false }>
+): 400 | 404 | 409 {
+  switch (result.reason) {
+    case "invalid":
+      return 400;
+    case "not_found":
+      return 404;
+    case "already_set":
+      return 409;
+  }
 }
 
 export interface SessionLifecycleHandler {
@@ -212,12 +229,9 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: "userId is required" }, { status: 400 });
       }
 
-      if (typeof body.title !== "string" || body.title.trim().length === 0) {
-        return Response.json({ error: "title must be a non-empty string" }, { status: 400 });
-      }
-
-      if (body.title.length > 200) {
-        return Response.json({ error: "title must be 200 characters or fewer" }, { status: 400 });
+      const normalizedTitle = normalizeSessionTitle(body.title);
+      if (!normalizedTitle.ok) {
+        return Response.json({ error: normalizedTitle.error }, { status: 400 });
       }
 
       const participant = deps.getParticipantByUserId(body.userId);
@@ -228,17 +242,12 @@ export function createSessionLifecycleHandler(
         );
       }
 
-      deps.repository.updateSessionTitle(session.id, body.title, deps.now());
+      const result = deps.applySessionTitleUpdate(normalizedTitle.title, { onlyIfUnset: false });
+      if (!result.ok) {
+        return Response.json({ error: result.error }, { status: sessionTitleUpdateStatus(result) });
+      }
 
-      const publicSessionId = deps.getPublicSessionId(session);
-      deps.syncSessionIndexTitle(publicSessionId, body.title);
-
-      deps.broadcast({
-        type: "session_title",
-        title: body.title,
-      });
-
-      return Response.json({ title: body.title });
+      return Response.json({ title: result.title });
     },
 
     async archive(request: Request): Promise<Response> {

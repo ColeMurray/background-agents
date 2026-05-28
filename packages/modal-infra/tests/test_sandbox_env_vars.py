@@ -328,9 +328,15 @@ def _fake_sandbox_create(captured):
     return fake_create_aio
 
 
+# Note: fresh sandboxes never receive SCM tokens in the environment. Legacy
+# snapshot/repo-image and image-build paths still receive VCS_CLONE_TOKEN as a
+# fallback because they may run code built before the credential-helper
+# migration. These tests pin that split contract.
+
+
 @pytest.mark.asyncio
 async def test_vcs_env_vars_default_github(monkeypatch):
-    """SCM_PROVIDER unset → github.com defaults."""
+    """SCM_PROVIDER unset → github.com defaults, no token in env."""
     captured = {}
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
     monkeypatch.delenv("SCM_PROVIDER", raising=False)
@@ -346,35 +352,14 @@ async def test_vcs_env_vars_default_github(monkeypatch):
     env = captured["env"]
     assert env["VCS_HOST"] == "github.com"
     assert env["VCS_CLONE_USERNAME"] == "x-access-token"
-    assert env["VCS_CLONE_TOKEN"] == "ghp_test123"
-    assert env["GITHUB_APP_TOKEN"] == "ghp_test123"
-    assert env["GITHUB_TOKEN"] == "ghp_test123"
-
-
-@pytest.mark.asyncio
-async def test_vcs_env_vars_explicit_github(monkeypatch):
-    """SCM_PROVIDER=github → same as default."""
-    captured = {}
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
-    monkeypatch.setenv("SCM_PROVIDER", "github")
-
-    manager = SandboxManager()
-    config = SandboxConfig(
-        repo_owner="acme",
-        repo_name="repo",
-        clone_token="ghp_test123",
-    )
-    await manager.create_sandbox(config)
-
-    env = captured["env"]
-    assert env["VCS_HOST"] == "github.com"
-    assert env["VCS_CLONE_USERNAME"] == "x-access-token"
-    assert env["VCS_CLONE_TOKEN"] == "ghp_test123"
+    assert "VCS_CLONE_TOKEN" not in env
+    assert "GITHUB_APP_TOKEN" not in env
+    assert "GITHUB_TOKEN" not in env
 
 
 @pytest.mark.asyncio
 async def test_vcs_env_vars_gitlab(monkeypatch):
-    """SCM_PROVIDER=gitlab → gitlab.com + oauth2."""
+    """SCM_PROVIDER=gitlab → gitlab.com + oauth2, no token in env."""
     captured = {}
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
     monkeypatch.setenv("SCM_PROVIDER", "gitlab")
@@ -390,15 +375,12 @@ async def test_vcs_env_vars_gitlab(monkeypatch):
     env = captured["env"]
     assert env["VCS_HOST"] == "gitlab.com"
     assert env["VCS_CLONE_USERNAME"] == "oauth2"
-    assert env["VCS_CLONE_TOKEN"] == "glpat_test123"
-    # GitHub-specific vars not set for GitLab
-    assert "GITHUB_APP_TOKEN" not in env
-    assert "GITHUB_TOKEN" not in env
+    assert "VCS_CLONE_TOKEN" not in env
 
 
 @pytest.mark.asyncio
 async def test_vcs_env_vars_bitbucket(monkeypatch):
-    """SCM_PROVIDER=bitbucket → bitbucket.org + x-token-auth."""
+    """SCM_PROVIDER=bitbucket → bitbucket.org + x-token-auth, no token in env."""
     captured = {}
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
     monkeypatch.setenv("SCM_PROVIDER", "bitbucket")
@@ -414,16 +396,24 @@ async def test_vcs_env_vars_bitbucket(monkeypatch):
     env = captured["env"]
     assert env["VCS_HOST"] == "bitbucket.org"
     assert env["VCS_CLONE_USERNAME"] == "x-token-auth"
-    assert env["VCS_CLONE_TOKEN"] == "bb_token_abc"
-    # GitHub-specific vars not set for Bitbucket
-    assert "GITHUB_APP_TOKEN" not in env
-    assert "GITHUB_TOKEN" not in env
+    assert "VCS_CLONE_TOKEN" not in env
 
 
 @pytest.mark.asyncio
-async def test_vcs_env_vars_no_token(monkeypatch):
-    """No clone token → token vars absent, host/username still set."""
+async def test_repo_image_boot_preserves_clone_token(monkeypatch):
+    """A repo-image boot may run a pre-migration entrypoint with no helper.
+
+    Repo images are selected by SHA and aren't rebuilt by a CACHE_BUSTER
+    bump, so the old entrypoint may still be in use — it needs VCS_CLONE_TOKEN
+    in env (plus the gh aliases + fallback marker). A helper-capable repo
+    image ignores the env token and refreshes via the helper / gh wrapper.
+    """
     captured = {}
+
+    class FakeImage:
+        object_id = "repo-img-1"
+
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
     monkeypatch.delenv("SCM_PROVIDER", raising=False)
 
@@ -431,20 +421,83 @@ async def test_vcs_env_vars_no_token(monkeypatch):
     config = SandboxConfig(
         repo_owner="acme",
         repo_name="repo",
+        clone_token="ghs_repo_image_token",
+        repo_image_id="repo-img-1",
     )
     await manager.create_sandbox(config)
 
     env = captured["env"]
-    assert env["VCS_HOST"] == "github.com"
-    assert env["VCS_CLONE_USERNAME"] == "x-access-token"
-    assert "VCS_CLONE_TOKEN" not in env
-    assert "GITHUB_APP_TOKEN" not in env
-    assert "GITHUB_TOKEN" not in env
+    assert env["FROM_REPO_IMAGE"] == "true"
+    assert env["VCS_CLONE_TOKEN"] == "ghs_repo_image_token"
+    assert env["GITHUB_TOKEN"] == "ghs_repo_image_token"
+    assert env["OI_GITHUB_TOKEN_IS_FALLBACK"] == "1"
 
 
 @pytest.mark.asyncio
-async def test_restore_vcs_env_vars(monkeypatch):
-    """restore_from_snapshot injects VCS env vars."""
+@pytest.mark.parametrize("token_key", ["GH_TOKEN", "GITHUB_TOKEN", "GITHUB_APP_TOKEN"])
+async def test_repo_image_boot_preserves_user_github_cli_token(monkeypatch, token_key):
+    """User-provided GitHub CLI tokens must win over fallback restore tokens."""
+    captured = {}
+
+    class FakeImage:
+        object_id = "repo-img-1"
+
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+    monkeypatch.delenv("SCM_PROVIDER", raising=False)
+
+    manager = SandboxManager()
+    await manager.create_sandbox(
+        SandboxConfig(
+            repo_owner="acme",
+            repo_name="repo",
+            clone_token="ghs_repo_image_token",
+            repo_image_id="repo-img-1",
+            user_env_vars={token_key: "user_token"},
+        )
+    )
+
+    env = captured["env"]
+    assert env["VCS_CLONE_TOKEN"] == "ghs_repo_image_token"
+    assert env[token_key] == "user_token"
+    assert env.get("GITHUB_TOKEN") != "ghs_repo_image_token"
+    assert env.get("GITHUB_APP_TOKEN") != "ghs_repo_image_token"
+    assert "OI_GITHUB_TOKEN_IS_FALLBACK" not in env
+
+
+@pytest.mark.asyncio
+async def test_session_snapshot_boot_preserves_clone_token(monkeypatch):
+    """A session-snapshot boot has the same legacy-compat need as repo images."""
+    captured = {}
+
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_registry", lambda *a, **kw: object())
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+    monkeypatch.delenv("SCM_PROVIDER", raising=False)
+
+    manager = SandboxManager()
+    config = SandboxConfig(
+        repo_owner="acme",
+        repo_name="repo",
+        clone_token="ghs_snapshot_token",
+        snapshot_id="snap-1",
+    )
+    await manager.create_sandbox(config)
+
+    env = captured["env"]
+    assert env["VCS_CLONE_TOKEN"] == "ghs_snapshot_token"
+    assert env["OI_GITHUB_TOKEN_IS_FALLBACK"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_restore_preserves_vcs_clone_token_for_legacy_snapshots(monkeypatch):
+    """Snapshot restore still injects VCS_CLONE_TOKEN.
+
+    Snapshots taken before the credential-helper migration ship an old
+    entrypoint that reads the env var and embeds it in the origin URL.
+    Without it those snapshots can't fetch. The new entrypoint ignores it
+    and routes through the helper, so the var is harmless on fresh images.
+    For a non-GitHub provider, the GitHub CLI aliases stay absent.
+    """
     captured = {}
 
     class FakeImage:
@@ -471,6 +524,43 @@ async def test_restore_vcs_env_vars(monkeypatch):
     assert env["VCS_HOST"] == "bitbucket.org"
     assert env["VCS_CLONE_USERNAME"] == "x-token-auth"
     assert env["VCS_CLONE_TOKEN"] == "bb_token_xyz"
-    # GitHub-specific vars not set for Bitbucket
     assert "GITHUB_APP_TOKEN" not in env
     assert "GITHUB_TOKEN" not in env
+
+
+@pytest.mark.asyncio
+async def test_restore_github_includes_gh_cli_aliases(monkeypatch):
+    """On GitHub, snapshot restore also sets GITHUB_TOKEN/GITHUB_APP_TOKEN.
+
+    Legacy snapshots lack the gh wrapper, so the CLI needs the token in env.
+    """
+    captured = {}
+
+    class FakeImage:
+        object_id = "img-123"
+
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+    monkeypatch.delenv("SCM_PROVIDER", raising=False)
+
+    manager = SandboxManager()
+    await manager.restore_from_snapshot(
+        snapshot_image_id="img-abc",
+        session_config={
+            "repo_owner": "acme",
+            "repo_name": "repo",
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-6",
+            "session_id": "sess-1",
+        },
+        clone_token="ghs_restore_token",
+    )
+
+    env = captured["env"]
+    assert env["VCS_HOST"] == "github.com"
+    assert env["VCS_CLONE_TOKEN"] == "ghs_restore_token"
+    assert env["GITHUB_TOKEN"] == "ghs_restore_token"
+    assert env["GITHUB_APP_TOKEN"] == "ghs_restore_token"
+    # Marked so the gh wrapper on helper-capable snapshots refreshes past it
+    # instead of reusing the soon-expired restore token.
+    assert env["OI_GITHUB_TOKEN_IS_FALLBACK"] == "1"

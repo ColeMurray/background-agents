@@ -167,6 +167,7 @@ function normalizePullRequest(
 
   const headSha = pr.head?.sha;
   const branch = pr.head?.ref;
+  const targetBranch = pr.base?.ref;
   const labels = getPRLabels(pr);
 
   const triggerKey = `pr:${prNumber}:${action}:${headSha ?? "unknown"}`;
@@ -180,6 +181,7 @@ function normalizePullRequest(
     repoOwner,
     repoName,
     branch,
+    targetBranch,
     labels,
     actor,
     contextBlock: buildGitHubContextBlock(eventType, payload),
@@ -187,6 +189,7 @@ function normalizePullRequest(
       prNumber,
       sha: headSha,
       action,
+      targetBranch,
     },
   };
 }
@@ -245,6 +248,7 @@ function normalizeReviewComment(
   if (typeof prNumber !== "number" || !Number.isFinite(prNumber)) return null;
 
   const branch = pr.head?.ref;
+  const targetBranch = pr.base?.ref;
   const triggerKey = `pr_review_comment:${commentId}`;
   const concurrencyKey = `pr:${prNumber}`;
 
@@ -256,11 +260,13 @@ function normalizeReviewComment(
     repoOwner,
     repoName,
     branch,
+    targetBranch,
     actor,
     contextBlock: buildGitHubContextBlock(eventType, payload),
     meta: {
       commentId,
       prNumber,
+      targetBranch,
     },
   };
 }

@@ -190,7 +190,8 @@ When you create a session for a repo without an existing snapshot:
 ```
 
 1. **Sandbox created**: Modal spins up a new container from the base image
-2. **Git sync**: Clones your repository using GitHub App credentials
+2. **Git sync**: Clones your repository using brokered SCM credentials from the git credential
+   helper
 3. **Setup script**: Runs `.openinspect/setup.sh` for provisioning (if present)
 4. **Start script**: Runs `.openinspect/start.sh` for runtime startup (if present)
 5. **Agent start**: OpenCode server starts and connects back to the control plane
@@ -239,6 +240,33 @@ To minimize perceived latency, sandboxes warm proactively:
 - When you start typing a prompt, the control plane begins warming a sandbox
 - By the time you hit enter, the sandbox may already be ready
 - If restore is fast enough, you won't notice any delay
+
+### Tunnel URLs Inside the Sandbox
+
+When a session uses the `tunnelPorts` sandbox setting, the resolved tunnel URLs are written to
+`/workspace/.tunnels.env` so processes started by `.openinspect/start.sh` (or by the agent later)
+can read them locally.
+
+```dotenv
+# /workspace/.tunnels.env
+TUNNEL_3000=https://abc123-3000.modal.host
+TUNNEL_5173=https://abc123-5173.modal.host
+```
+
+This dotenv shape works directly with tools that accept an env-file path — `node --env-file=...`,
+`bun --env-file=...`, `docker compose --env-file=...`. The format is plain `KEY=value`, so any other
+dotenv consumer can read it without parsing.
+
+**Boot ordering.** On every non-build boot, the supervisor:
+
+1. Clears any stale file inherited from a snapshot.
+2. Waits up to `TUNNEL_WAIT_TIMEOUT_SECONDS` (default `30`) for fresh URLs.
+3. Runs `.openinspect/start.sh`.
+
+If the wait times out (e.g. a Modal-side outage), `start.sh` proceeds without fresh local URLs and
+the supervisor logs `tunnel.env_file_wait_timeout`. The control plane still receives and broadcasts
+the URLs to clients on a separate path. The file is not written when `tunnelPorts` is empty or in
+build mode.
 
 ---
 
@@ -326,7 +354,7 @@ This ensures your contributions are properly credited in git history.
 
 When you ask the agent to create a PR:
 
-1. Agent pushes the branch using GitHub App credentials
+1. Agent pushes the branch using brokered SCM credentials from the sandbox credential helper
 2. Control plane receives the branch name
 3. Control plane creates the PR using _your_ GitHub OAuth token
 4. PR appears as created by you, not a bot
@@ -423,12 +451,20 @@ was built for internal use where all employees have access to company repositori
 
 ### Token Architecture
 
-| Token              | Purpose                              | Scope                            |
-| ------------------ | ------------------------------------ | -------------------------------- |
-| GitHub App Token   | Clone repos, push commits            | All repos where App is installed |
-| User OAuth Token   | Create PRs, identify users           | Repos the user has access to     |
-| Sandbox Auth Token | Authenticate sandbox → control plane | Single session                   |
-| WebSocket Token    | Authenticate client connections      | Single session                   |
+| Token              | Purpose                                    | Scope                            |
+| ------------------ | ------------------------------------------ | -------------------------------- |
+| GitHub App Token   | Mint brokered git credentials              | All repos where App is installed |
+| User OAuth Token   | Create PRs, identify users                 | Repos the user has access to     |
+| Sandbox Auth Token | Authenticate sandbox → control plane calls | Single session                   |
+| WebSocket Token    | Authenticate client connections            | Single session                   |
+
+Fresh sandboxes fetch git credentials on demand through the control plane instead of relying on a
+token embedded in the environment or remote URL. Older snapshots and repo images may still receive
+env-token fallbacks so they can boot through the credential-helper migration. The helper authorizes
+HTTPS requests for the configured SCM host, preserving existing setup/start hooks that clone other
+private repositories available to the installation. This primarily protects continuously running
+sessions and Daytona persistent resumes from expired embedded credentials; Modal snapshot restores
+already mint a fresh fallback token on restore.
 
 ### Secrets
 

@@ -22,6 +22,13 @@ describe("GitLabSourceControlProvider", () => {
     vi.resetAllMocks();
   });
 
+  it("throws a permanent provider error when the access token is blank", () => {
+    const createProvider = () => new GitLabSourceControlProvider({ accessToken: "   " });
+
+    expect(createProvider).toThrow(SourceControlProviderError);
+    expect(createProvider).toThrow("GitLab access token not configured.");
+  });
+
   describe("getRepository", () => {
     it("maps GitLab project response to RepositoryInfo using path not display name", async () => {
       mockFetch.mockResolvedValueOnce(
@@ -472,6 +479,26 @@ describe("GitLabSourceControlProvider", () => {
       const auth = await provider.generatePushAuth();
 
       expect(auth).toEqual({ authType: "pat", token: "glpat-abc123" });
+    });
+  });
+
+  describe("generateCredentialHelperAuth", () => {
+    it("returns oauth2 PAT credentials with a cache expiry", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      try {
+        const provider = new GitLabSourceControlProvider({ accessToken: "glpat-abc123" });
+
+        const auth = await provider.generateCredentialHelperAuth();
+
+        expect(auth).toEqual({
+          username: "oauth2",
+          password: "glpat-abc123",
+          expiresAtEpochMs: Date.now() + 60 * 60 * 1000,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

@@ -148,6 +148,54 @@ describe("POST /internal/sandbox-event", () => {
     expect(events).toHaveLength(0);
   });
 
+  it("applies generated session title without storing a timeline event", async () => {
+    const { stub } = await initSession();
+
+    const res = await stub.fetch("http://internal/internal/sandbox-event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "session_title",
+        title: "Generated title",
+        sandboxId: "sb-1",
+        timestamp: Date.now() / 1000,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+
+    const stateRes = await stub.fetch("http://internal/internal/state");
+    const state = (await stateRes.json()) as { title: string };
+    expect(state.title).toBe("Generated title");
+
+    const events = await queryDO<{ type: string }>(
+      stub,
+      "SELECT type FROM events WHERE type = 'session_title'"
+    );
+    expect(events).toHaveLength(0);
+  });
+
+  it("does not overwrite an existing title with a generated session title", async () => {
+    const { stub } = await initSession({ title: "Manual title" });
+
+    const res = await stub.fetch("http://internal/internal/sandbox-event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "session_title",
+        title: "Generated title",
+        sandboxId: "sb-1",
+        timestamp: Date.now() / 1000,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+
+    const stateRes = await stub.fetch("http://internal/internal/state");
+    const state = (await stateRes.json()) as { title: string };
+    expect(state.title).toBe("Manual title");
+  });
+
   it("execution_complete marks message as completed", async () => {
     const { stub } = await initSession();
 

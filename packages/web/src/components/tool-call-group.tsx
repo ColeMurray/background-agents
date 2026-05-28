@@ -2,6 +2,7 @@
 
 import { memo, useState } from "react";
 import type { SandboxEvent } from "@/types/session";
+import { formatSessionEventTime } from "@/lib/time";
 import { formatToolGroup } from "@/lib/tool-formatters";
 import { ToolCallItem } from "./tool-call-item";
 import {
@@ -42,10 +43,7 @@ export const ToolCallGroup = memo(
 
     const formatted = formatToolGroup(events);
     const firstEvent = events[0];
-    const time = new Date(firstEvent.timestamp * 1000).toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    const time = formatSessionEventTime(firstEvent.timestamp);
 
     const toggleItem = (itemId: string) => {
       setExpandedItems((prev) => {

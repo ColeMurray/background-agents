@@ -1,6 +1,7 @@
 "use client";
 
 import type { SandboxEvent } from "@/types/session";
+import { formatSessionEventTime } from "@/lib/time";
 import { formatToolCall } from "@/lib/tool-formatters";
 import { SlackNotifyEvent } from "./slack-notify-event";
 import {
@@ -63,10 +64,7 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
 
   const formatted = formatToolCall(event);
   const isApplyPatch = event.tool?.toLowerCase() === "apply_patch";
-  const time = new Date(event.timestamp * 1000).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const time = formatSessionEventTime(event.timestamp);
 
   const { args, output } = formatted.getDetails();
   const patchText = isApplyPatch && typeof args?.patchText === "string" ? args.patchText : null;

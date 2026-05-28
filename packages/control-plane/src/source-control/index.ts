@@ -25,6 +25,7 @@ export type {
 export type { SourceControlErrorType } from "./errors";
 export { SourceControlProviderError } from "./errors";
 export { DEFAULT_SCM_PROVIDER, resolveScmProviderFromEnv } from "./config";
+export { createSourceControlProviderFromEnv } from "./provider-from-env";
 
 // Providers
 export {

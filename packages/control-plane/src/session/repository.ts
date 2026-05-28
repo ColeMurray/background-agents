@@ -211,6 +211,8 @@ export interface SqlStorage {
 export interface SqlResult {
   toArray(): unknown[];
   one(): unknown;
+  readonly rowsRead?: number;
+  readonly rowsWritten?: number;
 }
 
 /**
@@ -283,6 +285,20 @@ export class SessionRepository {
     );
   }
 
+  updateSessionTitleIfUnset(sessionId: string, title: string, updatedAt: number): boolean {
+    const result = this.sql.exec(
+      `UPDATE session SET title = ?, updated_at = ?
+       WHERE id = ? AND (title IS NULL OR TRIM(title) = '')`,
+      title,
+      updatedAt,
+      sessionId
+    );
+
+    // Intentionally consume result before reading rowsWritten so the count is final.
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
   updateSessionStatus(sessionId: string, status: SessionStatus, updatedAt: number): void {
     this.sql.exec(
       `UPDATE session SET status = ?, updated_at = ? WHERE id = ?`,
@@ -345,7 +361,8 @@ export class SessionRepository {
          created_at = ?,
          auth_token_hash = ?,
          auth_token = NULL,
-         modal_sandbox_id = ?
+         modal_sandbox_id = ?,
+         modal_object_id = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,

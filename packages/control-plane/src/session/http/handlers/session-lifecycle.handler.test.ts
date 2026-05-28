@@ -80,7 +80,6 @@ function createHandler() {
     upsertSession: vi.fn(),
     createSandbox: vi.fn(),
     createParticipant: vi.fn(),
-    updateSessionTitle: vi.fn(),
   };
   const getDurableObjectId = vi.fn(() => "session-do-id");
   const encryptToken = vi.fn();
@@ -100,12 +99,11 @@ function createHandler() {
   const getPublicSessionId = vi.fn<(session: SessionRow) => string>();
   const getParticipantByUserId = vi.fn<(userId: string) => ParticipantRow | null>();
   const transitionSessionStatus = vi.fn<(status: SessionRow["status"]) => Promise<boolean>>();
-  const syncSessionIndexTitle = vi.fn();
+  const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
   const stopExecution = vi.fn();
   const getSandboxSocket = vi.fn<() => WebSocket | null>();
   const sendToSandbox = vi.fn();
   const updateSandboxStatus = vi.fn();
-  const broadcast = vi.fn();
 
   const handler = createSessionLifecycleHandler({
     repository,
@@ -122,12 +120,11 @@ function createHandler() {
     getPublicSessionId,
     getParticipantByUserId,
     transitionSessionStatus,
-    syncSessionIndexTitle,
+    applySessionTitleUpdate,
     stopExecution,
     getSandboxSocket,
     sendToSandbox,
     updateSandboxStatus,
-    broadcast,
   });
 
   return {
@@ -145,12 +142,11 @@ function createHandler() {
     getPublicSessionId,
     getParticipantByUserId,
     transitionSessionStatus,
-    syncSessionIndexTitle,
+    applySessionTitleUpdate,
     stopExecution,
     getSandboxSocket,
     sendToSandbox,
     updateSandboxStatus,
-    broadcast,
   };
 }
 
@@ -431,33 +427,23 @@ describe("createSessionLifecycleHandler", () => {
     expect(response.status).toBe(403);
   });
 
-  it("updates title, broadcasts, syncs to D1 index, and returns new title", async () => {
-    const {
-      handler,
-      getSession,
-      getPublicSessionId,
-      getParticipantByUserId,
-      repository,
-      syncSessionIndexTitle,
-      broadcast,
-    } = createHandler();
+  it("applies a manual title update and returns the normalized title", async () => {
+    const { handler, getSession, getParticipantByUserId, applySessionTitleUpdate } =
+      createHandler();
     getSession.mockReturnValue(createSession());
-    getPublicSessionId.mockReturnValue("public-session-1");
     getParticipantByUserId.mockReturnValue(createParticipant());
 
     const response = await handler.updateTitle(
       new Request("http://internal/internal/update-title", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ userId: "user-1", title: "New Title" }),
+        body: JSON.stringify({ userId: "user-1", title: " New Title " }),
       })
     );
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ title: "New Title" });
-    expect(repository.updateSessionTitle).toHaveBeenCalledWith("session-1", "New Title", 1234);
-    expect(syncSessionIndexTitle).toHaveBeenCalledWith("public-session-1", "New Title");
-    expect(broadcast).toHaveBeenCalledWith({ type: "session_title", title: "New Title" });
+    expect(applySessionTitleUpdate).toHaveBeenCalledWith("New Title", { onlyIfUnset: false });
   });
 
   it("returns 400 for invalid archive body", async () => {

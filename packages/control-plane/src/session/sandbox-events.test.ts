@@ -36,6 +36,7 @@ function createProcessor() {
   const processMessageQueue = vi.fn(async () => {});
   const updateLastActivity = vi.fn();
   const getIsProcessing = vi.fn(() => false);
+  const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
   const waitUntil = vi.fn();
 
   const processor = new SessionSandboxEventProcessor({
@@ -51,6 +52,7 @@ function createProcessor() {
     callbackService: callbackService as never,
     wsManager: wsManager as never,
     broadcast,
+    applySessionTitleUpdate,
     getIsProcessing,
     triggerSnapshot,
     reconcileSessionStatusAfterExecution,
@@ -70,6 +72,7 @@ function createProcessor() {
     scheduleInactivityCheck,
     processMessageQueue,
     updateLastActivity,
+    applySessionTitleUpdate,
     waitUntil,
   };
 }
@@ -88,6 +91,25 @@ describe("SessionSandboxEventProcessor", () => {
 
     expect(h.repository.updateSandboxHeartbeat).toHaveBeenCalledWith(expect.any(Number));
     expect(h.broadcast).not.toHaveBeenCalled();
+  });
+
+  it("applies session_title without storing a timeline event", async () => {
+    const h = createProcessor();
+    const event: SandboxEvent = {
+      type: "session_title",
+      title: "Generated title",
+      sandboxId: "sb-1",
+      timestamp: 1000,
+    };
+
+    await h.processor.processSandboxEvent(event);
+
+    expect(h.applySessionTitleUpdate).toHaveBeenCalledWith("Generated title", {
+      onlyIfUnset: true,
+    });
+    expect(h.repository.createEvent).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalled();
+    expect(h.updateLastActivity).not.toHaveBeenCalled();
   });
 
   it("persists token event and broadcasts it", async () => {

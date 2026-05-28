@@ -24,7 +24,8 @@ existing GitHub behavior and prevents unsafe coupling during future provider con
      control-plane returns explicit `501 Not Implemented` responses for non-public routes.
 
 3. **Provider/auth boundary rules**
-   - Provider-specific PR URL and push-transport construction must live in provider implementations.
+   - Provider-specific PR URL, push-transport construction, and sandbox credential-helper auth must
+     live in provider implementations.
    - Direct GitHub API base URL usage is limited to approved auth/provider modules.
 
 4. **Guardrails enforced by code review + focused tests**
@@ -48,3 +49,5 @@ existing GitHub behavior and prevents unsafe coupling during future provider con
 - Add new provider logic under `packages/control-plane/src/source-control/providers`.
 - Register provider in factory and env resolver.
 - Do not add provider-specific URL/token logic to router/session/slack layers.
+- Implement `generateCredentialHelperAuth` before enabling helper-backed sandbox git auth for the
+  provider.

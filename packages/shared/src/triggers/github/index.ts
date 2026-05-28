@@ -22,5 +22,12 @@ export const githubSource: TriggerSourceDefinition = {
     displayName,
     description,
   })),
-  supportedConditions: ["branch", "label", "path_glob", "actor", "check_conclusion"],
+  supportedConditions: [
+    "branch",
+    "target_branch",
+    "label",
+    "path_glob",
+    "actor",
+    "check_conclusion",
+  ],
 };

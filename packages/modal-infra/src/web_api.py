@@ -154,7 +154,9 @@ async def api_create_sandbox(
 
         manager = SandboxManager()
 
-        clone_token = _resolve_clone_token()
+        snapshot_id = request.get("snapshot_id")
+        repo_image_id = request.get("repo_image_id") or None
+        clone_token = _resolve_clone_token() if snapshot_id or repo_image_id else None
 
         session_config = SessionConfig(
             session_id=request.get("session_id"),
@@ -171,13 +173,13 @@ async def api_create_sandbox(
             repo_owner=request.get("repo_owner"),
             repo_name=request.get("repo_name"),
             sandbox_id=request.get("sandbox_id"),  # Use control-plane-provided ID for auth
-            snapshot_id=request.get("snapshot_id"),
+            snapshot_id=snapshot_id,
             session_config=session_config,
             control_plane_url=control_plane_url,
             sandbox_auth_token=request.get("sandbox_auth_token"),
             clone_token=clone_token,
             user_env_vars=request.get("user_env_vars") or None,
-            repo_image_id=request.get("repo_image_id") or None,
+            repo_image_id=repo_image_id,
             repo_image_sha=request.get("repo_image_sha") or None,
             code_server_enabled=bool(request.get("code_server_enabled", False)),
             agent_slack_notify_enabled=bool(request.get("agent_slack_notify_enabled", False)),

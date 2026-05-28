@@ -132,6 +132,7 @@ describe("normalizeGitHubEvent", () => {
       expect(event!.repoOwner).toBe("acme-org");
       expect(event!.repoName).toBe("my-app");
       expect(event!.branch).toBe("feature/my-feature");
+      expect(event!.targetBranch).toBe("main");
       expect(event!.labels).toEqual(["enhancement", "review-needed"]);
       expect(event!.actor).toBe("dev-user");
       expect(event!.triggerKey).toBe("pr:42:opened:abc1234def5678");
@@ -145,7 +146,12 @@ describe("normalizeGitHubEvent", () => {
       expect(event!.contextBlock).toContain("pull_request.opened");
       expect(event!.contextBlock).toContain("acme-org/my-app");
       expect(event!.contextBlock).toContain("PR #42");
-      expect(event!.meta).toMatchObject({ prNumber: 42, sha: "abc1234def5678", action: "opened" });
+      expect(event!.meta).toMatchObject({
+        prNumber: 42,
+        sha: "abc1234def5678",
+        action: "opened",
+        targetBranch: "main",
+      });
     });
   });
 
@@ -228,9 +234,14 @@ describe("normalizeGitHubEvent", () => {
       expect(event!.triggerKey).toBe("pr_review_comment:5555");
       expect(event!.concurrencyKey).toBe("pr:42");
       expect(event!.branch).toBe("feature/my-feature");
+      expect(event!.targetBranch).toBe("main");
       expect(event!.actor).toBe("dev-user");
       expect(event!.contextBlock).toContain("pull_request_review_comment.created");
-      expect(event!.meta).toMatchObject({ commentId: 5555, prNumber: 42 });
+      expect(event!.meta).toMatchObject({
+        commentId: 5555,
+        prNumber: 42,
+        targetBranch: "main",
+      });
     });
   });
 
@@ -245,6 +256,7 @@ describe("normalizeGitHubEvent", () => {
       expect(event!.triggerKey).toBe("check_suite:77777");
       expect(event!.concurrencyKey).toBe("check_suite:77777");
       expect(event!.branch).toBe("feature/my-feature");
+      expect(event!.targetBranch).toBeUndefined();
       expect(event!.contextBlock).toContain("check_suite.completed");
       expect(event!.contextBlock).toContain("failure");
       expect(event!.meta).toMatchObject({ checkSuiteId: 77777, conclusion: "failure" });
