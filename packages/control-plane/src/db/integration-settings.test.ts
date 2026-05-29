@@ -871,6 +871,28 @@ describe("IntegrationSettingsStore", () => {
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
 
+    it("round-trips allowPrivateChannels at global level", async () => {
+      await store.setGlobal("slack", { defaults: { allowPrivateChannels: false } });
+      const result = await store.getGlobal("slack");
+      expect(result?.defaults?.allowPrivateChannels).toBe(false);
+    });
+
+    it("rejects non-boolean allowPrivateChannels at global level", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { allowPrivateChannels: "no" as unknown as boolean },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects allowPrivateChannels at per-repo level (global-only field)", async () => {
+      await expect(
+        store.setRepoSettings("slack", "acme/widgets", {
+          allowPrivateChannels: false,
+        } as unknown as { agentNotificationsEnabled?: boolean })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
     it("round-trips per-repo slack settings", async () => {
       await store.setRepoSettings("slack", "acme/widgets", {
         agentNotificationsEnabled: false,
@@ -951,6 +973,7 @@ describe("IntegrationSettingsStore", () => {
       expect(resolveSlackSettings(undefined)).toEqual({
         agentNotificationsEnabled: false,
         mentionsPolicy: "allow",
+        allowPrivateChannels: true,
       });
     });
 
@@ -958,7 +981,16 @@ describe("IntegrationSettingsStore", () => {
       expect(resolveSlackSettings({})).toEqual({
         agentNotificationsEnabled: false,
         mentionsPolicy: "allow",
+        allowPrivateChannels: true,
       });
+    });
+
+    it("returns allowPrivateChannels false only when explicitly false", () => {
+      expect(resolveSlackSettings({ allowPrivateChannels: false }).allowPrivateChannels).toBe(
+        false
+      );
+      expect(resolveSlackSettings({ allowPrivateChannels: true }).allowPrivateChannels).toBe(true);
+      expect(resolveSlackSettings({}).allowPrivateChannels).toBe(true);
     });
 
     it("returns enabled true only when the flag is exactly true", () => {

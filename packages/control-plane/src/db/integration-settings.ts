@@ -3,6 +3,7 @@ import {
   isValidReasoningEffort,
   INTEGRATION_DEFINITIONS,
   DEFAULT_MENTIONS_POLICY,
+  resolveAllowPrivateChannels,
   type IntegrationId,
   type IntegrationSettingsMap,
   type GitHubBotSettings,
@@ -365,7 +366,7 @@ export class IntegrationSettingsStore {
   ): SlackGlobalSettings {
     const allowedKeys =
       level === "global"
-        ? new Set(["agentNotificationsEnabled", "mentionsPolicy"])
+        ? new Set(["agentNotificationsEnabled", "mentionsPolicy", "allowPrivateChannels"])
         : new Set(["agentNotificationsEnabled"]);
 
     for (const key of Object.keys(settings)) {
@@ -390,6 +391,13 @@ export class IntegrationSettingsStore {
       );
     }
 
+    if (
+      settings.allowPrivateChannels !== undefined &&
+      typeof settings.allowPrivateChannels !== "boolean"
+    ) {
+      throw new IntegrationSettingsValidationError("allowPrivateChannels must be a boolean");
+    }
+
     return settings;
   }
 }
@@ -411,9 +419,11 @@ export interface ResolvedIntegrationConfig<TRepo extends object = Record<string,
 export function resolveSlackSettings(raw: Partial<SlackGlobalSettings> | undefined): {
   agentNotificationsEnabled: boolean;
   mentionsPolicy: SlackMentionsPolicy;
+  allowPrivateChannels: boolean;
 } {
   return {
     agentNotificationsEnabled: raw?.agentNotificationsEnabled === true,
     mentionsPolicy: raw?.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY,
+    allowPrivateChannels: resolveAllowPrivateChannels(raw),
   };
 }

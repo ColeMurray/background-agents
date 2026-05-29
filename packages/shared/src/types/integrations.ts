@@ -70,6 +70,31 @@ export interface SlackRepoSettings {
 /** Global Slack defaults: per-repo fields plus workspace-wide policy controls. */
 export interface SlackGlobalSettings extends SlackRepoSettings {
   mentionsPolicy?: SlackMentionsPolicy;
+  /**
+   * When false, the Slack bot declines to act in any private context (named private
+   * channels, group DMs, and 1:1 DMs) and only responds in public channels.
+   * Workspace-wide; cannot be overridden per repo. Defaults to allow.
+   */
+  allowPrivateChannels?: boolean;
+}
+
+/**
+ * Default for {@link SlackGlobalSettings.allowPrivateChannels}: private contexts are
+ * allowed unless an operator explicitly opts out. Preserves existing behavior.
+ */
+export const DEFAULT_ALLOW_PRIVATE_CHANNELS = true;
+
+/**
+ * Resolve the effective `allowPrivateChannels` value from raw global Slack settings.
+ *
+ * Defaults to allow via `!== false` (deliberately unlike `agentNotificationsEnabled`'s
+ * `=== true`): the rollout must be non-breaking, so only an explicit `false` denies.
+ * Shared by the control plane and the slack-bot so the default lives in one place.
+ */
+export function resolveAllowPrivateChannels(
+  raw: Partial<SlackGlobalSettings> | undefined
+): boolean {
+  return raw?.allowPrivateChannels !== false;
 }
 
 /** Maps each integration ID to its global and per-repo settings types. */

@@ -5,6 +5,7 @@ import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import {
   DEFAULT_MENTIONS_POLICY,
+  DEFAULT_ALLOW_PRIVATE_CHANNELS,
   type EnrichedRepository,
   type SlackGlobalConfig,
   type SlackGlobalSettings,
@@ -128,6 +129,9 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
   const [mentionsPolicy, setMentionsPolicy] = useState<SlackMentionsPolicy>(
     settings?.defaults?.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY
   );
+  const [allowPrivateChannels, setAllowPrivateChannels] = useState(
+    settings?.defaults?.allowPrivateChannels ?? DEFAULT_ALLOW_PRIVATE_CHANNELS
+  );
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [showResetDialog, setShowResetDialog] = useState(false);
@@ -136,6 +140,9 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
     if (settings === undefined || dirty || saving) return;
     setAgentNotificationsEnabled(settings?.defaults?.agentNotificationsEnabled ?? false);
     setMentionsPolicy(settings?.defaults?.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY);
+    setAllowPrivateChannels(
+      settings?.defaults?.allowPrivateChannels ?? DEFAULT_ALLOW_PRIVATE_CHANNELS
+    );
   }, [settings, dirty, saving]);
 
   const isConfigured = settings !== null && settings !== undefined;
@@ -148,6 +155,7 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
         mutate(GLOBAL_SETTINGS_KEY);
         setAgentNotificationsEnabled(false);
         setMentionsPolicy(DEFAULT_MENTIONS_POLICY);
+        setAllowPrivateChannels(DEFAULT_ALLOW_PRIVATE_CHANNELS);
         setDirty(false);
         toast.success("Settings reset to defaults.");
       } else {
@@ -166,6 +174,7 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
     const defaults: SlackGlobalSettings = {
       agentNotificationsEnabled,
       mentionsPolicy,
+      allowPrivateChannels,
     };
     const body: SlackGlobalConfig = { defaults };
 
@@ -239,6 +248,29 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
         </div>
       </div>
 
+      <label
+        htmlFor="slack-allow-private-switch"
+        className="flex items-center justify-between px-4 py-3 border border-border hover:bg-muted/50 transition cursor-pointer mb-4 rounded-sm"
+      >
+        <div>
+          <span className="text-sm font-medium text-foreground">
+            Allow use in private channels & DMs
+          </span>
+          <span className="text-sm text-muted-foreground ml-2">
+            When off, the bot only responds in public channels. Private channels, group DMs, and
+            direct messages are declined. On by default.
+          </span>
+        </div>
+        <Switch
+          id="slack-allow-private-switch"
+          checked={allowPrivateChannels}
+          onCheckedChange={(checked) => {
+            setAllowPrivateChannels(checked);
+            setDirty(true);
+          }}
+        />
+      </label>
+
       <div className="flex items-center gap-2">
         <Button onClick={handleSave} disabled={saving || !dirty}>
           {saving ? "Saving..." : "Save"}
@@ -256,8 +288,9 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
           <AlertDialogHeader>
             <AlertDialogTitle>Reset to defaults</AlertDialogTitle>
             <AlertDialogDescription>
-              Reset Slack defaults? The master switch will turn off and mentions policy will return
-              to <strong>allow</strong>. Per-repository overrides are not affected.
+              Reset Slack defaults? The master switch will turn off, mentions policy will return to{" "}
+              <strong>allow</strong>, and use in private channels &amp; DMs will return to{" "}
+              <strong>allowed</strong>. Per-repository overrides are not affected.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

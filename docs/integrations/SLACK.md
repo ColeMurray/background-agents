@@ -190,6 +190,30 @@ The Slack settings page includes a workspace-wide mentions policy for direct use
 Broadcast mention tokens such as `<!channel>`, `<!here>`, `<!everyone>`, and `<!subteam^...>` are
 always stripped from agent notification messages.
 
+### Private channels and DMs
+
+The Slack settings page includes a workspace-wide **Allow use in private channels & DMs** toggle.
+
+| State        | Result                                                                                       |
+| ------------ | -------------------------------------------------------------------------------------------- |
+| On (default) | The bot responds anywhere it is reachable: public channels, private channels, group DMs, DMs |
+| Off          | The bot only responds in public channels; private channels, group DMs, and DMs are declined  |
+
+When off, an invocation from a private context gets a short reply explaining the bot is
+public-channels-only, and no session is created. The control is workspace-wide and cannot be
+overridden per repository. It defaults to on so existing installs are unaffected.
+
+The setting is cached by the bot for up to ~60 seconds, so flipping it can take up to a minute to
+take effect across already-running workers. A deny that was previously read stays in effect through
+a control-plane outage; a deny set _during_ an outage takes effect once the bot can reach the
+control plane again.
+
+> **Required Slack scopes when off:** declining a private context relies on `conversations.info`,
+> which needs `groups:read` (private channels), `im:read` (DMs), and `mpim:read` (group DMs). If
+> those scopes are missing the lookup fails and the bot fails closed (declines), so private contexts
+> stay blocked. Public channels only need `channels:read`. When the toggle is on, no extra lookup is
+> performed.
+
 ---
 
 ## Admin and Safety Notes
@@ -224,7 +248,8 @@ If setup was just changed, confirm the Slack app event subscriptions and interac
 ### DMs do not start sessions
 
 The Slack app needs the direct message event subscription configured. Once that is set up, send the
-bot a plain DM with your request. No `@mention` is required.
+bot a plain DM with your request. No `@mention` is required. If the bot replies that it only works
+in public channels, the **Allow use in private channels & DMs** toggle is off (see above).
 
 ### Open-Inspect asks which repository to use
 
