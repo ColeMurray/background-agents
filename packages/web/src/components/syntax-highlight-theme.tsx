@@ -8,6 +8,7 @@ import {
   LIGHT_THEMES,
   DARK_THEMES,
 } from "@/hooks/use-syntax-highlight-preferences";
+import { getAppTheme } from "@/lib/app-themes";
 
 const LINK_ID = "hljs-theme-link";
 
@@ -16,15 +17,23 @@ const LINK_ID = "hljs-theme-link";
  * user preferences. Must be rendered as a single instance (in Providers).
  */
 export function SyntaxHighlightTheme() {
-  const { resolvedTheme } = useTheme();
+  const { theme, resolvedTheme } = useTheme();
   const { colorSchemeMode, preferredLightTheme, preferredDarkTheme } =
     useSyntaxHighlightPreferences();
 
   useEffect(() => {
-    // Determine which color scheme is active
+    // Determine which color scheme is active. When Code Highlighting's mode
+    // is "system" we follow the active app theme — for "system" itself
+    // next-themes has already resolved that to light/dark via resolvedTheme;
+    // for named palettes ("blue", etc.) we read the registry's colorScheme.
     let activeScheme: "light" | "dark";
     if (colorSchemeMode === "system") {
-      activeScheme = (resolvedTheme as "light" | "dark") ?? "light";
+      const appTheme = getAppTheme(theme);
+      if (appTheme && appTheme.colorScheme !== "system") {
+        activeScheme = appTheme.colorScheme;
+      } else {
+        activeScheme = (resolvedTheme as "light" | "dark") ?? "light";
+      }
     } else {
       activeScheme = colorSchemeMode;
     }
@@ -47,7 +56,7 @@ export function SyntaxHighlightTheme() {
       link.href = href;
       document.head.appendChild(link);
     }
-  }, [resolvedTheme, colorSchemeMode, preferredLightTheme, preferredDarkTheme]);
+  }, [theme, resolvedTheme, colorSchemeMode, preferredLightTheme, preferredDarkTheme]);
 
   return null;
 }

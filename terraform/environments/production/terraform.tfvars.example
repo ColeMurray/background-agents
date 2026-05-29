@@ -252,6 +252,19 @@ project_root = "../../../"
 #   - Workers Scripts: Edit (to attach the MEDIA_BUCKET binding to the Worker)
 # r2_media_bucket_name = ""
 
+# Theme applied on first load before the user picks one. Useful when you want
+# every new visitor to land on a company-branded theme out of the box — they can
+# still switch in Settings → Appearance and their choice persists. Must match a
+# registered theme id from packages/web/src/lib/app-themes.ts:
+#   "light"  – the built-in light/Default palette
+#   "dark"   – the built-in dark palette
+#   "system" – follow the user's OS preference (default)
+#   "blue"   – the demo branded palette shipped as an example
+# To ship your own brand: add a `[your-id]` entry to APP_THEMES, add the
+# matching CSS rule in packages/web/src/app/globals.css, append the id to the
+# variable's validation list in variables.tf, then set this to "your-id".
+# app_default_theme = "system"
+
 # =============================================================================
 # Initial Deployment Flags
 # =============================================================================

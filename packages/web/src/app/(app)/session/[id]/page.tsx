@@ -1242,14 +1242,14 @@ function ParticipantsList({
       {uniqueParticipants.slice(0, 3).map((p) => (
         <div
           key={p.userId}
-          className="w-8 h-8 rounded-full bg-card flex items-center justify-center text-xs font-medium text-foreground border-2 border-white"
+          className="w-8 h-8 rounded-full bg-card flex items-center justify-center text-xs font-medium text-foreground border-2 border-background"
           title={p.name}
         >
           {p.name.charAt(0).toUpperCase()}
         </div>
       ))}
       {uniqueParticipants.length > 3 && (
-        <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-xs font-medium text-foreground border-2 border-white">
+        <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-xs font-medium text-foreground border-2 border-background">
           +{uniqueParticipants.length - 3}
         </div>
       )}
