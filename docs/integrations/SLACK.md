@@ -208,11 +208,11 @@ take effect across already-running workers. A deny that was previously read stay
 a control-plane outage; a deny set _during_ an outage takes effect once the bot can reach the
 control plane again.
 
-> **Required Slack scopes when off:** declining a private context relies on `conversations.info`,
-> which needs `groups:read` (private channels), `im:read` (DMs), and `mpim:read` (group DMs). If
-> those scopes are missing the lookup fails and the bot fails closed (declines), so private contexts
-> stay blocked. Public channels only need `channels:read`. When the toggle is on, no extra lookup is
-> performed.
+> **Required Slack scopes when off:** for **named** channels the bot calls `conversations.info` to
+> distinguish public from private, which needs `channels:read` (public) and `groups:read` (private).
+> DMs and group DMs are recognized from the event's `channel_type` and declined **without** an API
+> call, so the gate needs no `im:read`/`mpim:read`. If a `conversations.info` lookup fails, the bot
+> fails closed (declines). When the toggle is on, no lookup is performed.
 
 ---
 

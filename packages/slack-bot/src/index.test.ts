@@ -385,6 +385,8 @@ describe("POST /events", () => {
     expect(startingStatusBodies(slackFetch)).toHaveLength(3);
     // Channel info is fetched first (it feeds the private-context gate), then the
     // Starting status is scheduled — still well before the slow session creation.
+    // Guard against vacuous pass: a missing "channelInfo" would make indexOf return -1.
+    expect(order).toContain("channelInfo");
     expect(order.indexOf("channelInfo")).toBeLessThan(order.indexOf("status"));
     expect(order.indexOf("status")).toBeLessThan(order.indexOf("session"));
 
