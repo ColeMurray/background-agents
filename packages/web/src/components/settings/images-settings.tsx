@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { RefreshIcon } from "@/components/ui/icons";
+import { RefreshIcon, TrashIcon } from "@/components/ui/icons";
 import { formatRelativeTime } from "@/lib/time";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 
@@ -36,6 +36,7 @@ export function ImagesSettings() {
   );
   const [togglingRepos, setTogglingRepos] = useState<Set<string>>(new Set());
   const [triggeringRepos, setTriggeringRepos] = useState<Set<string>>(new Set());
+  const [deletingRepos, setDeletingRepos] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
 
   if (!repoImagesSupported) {
@@ -118,6 +119,34 @@ export function ImagesSettings() {
     }
   };
 
+  const handleDelete = async (owner: string, name: string) => {
+    const repoKey = `${owner}/${name}`.toLowerCase();
+    setDeletingRepos((prev) => new Set(prev).add(repoKey));
+    setError("");
+
+    try {
+      const res = await fetch(
+        `/api/repo-images/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
+        { method: "DELETE" }
+      );
+
+      if (!res.ok) {
+        const errBody = await res.json();
+        setError(errBody.error || "Failed to delete stored images");
+      } else {
+        mutate(REPO_IMAGES_KEY);
+      }
+    } catch {
+      setError("Failed to delete stored images");
+    } finally {
+      setDeletingRepos((prev) => {
+        const next = new Set(prev);
+        next.delete(repoKey);
+        return next;
+      });
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center gap-2 text-muted-foreground">
@@ -144,6 +173,7 @@ export function ImagesSettings() {
             const isEnabled = enabledRepos.has(repoKey);
             const isToggling = togglingRepos.has(repoKey);
             const isTriggering = triggeringRepos.has(repoKey);
+            const isDeleting = deletingRepos.has(repoKey);
             const image = getLatestImage(repo.owner, repo.name);
 
             return (
@@ -173,6 +203,15 @@ export function ImagesSettings() {
                     title="Rebuild image"
                   >
                     <RefreshIcon className={`w-4 h-4 ${isTriggering ? "animate-spin" : ""}`} />
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="icon"
+                    onClick={() => handleDelete(repo.owner, repo.name)}
+                    disabled={isDeleting || !image || image.status === "building"}
+                    title="Delete stored images"
+                  >
+                    <TrashIcon className={`w-4 h-4 ${isDeleting ? "animate-pulse" : ""}`} />
                   </Button>
                 </div>
               </div>

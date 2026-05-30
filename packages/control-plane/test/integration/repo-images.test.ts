@@ -497,6 +497,36 @@ describe("Repo image HTTP routes", () => {
     expect(body.error).toContain("boolean");
   });
 
+  it("DELETE /repo-images/:owner/:name deletes stored images only", async () => {
+    await store.registerBuild({
+      id: "img-building",
+      repoOwner: "acme",
+      repoName: "repo",
+      baseBranch: "main",
+    });
+    await store.registerBuild({
+      id: "img-failed",
+      repoOwner: "acme",
+      repoName: "repo",
+      baseBranch: "main",
+    });
+    await store.markFailed("img-failed", "failed");
+
+    const response = await SELF.fetch("https://test.local/repo-images/acme/repo", {
+      method: "DELETE",
+      headers: await authHeaders(),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json<{ ok: boolean; deleted: number }>();
+    expect(body.ok).toBe(true);
+    expect(body.deleted).toBe(1);
+
+    const status = await store.getStatus("acme", "repo");
+    expect(status).toHaveLength(1);
+    expect(status[0].status).toBe("building");
+  });
+
   it("PUT /repo-images/toggle requires auth", async () => {
     const response = await SELF.fetch("https://test.local/repo-images/toggle/acme/repo", {
       method: "PUT",
