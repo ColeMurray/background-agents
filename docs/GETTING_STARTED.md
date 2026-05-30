@@ -671,6 +671,7 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `MODAL_TOKEN_ID`              | Modal token ID                                                                |
 | `MODAL_TOKEN_SECRET`          | Modal token secret                                                            |
 | `MODAL_WORKSPACE`             | Modal workspace name                                                          |
+| `MODAL_ENVIRONMENT`           | Modal environment name (defaults to `main`)                                   |
 | `GH_OAUTH_CLIENT_ID`          | GitHub App OAuth client ID                                                    |
 | `GH_OAUTH_CLIENT_SECRET`      | GitHub App OAuth client secret                                                |
 | `GH_APP_ID`                   | GitHub App ID                                                                 |

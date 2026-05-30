@@ -13,7 +13,8 @@ resource "null_resource" "modal_secrets" {
 
   triggers = {
     # Re-run when secrets configuration changes
-    secrets_hash = sha256(local.secrets_json)
+    secrets_hash      = sha256(local.secrets_json)
+    modal_environment = var.modal_environment
   }
 
   provisioner "local-exec" {
@@ -23,6 +24,7 @@ resource "null_resource" "modal_secrets" {
     environment = {
       MODAL_TOKEN_ID     = var.modal_token_id
       MODAL_TOKEN_SECRET = var.modal_token_secret
+      MODAL_ENVIRONMENT  = var.modal_environment
       DEPLOY_PATH        = var.deploy_path
       SECRETS_JSON       = local.secrets_json
     }
@@ -36,6 +38,8 @@ resource "null_resource" "modal_deploy" {
     source_hash = var.source_hash
     # Re-deploy when app name changes
     app_name = var.app_name
+    # Re-deploy when Modal environment changes
+    modal_environment = var.modal_environment
     # Ensure secrets are created first
     secrets_created = length(var.secrets) > 0 ? null_resource.modal_secrets[0].id : "no-secrets"
   }
@@ -47,6 +51,7 @@ resource "null_resource" "modal_deploy" {
     environment = {
       MODAL_TOKEN_ID     = var.modal_token_id
       MODAL_TOKEN_SECRET = var.modal_token_secret
+      MODAL_ENVIRONMENT  = var.modal_environment
       APP_NAME           = var.app_name
       DEPLOY_PATH        = var.deploy_path
       DEPLOY_MODULE      = var.deploy_module

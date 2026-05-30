@@ -28,7 +28,7 @@ import {
  *
  * @example
  * ```typescript
- * const client = createModalClient(secret, workspace);
+ * const client = createModalClient(secret, workspace, environment);
  * const provider = new ModalSandboxProvider(client);
  *
  * try {

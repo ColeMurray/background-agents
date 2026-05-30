@@ -97,7 +97,11 @@ async function handleBuildComplete(
       ctx.executionCtx?.waitUntil(
         (async () => {
           try {
-            const client = createModalClient(env.MODAL_API_SECRET!, env.MODAL_WORKSPACE!);
+            const client = createModalClient(
+              env.MODAL_API_SECRET!,
+              env.MODAL_WORKSPACE!,
+              env.MODAL_ENVIRONMENT
+            );
             await client.deleteProviderImage({ providerImageId: result.replacedImageId! });
           } catch (e) {
             logger.warn("repo_image.delete_old_failed", {
@@ -261,7 +265,11 @@ async function handleTriggerBuild(
     }
 
     // Trigger build on Modal
-    const client = createModalClient(env.MODAL_API_SECRET, env.MODAL_WORKSPACE);
+    const client = createModalClient(
+      env.MODAL_API_SECRET,
+      env.MODAL_WORKSPACE,
+      env.MODAL_ENVIRONMENT
+    );
     await client.buildRepoImage(
       {
         repoOwner: owner,

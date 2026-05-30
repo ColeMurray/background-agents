@@ -78,8 +78,8 @@ variable "modal_environment" {
   default     = "main"
 
   validation {
-    condition     = var.sandbox_provider != "modal" || length(var.modal_environment) > 0
-    error_message = "modal_environment must be set when sandbox_provider = 'modal'."
+    condition     = var.sandbox_provider != "modal" || (length(var.modal_environment) > 0 && can(regex("^[^:/]+$", var.modal_environment)))
+    error_message = "modal_environment must be set and must not contain colons or slashes when sandbox_provider = 'modal'."
   }
 }
 

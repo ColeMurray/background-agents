@@ -188,6 +188,7 @@ jobs:
           TF_VAR_modal_token_id: ${{ secrets.MODAL_TOKEN_ID }}
           TF_VAR_modal_token_secret: ${{ secrets.MODAL_TOKEN_SECRET }}
           TF_VAR_modal_workspace: ${{ secrets.MODAL_WORKSPACE }}
+          TF_VAR_modal_environment: "${{ secrets.MODAL_ENVIRONMENT || 'main' }}"
           TF_VAR_github_client_id: ${{ secrets.GH_OAUTH_CLIENT_ID }}
           TF_VAR_github_client_secret: ${{ secrets.GH_OAUTH_CLIENT_SECRET }}
           TF_VAR_github_app_id: ${{ secrets.GH_APP_ID }}
@@ -319,6 +320,7 @@ jobs:
           TF_VAR_modal_token_id: ${{ secrets.MODAL_TOKEN_ID }}
           TF_VAR_modal_token_secret: ${{ secrets.MODAL_TOKEN_SECRET }}
           TF_VAR_modal_workspace: ${{ secrets.MODAL_WORKSPACE }}
+          TF_VAR_modal_environment: "${{ secrets.MODAL_ENVIRONMENT || 'main' }}"
           TF_VAR_github_client_id: ${{ secrets.GH_OAUTH_CLIENT_ID }}
           TF_VAR_github_client_secret: ${{ secrets.GH_OAUTH_CLIENT_SECRET }}
           TF_VAR_github_app_id: ${{ secrets.GH_APP_ID }}

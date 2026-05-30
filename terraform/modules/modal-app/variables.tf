@@ -16,8 +16,14 @@ variable "app_name" {
 }
 
 variable "workspace" {
-  description = "Modal workspace name (used in endpoint URLs)"
+  description = "Modal workspace slug used in endpoint URLs"
   type        = string
+}
+
+variable "modal_environment" {
+  description = "Modal environment name used by the Modal CLI"
+  type        = string
+  default     = "main"
 }
 
 variable "deploy_path" {

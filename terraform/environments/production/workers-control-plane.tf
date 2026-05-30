@@ -70,7 +70,10 @@ module "control_plane_worker" {
       { name = "APP_NAME", value = var.app_name },
       { name = "SANDBOX_PROVIDER", value = var.sandbox_provider },
     ],
-    local.use_modal_backend ? [{ name = "MODAL_WORKSPACE", value = local.modal_workspace_slug }] : [],
+    local.use_modal_backend ? [
+      { name = "MODAL_WORKSPACE", value = var.modal_workspace },
+      { name = "MODAL_ENVIRONMENT", value = var.modal_environment },
+    ] : [],
     local.use_daytona_backend ? [
       { name = "DAYTONA_API_URL", value = var.daytona_api_url },
       { name = "DAYTONA_BASE_SNAPSHOT", value = var.daytona_base_snapshot },

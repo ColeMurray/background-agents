@@ -3,13 +3,19 @@
 # Required environment variables:
 #   MODAL_TOKEN_ID - Modal API token ID
 #   MODAL_TOKEN_SECRET - Modal API token secret
+#   MODAL_ENVIRONMENT - Modal environment to create secrets in
 #   DEPLOY_PATH - Path to the Modal app source (for uv project resolution)
 #   SECRETS_JSON - JSON array of secrets with format:
 #     [{"name": "secret-name", "values": {"KEY1": "value1", "KEY2": "value2"}}]
 
 set -euo pipefail
 
-echo "Creating/updating Modal secrets..."
+if [[ -z "${MODAL_ENVIRONMENT:-}" ]]; then
+    echo "Error: MODAL_ENVIRONMENT environment variable is not set"
+    exit 1
+fi
+
+echo "Creating/updating Modal secrets in environment: ${MODAL_ENVIRONMENT}"
 
 # Validate SECRETS_JSON is valid JSON
 if ! echo "${SECRETS_JSON}" | jq empty 2>/dev/null; then
