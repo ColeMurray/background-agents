@@ -66,6 +66,13 @@ export function isUnarchivedSessionListKey(key: unknown): key is string {
   return url.searchParams.get("status") !== "archived";
 }
 
+export function isArchivedSessionListKey(key: unknown): key is string {
+  if (!isSessionListKey(key)) return false;
+
+  const url = new URL(key, "http://localhost");
+  return url.searchParams.get("status") === "archived";
+}
+
 // Extracted from session-sidebar so the cache-shape transformation can be unit
 // tested without rendering the component or going through Radix/SWR.
 export function applyTitleUpdate(

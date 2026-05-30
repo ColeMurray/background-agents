@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyTitleUpdate,
   buildSessionsPageKey,
+  isArchivedSessionListKey,
   isSessionListKey,
   isUnarchivedSessionListKey,
   type SessionListResponse,
@@ -69,6 +70,19 @@ describe("isUnarchivedSessionListKey", () => {
 
   it("ignores archived session lists", () => {
     expect(isUnarchivedSessionListKey("/api/sessions?status=archived&limit=20")).toBe(false);
+  });
+});
+
+describe("isArchivedSessionListKey", () => {
+  it("matches archived session lists", () => {
+    expect(isArchivedSessionListKey("/api/sessions?status=archived")).toBe(true);
+    expect(isArchivedSessionListKey("/api/sessions?status=archived&limit=20")).toBe(true);
+  });
+
+  it("ignores unarchived session lists", () => {
+    expect(isArchivedSessionListKey("/api/sessions")).toBe(false);
+    expect(isArchivedSessionListKey("/api/sessions?excludeStatus=archived")).toBe(false);
+    expect(isArchivedSessionListKey("/api/sessions?status=active")).toBe(false);
   });
 });
 

@@ -31,6 +31,7 @@ import { copyToClipboard, formatModelNameLower } from "@/lib/format";
 import { archiveSession } from "@/lib/archive-session";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import {
+  isArchivedSessionListKey,
   isUnarchivedSessionListKey,
   removeSessionFromList,
   type SessionListResponse,
@@ -263,6 +264,10 @@ function SessionPageContent() {
           populateCache: true,
           revalidate: true,
         });
+        await mutate<SessionListResponse>(isArchivedSessionListKey, updateSessionsTitle, {
+          populateCache: true,
+          revalidate: false,
+        });
         return true;
       } catch {
         return false;
@@ -274,9 +279,20 @@ function SessionPageContent() {
   const { trigger: handleUnarchive } = useSWRMutation(
     `/api/sessions/${sessionId}/unarchive`,
     (url: string) =>
-      fetch(url, { method: "POST" }).then((r) => {
-        if (r.ok) mutate(isUnarchivedSessionListKey);
-        else console.error("Failed to unarchive session");
+      fetch(url, { method: "POST" }).then(async (r) => {
+        if (r.ok) {
+          await mutate<SessionListResponse>(
+            isArchivedSessionListKey,
+            (current) =>
+              current
+                ? { ...current, sessions: removeSessionFromList(current.sessions, sessionId) }
+                : current,
+            { revalidate: false, populateCache: true }
+          );
+          mutate(isUnarchivedSessionListKey);
+        } else {
+          console.error("Failed to unarchive session");
+        }
       }),
     { throwOnError: false }
   );
