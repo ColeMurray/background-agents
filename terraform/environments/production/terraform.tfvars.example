@@ -51,14 +51,16 @@ cloudflare_worker_subdomain = ""
 modal_token_id = ""
 modal_token_secret = ""
 
-# Modal workspace name and environment (used in endpoint URLs)
+# Modal workspace, environment, and endpoint web suffix
 # Only required when sandbox_provider = "modal"
 # workspace: your Modal username (e.g., "myworkspace")
-# environment: Modal environment name. Use "main" for the default environment:
-#   main env:     https://myworkspace--app.modal.run
-#   non-main env: https://myworkspace-production--app.modal.run
-modal_workspace   = ""
-modal_environment = "main"
+# environment: Modal environment name used by the CLI
+# environment_web_suffix: Modal web suffix used in endpoint URLs:
+#   empty suffix:      https://myworkspace--app.modal.run
+#   "production":      https://myworkspace-production--app.modal.run
+modal_workspace               = ""
+modal_environment             = "main"
+modal_environment_web_suffix  = ""
 
 # Daytona REST API
 # Only required when sandbox_provider = "daytona"

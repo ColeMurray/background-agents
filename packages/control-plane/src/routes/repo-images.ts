@@ -100,7 +100,7 @@ async function handleBuildComplete(
             const client = createModalClient(
               env.MODAL_API_SECRET!,
               env.MODAL_WORKSPACE!,
-              env.MODAL_ENVIRONMENT
+              env.MODAL_ENVIRONMENT_WEB_SUFFIX
             );
             await client.deleteProviderImage({ providerImageId: result.replacedImageId! });
           } catch (e) {
@@ -268,7 +268,7 @@ async function handleTriggerBuild(
     const client = createModalClient(
       env.MODAL_API_SECRET,
       env.MODAL_WORKSPACE,
-      env.MODAL_ENVIRONMENT
+      env.MODAL_ENVIRONMENT_WEB_SUFFIX
     );
     await client.buildRepoImage(
       {

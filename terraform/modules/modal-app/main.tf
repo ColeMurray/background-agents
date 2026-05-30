@@ -4,7 +4,8 @@
 
 locals {
   # Combine all secrets for the create-secrets script
-  secrets_json = jsonencode(var.secrets)
+  secrets_json         = jsonencode(var.secrets)
+  modal_workspace_slug = var.modal_environment_web_suffix == "" ? var.workspace : "${var.workspace}-${var.modal_environment_web_suffix}"
 }
 
 # Create Modal secrets

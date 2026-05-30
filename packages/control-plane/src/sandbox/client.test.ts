@@ -6,14 +6,13 @@ import {
 } from "./client";
 
 describe("buildModalWorkspaceSlug", () => {
-  it("uses the raw workspace for the default Modal environment", () => {
+  it("uses the raw workspace when the Modal environment has no web suffix", () => {
     expect(buildModalWorkspaceSlug("acme")).toBe("acme");
     expect(buildModalWorkspaceSlug("acme", "")).toBe("acme");
-    expect(buildModalWorkspaceSlug("acme", "main")).toBe("acme");
   });
 
-  it("appends non-main Modal environments for endpoint URLs", () => {
-    expect(buildModalWorkspaceSlug("acme", "production")).toBe("acme-production");
+  it("appends the Modal environment web suffix for endpoint URLs", () => {
+    expect(buildModalWorkspaceSlug("acme", "prod-web")).toBe("acme-prod-web");
   });
 });
 
@@ -74,7 +73,7 @@ describe("ModalClient", () => {
     vi.restoreAllMocks();
   });
 
-  it("uses the Modal environment in endpoint URLs", async () => {
+  it("uses the Modal environment web suffix in endpoint URLs", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ success: true, data: { status: "ok", service: "modal" } }), {
         status: 200,
@@ -82,11 +81,11 @@ describe("ModalClient", () => {
       })
     );
 
-    const client = createModalClient("secret", "acme", "production");
+    const client = createModalClient("secret", "acme", "prod-web");
     await client.health();
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://acme-production--open-inspect-api-health.modal.run"
+      "https://acme-prod-web--open-inspect-api-health.modal.run"
     );
   });
 });

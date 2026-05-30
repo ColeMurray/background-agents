@@ -62,7 +62,7 @@ variable "modal_token_secret" {
 }
 
 variable "modal_workspace" {
-  description = "Modal workspace name (used in endpoint URLs)"
+  description = "Modal workspace name"
   type        = string
   default     = ""
 
@@ -73,13 +73,24 @@ variable "modal_workspace" {
 }
 
 variable "modal_environment" {
-  description = "Modal environment name. Use 'main' for the default environment (omitted from endpoint URLs). Non-main envs (e.g., 'production', 'dev') are included in the URL slug."
+  description = "Modal environment name used by the Modal CLI"
   type        = string
   default     = "main"
 
   validation {
-    condition     = var.sandbox_provider != "modal" || (length(var.modal_environment) > 0 && can(regex("^[^:/]+$", var.modal_environment)))
-    error_message = "modal_environment must be set and must not contain colons or slashes when sandbox_provider = 'modal'."
+    condition     = var.sandbox_provider != "modal" || (length(trimspace(var.modal_environment)) > 0 && can(regex("^[^:/\\\\]+$", var.modal_environment)))
+    error_message = "modal_environment must be set and must not contain colons, slashes, or backslashes when sandbox_provider = 'modal'."
+  }
+}
+
+variable "modal_environment_web_suffix" {
+  description = "Modal environment web suffix used in endpoint URLs. Leave empty for the environment with no web suffix."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "modal" || var.modal_environment_web_suffix == "" || (length(trimspace(var.modal_environment_web_suffix)) > 0 && can(regex("^[^:/\\\\]+$", var.modal_environment_web_suffix)))
+    error_message = "modal_environment_web_suffix must not contain colons, slashes, or backslashes when sandbox_provider = 'modal'."
   }
 }
 

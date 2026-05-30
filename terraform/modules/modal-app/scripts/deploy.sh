@@ -26,6 +26,21 @@ if [[ -z "${MODAL_ENVIRONMENT:-}" ]]; then
     exit 1
 fi
 
+if [[ -z "${APP_NAME:-}" ]]; then
+    echo "Error: APP_NAME environment variable is not set"
+    exit 1
+fi
+
+if [[ -z "${DEPLOY_PATH:-}" ]]; then
+    echo "Error: DEPLOY_PATH environment variable is not set"
+    exit 1
+fi
+
+if [[ -z "${DEPLOY_MODULE:-}" ]]; then
+    echo "Error: DEPLOY_MODULE environment variable is not set"
+    exit 1
+fi
+
 echo "Deploying Modal app: ${APP_NAME}"
 echo "Modal environment: ${MODAL_ENVIRONMENT}"
 echo "Deploy path: ${DEPLOY_PATH}"

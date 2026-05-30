@@ -179,6 +179,7 @@ MODAL_TOKEN_ID
 MODAL_TOKEN_SECRET
 MODAL_WORKSPACE
 MODAL_ENVIRONMENT # Optional; defaults to main
+MODAL_ENVIRONMENT_WEB_SUFFIX # Optional; empty for workspace--... endpoints
 
 # GitHub OAuth App
 GH_OAUTH_CLIENT_ID
@@ -303,11 +304,12 @@ module "modal" {
   modal_token_id     = var.modal_token_id
   modal_token_secret = var.modal_token_secret
 
-  app_name          = "my-app"
-  workspace         = "my-workspace"
-  modal_environment = "main"
-  deploy_path       = "${path.root}/../../../packages/modal-infra"
-  deploy_module     = "deploy"
+  app_name                     = "my-app"
+  workspace                    = "my-workspace"
+  modal_environment            = "main"
+  modal_environment_web_suffix = ""
+  deploy_path                  = "${path.root}/../../../packages/modal-infra"
+  deploy_module                = "deploy"
 
   secrets = [
     {

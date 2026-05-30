@@ -16,7 +16,7 @@ variable "app_name" {
 }
 
 variable "workspace" {
-  description = "Modal workspace slug used in endpoint URLs"
+  description = "Modal workspace name"
   type        = string
 }
 
@@ -24,6 +24,22 @@ variable "modal_environment" {
   description = "Modal environment name used by the Modal CLI"
   type        = string
   default     = "main"
+
+  validation {
+    condition     = length(trimspace(var.modal_environment)) > 0 && can(regex("^[^:/\\\\]+$", var.modal_environment))
+    error_message = "modal_environment must be non-empty and must not contain colons, slashes, or backslashes."
+  }
+}
+
+variable "modal_environment_web_suffix" {
+  description = "Modal environment web suffix used in endpoint URLs. Leave empty for the environment with no web suffix."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.modal_environment_web_suffix == "" || (length(trimspace(var.modal_environment_web_suffix)) > 0 && can(regex("^[^:/\\\\]+$", var.modal_environment_web_suffix)))
+    error_message = "modal_environment_web_suffix must not contain colons, slashes, or backslashes."
+  }
 }
 
 variable "deploy_path" {

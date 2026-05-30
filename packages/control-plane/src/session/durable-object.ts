@@ -597,7 +597,7 @@ export class SessionDO extends DurableObject<Env> {
             const modalClient = createModalClient(
               this.env.MODAL_API_SECRET,
               this.env.MODAL_WORKSPACE,
-              this.env.MODAL_ENVIRONMENT
+              this.env.MODAL_ENVIRONMENT_WEB_SUFFIX
             );
             return createModalProvider(modalClient);
           })();
