@@ -119,23 +119,16 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   useEffect(() => {
     sessionListVersionRef.current += 1;
     setExtraSessions([]);
-    setHasMorePages(false);
     setLoadingMore(false);
-    offsetRef.current = 0;
-    hasMoreRef.current = false;
     loadingMoreRef.current = false;
-  }, [sidebarSessionsKey]);
 
-  useEffect(() => {
-    if (!data) return;
+    const nextHasMore = data?.hasMore ?? false;
+    const nextOffset = data ? firstPageSessions.length : 0;
 
-    setExtraSessions([]);
-    setHasMorePages(data.hasMore);
-    setLoadingMore(false);
-    offsetRef.current = firstPageSessions.length;
-    hasMoreRef.current = data.hasMore;
-    loadingMoreRef.current = false;
-  }, [data, firstPageSessions.length]);
+    setHasMorePages(nextHasMore);
+    offsetRef.current = nextOffset;
+    hasMoreRef.current = nextHasMore;
+  }, [sidebarSessionsKey, data, firstPageSessions.length]);
 
   const loadMoreSessions = useCallback(async () => {
     if (!authSession || !sidebarSessionsKey || loadingMoreRef.current || !hasMoreRef.current) {
