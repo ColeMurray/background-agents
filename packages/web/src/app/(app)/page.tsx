@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
-import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
+import { isSessionListKey } from "@/lib/session-list";
 import { APP_NAME } from "@/lib/site-config";
 import {
   DEFAULT_MODEL,
@@ -254,7 +254,7 @@ export default function Home() {
       });
 
       if (res.ok) {
-        mutate(SIDEBAR_SESSIONS_KEY);
+        mutate(isSessionListKey);
         router.push(`/session/${sessionId}`);
       } else {
         const data = await res.json();

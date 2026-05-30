@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { applyTitleUpdate, type SessionListResponse } from "./session-list";
+import {
+  applyTitleUpdate,
+  buildSessionsPageKey,
+  isSessionListKey,
+  type SessionListResponse,
+} from "./session-list";
 import type { Session } from "@open-inspect/shared";
 
 function session(id: string, overrides: Partial<Session> = {}): Session {
@@ -22,6 +27,31 @@ function session(id: string, overrides: Partial<Session> = {}): Session {
     ...overrides,
   };
 }
+
+describe("buildSessionsPageKey", () => {
+  it("adds repeated creator filters", () => {
+    expect(
+      buildSessionsPageKey({
+        excludeStatus: "archived",
+        createdBy: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+      })
+    ).toBe(
+      "/api/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&createdBy=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    );
+  });
+});
+
+describe("isSessionListKey", () => {
+  it("matches all session list cache keys", () => {
+    expect(isSessionListKey("/api/sessions")).toBe(true);
+    expect(isSessionListKey("/api/sessions?limit=50&offset=0")).toBe(true);
+  });
+
+  it("ignores other cache keys", () => {
+    expect(isSessionListKey("/api/sessions/session-1")).toBe(false);
+    expect(isSessionListKey(["/api/sessions"])).toBe(false);
+  });
+});
 
 describe("applyTitleUpdate", () => {
   it("replaces the title and updatedAt of the matching session", () => {

@@ -31,8 +31,8 @@ import { copyToClipboard, formatModelNameLower } from "@/lib/format";
 import { archiveSession } from "@/lib/archive-session";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import {
+  isSessionListKey,
   removeSessionFromList,
-  SIDEBAR_SESSIONS_KEY,
   type SessionListResponse,
 } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
@@ -52,8 +52,6 @@ import {
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
-import type { SessionItem } from "@/components/session-sidebar";
-
 // Event grouping types
 type EventGroup =
   | { type: "tool_group"; events: ToolCallEvent[]; id: string }
@@ -66,8 +64,6 @@ type FallbackSessionInfo = {
   repoName: string | null;
   title: string | null;
 };
-
-type SessionsResponse = { sessions: SessionItem[] };
 
 // Group consecutive tool calls of the same type
 function groupEvents(events: SandboxEvent[]): EventGroup[] {
@@ -234,7 +230,7 @@ function SessionPageContent() {
     const didArchive = await archiveSession(sessionId);
     if (didArchive) {
       await mutate<SessionListResponse>(
-        SIDEBAR_SESSIONS_KEY,
+        isSessionListKey,
         (current) =>
           current
             ? { ...current, sessions: removeSessionFromList(current.sessions, sessionId) }
@@ -248,8 +244,8 @@ function SessionPageContent() {
   const renameSession = useCallback(
     async (title: string) => {
       const updatedAt = Date.now();
-      const updateSessionsTitle = (data?: SessionsResponse): SessionsResponse => {
-        if (!data?.sessions) return { sessions: [] };
+      const updateSessionsTitle = (data?: SessionListResponse): SessionListResponse | undefined => {
+        if (!data?.sessions) return data;
         return {
           ...data,
           sessions: data.sessions.map((session) =>
@@ -259,22 +255,14 @@ function SessionPageContent() {
       };
 
       try {
-        await mutate<SessionsResponse>(
-          "/api/sessions",
-          async (currentData?: SessionsResponse) => {
-            const success = await triggerRename({ title });
-            if (!success) {
-              throw new Error("Failed to update session title");
-            }
-            return updateSessionsTitle(currentData);
-          },
-          {
-            optimisticData: updateSessionsTitle,
-            rollbackOnError: true,
-            populateCache: true,
-            revalidate: true,
-          }
-        );
+        const success = await triggerRename({ title });
+        if (!success) {
+          throw new Error("Failed to update session title");
+        }
+        await mutate<SessionListResponse>(isSessionListKey, updateSessionsTitle, {
+          populateCache: true,
+          revalidate: true,
+        });
         return true;
       } catch {
         return false;
@@ -287,7 +275,7 @@ function SessionPageContent() {
     `/api/sessions/${sessionId}/unarchive`,
     (url: string) =>
       fetch(url, { method: "POST" }).then((r) => {
-        if (r.ok) mutate(SIDEBAR_SESSIONS_KEY);
+        if (r.ok) mutate(isSessionListKey);
         else console.error("Failed to unarchive session");
       }),
     { throwOnError: false }
@@ -336,7 +324,7 @@ function SessionPageContent() {
     sendPrompt(prompt, selectedModel, reasoningEffort);
     setPrompt("");
     // Revalidate sidebar so this session bubbles to the top
-    mutate(SIDEBAR_SESSIONS_KEY);
+    mutate(isSessionListKey);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

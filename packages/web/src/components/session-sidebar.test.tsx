@@ -186,6 +186,64 @@ describe("SessionSidebar", () => {
     });
   });
 
+  it("filters sessions to the current user when Mine is selected", async () => {
+    const currentUserId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const mineKey = buildSessionsPageKey({
+      excludeStatus: "archived",
+      createdBy: [currentUserId],
+    });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url === SIDEBAR_SESSIONS_KEY) {
+        return jsonResponse({ sessions: [createSession(1)], hasMore: false });
+      }
+
+      if (url === "/api/me") {
+        return jsonResponse({ userId: currentUserId });
+      }
+
+      if (url === mineKey) {
+        return jsonResponse({
+          sessions: [createSession(2, { title: "Mine only" })],
+          hasMore: false,
+        });
+      }
+
+      throw new Error(`Unexpected fetch for ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+          fetcher: async (url: string) => {
+            const response = await fetch(url);
+            return response.json();
+          },
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    expect(await screen.findByText("Session 1")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Mine"));
+
+    expect(await screen.findByText("Mine only")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/me");
+      expect(fetchMock).toHaveBeenCalledWith(mineKey);
+    });
+    expect(screen.queryByText("Session 1")).not.toBeInTheDocument();
+  });
+
   it("navigates directly on mobile tap without opening rename actions", async () => {
     mockUseIsMobile.mockReturnValue(true);
     const onSessionSelect = vi.fn();

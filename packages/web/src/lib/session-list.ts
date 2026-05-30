@@ -1,6 +1,7 @@
 import type { Session } from "@open-inspect/shared";
 
 export const SESSIONS_PAGE_SIZE = 50;
+export const SESSIONS_API_PATH = "/api/sessions";
 export const SIDEBAR_SESSIONS_KEY = buildSessionsPageKey({
   excludeStatus: "archived",
   limit: SESSIONS_PAGE_SIZE,
@@ -17,11 +18,13 @@ export function buildSessionsPageKey({
   offset = 0,
   status,
   excludeStatus,
+  createdBy,
 }: {
   limit?: number;
   offset?: number;
   status?: string;
   excludeStatus?: string;
+  createdBy?: readonly string[];
 }) {
   const searchParams = new URLSearchParams({
     limit: String(limit),
@@ -36,7 +39,18 @@ export function buildSessionsPageKey({
     searchParams.set("excludeStatus", excludeStatus);
   }
 
-  return `/api/sessions?${searchParams.toString()}`;
+  for (const userId of createdBy ?? []) {
+    searchParams.append("createdBy", userId);
+  }
+
+  return `${SESSIONS_API_PATH}?${searchParams.toString()}`;
+}
+
+export function isSessionListKey(key: unknown): key is string {
+  return (
+    typeof key === "string" &&
+    (key === SESSIONS_API_PATH || key.startsWith(`${SESSIONS_API_PATH}?`))
+  );
 }
 
 // Extracted from session-sidebar so the cache-shape transformation can be unit

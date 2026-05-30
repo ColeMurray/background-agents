@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { generateInternalToken } from "../../src/auth/internal";
+import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
 
 describe("HMAC authentication", () => {
@@ -52,5 +53,72 @@ describe("HMAC authentication", () => {
     expect(body.sessions).toEqual([]);
     expect(body.total).toBe(0);
     expect(body.hasMore).toBe(false);
+  });
+
+  it("filters the session list by creator user id", async () => {
+    const aliceId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const bobId = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+
+    await store.create({
+      id: "alice-session",
+      title: null,
+      repoOwner: "acme",
+      repoName: "api",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "active",
+      userId: aliceId,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await store.create({
+      id: "bob-session",
+      title: null,
+      repoOwner: "acme",
+      repoName: "api",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "active",
+      userId: bobId,
+      createdAt: now - 1000,
+      updatedAt: now - 1000,
+    });
+    await store.create({
+      id: "historical-session",
+      title: null,
+      repoOwner: "acme",
+      repoName: "api",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "active",
+      userId: null,
+      createdAt: now - 2000,
+      updatedAt: now - 2000,
+    });
+
+    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
+    const response = await SELF.fetch(`https://test.local/sessions?createdBy=${aliceId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json<{ sessions: Array<{ id: string }>; total: number }>();
+    expect(body.sessions.map((session) => session.id)).toEqual(["alice-session"]);
+    expect(body.total).toBe(1);
+  });
+
+  it("rejects invalid creator user id filters", async () => {
+    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
+    const response = await SELF.fetch("https://test.local/sessions?createdBy=me", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid createdBy" });
   });
 });

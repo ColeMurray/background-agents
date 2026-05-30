@@ -298,6 +298,14 @@ class FakeD1Database {
         const nameVal = args[argIdx++] as string;
         rows = rows.filter((r) => r.repo_name === nameVal);
       }
+
+      const userIdMatch = conditions.match(/user_id IN \(([^)]+)\)/);
+      if (userIdMatch) {
+        const userIdCount = userIdMatch[1].split(",").length;
+        const userIds = new Set(args.slice(argIdx, argIdx + userIdCount) as string[]);
+        argIdx += userIdCount;
+        rows = rows.filter((r) => r.user_id !== null && userIds.has(r.user_id));
+      }
     }
 
     return rows;
@@ -472,6 +480,30 @@ describe("SessionIndexStore", () => {
       const result = await store.list({ excludeStatus: "archived" });
       expect(result.sessions).toHaveLength(2);
       expect(result.sessions.map((s) => s.id)).toEqual(["c", "a"]);
+      expect(result.total).toBe(2);
+    });
+
+    it("filters by creator user ids", async () => {
+      await store.create(makeSession({ id: "alice-old", userId: "alice", updatedAt: 1000 }));
+      await store.create(makeSession({ id: "bob", userId: "bob", updatedAt: 3000 }));
+      await store.create(makeSession({ id: "alice-new", userId: "alice", updatedAt: 4000 }));
+      await store.create(makeSession({ id: "historical", userId: null, updatedAt: 5000 }));
+
+      const result = await store.list({ createdByUserIds: ["alice"] });
+
+      expect(result.sessions.map((s) => s.id)).toEqual(["alice-new", "alice-old"]);
+      expect(result.total).toBe(2);
+      expect(result.hasMore).toBe(false);
+    });
+
+    it("supports multiple creator user ids", async () => {
+      await store.create(makeSession({ id: "alice", userId: "alice", updatedAt: 1000 }));
+      await store.create(makeSession({ id: "bob", userId: "bob", updatedAt: 3000 }));
+      await store.create(makeSession({ id: "carol", userId: "carol", updatedAt: 4000 }));
+
+      const result = await store.list({ createdByUserIds: ["alice", "bob"] });
+
+      expect(result.sessions.map((s) => s.id)).toEqual(["bob", "alice"]);
       expect(result.total).toBe(2);
     });
 
