@@ -107,18 +107,6 @@ describe("sessions API route", () => {
     expect(controlPlaneFetch).not.toHaveBeenCalled();
   });
 
-  it("rejects legacy scope query params", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "12345" } } as never);
-
-    const response = await GET(request("/api/sessions?scope=mine"));
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({
-      error: "scope is not supported; use createdBy=me",
-    });
-    expect(controlPlaneFetch).not.toHaveBeenCalled();
-  });
-
   it("resolves createdBy=me alongside explicit creator filters", async () => {
     vi.mocked(getServerSession).mockResolvedValue({
       user: {

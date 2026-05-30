@@ -24,13 +24,6 @@ export async function GET(request: NextRequest) {
   try {
     const searchParams = new URLSearchParams(request.nextUrl.searchParams);
 
-    if (searchParams.has("scope")) {
-      return NextResponse.json(
-        { error: "scope is not supported; use createdBy=me" },
-        { status: 400 }
-      );
-    }
-
     const createdByValues = searchParams.getAll("createdBy");
     if (createdByValues.includes(CURRENT_USER_CREATED_BY)) {
       const resolved = await resolveCurrentUserId(session.user);
