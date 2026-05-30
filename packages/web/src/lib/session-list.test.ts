@@ -30,6 +30,12 @@ function session(id: string, overrides: Partial<Session> = {}): Session {
 }
 
 describe("buildSessionsPageKey", () => {
+  it("adds a Mine scope", () => {
+    expect(buildSessionsPageKey({ excludeStatus: "archived", scope: "mine" })).toBe(
+      "/api/sessions?limit=50&offset=0&excludeStatus=archived&scope=mine"
+    );
+  });
+
   it("adds repeated creator filters", () => {
     expect(
       buildSessionsPageKey({

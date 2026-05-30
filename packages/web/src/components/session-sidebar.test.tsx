@@ -187,10 +187,9 @@ describe("SessionSidebar", () => {
   });
 
   it("filters sessions to the current user when Mine is selected", async () => {
-    const currentUserId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const mineKey = buildSessionsPageKey({
       excludeStatus: "archived",
-      createdBy: [currentUserId],
+      scope: "mine",
     });
 
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -198,10 +197,6 @@ describe("SessionSidebar", () => {
 
       if (url === SIDEBAR_SESSIONS_KEY) {
         return jsonResponse({ sessions: [createSession(1)], hasMore: false });
-      }
-
-      if (url === "/api/me") {
-        return jsonResponse({ userId: currentUserId });
       }
 
       if (url === mineKey) {
@@ -238,7 +233,6 @@ describe("SessionSidebar", () => {
 
     expect(await screen.findByText("Mine only")).toBeInTheDocument();
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/me");
       expect(fetchMock).toHaveBeenCalledWith(mineKey);
     });
     expect(screen.queryByText("Session 1")).not.toBeInTheDocument();

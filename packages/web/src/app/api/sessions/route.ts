@@ -8,6 +8,9 @@ import {
   buildControlPlanePath,
   SESSION_CONTROL_PLANE_QUERY_PARAMS,
 } from "@/lib/control-plane-query";
+import { resolveCurrentUserId } from "@/lib/current-user";
+
+const SESSION_SCOPES = new Set(["all", "mine"]);
 
 export async function GET(request: NextRequest) {
   const routeStart = Date.now();
@@ -19,13 +22,38 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const path = buildControlPlanePath(
-    "/sessions",
-    request.nextUrl.searchParams,
-    SESSION_CONTROL_PLANE_QUERY_PARAMS
-  );
-
   try {
+    const searchParams = new URLSearchParams(request.nextUrl.searchParams);
+    const scopes = searchParams.getAll("scope");
+    const scope = scopes[0];
+
+    if (scopes.length > 1 || (scope && !SESSION_SCOPES.has(scope))) {
+      return NextResponse.json({ error: "Invalid scope" }, { status: 400 });
+    }
+
+    if (scope === "mine") {
+      if (searchParams.has("createdBy")) {
+        return NextResponse.json(
+          { error: "scope=mine cannot be combined with createdBy" },
+          { status: 400 }
+        );
+      }
+
+      const resolved = await resolveCurrentUserId(session.user);
+      if (!resolved.ok) {
+        return NextResponse.json(resolved.body, { status: resolved.status });
+      }
+
+      searchParams.append("createdBy", resolved.userId);
+    }
+
+    searchParams.delete("scope");
+    const path = buildControlPlanePath(
+      "/sessions",
+      searchParams,
+      SESSION_CONTROL_PLANE_QUERY_PARAMS
+    );
+
     const fetchStart = Date.now();
     const response = await controlPlaneFetch(path);
     const fetchMs = Date.now() - fetchStart;

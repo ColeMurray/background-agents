@@ -19,6 +19,7 @@ import { formatRelativeTime, isInactiveSession } from "@/lib/time";
 import {
   applyTitleUpdate,
   buildSessionsPageKey,
+  isUnarchivedSessionListKey,
   mergeUniqueSessions,
   removeSessionFromList,
   type SessionListResponse,
@@ -54,9 +55,6 @@ export type SessionItem = Session;
 export const MOBILE_LONG_PRESS_MS = 450;
 const MOBILE_LONG_PRESS_MOVE_THRESHOLD_PX = 10;
 type SessionFilterScope = "all" | "mine";
-type CurrentUserResponse = {
-  userId: string;
-};
 
 export function buildSessionHref(session: SessionItem) {
   return {
@@ -90,32 +88,22 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const loadingMoreRef = useRef(false);
   const isMobile = useIsMobile();
 
-  const shouldResolveCurrentUser = Boolean(authSession) && sessionScope === "mine";
-  const {
-    data: currentUser,
-    error: currentUserError,
-    isLoading: currentUserLoading,
-  } = useSWR<CurrentUserResponse>(shouldResolveCurrentUser ? "/api/me" : null);
-  const createdByUserIds = useMemo(
-    () => (sessionScope === "mine" && currentUser?.userId ? [currentUser.userId] : undefined),
-    [currentUser?.userId, sessionScope]
-  );
+  const sessionListScope = sessionScope === "mine" ? "mine" : undefined;
   const sidebarSessionsKey = useMemo(() => {
     if (!authSession) return null;
-    if (sessionScope === "mine" && !createdByUserIds) return null;
 
     return buildSessionsPageKey({
       excludeStatus: "archived",
-      createdBy: createdByUserIds,
+      scope: sessionListScope,
     });
-  }, [authSession, createdByUserIds, sessionScope]);
+  }, [authSession, sessionListScope]);
 
   const {
     data,
     error: sessionsError,
     isLoading: sessionsLoading,
   } = useSWR<SessionListResponse>(sidebarSessionsKey);
-  const loading = sessionsLoading || (sessionScope === "mine" && currentUserLoading);
+  const loading = sessionsLoading;
   const firstPageSessions = useMemo(() => data?.sessions ?? [], [data?.sessions]);
 
   // Track data reference to clear extraSessions synchronously during render,
@@ -150,7 +138,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
       const response = await fetch(
         buildSessionsPageKey({
           excludeStatus: "archived",
-          createdBy: createdByUserIds,
+          scope: sessionListScope,
           offset: offsetRef.current,
         })
       );
@@ -172,7 +160,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
       loadingMoreRef.current = false;
       setLoadingMore(false);
     }
-  }, [authSession, createdByUserIds, sidebarSessionsKey]);
+  }, [authSession, sessionListScope, sidebarSessionsKey]);
 
   const maybeLoadMoreSessions = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -261,7 +249,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   }, [sessions, searchQuery]);
 
   const currentSessionId = pathname?.startsWith("/session/") ? pathname.split("/")[2] : null;
-  const hasSessionListError = sessionsError || (sessionScope === "mine" && currentUserError);
+  const hasSessionListError = sessionsError;
   const emptyMessage = hasSessionListError
     ? "Unable to load sessions"
     : sessionScope === "mine"
@@ -273,7 +261,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
       if (!sidebarSessionsKey) return;
 
       await mutate<SessionListResponse>(
-        sidebarSessionsKey,
+        isUnarchivedSessionListKey,
         (current) =>
           current
             ? { ...current, sessions: removeSessionFromList(current.sessions, sessionId) }
@@ -306,7 +294,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
       if (!sidebarSessionsKey) return;
 
       void mutate<SessionListResponse>(
-        sidebarSessionsKey,
+        isUnarchivedSessionListKey,
         (currentData) => applyTitleUpdate(currentData, sessionId, title, updatedAt),
         { revalidate: false }
       );

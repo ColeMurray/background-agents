@@ -18,12 +18,14 @@ export function buildSessionsPageKey({
   offset = 0,
   status,
   excludeStatus,
+  scope,
   createdBy,
 }: {
   limit?: number;
   offset?: number;
   status?: string;
   excludeStatus?: string;
+  scope?: "mine";
   createdBy?: readonly string[];
 }) {
   const searchParams = new URLSearchParams({
@@ -37,6 +39,10 @@ export function buildSessionsPageKey({
 
   if (excludeStatus) {
     searchParams.set("excludeStatus", excludeStatus);
+  }
+
+  if (scope) {
+    searchParams.set("scope", scope);
   }
 
   for (const userId of createdBy ?? []) {
