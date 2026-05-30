@@ -89,7 +89,7 @@ variable "modal_environment_web_suffix" {
   default     = ""
 
   validation {
-    condition     = var.sandbox_provider != "modal" || var.modal_environment_web_suffix == "" || (length(trimspace(var.modal_environment_web_suffix)) > 0 && can(regex("^[^:/\\\\]+$", var.modal_environment_web_suffix)))
+    condition     = var.sandbox_provider != "modal" || var.modal_environment_web_suffix == "" || can(regex("^[^[:space:]:/\\\\]+$", var.modal_environment_web_suffix))
     error_message = "modal_environment_web_suffix must not contain colons, slashes, or backslashes when sandbox_provider = 'modal'."
   }
 }
