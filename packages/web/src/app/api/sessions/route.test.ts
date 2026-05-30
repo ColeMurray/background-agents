@@ -19,6 +19,7 @@ vi.mock("@/lib/control-plane", () => ({
 
 import { getServerSession } from "next-auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
+import { clearCurrentUserIdCacheForTests } from "@/lib/current-user";
 import { GET } from "./route";
 
 function request(path: string) {
@@ -30,6 +31,7 @@ function request(path: string) {
 describe("sessions API route", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    clearCurrentUserIdCacheForTests();
   });
 
   it("returns 401 when the user session is missing", async () => {
@@ -115,6 +117,16 @@ describe("sessions API route", () => {
     expect(controlPlaneFetch).not.toHaveBeenCalled();
   });
 
+  it("rejects empty scopes", async () => {
+    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "12345" } } as never);
+
+    const response = await GET(request("/api/sessions?scope="));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid scope" });
+    expect(controlPlaneFetch).not.toHaveBeenCalled();
+  });
+
   it("rejects combining scope=mine with explicit creator filters", async () => {
     vi.mocked(getServerSession).mockResolvedValue({ user: { id: "12345" } } as never);
 
@@ -127,5 +139,43 @@ describe("sessions API route", () => {
       error: "scope=mine cannot be combined with createdBy",
     });
     expect(controlPlaneFetch).not.toHaveBeenCalled();
+  });
+
+  it("reuses the resolved current user across Mine pagination requests", async () => {
+    vi.mocked(getServerSession).mockResolvedValue({
+      user: {
+        id: "12345",
+        login: "ada",
+        name: "Ada Lovelace",
+        email: "ada@example.com",
+        image: "https://avatars.githubusercontent.com/u/12345",
+      },
+    } as never);
+    vi.mocked(controlPlaneFetch)
+      .mockResolvedValueOnce(Response.json({ userId: "0123456789abcdef0123456789abcdef" }))
+      .mockResolvedValueOnce(Response.json({ sessions: [], hasMore: true }, { status: 200 }))
+      .mockResolvedValueOnce(Response.json({ sessions: [], hasMore: false }, { status: 200 }));
+
+    await GET(request("/api/sessions?limit=50&offset=0&excludeStatus=archived&scope=mine"));
+    await GET(request("/api/sessions?limit=50&offset=50&excludeStatus=archived&scope=mine"));
+
+    expect(controlPlaneFetch).toHaveBeenCalledTimes(3);
+    expect(controlPlaneFetch).toHaveBeenNthCalledWith(1, "/provider-identities/github/12345", {
+      method: "PUT",
+      body: JSON.stringify({
+        providerLogin: "ada",
+        providerEmail: "ada@example.com",
+        displayName: "Ada Lovelace",
+        avatarUrl: "https://avatars.githubusercontent.com/u/12345",
+      }),
+    });
+    expect(controlPlaneFetch).toHaveBeenNthCalledWith(
+      2,
+      "/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=0123456789abcdef0123456789abcdef"
+    );
+    expect(controlPlaneFetch).toHaveBeenNthCalledWith(
+      3,
+      "/sessions?limit=50&offset=50&excludeStatus=archived&createdBy=0123456789abcdef0123456789abcdef"
+    );
   });
 });

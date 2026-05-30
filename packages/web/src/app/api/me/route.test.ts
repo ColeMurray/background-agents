@@ -14,11 +14,13 @@ vi.mock("@/lib/control-plane", () => ({
 
 import { getServerSession } from "next-auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
+import { clearCurrentUserIdCacheForTests } from "@/lib/current-user";
 import { GET } from "./route";
 
 describe("current user API route", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    clearCurrentUserIdCacheForTests();
   });
 
   it("returns 401 when the user session is missing", async () => {

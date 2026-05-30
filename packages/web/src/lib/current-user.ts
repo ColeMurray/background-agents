@@ -24,6 +24,15 @@ type ResolveCurrentUserResult =
       body: unknown;
     };
 
+const CURRENT_USER_ID_CACHE_TTL_MS = 5 * 60 * 1000;
+const currentUserIdCache = new Map<string, { userId: string; expiresAt: number }>();
+const pendingCurrentUserIdResolutions = new Map<string, Promise<ResolveCurrentUserResult>>();
+
+export function clearCurrentUserIdCacheForTests() {
+  currentUserIdCache.clear();
+  pendingCurrentUserIdResolutions.clear();
+}
+
 export async function resolveCurrentUserId(
   user: CurrentUserIdentityInput | null | undefined
 ): Promise<ResolveCurrentUserResult> {
@@ -35,6 +44,30 @@ export async function resolveCurrentUserId(
     };
   }
 
+  const cacheKey = user.id;
+  const cached = currentUserIdCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return {
+      ok: true,
+      userId: cached.userId,
+    };
+  }
+
+  const pending = pendingCurrentUserIdResolutions.get(cacheKey);
+  if (pending) {
+    return pending;
+  }
+
+  const resolution = resolveCurrentUserIdUncached({ ...user, id: cacheKey }).finally(() => {
+    pendingCurrentUserIdResolutions.delete(cacheKey);
+  });
+  pendingCurrentUserIdResolutions.set(cacheKey, resolution);
+  return resolution;
+}
+
+async function resolveCurrentUserIdUncached(
+  user: CurrentUserIdentityInput & { id: string }
+): Promise<ResolveCurrentUserResult> {
   const response = await controlPlaneFetch(
     `/provider-identities/github/${encodeURIComponent(user.id)}`,
     {
@@ -64,6 +97,11 @@ export async function resolveCurrentUserId(
       body: { error: "Invalid current user response" },
     };
   }
+
+  currentUserIdCache.set(user.id, {
+    userId: data.userId,
+    expiresAt: Date.now() + CURRENT_USER_ID_CACHE_TTL_MS,
+  });
 
   return {
     ok: true,

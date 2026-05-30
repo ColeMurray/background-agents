@@ -25,9 +25,9 @@ export async function GET(request: NextRequest) {
   try {
     const searchParams = new URLSearchParams(request.nextUrl.searchParams);
     const scopes = searchParams.getAll("scope");
-    const scope = scopes[0];
+    const scope = scopes[0] ?? null;
 
-    if (scopes.length > 1 || (scope && !SESSION_SCOPES.has(scope))) {
+    if (scopes.length > 1 || (scope !== null && !SESSION_SCOPES.has(scope))) {
       return NextResponse.json({ error: "Invalid scope" }, { status: 400 });
     }
 

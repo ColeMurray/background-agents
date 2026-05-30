@@ -86,6 +86,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const offsetRef = useRef(0);
   const hasMoreRef = useRef(false);
   const loadingMoreRef = useRef(false);
+  const sessionListVersionRef = useRef(0);
   const isMobile = useIsMobile();
 
   const sessionListScope = sessionScope === "mine" ? "mine" : undefined;
@@ -116,6 +117,16 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   }
 
   useEffect(() => {
+    sessionListVersionRef.current += 1;
+    setExtraSessions([]);
+    setHasMorePages(false);
+    setLoadingMore(false);
+    offsetRef.current = 0;
+    hasMoreRef.current = false;
+    loadingMoreRef.current = false;
+  }, [sidebarSessionsKey]);
+
+  useEffect(() => {
     if (!data) return;
 
     setExtraSessions([]);
@@ -133,6 +144,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
 
     loadingMoreRef.current = true;
     setLoadingMore(true);
+    const sessionListVersion = sessionListVersionRef.current;
 
     try {
       const response = await fetch(
@@ -150,6 +162,10 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
       const page: SessionListResponse = await response.json();
       const fetched = page.sessions ?? [];
 
+      if (sessionListVersion !== sessionListVersionRef.current) {
+        return;
+      }
+
       setExtraSessions((prev) => mergeUniqueSessions(prev, fetched));
       setHasMorePages(page.hasMore);
       offsetRef.current += fetched.length;
@@ -157,8 +173,10 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
     } catch (error) {
       console.error("Failed to fetch additional sessions:", error);
     } finally {
-      loadingMoreRef.current = false;
-      setLoadingMore(false);
+      if (sessionListVersion === sessionListVersionRef.current) {
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      }
     }
   }, [authSession, sessionListScope, sidebarSessionsKey]);
 
