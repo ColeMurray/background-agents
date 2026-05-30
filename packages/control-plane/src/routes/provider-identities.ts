@@ -17,6 +17,10 @@ type UpsertProviderIdentityRequest = {
   avatarUrl?: unknown;
 };
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function optionalString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
@@ -40,10 +44,8 @@ export async function handleUpsertProviderIdentity(
 ): Promise<Response> {
   const body = await parseJsonBody<UpsertProviderIdentityRequest>(request);
   if (body instanceof Response) return body;
-
-  const provider = pathSegment(match.groups?.provider);
-  if (provider !== "github") {
-    return error("provider must be github", 400);
+  if (!isObjectRecord(body)) {
+    return error("Request body must be an object", 400);
   }
 
   const providerUserId = pathSegment(match.groups?.providerUserId);
@@ -71,7 +73,7 @@ export async function handleUpsertProviderIdentity(
 export const providerIdentityRoutes: Route[] = [
   {
     method: "PUT",
-    pattern: parsePattern("/provider-identities/:provider/:providerUserId"),
+    pattern: parsePattern("/provider-identities/github/:providerUserId"),
     handler: handleUpsertProviderIdentity,
   },
 ];
