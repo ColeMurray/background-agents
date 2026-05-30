@@ -2,6 +2,7 @@ import type { Session } from "@open-inspect/shared";
 
 export const SESSIONS_PAGE_SIZE = 50;
 export const SESSIONS_API_PATH = "/api/sessions";
+export const CURRENT_USER_CREATED_BY = "me";
 export const SIDEBAR_SESSIONS_KEY = buildSessionsPageKey({
   excludeStatus: "archived",
   limit: SESSIONS_PAGE_SIZE,
@@ -18,14 +19,12 @@ export function buildSessionsPageKey({
   offset = 0,
   status,
   excludeStatus,
-  scope,
   createdBy,
 }: {
   limit?: number;
   offset?: number;
   status?: string;
   excludeStatus?: string;
-  scope?: "mine";
   createdBy?: readonly string[];
 }) {
   const searchParams = new URLSearchParams({
@@ -39,10 +38,6 @@ export function buildSessionsPageKey({
 
   if (excludeStatus) {
     searchParams.set("excludeStatus", excludeStatus);
-  }
-
-  if (scope) {
-    searchParams.set("scope", scope);
   }
 
   for (const userId of createdBy ?? []) {

@@ -9,8 +9,7 @@ import {
   SESSION_CONTROL_PLANE_QUERY_PARAMS,
 } from "@/lib/control-plane-query";
 import { resolveCurrentUserId } from "@/lib/current-user";
-
-const SESSION_SCOPES = new Set(["all", "mine"]);
+import { CURRENT_USER_CREATED_BY } from "@/lib/session-list";
 
 export async function GET(request: NextRequest) {
   const routeStart = Date.now();
@@ -24,30 +23,30 @@ export async function GET(request: NextRequest) {
 
   try {
     const searchParams = new URLSearchParams(request.nextUrl.searchParams);
-    const scopes = searchParams.getAll("scope");
-    const scope = scopes[0] ?? null;
 
-    if (scopes.length > 1 || (scope !== null && !SESSION_SCOPES.has(scope))) {
-      return NextResponse.json({ error: "Invalid scope" }, { status: 400 });
+    if (searchParams.has("scope")) {
+      return NextResponse.json(
+        { error: "scope is not supported; use createdBy=me" },
+        { status: 400 }
+      );
     }
 
-    if (scope === "mine") {
-      if (searchParams.has("createdBy")) {
-        return NextResponse.json(
-          { error: "scope=mine cannot be combined with createdBy" },
-          { status: 400 }
-        );
-      }
-
+    const createdByValues = searchParams.getAll("createdBy");
+    if (createdByValues.includes(CURRENT_USER_CREATED_BY)) {
       const resolved = await resolveCurrentUserId(session.user);
       if (!resolved.ok) {
         return NextResponse.json(resolved.body, { status: resolved.status });
       }
 
-      searchParams.append("createdBy", resolved.userId);
+      searchParams.delete("createdBy");
+      for (const value of createdByValues) {
+        searchParams.append(
+          "createdBy",
+          value === CURRENT_USER_CREATED_BY ? resolved.userId : value
+        );
+      }
     }
 
-    searchParams.delete("scope");
     const path = buildControlPlanePath(
       "/sessions",
       searchParams,

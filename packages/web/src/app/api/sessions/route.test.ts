@@ -44,7 +44,7 @@ describe("sessions API route", () => {
     expect(controlPlaneFetch).not.toHaveBeenCalled();
   });
 
-  it("forwards allowed session query params and drops scope=all", async () => {
+  it("forwards allowed session query params", async () => {
     vi.mocked(getServerSession).mockResolvedValue({ user: { id: "12345" } } as never);
     vi.mocked(controlPlaneFetch).mockResolvedValue(
       Response.json({ sessions: [], hasMore: false }, { status: 200 })
@@ -52,7 +52,7 @@ describe("sessions API route", () => {
 
     const response = await GET(
       request(
-        "/api/sessions?debug=true&limit=10&offset=20&excludeStatus=archived&createdBy=0123456789abcdef0123456789abcdef&scope=all"
+        "/api/sessions?debug=true&limit=10&offset=20&excludeStatus=archived&createdBy=0123456789abcdef0123456789abcdef"
       )
     );
 
@@ -63,7 +63,7 @@ describe("sessions API route", () => {
     await expect(response.json()).resolves.toEqual({ sessions: [], hasMore: false });
   });
 
-  it("resolves scope=mine before forwarding sessions to the control plane", async () => {
+  it("resolves createdBy=me before forwarding sessions to the control plane", async () => {
     vi.mocked(getServerSession).mockResolvedValue({
       user: {
         id: "12345",
@@ -78,7 +78,7 @@ describe("sessions API route", () => {
       .mockResolvedValueOnce(Response.json({ sessions: [], hasMore: false }, { status: 200 }));
 
     const response = await GET(
-      request("/api/sessions?limit=50&offset=0&excludeStatus=archived&scope=mine")
+      request("/api/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=me")
     );
 
     expect(controlPlaneFetch).toHaveBeenNthCalledWith(1, "/provider-identities/github/12345", {
@@ -97,51 +97,63 @@ describe("sessions API route", () => {
     expect(response.status).toBe(200);
   });
 
-  it("returns 409 when scope=mine cannot resolve a GitHub user ID", async () => {
+  it("returns 409 when createdBy=me cannot resolve a GitHub user ID", async () => {
     vi.mocked(getServerSession).mockResolvedValue({ user: { email: "ada@example.com" } } as never);
 
-    const response = await GET(request("/api/sessions?scope=mine"));
+    const response = await GET(request("/api/sessions?createdBy=me"));
 
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toEqual({ error: "GitHub user ID is unavailable" });
     expect(controlPlaneFetch).not.toHaveBeenCalled();
   });
 
-  it("rejects unknown scopes", async () => {
+  it("rejects legacy scope query params", async () => {
     vi.mocked(getServerSession).mockResolvedValue({ user: { id: "12345" } } as never);
 
-    const response = await GET(request("/api/sessions?scope=team"));
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "Invalid scope" });
-    expect(controlPlaneFetch).not.toHaveBeenCalled();
-  });
-
-  it("rejects empty scopes", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "12345" } } as never);
-
-    const response = await GET(request("/api/sessions?scope="));
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "Invalid scope" });
-    expect(controlPlaneFetch).not.toHaveBeenCalled();
-  });
-
-  it("rejects combining scope=mine with explicit creator filters", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "12345" } } as never);
-
-    const response = await GET(
-      request("/api/sessions?scope=mine&createdBy=0123456789abcdef0123456789abcdef")
-    );
+    const response = await GET(request("/api/sessions?scope=mine"));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
-      error: "scope=mine cannot be combined with createdBy",
+      error: "scope is not supported; use createdBy=me",
     });
     expect(controlPlaneFetch).not.toHaveBeenCalled();
   });
 
-  it("reuses the resolved current user across Mine pagination requests", async () => {
+  it("resolves createdBy=me alongside explicit creator filters", async () => {
+    vi.mocked(getServerSession).mockResolvedValue({
+      user: {
+        id: "12345",
+        login: "ada",
+        name: "Ada Lovelace",
+        email: "ada@example.com",
+        image: "https://avatars.githubusercontent.com/u/12345",
+      },
+    } as never);
+    vi.mocked(controlPlaneFetch)
+      .mockResolvedValueOnce(Response.json({ userId: "0123456789abcdef0123456789abcdef" }))
+      .mockResolvedValueOnce(Response.json({ sessions: [], hasMore: false }, { status: 200 }));
+
+    const response = await GET(
+      request("/api/sessions?createdBy=ffffffffffffffffffffffffffffffff&createdBy=me&limit=25")
+    );
+
+    expect(controlPlaneFetch).toHaveBeenNthCalledWith(1, "/provider-identities/github/12345", {
+      method: "PUT",
+      body: JSON.stringify({
+        providerLogin: "ada",
+        providerEmail: "ada@example.com",
+        displayName: "Ada Lovelace",
+        avatarUrl: "https://avatars.githubusercontent.com/u/12345",
+      }),
+    });
+    expect(controlPlaneFetch).toHaveBeenNthCalledWith(
+      2,
+      "/sessions?limit=25&createdBy=ffffffffffffffffffffffffffffffff&createdBy=0123456789abcdef0123456789abcdef"
+    );
+    expect(response.status).toBe(200);
+  });
+
+  it("reuses the resolved current user across createdBy=me pagination requests", async () => {
     vi.mocked(getServerSession).mockResolvedValue({
       user: {
         id: "12345",
@@ -156,8 +168,8 @@ describe("sessions API route", () => {
       .mockResolvedValueOnce(Response.json({ sessions: [], hasMore: true }, { status: 200 }))
       .mockResolvedValueOnce(Response.json({ sessions: [], hasMore: false }, { status: 200 }));
 
-    await GET(request("/api/sessions?limit=50&offset=0&excludeStatus=archived&scope=mine"));
-    await GET(request("/api/sessions?limit=50&offset=50&excludeStatus=archived&scope=mine"));
+    await GET(request("/api/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=me"));
+    await GET(request("/api/sessions?limit=50&offset=50&excludeStatus=archived&createdBy=me"));
 
     expect(controlPlaneFetch).toHaveBeenCalledTimes(3);
     expect(controlPlaneFetch).toHaveBeenNthCalledWith(1, "/provider-identities/github/12345", {

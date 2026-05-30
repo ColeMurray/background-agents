@@ -19,6 +19,7 @@ import { formatRelativeTime, isInactiveSession } from "@/lib/time";
 import {
   applyTitleUpdate,
   buildSessionsPageKey,
+  CURRENT_USER_CREATED_BY,
   isUnarchivedSessionListKey,
   mergeUniqueSessions,
   removeSessionFromList,
@@ -54,7 +55,7 @@ export type SessionItem = Session;
 
 export const MOBILE_LONG_PRESS_MS = 450;
 const MOBILE_LONG_PRESS_MOVE_THRESHOLD_PX = 10;
-type SessionFilterScope = "all" | "mine";
+type SessionCreatorFilter = "all" | "mine";
 
 export function buildSessionHref(session: SessionItem) {
   return {
@@ -78,7 +79,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const pathname = usePathname();
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState("");
-  const [sessionScope, setSessionScope] = useState<SessionFilterScope>("all");
+  const [sessionCreatorFilter, setSessionCreatorFilter] = useState<SessionCreatorFilter>("all");
   const [extraSessions, setExtraSessions] = useState<SessionItem[]>([]);
   const [hasMorePages, setHasMorePages] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -89,15 +90,14 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const sessionListVersionRef = useRef(0);
   const isMobile = useIsMobile();
 
-  const sessionListScope = sessionScope === "mine" ? "mine" : undefined;
   const sidebarSessionsKey = useMemo(() => {
     if (!authSession) return null;
 
     return buildSessionsPageKey({
       excludeStatus: "archived",
-      scope: sessionListScope,
+      createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,
     });
-  }, [authSession, sessionListScope]);
+  }, [authSession, sessionCreatorFilter]);
 
   const {
     data,
@@ -150,7 +150,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
       const response = await fetch(
         buildSessionsPageKey({
           excludeStatus: "archived",
-          scope: sessionListScope,
+          createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,
           offset: offsetRef.current,
         })
       );
@@ -178,7 +178,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
         setLoadingMore(false);
       }
     }
-  }, [authSession, sessionListScope, sidebarSessionsKey]);
+  }, [authSession, sessionCreatorFilter, sidebarSessionsKey]);
 
   const maybeLoadMoreSessions = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -270,7 +270,7 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
   const hasSessionListError = sessionsError;
   const emptyMessage = hasSessionListError
     ? "Unable to load sessions"
-    : sessionScope === "mine"
+    : sessionCreatorFilter === "mine"
       ? "No sessions started by you"
       : "No sessions yet";
 
@@ -395,10 +395,10 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
       <div className="px-3 pt-2">
         <ToggleGroup
           type="single"
-          value={sessionScope}
+          value={sessionCreatorFilter}
           onValueChange={(value) => {
             if (value === "all" || value === "mine") {
-              setSessionScope(value);
+              setSessionCreatorFilter(value);
             }
           }}
           className="grid grid-cols-2 rounded-md border border-border-muted bg-muted p-0.5"

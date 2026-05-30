@@ -6,7 +6,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { SWRConfig } from "swr";
 import { MOBILE_LONG_PRESS_MS, SessionSidebar } from "./session-sidebar";
-import { buildSessionsPageKey, SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
+import {
+  buildSessionsPageKey,
+  CURRENT_USER_CREATED_BY,
+  SIDEBAR_SESSIONS_KEY,
+} from "@/lib/session-list";
 
 expect.extend(matchers);
 
@@ -189,7 +193,7 @@ describe("SessionSidebar", () => {
   it("filters sessions to the current user when Mine is selected", async () => {
     const mineKey = buildSessionsPageKey({
       excludeStatus: "archived",
-      scope: "mine",
+      createdBy: [CURRENT_USER_CREATED_BY],
     });
 
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -238,12 +242,12 @@ describe("SessionSidebar", () => {
     expect(screen.queryByText("Session 1")).not.toBeInTheDocument();
   });
 
-  it("ignores stale load-more results after the scope changes", async () => {
+  it("ignores stale load-more results after the creator filter changes", async () => {
     const firstPage = Array.from({ length: 50 }, (_, index) => createSession(index + 1));
     const allNextPageKey = buildSessionsPageKey({ excludeStatus: "archived", offset: 50 });
     const mineKey = buildSessionsPageKey({
       excludeStatus: "archived",
-      scope: "mine",
+      createdBy: [CURRENT_USER_CREATED_BY],
     });
     let resolveAllNextPage!: (response: Response) => void;
     const allNextPage = new Promise<Response>((resolve) => {

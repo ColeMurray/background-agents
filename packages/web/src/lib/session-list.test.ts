@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyTitleUpdate,
   buildSessionsPageKey,
+  CURRENT_USER_CREATED_BY,
   isArchivedSessionListKey,
   isSessionListKey,
   isUnarchivedSessionListKey,
@@ -31,10 +32,10 @@ function session(id: string, overrides: Partial<Session> = {}): Session {
 }
 
 describe("buildSessionsPageKey", () => {
-  it("adds a Mine scope", () => {
-    expect(buildSessionsPageKey({ excludeStatus: "archived", scope: "mine" })).toBe(
-      "/api/sessions?limit=50&offset=0&excludeStatus=archived&scope=mine"
-    );
+  it("adds the current-user creator filter", () => {
+    expect(
+      buildSessionsPageKey({ excludeStatus: "archived", createdBy: [CURRENT_USER_CREATED_BY] })
+    ).toBe("/api/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=me");
   });
 
   it("adds repeated creator filters", () => {
