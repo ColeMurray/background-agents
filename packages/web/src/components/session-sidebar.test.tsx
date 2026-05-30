@@ -320,14 +320,14 @@ describe("SessionSidebar", () => {
     await act(async () => {
       resolveAllNextPage(
         jsonResponse({
-          sessions: [createSession(51, { title: "Old scope page" })],
+          sessions: [createSession(51, { title: "Stale page" })],
           hasMore: false,
         })
       );
       await allNextPage;
     });
 
-    expect(screen.queryByText("Old scope page")).not.toBeInTheDocument();
+    expect(screen.queryByText("Stale page")).not.toBeInTheDocument();
     expect(screen.getByText("Mine only")).toBeInTheDocument();
   });
 
