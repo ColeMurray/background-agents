@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { mutate } from "swr";
-import { isSessionListKey } from "@/lib/session-list";
+import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type {
   ParticipantPresence,
@@ -464,20 +464,20 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
         case "session_title":
           if (data.title) {
             setSessionState((prev) => (prev ? { ...prev, title: data.title! } : null));
-            mutate(isSessionListKey);
+            mutate(isUnarchivedSessionListKey);
           }
           break;
 
         case "session_status":
           setSessionState((prev) => (prev ? { ...prev, status: data.status } : null));
           // Revalidate session list so status change is reflected in sidebar
-          mutate(isSessionListKey);
+          mutate(isUnarchivedSessionListKey);
           break;
 
         case "child_session_update":
           // Child session spawned or changed status — revalidate child list and sidebar
           mutate(`/api/sessions/${sessionId}/children`);
-          mutate(isSessionListKey);
+          mutate(isUnarchivedSessionListKey);
           break;
 
         case "processing_status":

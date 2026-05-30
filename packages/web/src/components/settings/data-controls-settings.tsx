@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { buildSessionHref, type SessionItem } from "@/components/session-sidebar";
 import {
-  isSessionListKey,
+  isUnarchivedSessionListKey,
   removeSessionFromList,
   type SessionListResponse,
 } from "@/lib/session-list";
@@ -73,7 +73,7 @@ export function DataControlsSettings() {
       // start one offset earlier to avoid skipping the session that took
       // this row's slot.
       setOffset((prev) => prev - 1);
-      mutate(isSessionListKey);
+      mutate(isUnarchivedSessionListKey);
     } catch {
       toast.error("Failed to unarchive session");
     }

@@ -3,6 +3,7 @@ import {
   applyTitleUpdate,
   buildSessionsPageKey,
   isSessionListKey,
+  isUnarchivedSessionListKey,
   type SessionListResponse,
 } from "./session-list";
 import type { Session } from "@open-inspect/shared";
@@ -50,6 +51,18 @@ describe("isSessionListKey", () => {
   it("ignores other cache keys", () => {
     expect(isSessionListKey("/api/sessions/session-1")).toBe(false);
     expect(isSessionListKey(["/api/sessions"])).toBe(false);
+  });
+});
+
+describe("isUnarchivedSessionListKey", () => {
+  it("matches active session list variants", () => {
+    expect(isUnarchivedSessionListKey("/api/sessions")).toBe(true);
+    expect(isUnarchivedSessionListKey("/api/sessions?excludeStatus=archived")).toBe(true);
+    expect(isUnarchivedSessionListKey("/api/sessions?status=active")).toBe(true);
+  });
+
+  it("ignores archived session lists", () => {
+    expect(isUnarchivedSessionListKey("/api/sessions?status=archived&limit=20")).toBe(false);
   });
 });
 

@@ -31,7 +31,7 @@ import { copyToClipboard, formatModelNameLower } from "@/lib/format";
 import { archiveSession } from "@/lib/archive-session";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import {
-  isSessionListKey,
+  isUnarchivedSessionListKey,
   removeSessionFromList,
   type SessionListResponse,
 } from "@/lib/session-list";
@@ -230,7 +230,7 @@ function SessionPageContent() {
     const didArchive = await archiveSession(sessionId);
     if (didArchive) {
       await mutate<SessionListResponse>(
-        isSessionListKey,
+        isUnarchivedSessionListKey,
         (current) =>
           current
             ? { ...current, sessions: removeSessionFromList(current.sessions, sessionId) }
@@ -259,7 +259,7 @@ function SessionPageContent() {
         if (!success) {
           throw new Error("Failed to update session title");
         }
-        await mutate<SessionListResponse>(isSessionListKey, updateSessionsTitle, {
+        await mutate<SessionListResponse>(isUnarchivedSessionListKey, updateSessionsTitle, {
           populateCache: true,
           revalidate: true,
         });
@@ -275,7 +275,7 @@ function SessionPageContent() {
     `/api/sessions/${sessionId}/unarchive`,
     (url: string) =>
       fetch(url, { method: "POST" }).then((r) => {
-        if (r.ok) mutate(isSessionListKey);
+        if (r.ok) mutate(isUnarchivedSessionListKey);
         else console.error("Failed to unarchive session");
       }),
     { throwOnError: false }
@@ -324,7 +324,7 @@ function SessionPageContent() {
     sendPrompt(prompt, selectedModel, reasoningEffort);
     setPrompt("");
     // Revalidate sidebar so this session bubbles to the top
-    mutate(isSessionListKey);
+    mutate(isUnarchivedSessionListKey);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
