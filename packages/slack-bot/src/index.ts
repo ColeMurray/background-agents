@@ -88,7 +88,6 @@ async function getAuthHeaders(env: Env, traceId?: string): Promise<Record<string
 async function createSession(
   env: Env,
   repo: RepoConfig,
-  title: string | undefined,
   model: string,
   reasoningEffort: string | undefined,
   branch: string | undefined,
@@ -115,7 +114,6 @@ async function createSession(
       body: JSON.stringify({
         repoOwner: repo.owner,
         repoName: repo.name,
-        title: title || `Slack: ${repo.name}`,
         model,
         reasoningEffort,
         branch,
@@ -973,7 +971,6 @@ async function startSessionAndSendPrompt(
   const session = await createSession(
     env,
     repo,
-    messageText.slice(0, 100),
     model,
     reasoningEffort,
     branch,
