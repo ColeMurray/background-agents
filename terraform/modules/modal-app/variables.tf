@@ -32,13 +32,13 @@ variable "modal_environment" {
 }
 
 variable "modal_environment_web_suffix" {
-  description = "Modal environment web suffix used in endpoint URLs. Leave empty for the environment with no web suffix."
+  description = "Modal environment web suffix used in endpoint URLs. Use lowercase letters, digits, and dashes, or leave empty for the environment with no web suffix."
   type        = string
   default     = ""
 
   validation {
-    condition     = var.modal_environment_web_suffix == "" || can(regex("^[^[:space:]:/\\\\]+$", var.modal_environment_web_suffix))
-    error_message = "modal_environment_web_suffix must not contain colons, slashes, or backslashes."
+    condition     = can(regex("^$|^[a-z0-9-]+$", var.modal_environment_web_suffix))
+    error_message = "modal_environment_web_suffix must be empty or contain only lowercase letters, digits, and dashes."
   }
 }
 

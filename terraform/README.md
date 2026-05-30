@@ -179,7 +179,7 @@ MODAL_TOKEN_ID
 MODAL_TOKEN_SECRET
 MODAL_WORKSPACE
 MODAL_ENVIRONMENT # Optional; defaults to main
-MODAL_ENVIRONMENT_WEB_SUFFIX # Optional; empty for workspace--... endpoints
+MODAL_ENVIRONMENT_WEB_SUFFIX # Optional; lowercase letters, digits, dashes; empty for workspace--... endpoints
 
 # GitHub OAuth App
 GH_OAUTH_CLIENT_ID
@@ -372,8 +372,11 @@ terraform output verification_commands
 # 1. Health check control plane
 curl https://open-inspect-control-plane-prod.<subdomain>.workers.dev/health
 
-# 2. Health check Modal (replace <workspace> with your Modal workspace)
-curl https://<workspace>--open-inspect-api-health.modal.run
+# 2. Health check Modal
+# Prefer the exact URL from terraform output verification_commands.
+# Manual form: https://<workspace>[-<modal_environment_web_suffix>]--open-inspect-api-health.modal.run
+MODAL_WORKSPACE_SLUG="<workspace>" # or "<workspace>-<modal_environment_web_suffix>"
+curl https://${MODAL_WORKSPACE_SLUG}--open-inspect-api-health.modal.run
 
 # 3. Verify Vercel deployment (replace with your Vercel app URL)
 curl https://<your-vercel-app>.vercel.app
