@@ -66,6 +66,11 @@ import { setAssistantThreadStatusBestEffort } from "./activity-status";
 const log = createLogger("handler");
 
 const MAX_REPO_SUGGESTION_OPTIONS = 100;
+
+// Max repo-specific branch overrides rendered in the App Home tab. Each renders
+// one block and Slack's views.publish rejects views over 100 blocks, so this
+// bounds the list well under the limit (the base App Home uses ~15 blocks).
+const MAX_RENDERED_REPO_OVERRIDES = 50;
 type BackgroundTaskScheduler = (promise: Promise<void>) => void;
 
 export function buildAppHomeIntroText(appName: string): string {
@@ -646,7 +651,13 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
         },
       });
 
-      for (const { repo, branch } of configuredRepoOverrides) {
+      // Slack's views.publish rejects Home tabs over 100 blocks. Each override
+      // renders one block, so cap the list to stay well under the limit. Hidden
+      // overrides are still fully manageable via the "Search repository"
+      // selector above, which opens a modal that can clear any repo's override.
+      const renderedOverrides = configuredRepoOverrides.slice(0, MAX_RENDERED_REPO_OVERRIDES);
+
+      for (const { repo, branch } of renderedOverrides) {
         blocks.push({
           type: "section",
           text: {
@@ -669,6 +680,19 @@ async function publishAppHome(env: Env, userId: string): Promise<void> {
               deny: { type: "plain_text", text: "Cancel" },
             },
           },
+        });
+      }
+
+      const hiddenOverrideCount = configuredRepoOverrides.length - renderedOverrides.length;
+      if (hiddenOverrideCount > 0) {
+        blocks.push({
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `…and ${hiddenOverrideCount} more override${hiddenOverrideCount === 1 ? "" : "s"}. Use *Search repository* above to view or clear any repo's override.`,
+            },
+          ],
         });
       }
     }
