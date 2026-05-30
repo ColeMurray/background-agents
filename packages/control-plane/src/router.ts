@@ -74,6 +74,7 @@ import { secretsRoutes } from "./routes/secrets";
 import { automationRoutes } from "./routes/automations";
 import { mcpServerRoutes } from "./routes/mcp-servers";
 import { analyticsRoutes } from "./routes/analytics";
+import { providerIdentityRoutes } from "./routes/provider-identities";
 import { handleSlackNotify } from "./routes/slack-notify";
 import { webhookRoutes } from "./webhooks";
 
@@ -211,7 +212,10 @@ function isSandboxAuthRoute(path: string): boolean {
 }
 
 function isScmAgnosticRoute(path: string): boolean {
-  return /^\/analytics\/(summary|timeseries|breakdown)$/.test(path);
+  return (
+    /^\/analytics\/(summary|timeseries|breakdown)$/.test(path) ||
+    /^\/provider-identities\/[^/]+\/[^/]+$/.test(path)
+  );
 }
 
 function isProviderImplementedRoute(provider: SourceControlProviderName, path: string): boolean {
@@ -529,6 +533,9 @@ const routes: Route[] = [
 
   // Analytics
   ...analyticsRoutes,
+
+  // Provider identities
+  ...providerIdentityRoutes,
 
   // Webhooks (public routes — auth handled per-route)
   ...webhookRoutes,
