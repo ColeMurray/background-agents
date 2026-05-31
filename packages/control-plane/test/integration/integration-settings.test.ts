@@ -600,6 +600,35 @@ describe("Integration settings API", () => {
       expect(body.config.memoryMib).toBeNull();
       expect(body.config.enabledRepos).toBeNull();
     });
+
+    it("GET /integration-settings/sandbox/resolved returns configured cpuCores and memoryMib", async () => {
+      const headers = await authHeaders();
+
+      const putRes = await SELF.fetch("https://test.local/integration-settings/sandbox", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          settings: {
+            defaults: { cpuCores: 2, memoryMib: 4096 },
+          },
+        }),
+      });
+      expect(putRes.status).toBe(200);
+
+      const res = await SELF.fetch(
+        "https://test.local/integration-settings/sandbox/resolved/testowner/testrepo",
+        { headers }
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json<{
+        config: {
+          cpuCores: number | null;
+          memoryMib: number | null;
+        };
+      }>();
+      expect(body.config.cpuCores).toBe(2);
+      expect(body.config.memoryMib).toBe(4096);
+    });
   });
 
   describe("code-server CRUD", () => {
