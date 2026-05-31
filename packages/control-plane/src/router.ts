@@ -170,6 +170,7 @@ const SANDBOX_AUTH_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/pr$/, // PR creation from sandbox
   /^\/sessions\/[^/]+\/openai-token-refresh$/, // OpenAI token refresh from sandbox
   /^\/sessions\/[^/]+\/scm-credentials$/, // SCM credential broker for git credential helper
+  /^\/sessions\/[^/]+\/tunnel-urls$/, // Tunnel URL fetch for sandboxes whose .tunnels.env write isn't visible from inside
   /^\/sessions\/[^/]+\/media$/, // Media upload from sandbox
   /^\/sessions\/[^/]+\/children$/, // POST spawn, GET list
   /^\/sessions\/[^/]+\/children\/[^/]+$/, // GET child detail
@@ -479,6 +480,11 @@ const routes: Route[] = [
     method: "POST",
     pattern: parsePattern("/sessions/:id/scm-credentials"),
     handler: handleScmCredentials,
+  },
+  {
+    method: "GET",
+    pattern: parsePattern("/sessions/:id/tunnel-urls"),
+    handler: handleGetTunnelUrls,
   },
   {
     method: "POST",
@@ -1936,6 +1942,24 @@ async function handleScmCredentials(
     internalRequest(
       buildSessionInternalUrl(SessionInternalPaths.scmCredentials),
       { method: "POST" },
+      ctx
+    )
+  );
+}
+
+async function handleGetTunnelUrls(
+  _request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const stub = getSessionStub(env, match);
+  if (!stub) return error("Session ID required");
+
+  return stub.fetch(
+    internalRequest(
+      buildSessionInternalUrl(SessionInternalPaths.tunnelUrls),
+      { method: "GET" },
       ctx
     )
   );

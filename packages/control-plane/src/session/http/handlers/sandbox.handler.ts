@@ -47,6 +47,7 @@ export interface SandboxHandler {
   verifySandboxToken: (request: Request) => Promise<Response>;
   openaiTokenRefresh: () => Promise<Response>;
   scmCredentials: () => Promise<Response>;
+  tunnelUrls: () => Promise<Response>;
 }
 
 export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
@@ -188,6 +189,39 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
           account_id: result.accountId,
         },
         { status: 200 }
+      );
+    },
+
+    async tunnelUrls(): Promise<Response> {
+      const sandbox = deps.getSandbox();
+      if (!sandbox) {
+        return Response.json({ error: "No sandbox" }, { status: 404 });
+      }
+
+      // sandbox.tunnel_urls is a JSON-encoded { [port: string]: string } stored
+      // by SandboxLifecycleManager#storeAndBroadcastTunnelUrls. When the
+      // control plane has resolved Modal tunnel URLs but the in-sandbox file
+      // write (sandbox.open from outside) hasn't propagated to the sandbox's
+      // own filesystem view — a real failure mode we hit on the Modal
+      // provider — this endpoint is the in-sandbox fallback for retrieving
+      // them via SANDBOX_AUTH_TOKEN.
+      let urls: Record<string, string> = {};
+      if (sandbox.tunnel_urls) {
+        try {
+          const parsed = JSON.parse(sandbox.tunnel_urls) as unknown;
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            urls = parsed as Record<string, string>;
+          }
+        } catch (err) {
+          deps.getLog().warn("Failed to parse stored tunnel_urls JSON", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      return Response.json(
+        { tunnelUrls: urls },
+        { status: 200, headers: { "Cache-Control": "no-store" } }
       );
     },
 

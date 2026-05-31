@@ -176,6 +176,7 @@ export class SessionDO extends DurableObject<Env> {
     verifySandboxToken: (request) => this.sandboxHandler.verifySandboxToken(request),
     openaiTokenRefresh: () => this.sandboxHandler.openaiTokenRefresh(),
     scmCredentials: () => this.sandboxHandler.scmCredentials(),
+    tunnelUrls: () => this.sandboxHandler.tunnelUrls(),
     spawnContext: () => this.childSessionsHandler.getSpawnContext(),
     childSummary: () => this.childSessionsHandler.getChildSummary(),
     cancel: () => this.sessionLifecycleHandler.cancel(),
