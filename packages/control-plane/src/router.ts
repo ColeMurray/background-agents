@@ -124,7 +124,7 @@ function isSandboxAuthRoute(path: string): boolean {
 function isScmAgnosticRoute(path: string): boolean {
   return (
     /^\/analytics\/(summary|timeseries|breakdown)$/.test(path) ||
-    /^\/provider-identities\/[^/]+\/[^/]+$/.test(path)
+    /^\/provider-identities\/github\/[^/]+$/.test(path)
   );
 }
 

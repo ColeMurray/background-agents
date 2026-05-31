@@ -54,7 +54,7 @@ describe("provider identity router integration", () => {
     });
   });
 
-  it("lets the provider identity route validate unsupported providers when the SCM provider is not github", async () => {
+  it("rejects non-GitHub provider identity paths when the SCM provider is not github", async () => {
     const env = {
       INTERNAL_CALLBACK_SECRET: "test-secret",
       SCM_PROVIDER: "gitlab",
@@ -79,7 +79,10 @@ describe("provider identity router integration", () => {
       env as never
     );
 
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(501);
+    await expect(response.json()).resolves.toEqual({
+      error: "SCM provider 'gitlab' is not implemented in this deployment.",
+    });
     expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
   });
 });
