@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveUserId, parseAuthorId } from "./router";
+import { deriveUserId, parseAuthorId } from "./identity";
 
 describe("parseAuthorId", () => {
   it("parses github authorId", () => {

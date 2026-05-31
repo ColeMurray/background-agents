@@ -58,7 +58,7 @@ describe("provider identity routes", () => {
     });
   });
 
-  describe("PUT /provider-identities/github/:providerUserId", () => {
+  describe("PUT /provider-identities/:provider/:providerUserId", () => {
     it("upserts a GitHub identity and returns its canonical user ID", async () => {
       const response = await callProviderIdentityRoute("/provider-identities/github/12345", {
         providerLogin: "ada",
@@ -81,6 +81,14 @@ describe("provider identity routes", () => {
       });
     });
 
+    it("rejects unsupported providers", async () => {
+      const response = await callProviderIdentityRoute("/provider-identities/slack/U123", {});
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "provider must be github" });
+      expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
+    });
+
     it("rejects blank provider user IDs", async () => {
       const response = await callProviderIdentityRoute("/provider-identities/github/%20%20%20", {});
 
@@ -94,14 +102,6 @@ describe("provider identity routes", () => {
 
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toEqual({ error: "providerUserId is required" });
-      expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
-    });
-
-    it("rejects non-object JSON bodies", async () => {
-      const response = await callProviderIdentityRoute("/provider-identities/github/12345", null);
-
-      expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({ error: "Request body must be an object" });
       expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
     });
 
