@@ -366,7 +366,7 @@ variable "app_short_name" {
 }
 
 variable "app_icon_url" {
-  description = "Optional URL (absolute or root-relative) to a custom logo image for the command menu and browser favicon. Leave empty to use the built-in icon."
+  description = "Optional URL (absolute or root-relative) to a custom logo image for the command menu and browser favicon. Leave empty to use the built-in favicon and default in-app icon."
   type        = string
   default     = ""
 }

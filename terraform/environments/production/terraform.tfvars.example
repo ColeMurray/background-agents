@@ -216,8 +216,9 @@ project_root = "../../../"
 # app_short_name = "Inspect"
 
 # Optional URL (absolute or root-relative path) to a custom logo image for the
-# command menu and browser favicon. Leave empty to use the built-in icon.
-# Example: "/branding/logo.svg" (file under packages/web/public/) or
+# command menu and browser favicon. Leave empty to use the built-in favicon
+# and default in-app icon.
+# Example: "/branding/acme-logo.svg" (file under packages/web/public/) or
 #          "https://cdn.example.com/logo.svg".
 # app_icon_url = ""
 

@@ -85,9 +85,27 @@ describe("site-config", () => {
     expect(APP_ICON_URL).toBe("");
   });
 
+  it("APP_ICON_URL is empty when NEXT_PUBLIC_APP_ICON_URL is empty", async () => {
+    process.env.NEXT_PUBLIC_APP_ICON_URL = "   ";
+    const { APP_ICON_URL } = await import("./site-config");
+    expect(APP_ICON_URL).toBe("");
+  });
+
   it("APP_ICON_URL reflects NEXT_PUBLIC_APP_ICON_URL", async () => {
     process.env.NEXT_PUBLIC_APP_ICON_URL = "/branding/logo.svg";
     const { APP_ICON_URL } = await import("./site-config");
     expect(APP_ICON_URL).toBe("/branding/logo.svg");
+  });
+
+  it("APP_FAVICON_URL defaults to the built-in logo when NEXT_PUBLIC_APP_ICON_URL is unset", async () => {
+    delete process.env.NEXT_PUBLIC_APP_ICON_URL;
+    const { APP_FAVICON_URL } = await import("./site-config");
+    expect(APP_FAVICON_URL).toBe("/favicon.ico");
+  });
+
+  it("APP_FAVICON_URL uses NEXT_PUBLIC_APP_ICON_URL when set", async () => {
+    process.env.NEXT_PUBLIC_APP_ICON_URL = "/branding/acme-logo.svg";
+    const { APP_FAVICON_URL } = await import("./site-config");
+    expect(APP_FAVICON_URL).toBe("/branding/acme-logo.svg");
   });
 });
