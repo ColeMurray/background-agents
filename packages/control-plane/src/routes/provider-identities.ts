@@ -17,10 +17,6 @@ type UpsertProviderIdentityRequest = {
   avatarUrl?: unknown;
 };
 
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function optionalString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
@@ -34,6 +30,10 @@ function pathSegment(value: string | undefined): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function isObjectRecord(value: unknown): value is UpsertProviderIdentityRequest {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export async function handleUpsertProviderIdentity(

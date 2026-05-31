@@ -53,4 +53,36 @@ describe("provider identity router integration", () => {
       userId: "0123456789abcdef0123456789abcdef",
     });
   });
+
+  it("rejects non-GitHub provider identity paths when the SCM provider is not github", async () => {
+    const env = {
+      INTERNAL_CALLBACK_SECRET: "test-secret",
+      SCM_PROVIDER: "gitlab",
+      DB: {
+        prepare: vi.fn(),
+        batch: vi.fn(),
+        exec: vi.fn(),
+        dump: vi.fn(),
+      },
+    };
+
+    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
+    const response = await handleRequest(
+      new Request("https://test.local/provider-identities/gitlab/U123", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({}),
+      }),
+      env as never
+    );
+
+    expect(response.status).toBe(501);
+    await expect(response.json()).resolves.toEqual({
+      error: "SCM provider 'gitlab' is not implemented in this deployment.",
+    });
+    expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
+  });
 });

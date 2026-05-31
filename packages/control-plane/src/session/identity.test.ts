@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveUserId, parseAuthorId } from "./router";
+import { deriveParticipantUserId, parseAuthorId } from "./identity";
 
 describe("parseAuthorId", () => {
   it("parses github authorId", () => {
@@ -40,48 +40,56 @@ describe("parseAuthorId", () => {
   });
 });
 
-describe("deriveUserId", () => {
+describe("deriveParticipantUserId", () => {
   it("returns explicit userId for non-bot spawnSource", () => {
-    expect(deriveUserId({ userId: "user-abc", spawnSource: "user" })).toBe("user-abc");
+    expect(deriveParticipantUserId({ userId: "user-abc", spawnSource: "user" })).toBe("user-abc");
   });
 
   it("ignores explicit userId for bot spawnSource and derives from identity fields", () => {
-    expect(deriveUserId({ userId: "user-abc", spawnSource: "github-bot", scmUserId: "1001" })).toBe(
+    expect(
+      deriveParticipantUserId({
+        userId: "user-abc",
+        spawnSource: "github-bot",
+        scmUserId: "1001",
+      })
+    ).toBe("github:1001");
+  });
+
+  it("derives github-bot userId from scmUserId", () => {
+    expect(deriveParticipantUserId({ spawnSource: "github-bot", scmUserId: "1001" })).toBe(
       "github:1001"
     );
   });
 
-  it("derives github-bot userId from scmUserId", () => {
-    expect(deriveUserId({ spawnSource: "github-bot", scmUserId: "1001" })).toBe("github:1001");
-  });
-
   it("derives slack-bot userId from actorUserId", () => {
-    expect(deriveUserId({ spawnSource: "slack-bot", actorUserId: "U123" })).toBe("slack:U123");
+    expect(deriveParticipantUserId({ spawnSource: "slack-bot", actorUserId: "U123" })).toBe(
+      "slack:U123"
+    );
   });
 
   it("derives linear-bot userId from actorUserId", () => {
-    expect(deriveUserId({ spawnSource: "linear-bot", actorUserId: "lin-abc" })).toBe(
+    expect(deriveParticipantUserId({ spawnSource: "linear-bot", actorUserId: "lin-abc" })).toBe(
       "linear:lin-abc"
     );
   });
 
   it("falls back to anonymous for github-bot without scmUserId", () => {
-    expect(deriveUserId({ spawnSource: "github-bot" })).toBe("anonymous");
+    expect(deriveParticipantUserId({ spawnSource: "github-bot" })).toBe("anonymous");
   });
 
   it("falls back to anonymous for slack-bot without actorUserId", () => {
-    expect(deriveUserId({ spawnSource: "slack-bot" })).toBe("anonymous");
+    expect(deriveParticipantUserId({ spawnSource: "slack-bot" })).toBe("anonymous");
   });
 
   it("falls back to anonymous for linear-bot without actorUserId", () => {
-    expect(deriveUserId({ spawnSource: "linear-bot" })).toBe("anonymous");
+    expect(deriveParticipantUserId({ spawnSource: "linear-bot" })).toBe("anonymous");
   });
 
   it("falls back to anonymous for unknown spawnSource", () => {
-    expect(deriveUserId({ spawnSource: "user" })).toBe("anonymous");
+    expect(deriveParticipantUserId({ spawnSource: "user" })).toBe("anonymous");
   });
 
   it("falls back to anonymous when no fields provided", () => {
-    expect(deriveUserId({})).toBe("anonymous");
+    expect(deriveParticipantUserId({})).toBe("anonymous");
   });
 });
