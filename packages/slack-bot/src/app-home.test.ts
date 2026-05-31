@@ -15,6 +15,44 @@ describe("buildAppHomeIntroText", () => {
 });
 
 describe("buildAppHomeView", () => {
+  it("caps model select option labels at Slack's 75-character limit", () => {
+    const longLabel = "Long model label ".repeat(8);
+
+    const view = buildAppHomeView({
+      appName: "Open-Inspect",
+      availableModels: [
+        {
+          label: longLabel,
+          value: "anthropic/claude-haiku-4-5",
+        },
+      ],
+      currentModel: "anthropic/claude-haiku-4-5",
+      currentEffort: "max",
+      currentBranch: undefined,
+      repos: [],
+      repoBranchPreferences: new Map(),
+    });
+
+    const modelActionsBlock = view.blocks.find(
+      (block) => block.type === "actions" && block.block_id === "model_selection"
+    );
+    expect(modelActionsBlock?.type).toBe("actions");
+    if (modelActionsBlock?.type !== "actions") {
+      throw new Error("Missing model actions block");
+    }
+
+    const modelSelect = modelActionsBlock.elements[0];
+    expect(modelSelect.type).toBe("static_select");
+    if (modelSelect.type !== "static_select") {
+      throw new Error("Missing model static select");
+    }
+
+    expect(modelSelect.options[0].text.text).toHaveLength(75);
+    expect(modelSelect.options[0].text.text).toMatch(/…$/);
+    expect(modelSelect.initial_option?.text.text).toHaveLength(75);
+    expect(modelSelect.initial_option?.text.text).toMatch(/…$/);
+  });
+
   it("caps the repo-override list under Slack's 100-block limit", () => {
     const repos: RepoConfig[] = Array.from({ length: 60 }, (_, idx) => {
       const number = String(idx + 1).padStart(3, "0");

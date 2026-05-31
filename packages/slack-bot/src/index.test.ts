@@ -312,6 +312,52 @@ describe("POST /events", () => {
     mockGetUserInfo.mockResolvedValue({ ok: true, user: undefined });
   });
 
+  it("publishes App Home when the home tab is opened", async () => {
+    mockPublishView.mockResolvedValue({ ok: true });
+    const env = makeEnv();
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_home_opened",
+        tab: "home",
+        user: "U123",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+
+    await flushWaitUntil(ctx);
+
+    expect(mockPublishView).toHaveBeenCalledOnce();
+    const [token, userId, view] = mockPublishView.mock.calls[0];
+    expect(token).toBe("xoxb-test");
+    expect(userId).toBe("U123");
+    expect(view).toEqual(
+      expect.objectContaining({
+        type: "home",
+        blocks: expect.arrayContaining([
+          expect.objectContaining({
+            type: "section",
+            text: expect.objectContaining({
+              text: "Configure your Open-Inspect preferences below.",
+            }),
+          }),
+          expect.objectContaining({
+            type: "section",
+            text: expect.objectContaining({
+              text: expect.stringContaining("*Branch by repository*"),
+            }),
+          }),
+        ]),
+      })
+    );
+  });
+
   it("sets Starting status for a new app mention before session creation", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order);

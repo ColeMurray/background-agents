@@ -25,6 +25,16 @@ type ConfiguredRepoOverride = {
   branch: string;
 };
 
+const SELECT_OPTION_TEXT_LIMIT = 75;
+
+function truncateSelectOptionText(text: string): string {
+  if (text.length <= SELECT_OPTION_TEXT_LIMIT) {
+    return text;
+  }
+
+  return `${text.slice(0, SELECT_OPTION_TEXT_LIMIT - 1)}…`;
+}
+
 export function buildAppHomeIntroText(appName: string): string {
   return `Configure your ${appName} preferences below.`;
 }
@@ -39,7 +49,7 @@ export function buildRepoBranchSelectOptions(
     return {
       text: {
         type: "plain_text" as const,
-        text: label.slice(0, 75),
+        text: truncateSelectOptionText(label),
       },
       value: repo.id,
     };
@@ -48,7 +58,7 @@ export function buildRepoBranchSelectOptions(
 
 function toSelectOption(model: ModelOption): SlackSelectOption {
   return {
-    text: { type: "plain_text", text: model.label },
+    text: { type: "plain_text", text: truncateSelectOptionText(model.label) },
     value: model.value,
   };
 }

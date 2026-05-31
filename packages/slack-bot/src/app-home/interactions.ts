@@ -1,8 +1,4 @@
-import {
-  getDefaultReasoningEffort,
-  isValidModel,
-  isValidReasoningEffort,
-} from "@open-inspect/shared";
+import { isValidModel, isValidReasoningEffort } from "@open-inspect/shared";
 import {
   BRANCH_INPUT_BLOCK_ID,
   BRANCH_MODAL_CALLBACK_ID,
@@ -36,7 +32,7 @@ import type {
   SlackSelectOption,
 } from "./slack-types";
 import { buildRepoBranchSelectOptions } from "./view";
-import { getResolvedUserPreferences, saveUserPreferences } from "../user-preferences";
+import { getResolvedUserPreferences, updateUserPreferences } from "../user-preferences";
 
 const log = createLogger("app-home");
 
@@ -226,8 +222,7 @@ async function handleBranchSubmission(
   const branch = getSubmittedBranch(payload);
 
   if (payload.view?.callback_id === BRANCH_MODAL_CALLBACK_ID) {
-    const current = await getResolvedUserPreferences(env, userId);
-    await saveUserPreferences(env, userId, { ...current, branch });
+    await updateUserPreferences(env, userId, { branch });
     await publishAppHome(env, userId);
     return;
   }
@@ -293,13 +288,7 @@ async function handleSelectModel({
     return;
   }
 
-  const current = await getResolvedUserPreferences(env, userId);
-  const newDefault = getDefaultReasoningEffort(selectedModel);
-  await saveUserPreferences(env, userId, {
-    model: selectedModel,
-    reasoningEffort: newDefault,
-    branch: current.branch,
-  });
+  await updateUserPreferences(env, userId, { model: selectedModel });
   await publishAppHome(env, userId);
 }
 
@@ -313,15 +302,17 @@ async function handleSelectReasoningEffort({
     return;
   }
 
-  const current = await getResolvedUserPreferences(env, userId);
-  if (!isValidReasoningEffort(current.model, selectedEffort)) {
+  const updated = await updateUserPreferences(env, userId, (current) => {
+    if (!isValidReasoningEffort(current.model, selectedEffort)) {
+      return null;
+    }
+
+    return { reasoningEffort: selectedEffort };
+  });
+  if (!updated) {
     return;
   }
 
-  await saveUserPreferences(env, userId, {
-    ...current,
-    reasoningEffort: selectedEffort,
-  });
   await publishAppHome(env, userId);
 }
 
@@ -396,7 +387,6 @@ async function handleClearBranchPreference({
     return;
   }
 
-  const current = await getResolvedUserPreferences(env, userId);
-  await saveUserPreferences(env, userId, { ...current, branch: undefined });
+  await updateUserPreferences(env, userId, { branch: undefined });
   await publishAppHome(env, userId);
 }

@@ -21,8 +21,60 @@ export interface ResolvedUserPreferences {
   branch: string | undefined;
 }
 
+type UserPreferencesPatch = Partial<ResolvedUserPreferences>;
+type UserPreferencesUpdater = (
+  current: ResolvedUserPreferences
+) => UserPreferencesPatch | null | undefined;
+
 function getUserPreferencesKey(userId: string): string {
   return `user_prefs:${userId}`;
+}
+
+function hasPreferenceField<K extends keyof UserPreferencesPatch>(
+  patch: UserPreferencesPatch,
+  field: K
+): patch is UserPreferencesPatch & Required<Pick<UserPreferencesPatch, K>> {
+  return Object.prototype.hasOwnProperty.call(patch, field);
+}
+
+function normalizeResolvedPreferences(
+  preferences: ResolvedUserPreferences,
+  defaultModel: string | undefined,
+  options: { validateBranch?: boolean } = {}
+): ResolvedUserPreferences {
+  const model = getValidModelOrDefault(preferences.model ?? defaultModel ?? DEFAULT_MODEL);
+  const reasoningEffort =
+    preferences.reasoningEffort && isValidReasoningEffort(model, preferences.reasoningEffort)
+      ? preferences.reasoningEffort
+      : getDefaultReasoningEffort(model);
+  const branch =
+    options.validateBranch === false
+      ? normalizeBranchPreference(preferences.branch)
+      : getValidatedBranch(preferences.branch);
+
+  return {
+    model,
+    reasoningEffort,
+    branch,
+  };
+}
+
+function mergeUserPreferencesPatch(
+  current: ResolvedUserPreferences,
+  patch: UserPreferencesPatch,
+  defaultModel: string | undefined
+): ResolvedUserPreferences {
+  const model = hasPreferenceField(patch, "model") ? (patch.model ?? current.model) : current.model;
+  const reasoningEffort = hasPreferenceField(patch, "reasoningEffort")
+    ? patch.reasoningEffort
+    : hasPreferenceField(patch, "model")
+      ? undefined
+      : current.reasoningEffort;
+  const branch = hasPreferenceField(patch, "branch") ? patch.branch : current.branch;
+
+  return normalizeResolvedPreferences({ model, reasoningEffort, branch }, defaultModel, {
+    validateBranch: false,
+  });
 }
 
 function isValidUserPreferences(data: unknown): data is UserPreferences {
@@ -45,17 +97,14 @@ export function resolveUserPreferences(
   prefs: UserPreferences | null | undefined,
   defaultModel: string | undefined
 ): ResolvedUserPreferences {
-  const model = getValidModelOrDefault(prefs?.model ?? defaultModel ?? DEFAULT_MODEL);
-  const reasoningEffort =
-    prefs?.reasoningEffort && isValidReasoningEffort(model, prefs.reasoningEffort)
-      ? prefs.reasoningEffort
-      : getDefaultReasoningEffort(model);
-
-  return {
-    model,
-    reasoningEffort,
-    branch: getValidatedBranch(prefs?.branch),
-  };
+  return normalizeResolvedPreferences(
+    {
+      model: prefs?.model ?? defaultModel ?? DEFAULT_MODEL,
+      reasoningEffort: prefs?.reasoningEffort,
+      branch: prefs?.branch,
+    },
+    defaultModel
+  );
 }
 
 export async function getUserPreferences(
@@ -90,7 +139,10 @@ export async function saveUserPreferences(
   preferences: ResolvedUserPreferences
 ): Promise<boolean> {
   try {
-    const normalizedBranch = normalizeBranchPreference(preferences.branch);
+    const normalizedPreferences = normalizeResolvedPreferences(preferences, env.DEFAULT_MODEL, {
+      validateBranch: false,
+    });
+    const normalizedBranch = normalizeBranchPreference(normalizedPreferences.branch);
     if (normalizedBranch && !isValidBranchName(normalizedBranch)) {
       log.warn("slack.branch_pref.invalid", {
         user_id: userId,
@@ -101,8 +153,8 @@ export async function saveUserPreferences(
 
     const prefs: UserPreferences = {
       userId,
-      model: preferences.model,
-      reasoningEffort: preferences.reasoningEffort,
+      model: normalizedPreferences.model,
+      reasoningEffort: normalizedPreferences.reasoningEffort,
       branch: normalizedBranch,
       updatedAt: Date.now(),
     };
@@ -120,4 +172,22 @@ export async function saveUserPreferences(
     });
     return false;
   }
+}
+
+export async function updateUserPreferences(
+  env: Env,
+  userId: string,
+  patchOrUpdater: UserPreferencesPatch | UserPreferencesUpdater
+): Promise<boolean> {
+  const current = await getResolvedUserPreferences(env, userId);
+  const patch = typeof patchOrUpdater === "function" ? patchOrUpdater(current) : patchOrUpdater;
+  if (!patch) {
+    return false;
+  }
+
+  return saveUserPreferences(
+    env,
+    userId,
+    mergeUserPreferencesPatch(current, patch, env.DEFAULT_MODEL)
+  );
 }
