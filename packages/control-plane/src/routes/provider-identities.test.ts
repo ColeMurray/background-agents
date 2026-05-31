@@ -30,7 +30,7 @@ function createCtx(): RequestContext {
   };
 }
 
-async function callProviderIdentityRoute(path: string, body: unknown): Promise<Response> {
+async function callProviderIdentityRoute(path: string, body: unknown = {}): Promise<Response> {
   const route = providerIdentityRoutes.find((candidate) => candidate.method === "PUT")!;
   const match = path.match(route.pattern);
   if (!match) throw new Error(`No route match for ${path}`);
@@ -41,6 +41,19 @@ async function callProviderIdentityRoute(path: string, body: unknown): Promise<R
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
+    createEnv(),
+    match,
+    createCtx()
+  );
+}
+
+async function callProviderIdentityRouteWithoutBody(path: string): Promise<Response> {
+  const route = providerIdentityRoutes.find((candidate) => candidate.method === "PUT")!;
+  const match = path.match(route.pattern);
+  if (!match) throw new Error(`No route match for ${path}`);
+
+  return route.handler(
+    new Request(`https://test.local${path}`, { method: "PUT" }),
     createEnv(),
     match,
     createCtx()
@@ -81,11 +94,54 @@ describe("provider identity routes", () => {
       });
     });
 
-    it("rejects unsupported providers", async () => {
-      const response = await callProviderIdentityRoute("/provider-identities/slack/U123", {});
+    it("upserts a Slack identity using the generic provider route", async () => {
+      const response = await callProviderIdentityRoute("/provider-identities/slack/U123", {
+        displayName: "Grace Hopper",
+        providerEmail: "grace@example.com",
+      });
+
+      expect(response.status).toBe(200);
+      expect(mockUserStore.resolveOrCreateUser).toHaveBeenCalledWith({
+        provider: "slack",
+        providerUserId: "U123",
+        providerLogin: undefined,
+        providerEmail: "grace@example.com",
+        displayName: "Grace Hopper",
+        avatarUrl: undefined,
+      });
+    });
+
+    it("upserts an identity with no request body", async () => {
+      const response = await callProviderIdentityRouteWithoutBody(
+        "/provider-identities/github/12345"
+      );
+
+      expect(response.status).toBe(200);
+      expect(mockUserStore.resolveOrCreateUser).toHaveBeenCalledWith({
+        provider: "github",
+        providerUserId: "12345",
+        providerLogin: undefined,
+        providerEmail: undefined,
+        displayName: undefined,
+        avatarUrl: undefined,
+      });
+    });
+
+    it("rejects non-object JSON bodies", async () => {
+      const response = await callProviderIdentityRoute("/provider-identities/github/12345", null);
 
       expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({ error: "provider must be github" });
+      await expect(response.json()).resolves.toEqual({ error: "JSON body must be an object" });
+      expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
+    });
+
+    it("rejects unsupported providers", async () => {
+      const response = await callProviderIdentityRoute("/provider-identities/gitlab/U123", {});
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "provider must be one of: github, slack, linear",
+      });
       expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
     });
 

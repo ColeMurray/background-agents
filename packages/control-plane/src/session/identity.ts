@@ -13,6 +13,20 @@ export interface GitHubEnrichment {
   tokenExpiresAt?: number;
 }
 
+export interface SessionIdentityFields {
+  userId?: string;
+  spawnSource?: SpawnSource;
+  scmUserId?: string;
+  scmLogin?: string;
+  scmName?: string;
+  scmEmail?: string;
+  scmAvatarUrl?: string;
+  actorUserId?: string;
+  actorDisplayName?: string;
+  actorEmail?: string;
+  actorAvatarUrl?: string;
+}
+
 /**
  * Derives a ProviderIdentity from spawnSource and the request body.
  * For GitHub-based callers (web + github-bot), reuses existing scm* fields.
@@ -25,17 +39,7 @@ export interface GitHubEnrichment {
  */
 export function resolveProviderIdentity(
   spawnSource: SpawnSource,
-  body: {
-    scmUserId?: string;
-    scmLogin?: string;
-    scmName?: string;
-    scmEmail?: string;
-    scmAvatarUrl?: string;
-    actorUserId?: string;
-    actorDisplayName?: string;
-    actorEmail?: string;
-    actorAvatarUrl?: string;
-  }
+  body: SessionIdentityFields
 ): ProviderIdentity | null {
   switch (spawnSource) {
     case "user":
@@ -90,16 +94,11 @@ export function parseAuthorId(
 }
 
 /**
- * Construct a canonical userId from the bot's identity fields, matching the
- * format each bot uses for prompt `authorId`. This ensures the owner
- * participant created at init is findable when the bot later sends a prompt.
+ * Construct the participant user ID used inside a session, matching the format
+ * each bot uses for prompt `authorId`. Canonical platform user IDs are the D1
+ * user IDs resolved through provider identities.
  */
-export function deriveUserId(body: {
-  userId?: string;
-  spawnSource?: SpawnSource;
-  scmUserId?: string;
-  actorUserId?: string;
-}): string {
+export function deriveParticipantUserId(body: SessionIdentityFields): string {
   switch (body.spawnSource) {
     case "github-bot":
       return body.scmUserId ? `github:${body.scmUserId}` : "anonymous";

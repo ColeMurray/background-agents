@@ -1,23 +1,16 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { SessionInternalPaths } from "./contracts";
 
 describe("session internal endpoint contracts", () => {
   it("uses contract constants in internal route wiring and router for known endpoints", () => {
     const routerSource = readFileSync(new URL("../router.ts", import.meta.url), "utf8");
-    const sessionRouteSources = [
-      "../routes/session-create.ts",
-      "../routes/session-runtime-proxy.ts",
-      "../routes/session-ws-token.ts",
-      "../routes/session-prompt.ts",
-      "../routes/session-media.ts",
-      "../routes/session-media-artifacts.ts",
-      "../routes/session-media-stream.ts",
-      "../routes/session-media-upload.ts",
-      "../routes/session-child-spawn.ts",
-      "../routes/session-children.ts",
-    ]
-      .map((path) => readFileSync(new URL(path, import.meta.url), "utf8"))
+    const routesDir = new URL("../routes/", import.meta.url);
+    const sessionRouteSources = readdirSync(routesDir)
+      .filter((file) => file.startsWith("session-") && file.endsWith(".ts"))
+      .filter((file) => !file.endsWith(".test.ts"))
+      .sort()
+      .map((file) => readFileSync(new URL(file, routesDir), "utf8"))
       .join("\n");
     const runtimeClientSource = readFileSync(
       new URL("./runtime-client.ts", import.meta.url),

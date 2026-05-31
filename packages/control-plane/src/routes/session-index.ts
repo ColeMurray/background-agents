@@ -36,6 +36,18 @@ function parseCreatedByFilters(searchParams: URLSearchParams): string[] | Respon
   return userIds;
 }
 
+function parsePaginationLimit(value: string | null): number {
+  const parsed = Number.parseInt(value ?? "50", 10);
+  if (!Number.isFinite(parsed)) return 50;
+  return Math.min(Math.max(parsed, 1), 100);
+}
+
+function parsePaginationOffset(value: string | null): number {
+  const parsed = Number.parseInt(value ?? "0", 10);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(parsed, 0);
+}
+
 async function handleListSessions(
   request: Request,
   env: Env,
@@ -43,8 +55,8 @@ async function handleListSessions(
   _ctx: RequestContext
 ): Promise<Response> {
   const url = new URL(request.url);
-  const limit = Math.min(parseInt(url.searchParams.get("limit") || "50"), 100);
-  const offset = parseInt(url.searchParams.get("offset") || "0");
+  const limit = parsePaginationLimit(url.searchParams.get("limit"));
+  const offset = parsePaginationOffset(url.searchParams.get("offset"));
   const statusParam = url.searchParams.get("status");
   const excludeStatusParam = url.searchParams.get("excludeStatus");
   const status = parseSessionStatus(statusParam);

@@ -1,6 +1,6 @@
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
 import type { Env } from "../types";
-import { error, parsePattern, type Route } from "./shared";
+import { error, parseJsonBody, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 type SimpleProxyRouteConfig = {
@@ -15,6 +15,10 @@ type SimpleProxyRouteConfig = {
 function getSessionId(match: RegExpMatchArray): string | Response {
   const sessionId = match.groups?.id;
   return sessionId ? sessionId : error("Session ID required");
+}
+
+function isObjectBody(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function simpleProxyRoute(config: SimpleProxyRouteConfig): Route {
@@ -32,7 +36,7 @@ function simpleProxyRoute(config: SimpleProxyRouteConfig): Route {
         config.forwardSearch ? new URL(request.url).search : undefined
       );
 
-      if (config.notFoundMessage && !response.ok) {
+      if (config.notFoundMessage && response.status === 404) {
         return error(config.notFoundMessage, 404);
       }
 
@@ -50,7 +54,9 @@ async function handleAddParticipant(
   const sessionId = getSessionId(match);
   if (sessionId instanceof Response) return sessionId;
 
-  const body = await request.json();
+  const body = await parseJsonBody<unknown>(request);
+  if (body instanceof Response) return body;
+
   return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.participants, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -67,12 +73,9 @@ async function handleCreatePR(
   const sessionId = getSessionId(match);
   if (sessionId instanceof Response) return sessionId;
 
-  const body = (await request.json()) as {
-    title: string;
-    body: string;
-    baseBranch?: string;
-    headBranch?: string;
-  };
+  const body = await parseJsonBody<unknown>(request);
+  if (body instanceof Response) return body;
+  if (!isObjectBody(body)) return error("JSON body must be an object");
 
   if (
     typeof body.title !== "string" ||

@@ -3,9 +3,10 @@ import { encryptTokenPair, generateId } from "../auth/crypto";
 import { DEFAULT_TOKEN_LIFETIME_MS, UserScmTokenStore } from "../db/user-scm-tokens";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
+import { parseCreateSessionInput } from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
 import {
-  deriveUserId,
+  deriveParticipantUserId,
   resolveGitHubEnrichment,
   resolveProviderIdentity,
 } from "../session/identity";
@@ -13,7 +14,7 @@ import {
   resolveCodeServerEnabled,
   resolveSandboxSettings,
 } from "../session/integration-settings-resolution";
-import type { CreateSessionRequest, CreateSessionResponse, Env, SpawnSource } from "../types";
+import type { CreateSessionResponse, Env } from "../types";
 import {
   error,
   json,
@@ -31,21 +32,9 @@ async function handleCreateSession(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const body = (await request.json()) as CreateSessionRequest & {
-    scmToken?: string;
-    scmRefreshToken?: string;
-    scmTokenExpiresAt?: number;
-    scmUserId?: string;
-    userId?: string;
-    scmLogin?: string;
-    scmName?: string;
-    scmEmail?: string;
-    spawnSource?: SpawnSource;
-    actorUserId?: string;
-    actorDisplayName?: string;
-    actorEmail?: string;
-    actorAvatarUrl?: string;
-  };
+  const parsed = await parseCreateSessionInput(request);
+  if (!parsed.ok) return error(parsed.message, 400);
+  const body = parsed.input;
 
   if (!body.repoOwner || !body.repoName) {
     return error("repoOwner and repoName are required");
@@ -65,7 +54,7 @@ async function handleCreateSession(
 
   const { repoId, defaultBranch } = resolved;
 
-  const userId = deriveUserId(body);
+  const participantUserId = deriveParticipantUserId(body);
 
   // Resolve canonical user model ID (for D1 session index).
   // Best-effort: if resolution fails, the session is created without a user_id.
@@ -156,7 +145,7 @@ async function handleCreateSession(
     title: body.title,
     model,
     reasoningEffort,
-    participantUserId: userId,
+    participantUserId,
     platformUserId: resolvedUserId,
     scmLogin,
     scmName,

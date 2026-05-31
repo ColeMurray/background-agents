@@ -85,4 +85,74 @@ describe("session runtime proxy routes", () => {
       title: "New title",
     });
   });
+
+  it("only rewrites runtime 404 responses to the configured not-found response", async () => {
+    const fetch = vi.fn(async () => Response.json({ error: "runtime failed" }, { status: 500 }));
+    const { handler, match } = getHandler("GET", "/sessions/session-1");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1"),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: "runtime failed" });
+  });
+
+  it("maps runtime 404 responses to the configured not-found response", async () => {
+    const fetch = vi.fn(async () => Response.json({ error: "missing" }, { status: 404 }));
+    const { handler, match } = getHandler("GET", "/sessions/session-1");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1"),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "Session not found" });
+  });
+
+  it("rejects malformed add-participant JSON without forwarding to the runtime", async () => {
+    const fetch = vi.fn(async () => Response.json({ status: "ok" }));
+    const { handler, match } = getHandler("POST", "/sessions/session-1/participants");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/participants", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{",
+      }),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed create-PR JSON without forwarding to the runtime", async () => {
+    const fetch = vi.fn(async () => Response.json({ status: "ok" }));
+    const { handler, match } = getHandler("POST", "/sessions/session-1/pr");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/pr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{",
+      }),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
 });
