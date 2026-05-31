@@ -35,6 +35,11 @@ class TestResourceKwargs:
     def test_omits_non_integer_memory(self):
         assert _resource_kwargs({"memoryMib": 256.5}) == {}
 
+    def test_omits_non_finite_cpu(self):
+        # Defensive: upstream rejects these, but the pass-through must too.
+        assert _resource_kwargs({"cpuCores": float("inf")}) == {}
+        assert _resource_kwargs({"cpuCores": float("nan")}) == {}
+
     def test_independent_fields(self):
         assert _resource_kwargs({"memoryMib": 2048}) == {"memory": 2048}
 

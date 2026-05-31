@@ -12,6 +12,7 @@ Updated: 2026-01-15 to fix Sandbox.create API
 
 import asyncio
 import json
+import math
 import os
 import secrets
 import time
@@ -53,7 +54,12 @@ def _resource_kwargs(settings: dict[str, Any] | None) -> dict:
     kwargs: dict = {}
 
     cpu_cores = settings.get("cpuCores")
-    if isinstance(cpu_cores, (int, float)) and not isinstance(cpu_cores, bool) and cpu_cores > 0:
+    if (
+        isinstance(cpu_cores, (int, float))
+        and not isinstance(cpu_cores, bool)
+        and math.isfinite(float(cpu_cores))
+        and cpu_cores > 0
+    ):
         kwargs["cpu"] = float(cpu_cores)
 
     memory_mib = settings.get("memoryMib")
