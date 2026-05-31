@@ -37,6 +37,17 @@ function isPositiveInteger(value: string): boolean {
   return /^\d+$/.test(value) && Number(value) >= 1;
 }
 
+function isValidCpuCores(value: string): boolean {
+  if (!/^\d*\.?\d+$/.test(value)) return false;
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0;
+}
+
+function isValidMemoryMib(value: string): boolean {
+  if (!/^\d+$/.test(value)) return false;
+  return Number(value) >= 1;
+}
+
 function SandboxSettingsEditor({
   scope,
   owner,
@@ -86,10 +97,21 @@ function SandboxSettingsEditor({
       globalDefaults?.maxTotalChildSessions ??
       DEFAULT_MAX_TOTAL_CHILD_SESSIONS);
 
+  // Resource reservations have no app-level default — unset means "use the
+  // provider's default reservation", so resolve to an empty string, not a number.
+  const currentCpuCores: number | undefined = isGlobal
+    ? globalDefaults?.cpuCores
+    : (repoSettings?.cpuCores ?? globalDefaults?.cpuCores);
+  const currentMemoryMib: number | undefined = isGlobal
+    ? globalDefaults?.memoryMib
+    : (repoSettings?.memoryMib ?? globalDefaults?.memoryMib);
+
   const [portRows, setPortRows] = useState<string[] | null>(null);
   const [terminalEnabled, setTerminalEnabled] = useState<boolean | null>(null);
   const [maxConcurrentChildSessions, setMaxConcurrentChildSessions] = useState<string | null>(null);
   const [maxTotalChildSessions, setMaxTotalChildSessions] = useState<string | null>(null);
+  const [cpuCores, setCpuCores] = useState<string | null>(null);
+  const [memoryMib, setMemoryMib] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -103,6 +125,10 @@ function SandboxSettingsEditor({
     maxConcurrentChildSessions ?? String(currentMaxConcurrentChildSessions);
   const resolvedMaxTotalChildSessions =
     maxTotalChildSessions ?? String(currentMaxTotalChildSessions);
+  const resolvedCpuCores =
+    cpuCores ?? (currentCpuCores !== undefined ? String(currentCpuCores) : "");
+  const resolvedMemoryMib =
+    memoryMib ?? (currentMemoryMib !== undefined ? String(currentMemoryMib) : "");
 
   const handleAddRow = () => {
     if (rows.length >= MAX_TUNNEL_PORTS) return;
@@ -148,6 +174,18 @@ function SandboxSettingsEditor({
       return;
     }
 
+    const trimmedCpu = resolvedCpuCores.trim();
+    if (trimmedCpu !== "" && !isValidCpuCores(trimmedCpu)) {
+      setError("CPU cores must be a positive number.");
+      return;
+    }
+
+    const trimmedMemory = resolvedMemoryMib.trim();
+    if (trimmedMemory !== "" && !isValidMemoryMib(trimmedMemory)) {
+      setError("Memory must be a positive whole number of MiB.");
+      return;
+    }
+
     setSaving(true);
     try {
       const existingEnabledRepos = isGlobal
@@ -171,6 +209,22 @@ function SandboxSettingsEditor({
       ) {
         settingsPayload.maxTotalChildSessions = Number(resolvedMaxTotalChildSessions);
       }
+      // Omit when blank so the field is dropped from stored settings and the
+      // provider's default reservation applies. For a repo, only persist a value
+      // that is global, explicitly edited, or already an override — otherwise an
+      // inherited global default would get pinned as a per-repo override.
+      if (
+        trimmedCpu !== "" &&
+        (isGlobal || cpuCores !== null || repoSettings?.cpuCores !== undefined)
+      ) {
+        settingsPayload.cpuCores = Number(trimmedCpu);
+      }
+      if (
+        trimmedMemory !== "" &&
+        (isGlobal || memoryMib !== null || repoSettings?.memoryMib !== undefined)
+      ) {
+        settingsPayload.memoryMib = Number(trimmedMemory);
+      }
       const body = isGlobal
         ? { settings: { defaults: settingsPayload, enabledRepos: existingEnabledRepos } }
         : { settings: settingsPayload };
@@ -191,6 +245,8 @@ function SandboxSettingsEditor({
       setTerminalEnabled(null);
       setMaxConcurrentChildSessions(null);
       setMaxTotalChildSessions(null);
+      setCpuCores(null);
+      setMemoryMib(null);
       setSuccess(true);
       setTimeout(() => setSuccess(false), 2000);
     } catch (e) {
@@ -207,10 +263,16 @@ function SandboxSettingsEditor({
     resolvedTerminalEnabled,
     resolvedMaxConcurrentChildSessions,
     resolvedMaxTotalChildSessions,
+    resolvedCpuCores,
+    resolvedMemoryMib,
+    cpuCores,
+    memoryMib,
     maxConcurrentChildSessions,
     maxTotalChildSessions,
     repoSettings?.maxConcurrentChildSessions,
     repoSettings?.maxTotalChildSessions,
+    repoSettings?.cpuCores,
+    repoSettings?.memoryMib,
   ]);
 
   const hasPortChanges =
@@ -223,8 +285,17 @@ function SandboxSettingsEditor({
   const hasTotalLimitChange =
     maxTotalChildSessions !== null &&
     maxTotalChildSessions !== String(currentMaxTotalChildSessions);
+  const currentCpuCoresString = currentCpuCores !== undefined ? String(currentCpuCores) : "";
+  const currentMemoryMibString = currentMemoryMib !== undefined ? String(currentMemoryMib) : "";
+  const hasCpuChange = cpuCores !== null && cpuCores.trim() !== currentCpuCoresString;
+  const hasMemoryChange = memoryMib !== null && memoryMib.trim() !== currentMemoryMibString;
   const hasChanges =
-    hasPortChanges || hasTerminalChange || hasConcurrentLimitChange || hasTotalLimitChange;
+    hasPortChanges ||
+    hasTerminalChange ||
+    hasConcurrentLimitChange ||
+    hasTotalLimitChange ||
+    hasCpuChange ||
+    hasMemoryChange;
 
   if (isLoading || isLoadingGlobal) {
     return <p className="text-sm text-muted-foreground">Loading...</p>;
@@ -341,6 +412,49 @@ function SandboxSettingsEditor({
               inputMode="numeric"
               value={resolvedMaxTotalChildSessions}
               onChange={(e) => setMaxTotalChildSessions(e.target.value)}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-foreground mb-1.5">Resources</label>
+        <p className="text-xs text-muted-foreground mb-2">
+          Reserve CPU and memory for each sandbox. Leave blank to use the provider&apos;s default
+          reservation.
+        </p>
+        <div className="grid gap-3 max-w-sm sm:grid-cols-2">
+          <div>
+            <label
+              htmlFor="sandbox-cpu-cores"
+              className="block text-xs font-medium text-muted-foreground mb-1"
+            >
+              CPU cores
+            </label>
+            <Input
+              id="sandbox-cpu-cores"
+              type="text"
+              inputMode="decimal"
+              value={resolvedCpuCores}
+              onChange={(e) => setCpuCores(e.target.value)}
+              placeholder="provider default"
+            />
+          </div>
+          <div>
+            <label
+              htmlFor="sandbox-memory-mib"
+              className="block text-xs font-medium text-muted-foreground mb-1"
+            >
+              Memory (MiB)
+            </label>
+            <Input
+              id="sandbox-memory-mib"
+              type="number"
+              min={1}
+              inputMode="numeric"
+              value={resolvedMemoryMib}
+              onChange={(e) => setMemoryMib(e.target.value)}
+              placeholder="provider default"
             />
           </div>
         </div>

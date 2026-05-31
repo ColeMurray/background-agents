@@ -366,6 +366,9 @@ async function handleGetResolvedConfig(
           sandboxSettings.maxConcurrentChildSessions ?? DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
         maxTotalChildSessions:
           sandboxSettings.maxTotalChildSessions ?? DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+        // null → use the provider's default reservation (no override configured).
+        cpuCores: sandboxSettings.cpuCores ?? null,
+        memoryMib: sandboxSettings.memoryMib ?? null,
         enabledRepos,
       },
     });

@@ -1206,6 +1206,24 @@ export class SandboxLifecycleManager {
         result.terminalEnabled = settings.terminalEnabled;
       }
 
+      // Resource reservations are advisory; drop non-positive values at the
+      // boundary and let the provider enforce its own real limits.
+      if (
+        typeof settings.cpuCores === "number" &&
+        Number.isFinite(settings.cpuCores) &&
+        settings.cpuCores > 0
+      ) {
+        result.cpuCores = settings.cpuCores;
+      }
+
+      if (
+        typeof settings.memoryMib === "number" &&
+        Number.isInteger(settings.memoryMib) &&
+        settings.memoryMib > 0
+      ) {
+        result.memoryMib = settings.memoryMib;
+      }
+
       return result;
     } catch {
       this.log.warn("Failed to parse sandbox_settings, using defaults");

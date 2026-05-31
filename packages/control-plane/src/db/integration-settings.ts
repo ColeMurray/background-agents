@@ -320,6 +320,8 @@ export class IntegrationSettingsStore {
       "maxConcurrentChildSessions"
     );
     this.validatePositiveIntegerSetting(settings.maxTotalChildSessions, "maxTotalChildSessions");
+    this.validateCpuCoresSetting(settings.cpuCores);
+    this.validateMemoryMibSetting(settings.memoryMib);
     if (
       settings.maxConcurrentChildSessions !== undefined &&
       settings.maxTotalChildSessions !== undefined &&
@@ -356,6 +358,22 @@ export class IntegrationSettingsStore {
     if (value === undefined) return;
     if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
       throw new IntegrationSettingsValidationError(`${name} must be a positive integer`);
+    }
+  }
+
+  // Resource reservations are only checked for positivity — the provider
+  // (e.g. Modal) enforces its own real CPU/memory limits.
+  private validateCpuCoresSetting(value: unknown): void {
+    if (value === undefined) return;
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+      throw new IntegrationSettingsValidationError("cpuCores must be a positive number");
+    }
+  }
+
+  private validateMemoryMibSetting(value: unknown): void {
+    if (value === undefined) return;
+    if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+      throw new IntegrationSettingsValidationError("memoryMib must be a positive integer");
     }
   }
 

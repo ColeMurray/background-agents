@@ -48,7 +48,14 @@ export const DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS = 5;
 /** Default maximum agent-spawned child sessions per parent session. */
 export const DEFAULT_MAX_TOTAL_CHILD_SESSIONS = 15;
 
-/** Sandbox environment settings. Provider-agnostic: describes what the user wants, not how it's done. */
+/**
+ * Sandbox environment settings. Provider-agnostic: describes what the user
+ * wants, not how it's done. Resource fields (`cpuCores`, `memoryMib`) are
+ * advisory and provider-dependent — Modal honors them; providers without
+ * resource reservations (e.g. Daytona) ignore them. We only check they're
+ * positive; the provider enforces its own real limits. When unset, the
+ * provider's own default applies.
+ */
 export interface SandboxSettings {
   /** Extra ports to expose via tunnels (e.g., dev server ports 3000, 5173). */
   tunnelPorts?: number[];
@@ -58,6 +65,16 @@ export interface SandboxSettings {
   maxConcurrentChildSessions?: number;
   /** Maximum total agent-spawned child sessions per parent session. */
   maxTotalChildSessions?: number;
+  /**
+   * CPU cores to reserve for the sandbox (maps to Modal's `cpu`). Fractional
+   * values are allowed. Unset → provider default.
+   */
+  cpuCores?: number;
+  /**
+   * Memory to reserve for the sandbox, in MiB (maps to Modal's `memory`).
+   * Unset → provider default.
+   */
+  memoryMib?: number;
 }
 
 export type SlackMentionsPolicy = "allow" | "escape" | "strip";

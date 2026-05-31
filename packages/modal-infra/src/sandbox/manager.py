@@ -39,6 +39,30 @@ SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS = 300
 MAX_TUNNEL_PORTS = 10
 
 
+def _resource_kwargs(settings: dict[str, Any] | None) -> dict:
+    """Map sandbox settings to Modal resource kwargs.
+
+    `cpuCores` -> Modal `cpu` (cores, fractional allowed), `memoryMib` -> Modal
+    `memory` (MiB). Only set when explicitly configured and positive; absent or
+    invalid values are omitted so Modal applies its own default reservation.
+    Modal enforces its own real CPU/memory limits on the values passed here.
+    """
+    if not settings:
+        return {}
+
+    kwargs: dict = {}
+
+    cpu_cores = settings.get("cpuCores")
+    if isinstance(cpu_cores, (int, float)) and not isinstance(cpu_cores, bool) and cpu_cores > 0:
+        kwargs["cpu"] = float(cpu_cores)
+
+    memory_mib = settings.get("memoryMib")
+    if isinstance(memory_mib, int) and not isinstance(memory_mib, bool) and memory_mib > 0:
+        kwargs["memory"] = memory_mib
+
+    return kwargs
+
+
 @dataclass
 class SandboxConfig:
     """Configuration for creating a sandbox."""
@@ -390,6 +414,7 @@ class SandboxManager:
             "timeout": config.timeout_seconds,
             "workdir": "/workspace",
             "env": env_vars,
+            **_resource_kwargs(config.settings),
         }
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports
@@ -719,6 +744,7 @@ class SandboxManager:
             "timeout": timeout_seconds,
             "workdir": "/workspace",
             "env": env_vars,
+            **_resource_kwargs(settings),
         }
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports

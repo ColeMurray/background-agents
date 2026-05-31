@@ -753,6 +753,31 @@ describe("IntegrationSettingsStore", () => {
         })
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
+
+    it("round-trips fractional cpuCores and small memoryMib", async () => {
+      await store.setRepoSettings("sandbox", "acme/app", { cpuCores: 0.5, memoryMib: 64 });
+
+      const result = await store.getRepoSettings("sandbox", "acme/app");
+      expect(result).toEqual({ cpuCores: 0.5, memoryMib: 64 });
+    });
+
+    it("rejects non-positive cpuCores", async () => {
+      await expect(store.setGlobal("sandbox", { defaults: { cpuCores: 0 } })).rejects.toThrow(
+        IntegrationSettingsValidationError
+      );
+    });
+
+    it("rejects non-integer memoryMib", async () => {
+      await expect(store.setGlobal("sandbox", { defaults: { memoryMib: 256.5 } })).rejects.toThrow(
+        IntegrationSettingsValidationError
+      );
+    });
+
+    it("rejects non-positive memoryMib", async () => {
+      await expect(store.setGlobal("sandbox", { defaults: { memoryMib: 0 } })).rejects.toThrow(
+        IntegrationSettingsValidationError
+      );
+    });
   });
 
   describe("linear settings", () => {

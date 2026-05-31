@@ -1735,6 +1735,60 @@ describe("SandboxLifecycleManager", () => {
       );
     });
 
+    it("doSpawn() forwards valid cpuCores and memoryMib to provider config", async () => {
+      const session = createMockSession({
+        sandbox_settings: '{"cpuCores":2,"memoryMib":4096}',
+      });
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(session, sandbox);
+      const provider = createMockProvider();
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sandboxSettings: { cpuCores: 2, memoryMib: 4096 },
+        })
+      );
+    });
+
+    it("doSpawn() drops non-positive cpuCores and memoryMib from stored settings", async () => {
+      const session = createMockSession({
+        sandbox_settings: '{"cpuCores":-2,"memoryMib":0}',
+      });
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(session, sandbox);
+      const provider = createMockProvider();
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sandboxSettings: {},
+        })
+      );
+    });
+
     it("doSpawn() broadcasts tunnel_urls when provider returns them", async () => {
       const session = createMockSession({
         sandbox_settings: '{"tunnelPorts":[3000]}',
