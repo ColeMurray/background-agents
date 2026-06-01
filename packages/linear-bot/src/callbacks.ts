@@ -590,7 +590,10 @@ async function handlePlanStatusCallback(
     return;
   }
 
-  const actorMention = formatCrossChannelActor(payload.approverAuthorId);
+  const actorMention = formatCrossChannelActor(
+    payload.approverAuthorId,
+    payload.approverDisplayName
+  );
   const body =
     verdict === "approved"
       ? `Plan v${planVersion} approved by ${actorMention}. Implementation is starting.`
@@ -623,16 +626,27 @@ async function handlePlanStatusCallback(
 
 /**
  * Render a human-readable actor label for a cross-channel verdict.
- * Approvers come in as `"web:<userId>"`, `"slack:<id>"`, etc. — for
- * Linear's activity stream we can't resolve that to a Linear handle,
- * so collapse to "someone in <source>".
+ * Prefers `displayName` (web propagates it from `session.user.name`)
+ * when available, falling back to `someone in <source>` for legacy
+ * payloads. Linear's activity stream can't resolve cross-channel actors
+ * to Linear handles, so the rendering is always plain text.
  */
-export function formatCrossChannelActor(approverAuthorId: string | null): string {
-  if (!approverAuthorId) return "someone";
+export function formatCrossChannelActor(
+  approverAuthorId: string | null,
+  displayName?: string | null
+): string {
+  const source = extractActorSource(approverAuthorId);
+  if (displayName && displayName.trim().length > 0) {
+    return source ? `${displayName} (via ${source})` : displayName;
+  }
+  return source ? `someone in ${source}` : "someone";
+}
+
+function extractActorSource(approverAuthorId: string | null): string | null {
+  if (!approverAuthorId) return null;
   const idx = approverAuthorId.indexOf(":");
-  if (idx <= 0) return "someone";
-  const source = approverAuthorId.slice(0, idx);
-  return `someone in ${source}`;
+  if (idx <= 0) return null;
+  return approverAuthorId.slice(0, idx);
 }
 
 // ─── Session Lifecycle Callback ──────────────────────────────────────────────
@@ -713,7 +727,7 @@ async function handleSessionLifecycleCallback(
   env: Env,
   traceId: string
 ): Promise<void> {
-  const { sessionId, event, actorAuthorId, context } = payload;
+  const { sessionId, event, actorAuthorId, actorDisplayName, context } = payload;
   const base = {
     trace_id: traceId,
     session_id: sessionId,
@@ -739,7 +753,7 @@ async function handleSessionLifecycleCallback(
     return;
   }
 
-  const actor = formatCrossChannelActor(actorAuthorId);
+  const actor = formatCrossChannelActor(actorAuthorId, actorDisplayName);
   const verb = event === "archived" ? "archived" : "unarchived";
   const body = `Session ${verb} by ${actor}.`;
 
