@@ -26,6 +26,10 @@ export const SUMMARY_TOOL_NAMES = ["Edit", "Write", "Bash", "Grep", "Read"] as c
 /** Server-side limit for the events API. */
 const EVENTS_PAGE_LIMIT = 200;
 
+export interface BuildAgentResponseOptions {
+  defaultSuccess?: boolean;
+}
+
 /**
  * Minimal interface for the control-plane service binding.
  * Compatible with Cloudflare Workers' `Fetcher` type without depending on
@@ -111,58 +115,21 @@ export async function extractAgentResponse(
       cursor = data.hasMore ? data.cursor : undefined;
     } while (cursor);
 
-    // Get the final text from the last token event.
-    // Token events contain cumulative text (not incremental deltas), so only the last one matters.
-    const tokenEvents = allEvents
-      .filter((e): e is EventResponse & { type: "token" } => e.type === "token")
-      .sort((a, b) => {
-        const timeDiff = (a.createdAt as number) - (b.createdAt as number);
-        if (timeDiff !== 0) return timeDiff;
-        return a.id.localeCompare(b.id); // Stable secondary sort
-      });
-    const lastToken = tokenEvents[tokenEvents.length - 1];
-    const textContent = lastToken ? String(lastToken.data.content ?? "") : "";
-
-    // Extract tool calls
-    const toolCalls: ToolCallSummary[] = allEvents
-      .filter((e) => e.type === "tool_call")
-      .map((e) => summarizeToolCall(e.data));
-
-    // Fallback artifact extraction from events (historical behavior)
-    const eventArtifacts: ArtifactInfo[] = allEvents
-      .filter((e) => e.type === "artifact")
-      .map((e) => toEventArtifactInfo(e.data))
-      .filter((artifact: ArtifactInfo | null): artifact is ArtifactInfo => artifact !== null);
-
     const artifacts = await fetchSessionArtifacts(deps, sessionId, headers, base);
-    const finalArtifacts = artifacts.length > 0 ? artifacts : eventArtifacts;
-
-    // Check for completion event to get success status and error message.
-    // The error may be on execution_complete itself, or on a separate "error" event.
-    const completionEvent = allEvents.find((e) => e.type === "execution_complete");
-    const errorEvent = allEvents.find((e) => e.type === "error");
-    const errorMessage =
-      (completionEvent?.data.error != null ? String(completionEvent.data.error) : undefined) ??
-      (errorEvent?.data.error != null ? String(errorEvent.data.error) : undefined);
+    const agentResponse = buildAgentResponseFromEvents(allEvents, artifacts);
 
     log.info("control_plane.fetch_events", {
       ...base,
       outcome: "success",
       event_count: allEvents.length,
-      tool_call_count: toolCalls.length,
-      artifact_count: finalArtifacts.length,
-      has_text: Boolean(textContent),
-      has_error: Boolean(errorMessage),
+      tool_call_count: agentResponse.toolCalls.length,
+      artifact_count: agentResponse.artifacts.length,
+      has_text: Boolean(agentResponse.textContent),
+      has_error: Boolean(agentResponse.error),
       duration_ms: Date.now() - startTime,
     });
 
-    return {
-      textContent,
-      toolCalls,
-      artifacts: finalArtifacts,
-      success: Boolean(completionEvent?.data.success),
-      error: errorMessage,
-    };
+    return agentResponse;
   } catch (error) {
     log.error("control_plane.fetch_events", {
       ...base,
@@ -177,6 +144,70 @@ export async function extractAgentResponse(
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Aggregate persisted control-plane events into the structured response shape
+ * consumed by callbacks and child-session introspection.
+ */
+export function buildAgentResponseFromEvents(
+  events: EventResponse[],
+  artifacts: ArtifactInfo[] = [],
+  options: BuildAgentResponseOptions = {}
+): AgentResponse {
+  const chronologicalEvents = sortEventsChronologically(events);
+
+  // Token events contain cumulative text, so only the chronologically last one matters.
+  const tokenEvents = chronologicalEvents.filter(
+    (event): event is EventResponse & { type: "token" } => event.type === "token"
+  );
+  const lastToken = tokenEvents[tokenEvents.length - 1];
+  const textContent = lastToken ? String(lastToken.data.content ?? "") : "";
+
+  const toolCalls: ToolCallSummary[] = chronologicalEvents
+    .filter((event) => event.type === "tool_call")
+    .map((event) => summarizeToolCall(event.data));
+
+  const eventArtifacts: ArtifactInfo[] = chronologicalEvents
+    .filter((event) => event.type === "artifact")
+    .map((event) => toEventArtifactInfo(event.data))
+    .filter((artifact: ArtifactInfo | null): artifact is ArtifactInfo => artifact !== null);
+
+  const completionEvent = findLastEvent(chronologicalEvents, "execution_complete");
+  const errorEvent = findLastEvent(chronologicalEvents, "error");
+  const errorMessage =
+    (completionEvent?.data.error != null ? String(completionEvent.data.error) : undefined) ??
+    (errorEvent?.data.error != null ? String(errorEvent.data.error) : undefined);
+
+  const successValue = completionEvent?.data.success;
+  const success =
+    typeof successValue === "boolean" ? successValue : (options.defaultSuccess ?? false);
+
+  return {
+    textContent,
+    toolCalls,
+    artifacts: artifacts.length > 0 ? artifacts : eventArtifacts,
+    success,
+    error: errorMessage,
+  };
+}
+
+function sortEventsChronologically(events: EventResponse[]): EventResponse[] {
+  return [...events].sort((a, b) => {
+    const timeDiff = a.createdAt - b.createdAt;
+    if (timeDiff !== 0) return timeDiff;
+    return a.id.localeCompare(b.id);
+  });
+}
+
+function findLastEvent(
+  events: EventResponse[],
+  type: EventResponse["type"]
+): EventResponse | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (events[index].type === type) return events[index];
+  }
+  return undefined;
+}
 
 /**
  * Fetch artifacts from the control-plane `/artifacts` endpoint.

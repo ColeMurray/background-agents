@@ -1,6 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import { createChildSessionsHandler } from "./child-sessions.handler";
-import type { ArtifactRow, EventRow, ParticipantRow, SandboxRow, SessionRow } from "../../types";
+import {
+  FINAL_RESPONSE_EVENT_PAGE_LIMIT,
+  FINAL_RESPONSE_MAX_EVENTS,
+  collectFinalResponseEventRows,
+} from "./child-session-summary";
+import type {
+  ArtifactRow,
+  EventRow,
+  MessageRow,
+  ParticipantRow,
+  SandboxRow,
+  SessionRow,
+} from "../../types";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
@@ -96,15 +108,39 @@ function createEvent(overrides: Partial<EventRow> = {}): EventRow {
   };
 }
 
+function createMessage(overrides: Partial<MessageRow> = {}): MessageRow {
+  return {
+    id: "message-1",
+    author_id: "user-1",
+    content: "Do the thing",
+    source: "web",
+    model: null,
+    reasoning_effort: null,
+    attachments: null,
+    callback_context: null,
+    status: "completed",
+    error_message: null,
+    created_at: 1,
+    started_at: 2,
+    completed_at: 3,
+    ...overrides,
+  };
+}
+
 function createHandler() {
   const repository = {
     listParticipants: vi.fn(),
     listArtifacts: vi.fn(),
-    listEvents: vi.fn(),
+    listEventPage: vi.fn(),
+    getLatestTerminalMessage: vi.fn(),
+    getEventTimelinePage: vi.fn(),
   };
   const getSession = vi.fn<() => SessionRow | null>();
   const getSandbox = vi.fn<() => SandboxRow | null>();
   const getPublicSessionId = vi.fn<(session: SessionRow) => string>();
+  const parseArtifactMetadata = vi.fn((artifact: Pick<ArtifactRow, "metadata">) =>
+    artifact.metadata ? (JSON.parse(artifact.metadata) as Record<string, unknown>) : null
+  );
   const broadcast = vi.fn();
 
   const handler = createChildSessionsHandler({
@@ -112,6 +148,7 @@ function createHandler() {
     getSession,
     getSandbox,
     getPublicSessionId,
+    parseArtifactMetadata,
     broadcast,
   });
 
@@ -121,6 +158,7 @@ function createHandler() {
     getSession,
     getSandbox,
     getPublicSessionId,
+    parseArtifactMetadata,
     broadcast,
   };
 }
@@ -207,22 +245,26 @@ describe("createChildSessionsHandler", () => {
       createArtifact({ type: "pr", metadata: '{"number":42}' }),
       createArtifact({ type: "preview", metadata: null }),
     ]);
-    repository.listEvents.mockReturnValue([
-      createEvent({ id: "e1", type: "token", data: '{"token":"x"}', created_at: 9 }),
-      createEvent({ id: "e2", type: "error", data: '{"message":"boom"}', created_at: 8 }),
-      createEvent({ id: "e3", type: "heartbeat", data: '{"ok":true}', created_at: 7 }),
-      createEvent({ id: "e4", type: "git_sync", data: '{"state":"done"}', created_at: 6 }),
-      createEvent({ id: "e5", type: "push_error", data: '{"code":"denied"}', created_at: 5 }),
-      createEvent({ id: "e6", type: "step_start", data: '{"step":1}', created_at: 4 }),
-      createEvent({ id: "e7", type: "user_message", data: '{"text":"hi"}', created_at: 3 }),
-      createEvent({ id: "e8", type: "tool_call", data: '{"name":"ls"}', created_at: 2 }),
-      createEvent({
-        id: "e9",
-        type: "execution_complete",
-        data: '{"status":"success"}',
-        created_at: 1,
-      }),
-    ]);
+    repository.listEventPage.mockReturnValue({
+      hasMore: false,
+      nextCursor: null,
+      events: [
+        createEvent({ id: "e1", type: "token", data: '{"token":"x"}', created_at: 9 }),
+        createEvent({ id: "e2", type: "error", data: '{"message":"boom"}', created_at: 8 }),
+        createEvent({ id: "e3", type: "heartbeat", data: '{"ok":true}', created_at: 7 }),
+        createEvent({ id: "e4", type: "git_sync", data: '{"state":"done"}', created_at: 6 }),
+        createEvent({ id: "e5", type: "push_error", data: '{"code":"denied"}', created_at: 5 }),
+        createEvent({ id: "e6", type: "step_start", data: '{"step":1}', created_at: 4 }),
+        createEvent({ id: "e7", type: "user_message", data: '{"text":"hi"}', created_at: 3 }),
+        createEvent({ id: "e8", type: "tool_call", data: '{"name":"ls"}', created_at: 2 }),
+        createEvent({
+          id: "e9",
+          type: "execution_complete",
+          data: '{"status":"success"}',
+          created_at: 1,
+        }),
+      ],
+    });
 
     const response = handler.getChildSummary();
 
@@ -260,7 +302,307 @@ describe("createChildSessionsHandler", () => {
         { type: "tool_call", data: { name: "ls" }, createdAt: 2 },
       ],
     });
-    expect(repository.listEvents).toHaveBeenCalledWith({ limit: 50 });
+    expect(repository.listEventPage).toHaveBeenCalledWith({ limit: 50 });
+    expect(repository.getLatestTerminalMessage).not.toHaveBeenCalled();
+  });
+
+  it("includes final response when requested", async () => {
+    const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+    getSession.mockReturnValue(createSession({ status: "completed" }));
+    getSandbox.mockReturnValue(createSandbox({ status: "stopped" }));
+    getPublicSessionId.mockReturnValue("public-session-1");
+    repository.listArtifacts.mockReturnValue([
+      createArtifact({
+        type: "branch",
+        url: "https://example.com/tree/fix",
+        metadata: '{"head":"fix"}',
+      }),
+    ]);
+    repository.getLatestTerminalMessage.mockReturnValue(createMessage({ id: "msg-final" }));
+    repository.listEventPage
+      .mockReturnValueOnce({ events: [], hasMore: false, nextCursor: null })
+      .mockReturnValueOnce({
+        hasMore: false,
+        nextCursor: null,
+        events: [
+          createEvent({
+            id: "token:msg-final",
+            type: "token",
+            message_id: "msg-final",
+            data: '{"content":"Final answer from child"}',
+            created_at: 10,
+          }),
+          createEvent({
+            id: "exec:msg-final",
+            type: "execution_complete",
+            message_id: "msg-final",
+            data: '{"success":true}',
+            created_at: 11,
+          }),
+          createEvent({
+            id: "tool:msg-final",
+            type: "tool_call",
+            message_id: "msg-final",
+            data: '{"tool":"Bash","args":{"command":"npm test"}}',
+            created_at: 9,
+          }),
+        ],
+      });
+
+    const response = handler.getChildSummary(
+      new URL("http://internal/internal/child-summary?include=result")
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      finalResponse: {
+        messageId: "msg-final",
+        completedAt: 3,
+        eventCount: 3,
+        eventLimitReached: false,
+        textContent: "Final answer from child",
+        success: true,
+        toolCalls: [{ tool: "Bash", summary: "Ran: npm test" }],
+        artifacts: [
+          {
+            type: "branch",
+            url: "https://example.com/tree/fix",
+            label: "Branch: fix",
+            metadata: { head: "fix" },
+          },
+        ],
+      },
+    });
+    expect(repository.listEventPage).toHaveBeenNthCalledWith(1, { limit: 50 });
+    expect(repository.listEventPage).toHaveBeenNthCalledWith(2, {
+      limit: 200,
+      messageId: "msg-final",
+    });
+  });
+
+  it("paginates final response events when requested", async () => {
+    const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+    getSession.mockReturnValue(createSession({ status: "completed" }));
+    getSandbox.mockReturnValue(createSandbox({ status: "stopped" }));
+    getPublicSessionId.mockReturnValue("public-session-1");
+    repository.listArtifacts.mockReturnValue([]);
+    repository.getLatestTerminalMessage.mockReturnValue(createMessage({ id: "msg-final" }));
+    repository.listEventPage
+      .mockReturnValueOnce({ events: [], hasMore: false, nextCursor: null })
+      .mockReturnValueOnce({
+        hasMore: true,
+        nextCursor: { kind: "timeline", createdAt: 20, id: "token:new" },
+        events: [
+          createEvent({
+            id: "token:new",
+            type: "token",
+            message_id: "msg-final",
+            data: '{"content":"done"}',
+            created_at: 20,
+          }),
+        ],
+      })
+      .mockReturnValueOnce({
+        hasMore: false,
+        nextCursor: null,
+        events: [
+          createEvent({
+            id: "tool:old",
+            type: "tool_call",
+            message_id: "msg-final",
+            data: '{"tool":"Bash","args":{"command":"npm test"}}',
+            created_at: 10,
+          }),
+        ],
+      });
+
+    const response = handler.getChildSummary(
+      new URL("http://internal/internal/child-summary?include=result")
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      finalResponse: {
+        textContent: "done",
+        eventCount: 2,
+        eventLimitReached: false,
+        toolCalls: [{ tool: "Bash", summary: "Ran: npm test" }],
+      },
+    });
+    expect(repository.listEventPage).toHaveBeenNthCalledWith(2, {
+      limit: FINAL_RESPONSE_EVENT_PAGE_LIMIT,
+      messageId: "msg-final",
+    });
+    expect(repository.listEventPage).toHaveBeenNthCalledWith(3, {
+      limit: FINAL_RESPONSE_EVENT_PAGE_LIMIT,
+      messageId: "msg-final",
+      cursor: { kind: "timeline", createdAt: 20, id: "token:new" },
+    });
+  });
+
+  it("marks final response event collection as limited at the explicit cap", () => {
+    const pageRows = Array.from({ length: FINAL_RESPONSE_EVENT_PAGE_LIMIT }, (_, index) =>
+      createEvent({
+        id: `event-${index}`,
+        message_id: "msg-final",
+        created_at: FINAL_RESPONSE_MAX_EVENTS - index,
+      })
+    );
+    const source = {
+      listEventPage: vi.fn().mockReturnValue({
+        events: pageRows,
+        hasMore: true,
+        nextCursor: { kind: "timeline", createdAt: 801, id: "event-199" },
+      }),
+    };
+
+    const result = collectFinalResponseEventRows(source, "msg-final");
+
+    expect(result.eventRows).toHaveLength(FINAL_RESPONSE_MAX_EVENTS);
+    expect(result.eventLimitReached).toBe(true);
+    expect(source.listEventPage).toHaveBeenCalledTimes(
+      FINAL_RESPONSE_MAX_EVENTS / FINAL_RESPONSE_EVENT_PAGE_LIMIT
+    );
+  });
+
+  it("includes chronological trajectory when requested", async () => {
+    const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+    getSession.mockReturnValue(createSession());
+    getSandbox.mockReturnValue(createSandbox());
+    getPublicSessionId.mockReturnValue("public-session-1");
+    repository.listArtifacts.mockReturnValue([]);
+    repository.getLatestTerminalMessage.mockReturnValue(null);
+    repository.listEventPage.mockReturnValueOnce({ events: [], hasMore: false, nextCursor: null });
+    repository.getEventTimelinePage.mockReturnValue({
+      events: [
+        createEvent({ id: "e1", type: "tool_call", data: '{"tool":"Read"}', created_at: 10 }),
+        createEvent({ id: "e2", type: "tool_result", data: '{"result":"ok"}', created_at: 20 }),
+      ],
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    const response = handler.getChildSummary(
+      new URL("http://internal/internal/child-summary?include=trajectory")
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      finalResponse: null,
+      trajectory: {
+        hasMore: false,
+        limit: 200,
+        events: [
+          { id: "e1", type: "tool_call", data: { tool: "Read" }, createdAt: 10 },
+          { id: "e2", type: "tool_result", data: { result: "ok" }, createdAt: 20 },
+        ],
+      },
+    });
+    expect(repository.listEventPage).toHaveBeenNthCalledWith(1, { limit: 50 });
+    expect(repository.getEventTimelinePage).toHaveBeenCalledWith({
+      limit: 200,
+      cursor: undefined,
+    });
+  });
+
+  it("returns 400 for malformed trajectory cursors", async () => {
+    const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+    getSession.mockReturnValue(createSession());
+    getSandbox.mockReturnValue(createSandbox());
+    getPublicSessionId.mockReturnValue("public-session-1");
+
+    const response = handler.getChildSummary(
+      new URL("http://internal/internal/child-summary?include=trajectory&trajectoryCursor=bad")
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid trajectoryCursor" });
+    expect(repository.listArtifacts).not.toHaveBeenCalled();
+    expect(repository.getEventTimelinePage).not.toHaveBeenCalled();
+  });
+
+  it.each(["0", "-1", "abc", "1.5"])(
+    "returns 400 for invalid trajectory limits (%s)",
+    async (trajectoryLimit) => {
+      const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+      getSession.mockReturnValue(createSession());
+      getSandbox.mockReturnValue(createSandbox());
+      getPublicSessionId.mockReturnValue("public-session-1");
+
+      const response = handler.getChildSummary(
+        new URL(
+          `http://internal/internal/child-summary?include=trajectory&trajectoryLimit=${trajectoryLimit}`
+        )
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "Invalid trajectoryLimit" });
+      expect(repository.listArtifacts).not.toHaveBeenCalled();
+      expect(repository.getEventTimelinePage).not.toHaveBeenCalled();
+    }
+  );
+
+  it("returns 400 for invalid child summary includes", async () => {
+    const { handler, getSession, repository } = createHandler();
+    getSession.mockReturnValue(createSession());
+
+    const response = handler.getChildSummary(
+      new URL("http://internal/internal/child-summary?include=result&include=unknown")
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid include: unknown" });
+    expect(repository.listArtifacts).not.toHaveBeenCalled();
+    expect(repository.listEventPage).not.toHaveBeenCalled();
+  });
+
+  it("paginates trajectory with an explicit limit and cursor", async () => {
+    const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+    getSession.mockReturnValue(createSession());
+    getSandbox.mockReturnValue(createSandbox());
+    getPublicSessionId.mockReturnValue("public-session-1");
+    repository.listArtifacts.mockReturnValue([]);
+    repository.getLatestTerminalMessage.mockReturnValue(null);
+    repository.listEventPage.mockReturnValueOnce({ events: [], hasMore: false, nextCursor: null });
+    repository.getEventTimelinePage.mockReturnValue({
+      events: [
+        createEvent({
+          id: "token:msg-final",
+          type: "token",
+          data: '{"content":"new"}',
+          created_at: 30,
+        }),
+      ],
+      hasMore: true,
+      nextCursor: { kind: "timeline", createdAt: 30, id: "token:msg-final" },
+    });
+
+    const response = handler.getChildSummary(
+      new URL(
+        "http://internal/internal/child-summary?include=trajectory&trajectoryLimit=1&trajectoryCursor=40:cursor-id"
+      )
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      trajectory: {
+        hasMore: true,
+        cursor: "30:token%3Amsg-final",
+        limit: 1,
+        events: [
+          {
+            id: "token:msg-final",
+            type: "token",
+            data: { content: "new" },
+            createdAt: 30,
+          },
+        ],
+      },
+    });
+    expect(repository.getEventTimelinePage).toHaveBeenCalledWith({
+      limit: 1,
+      cursor: { kind: "timeline", createdAt: 40, id: "cursor-id" },
+    });
   });
 
   it("returns 400 when child session update body is missing required fields", async () => {
