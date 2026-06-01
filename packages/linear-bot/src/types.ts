@@ -166,6 +166,19 @@ export interface PlanStatusCallback {
   context: LinearCallbackContext;
 }
 
+/**
+ * Session-lifecycle callback payload from control-plane (archive /
+ * unarchive). Mirrors the slack-bot SessionLifecycleCallback shape.
+ */
+export interface SessionLifecycleCallback {
+  sessionId: string;
+  event: "archived" | "unarchived";
+  actorAuthorId: string | null;
+  timestamp: number;
+  signature: string;
+  context: LinearCallbackContext;
+}
+
 // ─── Classification Types ────────────────────────────────────────────────────
 
 export type { ClassificationResult, ConfidenceLevel } from "@open-inspect/shared";

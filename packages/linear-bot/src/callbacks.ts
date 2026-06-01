@@ -4,7 +4,13 @@
  */
 
 import { Hono } from "hono";
-import type { Env, CompletionCallback, PlanStatusCallback, ToolCallCallback } from "./types";
+import type {
+  Env,
+  CompletionCallback,
+  PlanStatusCallback,
+  SessionLifecycleCallback,
+  ToolCallCallback,
+} from "./types";
 import {
   getLinearClient,
   emitAgentActivity,
@@ -627,4 +633,131 @@ export function formatCrossChannelActor(approverAuthorId: string | null): string
   if (idx <= 0) return "someone";
   const source = approverAuthorId.slice(0, idx);
   return `someone in ${source}`;
+}
+
+// ─── Session Lifecycle Callback ──────────────────────────────────────────────
+
+/**
+ * Validate session-lifecycle callback payload shape.
+ */
+export function isValidSessionLifecyclePayload(
+  payload: unknown
+): payload is SessionLifecycleCallback {
+  if (!payload || typeof payload !== "object") return false;
+  const p = payload as Record<string, unknown>;
+  return (
+    typeof p.sessionId === "string" &&
+    (p.event === "archived" || p.event === "unarchived") &&
+    typeof p.signature === "string" &&
+    typeof p.timestamp === "number" &&
+    p.context !== null &&
+    typeof p.context === "object" &&
+    typeof (p.context as Record<string, unknown>).issueId === "string"
+  );
+}
+
+/**
+ * Callback endpoint for cross-channel session-lifecycle events
+ * (archive / unarchive). Emits a `response` agent activity in the
+ * Linear issue so the user can see the state change without watching
+ * the web app.
+ */
+callbacksRouter.post("/session-lifecycle", async (c) => {
+  const startTime = Date.now();
+  const traceId = c.req.header("x-trace-id") || crypto.randomUUID();
+  const payload = await c.req.json().catch(() => null);
+
+  if (!isValidSessionLifecyclePayload(payload)) {
+    log.warn("http.request", {
+      trace_id: traceId,
+      http_path: "/callbacks/session-lifecycle",
+      http_status: 400,
+      outcome: "rejected",
+      reject_reason: "invalid_payload",
+      duration_ms: Date.now() - startTime,
+    });
+    return c.json({ error: "invalid payload" }, 400);
+  }
+
+  if (!c.env.INTERNAL_CALLBACK_SECRET) {
+    log.error("http.request", {
+      trace_id: traceId,
+      http_path: "/callbacks/session-lifecycle",
+      http_status: 500,
+      outcome: "error",
+      reject_reason: "secret_not_configured",
+      duration_ms: Date.now() - startTime,
+    });
+    return c.json({ error: "not configured" }, 500);
+  }
+
+  const isValid = await verifyCallbackSignature(payload, c.env.INTERNAL_CALLBACK_SECRET);
+  if (!isValid) {
+    log.warn("http.request", {
+      trace_id: traceId,
+      http_path: "/callbacks/session-lifecycle",
+      http_status: 401,
+      outcome: "rejected",
+      reject_reason: "invalid_signature",
+      duration_ms: Date.now() - startTime,
+    });
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  c.executionCtx.waitUntil(handleSessionLifecycleCallback(payload, c.env, traceId));
+  return c.json({ ok: true });
+});
+
+async function handleSessionLifecycleCallback(
+  payload: SessionLifecycleCallback,
+  env: Env,
+  traceId: string
+): Promise<void> {
+  const { sessionId, event, actorAuthorId, context } = payload;
+  const base = {
+    trace_id: traceId,
+    session_id: sessionId,
+    event,
+    issue_id: context.issueId,
+  };
+
+  if (!context.agentSessionId || !context.organizationId) {
+    log.info("callback.session_lifecycle", {
+      ...base,
+      outcome: "noop",
+      reason: "no_agent_session_context",
+    });
+    return;
+  }
+
+  const client = await getLinearClient(env, context.organizationId);
+  if (!client) {
+    log.warn("callback.session_lifecycle.no_oauth_token", {
+      ...base,
+      org_id: context.organizationId,
+    });
+    return;
+  }
+
+  const actor = formatCrossChannelActor(actorAuthorId);
+  const verb = event === "archived" ? "archived" : "unarchived";
+  const body = `Session ${verb} by ${actor}.`;
+
+  try {
+    await emitAgentActivity(client, context.agentSessionId, {
+      type: "response",
+      body,
+    });
+
+    log.info("callback.session_lifecycle", {
+      ...base,
+      outcome: "posted",
+      delivery: "agent_activity",
+    });
+  } catch (e) {
+    log.error("callback.session_lifecycle.emit_error", {
+      ...base,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
+  }
 }
