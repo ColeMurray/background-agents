@@ -606,7 +606,7 @@ async function handlePlanStatusCallback(
   env: Env,
   traceId: string
 ): Promise<void> {
-  const { sessionId, planVersion, verdict, plan, approverAuthorId } = payload;
+  const { sessionId, planVersion, verdict, plan, approverAuthorId, approverDisplayName } = payload;
   const base = {
     trace_id: traceId,
     session_id: sessionId,
@@ -638,10 +638,10 @@ async function handlePlanStatusCallback(
   }
 
   // Best-effort actor mention. Cross-channel verdicts are typically
-  // "web:<userId>" — we don't have a Slack handle for the actor, so fall
-  // back to a generic label that still tells the user where the verdict
-  // came from.
-  const actorMention = formatCrossChannelActor(approverAuthorId);
+  // "web:<userId>" with the user's display name passed alongside — we
+  // can't render a Slack mention for a web user, so use the display name
+  // (e.g. "John Doe (via web)") and fall back to a generic label.
+  const actorMention = formatCrossChannelActor(approverAuthorId, approverDisplayName);
 
   const blocks = buildPlanDecidedBlocks({
     sessionId,
@@ -694,16 +694,27 @@ async function handlePlanStatusCallback(
 
 /**
  * Render a human-readable actor label for a cross-channel verdict.
- * Cross-channel approvers come in as `"web:<userId>"`, `"linear:<id>"`,
- * etc. — there's no canonical Slack handle to mention, so we collapse
- * the source prefix into a "(in <source>)" suffix.
+ * Prefers `displayName` (web propagates it from `session.user.name`)
+ * when available, falling back to `someone in <source>` for legacy
+ * payloads that didn't carry it. Cross-channel actors have no canonical
+ * Slack mention format, so the rendering is always plain text.
  */
-export function formatCrossChannelActor(approverAuthorId: string | null): string {
-  if (!approverAuthorId) return "someone";
+export function formatCrossChannelActor(
+  approverAuthorId: string | null,
+  displayName?: string | null
+): string {
+  const source = extractActorSource(approverAuthorId);
+  if (displayName && displayName.trim().length > 0) {
+    return source ? `${displayName} (via ${source})` : displayName;
+  }
+  return source ? `someone in ${source}` : "someone";
+}
+
+function extractActorSource(approverAuthorId: string | null): string | null {
+  if (!approverAuthorId) return null;
   const idx = approverAuthorId.indexOf(":");
-  if (idx <= 0) return "someone";
-  const source = approverAuthorId.slice(0, idx);
-  return `someone in ${source}`;
+  if (idx <= 0) return null;
+  return approverAuthorId.slice(0, idx);
 }
 
 // ─── Session Lifecycle Callback ──────────────────────────────────────────────
@@ -800,8 +811,8 @@ async function handleSessionLifecycleCallback(
   env: Env,
   traceId: string
 ): Promise<void> {
-  const { sessionId, event, actorAuthorId, context } = payload;
-  const actor = formatCrossChannelActor(actorAuthorId);
+  const { sessionId, event, actorAuthorId, actorDisplayName, context } = payload;
+  const actor = formatCrossChannelActor(actorAuthorId, actorDisplayName);
   const icon = event === "archived" ? ":file_cabinet:" : ":open_file_folder:";
   const verb = event === "archived" ? "archived" : "unarchived";
   const text = `${icon} Session ${verb} by ${actor}`;

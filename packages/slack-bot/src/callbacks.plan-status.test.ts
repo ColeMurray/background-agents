@@ -69,23 +69,30 @@ describe("isValidPlanStatusPayload", () => {
 // ─── formatCrossChannelActor ─────────────────────────────────────────────────
 
 describe("formatCrossChannelActor", () => {
-  it("collapses 'web:userId' to 'someone in web'", () => {
-    expect(formatCrossChannelActor("web:user-1")).toBe("someone in web");
+  it("uses the display name when provided, suffixed with the channel source", () => {
+    expect(formatCrossChannelActor("web:user-1", "John Doe")).toBe("John Doe (via web)");
   });
 
-  it("collapses 'linear:agent-123' to 'someone in linear'", () => {
+  it("returns the display name without suffix when source can't be parsed", () => {
+    expect(formatCrossChannelActor(null, "John Doe")).toBe("John Doe");
+    expect(formatCrossChannelActor("no-prefix-id", "John Doe")).toBe("John Doe");
+  });
+
+  it("falls back to 'someone in <source>' when displayName is missing", () => {
+    expect(formatCrossChannelActor("web:user-1")).toBe("someone in web");
     expect(formatCrossChannelActor("linear:agent-123")).toBe("someone in linear");
   });
 
-  it("returns 'someone' for null", () => {
+  it("treats blank-only displayName as missing", () => {
+    expect(formatCrossChannelActor("web:user-1", "   ")).toBe("someone in web");
+    expect(formatCrossChannelActor("web:user-1", "")).toBe("someone in web");
+  });
+
+  it("returns 'someone' for null without displayName", () => {
     expect(formatCrossChannelActor(null)).toBe("someone");
   });
 
-  it("returns 'someone' for a string without a prefix", () => {
+  it("returns 'someone' for an id with no prefix and no displayName", () => {
     expect(formatCrossChannelActor("just-an-id")).toBe("someone");
-  });
-
-  it("returns 'someone' for an empty string", () => {
-    expect(formatCrossChannelActor("")).toBe("someone");
   });
 });
