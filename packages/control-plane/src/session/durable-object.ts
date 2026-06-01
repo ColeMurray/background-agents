@@ -426,7 +426,14 @@ export class SessionDO extends DurableObject<Env> {
         broadcast: (message) => this.broadcast(message),
         getPlanApprovalStatus: () => this.repository.getSession()?.plan_approval_status ?? null,
         validateReasoningEffort: (model, effort) => this.validateReasoningEffort(model, effort),
-        notifyPlanVerdict: ({ plan, verdict, approverAuthorId, implementationModel, reason }) => {
+        notifyPlanVerdict: ({
+          plan,
+          verdict,
+          approverAuthorId,
+          approverDisplayName,
+          implementationModel,
+          reason,
+        }) => {
           // Cross-channel verdict notification: when approval comes from a
           // surface that isn't the one that posted the awaiting-approval
           // message (e.g. web approving a Slack-triggered plan), the
@@ -442,6 +449,7 @@ export class SessionDO extends DurableObject<Env> {
               plan,
               verdict,
               approverAuthorId,
+              approverDisplayName,
               implementationModel,
               reason,
             })
@@ -536,13 +544,19 @@ export class SessionDO extends DurableObject<Env> {
         sendToSandbox: (ws, message) => this.wsManager.send(ws, message),
         updateSandboxStatus: (status) => this.updateSandboxStatus(status),
         broadcast: (message) => this.broadcast(message),
-        notifySessionLifecycle: ({ event, actorAuthorId }) => {
+        notifySessionLifecycle: ({ event, actorAuthorId, actorDisplayName }) => {
           // Fire-and-forget cross-channel notification. Reaches the
           // originating bot (Slack/Linear) via the session's most recent
           // bot-tagged message — no-op for web-only sessions. Decoupled
           // from the transition itself (handler already committed the
           // status) so a callback failure can't roll back the archive.
-          this.ctx.waitUntil(this.callbackService.notifySessionLifecycle({ event, actorAuthorId }));
+          this.ctx.waitUntil(
+            this.callbackService.notifySessionLifecycle({
+              event,
+              actorAuthorId,
+              actorDisplayName,
+            })
+          );
         },
       });
     }

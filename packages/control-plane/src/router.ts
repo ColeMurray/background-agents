@@ -2063,11 +2063,19 @@ async function handleArchiveSession(
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
 
-  // Parse userId from request body for authorization
+  // Parse userId for authorization + actorDisplayName for the
+  // cross-channel notification (rendered as "<name> (via web)" in the
+  // originating Slack thread / Linear issue). Anything else in the body
+  // is discarded — the DO accepts only these two fields.
   let userId: string | undefined;
+  let actorDisplayName: string | undefined;
   try {
-    const body = (await request.json()) as { userId?: string };
+    const body = (await request.json()) as {
+      userId?: string;
+      actorDisplayName?: string;
+    };
     userId = body.userId;
+    actorDisplayName = body.actorDisplayName;
   } catch {
     // Body parsing failed, continue without userId
   }
@@ -2081,7 +2089,10 @@ async function handleArchiveSession(
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId }),
+        body: JSON.stringify({
+          userId,
+          ...(actorDisplayName ? { actorDisplayName } : {}),
+        }),
       },
       ctx
     )
@@ -2099,11 +2110,18 @@ async function handleUnarchiveSession(
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
 
-  // Parse userId from request body for authorization
+  // Parse userId for authorization + actorDisplayName for the
+  // cross-channel notification (rendered as "<name> (via web)" in the
+  // originating Slack thread / Linear issue).
   let userId: string | undefined;
+  let actorDisplayName: string | undefined;
   try {
-    const body = (await request.json()) as { userId?: string };
+    const body = (await request.json()) as {
+      userId?: string;
+      actorDisplayName?: string;
+    };
     userId = body.userId;
+    actorDisplayName = body.actorDisplayName;
   } catch {
     // Body parsing failed, continue without userId
   }
@@ -2117,7 +2135,10 @@ async function handleUnarchiveSession(
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId }),
+        body: JSON.stringify({
+          userId,
+          ...(actorDisplayName ? { actorDisplayName } : {}),
+        }),
       },
       ctx
     )

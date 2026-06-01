@@ -31,6 +31,7 @@ export interface PlansHandlerDeps {
     plan: PlanResponse;
     verdict: "approved" | "rejected";
     approverAuthorId: string | null;
+    approverDisplayName?: string | null;
     implementationModel?: string | null;
     reason?: string | null;
   }) => void;
@@ -46,6 +47,7 @@ export interface PlansHandler {
 
 interface ApprovalRequestBody {
   approverAuthorId?: string | null;
+  approverDisplayName?: string | null;
   reason?: string | null;
   implementationModel?: string | null;
   implementationReasoningEffort?: string | null;
@@ -178,6 +180,7 @@ export function createPlansHandler(deps: PlansHandlerDeps): PlansHandler {
           plan: result.plan,
           verdict: "approved",
           approverAuthorId: body.approverAuthorId ?? null,
+          approverDisplayName: body.approverDisplayName ?? null,
           implementationModel,
         });
         return Response.json({ status: result.status, plan: result.plan });
@@ -198,6 +201,7 @@ export function createPlansHandler(deps: PlansHandlerDeps): PlansHandler {
           plan: result.plan,
           verdict: "rejected",
           approverAuthorId: body.approverAuthorId ?? null,
+          approverDisplayName: body.approverDisplayName ?? null,
           reason: body.reason ?? null,
         });
         return Response.json({ status: result.status, plan: result.plan });

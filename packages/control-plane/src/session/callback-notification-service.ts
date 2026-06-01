@@ -232,6 +232,7 @@ export class CallbackNotificationService {
     plan: PlanResponse;
     verdict: "approved" | "rejected";
     approverAuthorId: string | null;
+    approverDisplayName?: string | null;
     implementationModel?: string | null;
     reason?: string | null;
   }): Promise<void> {
@@ -302,6 +303,9 @@ export class CallbackNotificationService {
       plan,
       verdict,
       approverAuthorId,
+      ...(params.approverDisplayName != null
+        ? { approverDisplayName: params.approverDisplayName }
+        : {}),
       ...(params.implementationModel != null
         ? { implementationModel: params.implementationModel }
         : {}),
@@ -373,6 +377,7 @@ export class CallbackNotificationService {
   async notifySessionLifecycle(params: {
     event: "archived" | "unarchived";
     actorAuthorId: string | null;
+    actorDisplayName?: string | null;
   }): Promise<void> {
     const { event, actorAuthorId } = params;
 
@@ -424,6 +429,7 @@ export class CallbackNotificationService {
       sessionId,
       event,
       actorAuthorId,
+      ...(params.actorDisplayName != null ? { actorDisplayName: params.actorDisplayName } : {}),
       timestamp,
       context,
     };

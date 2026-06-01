@@ -73,6 +73,7 @@ export interface SessionLifecycleHandlerDeps {
   notifySessionLifecycle?: (params: {
     event: "archived" | "unarchived";
     actorAuthorId: string | null;
+    actorDisplayName?: string | null;
   }) => void;
 }
 
@@ -85,8 +86,8 @@ export interface SessionLifecycleHandler {
   cancel: () => Promise<Response>;
 }
 
-function parseUserIdBody(body: unknown): { userId?: string } {
-  return body as { userId?: string };
+function parseUserIdBody(body: unknown): { userId?: string; actorDisplayName?: string } {
+  return body as { userId?: string; actorDisplayName?: string };
 }
 
 export function createSessionLifecycleHandler(
@@ -276,7 +277,7 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: "Session not found" }, { status: 404 });
       }
 
-      let body: { userId?: string };
+      let body: { userId?: string; actorDisplayName?: string };
       try {
         body = parseUserIdBody(await request.json());
       } catch {
@@ -297,6 +298,7 @@ export function createSessionLifecycleHandler(
       deps.notifySessionLifecycle?.({
         event: "archived",
         actorAuthorId: body.userId ? `web:${body.userId}` : null,
+        actorDisplayName: body.actorDisplayName ?? null,
       });
 
       return Response.json({ status: "archived" });
@@ -308,7 +310,7 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: "Session not found" }, { status: 404 });
       }
 
-      let body: { userId?: string };
+      let body: { userId?: string; actorDisplayName?: string };
       try {
         body = parseUserIdBody(await request.json());
       } catch {
@@ -332,6 +334,7 @@ export function createSessionLifecycleHandler(
       deps.notifySessionLifecycle?.({
         event: "unarchived",
         actorAuthorId: body.userId ? `web:${body.userId}` : null,
+        actorDisplayName: body.actorDisplayName ?? null,
       });
 
       return Response.json({ status: "active" });
