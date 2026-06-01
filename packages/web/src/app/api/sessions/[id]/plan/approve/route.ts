@@ -12,6 +12,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   const { id } = await params;
   const userId = session.user.id || session.user.email || "anonymous";
+  const approverDisplayName = session.user.name || session.user.email || null;
 
   // Explicitly pick allowed fields — the client may supply an
   // implementation model / reasoning effort but cannot override identity.
@@ -34,6 +35,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         approverAuthorId: `web:${userId}`,
+        ...(approverDisplayName ? { approverDisplayName } : {}),
         ...(implementationModel !== undefined ? { implementationModel } : {}),
         ...(implementationReasoningEffort !== undefined ? { implementationReasoningEffort } : {}),
       }),

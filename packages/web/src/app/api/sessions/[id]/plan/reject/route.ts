@@ -12,6 +12,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   const { id } = await params;
   const userId = session.user.id || session.user.email || "anonymous";
+  const approverDisplayName = session.user.name || session.user.email || null;
 
   let body: { reason?: string } = {};
   try {
@@ -26,6 +27,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         approverAuthorId: `web:${userId}`,
+        ...(approverDisplayName ? { approverDisplayName } : {}),
         reason: typeof body.reason === "string" ? body.reason : null,
       }),
     });

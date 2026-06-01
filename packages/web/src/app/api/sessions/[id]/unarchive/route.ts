@@ -13,11 +13,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   const { id } = await params;
   const userId = session.user.id || session.user.email || "anonymous";
+  const actorDisplayName = session.user.name || session.user.email || null;
 
   try {
     const response = await controlPlaneFetch(`/sessions/${id}/unarchive`, {
       method: "POST",
-      body: JSON.stringify({ userId }),
+      body: JSON.stringify({
+        userId,
+        ...(actorDisplayName ? { actorDisplayName } : {}),
+      }),
     });
 
     const data = await response.json();
