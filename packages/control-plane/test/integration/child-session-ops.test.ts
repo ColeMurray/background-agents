@@ -136,6 +136,64 @@ describe("Child session operations (list, get, cancel)", () => {
       expect(toolCall).toBeDefined();
     });
 
+    it("forwards optional result and trajectory parameters to child summary", async () => {
+      const { pName, childName, childStub, sandboxToken } = await setupParentAndChild();
+      const [{ id: participantId }] = await queryDO<{ id: string }>(
+        childStub,
+        "SELECT id FROM participants LIMIT 1"
+      );
+
+      await queryDO(
+        childStub,
+        `INSERT INTO messages (id, author_id, content, source, status, created_at, started_at, completed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        "msg-child-result",
+        participantId,
+        "Do the child task",
+        "web",
+        "completed",
+        100,
+        110,
+        200
+      );
+      await seedEvents(childStub, [
+        {
+          id: "evt-child-token",
+          type: "token",
+          data: JSON.stringify({ content: "usable child result" }),
+          messageId: "msg-child-result",
+          createdAt: 180,
+        },
+        {
+          id: "evt-child-complete",
+          type: "execution_complete",
+          data: JSON.stringify({ success: true }),
+          messageId: "msg-child-result",
+          createdAt: 200,
+        },
+      ]);
+
+      const res = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}?include=result,trajectory`,
+        { headers: { Authorization: `Bearer ${sandboxToken}` } }
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json<{
+        finalResponse: { textContent: string; messageId: string } | null;
+        trajectory: { events: Array<{ id: string }> };
+      }>();
+
+      expect(body.finalResponse).toMatchObject({
+        messageId: "msg-child-result",
+        textContent: "usable child result",
+      });
+      expect(body.trajectory.events.map((event) => event.id)).toEqual([
+        "evt-child-token",
+        "evt-child-complete",
+      ]);
+    });
+
     it("returns 404 for wrong parent", async () => {
       const { childName } = await setupParentAndChild();
 

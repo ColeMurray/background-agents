@@ -443,4 +443,64 @@ describe("createSandboxHandler", () => {
       expires_at_epoch_ms: expiresAt,
     });
   });
+
+  it("returns 404 when tunnel URLs have no sandbox", async () => {
+    const { handler, getSandbox } = createHandler();
+    getSandbox.mockReturnValue(null);
+
+    const response = await handler.tunnelUrls();
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "No sandbox" });
+  });
+
+  it("returns an empty map when no tunnel URLs are stored yet", async () => {
+    const { handler, getSandbox } = createHandler();
+    getSandbox.mockReturnValue({ tunnel_urls: null } as unknown as SandboxRow);
+
+    const response = await handler.tunnelUrls();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(await response.json()).toEqual({ tunnelUrls: {} });
+  });
+
+  it("returns parsed tunnel URLs on success", async () => {
+    const { handler, getSandbox } = createHandler();
+    getSandbox.mockReturnValue({
+      tunnel_urls: JSON.stringify({ "3000": "https://a.example", "5000": "https://b.example" }),
+    } as unknown as SandboxRow);
+
+    const response = await handler.tunnelUrls();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(await response.json()).toEqual({
+      tunnelUrls: { "3000": "https://a.example", "5000": "https://b.example" },
+    });
+  });
+
+  it("returns 500 when stored tunnel URLs are malformed JSON", async () => {
+    const { handler, getSandbox, log } = createHandler();
+    getSandbox.mockReturnValue({ tunnel_urls: "{not json" } as unknown as SandboxRow);
+
+    const response = await handler.tunnelUrls();
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "Invalid stored tunnel URLs" });
+    expect(log.warn).toHaveBeenCalled();
+  });
+
+  it("returns 500 when stored tunnel URLs are not an object", async () => {
+    const { handler, getSandbox, log } = createHandler();
+    getSandbox.mockReturnValue({
+      tunnel_urls: JSON.stringify(["3000", "5000"]),
+    } as unknown as SandboxRow);
+
+    const response = await handler.tunnelUrls();
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "Invalid stored tunnel URLs" });
+    expect(log.warn).toHaveBeenCalled();
+  });
 });

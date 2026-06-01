@@ -49,6 +49,22 @@ describe("handleCreateSession D1 ordering", () => {
     );
   }
 
+  async function invalidCreateSessionRequest(body: string): Promise<Response> {
+    const token = await generateInternalToken(secret);
+
+    return handleRequest(
+      new Request("https://test.local/sessions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body,
+      }),
+      createEnv(vi.fn()) as never
+    );
+  }
+
   function createEnv(initFetch: ReturnType<typeof vi.fn>): Record<string, unknown> {
     const statement = {
       bind: vi.fn(() => statement),
@@ -83,6 +99,22 @@ describe("handleCreateSession D1 ordering", () => {
     expect(response.status).toBe(500);
     expect(create).toHaveBeenCalledOnce();
     expect(initFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed create-session JSON before resolving the repo", async () => {
+    const response = await invalidCreateSessionRequest("{");
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
+    expect(resolveRepoOrError).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-object create-session JSON before resolving the repo", async () => {
+    const response = await invalidCreateSessionRequest("null");
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "JSON body must be an object" });
+    expect(resolveRepoOrError).not.toHaveBeenCalled();
   });
 
   it("creates the D1 session index before initializing the SessionDO", async () => {

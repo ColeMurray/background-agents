@@ -597,6 +597,18 @@ describe("SessionRepository", () => {
     });
   });
 
+  describe("getLatestTerminalMessage", () => {
+    it("selects the newest completed or failed message", () => {
+      repo.getLatestTerminalMessage();
+
+      expect(mock.calls[0].query).toContain("status IN ('completed', 'failed')");
+      expect(mock.calls[0].query).toContain(
+        "ORDER BY COALESCE(completed_at, started_at, created_at) DESC"
+      );
+      expect(mock.calls[0].query).toContain("LIMIT 1");
+    });
+  });
+
   // === EVENTS ===
 
   describe("createEvent", () => {
@@ -723,28 +735,120 @@ describe("SessionRepository", () => {
     });
   });
 
-  describe("listEvents", () => {
-    it("returns in descending order", () => {
-      repo.listEvents({ limit: 50 });
-      expect(mock.calls[0].query).toContain("ORDER BY created_at DESC");
+  describe("listEventPage", () => {
+    it("returns in deterministic descending order", () => {
+      repo.listEventPage({ limit: 50 });
+      expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, id DESC");
     });
 
     it("filters by type", () => {
-      repo.listEvents({ limit: 50, type: "tool_call" });
+      repo.listEventPage({ limit: 50, type: "tool_call" });
       expect(mock.calls[0].query).toContain("type = ?");
       expect(mock.calls[0].params).toContain("tool_call");
     });
 
     it("filters by messageId", () => {
-      repo.listEvents({ limit: 50, messageId: "msg-1" });
+      repo.listEventPage({ limit: 50, messageId: "msg-1" });
       expect(mock.calls[0].query).toContain("message_id = ?");
       expect(mock.calls[0].params).toContain("msg-1");
     });
 
-    it("uses cursor for pagination", () => {
-      repo.listEvents({ limit: 50, cursor: "5000" });
+    it("keeps legacy timestamp cursors for pagination", () => {
+      repo.listEventPage({ limit: 50, cursor: { kind: "legacy", createdAt: 5000 } });
       expect(mock.calls[0].query).toContain("created_at < ?");
       expect(mock.calls[0].params).toContain(5000);
+    });
+
+    it("uses composite cursors for stable pagination across tied timestamps", () => {
+      repo.listEventPage({
+        limit: 50,
+        cursor: { kind: "timeline", createdAt: 5000, id: "cursor-id" },
+      });
+      expect(mock.calls[0].query).toContain("((created_at < ?) OR (created_at = ? AND id < ?))");
+      expect(mock.calls[0].params).toEqual([5000, 5000, "cursor-id", 51]);
+    });
+
+    it("returns hasMore and trims overflow", () => {
+      const query = "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?";
+      mock.setData(query, [
+        { id: "e3", created_at: 5000, type: "token", data: "{}" },
+        { id: "e2", created_at: 4000, type: "tool_call", data: "{}" },
+        { id: "e1", created_at: 3000, type: "token", data: "{}" },
+      ]);
+
+      const result = repo.listEventPage({ limit: 2 });
+
+      expect(result.hasMore).toBe(true);
+      expect(result.events.map((event) => event.id)).toEqual(["e3", "e2"]);
+      expect(result.nextCursor).toEqual({ kind: "timeline", createdAt: 4000, id: "e2" });
+    });
+  });
+
+  describe("getEventTimelinePage", () => {
+    it("queries the first timeline page with deterministic descending storage order", () => {
+      repo.getEventTimelinePage({ limit: 50 });
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toBe(
+        "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?"
+      );
+      expect(mock.calls[0].params).toEqual([51]);
+    });
+
+    it("queries timeline pages after a composite cursor", () => {
+      repo.getEventTimelinePage({
+        limit: 50,
+        cursor: { kind: "timeline", createdAt: 5000, id: "cursor-id" },
+      });
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toBe(
+        "SELECT * FROM events WHERE ((created_at < ?) OR (created_at = ? AND id < ?)) ORDER BY created_at DESC, id DESC LIMIT ?"
+      );
+      expect(mock.calls[0].params).toEqual([5000, 5000, "cursor-id", 51]);
+    });
+
+    it("can exclude event types while using the same timeline pager", () => {
+      repo.getEventTimelinePage({
+        limit: 50,
+        cursor: { kind: "timeline", createdAt: 5000, id: "cursor-id" },
+        excludeTypes: ["heartbeat"],
+      });
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toBe(
+        "SELECT * FROM events WHERE type NOT IN (?) AND ((created_at < ?) OR (created_at = ? AND id < ?)) ORDER BY created_at DESC, id DESC LIMIT ?"
+      );
+      expect(mock.calls[0].params).toEqual(["heartbeat", 5000, 5000, "cursor-id", 51]);
+    });
+
+    it("returns hasMore=false when a timeline page fits within the limit", () => {
+      const query = "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?";
+      mock.setData(query, [
+        { id: "e2", created_at: 4000, type: "token", data: "{}" },
+        { id: "e1", created_at: 3000, type: "tool_call", data: "{}" },
+      ]);
+
+      const result = repo.getEventTimelinePage({ limit: 50 });
+
+      expect(result.hasMore).toBe(false);
+      expect(result.events.map((event) => event.id)).toEqual(["e1", "e2"]);
+      expect(result.nextCursor).toEqual({ kind: "timeline", createdAt: 3000, id: "e1" });
+    });
+
+    it("returns hasMore=true and trims overflow when a timeline page exceeds the limit", () => {
+      const query = "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?";
+      mock.setData(query, [
+        { id: "e3", created_at: 5000, type: "token", data: "{}" },
+        { id: "e2", created_at: 4000, type: "tool_call", data: "{}" },
+        { id: "e1", created_at: 3000, type: "token", data: "{}" },
+      ]);
+
+      const result = repo.getEventTimelinePage({ limit: 2 });
+
+      expect(result.hasMore).toBe(true);
+      expect(result.events.map((event) => event.id)).toEqual(["e2", "e3"]);
+      expect(result.nextCursor).toEqual({ kind: "timeline", createdAt: 4000, id: "e2" });
     });
   });
 
@@ -758,74 +862,6 @@ describe("SessionRepository", () => {
       // Outer query re-sorts to chronological ASC for replay
       expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, id ASC");
       expect(mock.calls[0].params).toEqual([500]);
-    });
-  });
-
-  describe("getEventsHistoryPage", () => {
-    it("queries events with composite cursor excluding heartbeats", () => {
-      repo.getEventsHistoryPage(5000, "cursor-id", 50);
-
-      expect(mock.calls.length).toBe(1);
-      expect(mock.calls[0].query).toContain("FROM events");
-      expect(mock.calls[0].query).toContain("type != 'heartbeat'");
-      expect(mock.calls[0].query).toContain("created_at < ?1");
-      expect(mock.calls[0].query).toContain("created_at = ?1 AND id < ?2");
-      expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, id DESC");
-      expect(mock.calls[0].params).toEqual([5000, "cursor-id", 51]); // limit + 1
-    });
-
-    it("returns hasMore=false when results fit within limit", () => {
-      const query = `SELECT * FROM events
-         WHERE type != 'heartbeat' AND ((created_at < ?1) OR (created_at = ?1 AND id < ?2))
-         ORDER BY created_at DESC, id DESC LIMIT ?3`;
-
-      mock.setData(query, [
-        { id: "e1", created_at: 4000, type: "token", data: "{}" },
-        { id: "e2", created_at: 3000, type: "tool_call", data: "{}" },
-      ]);
-
-      const result = repo.getEventsHistoryPage(5000, "cursor-id", 50);
-      expect(result.hasMore).toBe(false);
-      expect(result.events.length).toBe(2);
-    });
-
-    it("returns hasMore=true and trims overflow when results exceed limit", () => {
-      const query = `SELECT * FROM events
-         WHERE type != 'heartbeat' AND ((created_at < ?1) OR (created_at = ?1 AND id < ?2))
-         ORDER BY created_at DESC, id DESC LIMIT ?3`;
-
-      // 3 rows returned, limit = 2 → hasMore = true, last row trimmed
-      mock.setData(query, [
-        { id: "e1", created_at: 4000, type: "token", data: "{}" },
-        { id: "e2", created_at: 3000, type: "tool_call", data: "{}" },
-        { id: "e3", created_at: 2000, type: "token", data: "{}" },
-      ]);
-
-      const result = repo.getEventsHistoryPage(5000, "cursor-id", 2);
-      expect(result.hasMore).toBe(true);
-      expect(result.events.length).toBe(2);
-    });
-
-    it("returns events in chronological order (reversed from DESC query)", () => {
-      const query = `SELECT * FROM events
-         WHERE type != 'heartbeat' AND ((created_at < ?1) OR (created_at = ?1 AND id < ?2))
-         ORDER BY created_at DESC, id DESC LIMIT ?3`;
-
-      mock.setData(query, [
-        { id: "e2", created_at: 4000, type: "token", data: "{}" },
-        { id: "e1", created_at: 3000, type: "tool_call", data: "{}" },
-      ]);
-
-      const result = repo.getEventsHistoryPage(5000, "cursor-id", 50);
-      // After reverse(), oldest first
-      expect(result.events[0].id).toBe("e1");
-      expect(result.events[1].id).toBe("e2");
-    });
-
-    it("returns empty results with hasMore=false when no data matches cursor", () => {
-      const result = repo.getEventsHistoryPage(5000, "cursor-id", 50);
-      expect(result.events).toEqual([]);
-      expect(result.hasMore).toBe(false);
     });
   });
 

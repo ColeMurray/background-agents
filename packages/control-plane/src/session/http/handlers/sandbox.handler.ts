@@ -205,18 +205,25 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
       // own filesystem view — a real failure mode we hit on the Modal
       // provider — this endpoint is the in-sandbox fallback for retrieving
       // them via SANDBOX_AUTH_TOKEN.
+      // Distinguish "no tunnels resolved yet" (empty map) from corrupted
+      // persisted data (5xx). Returning an empty map for malformed JSON would
+      // let the in-sandbox setup silently write an empty .tunnels.env.
       let urls: Record<string, string> = {};
       if (sandbox.tunnel_urls) {
+        let parsed: unknown;
         try {
-          const parsed = JSON.parse(sandbox.tunnel_urls) as unknown;
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            urls = parsed as Record<string, string>;
-          }
+          parsed = JSON.parse(sandbox.tunnel_urls);
         } catch (err) {
           deps.getLog().warn("Failed to parse stored tunnel_urls JSON", {
             error: err instanceof Error ? err.message : String(err),
           });
+          return Response.json({ error: "Invalid stored tunnel URLs" }, { status: 500 });
         }
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          deps.getLog().warn("Stored tunnel_urls is not a JSON object");
+          return Response.json({ error: "Invalid stored tunnel URLs" }, { status: 500 });
+        }
+        urls = parsed as Record<string, string>;
       }
 
       return Response.json(

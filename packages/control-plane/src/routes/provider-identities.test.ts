@@ -47,6 +47,19 @@ async function callProviderIdentityRoute(path: string, body: unknown): Promise<R
   );
 }
 
+async function callProviderIdentityRouteWithoutBody(path: string): Promise<Response> {
+  const route = providerIdentityRoutes.find((candidate) => candidate.method === "PUT")!;
+  const match = path.match(route.pattern);
+  if (!match) throw new Error(`No route match for ${path}`);
+
+  return route.handler(
+    new Request(`https://test.local${path}`, { method: "PUT" }),
+    createEnv(),
+    match,
+    createCtx()
+  );
+}
+
 describe("provider identity routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -81,6 +94,31 @@ describe("provider identity routes", () => {
       });
     });
 
+    it("does not match non-GitHub provider identity paths", () => {
+      const route = providerIdentityRoutes.find((candidate) => candidate.method === "PUT")!;
+
+      expect("/provider-identities/slack/U123".match(route.pattern)).toBeNull();
+      expect("/provider-identities/linear/abc".match(route.pattern)).toBeNull();
+    });
+
+    it("rejects requests with no request body", async () => {
+      const response = await callProviderIdentityRouteWithoutBody(
+        "/provider-identities/github/12345"
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
+      expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
+    });
+
+    it("rejects non-object JSON bodies", async () => {
+      const response = await callProviderIdentityRoute("/provider-identities/github/12345", null);
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "Request body must be an object" });
+      expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
+    });
+
     it("rejects blank provider user IDs", async () => {
       const response = await callProviderIdentityRoute("/provider-identities/github/%20%20%20", {});
 
@@ -94,14 +132,6 @@ describe("provider identity routes", () => {
 
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toEqual({ error: "providerUserId is required" });
-      expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
-    });
-
-    it("rejects non-object JSON bodies", async () => {
-      const response = await callProviderIdentityRoute("/provider-identities/github/12345", null);
-
-      expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({ error: "Request body must be an object" });
       expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
     });
 

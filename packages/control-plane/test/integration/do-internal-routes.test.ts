@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:test";
+import { cleanD1Tables } from "./cleanup";
 import { initSession, queryDO, seedEvents } from "./helpers";
 import type { SpawnContext, ChildSessionDetail } from "@open-inspect/shared";
 
@@ -48,7 +49,8 @@ async function waitForSandboxSpawn(stub: DurableObjectStub): Promise<void> {
 }
 
 describe("DO internal sub-session routes", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await cleanD1Tables();
     installModalFetchMock();
   });
 
@@ -174,6 +176,133 @@ describe("DO internal sub-session routes", () => {
       expect(eventTypes).toContain("tool_call");
       expect(eventTypes).not.toContain("token");
       expect(eventTypes).not.toContain("heartbeat");
+    });
+
+    it("can include final response and trajectory when requested", async () => {
+      const externalSessionId = `child-summary-rich-${Date.now()}`;
+      const { stub } = await initSession({
+        sessionName: externalSessionId,
+        repoOwner: "acme",
+        repoName: "web-app",
+        title: "Child task",
+        userId: "user-1",
+      });
+      const [{ id: participantId }] = await queryDO<{ id: string }>(
+        stub,
+        "SELECT id FROM participants LIMIT 1"
+      );
+
+      await queryDO(
+        stub,
+        `INSERT INTO messages (id, author_id, content, source, status, created_at, started_at, completed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        "msg-rich-1",
+        participantId,
+        "Do the task",
+        "web",
+        "completed",
+        100,
+        110,
+        200
+      );
+
+      await seedEvents(stub, [
+        {
+          id: "evt-tool-rich",
+          type: "tool_call",
+          data: JSON.stringify({ tool: "Bash", args: { command: "npm test" } }),
+          messageId: "msg-rich-1",
+          createdAt: 120,
+        },
+        {
+          id: "evt-token-rich",
+          type: "token",
+          data: JSON.stringify({ content: "Child final answer" }),
+          messageId: "msg-rich-1",
+          createdAt: 180,
+        },
+        {
+          id: "evt-complete-rich",
+          type: "execution_complete",
+          data: JSON.stringify({ success: true }),
+          messageId: "msg-rich-1",
+          createdAt: 200,
+        },
+      ]);
+
+      const res = await stub.fetch(
+        "http://internal/internal/child-summary?include=result,trajectory"
+      );
+
+      expect(res.status).toBe(200);
+      const detail = await res.json<ChildSessionDetail>();
+
+      expect(detail.finalResponse).toMatchObject({
+        messageId: "msg-rich-1",
+        completedAt: 200,
+        textContent: "Child final answer",
+        success: true,
+        toolCalls: [{ tool: "Bash", summary: "Ran: npm test" }],
+      });
+      expect(detail.trajectory?.hasMore).toBe(false);
+      expect(detail.trajectory?.limit).toBe(200);
+      expect(detail.trajectory?.events.map((event) => event.id)).toEqual([
+        "evt-tool-rich",
+        "evt-token-rich",
+        "evt-complete-rich",
+      ]);
+    });
+
+    it("rejects malformed trajectory cursors", async () => {
+      const externalSessionId = `child-summary-bad-cursor-${Date.now()}`;
+      const { stub } = await initSession({
+        sessionName: externalSessionId,
+        repoOwner: "acme",
+        repoName: "web-app",
+        userId: "user-1",
+      });
+
+      const res = await stub.fetch(
+        "http://internal/internal/child-summary?include=trajectory&trajectoryCursor=bad"
+      );
+
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toEqual({ error: "Invalid trajectoryCursor" });
+    });
+
+    it.each(["0", "-1", "abc", "1.5"])(
+      "rejects invalid trajectory limits (%s)",
+      async (trajectoryLimit) => {
+        const externalSessionId = `child-summary-bad-limit-${Date.now()}`;
+        const { stub } = await initSession({
+          sessionName: externalSessionId,
+          repoOwner: "acme",
+          repoName: "web-app",
+          userId: "user-1",
+        });
+
+        const res = await stub.fetch(
+          `http://internal/internal/child-summary?include=trajectory&trajectoryLimit=${trajectoryLimit}`
+        );
+
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toEqual({ error: "Invalid trajectoryLimit" });
+      }
+    );
+
+    it("rejects invalid child summary include values", async () => {
+      const externalSessionId = `child-summary-bad-include-${Date.now()}`;
+      const { stub } = await initSession({
+        sessionName: externalSessionId,
+        repoOwner: "acme",
+        repoName: "web-app",
+        userId: "user-1",
+      });
+
+      const res = await stub.fetch("http://internal/internal/child-summary?include=result,unknown");
+
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toEqual({ error: "Invalid include: unknown" });
     });
 
     it("returns 404 when session is not initialized", async () => {

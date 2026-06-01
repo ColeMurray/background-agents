@@ -24,6 +24,11 @@ import type {
   ArtifactType,
   SandboxEvent,
 } from "../types";
+import {
+  eventTimelineCursorFromRow,
+  type EventListCursor,
+  type EventTimelineCursor,
+} from "./event-cursor";
 
 type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
@@ -146,13 +151,29 @@ export interface CreateEventData {
 }
 
 /**
- * Options for listing events.
+ * Options for listing event pages.
  */
-export interface ListEventsOptions {
-  cursor?: string | null;
+export interface ListEventPageOptions {
+  cursor?: EventListCursor | null;
   limit: number;
   type?: string | null;
   messageId?: string | null;
+}
+
+export interface ListEventTimelinePageOptions {
+  cursor?: EventTimelineCursor | null;
+  excludeTypes?: string[];
+  limit: number;
+}
+
+export interface EventPage {
+  events: EventRow[];
+  hasMore: boolean;
+  nextCursor: EventTimelineCursor | null;
+}
+
+interface QueryEventPageOptions extends ListEventPageOptions {
+  excludeTypes?: string[];
 }
 
 /**
@@ -707,6 +728,17 @@ export class SessionRepository {
     return this.rows<MessageRow>(result);
   }
 
+  getLatestTerminalMessage(): MessageRow | null {
+    const result = this.sql.exec(
+      `SELECT * FROM messages
+       WHERE status IN ('completed', 'failed')
+       ORDER BY COALESCE(completed_at, started_at, created_at) DESC, created_at DESC, id DESC
+       LIMIT 1`
+    );
+    const rows = this.rows<MessageRow>(result);
+    return rows[0] ?? null;
+  }
+
   // === EVENTS ===
 
   createEvent(data: CreateEventData): void {
@@ -755,30 +787,61 @@ export class SessionRepository {
     this.upsertEventByMessageId("execution_complete", messageId, event, createdAt);
   }
 
-  listEvents(options: ListEventsOptions): EventRow[] {
-    let query = `SELECT * FROM events WHERE 1=1`;
+  listEventPage(options: ListEventPageOptions): EventPage {
+    return this.queryEventPage(options);
+  }
+
+  getEventTimelinePage(options: ListEventTimelinePageOptions): EventPage {
+    const page = this.queryEventPage(options);
+    return {
+      ...page,
+      events: [...page.events].reverse(),
+    };
+  }
+
+  private queryEventPage(options: QueryEventPageOptions): EventPage {
+    let query = `SELECT * FROM events`;
+    const conditions: string[] = [];
     const params: (string | number)[] = [];
 
     if (options.type) {
-      query += ` AND type = ?`;
+      conditions.push(`type = ?`);
       params.push(options.type);
     }
 
     if (options.messageId) {
-      query += ` AND message_id = ?`;
+      conditions.push(`message_id = ?`);
       params.push(options.messageId);
     }
 
-    if (options.cursor) {
-      query += ` AND created_at < ?`;
-      params.push(parseInt(options.cursor));
+    if (options.excludeTypes?.length) {
+      conditions.push(`type NOT IN (${options.excludeTypes.map(() => "?").join(", ")})`);
+      params.push(...options.excludeTypes);
     }
 
-    query += ` ORDER BY created_at DESC LIMIT ?`;
+    const cursor = options.cursor;
+    if (cursor?.kind === "timeline") {
+      conditions.push(`((created_at < ?) OR (created_at = ? AND id < ?))`);
+      params.push(cursor.createdAt, cursor.createdAt, cursor.id);
+    } else if (cursor?.kind === "legacy") {
+      conditions.push(`created_at < ?`);
+      params.push(cursor.createdAt);
+    }
+
+    if (conditions.length > 0) {
+      query += ` WHERE ${conditions.join(" AND ")}`;
+    }
+
+    query += ` ORDER BY created_at DESC, id DESC LIMIT ?`;
     params.push(options.limit + 1);
 
     const result = this.sql.exec(query, ...params);
-    return this.rows<EventRow>(result);
+    const rows = this.rows<EventRow>(result);
+    const hasMore = rows.length > options.limit;
+    const pageEvents = hasMore ? rows.slice(0, options.limit) : rows;
+    const nextCursor =
+      pageEvents.length > 0 ? eventTimelineCursorFromRow(pageEvents[pageEvents.length - 1]) : null;
+    return { events: pageEvents, hasMore, nextCursor };
   }
 
   getEventsForReplay(limit: number): EventRow[] {
@@ -790,35 +853,6 @@ export class SessionRepository {
       limit
     );
     return this.rows<EventRow>(result);
-  }
-
-  /**
-   * Paginate the events timeline using a composite cursor.
-   * Returns events older than the cursor in chronological order, plus a hasMore flag.
-   */
-  getEventsHistoryPage(
-    cursorTimestamp: number,
-    cursorId: string,
-    limit: number
-  ): {
-    events: EventRow[];
-    hasMore: boolean;
-  } {
-    const result = this.sql.exec(
-      `SELECT * FROM events
-         WHERE type != 'heartbeat' AND ((created_at < ?1) OR (created_at = ?1 AND id < ?2))
-         ORDER BY created_at DESC, id DESC LIMIT ?3`,
-      cursorTimestamp,
-      cursorId,
-      limit + 1
-    );
-    const rows = this.rows<EventRow>(result);
-
-    const hasMore = rows.length > limit;
-    if (hasMore) rows.pop();
-    rows.reverse(); // chronological order
-
-    return { events: rows, hasMore };
   }
 
   // === ARTIFACTS ===

@@ -411,8 +411,8 @@ project_root    = "../../../"
 # app_name = "Open-Inspect"
 # Short brand label shown only in the sidebar header.
 # app_short_name = "Inspect"
-# Optional URL (absolute or root-relative) to a custom logo/favicon. When set,
-# replaces the built-in icon in the command menu and browser favicon.
+# Optional URL (absolute or root-relative) to a custom logo/favicon override.
+# Leave empty to keep the built-in favicon and default in-app icon.
 # app_icon_url = ""
 
 # Initial deployment: set both to false (see Step 7)
@@ -910,10 +910,10 @@ app_name = "Acme Bot"
 # wide for the sidebar.
 app_short_name = "Acme"
 
-# Optional URL to a custom logo image (SVG/PNG). When set, replaces the
-# built-in icon in the command menu and browser favicon.
+# Optional URL to a custom logo image (SVG/PNG). When set, replaces the icon in
+# the command menu and favicon. Leave empty to keep the built-in favicon.
 # Use an absolute URL or a root-relative path served from packages/web/public/.
-app_icon_url = "/branding/logo.svg"   # or "https://cdn.example.com/logo.svg"
+app_icon_url = "/branding/acme-logo.svg"   # or "https://cdn.example.com/logo.svg"
 ```
 
 After changing any of these values, run `terraform apply` and (for Vercel) redeploy the web app so

@@ -52,6 +52,24 @@ describe("SCM credentials router provider gate", () => {
     expect(new URL(request.url).pathname).toBe("/internal/scm-credentials");
   });
 
+  it("allows GitLab deployments to reach the tunnel URLs endpoint", async () => {
+    const { env, fetch } = createEnv();
+    const token = await generateInternalToken(secret);
+
+    const response = await handleRequest(
+      new Request("https://test.local/sessions/session-1/tunnel-urls", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+      env as never
+    );
+
+    expect(response.status).toBe(202);
+    expect(fetch).toHaveBeenCalledOnce();
+    const request = fetch.mock.calls[0][0];
+    expect(new URL(request.url).pathname).toBe("/internal/tunnel-urls");
+  });
+
   it("continues blocking unrelated GitLab session routes", async () => {
     const { env, fetch } = createEnv();
     const token = await generateInternalToken(secret);

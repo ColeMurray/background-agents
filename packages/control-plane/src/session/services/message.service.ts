@@ -1,6 +1,7 @@
 import type { ArtifactRow, EventRow, MessageRow } from "../types";
 import type { ArtifactResponse } from "../../types";
 import type { SessionRepository } from "../repository";
+import { encodeEventTimelineCursor, type EventListCursor } from "../event-cursor";
 import type { SessionMessageQueue } from "../message-queue";
 
 export interface EnqueuePromptRequest {
@@ -25,7 +26,7 @@ export interface EnqueuePromptRequest {
 }
 
 export interface ListEventsRequest {
-  cursor: string | null;
+  cursor: EventListCursor | null;
   limit: number;
   type: string | null;
   messageId: string | null;
@@ -63,19 +64,16 @@ export class MessageService {
     cursor: string | undefined;
     hasMore: boolean;
   } {
-    const events = this.deps.repository.listEvents({
+    const page = this.deps.repository.listEventPage({
       cursor: request.cursor,
       limit: request.limit,
       type: request.type,
       messageId: request.messageId,
     });
-    const hasMore = events.length > request.limit;
-    if (hasMore) events.pop();
-
     return {
-      events,
-      cursor: events.length > 0 ? events[events.length - 1].created_at.toString() : undefined,
-      hasMore,
+      events: page.events,
+      cursor: page.nextCursor ? encodeEventTimelineCursor(page.nextCursor) : undefined,
+      hasMore: page.hasMore,
     };
   }
 
