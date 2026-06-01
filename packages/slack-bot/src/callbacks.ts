@@ -12,7 +12,13 @@ import {
 } from "@open-inspect/shared";
 import type { PlanApprovalStatus, PlanArtifact } from "@open-inspect/shared";
 import { Hono } from "hono";
-import type { Env, CompletionCallback, PlanStatusCallback, ToolCallCallback } from "./types";
+import type {
+  Env,
+  CompletionCallback,
+  PlanStatusCallback,
+  SessionLifecycleCallback,
+  ToolCallCallback,
+} from "./types";
 import { extractAgentResponse } from "./completion/extractor";
 import {
   buildCompletionBlocks,
@@ -698,4 +704,139 @@ export function formatCrossChannelActor(approverAuthorId: string | null): string
   if (idx <= 0) return "someone";
   const source = approverAuthorId.slice(0, idx);
   return `someone in ${source}`;
+}
+
+// ─── Session Lifecycle Callback ──────────────────────────────────────────────
+
+/**
+ * Validate session-lifecycle callback payload shape.
+ */
+export function isValidSessionLifecyclePayload(
+  payload: unknown
+): payload is SessionLifecycleCallback {
+  if (!payload || typeof payload !== "object") return false;
+  const p = payload as Record<string, unknown>;
+  return (
+    typeof p.sessionId === "string" &&
+    (p.event === "archived" || p.event === "unarchived") &&
+    typeof p.signature === "string" &&
+    typeof p.timestamp === "number" &&
+    p.context !== null &&
+    typeof p.context === "object" &&
+    typeof (p.context as Record<string, unknown>).channel === "string" &&
+    typeof (p.context as Record<string, unknown>).threadTs === "string"
+  );
+}
+
+/**
+ * Callback endpoint for session-lifecycle (archive / unarchive) events
+ * initiated from a surface other than the bot. The bot posts a new
+ * message in the originating Slack thread describing the transition so
+ * the user can see the state change without watching the web app.
+ */
+callbacksRouter.post("/session-lifecycle", async (c) => {
+  const startTime = Date.now();
+  const traceId = c.req.header("x-trace-id") || crypto.randomUUID();
+  const payload = await c.req.json().catch(() => null);
+
+  if (!isValidSessionLifecyclePayload(payload)) {
+    log.warn("http.request", {
+      trace_id: traceId,
+      http_method: "POST",
+      http_path: "/callbacks/session-lifecycle",
+      http_status: 400,
+      outcome: "rejected",
+      reject_reason: "invalid_payload",
+      duration_ms: Date.now() - startTime,
+    });
+    return c.json({ error: "invalid payload" }, 400);
+  }
+
+  if (!c.env.INTERNAL_CALLBACK_SECRET) {
+    log.error("http.request", {
+      trace_id: traceId,
+      http_method: "POST",
+      http_path: "/callbacks/session-lifecycle",
+      http_status: 500,
+      outcome: "error",
+      reject_reason: "secret_not_configured",
+      duration_ms: Date.now() - startTime,
+    });
+    return c.json({ error: "not configured" }, 500);
+  }
+
+  const isValid = await verifyCallbackSignature(payload, c.env.INTERNAL_CALLBACK_SECRET);
+  if (!isValid) {
+    log.warn("http.request", {
+      trace_id: traceId,
+      http_method: "POST",
+      http_path: "/callbacks/session-lifecycle",
+      http_status: 401,
+      outcome: "rejected",
+      reject_reason: "invalid_signature",
+      session_id: payload.sessionId,
+      duration_ms: Date.now() - startTime,
+    });
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  c.executionCtx.waitUntil(handleSessionLifecycleCallback(payload, c.env, traceId));
+
+  log.info("http.request", {
+    trace_id: traceId,
+    http_method: "POST",
+    http_path: "/callbacks/session-lifecycle",
+    http_status: 200,
+    session_id: payload.sessionId,
+    event: payload.event,
+    duration_ms: Date.now() - startTime,
+  });
+
+  return c.json({ ok: true });
+});
+
+async function handleSessionLifecycleCallback(
+  payload: SessionLifecycleCallback,
+  env: Env,
+  traceId: string
+): Promise<void> {
+  const { sessionId, event, actorAuthorId, context } = payload;
+  const actor = formatCrossChannelActor(actorAuthorId);
+  const icon = event === "archived" ? ":file_cabinet:" : ":open_file_folder:";
+  const verb = event === "archived" ? "archived" : "unarchived";
+  const text = `${icon} Session ${verb} by ${actor}`;
+
+  try {
+    const result = await postMessage(env.SLACK_BOT_TOKEN, context.channel, text, {
+      thread_ts: context.threadTs,
+      blocks: [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text },
+        },
+      ],
+    });
+    if (!result.ok) {
+      log.warn("callback.session_lifecycle.post_failed", {
+        trace_id: traceId,
+        session_id: sessionId,
+        event,
+        slack_error: result.error,
+      });
+      return;
+    }
+    log.info("callback.session_lifecycle", {
+      trace_id: traceId,
+      session_id: sessionId,
+      event,
+      outcome: "posted",
+    });
+  } catch (e) {
+    log.error("callback.session_lifecycle.post_error", {
+      trace_id: traceId,
+      session_id: sessionId,
+      event,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
+  }
 }

@@ -198,6 +198,23 @@ export interface PlanStatusCallback {
 }
 
 /**
+ * Session-lifecycle callback payload from control-plane. Fired when a
+ * session transitions to/from "archived" by an actor on a surface that
+ * isn't the originating bot — most commonly a user archiving from the
+ * web UI. Lets the bot post a follow-up message in the originating
+ * Slack thread so the user can see the state change without watching
+ * the web app.
+ */
+export interface SessionLifecycleCallback {
+  sessionId: string;
+  event: "archived" | "unarchived";
+  actorAuthorId: string | null;
+  timestamp: number;
+  signature: string;
+  context: SlackCallbackContext;
+}
+
+/**
  * Event response from control-plane events API.
  */
 export type {
