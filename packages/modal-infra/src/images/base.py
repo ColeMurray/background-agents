@@ -11,11 +11,14 @@ This image provides a complete development environment with:
 - Sandbox entrypoint and bridge code
 """
 
+import os
 from pathlib import Path
 
 import modal
 
 import sandbox_runtime
+
+os.environ.setdefault("MODAL_IMAGE_BUILDER_VERSION", "2025.06")
 
 # Get the path to the sandbox runtime code (provider-agnostic)
 SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
@@ -44,6 +47,12 @@ AGENT_BROWSER_VERSION = "0.21.2"
 # ttyd version to install (pinned for reproducible images)
 TTYD_VERSION = "1.7.7"
 TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
+DOCKER_CE_VERSION = "5:29.5.2-1~debian.12~bookworm"
+DOCKER_CE_CLI_VERSION = "5:29.5.2-1~debian.12~bookworm"
+CONTAINERD_VERSION = "2.2.4-1~debian.12~bookworm"
+DOCKER_BUILDX_PLUGIN_VERSION = "0.34.1-1~debian.12~bookworm"
+DOCKER_COMPOSE_PLUGIN_VERSION = "5.1.4-1~debian.12~bookworm"
+RUNC_VERSION = "1.3.0"
 
 # Cache buster - change this to force Modal image rebuild
 # v51: SCM credential helper backed by control plane; remove embedded VCS tokens
@@ -215,6 +224,39 @@ base_image = (
 node_image = base_image.run_commands(
     # Pre-cache common Node.js development dependencies
     "npm cache clean --force",
+)
+
+# Image variant with Docker Engine, Buildx, and Docker Compose for Modal's
+# Docker-in-Sandboxes alpha. The runtime starts dockerd on demand.
+docker_image = (
+    base_image.apt_install("iproute2", "iptables", "wget")
+    .run_commands(
+        "install -m 0755 -d /etc/apt/keyrings",
+        "curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc",
+        "chmod a+r /etc/apt/keyrings/docker.asc",
+        'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] '
+        'https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" '
+        "> /etc/apt/sources.list.d/docker.list",
+        "apt-get update && apt-get install -y "
+        f"docker-ce={DOCKER_CE_VERSION} "
+        f"docker-ce-cli={DOCKER_CE_CLI_VERSION} "
+        f"containerd.io={CONTAINERD_VERSION} "
+        f"docker-buildx-plugin={DOCKER_BUILDX_PLUGIN_VERSION} "
+        f"docker-compose-plugin={DOCKER_COMPOSE_PLUGIN_VERSION} "
+        "&& rm -rf /var/lib/apt/lists/*",
+    )
+    .run_commands(
+        "rm -f $(command -v runc)",
+        f"wget -q https://github.com/opencontainers/runc/releases/download/v{RUNC_VERSION}/runc.amd64",
+        "chmod +x runc.amd64",
+        "mv runc.amd64 /usr/local/bin/runc",
+        "update-alternatives --set iptables /usr/sbin/iptables-legacy",
+        "update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy",
+        "mkdir -p /opt/docker-data",
+        "docker --version",
+        "docker compose version",
+        "runc --version",
+    )
 )
 
 # Image variant optimized for Python projects

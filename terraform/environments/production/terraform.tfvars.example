@@ -62,6 +62,10 @@ modal_workspace               = ""
 modal_environment             = "main"
 modal_environment_web_suffix  = ""
 
+# Optional resource defaults for Docker-enabled Modal sandboxes.
+modal_docker_sandbox_cpu       = 4
+modal_docker_sandbox_memory_mb = 8192
+
 # Daytona REST API
 # Only required when sandbox_provider = "daytona"
 # Create an API key at https://app.daytona.io with permissions:

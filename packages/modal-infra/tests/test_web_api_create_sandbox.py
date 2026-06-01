@@ -7,6 +7,7 @@ import pytest
 from sandbox_runtime.types import SandboxStatus
 from src import web_api
 from src.sandbox import manager as manager_module
+from src.scheduler import image_builder as image_builder_module
 
 
 def _patch_auth(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -40,6 +41,15 @@ async def _call_create_sandbox(request: dict) -> dict:
         x_request_id=None,
         x_session_id=None,
         x_sandbox_id=None,
+    )
+
+
+async def _call_build_repo_image(request: dict) -> dict:
+    return await web_api.api_build_repo_image.get_raw_f()(
+        request,
+        authorization="Bearer test",
+        x_trace_id=None,
+        x_request_id=None,
     )
 
 
@@ -97,3 +107,33 @@ async def test_create_sandbox_resolves_clone_token_for_prebuilt_boot(monkeypatch
     assert result["success"] is True
     assert calls == [True]
     assert captured["config"].clone_token == "ghs_prebuilt"
+
+
+@pytest.mark.asyncio
+async def test_build_repo_image_forwards_sandbox_settings(monkeypatch):
+    captured = {}
+
+    _patch_auth(monkeypatch)
+
+    async def fake_spawn_aio(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(
+        image_builder_module,
+        "build_repo_image",
+        SimpleNamespace(spawn=SimpleNamespace(aio=fake_spawn_aio)),
+    )
+
+    result = await _call_build_repo_image(
+        {
+            "repo_owner": "acme",
+            "repo_name": "repo",
+            "default_branch": "main",
+            "build_id": "build-1",
+            "callback_url": "https://control-plane.example/repo-images/build-complete",
+            "sandbox_settings": {"dockerEnabled": True},
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["sandbox_settings"] == {"dockerEnabled": True}

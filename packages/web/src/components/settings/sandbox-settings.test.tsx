@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
@@ -33,6 +33,10 @@ vi.mock("@/hooks/use-repos", () => ({
 }));
 
 const SETTINGS_KEY = "/api/integration-settings/sandbox";
+
+beforeEach(() => {
+  vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "modal");
+});
 
 function globalSettings(
   tunnelPorts: number[],
@@ -71,6 +75,7 @@ function renderWithSWR(fallbackData: unknown) {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   reposMock.repos = [];
   reposMock.loading = false;
 });
@@ -194,6 +199,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
               defaults: {
                 tunnelPorts: [8080],
                 terminalEnabled: false,
+                dockerEnabled: false,
                 maxConcurrentChildSessions: DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
                 maxTotalChildSessions: DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
               },
@@ -257,6 +263,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
               defaults: {
                 tunnelPorts: [],
                 terminalEnabled: false,
+                dockerEnabled: false,
                 maxConcurrentChildSessions: 2,
                 maxTotalChildSessions: 7,
               },
@@ -393,6 +400,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
               defaults: {
                 tunnelPorts: [3000],
                 terminalEnabled: false,
+                dockerEnabled: false,
                 maxConcurrentChildSessions: DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
                 maxTotalChildSessions: DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
               },
@@ -416,5 +424,314 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     await user.type(inputs[1], "3000");
 
     expect(screen.getByText("Save Settings").closest("button")).toBeDisabled();
+  });
+
+  it("hides Docker control for non-Modal sandbox providers", () => {
+    vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "daytona");
+    renderWithSWR(globalSettings([]));
+    expect(screen.queryByText("Docker")).not.toBeInTheDocument();
+  });
+
+  it("preserves hidden Docker settings when saving other global settings for non-Modal providers", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "daytona");
+
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      throw new Error("unexpected fetch");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: {
+            [SETTINGS_KEY]: {
+              integrationId: "sandbox",
+              settings: { defaults: { tunnelPorts: [], dockerEnabled: true } },
+            },
+          },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    await user.click(screen.getByText("Add port"));
+    await user.type(screen.getByPlaceholderText("e.g. 3000"), "3000");
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        SETTINGS_KEY,
+        expect.objectContaining({ method: "PUT" })
+      );
+    });
+
+    const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT");
+    expect(putCall).toBeDefined();
+    const [, init] = putCall!;
+    expect(JSON.parse(String(init?.body))).toEqual({
+      settings: {
+        defaults: {
+          tunnelPorts: [3000],
+          terminalEnabled: false,
+          dockerEnabled: true,
+          maxConcurrentChildSessions: DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
+          maxTotalChildSessions: DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+        },
+      },
+    });
+  });
+
+  it("sends dockerEnabled in the global payload when enabled", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "modal");
+
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      throw new Error("unexpected fetch");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: { [SETTINGS_KEY]: globalSettings([]) },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    await user.click(screen.getByRole("switch", { name: "Docker" }));
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        SETTINGS_KEY,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({
+            settings: {
+              defaults: {
+                tunnelPorts: [],
+                terminalEnabled: false,
+                dockerEnabled: true,
+                maxConcurrentChildSessions: DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
+                maxTotalChildSessions: DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+              },
+            },
+          }),
+        })
+      );
+    });
+  });
+
+  it("lets repo Docker settings inherit without saving a dockerEnabled override", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "modal");
+    Element.prototype.scrollIntoView = vi.fn();
+    reposMock.repos = [
+      {
+        id: 1,
+        fullName: "acme/app",
+        owner: "acme",
+        name: "app",
+        description: null,
+        private: false,
+        defaultBranch: "main",
+      },
+    ];
+    const repoSettingsKey = "/api/integration-settings/sandbox/repos/acme/app";
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      throw new Error("unexpected fetch");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: {
+            [SETTINGS_KEY]: {
+              integrationId: "sandbox",
+              settings: { defaults: { tunnelPorts: [], dockerEnabled: true } },
+            },
+            [repoSettingsKey]: { integrationId: "sandbox", repo: "acme/app", settings: null },
+          },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    await user.click(screen.getByText("All Repositories (Global)"));
+    await user.click(screen.getByRole("option", { name: /app/ }));
+    expect(screen.getByLabelText("Docker")).toHaveValue("inherit");
+
+    await user.click(screen.getByText("Add port"));
+    await user.type(screen.getByPlaceholderText("e.g. 3000"), "3000");
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        repoSettingsKey,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({
+            settings: { tunnelPorts: [3000], terminalEnabled: false },
+          }),
+        })
+      );
+    });
+  });
+
+  it("clears an existing repo Docker override when switching back to inherit", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "modal");
+    Element.prototype.scrollIntoView = vi.fn();
+    reposMock.repos = [
+      {
+        id: 1,
+        fullName: "acme/app",
+        owner: "acme",
+        name: "app",
+        description: null,
+        private: false,
+        defaultBranch: "main",
+      },
+    ];
+    const repoSettingsKey = "/api/integration-settings/sandbox/repos/acme/app";
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      throw new Error("unexpected fetch");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: {
+            [SETTINGS_KEY]: {
+              integrationId: "sandbox",
+              settings: { defaults: { tunnelPorts: [], dockerEnabled: true } },
+            },
+            [repoSettingsKey]: {
+              integrationId: "sandbox",
+              repo: "acme/app",
+              settings: { tunnelPorts: [], terminalEnabled: false, dockerEnabled: false },
+            },
+          },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    await user.click(screen.getByText("All Repositories (Global)"));
+    await user.click(screen.getByRole("option", { name: /app/ }));
+    expect(screen.getByLabelText("Docker")).toHaveValue("disabled");
+
+    await user.selectOptions(screen.getByLabelText("Docker"), "inherit");
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        repoSettingsKey,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({
+            settings: { tunnelPorts: [], terminalEnabled: false },
+          }),
+        })
+      );
+    });
+  });
+
+  it("saves explicit disabled Docker override for a repo", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "modal");
+    Element.prototype.scrollIntoView = vi.fn();
+    reposMock.repos = [
+      {
+        id: 1,
+        fullName: "acme/app",
+        owner: "acme",
+        name: "app",
+        description: null,
+        private: false,
+        defaultBranch: "main",
+      },
+    ];
+    const repoSettingsKey = "/api/integration-settings/sandbox/repos/acme/app";
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      throw new Error("unexpected fetch");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: {
+            [SETTINGS_KEY]: {
+              integrationId: "sandbox",
+              settings: { defaults: { tunnelPorts: [], dockerEnabled: true } },
+            },
+            [repoSettingsKey]: { integrationId: "sandbox", repo: "acme/app", settings: null },
+          },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    await user.click(screen.getByText("All Repositories (Global)"));
+    await user.click(screen.getByRole("option", { name: /app/ }));
+    await user.selectOptions(screen.getByLabelText("Docker"), "disabled");
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        repoSettingsKey,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({
+            settings: { tunnelPorts: [], terminalEnabled: false, dockerEnabled: false },
+          }),
+        })
+      );
+    });
   });
 });

@@ -5,6 +5,7 @@ import json
 import pytest
 
 from src.sandbox.manager import SandboxManager
+from src.sandbox.settings import SandboxRuntimeSettings
 
 
 def _fake_sandbox_create(captured):
@@ -255,3 +256,25 @@ async def test_system_vars_override_user_env_vars(monkeypatch):
     env = captured["env"]
     assert env["IMAGE_BUILD_MODE"] == "true"
     assert env["SANDBOX_ID"].startswith("build-acme-my-repo-")
+
+
+@pytest.mark.asyncio
+async def test_docker_build_sandbox_sets_docker_env_and_experimental_option(monkeypatch):
+    """Docker-enabled repo image builds should use Modal's Docker sandbox option."""
+    captured = {}
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+
+    manager = SandboxManager()
+    await manager.create_build_sandbox(
+        repo_owner="acme",
+        repo_name="my-repo",
+        settings=SandboxRuntimeSettings.from_raw({"dockerEnabled": True}),
+    )
+
+    env = captured["env"]
+    assert env["OPENINSPECT_DOCKER_ENABLED"] == "true"
+    assert env["DOCKER_DATA_ROOT"] == "/opt/docker-data"
+    assert env["OPENINSPECT_SANDBOX_IMAGE_PROFILE"] == "docker"
+    assert captured["kwargs"]["experimental_options"] == {"enable_docker": True}
+    assert captured["kwargs"]["cpu"] == 4.0
+    assert captured["kwargs"]["memory"] == 8192

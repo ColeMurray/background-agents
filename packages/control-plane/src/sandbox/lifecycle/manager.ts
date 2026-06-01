@@ -10,7 +10,13 @@
  * spawn attempts within the same request.
  */
 
-import { MAX_TUNNEL_PORTS, type SandboxSettings } from "@open-inspect/shared";
+import {
+  DEFAULT_SANDBOX_IMAGE_PROFILE,
+  normalizeSandboxRuntimeSettings,
+  resolveSandboxImageProfile,
+  type SandboxImageProfile,
+  type SandboxRuntimeSettings,
+} from "@open-inspect/shared";
 import type { SandboxStatus } from "../../types";
 import type { SandboxRow, SessionRow } from "../../session/types";
 import type { McpServerConfig } from "@open-inspect/shared";
@@ -53,6 +59,7 @@ export interface SandboxCircuitBreakerInfo {
   created_at: number;
   modal_object_id: string | null;
   snapshot_image_id: string | null;
+  snapshot_image_profile: SandboxImageProfile | null;
   spawn_failure_count: number | null;
   last_spawn_failure: number | null;
 }
@@ -82,8 +89,12 @@ export interface SandboxStorage {
   updateSandboxForResume?(data: { status: SandboxStatus; createdAt: number }): void;
   /** Update sandbox Modal object ID (for snapshot API) */
   updateSandboxModalObjectId(modalObjectId: string): void;
-  /** Update sandbox snapshot image ID */
-  updateSandboxSnapshotImageId(sandboxId: string, imageId: string): void;
+  /** Update sandbox snapshot image ID and the image profile it was created from */
+  updateSandboxSnapshotImageId(
+    sandboxId: string,
+    imageId: string,
+    imageProfile: SandboxImageProfile
+  ): void;
   /** Update last activity timestamp */
   updateSandboxLastActivity(timestamp: number): void;
   /** Increment circuit breaker failure count */
@@ -204,7 +215,8 @@ export interface RepoImageLookup {
   getLatestReady(
     repoOwner: string,
     repoName: string,
-    baseBranch?: string
+    baseBranch?: string,
+    imageProfile?: SandboxImageProfile
   ): Promise<{ provider_image_id: string; base_sha: string } | null>;
 }
 
@@ -301,12 +313,17 @@ export class SandboxLifecycleManager {
       return;
     }
 
+    const session = this.storage.getSession();
+    const requestedImageProfile = session
+      ? this.resolveSessionImageProfile(session)
+      : DEFAULT_SANDBOX_IMAGE_PROFILE;
+
     // Evaluate spawn decision
     const spawnState = {
       status: (sandboxState?.status || "pending") as SandboxStatus,
       createdAt: sandboxState?.created_at || 0,
       providerObjectId: sandboxState?.modal_object_id || null,
-      snapshotImageId: sandboxState?.snapshot_image_id || null,
+      snapshotImageId: this.getCompatibleSnapshotImageId(sandboxState, requestedImageProfile),
       hasActiveWebSocket: this.wsManager.getSandboxWebSocket() !== null,
     };
 
@@ -392,6 +409,8 @@ export class SandboxLifecycleManager {
 
       const userEnvVars = await this.storage.getUserEnvVars();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
+      const sandboxSettings = this.parseSandboxRuntimeSettings(session);
+      const imageProfile = resolveSandboxImageProfile(sandboxSettings);
 
       // Look up pre-built repo image (graceful fallback on failure)
       let repoImageId: string | null = null;
@@ -401,7 +420,8 @@ export class SandboxLifecycleManager {
           const repoImage = await this.repoImageLookup.getLatestReady(
             session.repo_owner,
             session.repo_name,
-            session.base_branch
+            session.base_branch,
+            imageProfile
           );
           if (repoImage) {
             repoImageId = repoImage.provider_image_id;
@@ -426,7 +446,6 @@ export class SandboxLifecycleManager {
 
       const codeServerEnabled = session.code_server_enabled === 1;
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
-      const sandboxSettings = this.parseSandboxSettings(session);
       const createConfig: CreateSandboxConfig = {
         sessionId,
         sandboxId: expectedSandboxId,
@@ -608,7 +627,7 @@ export class SandboxLifecycleManager {
       const codeServerEnabled = session.code_server_enabled === 1;
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const mcpServers = await this.loadMcpServers(session);
-      const sandboxSettings = this.parseSandboxSettings(session);
+      const sandboxSettings = this.parseSandboxRuntimeSettings(session);
       const result = await this.provider.restoreFromSnapshot({
         snapshotImageId,
         sessionId: session.session_name || session.id,
@@ -734,7 +753,7 @@ export class SandboxLifecycleManager {
         sandboxId: sandbox.modal_sandbox_id,
         timeoutSeconds,
         codeServerEnabled: session.code_server_enabled === 1,
-        sandboxSettings: this.parseSandboxSettings(session),
+        sandboxSettings: this.parseSandboxRuntimeSettings(session),
       });
 
       if (!result.success) {
@@ -826,10 +845,12 @@ export class SandboxLifecycleManager {
       });
 
       if (result.success && result.imageId) {
-        this.storage.updateSandboxSnapshotImageId(sandbox.id, result.imageId);
+        const imageProfile = this.resolveSessionImageProfile(session);
+        this.storage.updateSandboxSnapshotImageId(sandbox.id, result.imageId, imageProfile);
         this.log.info("Snapshot saved", {
           event: "sandbox.snapshot_saved",
           image_id: result.imageId,
+          image_profile: imageProfile,
           reason,
         });
         this.broadcaster.broadcast({
@@ -1184,33 +1205,40 @@ export class SandboxLifecycleManager {
     });
   }
 
-  private parseSandboxSettings(session: SessionRow): SandboxSettings {
+  private parseSandboxRuntimeSettings(session: SessionRow): SandboxRuntimeSettings {
     if (!session.sandbox_settings) return {};
     try {
       const parsed: unknown = JSON.parse(session.sandbox_settings);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-
-      const settings = parsed as Record<string, unknown>;
-      const result: SandboxSettings = {};
-
-      // Validate tunnelPorts at the boundary — data may come from untrusted callers
-      if (settings.tunnelPorts !== undefined) {
-        if (!Array.isArray(settings.tunnelPorts)) return {};
-        const valid = settings.tunnelPorts.filter(
-          (p: unknown) => typeof p === "number" && Number.isInteger(p) && p >= 1 && p <= 65535
-        );
-        result.tunnelPorts = valid.slice(0, MAX_TUNNEL_PORTS);
-      }
-
-      if (typeof settings.terminalEnabled === "boolean") {
-        result.terminalEnabled = settings.terminalEnabled;
-      }
-
-      return result;
+      return normalizeSandboxRuntimeSettings(parsed);
     } catch {
       this.log.warn("Failed to parse sandbox_settings, using defaults");
       return {};
     }
+  }
+
+  private resolveSessionImageProfile(session: SessionRow): SandboxImageProfile {
+    return resolveSandboxImageProfile(this.parseSandboxRuntimeSettings(session));
+  }
+
+  private getCompatibleSnapshotImageId(
+    sandboxState: SandboxCircuitBreakerInfo | null,
+    requestedImageProfile: SandboxImageProfile
+  ): string | null {
+    if (!sandboxState?.snapshot_image_id) return null;
+
+    const snapshotImageProfile =
+      sandboxState.snapshot_image_profile ?? DEFAULT_SANDBOX_IMAGE_PROFILE;
+    if (snapshotImageProfile === requestedImageProfile) {
+      return sandboxState.snapshot_image_id;
+    }
+
+    this.log.info("Ignoring snapshot image with mismatched profile", {
+      event: "sandbox.snapshot_profile_mismatch",
+      snapshot_image_id: sandboxState.snapshot_image_id,
+      snapshot_image_profile: snapshotImageProfile,
+      requested_image_profile: requestedImageProfile,
+    });
+    return null;
   }
 
   private async storeAndBroadcastTunnelUrls(

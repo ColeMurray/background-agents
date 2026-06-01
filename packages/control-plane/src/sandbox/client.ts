@@ -5,7 +5,7 @@
  * All requests are authenticated using HMAC-signed tokens.
  */
 
-import { generateInternalToken, type SandboxSettings } from "@open-inspect/shared";
+import { generateInternalToken, type SandboxRuntimeSettings } from "@open-inspect/shared";
 import type { McpServerConfig } from "@open-inspect/shared";
 import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";
@@ -66,7 +66,7 @@ export interface CreateSandboxRequest {
   codeServerEnabled?: boolean;
   agentSlackNotifyEnabled?: boolean;
   mcpServers?: McpServerConfig[];
-  sandboxSettings?: SandboxSettings;
+  sandboxSettings?: SandboxRuntimeSettings;
 }
 
 export interface CreateSandboxResponse {
@@ -96,7 +96,7 @@ export interface RestoreSandboxRequest {
   codeServerEnabled?: boolean;
   agentSlackNotifyEnabled?: boolean;
   mcpServers?: McpServerConfig[];
-  sandboxSettings?: SandboxSettings;
+  sandboxSettings?: SandboxRuntimeSettings;
 }
 
 export interface RestoreSandboxResponse {
@@ -140,6 +140,7 @@ export interface BuildRepoImageRequest {
   buildId: string;
   callbackUrl: string;
   userEnvVars?: Record<string, string>;
+  sandboxSettings?: SandboxRuntimeSettings;
 }
 
 export interface BuildRepoImageResponse {
@@ -561,6 +562,7 @@ export class ModalClient {
           build_id: request.buildId,
           callback_url: request.callbackUrl,
           user_env_vars: request.userEnvVars,
+          sandbox_settings: request.sandboxSettings ?? null,
         }),
       });
 

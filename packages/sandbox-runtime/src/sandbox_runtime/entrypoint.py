@@ -30,6 +30,7 @@ from .constants import (
     TUNNEL_ENV_FILE_PATH,
 )
 from .log_config import configure_logging, get_logger
+from .runtime_services import RuntimeServices
 
 configure_logging()
 
@@ -151,6 +152,7 @@ class SandboxSupervisor:
             sandbox_id=self.sandbox_id,
             session_id=session_id,
         )
+        self.runtime_services = RuntimeServices.from_env(self.log)
 
     @property
     def base_branch(self) -> str:
@@ -998,6 +1000,10 @@ class SandboxSupervisor:
         ttyd_proxy_restart_count = 0
 
         while not self.shutdown_event.is_set():
+            if not await self.runtime_services.ensure_healthy(self._report_fatal_error):
+                self.shutdown_event.set()
+                break
+
             # Check OpenCode process
             if self.opencode_process and self.opencode_process.returncode is not None:
                 exit_code = self.opencode_process.returncode
@@ -1445,14 +1451,17 @@ class SandboxSupervisor:
                     self.log.info("git.sync_complete", head_sha=head_sha)
             self.git_sync_complete.set()
 
-            # Phase 2: Run setup script only for fresh or build boots.
+            # Phase 2: Start Docker before repository hooks when requested.
+            await self.runtime_services.start_before_hooks()
+
+            # Phase 3: Run setup script only for fresh or build boots.
             setup_success: bool | None = None
             if self.boot_mode in ("fresh", "build"):
                 setup_success = await self.run_setup_script()
                 if image_build_mode and not setup_success:
                     raise RuntimeError("setup hook failed in build mode")
 
-            # Phase 3: Run runtime start hook for all non-build boots. Wait for
+            # Phase 4: Run runtime start hook for all non-build boots. Wait for
             # tunnel URLs first so dev servers booted by start.sh see fresh data.
             start_success: bool | None = None
             if self.boot_mode != "build":
@@ -1472,7 +1481,7 @@ class SandboxSupervisor:
                 await self.shutdown_event.wait()
                 return
 
-            # Phase 3.5: Start optional sidecars (best-effort, non-fatal)
+            # Phase 4.5: Start optional sidecars (best-effort, non-fatal)
             for sidecar_name, starter in (
                 ("code_server", self.start_code_server),
                 ("ttyd", self.start_ttyd),
@@ -1492,11 +1501,11 @@ class SandboxSupervisor:
                     except Exception as e:
                         self.log.warn("ttyd_proxy.start_failed", exc=e)
 
-            # Phase 4: Start OpenCode server (in repo directory)
+            # Phase 5: Start OpenCode server (in repo directory)
             await self.start_opencode()
             opencode_ready = True
 
-            # Phase 5: Start bridge (after OpenCode is ready)
+            # Phase 6: Start bridge (after OpenCode is ready)
             await self.start_bridge()
 
             # Emit sandbox.startup wide event
@@ -1516,7 +1525,7 @@ class SandboxSupervisor:
                 outcome="success",
             )
 
-            # Phase 6: Monitor processes
+            # Phase 7: Monitor processes
             await self.monitor_processes()
 
         except Exception as e:
@@ -1534,6 +1543,8 @@ class SandboxSupervisor:
     async def shutdown(self) -> None:
         """Graceful shutdown of all processes."""
         self.log.info("supervisor.shutdown_start")
+
+        await self.runtime_services.stop()
 
         # Terminate bridge first
         if self.bridge_process and self.bridge_process.returncode is None:

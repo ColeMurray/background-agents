@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ChevronDownIcon, CheckIcon, PlusIcon } from "@/components/ui/icons";
 import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
+import { getPublicSandboxProvider } from "@/lib/sandbox-provider";
 import useSWR from "swr";
 import type { SandboxSettings } from "@open-inspect/shared";
 import {
@@ -13,6 +14,14 @@ import {
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
   MAX_TUNNEL_PORTS,
 } from "@open-inspect/shared";
+import {
+  buildSettingsPayload,
+  isPositiveInteger,
+  normalizePorts,
+  resolveDockerEnabled,
+  resolveDockerMode,
+  type DockerMode,
+} from "./sandbox-settings-model";
 
 const GLOBAL_SCOPE = "__global__";
 
@@ -28,14 +37,6 @@ interface RepoSettingsResponse {
 }
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
-
-function isValidPort(value: string): boolean {
-  return /^\d+$/.test(value) && Number(value) >= 1 && Number(value) <= 65535;
-}
-
-function isPositiveInteger(value: string): boolean {
-  return /^\d+$/.test(value) && Number(value) >= 1;
-}
 
 function SandboxSettingsEditor({
   scope,
@@ -65,6 +66,7 @@ function SandboxSettingsEditor({
     ? (data as GlobalSettingsResponse | undefined)?.settings?.defaults
     : globalData?.settings?.defaults;
   const repoSettings = isGlobal ? undefined : (data as RepoSettingsResponse | undefined)?.settings;
+  const canEditDockerSettings = getPublicSandboxProvider() === "modal";
 
   const currentPorts: number[] = isGlobal
     ? ((data as GlobalSettingsResponse)?.settings?.defaults?.tunnelPorts ?? [])
@@ -73,6 +75,7 @@ function SandboxSettingsEditor({
   const currentTerminalEnabled: boolean = isGlobal
     ? ((data as GlobalSettingsResponse)?.settings?.defaults?.terminalEnabled ?? false)
     : ((data as RepoSettingsResponse)?.settings?.terminalEnabled ?? false);
+  const currentDockerMode = resolveDockerMode({ isGlobal, globalDefaults, repoSettings });
 
   const currentMaxConcurrentChildSessions: number = isGlobal
     ? (globalDefaults?.maxConcurrentChildSessions ?? DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS)
@@ -88,6 +91,7 @@ function SandboxSettingsEditor({
 
   const [portRows, setPortRows] = useState<string[] | null>(null);
   const [terminalEnabled, setTerminalEnabled] = useState<boolean | null>(null);
+  const [dockerMode, setDockerMode] = useState<DockerMode | null>(null);
   const [maxConcurrentChildSessions, setMaxConcurrentChildSessions] = useState<string | null>(null);
   const [maxTotalChildSessions, setMaxTotalChildSessions] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -96,6 +100,8 @@ function SandboxSettingsEditor({
 
   // Resolve terminal toggle: local edit or server state
   const resolvedTerminalEnabled = terminalEnabled ?? currentTerminalEnabled;
+  const resolvedDockerMode = dockerMode ?? currentDockerMode;
+  const resolvedDockerEnabled = resolveDockerEnabled(resolvedDockerMode, globalDefaults);
 
   // Use server state unless user is editing
   const rows = portRows ?? currentPorts.map(String);
@@ -118,16 +124,6 @@ function SandboxSettingsEditor({
   const handleRemoveRow = (index: number) => {
     const updated = rows.filter((_, i) => i !== index);
     setPortRows(updated);
-  };
-
-  /** Trim, filter empty, validate, parse to number, dedupe. */
-  const normalizePorts = (input: string[]): { ports: number[]; invalid: string[] } => {
-    const nonEmpty = input.filter((r) => r.trim() !== "");
-    const invalid = nonEmpty.filter((r) => !isValidPort(r.trim()));
-    const ports = [
-      ...new Set(nonEmpty.filter((r) => isValidPort(r.trim())).map((r) => Number(r.trim()))),
-    ];
-    return { ports, invalid };
   };
 
   const handleSave = useCallback(async () => {
@@ -153,24 +149,19 @@ function SandboxSettingsEditor({
       const existingEnabledRepos = isGlobal
         ? (data as GlobalSettingsResponse)?.settings?.enabledRepos
         : undefined;
-      const settingsPayload: SandboxSettings = {
-        tunnelPorts: ports,
+      const settingsPayload = buildSettingsPayload({
+        baseSettings: isGlobal ? globalDefaults : repoSettings,
+        isGlobal,
+        ports,
         terminalEnabled: resolvedTerminalEnabled,
-      };
-      if (
-        isGlobal ||
-        maxConcurrentChildSessions !== null ||
-        repoSettings?.maxConcurrentChildSessions !== undefined
-      ) {
-        settingsPayload.maxConcurrentChildSessions = Number(resolvedMaxConcurrentChildSessions);
-      }
-      if (
-        isGlobal ||
-        maxTotalChildSessions !== null ||
-        repoSettings?.maxTotalChildSessions !== undefined
-      ) {
-        settingsPayload.maxTotalChildSessions = Number(resolvedMaxTotalChildSessions);
-      }
+        dockerMode: resolvedDockerMode,
+        canEditDockerSettings,
+        maxConcurrentChildSessions: resolvedMaxConcurrentChildSessions,
+        maxTotalChildSessions: resolvedMaxTotalChildSessions,
+        maxConcurrentChildSessionsEdited: maxConcurrentChildSessions !== null,
+        maxTotalChildSessionsEdited: maxTotalChildSessions !== null,
+        repoSettings,
+      });
       const body = isGlobal
         ? { settings: { defaults: settingsPayload, enabledRepos: existingEnabledRepos } }
         : { settings: settingsPayload };
@@ -189,6 +180,7 @@ function SandboxSettingsEditor({
       await mutate();
       setPortRows(null);
       setTerminalEnabled(null);
+      setDockerMode(null);
       setMaxConcurrentChildSessions(null);
       setMaxTotalChildSessions(null);
       setSuccess(true);
@@ -204,19 +196,23 @@ function SandboxSettingsEditor({
     apiUrl,
     mutate,
     data,
+    globalDefaults,
     resolvedTerminalEnabled,
+    resolvedDockerMode,
+    canEditDockerSettings,
     resolvedMaxConcurrentChildSessions,
     resolvedMaxTotalChildSessions,
     maxConcurrentChildSessions,
     maxTotalChildSessions,
-    repoSettings?.maxConcurrentChildSessions,
-    repoSettings?.maxTotalChildSessions,
+    repoSettings,
   ]);
 
   const hasPortChanges =
     portRows !== null &&
     JSON.stringify(normalizePorts(portRows).ports) !== JSON.stringify(currentPorts);
   const hasTerminalChange = terminalEnabled !== null && terminalEnabled !== currentTerminalEnabled;
+  const hasDockerChange =
+    canEditDockerSettings && dockerMode !== null && dockerMode !== currentDockerMode;
   const hasConcurrentLimitChange =
     maxConcurrentChildSessions !== null &&
     maxConcurrentChildSessions !== String(currentMaxConcurrentChildSessions);
@@ -224,7 +220,11 @@ function SandboxSettingsEditor({
     maxTotalChildSessions !== null &&
     maxTotalChildSessions !== String(currentMaxTotalChildSessions);
   const hasChanges =
-    hasPortChanges || hasTerminalChange || hasConcurrentLimitChange || hasTotalLimitChange;
+    hasPortChanges ||
+    hasTerminalChange ||
+    hasDockerChange ||
+    hasConcurrentLimitChange ||
+    hasTotalLimitChange;
 
   if (isLoading || isLoadingGlobal) {
     return <p className="text-sm text-muted-foreground">Loading...</p>;
@@ -258,6 +258,48 @@ function SandboxSettingsEditor({
           </button>
         </div>
       </div>
+
+      {canEditDockerSettings && (
+        <div className="max-w-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <label className="block text-sm font-medium text-foreground">Docker</label>
+              <p className="text-xs text-muted-foreground">
+                Enable Docker Engine and Docker Compose in Modal sandboxes.
+              </p>
+            </div>
+            {isGlobal ? (
+              <button
+                type="button"
+                role="switch"
+                aria-label="Docker"
+                aria-checked={resolvedDockerEnabled}
+                onClick={() => setDockerMode(resolvedDockerEnabled ? "disabled" : "enabled")}
+                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+                  resolvedDockerEnabled ? "bg-accent" : "bg-muted"
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${
+                    resolvedDockerEnabled ? "translate-x-4" : "translate-x-0"
+                  }`}
+                />
+              </button>
+            ) : (
+              <select
+                aria-label="Docker"
+                value={resolvedDockerMode}
+                onChange={(e) => setDockerMode(e.target.value as DockerMode)}
+                className="h-8 rounded border border-border bg-input px-2 text-sm text-foreground"
+              >
+                <option value="inherit">Inherit</option>
+                <option value="enabled">Enabled</option>
+                <option value="disabled">Disabled</option>
+              </select>
+            )}
+          </div>
+        </div>
+      )}
 
       <div>
         <div className="flex items-center justify-between max-w-sm mb-1.5">

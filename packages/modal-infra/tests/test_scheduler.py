@@ -159,6 +159,20 @@ class TestShouldRebuild:
         result = _should_rebuild("acme", "repo", "abc123", images)
         assert result is True
 
+    def test_rebuild_when_only_default_image_exists_for_docker_profile(self):
+        """Docker profile rebuilds require a Docker-profile ready image."""
+        images = [
+            {
+                "repo_owner": "acme",
+                "repo_name": "repo",
+                "status": "ready",
+                "base_sha": "abc123",
+                "image_profile": "default",
+            }
+        ]
+        result = _should_rebuild("acme", "repo", "abc123", images, image_profile="docker")
+        assert result is True
+
 
 class TestRebuildRepoImages:
     """Test the rebuild_repo_images cron function (integration-level with mocks)."""
@@ -206,7 +220,9 @@ class TestRebuildRepoImages:
             "MODAL_API_SECRET": "test-secret",
         }
 
-        mock_enabled = {"repos": [{"repoOwner": "acme", "repoName": "repo"}]}
+        mock_enabled = {
+            "repos": [{"repoOwner": "acme", "repoName": "repo", "imageProfile": "docker"}]
+        }
         mock_status = {
             "images": [
                 {
@@ -265,6 +281,7 @@ class TestRebuildRepoImages:
         trigger_calls = [c for c in mock_post.call_args_list if "trigger" in str(c)]
         assert len(trigger_calls) == 1
         assert "acme/repo" in str(trigger_calls[0])
+        assert len(trigger_calls[0].args) == 1
 
     @pytest.mark.asyncio
     async def test_skips_build_when_sha_matches(self):
@@ -380,3 +397,46 @@ class TestRebuildRepoImages:
 
         cleanup_calls = [c for c in mock_post.call_args_list if "cleanup" in str(c)]
         assert len(cleanup_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_skips_repo_with_invalid_image_profile(self):
+        env = {
+            "CONTROL_PLANE_URL": "https://cp.test",
+            "MODAL_API_SECRET": "test-secret",
+        }
+
+        async def mock_get_side_effect(url, **kwargs):
+            if "enabled-repos" in url:
+                return {
+                    "repos": [{"repoOwner": "acme", "repoName": "repo", "imageProfile": "bogus"}]
+                }
+            if "status" in url:
+                return {"images": []}
+            return {}
+
+        async def mock_post_side_effect(url, payload=None, **kwargs):
+            return {"ok": True, "markedFailed": 0, "deleted": 0}
+
+        with (
+            patch.dict("os.environ", env, clear=False),
+            patch(
+                "src.scheduler.image_builder._api_get",
+                new_callable=AsyncMock,
+                side_effect=mock_get_side_effect,
+            ),
+            patch(
+                "src.scheduler.image_builder._api_post",
+                new_callable=AsyncMock,
+                side_effect=mock_post_side_effect,
+            ) as mock_post,
+            patch(
+                "sandbox_runtime.auth.github_app.generate_installation_token",
+                return_value="gh-token",
+            ),
+        ):
+            from src.scheduler.image_builder import rebuild_repo_images
+
+            await rebuild_repo_images.local()
+
+        trigger_calls = [c for c in mock_post.call_args_list if "trigger" in str(c)]
+        assert trigger_calls == []

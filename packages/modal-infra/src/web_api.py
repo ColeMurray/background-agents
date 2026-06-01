@@ -151,6 +151,7 @@ async def api_create_sandbox(
         # Import types and manager directly
         from .sandbox import SessionConfig
         from .sandbox.manager import SandboxConfig, SandboxManager
+        from .sandbox.settings import SandboxRuntimeSettings
 
         manager = SandboxManager()
 
@@ -183,7 +184,7 @@ async def api_create_sandbox(
             repo_image_sha=request.get("repo_image_sha") or None,
             code_server_enabled=bool(request.get("code_server_enabled", False)),
             agent_slack_notify_enabled=bool(request.get("agent_slack_notify_enabled", False)),
-            settings=request.get("sandbox_settings") or None,
+            settings=SandboxRuntimeSettings.from_raw(request.get("sandbox_settings")),
         )
 
         handle = await manager.create_sandbox(config)
@@ -459,11 +460,13 @@ async def api_restore_sandbox(
 
     try:
         from .sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxManager
+        from .sandbox.settings import SandboxRuntimeSettings
 
         session_config = request.get("session_config", {})
         sandbox_id = request.get("sandbox_id")
         sandbox_auth_token = request.get("sandbox_auth_token", "")
         user_env_vars = request.get("user_env_vars") or None
+        sandbox_settings = SandboxRuntimeSettings.from_raw(request.get("sandbox_settings"))
         timeout_seconds = int(request.get("timeout_seconds", DEFAULT_SANDBOX_TIMEOUT_SECONDS))
 
         manager = SandboxManager()
@@ -471,7 +474,6 @@ async def api_restore_sandbox(
 
         code_server_enabled = bool(request.get("code_server_enabled", False))
         agent_slack_notify_enabled = bool(request.get("agent_slack_notify_enabled", False))
-        sandbox_settings = request.get("sandbox_settings") or None
 
         # Restore sandbox from snapshot
         handle = await manager.restore_from_snapshot(
@@ -570,6 +572,7 @@ async def api_build_repo_image(
         build_id = request.get("build_id", "")
         callback_url = request.get("callback_url", "")
         user_env_vars = request.get("user_env_vars") or None
+        sandbox_settings = request.get("sandbox_settings") or None
 
         if not repo_owner or not repo_name:
             raise HTTPException(status_code=400, detail="repo_owner and repo_name are required")
@@ -585,6 +588,7 @@ async def api_build_repo_image(
             callback_url=callback_url,
             build_id=build_id,
             user_env_vars=user_env_vars,
+            sandbox_settings=sandbox_settings,
         )
 
         return {

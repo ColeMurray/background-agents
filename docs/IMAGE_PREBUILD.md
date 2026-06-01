@@ -73,6 +73,10 @@ The build process runs the same setup steps that a normal session would:
 Everything your setup script installs — dependencies, build artifacts, caches — is captured in the
 snapshot.
 
+If Docker is enabled for the repository, the build sandbox starts the Docker daemon before
+`.openinspect/setup.sh` runs. Docker images, volumes, layers, and BuildKit cache under
+`/opt/docker-data` are included in the saved repo image.
+
 ### What Happens When You Start a Session
 
 When you create a new session for a repository with a pre-built image:
@@ -101,10 +105,26 @@ are some tips:
 - **Warm caches** — Running your test suite once during setup means cached files are available for
   subsequent runs in the session
 - **Pre-download large resources** — Models, datasets, or any large files the agent might need
+- **Pre-pull or build Docker images** — `docker compose pull` or `docker compose build` can warm
+  image layers for Docker-enabled repositories
 
 Don't worry about build duration. Builds run in the background and users always get the last
 _successfully_ built image. A 10-minute build is worthwhile if it saves 10 minutes on every session
 start.
+
+### Docker-Enabled Images
+
+Docker-enabled and non-Docker repo images are tracked separately. If you turn Docker on for a repo,
+Open-Inspect will build or select an image that was created with Docker support instead of reusing a
+non-Docker image.
+
+For Docker Compose projects, keep long-running services in `.openinspect/start.sh` and use
+`.openinspect/setup.sh` for install, build, pull, and cache-warming work. If setup starts containers
+as part of a build, stop them before the script exits, for example with `docker compose down`, so
+the snapshot contains reusable image and volume data without stale running container state.
+
+Container ports are not automatically public. Add any browser-facing service ports to the sandbox
+tunnel port settings, then start the matching Compose services from `.openinspect/start.sh`.
 
 ---
 

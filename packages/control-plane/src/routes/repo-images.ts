@@ -8,6 +8,8 @@
  * - Maintenance operations (stale builds, cleanup)
  */
 
+import { normalizeSandboxRuntimeSettings, resolveSandboxImageProfile } from "@open-inspect/shared";
+
 import { RepoImageStore } from "../db/repo-images";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import { GlobalSecretsStore } from "../db/global-secrets";
@@ -15,6 +17,10 @@ import { RepoSecretsStore } from "../db/repo-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
 import { createModalClient } from "../sandbox/client";
 import { isModalSandboxBackend } from "../sandbox/provider-name";
+import {
+  resolveSandboxSettings,
+  resolveSandboxSettingsForRepos,
+} from "../session/integration-settings-resolution";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
 import {
@@ -205,6 +211,11 @@ async function handleTriggerBuild(
   const now = Date.now();
   const buildId = `img-${owner}-${name}-${now}`;
 
+  const sandboxSettings = normalizeSandboxRuntimeSettings(
+    await resolveSandboxSettings(env.DB, owner, name)
+  );
+  const imageProfile = resolveSandboxImageProfile(sandboxSettings);
+
   try {
     // Register the build in D1
     await store.registerBuild({
@@ -212,6 +223,7 @@ async function handleTriggerBuild(
       repoOwner: owner,
       repoName: name,
       baseBranch: "main",
+      imageProfile,
     });
 
     // Construct callback URL
@@ -278,6 +290,7 @@ async function handleTriggerBuild(
         buildId,
         callbackUrl,
         userEnvVars,
+        sandboxSettings,
       },
       { trace_id: ctx.trace_id, request_id: ctx.request_id }
     );
@@ -286,6 +299,7 @@ async function handleTriggerBuild(
       build_id: buildId,
       repo_owner: owner,
       repo_name: name,
+      image_profile: imageProfile,
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
@@ -520,7 +534,14 @@ async function handleGetEnabledRepos(
 
   try {
     const repos = await metadataStore.getImageBuildEnabledRepos();
-    return json({ repos });
+    const sandboxSettings = (await resolveSandboxSettingsForRepos(env.DB, repos)).map((settings) =>
+      normalizeSandboxRuntimeSettings(settings)
+    );
+    const reposWithSettings = repos.map((repo, index) => ({
+      ...repo,
+      imageProfile: resolveSandboxImageProfile(sandboxSettings[index]),
+    }));
+    return json({ repos: reposWithSettings });
   } catch (e) {
     logger.error("repo_image.enabled_repos_error", {
       error: e instanceof Error ? e.message : String(e),

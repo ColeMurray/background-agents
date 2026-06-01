@@ -88,4 +88,28 @@ describe("ModalClient", () => {
       "https://acme-prod-web--open-inspect-api-health.modal.run"
     );
   });
+
+  it("includes sandbox settings in repo-image build requests", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({ success: true, data: { build_id: "img-1", status: "building" } }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }
+      )
+    );
+
+    const client = createModalClient("secret", "acme");
+    await client.buildRepoImage({
+      repoOwner: "acme",
+      repoName: "repo",
+      buildId: "img-1",
+      callbackUrl: "https://cp.example/repo-images/build-complete",
+      sandboxSettings: { dockerEnabled: true },
+    });
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.sandbox_settings).toEqual({ dockerEnabled: true });
+  });
 });

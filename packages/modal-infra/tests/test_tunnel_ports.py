@@ -5,11 +5,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from sandbox_runtime.constants import (
+    CODE_SERVER_PORT,
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
     TTYD_PROXY_PORT,
     TUNNEL_ENV_FILE_PATH,
 )
-from src.sandbox.manager import CODE_SERVER_PORT, SandboxConfig, SandboxManager
+from src.sandbox.manager import SandboxConfig, SandboxManager
+from src.sandbox.settings import RuntimePortSettings, SandboxRuntimeSettings, validate_tunnel_ports
+
+
+def _settings(raw: dict | None = None) -> SandboxRuntimeSettings:
+    return SandboxRuntimeSettings.from_raw(raw)
 
 
 def _mock_sandbox_with_open() -> tuple[MagicMock, AsyncMock]:
@@ -303,7 +309,7 @@ class TestExpectedTunnelPortsEnvVar:
             SandboxConfig(
                 repo_owner="acme",
                 repo_name="repo",
-                settings={"tunnelPorts": [3000, 5173]},
+                settings=_settings({"tunnelPorts": [3000, 5173]}),
             )
         )
 
@@ -368,74 +374,73 @@ class TestExpectedTunnelPortsEnvVar:
         await manager.restore_from_snapshot(
             snapshot_image_id="img-abc",
             session_config={"repo_owner": "acme", "repo_name": "repo"},
-            settings={"tunnelPorts": [3000]},
+            settings=_settings({"tunnelPorts": [3000]}),
         )
 
         assert captured["env"][EXPECTED_TUNNEL_PORTS_ENV_VAR] == "3000"
 
 
 class TestCollectExposedPorts:
-    """SandboxManager._collect_exposed_ports tests."""
+    """RuntimePortSettings tests."""
 
     def test_no_ports_when_no_settings(self):
-        exposed, tunnel = SandboxManager._collect_exposed_ports(False, False, None)
-        assert exposed == []
-        assert tunnel == []
+        ports = RuntimePortSettings.from_settings(_settings(), False)
+        assert ports.exposed_ports == ()
+        assert ports.tunnel_ports == ()
 
     def test_code_server_only(self):
-        exposed, tunnel = SandboxManager._collect_exposed_ports(True, False, None)
-        assert exposed == [CODE_SERVER_PORT]
-        assert tunnel == []
+        ports = RuntimePortSettings.from_settings(_settings(), True)
+        assert ports.exposed_ports == (CODE_SERVER_PORT,)
+        assert ports.tunnel_ports == ()
 
     def test_tunnel_ports_only(self):
-        exposed, tunnel = SandboxManager._collect_exposed_ports(
-            False, False, {"tunnelPorts": [3000, 5173]}
-        )
-        assert exposed == [3000, 5173]
-        assert tunnel == [3000, 5173]
+        ports = RuntimePortSettings.from_settings(_settings({"tunnelPorts": [3000, 5173]}), False)
+        assert ports.exposed_ports == (3000, 5173)
+        assert ports.tunnel_ports == (3000, 5173)
 
     def test_combined_code_server_and_tunnels(self):
-        exposed, tunnel = SandboxManager._collect_exposed_ports(
-            True, False, {"tunnelPorts": [3000]}
-        )
-        assert exposed == [CODE_SERVER_PORT, 3000]
-        assert tunnel == [3000]
+        ports = RuntimePortSettings.from_settings(_settings({"tunnelPorts": [3000]}), True)
+        assert ports.exposed_ports == (CODE_SERVER_PORT, 3000)
+        assert ports.tunnel_ports == (3000,)
 
     def test_terminal_only(self):
-        exposed, tunnel = SandboxManager._collect_exposed_ports(False, True, None)
-        assert exposed == [TTYD_PROXY_PORT]
-        assert tunnel == []
+        ports = RuntimePortSettings.from_settings(_settings({"terminalEnabled": True}), False)
+        assert ports.exposed_ports == (TTYD_PROXY_PORT,)
+        assert ports.tunnel_ports == ()
 
     def test_deduplicates_ttyd_port_from_tunnels(self):
-        exposed, tunnel = SandboxManager._collect_exposed_ports(
-            False, True, {"tunnelPorts": [TTYD_PROXY_PORT, 3000]}
+        ports = RuntimePortSettings.from_settings(
+            _settings({"terminalEnabled": True, "tunnelPorts": [TTYD_PROXY_PORT, 3000]}), False
         )
-        assert exposed == [TTYD_PROXY_PORT, 3000]
-        assert tunnel == [3000]
+        assert ports.exposed_ports == (TTYD_PROXY_PORT, 3000)
+        assert ports.tunnel_ports == (3000,)
 
     def test_deduplicates_code_server_port_from_tunnels(self):
-        exposed, tunnel = SandboxManager._collect_exposed_ports(
-            True, False, {"tunnelPorts": [CODE_SERVER_PORT, 3000]}
+        ports = RuntimePortSettings.from_settings(
+            _settings({"tunnelPorts": [CODE_SERVER_PORT, 3000]}), True
         )
-        assert exposed == [CODE_SERVER_PORT, 3000]
-        assert tunnel == [3000]
+        assert ports.exposed_ports == (CODE_SERVER_PORT, 3000)
+        assert ports.tunnel_ports == (3000,)
 
 
 class TestValidatePorts:
-    """SandboxManager._validate_ports tests."""
+    """validate_tunnel_ports tests."""
 
     def test_accepts_valid_ports(self):
-        assert SandboxManager._validate_ports([80, 3000, 65535]) == [80, 3000, 65535]
+        assert validate_tunnel_ports([80, 3000, 65535]) == (80, 3000, 65535)
 
     def test_rejects_out_of_range(self):
-        assert SandboxManager._validate_ports([0, -1, 65536, 3000]) == [3000]
+        assert validate_tunnel_ports([0, -1, 65536, 3000]) == (3000,)
 
     def test_rejects_non_integers(self):
-        assert SandboxManager._validate_ports(["3000", 3.5, None, 8080]) == [8080]
+        assert validate_tunnel_ports(["3000", 3.5, None, 8080]) == (8080,)
+
+    def test_rejects_boolean_ports(self):
+        assert validate_tunnel_ports([True, False, 8080]) == (8080,)
 
     def test_caps_at_ten(self):
         ports = list(range(1, 20))
-        assert len(SandboxManager._validate_ports(ports)) == 10
+        assert len(validate_tunnel_ports(ports)) == 10
 
     def test_empty_list(self):
-        assert SandboxManager._validate_ports([]) == []
+        assert validate_tunnel_ports([]) == ()

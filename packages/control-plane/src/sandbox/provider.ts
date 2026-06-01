@@ -5,7 +5,7 @@
  * enabling unit testing and future provider support.
  */
 
-import type { SandboxSettings } from "@open-inspect/shared";
+import type { SandboxRuntimeSettings } from "@open-inspect/shared";
 import type { CorrelationContext } from "../logger";
 import type { McpServerConfig } from "@open-inspect/shared";
 
@@ -73,8 +73,8 @@ export interface CreateSandboxConfig {
   agentSlackNotifyEnabled?: boolean;
   /** MCP servers to inject into the agent session */
   mcpServers?: McpServerConfig[];
-  /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
-  sandboxSettings?: SandboxSettings;
+  /** Runtime sandbox settings resolved from integration settings */
+  sandboxSettings?: SandboxRuntimeSettings;
 }
 
 /**
@@ -135,8 +135,8 @@ export interface RestoreConfig {
   codeServerEnabled?: boolean;
   /** Resolved fresh on each restore — see CreateSandboxConfig. */
   agentSlackNotifyEnabled?: boolean;
-  /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
-  sandboxSettings?: SandboxSettings;
+  /** Runtime sandbox settings resolved from integration settings */
+  sandboxSettings?: SandboxRuntimeSettings;
 }
 
 /**
@@ -201,8 +201,8 @@ export interface ResumeConfig {
   timeoutSeconds?: number;
   /** Whether code-server should be exposed */
   codeServerEnabled?: boolean;
-  /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
-  sandboxSettings?: SandboxSettings;
+  /** Runtime sandbox settings resolved from integration settings */
+  sandboxSettings?: SandboxRuntimeSettings;
   /** Correlation context for downstream tracing */
   correlation?: CorrelationContext;
 }

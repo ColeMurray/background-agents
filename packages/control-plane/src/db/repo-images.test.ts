@@ -11,22 +11,24 @@ type RepoImageRow = {
   status: string;
   build_duration_seconds: number | null;
   error_message: string | null;
+  image_profile: "default" | "docker";
   created_at: number;
 };
 
 const QUERY_PATTERNS = {
   INSERT_BUILD: /^INSERT INTO repo_images/,
-  SELECT_BY_ID: /^SELECT repo_owner, repo_name, base_branch FROM repo_images WHERE id = \?$/,
+  SELECT_BY_ID:
+    /^SELECT repo_owner, repo_name, base_branch, image_profile FROM repo_images WHERE id = \?$/,
   SELECT_READY_FOR_REPO:
-    /^SELECT id, provider_image_id FROM repo_images WHERE repo_owner = \? AND repo_name = \? AND base_branch = \? AND status = 'ready'$/,
+    /^SELECT id, provider_image_id FROM repo_images WHERE repo_owner = \? AND repo_name = \? AND base_branch = \? AND image_profile = \? AND status = 'ready'$/,
   UPDATE_READY:
     /^UPDATE repo_images SET status = 'ready', provider_image_id = \?, base_sha = \?, build_duration_seconds = \? WHERE id = \?$/,
   DELETE_BY_ID: /^DELETE FROM repo_images WHERE id = \?$/,
   UPDATE_FAILED: /^UPDATE repo_images SET status = 'failed', error_message = \? WHERE id = \?$/,
   SELECT_LATEST_READY:
-    /^SELECT ri\.\* FROM repo_images ri INNER JOIN repo_metadata rm ON ri\.repo_owner = rm\.repo_owner AND ri\.repo_name = rm\.repo_name WHERE ri\.repo_owner = \? AND ri\.repo_name = \? AND ri\.status = 'ready' AND rm\.image_build_enabled = 1 ORDER BY ri\.created_at DESC LIMIT 1$/,
+    /^SELECT ri\.\* FROM repo_images ri INNER JOIN repo_metadata rm ON ri\.repo_owner = rm\.repo_owner AND ri\.repo_name = rm\.repo_name WHERE ri\.repo_owner = \? AND ri\.repo_name = \? AND ri\.status = 'ready' AND ri\.image_profile = \? AND rm\.image_build_enabled = 1 ORDER BY ri\.created_at DESC LIMIT 1$/,
   SELECT_LATEST_READY_WITH_BRANCH:
-    /^SELECT ri\.\* FROM repo_images ri INNER JOIN repo_metadata rm ON ri\.repo_owner = rm\.repo_owner AND ri\.repo_name = rm\.repo_name WHERE ri\.repo_owner = \? AND ri\.repo_name = \? AND ri\.base_branch = \? AND ri\.status = 'ready' AND rm\.image_build_enabled = 1 ORDER BY ri\.created_at DESC LIMIT 1$/,
+    /^SELECT ri\.\* FROM repo_images ri INNER JOIN repo_metadata rm ON ri\.repo_owner = rm\.repo_owner AND ri\.repo_name = rm\.repo_name WHERE ri\.repo_owner = \? AND ri\.repo_name = \? AND ri\.base_branch = \? AND ri\.status = 'ready' AND ri\.image_profile = \? AND rm\.image_build_enabled = 1 ORDER BY ri\.created_at DESC LIMIT 1$/,
   SELECT_STATUS:
     /^SELECT \* FROM repo_images WHERE repo_owner = \? AND repo_name = \? ORDER BY created_at DESC LIMIT 10$/,
   SELECT_ALL_STATUS: /^SELECT \* FROM repo_images ORDER BY created_at DESC LIMIT 100$/,
@@ -65,17 +67,23 @@ class FakeD1Database {
       const [id] = args as [string];
       const row = this.rows.get(id);
       return row
-        ? { repo_owner: row.repo_owner, repo_name: row.repo_name, base_branch: row.base_branch }
+        ? {
+            repo_owner: row.repo_owner,
+            repo_name: row.repo_name,
+            base_branch: row.base_branch,
+            image_profile: row.image_profile,
+          }
         : null;
     }
 
     if (QUERY_PATTERNS.SELECT_READY_FOR_REPO.test(normalized)) {
-      const [owner, name, branch] = args as [string, string, string];
+      const [owner, name, branch, imageProfile] = args as [string, string, string, string];
       for (const row of this.rows.values()) {
         if (
           row.repo_owner === owner &&
           row.repo_name === name &&
           row.base_branch === branch &&
+          row.image_profile === imageProfile &&
           row.status === "ready"
         ) {
           return { id: row.id, provider_image_id: row.provider_image_id };
@@ -85,7 +93,7 @@ class FakeD1Database {
     }
 
     if (QUERY_PATTERNS.SELECT_LATEST_READY_WITH_BRANCH.test(normalized)) {
-      const [owner, name, branch] = args as [string, string, string];
+      const [owner, name, branch, imageProfile] = args as [string, string, string, string];
       if (!this.isImageBuildEnabled(owner, name)) return null;
       let latest: RepoImageRow | null = null;
       for (const row of this.rows.values()) {
@@ -93,6 +101,7 @@ class FakeD1Database {
           row.repo_owner === owner &&
           row.repo_name === name &&
           row.base_branch === branch &&
+          row.image_profile === imageProfile &&
           row.status === "ready"
         ) {
           if (!latest || row.created_at > latest.created_at) {
@@ -104,11 +113,16 @@ class FakeD1Database {
     }
 
     if (QUERY_PATTERNS.SELECT_LATEST_READY.test(normalized)) {
-      const [owner, name] = args as [string, string];
+      const [owner, name, imageProfile] = args as [string, string, string];
       if (!this.isImageBuildEnabled(owner, name)) return null;
       let latest: RepoImageRow | null = null;
       for (const row of this.rows.values()) {
-        if (row.repo_owner === owner && row.repo_name === name && row.status === "ready") {
+        if (
+          row.repo_owner === owner &&
+          row.repo_name === name &&
+          row.image_profile === imageProfile &&
+          row.status === "ready"
+        ) {
           if (!latest || row.created_at > latest.created_at) {
             latest = row;
           }
@@ -149,14 +163,22 @@ class FakeD1Database {
     const normalized = normalizeQuery(query);
 
     if (QUERY_PATTERNS.INSERT_BUILD.test(normalized)) {
-      // SQL: INSERT ... VALUES (?, ?, ?, ?, '', 'building', '', ?)
-      // Bound args: [id, owner, name, branch, createdAt]
-      const [id, owner, name, branch, createdAt] = args as [string, string, string, string, number];
+      // SQL: INSERT ... VALUES (?, ?, ?, ?, ?, '', 'building', '', ?)
+      // Bound args: [id, owner, name, branch, imageProfile, createdAt]
+      const [id, owner, name, branch, imageProfile, createdAt] = args as [
+        string,
+        string,
+        string,
+        string,
+        "default" | "docker",
+        number,
+      ];
       this.rows.set(id, {
         id,
         repo_owner: owner,
         repo_name: name,
         base_branch: branch,
+        image_profile: imageProfile,
         provider_image_id: "",
         status: "building",
         base_sha: "",
@@ -296,6 +318,20 @@ describe("RepoImageStore", () => {
       expect(status[0].repo_name).toBe("repo");
       expect(status[0].provider_image_id).toBe("");
       expect(status[0].base_sha).toBe("");
+      expect(status[0].image_profile).toBe("default");
+    });
+
+    it("records Docker capability for Docker-enabled builds", async () => {
+      await store.registerBuild({
+        id: "img-docker",
+        repoOwner: "Acme",
+        repoName: "Repo",
+        baseBranch: "main",
+        imageProfile: "docker",
+      });
+
+      const status = await store.getStatus("acme", "repo");
+      expect(status[0].image_profile).toBe("docker");
     });
 
     it("normalizes owner and name to lowercase", async () => {
@@ -434,6 +470,36 @@ describe("RepoImageStore", () => {
       expect(result!.provider_image_id).toBe("modal-img-1");
     });
 
+    it("filters latest ready images by Docker capability", async () => {
+      db.setImageBuildEnabled("acme", "repo", true);
+      await store.registerBuild({
+        id: "img-plain",
+        repoOwner: "acme",
+        repoName: "repo",
+        baseBranch: "main",
+      });
+      await store.markReady("img-plain", "modal-img-plain", "sha1", 30);
+
+      vi.advanceTimersByTime(1000);
+
+      await store.registerBuild({
+        id: "img-docker",
+        repoOwner: "acme",
+        repoName: "repo",
+        baseBranch: "main",
+        imageProfile: "docker",
+      });
+      await store.markReady("img-docker", "modal-img-docker", "sha2", 35);
+
+      const plain = await store.getLatestReady("acme", "repo", "main", "default");
+      expect(plain).not.toBeNull();
+      expect(plain!.id).toBe("img-plain");
+
+      const docker = await store.getLatestReady("acme", "repo", "main", "docker");
+      expect(docker).not.toBeNull();
+      expect(docker!.id).toBe("img-docker");
+    });
+
     it("returns null when image_build_enabled is false", async () => {
       db.setImageBuildEnabled("acme", "repo", false);
       await store.registerBuild({
@@ -547,6 +613,36 @@ describe("RepoImageStore", () => {
       const mainImage = await store.getLatestReady("acme", "repo", "main");
       expect(mainImage).not.toBeNull();
       expect(mainImage!.id).toBe("img-main");
+    });
+
+    it("only replaces the previous ready image with the same Docker capability", async () => {
+      db.setImageBuildEnabled("acme", "repo", true);
+      await store.registerBuild({
+        id: "img-plain",
+        repoOwner: "acme",
+        repoName: "repo",
+        baseBranch: "main",
+      });
+      await store.markReady("img-plain", "modal-img-plain", "sha-plain", 30);
+
+      vi.advanceTimersByTime(1000);
+
+      await store.registerBuild({
+        id: "img-docker",
+        repoOwner: "acme",
+        repoName: "repo",
+        baseBranch: "main",
+        imageProfile: "docker",
+      });
+      const result = await store.markReady("img-docker", "modal-img-docker", "sha-docker", 25);
+
+      expect(result.replacedImageId).toBeNull();
+      const plain = await store.getLatestReady("acme", "repo", "main", "default");
+      const docker = await store.getLatestReady("acme", "repo", "main", "docker");
+      expect(plain).not.toBeNull();
+      expect(plain!.id).toBe("img-plain");
+      expect(docker).not.toBeNull();
+      expect(docker!.id).toBe("img-docker");
     });
   });
 

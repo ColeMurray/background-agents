@@ -83,7 +83,9 @@ modal secret create github-app \
 # Internal API secret (for control plane authentication)
 modal secret create internal-api \
   MODAL_API_SECRET="$(openssl rand -hex 32)" \
-  ALLOWED_CONTROL_PLANE_HOSTS="your-control-plane.workers.dev"
+  ALLOWED_CONTROL_PLANE_HOSTS="your-control-plane.workers.dev" \
+  MODAL_DOCKER_SANDBOX_CPU="4" \
+  MODAL_DOCKER_SANDBOX_MEMORY_MB="8192"
 ```
 
 See `.env.example` for a full list of environment variables.

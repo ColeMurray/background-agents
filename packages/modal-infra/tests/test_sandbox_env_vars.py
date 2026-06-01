@@ -4,6 +4,27 @@ import pytest
 
 from sandbox_runtime.types import SessionConfig
 from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxConfig, SandboxManager
+from src.sandbox.settings import SandboxRuntimeSettings
+
+
+def test_runtime_settings_parse_docker_request():
+    settings = SandboxRuntimeSettings.from_raw({"dockerEnabled": True})
+
+    assert settings.docker.enabled is True
+    assert settings.image_profile == "docker"
+
+
+def test_runtime_settings_ignore_non_boolean_feature_flags():
+    for raw in (
+        {"dockerEnabled": "false", "terminalEnabled": "true"},
+        {"dockerEnabled": 1, "terminalEnabled": 1},
+        {"dockerEnabled": {}, "terminalEnabled": []},
+    ):
+        settings = SandboxRuntimeSettings.from_raw(raw)
+
+        assert settings.docker.enabled is False
+        assert settings.terminal_enabled is False
+        assert settings.image_profile == "default"
 
 
 @pytest.mark.asyncio
@@ -39,6 +60,115 @@ async def test_user_env_vars_override_order(monkeypatch):
     env_vars = captured["env"]
     assert env_vars["CONTROL_PLANE_URL"] == "https://control-plane.example"
     assert env_vars["CUSTOM_SECRET"] == "value"
+
+
+@pytest.mark.asyncio
+async def test_create_sandbox_enables_docker_when_setting_is_on(monkeypatch):
+    captured = {}
+
+    async def fake_create_aio(*args, **kwargs):
+        captured["env"] = kwargs.get("env")
+        captured["experimental_options"] = kwargs.get("experimental_options")
+        captured["cpu"] = kwargs.get("cpu")
+        captured["memory"] = kwargs.get("memory")
+
+        class FakeSandbox:
+            object_id = "obj-docker"
+            stdout = None
+
+        return FakeSandbox()
+
+    fake_create_aio.aio = fake_create_aio
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create_aio)
+
+    manager = SandboxManager()
+    await manager.create_sandbox(
+        SandboxConfig(
+            repo_owner="acme",
+            repo_name="repo",
+            control_plane_url="https://control-plane.example",
+            sandbox_auth_token="token-123",
+            settings=SandboxRuntimeSettings.from_raw({"dockerEnabled": True}),
+        )
+    )
+
+    assert captured["env"]["OPENINSPECT_DOCKER_ENABLED"] == "true"
+    assert captured["env"]["DOCKER_DATA_ROOT"] == "/opt/docker-data"
+    assert captured["env"]["OPENINSPECT_SANDBOX_IMAGE_PROFILE"] == "docker"
+    assert captured["experimental_options"] == {"enable_docker": True}
+    assert captured["cpu"] == 4.0
+    assert captured["memory"] == 8192
+
+
+@pytest.mark.asyncio
+async def test_create_sandbox_does_not_enable_docker_when_setting_is_off(monkeypatch):
+    captured = {}
+
+    async def fake_create_aio(*args, **kwargs):
+        captured["env"] = kwargs.get("env")
+        captured["experimental_options"] = kwargs.get("experimental_options")
+        captured["cpu"] = kwargs.get("cpu")
+        captured["memory"] = kwargs.get("memory")
+
+        class FakeSandbox:
+            object_id = "obj-plain"
+            stdout = None
+
+        return FakeSandbox()
+
+    fake_create_aio.aio = fake_create_aio
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create_aio)
+
+    manager = SandboxManager()
+    await manager.create_sandbox(
+        SandboxConfig(
+            repo_owner="acme",
+            repo_name="repo",
+            control_plane_url="https://control-plane.example",
+            sandbox_auth_token="token-123",
+            settings=SandboxRuntimeSettings.from_raw({"dockerEnabled": False}),
+        )
+    )
+
+    assert "OPENINSPECT_DOCKER_ENABLED" not in captured["env"]
+    assert captured["env"]["OPENINSPECT_SANDBOX_IMAGE_PROFILE"] == "default"
+    assert captured["experimental_options"] is None
+    assert captured["cpu"] is None
+    assert captured["memory"] is None
+
+
+@pytest.mark.asyncio
+async def test_docker_resource_defaults_are_configurable(monkeypatch):
+    captured = {}
+
+    async def fake_create_aio(*args, **kwargs):
+        captured["cpu"] = kwargs.get("cpu")
+        captured["memory"] = kwargs.get("memory")
+
+        class FakeSandbox:
+            object_id = "obj-docker-resources"
+            stdout = None
+
+        return FakeSandbox()
+
+    fake_create_aio.aio = fake_create_aio
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create_aio)
+    monkeypatch.setenv("MODAL_DOCKER_SANDBOX_CPU", "2.5")
+    monkeypatch.setenv("MODAL_DOCKER_SANDBOX_MEMORY_MB", "6144")
+
+    manager = SandboxManager()
+    await manager.create_sandbox(
+        SandboxConfig(
+            repo_owner="acme",
+            repo_name="repo",
+            control_plane_url="https://control-plane.example",
+            sandbox_auth_token="token-123",
+            settings=SandboxRuntimeSettings.from_raw({"dockerEnabled": True}),
+        )
+    )
+
+    assert captured["cpu"] == 2.5
+    assert captured["memory"] == 6144
 
 
 @pytest.mark.asyncio

@@ -27,6 +27,8 @@ const QUERY_PATTERNS = {
   DELETE_GLOBAL: /^DELETE FROM integration_settings WHERE integration_id = \?$/,
   SELECT_REPO:
     /^SELECT settings FROM integration_repo_settings WHERE integration_id = \? AND repo = \?$/,
+  SELECT_REPO_BATCH:
+    /^SELECT repo, settings FROM integration_repo_settings WHERE integration_id = \? AND repo IN \(\?(, \?)*\)$/,
   UPSERT_REPO: /^INSERT INTO integration_repo_settings/,
   DELETE_REPO: /^DELETE FROM integration_repo_settings WHERE integration_id = \? AND repo = \?$/,
   LIST_REPO: /^SELECT repo, settings FROM integration_repo_settings WHERE integration_id = \?$/,
@@ -39,6 +41,7 @@ function normalizeQuery(query: string): string {
 class FakeD1Database {
   private globalRows = new Map<string, GlobalRow>();
   private repoRows = new Map<string, RepoRow>();
+  public allQueries: Array<{ query: string; args: unknown[] }> = [];
 
   private repoKey(integrationId: string, repo: string): string {
     return `${integrationId}:${repo}`;
@@ -68,6 +71,19 @@ class FakeD1Database {
 
   all(query: string, args: unknown[]) {
     const normalized = normalizeQuery(query);
+    this.allQueries.push({ query: normalized, args });
+
+    if (QUERY_PATTERNS.SELECT_REPO_BATCH.test(normalized)) {
+      const [integrationId, ...repos] = args as [string, ...string[]];
+      const repoSet = new Set(repos);
+      const results: Array<{ repo: string; settings: string }> = [];
+      for (const row of this.repoRows.values()) {
+        if (row.integration_id === integrationId && repoSet.has(row.repo)) {
+          results.push({ repo: row.repo, settings: row.settings });
+        }
+      }
+      return results;
+    }
 
     if (QUERY_PATTERNS.LIST_REPO.test(normalized)) {
       const [integrationId] = args as [string];
@@ -336,6 +352,21 @@ describe("IntegrationSettingsStore", () => {
       expect(list).toHaveLength(2);
       const repos = list.map((r) => r.repo).sort();
       expect(repos).toEqual(["acme/gadgets", "acme/widgets"]);
+    });
+
+    it("batch lookup returns only requested repo overrides", async () => {
+      await store.setRepoSettings("github", "acme/widgets", {
+        model: "anthropic/claude-opus-4-6",
+      });
+      await store.setRepoSettings("github", "acme/gadgets", {
+        model: "anthropic/claude-haiku-4-5",
+      });
+
+      const batch = await store.getRepoSettingsBatch("github", ["Acme/Widgets", "acme/missing"]);
+
+      expect([...batch.keys()]).toEqual(["acme/widgets"]);
+      expect(batch.get("acme/widgets")?.model).toBe("anthropic/claude-opus-4-6");
+      expect(db.allQueries.some((q) => q.query.includes("repo IN"))).toBe(true);
     });
 
     it("normalizes repo name to lowercase on write and lookup", async () => {
@@ -663,6 +694,7 @@ describe("IntegrationSettingsStore", () => {
       await store.setGlobal("sandbox", {
         defaults: {
           tunnelPorts: [3000, 3001],
+          dockerEnabled: true,
           maxConcurrentChildSessions: 3,
           maxTotalChildSessions: 8,
         },
@@ -672,6 +704,7 @@ describe("IntegrationSettingsStore", () => {
       expect(result).toEqual({
         defaults: {
           tunnelPorts: [3000, 3001],
+          dockerEnabled: true,
           maxConcurrentChildSessions: 3,
           maxTotalChildSessions: 8,
         },
@@ -712,6 +745,35 @@ describe("IntegrationSettingsStore", () => {
         maxConcurrentChildSessions: 2,
         maxTotalChildSessions: 15,
       });
+    });
+
+    it("getResolvedConfig lets repo dockerEnabled override global defaults", async () => {
+      await store.setGlobal("sandbox", { defaults: { dockerEnabled: true } });
+      await store.setRepoSettings("sandbox", "acme/app", { dockerEnabled: false });
+
+      const config = await store.getResolvedConfig("sandbox", "acme/app");
+      expect(config.settings.dockerEnabled).toBe(false);
+    });
+
+    it("getResolvedConfigs only reads requested repo overrides", async () => {
+      await store.setGlobal("sandbox", { defaults: { dockerEnabled: true } });
+      await store.setRepoSettings("sandbox", "acme/app", { dockerEnabled: false });
+      await store.setRepoSettings("sandbox", "acme/unrelated", { tunnelPorts: [5173] });
+
+      const configs = await store.getResolvedConfigs("sandbox", ["Acme/App", "acme/missing"]);
+
+      expect(configs.get("acme/app")?.settings).toEqual({ dockerEnabled: false });
+      expect(configs.get("acme/missing")?.settings).toEqual({ dockerEnabled: true });
+      expect(db.allQueries.some((q) => q.query.includes("repo IN"))).toBe(true);
+      expect(db.allQueries.some((q) => QUERY_PATTERNS.LIST_REPO.test(q.query))).toBe(false);
+    });
+
+    it("rejects non-boolean dockerEnabled", async () => {
+      await expect(
+        store.setRepoSettings("sandbox", "acme/app", {
+          dockerEnabled: "true" as unknown as boolean,
+        })
+      ).rejects.toThrow("dockerEnabled must be a boolean");
     });
 
     it("rejects non-array tunnelPorts", async () => {

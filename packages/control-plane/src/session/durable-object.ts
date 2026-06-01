@@ -613,8 +613,8 @@ export class SessionDO extends DurableObject<Env> {
       updateSandboxForSpawn: (data) => this.repository.updateSandboxForSpawn(data),
       updateSandboxForResume: (data) => this.repository.updateSandboxForResume(data),
       updateSandboxModalObjectId: (id) => this.repository.updateSandboxModalObjectId(id),
-      updateSandboxSnapshotImageId: (sandboxId, imageId) =>
-        this.repository.updateSandboxSnapshotImageId(sandboxId, imageId),
+      updateSandboxSnapshotImageId: (sandboxId, imageId, imageProfile) =>
+        this.repository.updateSandboxSnapshotImageId(sandboxId, imageId, imageProfile),
       updateSandboxLastActivity: (timestamp) =>
         this.repository.updateSandboxLastActivity(timestamp),
       incrementCircuitBreakerFailure: (timestamp) =>
@@ -736,8 +736,8 @@ export class SessionDO extends DurableObject<Env> {
     if (this.env.DB && sandboxBackend === "modal") {
       const repoImageStore = new RepoImageStore(this.env.DB);
       repoImageLookup = {
-        getLatestReady: (repoOwner, repoName, baseBranch) =>
-          repoImageStore.getLatestReady(repoOwner, repoName, baseBranch),
+        getLatestReady: (repoOwner, repoName, baseBranch, imageProfile) =>
+          repoImageStore.getLatestReady(repoOwner, repoName, baseBranch, imageProfile),
       };
     }
 

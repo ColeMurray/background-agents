@@ -10,6 +10,7 @@ import pytest
 
 from sandbox_runtime.auth.internal import generate_internal_token, verify_internal_token
 from src.sandbox.manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
+from src.sandbox.settings import SandboxRuntimeSettings
 from src.scheduler.image_builder import (
     CALLBACK_BACKOFF_BASE,
     CALLBACK_MAX_RETRIES,
@@ -405,6 +406,34 @@ class TestBuildRepoImage:
         assert callback_payload["build_id"] == "img-1"
         assert callback_payload["provider_image_id"] == "im-test"
         assert callback_payload["base_sha"] == "abc123"
+
+    @pytest.mark.asyncio
+    async def test_passes_sandbox_settings_to_build_sandbox(self):
+        handle, _snapshot_aio, _terminate_aio = self._build_handle()
+        manager = SimpleNamespace(create_build_sandbox=AsyncMock(return_value=handle))
+
+        with (
+            patch("src.scheduler.image_builder.validate_control_plane_url", return_value=True),
+            patch("src.scheduler.image_builder._generate_clone_token", return_value="gh-token"),
+            patch("src.sandbox.manager.SandboxManager", return_value=manager),
+            patch(
+                "src.scheduler.image_builder._callback_with_retry",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            await build_repo_image.local(
+                repo_owner="acme",
+                repo_name="repo",
+                callback_url="https://cp.test/repo-images/build-complete",
+                build_id="img-1",
+                sandbox_settings={"dockerEnabled": True},
+            )
+
+        manager.create_build_sandbox.assert_awaited_once()
+        assert manager.create_build_sandbox.await_args.kwargs[
+            "settings"
+        ] == SandboxRuntimeSettings.from_raw({"dockerEnabled": True})
 
     @pytest.mark.asyncio
     async def test_terminates_and_reports_failure_when_snapshot_times_out(self):

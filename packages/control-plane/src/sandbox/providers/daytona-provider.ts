@@ -5,7 +5,11 @@
  * code-server password derivation that previously lived in the Python shim.
  */
 
-import { computeHmacHex, MAX_TUNNEL_PORTS, type SandboxSettings } from "@open-inspect/shared";
+import {
+  computeHmacHex,
+  MAX_TUNNEL_PORTS,
+  type SandboxRuntimeSettings,
+} from "@open-inspect/shared";
 import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
 import type { DaytonaRestClient, DaytonaCreateSandboxParams } from "../daytona-rest-client";
@@ -262,7 +266,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     logicalSandboxId: string,
     timeoutSeconds: number | undefined,
     codeServerEnabled: boolean | undefined,
-    sandboxSettings: SandboxSettings | undefined
+    sandboxSettings: SandboxRuntimeSettings | undefined
   ): Promise<{
     codeServerUrl?: string;
     codeServerPassword?: string;

@@ -48,16 +48,71 @@ export const DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS = 5;
 /** Default maximum agent-spawned child sessions per parent session. */
 export const DEFAULT_MAX_TOTAL_CHILD_SESSIONS = 15;
 
+/** Repo image/runtime profile that changes the base sandbox image requirements. */
+export type SandboxImageProfile = "default" | "docker";
+
+export const DEFAULT_SANDBOX_IMAGE_PROFILE: SandboxImageProfile = "default";
+
+export function isSandboxImageProfile(value: unknown): value is SandboxImageProfile {
+  return value === DEFAULT_SANDBOX_IMAGE_PROFILE || value === "docker";
+}
+
 /** Sandbox environment settings. Provider-agnostic: describes what the user wants, not how it's done. */
 export interface SandboxSettings {
   /** Extra ports to expose via tunnels (e.g., dev server ports 3000, 5173). */
   tunnelPorts?: number[];
   /** Enable a browser-based terminal (ttyd) in sandbox sessions. */
   terminalEnabled?: boolean;
+  /** Enable Docker Engine and Docker Compose inside Modal-backed sandboxes. */
+  dockerEnabled?: boolean;
   /** Maximum active agent-spawned child sessions per parent session. */
   maxConcurrentChildSessions?: number;
   /** Maximum total agent-spawned child sessions per parent session. */
   maxTotalChildSessions?: number;
+}
+
+/** Runtime settings passed to sandbox providers. Excludes control-plane-only limits. */
+export type SandboxRuntimeSettings = Pick<
+  SandboxSettings,
+  "tunnelPorts" | "terminalEnabled" | "dockerEnabled"
+>;
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1;
+}
+
+function normalizeTunnelPorts(value: unknown): number[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((port): port is number => isPositiveInteger(port) && port <= 65535)
+    .slice(0, MAX_TUNNEL_PORTS);
+}
+
+export function normalizeSandboxRuntimeSettings(value: unknown): SandboxRuntimeSettings {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+
+  const settings = value as Record<string, unknown>;
+  const normalized: SandboxRuntimeSettings = {};
+  const tunnelPorts = normalizeTunnelPorts(settings.tunnelPorts);
+
+  if (tunnelPorts !== undefined) {
+    normalized.tunnelPorts = tunnelPorts;
+  }
+  if (typeof settings.terminalEnabled === "boolean") {
+    normalized.terminalEnabled = settings.terminalEnabled;
+  }
+  if (typeof settings.dockerEnabled === "boolean") {
+    normalized.dockerEnabled = settings.dockerEnabled;
+  }
+
+  return normalized;
+}
+
+export function resolveSandboxImageProfile(
+  settings: Pick<SandboxRuntimeSettings, "dockerEnabled"> | null | undefined
+): SandboxImageProfile {
+  return settings?.dockerEnabled === true ? "docker" : DEFAULT_SANDBOX_IMAGE_PROFILE;
 }
 
 export type SlackMentionsPolicy = "allow" | "escape" | "strip";
