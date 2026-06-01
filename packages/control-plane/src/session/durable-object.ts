@@ -536,6 +536,14 @@ export class SessionDO extends DurableObject<Env> {
         sendToSandbox: (ws, message) => this.wsManager.send(ws, message),
         updateSandboxStatus: (status) => this.updateSandboxStatus(status),
         broadcast: (message) => this.broadcast(message),
+        notifySessionLifecycle: ({ event, actorAuthorId }) => {
+          // Fire-and-forget cross-channel notification. Reaches the
+          // originating bot (Slack/Linear) via the session's most recent
+          // bot-tagged message — no-op for web-only sessions. Decoupled
+          // from the transition itself (handler already committed the
+          // status) so a callback failure can't roll back the archive.
+          this.ctx.waitUntil(this.callbackService.notifySessionLifecycle({ event, actorAuthorId }));
+        },
       });
     }
 

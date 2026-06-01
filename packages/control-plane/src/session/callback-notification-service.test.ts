@@ -22,6 +22,7 @@ function createMockLogger(): Logger {
 function createMockRepository(): CallbackRepository {
   return {
     getMessageCallbackContext: vi.fn(() => null),
+    getLatestCallbackEnvelope: vi.fn(() => null),
     getSession: vi.fn(() => null),
   };
 }
@@ -820,6 +821,123 @@ describe("CallbackNotificationService", () => {
         plan: PLAN,
         verdict: "approved",
         approverAuthorId: "web:user-1",
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("notifySessionLifecycle", () => {
+    it("skips when the session has no bot-originated messages", async () => {
+      vi.mocked(harness.repository.getLatestCallbackEnvelope).mockReturnValue(null);
+
+      await harness.service.notifySessionLifecycle({
+        event: "archived",
+        actorAuthorId: "web:user-1",
+      });
+
+      const slackFetch = (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
+      expect(slackFetch).not.toHaveBeenCalled();
+      expect(harness.log.debug).toHaveBeenCalledWith(
+        "callback.session_lifecycle",
+        expect.objectContaining({ skip_reason: "no_bot_origin" })
+      );
+    });
+
+    it("fires the callback to the slack-bot for slack-sourced sessions on archive", async () => {
+      vi.mocked(harness.repository.getLatestCallbackEnvelope).mockReturnValue({
+        callback_context: JSON.stringify({ channel: "C1", threadTs: "1.2" }),
+        source: "slack",
+      });
+
+      const fetchMock = vi.mocked(
+        (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
+      );
+      fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+
+      await harness.service.notifySessionLifecycle({
+        event: "archived",
+        actorAuthorId: "web:user-1",
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://internal/callbacks/session-lifecycle",
+        expect.objectContaining({ method: "POST" })
+      );
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body).toMatchObject({
+        sessionId: "session-123",
+        event: "archived",
+        actorAuthorId: "web:user-1",
+        context: { channel: "C1", threadTs: "1.2" },
+      });
+      expect(body.signature).toEqual(expect.any(String));
+    });
+
+    it("routes unarchive events to LINEAR_BOT for linear-sourced sessions", async () => {
+      vi.mocked(harness.repository.getLatestCallbackEnvelope).mockReturnValue({
+        callback_context: JSON.stringify({ issueId: "LIN-1" }),
+        source: "linear",
+      });
+
+      const fetchMock = vi.mocked(
+        (harness.linearBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
+      );
+      fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+
+      await harness.service.notifySessionLifecycle({
+        event: "unarchived",
+        actorAuthorId: "web:user-1",
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body).toMatchObject({ event: "unarchived" });
+
+      const slackFetch = (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
+      expect(slackFetch).not.toHaveBeenCalled();
+    });
+
+    it("skips automation-sourced sessions (no user surface)", async () => {
+      vi.mocked(harness.repository.getLatestCallbackEnvelope).mockReturnValue({
+        callback_context: JSON.stringify({
+          source: "automation",
+          automationId: "auto-1",
+          runId: "run-1",
+        }),
+        source: "automation",
+      });
+
+      await harness.service.notifySessionLifecycle({
+        event: "archived",
+        actorAuthorId: "web:user-1",
+      });
+
+      const slackFetch = (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
+      expect(slackFetch).not.toHaveBeenCalled();
+      expect(harness.log.debug).toHaveBeenCalledWith(
+        "callback.session_lifecycle",
+        expect.objectContaining({ skip_reason: "automation_source" })
+      );
+    });
+
+    it("retries once on transient binding failure", async () => {
+      vi.mocked(harness.repository.getLatestCallbackEnvelope).mockReturnValue({
+        callback_context: JSON.stringify({ channel: "C1", threadTs: "1.2" }),
+        source: "slack",
+      });
+
+      const fetchMock = vi.mocked(
+        (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
+      );
+      fetchMock
+        .mockRejectedValueOnce(new Error("transient"))
+        .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+      await harness.service.notifySessionLifecycle({
+        event: "archived",
+        actorAuthorId: null,
       });
 
       expect(fetchMock).toHaveBeenCalledTimes(2);

@@ -20,6 +20,13 @@ export interface CallbackRepository {
   getMessageCallbackContext(
     messageId: string
   ): { callback_context: string | null; source: string | null } | null;
+  /**
+   * Find the most recent message with a non-null callback_context.
+   * Used for session-level lifecycle events (archive, unarchive) that
+   * don't bind to a specific message but still need to reach the
+   * originating bot.
+   */
+  getLatestCallbackEnvelope(): { callback_context: string; source: string | null } | null;
   getSession(): SessionRow | null;
 }
 
@@ -351,6 +358,120 @@ export class CallbackNotificationService {
       plan_version: plan.version,
       source,
       verdict,
+    });
+  }
+
+  /**
+   * Notify the originating bot of a session-lifecycle event
+   * (archive / unarchive). Unlike plan_status these events don't bind
+   * to a specific message, so we route based on the most recent
+   * message that carries a callback_context (a `latest-bot-touch`
+   * heuristic — handles users who resumed the session from a different
+   * Slack channel or Linear issue). No-op when the session has no
+   * bot-originated messages.
+   */
+  async notifySessionLifecycle(params: {
+    event: "archived" | "unarchived";
+    actorAuthorId: string | null;
+  }): Promise<void> {
+    const { event, actorAuthorId } = params;
+
+    const envelope = this.repository.getLatestCallbackEnvelope();
+    if (!envelope) {
+      this.log.debug("callback.session_lifecycle", {
+        event,
+        outcome: "skipped",
+        skip_reason: "no_bot_origin",
+      });
+      return;
+    }
+
+    const context = JSON.parse(envelope.callback_context) as Record<string, unknown>;
+    if (context.source === "automation") {
+      this.log.debug("callback.session_lifecycle", {
+        event,
+        outcome: "skipped",
+        skip_reason: "automation_source",
+      });
+      return;
+    }
+
+    if (!this.env.INTERNAL_CALLBACK_SECRET) {
+      this.log.debug("callback.session_lifecycle", {
+        event,
+        outcome: "skipped",
+        skip_reason: "no_secret",
+      });
+      return;
+    }
+
+    const source = envelope.source ?? null;
+    const binding = this.getBinding(source);
+    if (!binding) {
+      this.log.debug("callback.session_lifecycle", {
+        event,
+        source,
+        outcome: "skipped",
+        skip_reason: "no_binding",
+      });
+      return;
+    }
+
+    const sessionId = this.getSessionId();
+    const timestamp = Date.now();
+
+    const payloadData = {
+      sessionId,
+      event,
+      actorAuthorId,
+      timestamp,
+      context,
+    };
+
+    const signature = await this.signPayload(payloadData, this.env.INTERNAL_CALLBACK_SECRET);
+    const payload = { ...payloadData, signature };
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const response = await binding.fetch("https://internal/callbacks/session-lifecycle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        if (response.ok) {
+          this.log.info("callback.session_lifecycle", {
+            event,
+            source,
+            outcome: "success",
+          });
+          return;
+        }
+
+        const responseText = await response.text().catch(() => "");
+        this.log.warn("callback.session_lifecycle", {
+          event,
+          source,
+          outcome: "error",
+          http_status: response.status,
+          response_body: responseText.slice(0, 500),
+        });
+      } catch (e) {
+        this.log.warn("callback.session_lifecycle", {
+          event,
+          source,
+          outcome: "error",
+          attempt: attempt + 1,
+          error: e instanceof Error ? e : new Error(String(e)),
+        });
+      }
+
+      if (attempt < 1) await new Promise((r) => setTimeout(r, 1000));
+    }
+
+    this.log.error("Failed to deliver session-lifecycle callback after retries", {
+      event,
+      source,
     });
   }
 

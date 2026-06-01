@@ -691,6 +691,32 @@ export class SessionRepository {
     return rows[0] ?? null;
   }
 
+  /**
+   * Return the most recent message that carries a non-null
+   * `callback_context`. Used for session-level events (archive,
+   * unarchive) that don't bind to a specific message but still need
+   * to reach the originating bot — the latest bot-tagged message
+   * carries the most relevant thread reference (handles users who
+   * resumed the session from a different Slack channel or Linear issue).
+   *
+   * Returns null when the session has no bot-originated messages
+   * (e.g. a web-only session). Callers should treat that as "no
+   * surface to notify" and silently no-op.
+   */
+  getLatestCallbackEnvelope(): { callback_context: string; source: string | null } | null {
+    const result = this.sql.exec(
+      `SELECT callback_context, source FROM messages
+        WHERE callback_context IS NOT NULL
+        ORDER BY created_at DESC
+        LIMIT 1`
+    );
+    const rows = result.toArray() as Array<{
+      callback_context: string;
+      source: string | null;
+    }>;
+    return rows[0] ?? null;
+  }
+
   createMessage(data: CreateMessageData): void {
     this.sql.exec(
       `INSERT INTO messages (id, author_id, content, source, model, reasoning_effort, attachments, callback_context, status, created_at)
