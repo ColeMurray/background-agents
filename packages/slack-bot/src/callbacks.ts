@@ -27,15 +27,21 @@ import { formatToolStatus, setAssistantThreadStatusBestEffort } from "./activity
 /**
  * KV key for the message-ts of the "Plan vN awaiting approval" message
  * the slack-bot posted for a given session. Lets us `chat.update` it
- * when a cross-channel verdict (e.g. web approval) lands. Cleared on
- * verdict (both modal-driven and cross-channel paths); the TTL is a
- * floor for sessions whose awaiting message is abandoned.
+ * when a cross-channel verdict (e.g. web approval) lands.
+ *
+ * Lifecycle: the entry is normally cleared on verdict — both the
+ * modal-driven path (handlePlan{Approve,Reject}Submission) and the
+ * cross-channel callback path delete it. The TTL is a backstop for
+ * sessions whose awaiting message is abandoned or whose explicit
+ * cleanup failed, sized to cover a long weekend + a day of slack so
+ * the visual update still works when an approver picks up the thread
+ * after the weekend.
  */
 export function planAwaitingMessageKvKey(sessionId: string): string {
   return `plan-awaiting-msg:${sessionId}`;
 }
 
-const PLAN_AWAITING_MSG_TTL_SECONDS = 60 * 60 * 24; // 24 hours
+const PLAN_AWAITING_MSG_TTL_SECONDS = 60 * 60 * 24 * 3; // 3 days
 
 interface PlanAwaitingMessageRef {
   channel: string;
