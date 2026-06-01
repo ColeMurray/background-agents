@@ -174,7 +174,6 @@ export interface EventPage {
 
 interface QueryEventPageOptions extends ListEventPageOptions {
   excludeTypes?: string[];
-  chronological?: boolean;
 }
 
 /**
@@ -793,7 +792,11 @@ export class SessionRepository {
   }
 
   getEventTimelinePage(options: ListEventTimelinePageOptions): EventPage {
-    return this.queryEventPage({ ...options, chronological: true });
+    const page = this.queryEventPage(options);
+    return {
+      ...page,
+      events: [...page.events].reverse(),
+    };
   }
 
   private queryEventPage(options: QueryEventPageOptions): EventPage {
@@ -838,9 +841,7 @@ export class SessionRepository {
     const pageEvents = hasMore ? rows.slice(0, options.limit) : rows;
     const nextCursor =
       pageEvents.length > 0 ? eventTimelineCursorFromRow(pageEvents[pageEvents.length - 1]) : null;
-    const events = options.chronological ? [...pageEvents].reverse() : pageEvents;
-
-    return { events, hasMore, nextCursor };
+    return { events: pageEvents, hasMore, nextCursor };
   }
 
   getEventsForReplay(limit: number): EventRow[] {

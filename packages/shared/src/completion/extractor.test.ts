@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildAgentResponseFromEvents, toArtifactType, toEventArtifactInfo } from "./extractor";
+import {
+  buildAgentResponseFromEvents,
+  extractAgentResponse,
+  toArtifactType,
+  toEventArtifactInfo,
+  type ControlPlaneFetcher,
+} from "./extractor";
 
 describe("completion artifact type narrowing", () => {
   it("recognizes video artifacts", () => {
@@ -106,5 +112,103 @@ describe("buildAgentResponseFromEvents", () => {
         { defaultSuccess: true }
       ).success
     ).toBe(false);
+  });
+
+  it("prefers message-scoped artifact events over supplied session artifacts", () => {
+    const response = buildAgentResponseFromEvents(
+      [
+        {
+          id: "artifact:current",
+          type: "artifact",
+          data: {
+            artifactType: "branch",
+            url: "https://example.com/tree/current",
+            metadata: { name: "current" },
+          },
+          messageId: "msg-1",
+          createdAt: 1,
+        },
+      ],
+      [
+        {
+          type: "branch",
+          url: "https://example.com/tree/old",
+          label: "Branch: old",
+        },
+      ]
+    );
+
+    expect(response.artifacts).toEqual([
+      {
+        type: "branch",
+        url: "https://example.com/tree/current",
+        label: "Branch: current",
+      },
+    ]);
+  });
+});
+
+describe("extractAgentResponse", () => {
+  it("filters fetched session artifacts to the message event window", async () => {
+    const fetcher: ControlPlaneFetcher = {
+      async fetch(input) {
+        const url = String(input);
+        if (url.includes("/events")) {
+          return Response.json({
+            events: [
+              {
+                id: "token:msg-1",
+                type: "token",
+                data: { content: "done" },
+                messageId: "msg-1",
+                createdAt: 100,
+              },
+              {
+                id: "complete:msg-1",
+                type: "execution_complete",
+                data: { success: true },
+                messageId: "msg-1",
+                createdAt: 200,
+              },
+            ],
+            hasMore: false,
+          });
+        }
+
+        if (url.includes("/artifacts")) {
+          return Response.json({
+            artifacts: [
+              {
+                id: "artifact-old",
+                type: "branch",
+                url: "https://example.com/tree/old",
+                metadata: { head: "old" },
+                createdAt: 50,
+              },
+              {
+                id: "artifact-current",
+                type: "branch",
+                url: "https://example.com/tree/current",
+                metadata: { head: "current" },
+                createdAt: 150,
+              },
+            ],
+          });
+        }
+
+        return Response.json({}, { status: 404 });
+      },
+    };
+
+    const response = await extractAgentResponse({ fetcher }, "session-1", "msg-1");
+
+    expect(response.artifacts).toEqual([
+      {
+        type: "branch",
+        url: "https://example.com/tree/current",
+        label: "Branch: current",
+        metadata: { head: "current" },
+      },
+    ]);
   });
 });

@@ -115,7 +115,7 @@ export async function extractAgentResponse(
       cursor = data.hasMore ? data.cursor : undefined;
     } while (cursor);
 
-    const artifacts = await fetchSessionArtifacts(deps, sessionId, headers, base);
+    const artifacts = await fetchSessionArtifacts(deps, sessionId, headers, base, allEvents);
     const agentResponse = buildAgentResponseFromEvents(allEvents, artifacts);
 
     log.info("control_plane.fetch_events", {
@@ -185,7 +185,7 @@ export function buildAgentResponseFromEvents(
   return {
     textContent,
     toolCalls,
-    artifacts: artifacts.length > 0 ? artifacts : eventArtifacts,
+    artifacts: eventArtifacts.length > 0 ? eventArtifacts : artifacts,
     success,
     error: errorMessage,
   };
@@ -216,9 +216,11 @@ async function fetchSessionArtifacts(
   deps: ExtractorDeps,
   sessionId: string,
   headers: Record<string, string>,
-  base: Record<string, unknown>
+  base: Record<string, unknown>,
+  events: EventResponse[]
 ): Promise<ArtifactInfo[]> {
   const log = deps.log ?? noopLogger;
+  const eventRange = getEventCreatedAtRange(events);
   try {
     const response = await deps.fetcher.fetch(`https://internal/sessions/${sessionId}/artifacts`, {
       headers,
@@ -236,6 +238,7 @@ async function fetchSessionArtifacts(
     const data = (await response.json()) as ListArtifactsResponse;
     return data.artifacts
       .filter((artifact) => artifact.type !== "screenshot" && artifact.type !== "video")
+      .filter((artifact) => isArtifactInEventRange(artifact.createdAt, eventRange))
       .map((artifact) => ({
         type: artifact.type,
         url: artifact.url ? String(artifact.url) : "",
@@ -250,6 +253,27 @@ async function fetchSessionArtifacts(
     });
     return [];
   }
+}
+
+function getEventCreatedAtRange(events: EventResponse[]): { start: number; end: number } | null {
+  if (events.length === 0) return null;
+
+  let start = Number.POSITIVE_INFINITY;
+  let end = Number.NEGATIVE_INFINITY;
+  for (const event of events) {
+    start = Math.min(start, event.createdAt);
+    end = Math.max(end, event.createdAt);
+  }
+
+  return { start, end };
+}
+
+function isArtifactInEventRange(
+  createdAt: number,
+  range: { start: number; end: number } | null
+): boolean {
+  if (!range) return false;
+  return createdAt >= range.start && createdAt <= range.end;
 }
 
 /**

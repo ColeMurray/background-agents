@@ -1,7 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect } from "vitest";
+import { cleanD1Tables } from "./cleanup";
 import { initSession, seedEvents } from "./helpers";
 
 describe("GET /internal/events", () => {
+  beforeEach(cleanD1Tables);
+
   it("lists events with default pagination", async () => {
     const { stub } = await initSession();
     const baseTime = Date.now();
@@ -127,10 +130,23 @@ describe("GET /internal/events", () => {
     );
     const page2 = await res2.json<{
       events: Array<{ id: string }>;
+      cursor: string;
       hasMore: boolean;
     }>();
 
     expect(page2.events.map((event) => event.id)).toEqual(["evt-tie-2", "evt-tie-1"]);
+    expect(page2.hasMore).toBe(true);
+
+    const res3 = await stub.fetch(
+      `http://internal/internal/events?type=error&limit=2&cursor=${encodeURIComponent(page2.cursor)}`
+    );
+    const page3 = await res3.json<{
+      events: Array<{ id: string }>;
+      hasMore: boolean;
+    }>();
+
+    expect(page3.events.map((event) => event.id)).toEqual(["evt-tie-0"]);
+    expect(page3.hasMore).toBe(false);
   });
 
   it("rejects malformed cursors", async () => {

@@ -87,7 +87,7 @@ export function parseChildSummaryOptions(url?: URL): ChildSummaryOptionsResult {
   }
 
   const includeTrajectory = includeValuesResult.values.has("trajectory");
-  const includeFinalResponse = includeValuesResult.values.has("result") || includeTrajectory;
+  const includeFinalResponse = includeValuesResult.values.has("result");
   const trajectoryLimitResult = includeTrajectory
     ? parseLimit(
         url?.searchParams.get("trajectoryLimit"),
@@ -182,6 +182,7 @@ export function buildChildSessionDetail(input: BuildChildSessionDetailInput): Ch
 
   if (input.finalResponse) {
     const artifactInfos = artifacts
+      .filter(({ row }) => artifactCreatedDuringMessage(row, input.finalResponse?.message ?? null))
       .map(({ row, metadata }) => buildArtifactInfo(row, metadata))
       .filter((artifact): artifact is ArtifactInfo => artifact !== null);
     detail.finalResponse = buildFinalResponse(
@@ -279,6 +280,14 @@ function buildArtifactInfo(
     label: getArtifactLabelFromArtifact(artifact.type, metadata),
     metadata,
   };
+}
+
+function artifactCreatedDuringMessage(artifact: ArtifactRow, message: MessageRow | null): boolean {
+  if (!message) return false;
+
+  const start = message.created_at;
+  const end = message.completed_at ?? Number.MAX_SAFE_INTEGER;
+  return artifact.created_at >= start && artifact.created_at <= end;
 }
 
 function buildFinalResponse(

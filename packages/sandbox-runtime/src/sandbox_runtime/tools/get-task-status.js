@@ -50,7 +50,8 @@ async function listChildren() {
 }
 
 async function getChildDetail(taskId, options = {}) {
-  const response = await bridgeFetch(`/children/${taskId}${buildChildDetailQuery(options)}`);
+  const encodedTaskId = encodeURIComponent(taskId);
+  const response = await bridgeFetch(`/children/${encodedTaskId}${buildChildDetailQuery(options)}`);
 
   if (!response.ok) {
     if (response.status === 404) {
@@ -104,7 +105,7 @@ export default tool({
       if (args.taskId) {
         return await getChildDetail(args.taskId, {
           includeResponse: args.includeResponse,
-          includeTrajectory: args.includeTrajectory,
+          includeTrajectory: args.includeTrajectory || args.includeEventData,
           trajectoryLimit: args.trajectoryLimit,
           trajectoryCursor: args.trajectoryCursor,
           includeEventData: args.includeEventData,

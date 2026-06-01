@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:test";
+import { cleanD1Tables } from "./cleanup";
 import { initSession, queryDO, seedEvents } from "./helpers";
 import type { SpawnContext, ChildSessionDetail } from "@open-inspect/shared";
 
@@ -48,7 +49,8 @@ async function waitForSandboxSpawn(stub: DurableObjectStub): Promise<void> {
 }
 
 describe("DO internal sub-session routes", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await cleanD1Tables();
     installModalFetchMock();
   });
 

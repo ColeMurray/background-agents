@@ -380,6 +380,70 @@ describe("createChildSessionsHandler", () => {
     });
   });
 
+  it("scopes final response artifacts to the terminal message window", async () => {
+    const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+    getSession.mockReturnValue(createSession({ status: "completed" }));
+    getSandbox.mockReturnValue(createSandbox({ status: "stopped" }));
+    getPublicSessionId.mockReturnValue("public-session-1");
+    repository.listArtifacts.mockReturnValue([
+      createArtifact({
+        id: "artifact-old",
+        type: "branch",
+        url: "https://example.com/tree/old",
+        metadata: '{"head":"old"}',
+        created_at: 10,
+      }),
+      createArtifact({
+        id: "artifact-current",
+        type: "branch",
+        url: "https://example.com/tree/current",
+        metadata: '{"head":"current"}',
+        created_at: 30,
+      }),
+    ]);
+    repository.getLatestTerminalMessage.mockReturnValue(
+      createMessage({
+        id: "msg-current",
+        created_at: 20,
+        started_at: 25,
+        completed_at: 40,
+      })
+    );
+    repository.listEventPage
+      .mockReturnValueOnce({ events: [], hasMore: false, nextCursor: null })
+      .mockReturnValueOnce({
+        hasMore: false,
+        nextCursor: null,
+        events: [
+          createEvent({
+            id: "token:msg-current",
+            type: "token",
+            message_id: "msg-current",
+            data: '{"content":"Current answer"}',
+            created_at: 35,
+          }),
+        ],
+      });
+
+    const response = handler.getChildSummary(
+      new URL("http://internal/internal/child-summary?include=result")
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      finalResponse: {
+        artifacts: [
+          {
+            type: "branch",
+            url: "https://example.com/tree/current",
+            label: "Branch: current",
+            metadata: { head: "current" },
+          },
+        ],
+      },
+    });
+  });
+
   it("paginates final response events when requested", async () => {
     const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
     getSession.mockReturnValue(createSession({ status: "completed" }));
@@ -487,8 +551,9 @@ describe("createChildSessionsHandler", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
-      finalResponse: null,
+    const body = await response.json();
+    expect(body).not.toHaveProperty("finalResponse");
+    expect(body).toMatchObject({
       trajectory: {
         hasMore: false,
         limit: 200,
@@ -503,6 +568,7 @@ describe("createChildSessionsHandler", () => {
       limit: 200,
       cursor: undefined,
     });
+    expect(repository.getLatestTerminalMessage).not.toHaveBeenCalled();
   });
 
   it("returns 400 for malformed trajectory cursors", async () => {
