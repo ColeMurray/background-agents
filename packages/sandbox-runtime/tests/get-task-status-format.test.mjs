@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildChildDetailQuery,
+  formatChildDetail,
   formatFinalResponse,
   formatRecentEvents,
   formatTrajectory,
@@ -19,7 +20,17 @@ test("buildChildDetailQuery includes trajectory pagination parameters", () => {
       trajectoryLimit: 25,
       trajectoryCursor: "10:event:1",
     }),
-    "?include=result%2Ctrajectory&trajectoryLimit=25&trajectoryCursor=10%3Aevent%3A1"
+    "?include=trajectory&trajectoryLimit=25&trajectoryCursor=10%3Aevent%3A1"
+  );
+});
+
+test("buildChildDetailQuery keeps response and trajectory includes separate", () => {
+  assert.equal(
+    buildChildDetailQuery({
+      includeResponse: true,
+      includeTrajectory: true,
+    }),
+    "?include=result%2Ctrajectory"
   );
 });
 
@@ -58,6 +69,27 @@ test("formatTrajectory shows event summaries and pagination cursor", () => {
   assert.match(output, /Bash: npm test/);
   assert.match(output, /More events available/);
   assert.match(output, /trajectoryCursor="30:event-1"/);
+});
+
+test("formatChildDetail does not show final response placeholder for trajectory-only requests", () => {
+  const output = formatChildDetail(
+    {
+      session: {
+        id: "task-1",
+        title: "Trajectory only",
+        status: "completed",
+      },
+      trajectory: {
+        hasMore: false,
+        events: [{ type: "execution_complete", createdAt: 1000, data: { success: true } }],
+      },
+    },
+    "task-1",
+    { includeTrajectory: true }
+  );
+
+  assert.doesNotMatch(output, /Final response/);
+  assert.match(output, /Trajectory/);
 });
 
 test("formatRecentEvents summarizes message-like payloads", () => {

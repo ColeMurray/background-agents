@@ -50,13 +50,9 @@ export function summarizeEvent(event) {
   return "";
 }
 
-export function shouldIncludeResponse(options = {}) {
-  return Boolean(options.includeResponse || options.includeTrajectory);
-}
-
 export function buildChildDetailQuery(options = {}) {
   const include = [];
-  if (shouldIncludeResponse(options)) {
+  if (options.includeResponse) {
     include.push("result");
   }
   if (options.includeTrajectory) {
@@ -172,7 +168,7 @@ export function formatChildDetail(detail, taskId, options = {}) {
   }
 
   lines.push(...formatArtifacts(detail.artifacts));
-  lines.push(...formatFinalResponse(detail.finalResponse, shouldIncludeResponse(options)));
+  lines.push(...formatFinalResponse(detail.finalResponse, Boolean(options.includeResponse)));
   lines.push(...formatTrajectory(detail.trajectory, options));
   lines.push(...formatRecentEvents(detail.recentEvents));
 

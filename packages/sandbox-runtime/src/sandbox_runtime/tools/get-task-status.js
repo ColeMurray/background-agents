@@ -82,7 +82,7 @@ export default tool({
       .boolean()
       .optional()
       .describe(
-        "Include a persisted child event trajectory page. This also includes the final response when available."
+        "Include a persisted child event trajectory page. Use includeResponse separately to include the final response."
       ),
     trajectoryLimit: z
       .number()
