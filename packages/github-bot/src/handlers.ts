@@ -436,6 +436,7 @@ export async function handleIssueComment(
     commentBody,
     commenter: sender.login,
     isPublic: !repo.private,
+    botUsername: env.GITHUB_BOT_USERNAME,
     commentActionInstructions: config.commentActionInstructions,
   });
 
@@ -537,6 +538,7 @@ export async function handleReviewComment(
     commentBody,
     commenter: sender.login,
     isPublic: !repo.private,
+    botUsername: env.GITHUB_BOT_USERNAME,
     filePath: comment.path,
     diffHunk: comment.diff_hunk,
     commentId: comment.id,
