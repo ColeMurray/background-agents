@@ -17,6 +17,8 @@ import {
   type SandboxProviderCapabilities,
   type SnapshotConfig,
   type SnapshotResult,
+  type StopConfig,
+  type StopResult,
 } from "../provider";
 import type {
   VercelCreateSandboxResponse,
@@ -76,7 +78,7 @@ export class VercelSandboxProvider implements SandboxProvider {
     supportsRestore: true,
     supportsWarm: true,
     supportsPersistentResume: false,
-    supportsExplicitStop: false,
+    supportsExplicitStop: true,
   };
 
   constructor(
@@ -205,6 +207,19 @@ export class VercelSandboxProvider implements SandboxProvider {
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;
       throw this.classifyError("Failed to snapshot Vercel sandbox", error);
+    }
+  }
+
+  async stopSandbox(config: StopConfig): Promise<StopResult> {
+    try {
+      await this.client.stopSession(config.providerObjectId, config.correlation);
+      return { success: true };
+    } catch (error) {
+      if (error instanceof VercelSandboxApiError && error.status === 404) {
+        return { success: true };
+      }
+      if (error instanceof SandboxProviderError) throw error;
+      throw this.classifyError("Failed to stop Vercel sandbox", error);
     }
   }
 

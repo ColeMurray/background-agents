@@ -208,6 +208,28 @@ describe("VercelSandboxClient", () => {
     expect(fetchSpy.mock.calls[1][1]).toEqual(expect.objectContaining({ method: "DELETE" }));
   });
 
+  it("stops a sandbox session with the expected endpoint", async () => {
+    fetchSpy.mockResolvedValue(new Response(null, { status: 204 }));
+
+    await createClient().stopSession("session-1", {
+      trace_id: "trace-1",
+      request_id: "request-1",
+      session_id: "session-logical",
+      sandbox_id: "sandbox-logical",
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://vercel.test/api/v2/sandboxes/sessions/session-1/stop?teamId=team-456",
+      expect.objectContaining({ method: "POST" })
+    );
+    const headers = lastFetchInit().headers as Headers;
+    expect(headers.get("Authorization")).toBe("Bearer vercel-token");
+    expect(headers.get("x-trace-id")).toBe("trace-1");
+    expect(headers.get("x-request-id")).toBe("request-1");
+    expect(headers.get("x-session-id")).toBe("session-logical");
+    expect(headers.get("x-sandbox-id")).toBe("sandbox-logical");
+  });
+
   it("wraps non-OK responses in VercelSandboxApiError", async () => {
     fetchSpy.mockResolvedValue(new Response("unauthorized", { status: 401 }));
 

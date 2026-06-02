@@ -49,6 +49,7 @@ function createMockClient(
       request: VercelRunCommandRequest
     ) => Promise<{ commandId: string; exitCode: number | null }>;
     snapshotSession: (sessionId: string) => Promise<VercelSnapshotResponse>;
+    stopSession: (sessionId: string) => Promise<void>;
     deleteSnapshot: (snapshotId: string) => Promise<void>;
   }> = {}
 ): VercelSandboxClient {
@@ -63,6 +64,7 @@ function createMockClient(
       })
     ),
     deleteSnapshot: vi.fn(async () => {}),
+    stopSession: vi.fn(async () => {}),
     ...overrides,
   } as unknown as VercelSandboxClient;
 }
@@ -110,7 +112,7 @@ describe("VercelSandboxProvider", () => {
       supportsRestore: true,
       supportsWarm: true,
       supportsPersistentResume: false,
-      supportsExplicitStop: false,
+      supportsExplicitStop: true,
     });
   });
 
@@ -300,6 +302,27 @@ describe("VercelSandboxProvider", () => {
     );
     expect(snapshot).toEqual({ success: true, imageId: "snapshot-1" });
     expect(vi.mocked(client.deleteSnapshot)).toHaveBeenCalledWith("snapshot-1");
+  });
+
+  it("stops a Vercel sandbox session", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, providerConfig);
+    const correlation = {
+      trace_id: "trace-1",
+      request_id: "request-1",
+      session_id: "session-123",
+      sandbox_id: "sandbox-456",
+    };
+
+    const result = await provider.stopSandbox({
+      providerObjectId: "vercel-session-1",
+      sessionId: "session-123",
+      reason: "inactivity_timeout",
+      correlation,
+    });
+
+    expect(result).toEqual({ success: true });
+    expect(vi.mocked(client.stopSession)).toHaveBeenCalledWith("vercel-session-1", correlation);
   });
 
   it("reports a failed snapshot status without throwing", async () => {
