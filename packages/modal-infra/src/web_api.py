@@ -107,6 +107,15 @@ def require_valid_control_plane_url(url: str | None) -> None:
         )
 
 
+def parse_request_image_profile(request: dict):
+    from .sandbox.settings import parse_sandbox_image_profile
+
+    try:
+        return parse_sandbox_image_profile(request.get("image_profile"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 @app.function(
     image=function_image,
     secrets=[github_app_secrets, internal_api_secret],
@@ -158,6 +167,7 @@ async def api_create_sandbox(
         snapshot_id = request.get("snapshot_id")
         repo_image_id = request.get("repo_image_id") or None
         clone_token = _resolve_clone_token() if snapshot_id or repo_image_id else None
+        image_profile = parse_request_image_profile(request)
 
         session_config = SessionConfig(
             session_id=request.get("session_id"),
@@ -185,6 +195,7 @@ async def api_create_sandbox(
             code_server_enabled=bool(request.get("code_server_enabled", False)),
             agent_slack_notify_enabled=bool(request.get("agent_slack_notify_enabled", False)),
             settings=SandboxRuntimeSettings.from_raw(request.get("sandbox_settings")),
+            image_profile=image_profile,
         )
 
         handle = await manager.create_sandbox(config)
@@ -202,6 +213,10 @@ async def api_create_sandbox(
                 "tunnel_urls": handle.tunnel_urls,
             },
         }
+    except HTTPException as e:
+        outcome = "error"
+        http_status = e.status_code
+        raise
     except Exception as e:
         outcome = "error"
         http_status = 500
@@ -467,6 +482,7 @@ async def api_restore_sandbox(
         sandbox_auth_token = request.get("sandbox_auth_token", "")
         user_env_vars = request.get("user_env_vars") or None
         sandbox_settings = SandboxRuntimeSettings.from_raw(request.get("sandbox_settings"))
+        image_profile = parse_request_image_profile(request)
         timeout_seconds = int(request.get("timeout_seconds", DEFAULT_SANDBOX_TIMEOUT_SECONDS))
 
         manager = SandboxManager()
@@ -488,6 +504,7 @@ async def api_restore_sandbox(
             code_server_enabled=code_server_enabled,
             agent_slack_notify_enabled=agent_slack_notify_enabled,
             settings=sandbox_settings,
+            image_profile=image_profile,
         )
 
         return {
@@ -573,6 +590,7 @@ async def api_build_repo_image(
         callback_url = request.get("callback_url", "")
         user_env_vars = request.get("user_env_vars") or None
         sandbox_settings = request.get("sandbox_settings") or None
+        image_profile = parse_request_image_profile(request)
 
         if not repo_owner or not repo_name:
             raise HTTPException(status_code=400, detail="repo_owner and repo_name are required")
@@ -589,6 +607,7 @@ async def api_build_repo_image(
             build_id=build_id,
             user_env_vars=user_env_vars,
             sandbox_settings=sandbox_settings,
+            image_profile=image_profile,
         )
 
         return {

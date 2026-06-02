@@ -40,7 +40,7 @@ from ..app import (
 )
 from ..auth import generate_internal_token
 from ..log_config import get_logger
-from ..sandbox.settings import DEFAULT_IMAGE_PROFILE, DOCKER_IMAGE_PROFILE
+from ..sandbox.settings import DEFAULT_IMAGE_PROFILE, DOCKER_IMAGE_PROFILE, SandboxImageProfile
 
 log = get_logger("image_builder")
 
@@ -56,9 +56,9 @@ _SETUP_FAILURE_EVENTS = {"setup.failed", "setup.timeout", "setup.error"}
 _SUPERVISOR_FAILURE_EVENTS = {"supervisor.error", "supervisor.fatal"}
 
 
-def _parse_image_profile(value: object) -> str:
+def _parse_image_profile(value: object) -> SandboxImageProfile:
     if value in IMAGE_PROFILES:
-        return str(value)
+        return value
     raise ValueError(f"Invalid image profile: {value!r}")
 
 
@@ -257,6 +257,7 @@ async def build_repo_image(
     build_id: str = "",
     user_env_vars: dict[str, str] | None = None,
     sandbox_settings: dict[str, Any] | None = None,
+    image_profile: str = DEFAULT_IMAGE_PROFILE,
 ) -> None:
     """
     Async worker: create build sandbox, await exit, snapshot, callback.
@@ -272,13 +273,19 @@ async def build_repo_image(
         build_id: Build identifier from the control plane
         user_env_vars: User-defined environment variables (repo secrets) injected into the build sandbox
         sandbox_settings: Resolved sandbox settings for this repository
+        image_profile: Resolved sandbox image profile for this build
     """
     from ..sandbox.manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS, SandboxManager
-    from ..sandbox.settings import SandboxRuntimeSettings
 
     # Validate callback URL against allowed hosts to prevent SSRF
     if callback_url and not validate_control_plane_url(callback_url):
         log.error("build.invalid_callback_url", url=callback_url, build_id=build_id)
+        return
+
+    try:
+        resolved_image_profile = _parse_image_profile(image_profile)
+    except ValueError as e:
+        log.error("build.invalid_image_profile", build_id=build_id, error=str(e))
         return
 
     start_time = time.time()
@@ -304,7 +311,7 @@ async def build_repo_image(
             default_branch=default_branch,
             clone_token=clone_token,
             user_env_vars=user_env_vars,
-            settings=SandboxRuntimeSettings.from_raw(sandbox_settings),
+            image_profile=resolved_image_profile,
         )
 
         # 3. Stream stdout until build completes (sandbox stays alive for snapshotting)

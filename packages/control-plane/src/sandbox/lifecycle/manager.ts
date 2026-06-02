@@ -464,6 +464,7 @@ export class SandboxLifecycleManager {
         agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
+        imageProfile,
       };
 
       const result = await this.provider.createSandbox(createConfig);
@@ -628,6 +629,7 @@ export class SandboxLifecycleManager {
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const mcpServers = await this.loadMcpServers(session);
       const sandboxSettings = this.parseSandboxRuntimeSettings(session);
+      const imageProfile = resolveSandboxImageProfile(sandboxSettings);
       const result = await this.provider.restoreFromSnapshot({
         snapshotImageId,
         sessionId: session.session_name || session.id,
@@ -645,6 +647,7 @@ export class SandboxLifecycleManager {
         agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
+        imageProfile,
       });
 
       if (result.success) {

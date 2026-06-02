@@ -10,7 +10,6 @@ import pytest
 
 from sandbox_runtime.auth.internal import generate_internal_token, verify_internal_token
 from src.sandbox.manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
-from src.sandbox.settings import SandboxRuntimeSettings
 from src.scheduler.image_builder import (
     CALLBACK_BACKOFF_BASE,
     CALLBACK_MAX_RETRIES,
@@ -408,7 +407,7 @@ class TestBuildRepoImage:
         assert callback_payload["base_sha"] == "abc123"
 
     @pytest.mark.asyncio
-    async def test_passes_sandbox_settings_to_build_sandbox(self):
+    async def test_passes_image_profile_to_build_sandbox(self):
         handle, _snapshot_aio, _terminate_aio = self._build_handle()
         manager = SimpleNamespace(create_build_sandbox=AsyncMock(return_value=handle))
 
@@ -428,12 +427,11 @@ class TestBuildRepoImage:
                 callback_url="https://cp.test/repo-images/build-complete",
                 build_id="img-1",
                 sandbox_settings={"dockerEnabled": True},
+                image_profile="docker",
             )
 
         manager.create_build_sandbox.assert_awaited_once()
-        assert manager.create_build_sandbox.await_args.kwargs[
-            "settings"
-        ] == SandboxRuntimeSettings.from_raw({"dockerEnabled": True})
+        assert manager.create_build_sandbox.await_args.kwargs["image_profile"] == "docker"
 
     @pytest.mark.asyncio
     async def test_terminates_and_reports_failure_when_snapshot_times_out(self):

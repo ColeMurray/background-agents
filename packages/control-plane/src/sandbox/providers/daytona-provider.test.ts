@@ -85,6 +85,7 @@ const baseCreateConfig: CreateSandboxConfig = {
   sandboxAuthToken: "auth-token-abc",
   provider: "anthropic",
   model: "anthropic/claude-sonnet-4-5",
+  imageProfile: "default",
 };
 
 const baseResumeConfig: ResumeConfig = {

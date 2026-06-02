@@ -8,19 +8,14 @@
  * - Maintenance operations (stale builds, cleanup)
  */
 
-import { normalizeSandboxRuntimeSettings, resolveSandboxImageProfile } from "@open-inspect/shared";
-
 import { RepoImageStore } from "../db/repo-images";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
+import { RepoImageBuildPlanner } from "../repo-images/build-planner";
 import { createModalClient } from "../sandbox/client";
 import { isModalSandboxBackend } from "../sandbox/provider-name";
-import {
-  resolveSandboxSettings,
-  resolveSandboxSettingsForRepos,
-} from "../session/integration-settings-resolution";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
 import {
@@ -208,22 +203,20 @@ async function handleTriggerBuild(
   const { owner, name } = params;
 
   const store = new RepoImageStore(env.DB);
+  const planner = new RepoImageBuildPlanner(env.DB);
   const now = Date.now();
   const buildId = `img-${owner}-${name}-${now}`;
 
-  const sandboxSettings = normalizeSandboxRuntimeSettings(
-    await resolveSandboxSettings(env.DB, owner, name)
-  );
-  const imageProfile = resolveSandboxImageProfile(sandboxSettings);
-
   try {
+    const buildPlan = await planner.plan({ repoOwner: owner, repoName: name });
+
     // Register the build in D1
     await store.registerBuild({
       id: buildId,
       repoOwner: owner,
       repoName: name,
       baseBranch: "main",
-      imageProfile,
+      imageProfile: buildPlan.imageProfile,
     });
 
     // Construct callback URL
@@ -290,7 +283,8 @@ async function handleTriggerBuild(
         buildId,
         callbackUrl,
         userEnvVars,
-        sandboxSettings,
+        sandboxSettings: buildPlan.sandboxSettings,
+        imageProfile: buildPlan.imageProfile,
       },
       { trace_id: ctx.trace_id, request_id: ctx.request_id }
     );
@@ -299,7 +293,7 @@ async function handleTriggerBuild(
       build_id: buildId,
       repo_owner: owner,
       repo_name: name,
-      image_profile: imageProfile,
+      image_profile: buildPlan.imageProfile,
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
@@ -531,15 +525,14 @@ async function handleGetEnabledRepos(
   }
 
   const metadataStore = new RepoMetadataStore(env.DB);
+  const planner = new RepoImageBuildPlanner(env.DB);
 
   try {
     const repos = await metadataStore.getImageBuildEnabledRepos();
-    const sandboxSettings = (await resolveSandboxSettingsForRepos(env.DB, repos)).map((settings) =>
-      normalizeSandboxRuntimeSettings(settings)
-    );
-    const reposWithSettings = repos.map((repo, index) => ({
+    const buildPlans = await planner.planMany(repos);
+    const reposWithSettings = buildPlans.map(({ repo, imageProfile }) => ({
       ...repo,
-      imageProfile: resolveSandboxImageProfile(sandboxSettings[index]),
+      imageProfile,
     }));
     return json({ repos: reposWithSettings });
   } catch (e) {

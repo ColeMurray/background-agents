@@ -132,8 +132,10 @@ async def test_build_repo_image_forwards_sandbox_settings(monkeypatch):
             "build_id": "build-1",
             "callback_url": "https://control-plane.example/repo-images/build-complete",
             "sandbox_settings": {"dockerEnabled": True},
+            "image_profile": "docker",
         }
     )
 
     assert result["success"] is True
     assert captured["sandbox_settings"] == {"dockerEnabled": True}
+    assert captured["image_profile"] == "docker"

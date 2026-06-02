@@ -5,7 +5,11 @@
  * All requests are authenticated using HMAC-signed tokens.
  */
 
-import { generateInternalToken, type SandboxRuntimeSettings } from "@open-inspect/shared";
+import {
+  generateInternalToken,
+  type SandboxImageProfile,
+  type SandboxRuntimeSettings,
+} from "@open-inspect/shared";
 import type { McpServerConfig } from "@open-inspect/shared";
 import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";
@@ -67,6 +71,7 @@ export interface CreateSandboxRequest {
   agentSlackNotifyEnabled?: boolean;
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxRuntimeSettings;
+  imageProfile: SandboxImageProfile;
 }
 
 export interface CreateSandboxResponse {
@@ -97,6 +102,7 @@ export interface RestoreSandboxRequest {
   agentSlackNotifyEnabled?: boolean;
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxRuntimeSettings;
+  imageProfile: SandboxImageProfile;
 }
 
 export interface RestoreSandboxResponse {
@@ -141,6 +147,7 @@ export interface BuildRepoImageRequest {
   callbackUrl: string;
   userEnvVars?: Record<string, string>;
   sandboxSettings?: SandboxRuntimeSettings;
+  imageProfile: SandboxImageProfile;
 }
 
 export interface BuildRepoImageResponse {
@@ -263,6 +270,7 @@ export class ModalClient {
           agent_slack_notify_enabled: request.agentSlackNotifyEnabled ?? false,
           mcp_servers: request.mcpServers || null,
           sandbox_settings: request.sandboxSettings ?? null,
+          image_profile: request.imageProfile,
         }),
       });
 
@@ -350,6 +358,7 @@ export class ModalClient {
           code_server_enabled: request.codeServerEnabled ?? false,
           agent_slack_notify_enabled: request.agentSlackNotifyEnabled ?? false,
           sandbox_settings: request.sandboxSettings ?? null,
+          image_profile: request.imageProfile,
         }),
       });
 
@@ -563,6 +572,7 @@ export class ModalClient {
           callback_url: request.callbackUrl,
           user_env_vars: request.userEnvVars,
           sandbox_settings: request.sandboxSettings ?? null,
+          image_profile: request.imageProfile,
         }),
       });
 

@@ -4,14 +4,18 @@ import pytest
 
 from sandbox_runtime.types import SessionConfig
 from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxConfig, SandboxManager
-from src.sandbox.settings import SandboxRuntimeSettings
+from src.sandbox.settings import SandboxRuntimeSettings, parse_sandbox_image_profile
 
 
-def test_runtime_settings_parse_docker_request():
-    settings = SandboxRuntimeSettings.from_raw({"dockerEnabled": True})
+def test_parse_sandbox_image_profile_accepts_known_profiles():
+    assert parse_sandbox_image_profile("default") == "default"
+    assert parse_sandbox_image_profile("docker") == "docker"
+    assert parse_sandbox_image_profile(None) == "default"
 
-    assert settings.docker.enabled is True
-    assert settings.image_profile == "docker"
+
+def test_parse_sandbox_image_profile_rejects_unknown_profiles():
+    with pytest.raises(ValueError):
+        parse_sandbox_image_profile("bogus")
 
 
 def test_runtime_settings_ignore_non_boolean_feature_flags():
@@ -22,9 +26,7 @@ def test_runtime_settings_ignore_non_boolean_feature_flags():
     ):
         settings = SandboxRuntimeSettings.from_raw(raw)
 
-        assert settings.docker.enabled is False
         assert settings.terminal_enabled is False
-        assert settings.image_profile == "default"
 
 
 @pytest.mark.asyncio
@@ -63,7 +65,7 @@ async def test_user_env_vars_override_order(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_sandbox_enables_docker_when_setting_is_on(monkeypatch):
+async def test_create_sandbox_enables_docker_when_profile_is_docker(monkeypatch):
     captured = {}
 
     async def fake_create_aio(*args, **kwargs):
@@ -88,7 +90,7 @@ async def test_create_sandbox_enables_docker_when_setting_is_on(monkeypatch):
             repo_name="repo",
             control_plane_url="https://control-plane.example",
             sandbox_auth_token="token-123",
-            settings=SandboxRuntimeSettings.from_raw({"dockerEnabled": True}),
+            image_profile="docker",
         )
     )
 
@@ -126,7 +128,6 @@ async def test_create_sandbox_does_not_enable_docker_when_setting_is_off(monkeyp
             repo_name="repo",
             control_plane_url="https://control-plane.example",
             sandbox_auth_token="token-123",
-            settings=SandboxRuntimeSettings.from_raw({"dockerEnabled": False}),
         )
     )
 
@@ -163,7 +164,7 @@ async def test_docker_resource_defaults_are_configurable(monkeypatch):
             repo_name="repo",
             control_plane_url="https://control-plane.example",
             sandbox_auth_token="token-123",
-            settings=SandboxRuntimeSettings.from_raw({"dockerEnabled": True}),
+            image_profile="docker",
         )
     )
 
@@ -600,7 +601,7 @@ async def test_session_snapshot_boot_preserves_clone_token(monkeypatch):
     """A session-snapshot boot has the same legacy-compat need as repo images."""
     captured = {}
 
-    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_registry", lambda *a, **kw: object())
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: object())
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
     monkeypatch.delenv("SCM_PROVIDER", raising=False)
 

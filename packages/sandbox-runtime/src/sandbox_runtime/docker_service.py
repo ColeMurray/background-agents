@@ -4,10 +4,12 @@ import asyncio
 import os
 import shutil
 import time
+from contextlib import suppress
 from pathlib import Path
 
 DEFAULT_DOCKER_DATA_ROOT = Path("/opt/docker-data")
 DEFAULT_IP_FORWARD_PATH = Path("/proc/sys/net/ipv4/ip_forward")
+DOCKER_COMMAND_TIMEOUT_SECONDS = 5.0
 DEFAULT_RUN_PATHS = (
     Path("/var/run/docker.sock"),
     Path("/var/run/docker.pid"),
@@ -36,6 +38,7 @@ class DockerService:
         self.run_paths = run_paths
         self.ip_forward_path = ip_forward_path
         self.process: asyncio.subprocess.Process | None = None
+        self._log_task: asyncio.Task[None] | None = None
 
     @classmethod
     def from_env(cls, log) -> "DockerService":
@@ -70,13 +73,26 @@ class DockerService:
             else:
                 path.unlink(missing_ok=True)
 
-    async def _run_command(self, *args: str, check: bool = True) -> tuple[int, str]:
+    async def _run_command(
+        self,
+        *args: str,
+        check: bool = True,
+        timeout_seconds: float = DOCKER_COMMAND_TIMEOUT_SECONDS,
+    ) -> tuple[int, str]:
         proc = await asyncio.create_subprocess_exec(
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        stdout, _ = await proc.communicate()
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+        except TimeoutError:
+            with suppress(ProcessLookupError):
+                proc.kill()
+            await proc.wait()
+            raise RuntimeError(
+                f"{' '.join(args)} timed out after {timeout_seconds:.1f}s"
+            ) from None
         output = (stdout or b"").decode(errors="replace")
         if check and proc.returncode != 0:
             raise RuntimeError(f"{' '.join(args)} failed: {output.strip()}")
@@ -144,8 +160,12 @@ class DockerService:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        asyncio.create_task(self._forward_logs())
-        await self.wait_until_ready()
+        self._log_task = asyncio.create_task(self._forward_logs())
+        try:
+            await self.wait_until_ready()
+        except Exception:
+            await self.stop()
+            raise
         self.log.info("docker.ready", data_root=str(self.data_root))
 
     async def wait_until_ready(self) -> None:
@@ -168,13 +188,29 @@ class DockerService:
         except Exception as e:
             self.log.warn("docker.log_forward_error", exc=e)
 
-    async def stop(self) -> None:
-        if not self.process or self.process.returncode is not None:
+    async def _cancel_log_task(self) -> None:
+        if not self._log_task:
             return
-        self.log.info("docker.terminating")
-        self.process.terminate()
-        try:
-            await asyncio.wait_for(self.process.wait(), timeout=5.0)
-        except TimeoutError:
-            self.process.kill()
-            await self.process.wait()
+        if not self._log_task.done():
+            self._log_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._log_task
+        self._log_task = None
+
+    async def stop(self) -> None:
+        process = self.process
+        if not process:
+            await self._cancel_log_task()
+            return
+
+        if process.returncode is None:
+            self.log.info("docker.terminating")
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5.0)
+            except TimeoutError:
+                process.kill()
+                await process.wait()
+
+        await self._cancel_log_task()
+        self.process = None

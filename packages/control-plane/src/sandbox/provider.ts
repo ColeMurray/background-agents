@@ -5,7 +5,7 @@
  * enabling unit testing and future provider support.
  */
 
-import type { SandboxRuntimeSettings } from "@open-inspect/shared";
+import type { SandboxImageProfile, SandboxRuntimeSettings } from "@open-inspect/shared";
 import type { CorrelationContext } from "../logger";
 import type { McpServerConfig } from "@open-inspect/shared";
 
@@ -75,6 +75,8 @@ export interface CreateSandboxConfig {
   mcpServers?: McpServerConfig[];
   /** Runtime sandbox settings resolved from integration settings */
   sandboxSettings?: SandboxRuntimeSettings;
+  /** Runtime image profile resolved by the control plane */
+  imageProfile: SandboxImageProfile;
 }
 
 /**
@@ -137,6 +139,8 @@ export interface RestoreConfig {
   agentSlackNotifyEnabled?: boolean;
   /** Runtime sandbox settings resolved from integration settings */
   sandboxSettings?: SandboxRuntimeSettings;
+  /** Runtime image profile resolved by the control plane */
+  imageProfile: SandboxImageProfile;
 }
 
 /**

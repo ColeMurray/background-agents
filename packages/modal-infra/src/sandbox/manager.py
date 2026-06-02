@@ -16,28 +16,25 @@ import os
 import secrets
 import time
 from dataclasses import dataclass, field
-from typing import Any
 
 import modal
 
 from sandbox_runtime.constants import (
     CODE_SERVER_PORT,
-    EXPECTED_TUNNEL_PORTS_ENV_VAR,
     TTYD_PROXY_PORT,
     TUNNEL_ENV_FILE_PATH,
 )
 from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.types import SandboxStatus, SessionConfig
 
-from ..app import app, llm_secrets
-from ..images.base import base_image, docker_image
-from .settings import (
-    DOCKER_IMAGE_PROFILE,
-    DockerLaunchSettings,
-    RuntimePortSettings,
-    SandboxImageProfile,
-    SandboxRuntimeSettings,
+from ..app import llm_secrets
+from .launch_options import (
+    RuntimeLaunchOptions,
+    build_modal_create_kwargs,
+    select_base_image,
+    select_runtime_image,
 )
+from .settings import SandboxImageProfile, SandboxRuntimeSettings
 
 log = get_logger("manager")
 
@@ -66,6 +63,7 @@ class SandboxConfig:
         False  # Whether to install the agent-initiated slack-notify tool
     )
     settings: SandboxRuntimeSettings = field(default_factory=SandboxRuntimeSettings.default)
+    image_profile: SandboxImageProfile = "default"
 
 
 @dataclass
@@ -90,88 +88,6 @@ class SandboxHandle:
     async def terminate(self) -> None:
         """Terminate the sandbox."""
         self.modal_sandbox.terminate()
-
-
-@dataclass(frozen=True)
-class RuntimeLaunchOptions:
-    """Modal launch options derived from parsed sandbox runtime settings."""
-
-    image_profile: SandboxImageProfile
-    docker: DockerLaunchSettings
-    terminal_enabled: bool = False
-    exposed_ports: tuple[int, ...] = ()
-    tunnel_ports: tuple[int, ...] = ()
-
-    @classmethod
-    def for_session(
-        cls,
-        settings: SandboxRuntimeSettings,
-        code_server_enabled: bool,
-    ) -> "RuntimeLaunchOptions":
-        image_profile = settings.image_profile
-        docker = DockerLaunchSettings.from_profile(image_profile)
-        ports = RuntimePortSettings.from_settings(settings, code_server_enabled)
-        return cls(
-            image_profile=image_profile,
-            docker=docker,
-            terminal_enabled=settings.terminal_enabled,
-            exposed_ports=ports.exposed_ports,
-            tunnel_ports=ports.tunnel_ports,
-        )
-
-    @classmethod
-    def for_image_build(cls, settings: SandboxRuntimeSettings) -> "RuntimeLaunchOptions":
-        image_profile = settings.image_profile
-        return cls(
-            image_profile=image_profile,
-            docker=DockerLaunchSettings.from_profile(image_profile),
-        )
-
-    def select_base_image(self) -> modal.Image:
-        return docker_image if self.image_profile == DOCKER_IMAGE_PROFILE else base_image
-
-    def select_runtime_image(
-        self,
-        *,
-        snapshot_id: str | None = None,
-        repo_image_id: str | None = None,
-    ) -> tuple[modal.Image, str]:
-        if snapshot_id:
-            return modal.Image.from_registry(f"open-inspect-snapshot:{snapshot_id}"), "snapshot"
-        if repo_image_id:
-            return modal.Image.from_id(repo_image_id), "repo"
-        return self.select_base_image(), "base"
-
-    def create_kwargs(
-        self,
-        *,
-        image: modal.Image,
-        secrets: list[Any],
-        timeout: int,
-        env_vars: dict[str, str],
-    ) -> dict[str, Any]:
-        launch_env_vars = dict(env_vars)
-        launch_env_vars["OPENINSPECT_SANDBOX_IMAGE_PROFILE"] = self.image_profile
-        if self.terminal_enabled:
-            launch_env_vars["TERMINAL_ENABLED"] = "true"
-        if self.tunnel_ports:
-            launch_env_vars[EXPECTED_TUNNEL_PORTS_ENV_VAR] = ",".join(
-                str(p) for p in self.tunnel_ports
-            )
-        launch_env_vars.update(self.docker.env_vars())
-
-        create_kwargs: dict[str, Any] = {
-            "image": image,
-            "app": app,
-            "secrets": secrets,
-            "timeout": timeout,
-            "workdir": "/workspace",
-            "env": launch_env_vars,
-        }
-        if self.exposed_ports:
-            create_kwargs["encrypted_ports"] = list(self.exposed_ports)
-        create_kwargs.update(self.docker.modal_create_kwargs())
-        return create_kwargs
 
 
 class SandboxManager:
@@ -413,6 +329,7 @@ class SandboxManager:
         launch_options = RuntimeLaunchOptions.for_session(
             runtime_settings,
             config.code_server_enabled,
+            config.image_profile,
         )
 
         if config.agent_slack_notify_enabled:
@@ -421,7 +338,8 @@ class SandboxManager:
         if config.session_config:
             env_vars["SESSION_CONFIG"] = config.session_config.model_dump_json()
 
-        image, image_source = launch_options.select_runtime_image(
+        image, image_source = select_runtime_image(
+            launch_options.image_profile,
             snapshot_id=config.snapshot_id,
             repo_image_id=config.repo_image_id,
         )
@@ -429,7 +347,8 @@ class SandboxManager:
             env_vars["FROM_REPO_IMAGE"] = "true"
             env_vars["REPO_IMAGE_SHA"] = config.repo_image_sha or ""
 
-        create_kwargs = launch_options.create_kwargs(
+        create_kwargs = build_modal_create_kwargs(
+            launch_options,
             image=image,
             secrets=[llm_secrets],
             timeout=config.timeout_seconds,
@@ -486,7 +405,7 @@ class SandboxManager:
         default_branch: str = "main",
         clone_token: str = "",
         user_env_vars: dict[str, str] | None = None,
-        settings: SandboxRuntimeSettings | None = None,
+        image_profile: SandboxImageProfile = "default",
     ) -> SandboxHandle:
         """
         Create a sandbox specifically for image building.
@@ -495,7 +414,7 @@ class SandboxManager:
         - Sets IMAGE_BUILD_MODE=true (exits after setup, no OpenCode/bridge)
         - No SANDBOX_AUTH_TOKEN, CONTROL_PLANE_URL, or LLM secrets
         - Shorter timeout (30 min vs 2 hours)
-        - Uses the Docker-capable base when dockerEnabled is requested
+        - Uses the Docker-capable base when the docker image profile is requested
 
         Note: MCP servers are not available during image builds (no session config).
         MCP packages are installed at first use via npx instead.
@@ -523,10 +442,10 @@ class SandboxManager:
         )
 
         self._inject_vcs_env_vars(env_vars, clone_token or None)
-        runtime_settings = settings or SandboxRuntimeSettings.default()
-        launch_options = RuntimeLaunchOptions.for_image_build(runtime_settings)
-        create_kwargs = launch_options.create_kwargs(
-            image=launch_options.select_base_image(),
+        launch_options = RuntimeLaunchOptions.for_image_build(image_profile)
+        create_kwargs = build_modal_create_kwargs(
+            launch_options,
+            image=select_base_image(launch_options.image_profile),
             secrets=[],
             timeout=BUILD_TIMEOUT_SECONDS,
             env_vars=env_vars,
@@ -683,6 +602,7 @@ class SandboxManager:
         code_server_enabled: bool = False,
         agent_slack_notify_enabled: bool = False,
         settings: SandboxRuntimeSettings | None = None,
+        image_profile: SandboxImageProfile = "default",
     ) -> SandboxHandle:
         """
         Create a new sandbox from a filesystem snapshot Image.
@@ -759,12 +679,14 @@ class SandboxManager:
         launch_options = RuntimeLaunchOptions.for_session(
             runtime_settings,
             code_server_enabled,
+            image_profile,
         )
 
         if agent_slack_notify_enabled:
             env_vars["AGENT_SLACK_NOTIFY_ENABLED"] = "true"
 
-        create_kwargs = launch_options.create_kwargs(
+        create_kwargs = build_modal_create_kwargs(
+            launch_options,
             image=image,
             secrets=[llm_secrets],
             timeout=timeout_seconds,

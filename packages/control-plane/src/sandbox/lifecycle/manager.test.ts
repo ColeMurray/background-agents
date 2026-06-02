@@ -1774,6 +1774,7 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
           sandboxSettings: { tunnelPorts: [3000], terminalEnabled: true, dockerEnabled: true },
+          imageProfile: "docker",
         })
       );
     });
@@ -1799,6 +1800,7 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
           sandboxSettings: {},
+          imageProfile: "default",
         })
       );
     });
@@ -1826,6 +1828,7 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
           sandboxSettings: { tunnelPorts: [3000] },
+          imageProfile: "default",
         })
       );
     });
@@ -1923,6 +1926,7 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({
           sandboxSettings: {},
+          imageProfile: "default",
         })
       );
     });

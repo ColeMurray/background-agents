@@ -107,9 +107,11 @@ describe("ModalClient", () => {
       buildId: "img-1",
       callbackUrl: "https://cp.example/repo-images/build-complete",
       sandboxSettings: { dockerEnabled: true },
+      imageProfile: "docker",
     });
 
     const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
     expect(body.sandbox_settings).toEqual({ dockerEnabled: true });
+    expect(body.image_profile).toBe("docker");
   });
 });

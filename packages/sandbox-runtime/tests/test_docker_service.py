@@ -1,6 +1,8 @@
 """Tests for Docker daemon supervision in the sandbox entrypoint."""
 
+import asyncio
 import os
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -78,6 +80,33 @@ async def test_supervisor_starts_docker_before_setup_in_build_mode():
 
 
 @pytest.mark.asyncio
+async def test_supervisor_shutdown_times_out_runtime_services():
+    env = {
+        "SANDBOX_ID": "test-sandbox",
+        "REPO_OWNER": "acme",
+        "REPO_NAME": "repo",
+        "SESSION_CONFIG": "{}",
+    }
+
+    async def slow_stop():
+        await asyncio.sleep(1)
+
+    with patch.dict(os.environ, env, clear=False):
+        supervisor = SandboxSupervisor()
+
+    supervisor.SIDECAR_TIMEOUT_SECONDS = 0.01
+    supervisor.runtime_services.stop = slow_stop
+    supervisor.log = MagicMock()
+
+    await supervisor.shutdown()
+
+    supervisor.log.warn.assert_called_with(
+        "runtime_services.stop_timeout",
+        timeout_seconds=0.01,
+    )
+
+
+@pytest.mark.asyncio
 async def test_configure_network_adds_snat_rules(tmp_path):
     calls: list[tuple[str, ...]] = []
 
@@ -133,3 +162,55 @@ async def test_configure_network_adds_snat_rules(tmp_path):
         "--to-source",
         "10.0.0.2",
     ) in calls
+
+
+@pytest.mark.asyncio
+async def test_run_command_times_out_and_kills_process():
+    service = DockerService(MagicMock())
+
+    with pytest.raises(RuntimeError, match="timed out after"):
+        await service._run_command(
+            sys.executable,
+            "-c",
+            "import time; time.sleep(10)",
+            timeout_seconds=0.01,
+        )
+
+
+@pytest.mark.asyncio
+async def test_start_cleans_up_dockerd_when_readiness_fails(monkeypatch, tmp_path):
+    class FakeProcess:
+        stdout = None
+        returncode = None
+        terminated = False
+        killed = False
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.killed = True
+
+        async def wait(self):
+            self.returncode = 0
+
+    process = FakeProcess()
+    service = DockerService(
+        MagicMock(),
+        enabled=True,
+        data_root=tmp_path / "docker-data",
+        run_paths=(tmp_path / "docker.sock", tmp_path / "docker.pid"),
+    )
+    service.configure_network = AsyncMock()
+    service.wait_until_ready = AsyncMock(side_effect=RuntimeError("not ready"))
+    monkeypatch.setattr(
+        "sandbox_runtime.docker_service.asyncio.create_subprocess_exec",
+        AsyncMock(return_value=process),
+    )
+
+    with pytest.raises(RuntimeError, match="not ready"):
+        await service.start()
+
+    assert process.terminated is True
+    assert service.process is None
+    assert service._log_task is None

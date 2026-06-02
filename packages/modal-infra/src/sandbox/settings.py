@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from sandbox_runtime.constants import CODE_SERVER_PORT, TTYD_PROXY_PORT
@@ -16,6 +16,7 @@ DEFAULT_DOCKER_SANDBOX_MEMORY_MB = 8192
 DEFAULT_IMAGE_PROFILE = "default"
 DOCKER_IMAGE_PROFILE = "docker"
 SandboxImageProfile = Literal["default", "docker"]
+IMAGE_PROFILES = frozenset({DEFAULT_IMAGE_PROFILE, DOCKER_IMAGE_PROFILE})
 
 
 def _env_float(name: str, default: float) -> float:
@@ -53,6 +54,14 @@ def parse_bool_setting(value: object) -> bool:
     return value is True
 
 
+def parse_sandbox_image_profile(value: object) -> SandboxImageProfile:
+    if value is None:
+        return DEFAULT_IMAGE_PROFILE
+    if value in IMAGE_PROFILES:
+        return value
+    raise ValueError(f"Invalid sandbox image profile: {value!r}")
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimePortSettings:
     """Modal port exposure derived from user sandbox settings."""
@@ -76,13 +85,6 @@ class RuntimePortSettings:
         tunnel_ports = tuple(p for p in settings.tunnel_ports if p not in reserved)
         exposed.extend(tunnel_ports)
         return cls(exposed_ports=tuple(exposed), tunnel_ports=tunnel_ports)
-
-
-@dataclass(frozen=True, slots=True)
-class DockerSandboxSettings:
-    """Docker-specific sandbox settings requested by the control plane."""
-
-    enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,11 +130,6 @@ class SandboxRuntimeSettings:
 
     tunnel_ports: tuple[int, ...] = ()
     terminal_enabled: bool = False
-    docker: DockerSandboxSettings = field(default_factory=DockerSandboxSettings)
-
-    @property
-    def image_profile(self) -> SandboxImageProfile:
-        return DOCKER_IMAGE_PROFILE if self.docker.enabled else DEFAULT_IMAGE_PROFILE
 
     @classmethod
     def default(cls) -> SandboxRuntimeSettings:
@@ -144,5 +141,4 @@ class SandboxRuntimeSettings:
         return cls(
             tunnel_ports=validate_tunnel_ports(payload.get("tunnelPorts", [])),
             terminal_enabled=parse_bool_setting(payload.get("terminalEnabled")),
-            docker=DockerSandboxSettings(enabled=parse_bool_setting(payload.get("dockerEnabled"))),
         )

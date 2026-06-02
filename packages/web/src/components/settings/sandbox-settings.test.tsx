@@ -426,13 +426,13 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     expect(screen.getByText("Save Settings").closest("button")).toBeDisabled();
   });
 
-  it("hides Docker control for non-Modal sandbox providers", () => {
+  it("shows Docker control for non-Modal sandbox providers", () => {
     vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "daytona");
     renderWithSWR(globalSettings([]));
-    expect(screen.queryByText("Docker")).not.toBeInTheDocument();
+    expect(screen.getByText("Docker")).toBeInTheDocument();
   });
 
-  it("preserves hidden Docker settings when saving other global settings for non-Modal providers", async () => {
+  it("preserves Docker settings when saving other global settings for non-Modal providers", async () => {
     vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "daytona");
 
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {

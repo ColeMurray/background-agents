@@ -1544,7 +1544,18 @@ class SandboxSupervisor:
         """Graceful shutdown of all processes."""
         self.log.info("supervisor.shutdown_start")
 
-        await self.runtime_services.stop()
+        try:
+            await asyncio.wait_for(
+                self.runtime_services.stop(),
+                timeout=self.SIDECAR_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            self.log.warn(
+                "runtime_services.stop_timeout",
+                timeout_seconds=self.SIDECAR_TIMEOUT_SECONDS,
+            )
+        except Exception as e:
+            self.log.warn("runtime_services.stop_error", exc=e)
 
         # Terminate bridge first
         if self.bridge_process and self.bridge_process.returncode is None:

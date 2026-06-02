@@ -5,7 +5,6 @@ import json
 import pytest
 
 from src.sandbox.manager import SandboxManager
-from src.sandbox.settings import SandboxRuntimeSettings
 
 
 def _fake_sandbox_create(captured):
@@ -268,7 +267,7 @@ async def test_docker_build_sandbox_sets_docker_env_and_experimental_option(monk
     await manager.create_build_sandbox(
         repo_owner="acme",
         repo_name="my-repo",
-        settings=SandboxRuntimeSettings.from_raw({"dockerEnabled": True}),
+        image_profile="docker",
     )
 
     env = captured["env"]

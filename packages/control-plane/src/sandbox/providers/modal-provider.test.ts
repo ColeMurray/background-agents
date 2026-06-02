@@ -62,6 +62,7 @@ const testConfig = {
   sandboxAuthToken: "auth-token",
   provider: "anthropic",
   model: "anthropic/claude-sonnet-4-5",
+  imageProfile: "default" as const,
 };
 
 // ==================== Tests ====================
@@ -486,6 +487,7 @@ describe("ModalSandboxProvider", () => {
           repoName: "repo",
           provider: "anthropic",
           model: "anthropic/claude-sonnet-4-5",
+          imageProfile: "default",
         });
         expect.fail("Should have thrown");
       } catch (e) {
@@ -513,6 +515,7 @@ describe("ModalSandboxProvider", () => {
           repoName: "repo",
           provider: "anthropic",
           model: "anthropic/claude-sonnet-4-5",
+          imageProfile: "default",
         });
         expect.fail("Should have thrown");
       } catch (e) {
@@ -562,6 +565,7 @@ describe("ModalSandboxProvider", () => {
         repoName: "repo",
         provider: "anthropic",
         model: "anthropic/claude-sonnet-4-5",
+        imageProfile: "default",
       });
 
       expect(result.success).toBe(true);

@@ -53,6 +53,7 @@ CONTAINERD_VERSION = "2.2.4-1~debian.12~bookworm"
 DOCKER_BUILDX_PLUGIN_VERSION = "0.34.1-1~debian.12~bookworm"
 DOCKER_COMPOSE_PLUGIN_VERSION = "5.1.4-1~debian.12~bookworm"
 RUNC_VERSION = "1.3.0"
+RUNC_SHA256 = "028986516ab5646370edce981df2d8e8a8d12188deaf837142a02097000ae2f2"
 
 # Cache buster - change this to force Modal image rebuild
 # v51: SCM credential helper backed by control plane; remove embedded VCS tokens
@@ -248,6 +249,7 @@ docker_image = (
     .run_commands(
         "rm -f $(command -v runc)",
         f"wget -q https://github.com/opencontainers/runc/releases/download/v{RUNC_VERSION}/runc.amd64",
+        f'echo "{RUNC_SHA256}  runc.amd64" | sha256sum -c -',
         "chmod +x runc.amd64",
         "mv runc.amd64 /usr/local/bin/runc",
         "update-alternatives --set iptables /usr/sbin/iptables-legacy",
