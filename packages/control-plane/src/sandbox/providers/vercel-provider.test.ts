@@ -253,6 +253,7 @@ describe("VercelSandboxProvider", () => {
       "sudo dnf install -y dnf-plugins-core git gcc gcc-c++ make ca-certificates openssh-clients jq unzip tar gzip python3.12 python3.12-pip python3.12-devel"
     );
     expect(bootstrapScript).toContain("sudo dnf install -y ffmpeg || true");
+    expect(bootstrapScript).toContain("sudo ln -sf /usr/bin/python3.12 /usr/local/bin/python");
     expect(bootstrapScript).toContain("sudo /usr/bin/python3.12 -m ensurepip --upgrade");
   });
 

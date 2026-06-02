@@ -607,6 +607,7 @@ if ! command -v gh >/dev/null 2>&1; then
 fi
 
 sudo ln -sf ${VERCEL_PYTHON_BIN} /usr/local/bin/python3
+sudo ln -sf ${VERCEL_PYTHON_BIN} /usr/local/bin/python
 if ! ${VERCEL_PYTHON_BIN} -m pip --version >/dev/null 2>&1; then
   sudo ${VERCEL_PYTHON_BIN} -m ensurepip --upgrade
 fi
