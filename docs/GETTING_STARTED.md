@@ -204,7 +204,9 @@ When the Terraform GitHub Actions apply job runs with `SANDBOX_PROVIDER=vercel`,
 immutable Vercel base-runtime snapshot before `terraform apply` and passes the generated snapshot ID
 into the Worker deployment. This keeps the Vercel base runtime aligned with the configured
 `VERCEL_RUNTIME_REPO_URL`/`VERCEL_RUNTIME_REPO_REF`. The `vercel_base_snapshot_id` setting is still
-available for local Terraform runs or as a manual fallback.
+available for local Terraform runs or as a manual fallback. See
+[Vercel Sandbox Provider](VERCEL_SANDBOX_PROVIDER.md) for the full runtime, snapshot, and resource
+configuration model.
 
 ### Anthropic
 
