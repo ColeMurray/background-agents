@@ -80,7 +80,6 @@ def build_modal_create_kwargs(
     env_vars: dict[str, str],
 ) -> dict[str, Any]:
     launch_env_vars = dict(env_vars)
-    launch_env_vars["OPENINSPECT_SANDBOX_IMAGE_PROFILE"] = launch_options.image_profile
     if launch_options.terminal_enabled:
         launch_env_vars["TERMINAL_ENABLED"] = "true"
     if launch_options.tunnel_ports:

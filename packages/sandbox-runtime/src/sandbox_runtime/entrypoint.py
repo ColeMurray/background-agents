@@ -38,7 +38,6 @@ configure_logging()
 
 DOCKER_DATA_ROOT_ENV_VAR = "DOCKER_DATA_ROOT"
 DOCKER_ENABLED_ENV_VAR = "OPENINSPECT_DOCKER_ENABLED"
-SANDBOX_IMAGE_PROFILE_ENV_VAR = "OPENINSPECT_SANDBOX_IMAGE_PROFILE"
 
 AGENT_TOOLS_GATED_ON_ENV: dict[str, str] = {
     "slack-notify.js": "AGENT_SLACK_NOTIFY_ENABLED",
@@ -49,19 +48,15 @@ def build_runtime_services(
     log,
     *,
     docker_enabled: bool,
-    sandbox_image_profile: str,
     docker_data_root: Path,
 ) -> RuntimeServices:
     if not docker_enabled:
-        log.info(
-            "runtime_services.docker_disabled",
-            image_profile=sandbox_image_profile,
-        )
+        log.info("runtime_services.docker_disabled")
         return RuntimeServices(log)
 
     log.info(
         "runtime_services.docker_enabled",
-        image_profile=sandbox_image_profile,
+        docker_data_root=str(docker_data_root),
     )
     return RuntimeServices(
         log,
@@ -160,7 +155,6 @@ class SandboxSupervisor:
         self.repo_owner = os.environ.get("REPO_OWNER", "")
         self.repo_name = os.environ.get("REPO_NAME", "")
         self.vcs_host = os.environ.get("VCS_HOST", "github.com")
-        self.sandbox_image_profile = os.environ.get(SANDBOX_IMAGE_PROFILE_ENV_VAR, "default")
         self.docker_enabled = os.environ.get(DOCKER_ENABLED_ENV_VAR, "").lower() == "true"
         self.docker_data_root = Path(
             os.environ.get(DOCKER_DATA_ROOT_ENV_VAR, str(DEFAULT_DOCKER_DATA_ROOT))
@@ -190,7 +184,6 @@ class SandboxSupervisor:
         self.runtime_services = build_runtime_services(
             self.log,
             docker_enabled=self.docker_enabled,
-            sandbox_image_profile=self.sandbox_image_profile,
             docker_data_root=self.docker_data_root,
         )
 

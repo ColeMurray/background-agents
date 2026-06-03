@@ -273,7 +273,7 @@ async def test_docker_build_sandbox_sets_docker_env_and_experimental_option(monk
     env = captured["env"]
     assert env["OPENINSPECT_DOCKER_ENABLED"] == "true"
     assert env["DOCKER_DATA_ROOT"] == "/opt/docker-data"
-    assert env["OPENINSPECT_SANDBOX_IMAGE_PROFILE"] == "docker"
+    assert "OPENINSPECT_SANDBOX_IMAGE_PROFILE" not in env
     assert captured["kwargs"]["experimental_options"] == {"enable_docker": True}
     assert captured["kwargs"]["cpu"] == 4.0
     assert captured["kwargs"]["memory"] == 8192

@@ -96,7 +96,7 @@ async def test_create_sandbox_enables_docker_when_profile_is_docker(monkeypatch)
 
     assert captured["env"]["OPENINSPECT_DOCKER_ENABLED"] == "true"
     assert captured["env"]["DOCKER_DATA_ROOT"] == "/opt/docker-data"
-    assert captured["env"]["OPENINSPECT_SANDBOX_IMAGE_PROFILE"] == "docker"
+    assert "OPENINSPECT_SANDBOX_IMAGE_PROFILE" not in captured["env"]
     assert captured["experimental_options"] == {"enable_docker": True}
     assert captured["cpu"] == 4.0
     assert captured["memory"] == 8192
@@ -132,7 +132,7 @@ async def test_create_sandbox_does_not_enable_docker_when_setting_is_off(monkeyp
     )
 
     assert "OPENINSPECT_DOCKER_ENABLED" not in captured["env"]
-    assert captured["env"]["OPENINSPECT_SANDBOX_IMAGE_PROFILE"] == "default"
+    assert "OPENINSPECT_SANDBOX_IMAGE_PROFILE" not in captured["env"]
     assert captured["experimental_options"] is None
     assert captured["cpu"] is None
     assert captured["memory"] is None

@@ -18,15 +18,11 @@ def test_build_runtime_services_omits_docker_when_disabled(tmp_path):
     services = build_runtime_services(
         log,
         docker_enabled=False,
-        sandbox_image_profile="default",
         docker_data_root=data_root,
     )
 
     assert services.docker is None
-    log.info.assert_called_with(
-        "runtime_services.docker_disabled",
-        image_profile="default",
-    )
+    log.info.assert_called_with("runtime_services.docker_disabled")
 
 
 def test_build_runtime_services_includes_docker_when_enabled(tmp_path):
@@ -36,7 +32,6 @@ def test_build_runtime_services_includes_docker_when_enabled(tmp_path):
     services = build_runtime_services(
         log,
         docker_enabled=True,
-        sandbox_image_profile="docker",
         docker_data_root=data_root,
     )
 
@@ -44,7 +39,7 @@ def test_build_runtime_services_includes_docker_when_enabled(tmp_path):
     assert services.docker.data_root == data_root
     log.info.assert_called_with(
         "runtime_services.docker_enabled",
-        image_profile="docker",
+        docker_data_root=str(data_root),
     )
 
 
@@ -84,7 +79,6 @@ async def test_supervisor_starts_docker_before_setup_in_build_mode():
         "SESSION_CONFIG": "{}",
         "IMAGE_BUILD_MODE": "true",
         "OPENINSPECT_DOCKER_ENABLED": "true",
-        "OPENINSPECT_SANDBOX_IMAGE_PROFILE": "docker",
     }
 
     order: list[str] = []
