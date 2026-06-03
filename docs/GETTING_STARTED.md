@@ -361,8 +361,9 @@ modal_token_secret          = "your-modal-token-secret"
 modal_workspace             = "your-modal-workspace"
 modal_environment           = "your-modal-environment"
 modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digits, dashes; empty for https://workspace--... endpoints
-modal_docker_sandbox_cpu       = 4                       # Optional Docker-enabled sandbox CPU request
-modal_docker_sandbox_memory_mb = 8192                    # Optional Docker-enabled sandbox memory request
+# Optional Docker-enabled sandbox resource overrides; leave unset to use Modal defaults.
+# modal_docker_sandbox_cpu       = 1
+# modal_docker_sandbox_memory_mb = 2048
 
 # Daytona (only required when sandbox_provider = "daytona")
 # daytona_api_url           = "https://app.daytona.io/api"
@@ -682,8 +683,8 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `MODAL_WORKSPACE`                | Modal workspace name                                                                        |
 | `MODAL_ENVIRONMENT`              | Modal environment name (defaults to `main`)                                                 |
 | `MODAL_ENVIRONMENT_WEB_SUFFIX`   | Modal environment web suffix for endpoint URLs; lowercase letters, digits, dashes, or empty |
-| `MODAL_DOCKER_SANDBOX_CPU`       | Optional CPU cores for Docker-enabled Modal sandboxes (default: `4`)                        |
-| `MODAL_DOCKER_SANDBOX_MEMORY_MB` | Optional memory in MB for Docker-enabled Modal sandboxes (default: `8192`)                  |
+| `MODAL_DOCKER_SANDBOX_CPU`       | Optional CPU cores for Docker-enabled Modal sandboxes; unset uses Modal defaults            |
+| `MODAL_DOCKER_SANDBOX_MEMORY_MB` | Optional memory in MB for Docker-enabled Modal sandboxes; unset uses Modal defaults         |
 | `GH_OAUTH_CLIENT_ID`             | GitHub App OAuth client ID                                                                  |
 | `GH_OAUTH_CLIENT_SECRET`         | GitHub App OAuth client secret                                                              |
 | `GH_APP_ID`                      | GitHub App ID                                                                               |

@@ -61,8 +61,8 @@ github_app_secrets = modal.Secret.from_name(
 #   ALLOWED_CONTROL_PLANE_HOSTS: comma-separated list of permitted callback hosts
 #   SCM_PROVIDER: "github" (default) or "gitlab" — selects the clone credential type
 #   GITLAB_ACCESS_TOKEN: GitLab PAT used as clone credential when SCM_PROVIDER=gitlab
-#   MODAL_DOCKER_SANDBOX_CPU: CPU cores for Docker-enabled sandboxes (default 4)
-#   MODAL_DOCKER_SANDBOX_MEMORY_MB: memory for Docker-enabled sandboxes (default 8192)
+#   MODAL_DOCKER_SANDBOX_CPU: optional CPU override for Docker-enabled sandboxes
+#   MODAL_DOCKER_SANDBOX_MEMORY_MB: optional memory override for Docker-enabled sandboxes
 internal_api_secret = modal.Secret.from_name(
     "internal-api",
     required_keys=["MODAL_API_SECRET", "INTERNAL_CALLBACK_SECRET"],

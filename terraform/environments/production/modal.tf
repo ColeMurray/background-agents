@@ -52,14 +52,20 @@ module "modal_app" {
     },
     {
       name = "internal-api"
-      values = {
-        MODAL_API_SECRET               = var.modal_api_secret
-        INTERNAL_CALLBACK_SECRET       = var.internal_callback_secret
-        ALLOWED_CONTROL_PLANE_HOSTS    = local.control_plane_host
-        CONTROL_PLANE_URL              = local.control_plane_url
-        MODAL_DOCKER_SANDBOX_CPU       = tostring(var.modal_docker_sandbox_cpu)
-        MODAL_DOCKER_SANDBOX_MEMORY_MB = tostring(var.modal_docker_sandbox_memory_mb)
-      }
+      values = merge(
+        {
+          MODAL_API_SECRET            = var.modal_api_secret
+          INTERNAL_CALLBACK_SECRET    = var.internal_callback_secret
+          ALLOWED_CONTROL_PLANE_HOSTS = local.control_plane_host
+          CONTROL_PLANE_URL           = local.control_plane_url
+        },
+        var.modal_docker_sandbox_cpu == null ? {} : {
+          MODAL_DOCKER_SANDBOX_CPU = tostring(var.modal_docker_sandbox_cpu)
+        },
+        var.modal_docker_sandbox_memory_mb == null ? {} : {
+          MODAL_DOCKER_SANDBOX_MEMORY_MB = tostring(var.modal_docker_sandbox_memory_mb)
+        }
+      )
     }
   ]
 }

@@ -62,9 +62,10 @@ modal_workspace               = ""
 modal_environment             = "main"
 modal_environment_web_suffix  = ""
 
-# Optional resource defaults for Docker-enabled Modal sandboxes.
-modal_docker_sandbox_cpu       = 4
-modal_docker_sandbox_memory_mb = 8192
+# Optional resource overrides for Docker-enabled Modal sandboxes.
+# Leave unset to use Modal's default CPU and memory requests.
+# modal_docker_sandbox_cpu       = 1
+# modal_docker_sandbox_memory_mb = 2048
 
 # Daytona REST API
 # Only required when sandbox_provider = "daytona"

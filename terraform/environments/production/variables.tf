@@ -95,24 +95,24 @@ variable "modal_environment_web_suffix" {
 }
 
 variable "modal_docker_sandbox_cpu" {
-  description = "CPU cores requested for Docker-enabled Modal sandboxes."
+  description = "Optional CPU cores requested for Docker-enabled Modal sandboxes. Leave null to use Modal's default."
   type        = number
-  default     = 4
+  default     = null
 
   validation {
-    condition     = var.modal_docker_sandbox_cpu > 0
-    error_message = "modal_docker_sandbox_cpu must be greater than 0."
+    condition     = var.modal_docker_sandbox_cpu == null || var.modal_docker_sandbox_cpu > 0
+    error_message = "modal_docker_sandbox_cpu must be null or greater than 0."
   }
 }
 
 variable "modal_docker_sandbox_memory_mb" {
-  description = "Memory in MB requested for Docker-enabled Modal sandboxes."
+  description = "Optional memory in MB requested for Docker-enabled Modal sandboxes. Leave null to use Modal's default."
   type        = number
-  default     = 8192
+  default     = null
 
   validation {
-    condition     = var.modal_docker_sandbox_memory_mb > 0
-    error_message = "modal_docker_sandbox_memory_mb must be greater than 0."
+    condition     = var.modal_docker_sandbox_memory_mb == null || var.modal_docker_sandbox_memory_mb > 0
+    error_message = "modal_docker_sandbox_memory_mb must be null or greater than 0."
   }
 }
 

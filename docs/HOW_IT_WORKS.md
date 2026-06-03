@@ -155,8 +155,8 @@ uses persistent sandboxes instead: the control plane stops the sandbox on inacti
 heartbeat, then resumes that same sandbox later with the same logical sandbox ID and auth token.
 
 Docker support is Modal-only and controlled by the sandbox `dockerEnabled` setting. Docker-enabled
-sandboxes request 4 CPU cores and 8 GB memory by default; deployment operators can adjust this with
-`MODAL_DOCKER_SANDBOX_CPU` and `MODAL_DOCKER_SANDBOX_MEMORY_MB`.
+sandboxes use Modal's default CPU and memory requests unless deployment operators set
+`MODAL_DOCKER_SANDBOX_CPU` or `MODAL_DOCKER_SANDBOX_MEMORY_MB`.
 
 ### Clients
 

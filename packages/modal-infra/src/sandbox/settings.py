@@ -11,28 +11,32 @@ from sandbox_runtime.constants import CODE_SERVER_PORT, TTYD_PROXY_PORT
 
 MAX_TUNNEL_PORTS = 10
 DOCKER_DATA_ROOT = "/opt/docker-data"
-DEFAULT_DOCKER_SANDBOX_CPU = 4.0
-DEFAULT_DOCKER_SANDBOX_MEMORY_MB = 8192
 DEFAULT_IMAGE_PROFILE = "default"
 DOCKER_IMAGE_PROFILE = "docker"
 SandboxImageProfile = Literal["default", "docker"]
 IMAGE_PROFILES = frozenset({DEFAULT_IMAGE_PROFILE, DOCKER_IMAGE_PROFILE})
 
 
-def _env_float(name: str, default: float) -> float:
+def _optional_env_float(name: str) -> float | None:
+    raw = os.environ.get(name)
+    if not raw:
+        return None
     try:
-        value = float(os.environ.get(name) or default)
-        return value if value > 0 else default
-    except (TypeError, ValueError):
-        return default
+        value = float(raw)
+        return value if value > 0 else None
+    except ValueError:
+        return None
 
 
-def _env_int(name: str, default: int) -> int:
+def _optional_env_int(name: str) -> int | None:
+    raw = os.environ.get(name)
+    if not raw:
+        return None
     try:
-        value = int(os.environ.get(name) or default)
-        return value if value > 0 else default
-    except (TypeError, ValueError):
-        return default
+        value = int(raw)
+        return value if value > 0 else None
+    except ValueError:
+        return None
 
 
 def validate_tunnel_ports(raw: object) -> tuple[int, ...]:
@@ -93,8 +97,8 @@ class DockerLaunchSettings:
 
     enabled: bool = False
     data_root: str = DOCKER_DATA_ROOT
-    cpu: float = DEFAULT_DOCKER_SANDBOX_CPU
-    memory_mb: int = DEFAULT_DOCKER_SANDBOX_MEMORY_MB
+    cpu: float | None = None
+    memory_mb: int | None = None
 
     @classmethod
     def from_profile(cls, image_profile: SandboxImageProfile) -> DockerLaunchSettings:
@@ -102,8 +106,8 @@ class DockerLaunchSettings:
             return cls()
         return cls(
             enabled=True,
-            cpu=_env_float("MODAL_DOCKER_SANDBOX_CPU", DEFAULT_DOCKER_SANDBOX_CPU),
-            memory_mb=_env_int("MODAL_DOCKER_SANDBOX_MEMORY_MB", DEFAULT_DOCKER_SANDBOX_MEMORY_MB),
+            cpu=_optional_env_float("MODAL_DOCKER_SANDBOX_CPU"),
+            memory_mb=_optional_env_int("MODAL_DOCKER_SANDBOX_MEMORY_MB"),
         )
 
     def env_vars(self) -> dict[str, str]:
@@ -117,11 +121,14 @@ class DockerLaunchSettings:
     def modal_create_kwargs(self) -> dict[str, Any]:
         if not self.enabled:
             return {}
-        return {
+        kwargs: dict[str, Any] = {
             "experimental_options": {"enable_docker": True},
-            "cpu": self.cpu,
-            "memory": self.memory_mb,
         }
+        if self.cpu is not None:
+            kwargs["cpu"] = self.cpu
+        if self.memory_mb is not None:
+            kwargs["memory"] = self.memory_mb
+        return kwargs
 
 
 @dataclass(frozen=True, slots=True)

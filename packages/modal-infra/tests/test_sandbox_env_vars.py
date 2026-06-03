@@ -98,8 +98,8 @@ async def test_create_sandbox_enables_docker_when_profile_is_docker(monkeypatch)
     assert captured["env"]["DOCKER_DATA_ROOT"] == "/opt/docker-data"
     assert "OPENINSPECT_SANDBOX_IMAGE_PROFILE" not in captured["env"]
     assert captured["experimental_options"] == {"enable_docker": True}
-    assert captured["cpu"] == 4.0
-    assert captured["memory"] == 8192
+    assert captured["cpu"] is None
+    assert captured["memory"] is None
 
 
 @pytest.mark.asyncio
@@ -139,7 +139,7 @@ async def test_create_sandbox_does_not_enable_docker_when_setting_is_off(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_docker_resource_defaults_are_configurable(monkeypatch):
+async def test_docker_resources_are_configurable(monkeypatch):
     captured = {}
 
     async def fake_create_aio(*args, **kwargs):

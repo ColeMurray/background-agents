@@ -180,8 +180,8 @@ MODAL_TOKEN_SECRET
 MODAL_WORKSPACE
 MODAL_ENVIRONMENT # Optional; defaults to main
 MODAL_ENVIRONMENT_WEB_SUFFIX # Optional; lowercase letters, digits, dashes; empty for workspace--... endpoints
-MODAL_DOCKER_SANDBOX_CPU # Optional; defaults to 4 for Docker-enabled sandboxes
-MODAL_DOCKER_SANDBOX_MEMORY_MB # Optional; defaults to 8192 for Docker-enabled sandboxes
+MODAL_DOCKER_SANDBOX_CPU # Optional; overrides Modal's default CPU request for Docker-enabled sandboxes
+MODAL_DOCKER_SANDBOX_MEMORY_MB # Optional; overrides Modal's default memory request for Docker-enabled sandboxes
 
 # GitHub OAuth App
 GH_OAUTH_CLIENT_ID
