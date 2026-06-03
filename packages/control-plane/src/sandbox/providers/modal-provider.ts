@@ -50,7 +50,7 @@ export class ModalSandboxProvider implements SandboxProvider {
     supportsWarm: true,
     supportsPersistentResume: false,
     supportsExplicitStop: false,
-    supportsImageProfiles: true,
+    supportsDocker: true,
   };
 
   constructor(private readonly client: ModalClient) {}

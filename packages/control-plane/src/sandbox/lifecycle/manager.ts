@@ -465,7 +465,7 @@ export class SandboxLifecycleManager {
         agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
-        ...(this.providerSupportsImageProfiles() ? { imageProfile } : {}),
+        ...(this.providerSupportsDocker() ? { imageProfile } : {}),
       };
 
       const result = await this.provider.createSandbox(createConfig);
@@ -649,7 +649,7 @@ export class SandboxLifecycleManager {
         agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
-        ...(this.providerSupportsImageProfiles() ? { imageProfile } : {}),
+        ...(this.providerSupportsDocker() ? { imageProfile } : {}),
       });
 
       if (result.success) {
@@ -1222,12 +1222,12 @@ export class SandboxLifecycleManager {
     }
   }
 
-  private providerSupportsImageProfiles(): boolean {
-    return this.provider.capabilities.supportsImageProfiles === true;
+  private providerSupportsDocker(): boolean {
+    return this.provider.capabilities.supportsDocker === true;
   }
 
   private resolveSandboxImageProfile(settings: SandboxSettings): SandboxImageProfile {
-    if (!this.providerSupportsImageProfiles()) return DEFAULT_SANDBOX_IMAGE_PROFILE;
+    if (!this.providerSupportsDocker()) return DEFAULT_SANDBOX_IMAGE_PROFILE;
     return resolveSandboxImageProfile(settings);
   }
 

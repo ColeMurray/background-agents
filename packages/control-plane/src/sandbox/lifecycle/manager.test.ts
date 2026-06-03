@@ -272,7 +272,7 @@ function createMockProvider(
       supportsSnapshots: true,
       supportsRestore: true,
       supportsWarm: true,
-      supportsImageProfiles: true,
+      supportsDocker: true,
       ...overrides.capabilities,
     },
     createSandbox:
@@ -1781,13 +1781,13 @@ describe("SandboxLifecycleManager", () => {
       );
     });
 
-    it("doSpawn() omits imageProfile when provider does not support profiles", async () => {
+    it("doSpawn() omits imageProfile when provider does not support Docker", async () => {
       const session = createMockSession({
         sandbox_settings: '{"dockerEnabled":true}',
       });
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const storage = createMockStorage(session, sandbox);
-      const provider = createMockProvider({ capabilities: { supportsImageProfiles: false } });
+      const provider = createMockProvider({ capabilities: { supportsDocker: false } });
 
       const manager = new SandboxLifecycleManager(
         provider,

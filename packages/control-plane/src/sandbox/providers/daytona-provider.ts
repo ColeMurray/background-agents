@@ -59,7 +59,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     supportsWarm: false,
     supportsPersistentResume: true,
     supportsExplicitStop: true,
-    supportsImageProfiles: false,
+    supportsDocker: false,
   };
 
   constructor(
