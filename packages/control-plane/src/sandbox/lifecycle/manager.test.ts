@@ -272,6 +272,7 @@ function createMockProvider(
       supportsSnapshots: true,
       supportsRestore: true,
       supportsWarm: true,
+      supportsImageProfiles: true,
       ...overrides.capabilities,
     },
     createSandbox:
@@ -560,7 +561,8 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
-          sandboxSettings: { dockerEnabled: true },
+          sandboxSettings: {},
+          imageProfile: "docker",
         })
       );
     });
@@ -1773,10 +1775,35 @@ describe("SandboxLifecycleManager", () => {
 
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
-          sandboxSettings: { tunnelPorts: [3000], terminalEnabled: true, dockerEnabled: true },
+          sandboxSettings: { tunnelPorts: [3000], terminalEnabled: true },
           imageProfile: "docker",
         })
       );
+    });
+
+    it("doSpawn() omits imageProfile when provider does not support profiles", async () => {
+      const session = createMockSession({
+        sandbox_settings: '{"dockerEnabled":true}',
+      });
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(session, sandbox);
+      const provider = createMockProvider({ capabilities: { supportsImageProfiles: false } });
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      const createConfig = vi.mocked(provider.createSandbox).mock.calls[0][0];
+      expect(createConfig).not.toHaveProperty("imageProfile");
+      expect(createConfig.sandboxSettings).toEqual({});
     });
 
     it("doSpawn() passes empty settings when sandbox_settings is null", async () => {

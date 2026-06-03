@@ -21,3 +21,7 @@ export function getPublicSandboxProvider(): PublicSandboxProvider {
 export function supportsRepoImages(): boolean {
   return getPublicSandboxProvider() === "modal";
 }
+
+export function supportsSandboxDocker(): boolean {
+  return getPublicSandboxProvider() === "modal";
+}

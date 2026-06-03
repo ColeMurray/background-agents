@@ -21,6 +21,7 @@ import {
   resolveDockerMode,
   type DockerMode,
 } from "./sandbox-settings-model";
+import { supportsSandboxDocker } from "@/lib/sandbox-provider";
 
 const GLOBAL_SCOPE = "__global__";
 
@@ -74,6 +75,7 @@ function SandboxSettingsEditor({
     ? ((data as GlobalSettingsResponse)?.settings?.defaults?.terminalEnabled ?? false)
     : ((data as RepoSettingsResponse)?.settings?.terminalEnabled ?? false);
   const currentDockerMode = resolveDockerMode({ isGlobal, globalDefaults, repoSettings });
+  const dockerSupported = supportsSandboxDocker();
 
   const currentMaxConcurrentChildSessions: number = isGlobal
     ? (globalDefaults?.maxConcurrentChildSessions ?? DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS)
@@ -153,6 +155,7 @@ function SandboxSettingsEditor({
         ports,
         terminalEnabled: resolvedTerminalEnabled,
         dockerMode: resolvedDockerMode,
+        dockerSupported,
         maxConcurrentChildSessions: resolvedMaxConcurrentChildSessions,
         maxTotalChildSessions: resolvedMaxTotalChildSessions,
         maxConcurrentChildSessionsEdited: maxConcurrentChildSessions !== null,
@@ -196,6 +199,7 @@ function SandboxSettingsEditor({
     globalDefaults,
     resolvedTerminalEnabled,
     resolvedDockerMode,
+    dockerSupported,
     resolvedMaxConcurrentChildSessions,
     resolvedMaxTotalChildSessions,
     maxConcurrentChildSessions,
@@ -207,7 +211,8 @@ function SandboxSettingsEditor({
     portRows !== null &&
     JSON.stringify(normalizePorts(portRows).ports) !== JSON.stringify(currentPorts);
   const hasTerminalChange = terminalEnabled !== null && terminalEnabled !== currentTerminalEnabled;
-  const hasDockerChange = dockerMode !== null && dockerMode !== currentDockerMode;
+  const hasDockerChange =
+    dockerSupported && dockerMode !== null && dockerMode !== currentDockerMode;
   const hasConcurrentLimitChange =
     maxConcurrentChildSessions !== null &&
     maxConcurrentChildSessions !== String(currentMaxConcurrentChildSessions);
@@ -254,45 +259,47 @@ function SandboxSettingsEditor({
         </div>
       </div>
 
-      <div className="max-w-sm">
-        <div className="flex items-center justify-between">
-          <div>
-            <label className="block text-sm font-medium text-foreground">Docker</label>
-            <p className="text-xs text-muted-foreground">
-              Enable Docker Engine and Docker Compose in sandboxes that support it.
-            </p>
-          </div>
-          {isGlobal ? (
-            <button
-              type="button"
-              role="switch"
-              aria-label="Docker"
-              aria-checked={resolvedDockerEnabled}
-              onClick={() => setDockerMode(resolvedDockerEnabled ? "disabled" : "enabled")}
-              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
-                resolvedDockerEnabled ? "bg-accent" : "bg-muted"
-              }`}
-            >
-              <span
-                className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${
-                  resolvedDockerEnabled ? "translate-x-4" : "translate-x-0"
+      {dockerSupported ? (
+        <div className="max-w-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <label className="block text-sm font-medium text-foreground">Docker</label>
+              <p className="text-xs text-muted-foreground">
+                Enable Docker Engine and Docker Compose in Modal sandboxes.
+              </p>
+            </div>
+            {isGlobal ? (
+              <button
+                type="button"
+                role="switch"
+                aria-label="Docker"
+                aria-checked={resolvedDockerEnabled}
+                onClick={() => setDockerMode(resolvedDockerEnabled ? "disabled" : "enabled")}
+                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+                  resolvedDockerEnabled ? "bg-accent" : "bg-muted"
                 }`}
-              />
-            </button>
-          ) : (
-            <select
-              aria-label="Docker"
-              value={resolvedDockerMode}
-              onChange={(e) => setDockerMode(e.target.value as DockerMode)}
-              className="h-8 rounded border border-border bg-input px-2 text-sm text-foreground"
-            >
-              <option value="inherit">Inherit</option>
-              <option value="enabled">Enabled</option>
-              <option value="disabled">Disabled</option>
-            </select>
-          )}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${
+                    resolvedDockerEnabled ? "translate-x-4" : "translate-x-0"
+                  }`}
+                />
+              </button>
+            ) : (
+              <select
+                aria-label="Docker"
+                value={resolvedDockerMode}
+                onChange={(e) => setDockerMode(e.target.value as DockerMode)}
+                className="h-8 rounded border border-border bg-input px-2 text-sm text-foreground"
+              >
+                <option value="inherit">Inherit</option>
+                <option value="enabled">Enabled</option>
+                <option value="disabled">Disabled</option>
+              </select>
+            )}
+          </div>
         </div>
-      </div>
+      ) : null}
 
       <div>
         <div className="flex items-center justify-between max-w-sm mb-1.5">

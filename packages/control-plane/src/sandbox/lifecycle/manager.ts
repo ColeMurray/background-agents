@@ -15,7 +15,7 @@ import {
   normalizeSandboxRuntimeSettings,
   resolveSandboxImageProfile,
   type SandboxImageProfile,
-  type SandboxRuntimeSettings,
+  type SandboxSettings,
 } from "@open-inspect/shared";
 import type { SandboxStatus } from "../../types";
 import type { SandboxRow, SessionRow } from "../../session/types";
@@ -409,8 +409,9 @@ export class SandboxLifecycleManager {
 
       const userEnvVars = await this.storage.getUserEnvVars();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
-      const sandboxSettings = this.parseSandboxRuntimeSettings(session);
-      const imageProfile = resolveSandboxImageProfile(sandboxSettings);
+      const storedSandboxSettings = this.parseSandboxSettings(session);
+      const sandboxSettings = normalizeSandboxRuntimeSettings(storedSandboxSettings);
+      const imageProfile = this.resolveSandboxImageProfile(storedSandboxSettings);
 
       // Look up pre-built repo image (graceful fallback on failure)
       let repoImageId: string | null = null;
@@ -464,7 +465,7 @@ export class SandboxLifecycleManager {
         agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
-        imageProfile,
+        ...(this.providerSupportsImageProfiles() ? { imageProfile } : {}),
       };
 
       const result = await this.provider.createSandbox(createConfig);
@@ -628,8 +629,9 @@ export class SandboxLifecycleManager {
       const codeServerEnabled = session.code_server_enabled === 1;
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const mcpServers = await this.loadMcpServers(session);
-      const sandboxSettings = this.parseSandboxRuntimeSettings(session);
-      const imageProfile = resolveSandboxImageProfile(sandboxSettings);
+      const storedSandboxSettings = this.parseSandboxSettings(session);
+      const sandboxSettings = normalizeSandboxRuntimeSettings(storedSandboxSettings);
+      const imageProfile = this.resolveSandboxImageProfile(storedSandboxSettings);
       const result = await this.provider.restoreFromSnapshot({
         snapshotImageId,
         sessionId: session.session_name || session.id,
@@ -647,7 +649,7 @@ export class SandboxLifecycleManager {
         agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
-        imageProfile,
+        ...(this.providerSupportsImageProfiles() ? { imageProfile } : {}),
       });
 
       if (result.success) {
@@ -756,7 +758,7 @@ export class SandboxLifecycleManager {
         sandboxId: sandbox.modal_sandbox_id,
         timeoutSeconds,
         codeServerEnabled: session.code_server_enabled === 1,
-        sandboxSettings: this.parseSandboxRuntimeSettings(session),
+        sandboxSettings: normalizeSandboxRuntimeSettings(this.parseSandboxSettings(session)),
       });
 
       if (!result.success) {
@@ -1208,19 +1210,29 @@ export class SandboxLifecycleManager {
     });
   }
 
-  private parseSandboxRuntimeSettings(session: SessionRow): SandboxRuntimeSettings {
+  private parseSandboxSettings(session: SessionRow): SandboxSettings {
     if (!session.sandbox_settings) return {};
     try {
       const parsed: unknown = JSON.parse(session.sandbox_settings);
-      return normalizeSandboxRuntimeSettings(parsed);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+      return parsed as SandboxSettings;
     } catch {
       this.log.warn("Failed to parse sandbox_settings, using defaults");
       return {};
     }
   }
 
+  private providerSupportsImageProfiles(): boolean {
+    return this.provider.capabilities.supportsImageProfiles === true;
+  }
+
+  private resolveSandboxImageProfile(settings: SandboxSettings): SandboxImageProfile {
+    if (!this.providerSupportsImageProfiles()) return DEFAULT_SANDBOX_IMAGE_PROFILE;
+    return resolveSandboxImageProfile(settings);
+  }
+
   private resolveSessionImageProfile(session: SessionRow): SandboxImageProfile {
-    return resolveSandboxImageProfile(this.parseSandboxRuntimeSettings(session));
+    return this.resolveSandboxImageProfile(this.parseSandboxSettings(session));
   }
 
   private getCompatibleSnapshotImageId(

@@ -61,11 +61,8 @@ def select_base_image(image_profile: SandboxImageProfile) -> modal.Image:
 def select_runtime_image(
     image_profile: SandboxImageProfile,
     *,
-    snapshot_id: str | None = None,
     repo_image_id: str | None = None,
 ) -> tuple[modal.Image, str]:
-    if snapshot_id:
-        return modal.Image.from_id(snapshot_id), "snapshot"
     if repo_image_id:
         return modal.Image.from_id(repo_image_id), "repo"
     return select_base_image(image_profile), "base"

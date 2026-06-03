@@ -48,17 +48,4 @@ describe("RepoImageBuildProfileResolver", () => {
     expect(profiles[0]).not.toHaveProperty("sandboxSettings");
     expect(profiles[1]).not.toHaveProperty("sandboxSettings");
   });
-
-  it("throws when batch sandbox settings are not aligned with repos", async () => {
-    vi.mocked(resolveSandboxSettingsForRepos).mockResolvedValueOnce([{ dockerEnabled: true }]);
-
-    const resolver = new RepoImageBuildProfileResolver({} as D1Database);
-
-    await expect(
-      resolver.resolveMany([
-        { repoOwner: "acme", repoName: "app" },
-        { repoOwner: "acme", repoName: "api" },
-      ])
-    ).rejects.toThrow("resolveSandboxSettingsForRepos returned 1 settings for 2 repos");
-  });
 });

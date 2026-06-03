@@ -71,11 +71,8 @@ export interface SandboxSettings {
   maxTotalChildSessions?: number;
 }
 
-/** Runtime settings passed to sandbox providers. Excludes control-plane-only limits. */
-export type SandboxRuntimeSettings = Pick<
-  SandboxSettings,
-  "tunnelPorts" | "terminalEnabled" | "dockerEnabled"
->;
+/** Runtime settings passed to sandbox providers. Excludes control-plane-only settings. */
+export type SandboxRuntimeSettings = Pick<SandboxSettings, "tunnelPorts" | "terminalEnabled">;
 
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1;
@@ -102,15 +99,12 @@ export function normalizeSandboxRuntimeSettings(value: unknown): SandboxRuntimeS
   if (typeof settings.terminalEnabled === "boolean") {
     normalized.terminalEnabled = settings.terminalEnabled;
   }
-  if (typeof settings.dockerEnabled === "boolean") {
-    normalized.dockerEnabled = settings.dockerEnabled;
-  }
 
   return normalized;
 }
 
 export function resolveSandboxImageProfile(
-  settings: Pick<SandboxRuntimeSettings, "dockerEnabled"> | null | undefined
+  settings: Pick<SandboxSettings, "dockerEnabled"> | null | undefined
 ): SandboxImageProfile {
   return settings?.dockerEnabled === true ? "docker" : DEFAULT_SANDBOX_IMAGE_PROFILE;
 }

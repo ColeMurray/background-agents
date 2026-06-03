@@ -77,6 +77,7 @@ describe("ModalSandboxProvider", () => {
       expect(provider.capabilities.supportsSnapshots).toBe(true);
       expect(provider.capabilities.supportsRestore).toBe(true);
       expect(provider.capabilities.supportsWarm).toBe(true);
+      expect(provider.capabilities.supportsImageProfiles).toBe(true);
     });
   });
 

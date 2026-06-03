@@ -27,6 +27,8 @@ export interface SandboxProviderCapabilities {
   supportsPersistentResume?: boolean;
   /** Whether the provider can stop a sandbox explicitly via API */
   supportsExplicitStop?: boolean;
+  /** Whether the provider accepts control-plane resolved runtime image profiles */
+  supportsImageProfiles?: boolean;
 }
 
 /**
@@ -75,8 +77,8 @@ export interface CreateSandboxConfig {
   mcpServers?: McpServerConfig[];
   /** Runtime sandbox settings resolved from integration settings */
   sandboxSettings?: SandboxRuntimeSettings;
-  /** Runtime image profile resolved by the control plane */
-  imageProfile: SandboxImageProfile;
+  /** Runtime image profile resolved by the control plane for providers that support it */
+  imageProfile?: SandboxImageProfile;
 }
 
 /**
@@ -139,8 +141,8 @@ export interface RestoreConfig {
   agentSlackNotifyEnabled?: boolean;
   /** Runtime sandbox settings resolved from integration settings */
   sandboxSettings?: SandboxRuntimeSettings;
-  /** Runtime image profile resolved by the control plane */
-  imageProfile: SandboxImageProfile;
+  /** Runtime image profile resolved by the control plane for providers that support it */
+  imageProfile?: SandboxImageProfile;
 }
 
 /**

@@ -18,6 +18,10 @@ import modal
 
 import sandbox_runtime
 
+# Modal reads image builder version from process/workspace config while resolving
+# images, not from an individual image option. Docker-in-sandbox launch support
+# requires the 2025.06 builder, so set a default for every image defined here
+# while preserving an explicit deployment override.
 os.environ.setdefault("MODAL_IMAGE_BUILDER_VERSION", "2025.06")
 
 # Get the path to the sandbox runtime code (provider-agnostic)

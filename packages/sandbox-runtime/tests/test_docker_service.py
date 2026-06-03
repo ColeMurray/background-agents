@@ -9,6 +9,7 @@ import pytest
 
 from sandbox_runtime.docker_service import DockerService
 from sandbox_runtime.entrypoint import SandboxSupervisor, build_runtime_services
+from sandbox_runtime.runtime_services import RuntimeServices
 
 
 def test_build_runtime_services_omits_docker_when_disabled(tmp_path):
@@ -41,6 +42,21 @@ def test_build_runtime_services_includes_docker_when_enabled(tmp_path):
         "runtime_services.docker_enabled",
         docker_data_root=str(data_root),
     )
+
+
+@pytest.mark.asyncio
+async def test_runtime_services_treats_dockerd_crash_as_fatal():
+    docker = MagicMock()
+    docker.has_crashed.return_value = True
+    docker.exit_code = 2
+    log = MagicMock()
+    report_fatal_error = AsyncMock()
+
+    services = RuntimeServices(log, docker=docker)
+
+    assert await services.ensure_healthy(report_fatal_error) is False
+    log.error.assert_called_once_with("docker.crash", exit_code=2)
+    report_fatal_error.assert_awaited_once_with("dockerd exited unexpectedly with code 2")
 
 
 def test_prepare_runtime_state_preserves_snapshot_content(tmp_path):

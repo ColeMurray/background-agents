@@ -7,6 +7,7 @@
 
 import { ModalApiError } from "../client";
 import type { ModalClient } from "../client";
+import { DEFAULT_SANDBOX_IMAGE_PROFILE } from "@open-inspect/shared";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   SandboxProviderError,
@@ -49,6 +50,7 @@ export class ModalSandboxProvider implements SandboxProvider {
     supportsWarm: true,
     supportsPersistentResume: false,
     supportsExplicitStop: false,
+    supportsImageProfiles: true,
   };
 
   constructor(private readonly client: ModalClient) {}
@@ -78,7 +80,7 @@ export class ModalSandboxProvider implements SandboxProvider {
           agentSlackNotifyEnabled: config.agentSlackNotifyEnabled,
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
-          imageProfile: config.imageProfile,
+          imageProfile: config.imageProfile ?? DEFAULT_SANDBOX_IMAGE_PROFILE,
         },
         config.correlation
       );
@@ -121,7 +123,7 @@ export class ModalSandboxProvider implements SandboxProvider {
           agentSlackNotifyEnabled: config.agentSlackNotifyEnabled,
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
-          imageProfile: config.imageProfile,
+          imageProfile: config.imageProfile ?? DEFAULT_SANDBOX_IMAGE_PROFILE,
         },
         config.correlation
       );

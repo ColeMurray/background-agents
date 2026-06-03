@@ -426,10 +426,10 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     expect(screen.getByText("Save Settings").closest("button")).toBeDisabled();
   });
 
-  it("shows Docker control for non-Modal sandbox providers", () => {
+  it("hides Docker control for non-Modal sandbox providers", () => {
     vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "daytona");
     renderWithSWR(globalSettings([]));
-    expect(screen.getByText("Docker")).toBeInTheDocument();
+    expect(screen.queryByText("Docker")).not.toBeInTheDocument();
   });
 
   it("preserves Docker settings when saving other global settings for non-Modal providers", async () => {
@@ -483,6 +483,63 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
           tunnelPorts: [3000],
           terminalEnabled: false,
           dockerEnabled: true,
+          maxConcurrentChildSessions: DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
+          maxTotalChildSessions: DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+        },
+      },
+    });
+  });
+
+  it("does not add Docker settings when saving non-Modal sandbox settings", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "daytona");
+
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      throw new Error("unexpected fetch");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: {
+            [SETTINGS_KEY]: {
+              integrationId: "sandbox",
+              settings: { defaults: { tunnelPorts: [] } },
+            },
+          },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    await user.click(screen.getByText("Add port"));
+    await user.type(screen.getByPlaceholderText("e.g. 3000"), "3000");
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        SETTINGS_KEY,
+        expect.objectContaining({ method: "PUT" })
+      );
+    });
+
+    const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT");
+    expect(putCall).toBeDefined();
+    const [, init] = putCall!;
+    expect(JSON.parse(String(init?.body))).toEqual({
+      settings: {
+        defaults: {
+          tunnelPorts: [3000],
+          terminalEnabled: false,
           maxConcurrentChildSessions: DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
           maxTotalChildSessions: DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
         },

@@ -50,6 +50,7 @@ export function buildSettingsPayload({
   ports,
   terminalEnabled,
   dockerMode,
+  dockerSupported,
   maxConcurrentChildSessions,
   maxTotalChildSessions,
   maxConcurrentChildSessionsEdited,
@@ -61,6 +62,7 @@ export function buildSettingsPayload({
   ports: number[];
   terminalEnabled: boolean;
   dockerMode: DockerMode;
+  dockerSupported: boolean;
   maxConcurrentChildSessions: string;
   maxTotalChildSessions: string;
   maxConcurrentChildSessionsEdited: boolean;
@@ -73,10 +75,12 @@ export function buildSettingsPayload({
     terminalEnabled,
   };
 
-  if (!isGlobal && dockerMode === "inherit") {
-    delete settingsPayload.dockerEnabled;
-  } else {
-    settingsPayload.dockerEnabled = dockerMode === "enabled";
+  if (dockerSupported) {
+    if (!isGlobal && dockerMode === "inherit") {
+      delete settingsPayload.dockerEnabled;
+    } else {
+      settingsPayload.dockerEnabled = dockerMode === "enabled";
+    }
   }
   if (
     isGlobal ||

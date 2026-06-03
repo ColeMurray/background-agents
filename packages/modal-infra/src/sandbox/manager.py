@@ -49,7 +49,6 @@ class SandboxConfig:
     repo_owner: str
     repo_name: str
     sandbox_id: str | None = None  # Expected sandbox ID from control plane
-    snapshot_id: str | None = None
     session_config: SessionConfig | None = None
     control_plane_url: str = ""
     sandbox_auth_token: str = ""
@@ -270,8 +269,7 @@ class SandboxManager:
         """
         Create a new sandbox for a session.
 
-        If a snapshot_id is provided, restores from that snapshot.
-        Otherwise, creates from the latest image for the repo.
+        Creates from the latest compatible repo image when one is provided.
 
         Args:
             config: Sandbox configuration including repo info and session config
@@ -304,7 +302,7 @@ class SandboxManager:
             }
         )
 
-        # A boot from a pre-built image (session snapshot or repo image) may
+        # A boot from a pre-built repo image may
         # run an entrypoint built before the credential-helper migration: no
         # helper, and the old entrypoint expects VCS_CLONE_TOKEN in env to
         # rewrite origin. Pass the fresh token through for those (with the
@@ -313,7 +311,7 @@ class SandboxManager:
         # helper and need no token in env. Repo images are selected by SHA and
         # aren't rebuilt by a CACHE_BUSTER bump, so we can't assume they're
         # current.
-        boots_from_prebuilt_image = bool(config.snapshot_id or config.repo_image_id)
+        boots_from_prebuilt_image = bool(config.repo_image_id)
         self._inject_vcs_env_vars(
             env_vars,
             clone_token=config.clone_token if boots_from_prebuilt_image else None,
@@ -340,7 +338,6 @@ class SandboxManager:
 
         image, image_source = select_runtime_image(
             launch_options.image_profile,
-            snapshot_id=config.snapshot_id,
             repo_image_id=config.repo_image_id,
         )
         if config.repo_image_id:
@@ -390,7 +387,6 @@ class SandboxManager:
             modal_sandbox=sandbox,
             status=SandboxStatus.WARMING,
             created_at=time.time(),
-            snapshot_id=config.snapshot_id,
             modal_object_id=modal_object_id,
             code_server_url=code_server_url,
             code_server_password=code_server_password,

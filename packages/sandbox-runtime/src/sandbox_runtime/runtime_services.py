@@ -26,6 +26,9 @@ class RuntimeServices:
         if not self.docker.has_crashed():
             return True
 
+        # Docker-backed hooks and Compose services depend on dockerd staying up.
+        # Restarting only the daemon would not rerun start.sh, so fail the
+        # session instead of leaving it alive with missing runtime services.
         exit_code = self.docker.exit_code
         self.log.error("docker.crash", exit_code=exit_code)
         await report_fatal_error(f"dockerd exited unexpectedly with code {exit_code}")

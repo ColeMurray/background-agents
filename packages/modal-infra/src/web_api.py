@@ -142,7 +142,6 @@ async def api_create_sandbox(
         "repo_name": "...",
         "control_plane_url": "...",
         "sandbox_auth_token": "...",
-        "snapshot_id": null,
         "provider": "anthropic",
         "model": "claude-sonnet-4-6"
     }
@@ -164,9 +163,8 @@ async def api_create_sandbox(
 
         manager = SandboxManager()
 
-        snapshot_id = request.get("snapshot_id")
         repo_image_id = request.get("repo_image_id") or None
-        clone_token = _resolve_clone_token() if snapshot_id or repo_image_id else None
+        clone_token = _resolve_clone_token() if repo_image_id else None
         image_profile = parse_request_image_profile(request)
 
         session_config = SessionConfig(
@@ -184,7 +182,6 @@ async def api_create_sandbox(
             repo_owner=request.get("repo_owner"),
             repo_name=request.get("repo_name"),
             sandbox_id=request.get("sandbox_id"),  # Use control-plane-provided ID for auth
-            snapshot_id=snapshot_id,
             session_config=session_config,
             control_plane_url=control_plane_url,
             sandbox_auth_token=request.get("sandbox_auth_token"),

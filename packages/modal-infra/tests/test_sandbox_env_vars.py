@@ -1,10 +1,12 @@
 import json
+import re
+from pathlib import Path
 
 import pytest
 
 from sandbox_runtime.types import SessionConfig
 from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxConfig, SandboxManager
-from src.sandbox.settings import SandboxRuntimeSettings, parse_sandbox_image_profile
+from src.sandbox.settings import IMAGE_PROFILES, SandboxRuntimeSettings, parse_sandbox_image_profile
 
 
 def test_parse_sandbox_image_profile_accepts_known_profiles():
@@ -16,6 +18,17 @@ def test_parse_sandbox_image_profile_accepts_known_profiles():
 def test_parse_sandbox_image_profile_rejects_unknown_profiles():
     with pytest.raises(ValueError):
         parse_sandbox_image_profile("bogus")
+
+
+def test_sandbox_image_profiles_match_shared_typescript_contract():
+    shared_types = (
+        Path(__file__).resolve().parents[2] / "shared" / "src" / "types" / "integrations.ts"
+    ).read_text()
+    match = re.search(r"export type SandboxImageProfile = ([^;]+);", shared_types)
+    assert match is not None
+
+    ts_profiles = set(re.findall(r'"([^"]+)"', match.group(1)))
+    assert ts_profiles == IMAGE_PROFILES
 
 
 def test_runtime_settings_ignore_non_boolean_feature_flags():
@@ -594,29 +607,6 @@ async def test_repo_image_boot_preserves_user_github_cli_token(monkeypatch, toke
     assert env.get("GITHUB_TOKEN") != "ghs_repo_image_token"
     assert env.get("GITHUB_APP_TOKEN") != "ghs_repo_image_token"
     assert "OI_GITHUB_TOKEN_IS_FALLBACK" not in env
-
-
-@pytest.mark.asyncio
-async def test_session_snapshot_boot_preserves_clone_token(monkeypatch):
-    """A session-snapshot boot has the same legacy-compat need as repo images."""
-    captured = {}
-
-    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: object())
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
-    monkeypatch.delenv("SCM_PROVIDER", raising=False)
-
-    manager = SandboxManager()
-    config = SandboxConfig(
-        repo_owner="acme",
-        repo_name="repo",
-        clone_token="ghs_snapshot_token",
-        snapshot_id="snap-1",
-    )
-    await manager.create_sandbox(config)
-
-    env = captured["env"]
-    assert env["VCS_CLONE_TOKEN"] == "ghs_snapshot_token"
-    assert env["OI_GITHUB_TOKEN_IS_FALLBACK"] == "1"
 
 
 @pytest.mark.asyncio

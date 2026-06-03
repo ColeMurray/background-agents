@@ -13,16 +13,13 @@ describe("sandbox settings helpers", () => {
       })
     ).toEqual({
       tunnelPorts: [5173, 3001],
-      dockerEnabled: true,
     });
   });
 
   it("resolves Docker image profile from normalized settings", () => {
-    expect(
-      resolveSandboxImageProfile(normalizeSandboxRuntimeSettings({ dockerEnabled: true }))
-    ).toBe("docker");
-    expect(
-      resolveSandboxImageProfile(normalizeSandboxRuntimeSettings({ dockerEnabled: "true" }))
-    ).toBe("default");
+    expect(resolveSandboxImageProfile({ dockerEnabled: true })).toBe("docker");
+    expect(resolveSandboxImageProfile({ dockerEnabled: "true" as unknown as boolean })).toBe(
+      "default"
+    );
   });
 });

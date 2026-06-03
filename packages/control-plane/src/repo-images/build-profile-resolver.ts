@@ -1,8 +1,4 @@
-import {
-  normalizeSandboxRuntimeSettings,
-  resolveSandboxImageProfile,
-  type SandboxImageProfile,
-} from "@open-inspect/shared";
+import { resolveSandboxImageProfile, type SandboxImageProfile } from "@open-inspect/shared";
 
 import {
   resolveSandboxSettings,
@@ -31,9 +27,7 @@ export class RepoImageBuildProfileResolver {
   constructor(private readonly db: D1Database) {}
 
   async resolve(repo: RepoImageBuildRepo): Promise<RepoImageBuildProfile> {
-    const sandboxSettings = normalizeSandboxRuntimeSettings(
-      await resolveSandboxSettings(this.db, repo.repoOwner, repo.repoName)
-    );
+    const sandboxSettings = await resolveSandboxSettings(this.db, repo.repoOwner, repo.repoName);
     return {
       repo,
       imageProfile: resolveSandboxImageProfile(sandboxSettings),
@@ -41,14 +35,7 @@ export class RepoImageBuildProfileResolver {
   }
 
   async resolveMany(repos: RepoImageBuildRepo[]): Promise<RepoImageBuildProfile[]> {
-    const sandboxSettings = (await resolveSandboxSettingsForRepos(this.db, repos)).map((settings) =>
-      normalizeSandboxRuntimeSettings(settings)
-    );
-    if (sandboxSettings.length !== repos.length) {
-      throw new Error(
-        `resolveSandboxSettingsForRepos returned ${sandboxSettings.length} settings for ${repos.length} repos`
-      );
-    }
+    const sandboxSettings = await resolveSandboxSettingsForRepos(this.db, repos);
     return repos.map((repo, index) => ({
       repo,
       imageProfile: resolveSandboxImageProfile(sandboxSettings[index]),

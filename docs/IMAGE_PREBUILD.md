@@ -118,6 +118,12 @@ Docker-enabled and non-Docker repo images are tracked separately. If you turn Do
 Open-Inspect will build or select an image that was created with Docker support instead of reusing a
 non-Docker image.
 
+Changing Docker settings changes the required image profile for affected repositories. If a global
+Docker default is enabled, any image-build-enabled repository that inherits that default will build
+a Docker-profile image on the next scheduled or manual build if one is not already ready. Existing
+opposite-profile images are retained rather than deleted, so they can be reused if the repository
+later switches back.
+
 For Docker Compose projects, keep long-running services in `.openinspect/start.sh` and use
 `.openinspect/setup.sh` for install, build, pull, and cache-warming work. If setup starts containers
 as part of a build, stop them before the script exits, for example with `docker compose down`, so
