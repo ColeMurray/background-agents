@@ -637,7 +637,19 @@ app.post("/interactions", async (c) => {
 
   if (payload.type === "block_suggestion") {
     if (payload.action_id === SELECT_REPO_ACTION_ID) {
-      const options = await getRepoClarificationOptions(c.env, payload.value, traceId);
+      let options: Awaited<ReturnType<typeof getRepoClarificationOptions>> = [];
+      try {
+        options = await getRepoClarificationOptions(c.env, payload.value, traceId);
+      } catch (e) {
+        // Don't let a lookup failure surface as a 500 on /interactions — return
+        // an empty suggestions payload so Slack just shows no matches.
+        log.error("slack.repo_clarification_options", {
+          trace_id: traceId,
+          query: payload.value,
+          error: e instanceof Error ? e : new Error(String(e)),
+          duration_ms: Date.now() - startTime,
+        });
+      }
       log.info("http.request", {
         trace_id: traceId,
         http_method: "POST",
