@@ -33,11 +33,41 @@ import { createKvCacheStore } from "@open-inspect/shared";
 import { getUserRepoBranchPreference } from "./branch-preferences";
 import { setAssistantThreadStatusBestEffort } from "./activity-status";
 import { handleAppHomeInteractionRoute, publishAppHome } from "./app-home";
+import { MAX_REPO_SUGGESTION_OPTIONS } from "./app-home/constants";
 import { getResolvedUserPreferences } from "./user-preferences";
 
 const log = createLogger("handler");
 
 type BackgroundTaskScheduler = (promise: Promise<void>) => void;
+
+/**
+ * Action ID for the repository picker shown when the classifier can't decide
+ * which repo a message refers to. The picker is an external_select, so the same
+ * ID is matched both for option suggestions (block_suggestion) and selection
+ * (block_actions).
+ */
+const SELECT_REPO_ACTION_ID = "select_repo";
+
+/**
+ * Repo options for the clarification picker's external_select. Slack queries
+ * this endpoint as the user types; we filter on the repo's full name and cap
+ * the count at Slack's per-response limit. With min_query_length 0 the
+ * unfiltered list shows as soon as the menu opens, and typing surfaces any of
+ * the remaining repos — so users are no longer limited to a fixed handful.
+ */
+async function getRepoClarificationOptions(env: Env, query: string | undefined, traceId?: string) {
+  const repos = await getAvailableRepos(env, traceId);
+  const normalizedQuery = query?.trim().toLowerCase();
+  const filtered = normalizedQuery
+    ? repos.filter((repo) => repo.fullName.toLowerCase().includes(normalizedQuery))
+    : repos;
+
+  return filtered.slice(0, MAX_REPO_SUGGESTION_OPTIONS).map((repo) => ({
+    text: { type: "plain_text" as const, text: repo.displayName },
+    description: { type: "plain_text" as const, text: repo.description.slice(0, 75) },
+    value: repo.id,
+  }));
+}
 
 /**
  * Build authenticated headers for control plane requests.
@@ -606,6 +636,20 @@ app.post("/interactions", async (c) => {
   }
 
   if (payload.type === "block_suggestion") {
+    if (payload.action_id === SELECT_REPO_ACTION_ID) {
+      const options = await getRepoClarificationOptions(c.env, payload.value, traceId);
+      log.info("http.request", {
+        trace_id: traceId,
+        http_method: "POST",
+        http_path: "/interactions",
+        http_status: 200,
+        interaction_type: payload.type,
+        action_id: payload.action_id,
+        option_count: options.length,
+        duration_ms: Date.now() - startTime,
+      });
+      return c.json({ options });
+    }
     return c.json({ options: [] });
   }
 
@@ -875,19 +919,6 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       { expirationTtl: 3600 } // Expire after 1 hour
     );
 
-    // Build repo selection message
-    const repoOptions = (result.alternatives || repos.slice(0, 5)).map((r) => ({
-      text: {
-        type: "plain_text" as const,
-        text: r.displayName,
-      },
-      description: {
-        type: "plain_text" as const,
-        text: r.description.slice(0, 75),
-      },
-      value: r.id,
-    }));
-
     await postMessage(
       env.SLACK_BOT_TOKEN,
       channel,
@@ -909,13 +940,14 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
               text: "Which repository should I work with?",
             },
             accessory: {
-              type: "static_select",
+              type: "external_select",
               placeholder: {
                 type: "plain_text",
                 text: "Select a repository",
               },
-              options: repoOptions,
-              action_id: "select_repo",
+              // 0 so the list appears on open; typing filters across all repos.
+              min_query_length: 0,
+              action_id: SELECT_REPO_ACTION_ID,
             },
           },
         ],
@@ -1189,7 +1221,7 @@ async function handleSlackInteraction(
   const threadTs = payload.message?.thread_ts;
 
   switch (action.action_id) {
-    case "select_repo": {
+    case SELECT_REPO_ACTION_ID: {
       if (!channel || !messageTs) return;
       const repoId = action.selected_option?.value;
       if (repoId) {
