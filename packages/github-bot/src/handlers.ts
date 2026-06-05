@@ -8,6 +8,8 @@ import type {
 } from "./types";
 import type { Logger } from "./logger";
 import { generateInstallationToken, postReaction, checkSenderPermission } from "./github-auth";
+import { parseInlineDirective, type ParsedDirective } from "./inline-directive";
+import { resolveSessionModelSettings, type ResolvedModelSettings } from "./model-resolution";
 import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
 import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
 
@@ -84,6 +86,53 @@ async function sendPrompt(
 function stripMention(body: string, botUsername: string): string {
   const escaped = botUsername.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return body.replace(new RegExp(`@${escaped}`, "gi"), "").trim();
+}
+
+function resolveModelForSession(
+  env: Env,
+  config: ResolvedGitHubConfig,
+  directive?: ParsedDirective
+): ResolvedModelSettings {
+  return resolveSessionModelSettings({
+    envDefaultModel: env.DEFAULT_MODEL,
+    configModel: config.model,
+    configReasoningEffort: config.reasoningEffort,
+    allowInlineDirectiveOverride: config.allowInlineDirectiveOverride ?? true,
+    directiveModel: directive?.model,
+    directiveReasoningEffort: directive?.reasoningEffort,
+  });
+}
+
+/**
+ * Build the directive observability fields that augment the `session.created` log.
+ * When a directive override actually applied, returns
+ * `{ directive_applied: true, directive_model, directive_reasoning }`. Otherwise
+ * returns `{ directive_applied: false }`.
+ */
+function directiveLogFields(
+  config: ResolvedGitHubConfig,
+  directive: ParsedDirective | undefined,
+  resolved: ResolvedModelSettings
+): Record<string, unknown> {
+  if (!directive) return { directive_applied: false };
+
+  const allowed = config.allowInlineDirectiveOverride ?? true;
+  const modelApplied =
+    allowed && directive.model !== undefined && resolved.model === directive.model;
+  const reasoningApplied =
+    allowed &&
+    directive.reasoningEffort !== undefined &&
+    resolved.reasoningEffort === directive.reasoningEffort;
+
+  if (!modelApplied && !reasoningApplied) {
+    return { directive_applied: false };
+  }
+
+  return {
+    directive_applied: true,
+    directive_model: modelApplied ? directive.model : null,
+    directive_reasoning: reasoningApplied ? directive.reasoningEffort : null,
+  };
 }
 
 function fireAndForgetReaction(
@@ -210,17 +259,23 @@ export async function handleReviewRequested(
     meta
   );
 
+  const resolved = resolveModelForSession(env, config);
   const sessionId = await createSession(env.CONTROL_PLANE, headers, {
     repoOwner: owner,
     repoName,
     title: `GitHub: Review PR #${pr.number}`,
-    model: config.model,
-    reasoningEffort: config.reasoningEffort,
+    model: resolved.model,
+    reasoningEffort: resolved.reasoningEffort,
     scmLogin: sender.login,
     scmUserId: String(sender.id),
     scmAvatarUrl: sender.avatar_url,
   });
-  log.info("session.created", { ...meta, session_id: sessionId, action: "review" });
+  log.info("session.created", {
+    ...meta,
+    session_id: sessionId,
+    action: "review",
+    ...directiveLogFields(config, undefined, resolved),
+  });
 
   const prompt = buildCodeReviewPrompt({
     owner,
@@ -310,17 +365,23 @@ export async function handlePullRequestOpened(
     meta
   );
 
+  const resolved = resolveModelForSession(env, config);
   const sessionId = await createSession(env.CONTROL_PLANE, headers, {
     repoOwner: owner,
     repoName,
     title: `GitHub: Review PR #${pr.number}`,
-    model: config.model,
-    reasoningEffort: config.reasoningEffort,
+    model: resolved.model,
+    reasoningEffort: resolved.reasoningEffort,
     scmLogin: sender.login,
     scmUserId: String(sender.id),
     scmAvatarUrl: sender.avatar_url,
   });
-  log.info("session.created", { ...meta, session_id: sessionId, action: "auto_review" });
+  log.info("session.created", {
+    ...meta,
+    session_id: sessionId,
+    action: "auto_review",
+    ...directiveLogFields(config, undefined, resolved),
+  });
 
   const prompt = buildCodeReviewPrompt({
     owner,
@@ -405,7 +466,9 @@ export async function handleIssueComment(
   if (!gating.allowed) return { outcome: "skipped", skip_reason: gating.reason };
   const { ghToken, headers } = gating;
 
-  const commentBody = stripMention(comment.body, env.GITHUB_BOT_USERNAME);
+  const mentionStripped = stripMention(comment.body, env.GITHUB_BOT_USERNAME);
+  const directive = parseInlineDirective(mentionStripped);
+  const commentBody = directive.cleanedBody;
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: issue.number };
   fireAndForgetReaction(
@@ -416,17 +479,23 @@ export async function handleIssueComment(
     meta
   );
 
+  const resolved = resolveModelForSession(env, config, directive);
   const sessionId = await createSession(env.CONTROL_PLANE, headers, {
     repoOwner: owner,
     repoName,
     title: `GitHub: PR #${issue.number} comment`,
-    model: config.model,
-    reasoningEffort: config.reasoningEffort,
+    model: resolved.model,
+    reasoningEffort: resolved.reasoningEffort,
     scmLogin: sender.login,
     scmUserId: String(sender.id),
     scmAvatarUrl: sender.avatar_url,
   });
-  log.info("session.created", { ...meta, session_id: sessionId, action: "comment" });
+  log.info("session.created", {
+    ...meta,
+    session_id: sessionId,
+    action: "comment",
+    ...directiveLogFields(config, directive, resolved),
+  });
 
   const prompt = buildCommentActionPrompt({
     owner,
@@ -504,7 +573,9 @@ export async function handleReviewComment(
   if (!gating.allowed) return { outcome: "skipped", skip_reason: gating.reason };
   const { ghToken, headers } = gating;
 
-  const commentBody = stripMention(comment.body, env.GITHUB_BOT_USERNAME);
+  const mentionStripped = stripMention(comment.body, env.GITHUB_BOT_USERNAME);
+  const directive = parseInlineDirective(mentionStripped);
+  const commentBody = directive.cleanedBody;
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
   fireAndForgetReaction(
@@ -515,17 +586,23 @@ export async function handleReviewComment(
     meta
   );
 
+  const resolved = resolveModelForSession(env, config, directive);
   const sessionId = await createSession(env.CONTROL_PLANE, headers, {
     repoOwner: owner,
     repoName,
     title: `GitHub: PR #${pr.number} review comment`,
-    model: config.model,
-    reasoningEffort: config.reasoningEffort,
+    model: resolved.model,
+    reasoningEffort: resolved.reasoningEffort,
     scmLogin: sender.login,
     scmUserId: String(sender.id),
     scmAvatarUrl: sender.avatar_url,
   });
-  log.info("session.created", { ...meta, session_id: sessionId, action: "review_comment" });
+  log.info("session.created", {
+    ...meta,
+    session_id: sessionId,
+    action: "review_comment",
+    ...directiveLogFields(config, directive, resolved),
+  });
 
   const prompt = buildCommentActionPrompt({
     owner,

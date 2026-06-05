@@ -10,6 +10,8 @@ export interface ResolvedGitHubConfig {
   allowedTriggerUsers: string[] | null;
   codeReviewInstructions: string | null;
   commentActionInstructions: string | null;
+  /** Whether per-comment `model:` / `reasoning:` directives may override config. */
+  allowInlineDirectiveOverride: boolean;
 }
 
 const FAIL_CLOSED: Omit<ResolvedGitHubConfig, "model"> = {
@@ -19,6 +21,7 @@ const FAIL_CLOSED: Omit<ResolvedGitHubConfig, "model"> = {
   allowedTriggerUsers: [],
   codeReviewInstructions: null,
   commentActionInstructions: null,
+  allowInlineDirectiveOverride: true,
 };
 
 export async function getGitHubConfig(
@@ -62,6 +65,7 @@ export async function getGitHubConfig(
       allowedTriggerUsers: string[] | null;
       codeReviewInstructions: string | null;
       commentActionInstructions: string | null;
+      allowInlineDirectiveOverride?: boolean;
     } | null;
   };
 
@@ -74,6 +78,7 @@ export async function getGitHubConfig(
       allowedTriggerUsers: null,
       codeReviewInstructions: null,
       commentActionInstructions: null,
+      allowInlineDirectiveOverride: true,
     };
   }
 
@@ -85,5 +90,6 @@ export async function getGitHubConfig(
     allowedTriggerUsers: data.config.allowedTriggerUsers,
     codeReviewInstructions: data.config.codeReviewInstructions,
     commentActionInstructions: data.config.commentActionInstructions,
+    allowInlineDirectiveOverride: data.config.allowInlineDirectiveOverride ?? true,
   };
 }

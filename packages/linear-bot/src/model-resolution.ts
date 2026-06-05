@@ -6,7 +6,9 @@ import type { TeamRepoMapping, StaticRepoConfig } from "./types";
 import {
   getDefaultReasoningEffort,
   getValidModelOrDefault,
+  isValidModel,
   isValidReasoningEffort,
+  resolveModelAlias,
 } from "@open-inspect/shared";
 
 /**
@@ -28,28 +30,19 @@ export function resolveStaticRepo(
   );
 }
 
-const MODEL_LABEL_MAP: Record<string, string> = {
-  haiku: "anthropic/claude-haiku-4-5",
-  sonnet: "anthropic/claude-sonnet-4-5",
-  opus: "anthropic/claude-opus-4-5",
-  "opus-4-6": "anthropic/claude-opus-4-6",
-  "opus-4-7": "anthropic/claude-opus-4-7",
-  "gpt-5.2": "openai/gpt-5.2",
-  "gpt-5.4": "openai/gpt-5.4",
-  "gpt-5.5": "openai/gpt-5.5",
-  "gpt-5.2-codex": "openai/gpt-5.2-codex",
-  "gpt-5.3-codex": "openai/gpt-5.3-codex",
-};
-
 /**
- * Extract model override from issue labels (e.g., "model:opus" → "anthropic/claude-opus-4-5").
+ * Extract model override from issue labels (e.g., "model:opus" → canonical id).
+ *
+ * Alias resolution is delegated to the shared `resolveModelAlias` helper so
+ * Linear, GitHub, and any future bot stay in lockstep with the canonical
+ * model list. Returns null when the label doesn't resolve to a valid model.
  */
 export function extractModelFromLabels(labels: Array<{ name: string }>): string | null {
   for (const label of labels) {
     const match = label.name.match(/^model:(.+)$/i);
     if (match) {
-      const key = match[1].toLowerCase();
-      if (MODEL_LABEL_MAP[key]) return MODEL_LABEL_MAP[key];
+      const resolved = resolveModelAlias(match[1].toLowerCase());
+      if (isValidModel(resolved)) return resolved;
     }
   }
   return null;

@@ -176,6 +176,52 @@ export function normalizeModelId(modelId: string): string {
   return modelId;
 }
 
+/**
+ * User-friendly model aliases that `normalizeModelId` cannot infer.
+ *
+ * Two flavors of entry:
+ *   1. Family shortcuts (`opus`, `sonnet`, `haiku`) — always point at the
+ *      *latest* canonical id in that family. Updating these is part of the
+ *      "promote a new model" workflow (see docs/MODELS.md).
+ *   2. Bare version ids (`opus-4-7`, `sonnet-4-6`) for Anthropic that aren't
+ *      already prefixed with `claude-` so `normalizeModelId` can't help.
+ *
+ * OpenAI bare names (`gpt-5.4`, etc.) and bare claude ids (`claude-opus-4-7`)
+ * fall through to `normalizeModelId` — no entry needed here.
+ */
+const MODEL_ALIASES: Record<string, ValidModel> = {
+  // Family shortcuts → latest in each family
+  haiku: "anthropic/claude-haiku-4-5",
+  sonnet: "anthropic/claude-sonnet-4-6",
+  opus: "anthropic/claude-opus-4-7",
+  // Bare Anthropic versions (no `claude-` prefix)
+  "haiku-4-5": "anthropic/claude-haiku-4-5",
+  "sonnet-4-5": "anthropic/claude-sonnet-4-5",
+  "sonnet-4-6": "anthropic/claude-sonnet-4-6",
+  "opus-4-5": "anthropic/claude-opus-4-5",
+  "opus-4-6": "anthropic/claude-opus-4-6",
+  "opus-4-7": "anthropic/claude-opus-4-7",
+};
+
+/**
+ * Resolve a user-supplied model string to a canonical "provider/model" id.
+ *
+ * Resolution order:
+ *   1. Family/version alias lookup (case-insensitive) — `opus`, `sonnet-4-6`, etc.
+ *   2. `normalizeModelId` for bare `claude-*` / `gpt-*` ids and pass-through
+ *      for already-prefixed ids.
+ *
+ * The returned string is NOT guaranteed to be in `VALID_MODELS` — callers
+ * that need a validity check should pair this with `isValidModel`. Centralizing
+ * the alias map here keeps the GitHub-bot, Linear-bot, and any future bot in
+ * lockstep with the canonical model list.
+ */
+export function resolveModelAlias(raw: string): string {
+  const lower = raw.toLowerCase();
+  if (MODEL_ALIASES[lower]) return MODEL_ALIASES[lower];
+  return normalizeModelId(lower);
+}
+
 // === Validation helpers ===
 
 /**

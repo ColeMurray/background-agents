@@ -66,6 +66,7 @@ describe("getGitHubConfig", () => {
       allowedTriggerUsers: null,
       codeReviewInstructions: "Be thorough",
       commentActionInstructions: null,
+      allowInlineDirectiveOverride: true,
     });
     expect(log.warn).not.toHaveBeenCalled();
   });
@@ -84,6 +85,7 @@ describe("getGitHubConfig", () => {
       allowedTriggerUsers: [],
       codeReviewInstructions: null,
       commentActionInstructions: null,
+      allowInlineDirectiveOverride: true,
     });
     expect(log.warn).toHaveBeenCalledWith(
       "config.fetch_error",
@@ -110,6 +112,7 @@ describe("getGitHubConfig", () => {
       allowedTriggerUsers: [],
       codeReviewInstructions: null,
       commentActionInstructions: null,
+      allowInlineDirectiveOverride: true,
     });
     expect(log.warn).toHaveBeenCalledWith(
       "config.fetch_failed",
@@ -134,6 +137,7 @@ describe("getGitHubConfig", () => {
       allowedTriggerUsers: [],
       codeReviewInstructions: null,
       commentActionInstructions: null,
+      allowInlineDirectiveOverride: true,
     });
   });
 
@@ -153,7 +157,59 @@ describe("getGitHubConfig", () => {
       allowedTriggerUsers: null,
       codeReviewInstructions: null,
       commentActionInstructions: null,
+      allowInlineDirectiveOverride: true,
     });
     expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("propagates explicit allowInlineDirectiveOverride: false from response", async () => {
+    const env = createMockEnv(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            config: {
+              model: null,
+              reasoningEffort: null,
+              autoReviewOnOpen: true,
+              enabledRepos: null,
+              allowedTriggerUsers: null,
+              codeReviewInstructions: null,
+              commentActionInstructions: null,
+              allowInlineDirectiveOverride: false,
+            },
+          }),
+          { status: 200 }
+        )
+      )
+    );
+
+    const result = await getGitHubConfig(env, "acme/widgets");
+
+    expect(result.allowInlineDirectiveOverride).toBe(false);
+  });
+
+  it("defaults allowInlineDirectiveOverride to true when missing from response", async () => {
+    const env = createMockEnv(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            config: {
+              model: null,
+              reasoningEffort: null,
+              autoReviewOnOpen: true,
+              enabledRepos: null,
+              allowedTriggerUsers: null,
+              codeReviewInstructions: null,
+              commentActionInstructions: null,
+            },
+          }),
+          { status: 200 }
+        )
+      )
+    );
+
+    const result = await getGitHubConfig(env, "acme/widgets");
+
+    expect(result.allowInlineDirectiveOverride).toBe(true);
   });
 });

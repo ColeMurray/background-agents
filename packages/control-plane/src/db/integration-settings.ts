@@ -245,6 +245,15 @@ export class IntegrationSettingsStore {
       throw new IntegrationSettingsValidationError("commentActionInstructions must be a string");
     }
 
+    if (
+      settings.allowInlineDirectiveOverride !== undefined &&
+      typeof settings.allowInlineDirectiveOverride !== "boolean"
+    ) {
+      throw new IntegrationSettingsValidationError(
+        "allowInlineDirectiveOverride must be a boolean"
+      );
+    }
+
     if (settings.allowedTriggerUsers !== undefined) {
       if (
         !Array.isArray(settings.allowedTriggerUsers) ||

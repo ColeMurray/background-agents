@@ -30,12 +30,12 @@ describe("buildOAuthSuccessHtml", () => {
 // ─── extractModelFromLabels ──────────────────────────────────────────────────
 
 describe("extractModelFromLabels", () => {
-  it("returns model for a valid label", () => {
-    expect(extractModelFromLabels([{ name: "model:opus" }])).toBe("anthropic/claude-opus-4-5");
+  it("returns model for a valid label (family alias points at latest)", () => {
+    expect(extractModelFromLabels([{ name: "model:opus" }])).toBe("anthropic/claude-opus-4-7");
   });
 
   it("returns model for case-insensitive label", () => {
-    expect(extractModelFromLabels([{ name: "Model:Sonnet" }])).toBe("anthropic/claude-sonnet-4-5");
+    expect(extractModelFromLabels([{ name: "Model:Sonnet" }])).toBe("anthropic/claude-sonnet-4-6");
   });
 
   it("returns GPT 5.4 for model:gpt-5.4 label", () => {
