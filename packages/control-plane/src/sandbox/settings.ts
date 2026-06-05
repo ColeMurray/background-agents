@@ -139,7 +139,9 @@ function normalizeTunnelPorts(
     reject(`tunnelPorts must have ${MAX_TUNNEL_PORTS} or fewer entries`);
   }
 
-  result.tunnelPorts = ports.slice(0, MAX_TUNNEL_PORTS);
+  if (ports.length > 0) {
+    result.tunnelPorts = ports.slice(0, MAX_TUNNEL_PORTS);
+  }
 }
 
 function normalizePositiveIntegerSetting(
