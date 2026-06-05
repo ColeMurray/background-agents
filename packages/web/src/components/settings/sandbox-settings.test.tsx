@@ -645,4 +645,147 @@ describe("SandboxSettingsPage — resource reservations editor", () => {
       );
     });
   });
+
+  it("clearing inherited repo resources saves null provider-default overrides", async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    reposMock.repos = [
+      {
+        id: 1,
+        fullName: "acme/app",
+        owner: "acme",
+        name: "app",
+        description: null,
+        private: false,
+        defaultBranch: "main",
+      },
+    ];
+    const repoSettingsKey = "/api/integration-settings/sandbox/repos/acme/app";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: {
+            [SETTINGS_KEY]: {
+              integrationId: "sandbox",
+              settings: { defaults: { tunnelPorts: [], cpuCores: 2, memoryMib: 4096 } },
+            },
+            [repoSettingsKey]: { integrationId: "sandbox", repo: "acme/app", settings: null },
+          },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    await user.click(screen.getByText("All Repositories (Global)"));
+    await user.click(screen.getByRole("option", { name: /app/ }));
+
+    await user.clear(screen.getByLabelText("CPU cores"));
+    await user.clear(screen.getByLabelText("Memory (MiB)"));
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        repoSettingsKey,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({
+            settings: {
+              tunnelPorts: [],
+              terminalEnabled: false,
+              cpuCores: null,
+              memoryMib: null,
+            },
+          }),
+        })
+      );
+    });
+  });
+
+  it("preserves existing null repo resource overrides when saving unrelated settings", async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    reposMock.repos = [
+      {
+        id: 1,
+        fullName: "acme/app",
+        owner: "acme",
+        name: "app",
+        description: null,
+        private: false,
+        defaultBranch: "main",
+      },
+    ];
+    const repoSettingsKey = "/api/integration-settings/sandbox/repos/acme/app";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: {
+            [SETTINGS_KEY]: {
+              integrationId: "sandbox",
+              settings: { defaults: { tunnelPorts: [], cpuCores: 2, memoryMib: 4096 } },
+            },
+            [repoSettingsKey]: {
+              integrationId: "sandbox",
+              repo: "acme/app",
+              settings: { cpuCores: null, memoryMib: null },
+            },
+          },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    await user.click(screen.getByText("All Repositories (Global)"));
+    await user.click(screen.getByRole("option", { name: /app/ }));
+
+    expect(screen.getByLabelText("CPU cores")).toHaveValue("");
+    expect(screen.getByLabelText("Memory (MiB)")).toHaveValue(null);
+
+    await user.click(screen.getByText("Add port"));
+    await user.type(screen.getByPlaceholderText("e.g. 3000"), "3000");
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        repoSettingsKey,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({
+            settings: {
+              tunnelPorts: [3000],
+              terminalEnabled: false,
+              cpuCores: null,
+              memoryMib: null,
+            },
+          }),
+        })
+      );
+    });
+  });
 });

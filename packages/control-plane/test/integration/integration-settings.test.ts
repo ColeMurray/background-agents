@@ -629,6 +629,47 @@ describe("Integration settings API", () => {
       expect(body.config.cpuCores).toBe(2);
       expect(body.config.memoryMib).toBe(4096);
     });
+
+    it("GET /integration-settings/sandbox/resolved preserves null repo resource overrides", async () => {
+      const headers = await authHeaders();
+
+      const putGlobalRes = await SELF.fetch("https://test.local/integration-settings/sandbox", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          settings: {
+            defaults: { cpuCores: 2, memoryMib: 4096 },
+          },
+        }),
+      });
+      expect(putGlobalRes.status).toBe(200);
+
+      const putRepoRes = await SELF.fetch(
+        "https://test.local/integration-settings/sandbox/repos/testowner/testrepo",
+        {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({
+            settings: { cpuCores: null, memoryMib: null },
+          }),
+        }
+      );
+      expect(putRepoRes.status).toBe(200);
+
+      const res = await SELF.fetch(
+        "https://test.local/integration-settings/sandbox/resolved/testowner/testrepo",
+        { headers }
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json<{
+        config: {
+          cpuCores: number | null;
+          memoryMib: number | null;
+        };
+      }>();
+      expect(body.config.cpuCores).toBeNull();
+      expect(body.config.memoryMib).toBeNull();
+    });
   });
 
   describe("code-server CRUD", () => {

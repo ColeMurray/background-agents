@@ -10,10 +10,9 @@
  * spawn attempts within the same request.
  */
 
-import { MAX_TUNNEL_PORTS, type SandboxSettings } from "@open-inspect/shared";
+import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared";
 import type { SandboxStatus } from "../../types";
 import type { SandboxRow, SessionRow } from "../../session/types";
-import type { McpServerConfig } from "@open-inspect/shared";
 import { SandboxProviderError, type SandboxProvider, type CreateSandboxConfig } from "../provider";
 import {
   evaluateCircuitBreaker,
@@ -37,6 +36,7 @@ import { extractProviderAndModel } from "../../utils/models";
 import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
 import { mintJwt } from "../../auth/jwt";
+import { normalizeSandboxSettings } from "../settings";
 
 const log = createLogger("lifecycle-manager");
 
@@ -1188,43 +1188,7 @@ export class SandboxLifecycleManager {
     if (!session.sandbox_settings) return {};
     try {
       const parsed: unknown = JSON.parse(session.sandbox_settings);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-
-      const settings = parsed as Record<string, unknown>;
-      const result: SandboxSettings = {};
-
-      // Validate tunnelPorts at the boundary — data may come from untrusted callers
-      if (settings.tunnelPorts !== undefined) {
-        if (!Array.isArray(settings.tunnelPorts)) return {};
-        const valid = settings.tunnelPorts.filter(
-          (p: unknown) => typeof p === "number" && Number.isInteger(p) && p >= 1 && p <= 65535
-        );
-        result.tunnelPorts = valid.slice(0, MAX_TUNNEL_PORTS);
-      }
-
-      if (typeof settings.terminalEnabled === "boolean") {
-        result.terminalEnabled = settings.terminalEnabled;
-      }
-
-      // Resource reservations are advisory; drop non-positive values at the
-      // boundary and let the provider enforce its own real limits.
-      if (
-        typeof settings.cpuCores === "number" &&
-        Number.isFinite(settings.cpuCores) &&
-        settings.cpuCores > 0
-      ) {
-        result.cpuCores = settings.cpuCores;
-      }
-
-      if (
-        typeof settings.memoryMib === "number" &&
-        Number.isInteger(settings.memoryMib) &&
-        settings.memoryMib > 0
-      ) {
-        result.memoryMib = settings.memoryMib;
-      }
-
-      return result;
+      return normalizeSandboxSettings(parsed, { invalid: "omit" });
     } catch {
       this.log.warn("Failed to parse sandbox_settings, using defaults");
       return {};

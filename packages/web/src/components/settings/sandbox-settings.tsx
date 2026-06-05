@@ -15,6 +15,7 @@ import {
 } from "@open-inspect/shared";
 
 const GLOBAL_SCOPE = "__global__";
+type ResourceField = "cpuCores" | "memoryMib";
 
 interface GlobalSettingsResponse {
   integrationId: string;
@@ -46,6 +47,83 @@ function isValidCpuCores(value: string): boolean {
 function isValidMemoryMib(value: string): boolean {
   if (!/^\d+$/.test(value)) return false;
   return Number(value) >= 1;
+}
+
+function hasOwnResourceSetting(
+  settings: SandboxSettings | null | undefined,
+  field: ResourceField
+): boolean {
+  return !!settings && Object.prototype.hasOwnProperty.call(settings, field);
+}
+
+function getResourceSetting(
+  settings: SandboxSettings | null | undefined,
+  field: ResourceField
+): number | null | undefined {
+  const value = settings?.[field];
+  return typeof value === "number" || value === null ? value : undefined;
+}
+
+function resolveResourceSetting(
+  isGlobal: boolean,
+  globalDefaults: SandboxSettings | undefined,
+  repoSettings: SandboxSettings | null | undefined,
+  field: ResourceField
+): {
+  displayValue: number | undefined;
+  repoHasOverride: boolean;
+  repoValue: number | null | undefined;
+} {
+  if (isGlobal) {
+    const globalValue = getResourceSetting(globalDefaults, field);
+    return {
+      displayValue: typeof globalValue === "number" ? globalValue : undefined,
+      repoHasOverride: false,
+      repoValue: undefined,
+    };
+  }
+
+  if (hasOwnResourceSetting(repoSettings, field)) {
+    const repoValue = getResourceSetting(repoSettings, field);
+    return {
+      displayValue: typeof repoValue === "number" ? repoValue : undefined,
+      repoHasOverride: true,
+      repoValue,
+    };
+  }
+
+  const inheritedValue = getResourceSetting(globalDefaults, field);
+  return {
+    displayValue: typeof inheritedValue === "number" ? inheritedValue : undefined,
+    repoHasOverride: false,
+    repoValue: undefined,
+  };
+}
+
+function applyResourcePayload(
+  payload: SandboxSettings,
+  field: ResourceField,
+  trimmedValue: string,
+  editedValue: string | null,
+  isGlobal: boolean,
+  repoHasOverride: boolean,
+  repoValue: number | null | undefined
+): void {
+  if (isGlobal) {
+    if (trimmedValue !== "") {
+      payload[field] = Number(trimmedValue);
+    }
+    return;
+  }
+
+  if (editedValue !== null) {
+    payload[field] = trimmedValue === "" ? null : Number(trimmedValue);
+    return;
+  }
+
+  if (repoHasOverride) {
+    payload[field] = repoValue ?? null;
+  }
 }
 
 function SandboxSettingsEditor({
@@ -97,14 +175,10 @@ function SandboxSettingsEditor({
       globalDefaults?.maxTotalChildSessions ??
       DEFAULT_MAX_TOTAL_CHILD_SESSIONS);
 
-  // Resource reservations have no app-level default — unset means "use the
-  // provider's default reservation", so resolve to an empty string, not a number.
-  const currentCpuCores: number | undefined = isGlobal
-    ? globalDefaults?.cpuCores
-    : (repoSettings?.cpuCores ?? globalDefaults?.cpuCores);
-  const currentMemoryMib: number | undefined = isGlobal
-    ? globalDefaults?.memoryMib
-    : (repoSettings?.memoryMib ?? globalDefaults?.memoryMib);
+  const cpuSetting = resolveResourceSetting(isGlobal, globalDefaults, repoSettings, "cpuCores");
+  const memorySetting = resolveResourceSetting(isGlobal, globalDefaults, repoSettings, "memoryMib");
+  const currentCpuCores = cpuSetting.displayValue;
+  const currentMemoryMib = memorySetting.displayValue;
 
   const [portRows, setPortRows] = useState<string[] | null>(null);
   const [terminalEnabled, setTerminalEnabled] = useState<boolean | null>(null);
@@ -209,22 +283,24 @@ function SandboxSettingsEditor({
       ) {
         settingsPayload.maxTotalChildSessions = Number(resolvedMaxTotalChildSessions);
       }
-      // Omit when blank so the field is dropped from stored settings and the
-      // provider's default reservation applies. For a repo, only persist a value
-      // that is global, explicitly edited, or already an override — otherwise an
-      // inherited global default would get pinned as a per-repo override.
-      if (
-        trimmedCpu !== "" &&
-        (isGlobal || cpuCores !== null || repoSettings?.cpuCores !== undefined)
-      ) {
-        settingsPayload.cpuCores = Number(trimmedCpu);
-      }
-      if (
-        trimmedMemory !== "" &&
-        (isGlobal || memoryMib !== null || repoSettings?.memoryMib !== undefined)
-      ) {
-        settingsPayload.memoryMib = Number(trimmedMemory);
-      }
+      applyResourcePayload(
+        settingsPayload,
+        "cpuCores",
+        trimmedCpu,
+        cpuCores,
+        isGlobal,
+        cpuSetting.repoHasOverride,
+        cpuSetting.repoValue
+      );
+      applyResourcePayload(
+        settingsPayload,
+        "memoryMib",
+        trimmedMemory,
+        memoryMib,
+        isGlobal,
+        memorySetting.repoHasOverride,
+        memorySetting.repoValue
+      );
       const body = isGlobal
         ? { settings: { defaults: settingsPayload, enabledRepos: existingEnabledRepos } }
         : { settings: settingsPayload };
@@ -271,8 +347,10 @@ function SandboxSettingsEditor({
     maxTotalChildSessions,
     repoSettings?.maxConcurrentChildSessions,
     repoSettings?.maxTotalChildSessions,
-    repoSettings?.cpuCores,
-    repoSettings?.memoryMib,
+    cpuSetting.repoHasOverride,
+    cpuSetting.repoValue,
+    memorySetting.repoHasOverride,
+    memorySetting.repoValue,
   ]);
 
   const hasPortChanges =

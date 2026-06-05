@@ -8,11 +8,10 @@ import {
   type GitHubBotSettings,
   type LinearBotSettings,
   type CodeServerSettings,
-  type SandboxSettings,
   type SlackGlobalSettings,
   type SlackMentionsPolicy,
-  MAX_TUNNEL_PORTS,
 } from "@open-inspect/shared";
+import { normalizeSandboxSettings } from "../sandbox/settings";
 
 type SettingsLevel = "global" | "repo";
 
@@ -43,7 +42,8 @@ export class IntegrationSettingsStore {
       .first<{ settings: string }>();
 
     if (!row) return null;
-    return JSON.parse(row.settings) as IntegrationSettingsMap[K]["global"];
+    const settings = JSON.parse(row.settings) as IntegrationSettingsMap[K]["global"];
+    return this.normalizeStoredGlobalSettings(integrationId, settings);
   }
 
   async setGlobal<K extends IntegrationId>(
@@ -102,7 +102,8 @@ export class IntegrationSettingsStore {
       .first<{ settings: string }>();
 
     if (!row) return null;
-    return JSON.parse(row.settings) as IntegrationSettingsMap[K]["repo"];
+    const settings = JSON.parse(row.settings) as IntegrationSettingsMap[K]["repo"];
+    return this.normalizeStoredRepoSettings(integrationId, settings);
   }
 
   async setRepoSettings<K extends IntegrationId>(
@@ -142,7 +143,10 @@ export class IntegrationSettingsStore {
 
     return results.map((row) => ({
       repo: row.repo,
-      settings: JSON.parse(row.settings) as IntegrationSettingsMap[K]["repo"],
+      settings: this.normalizeStoredRepoSettings(
+        integrationId,
+        JSON.parse(row.settings) as IntegrationSettingsMap[K]["repo"]
+      ),
     }));
   }
 
@@ -172,9 +176,35 @@ export class IntegrationSettingsStore {
       }
     }
 
-    return { enabledRepos, settings } as ResolvedIntegrationConfig<
+    const resolvedSettings =
+      integrationId === "sandbox"
+        ? normalizeSandboxSettings(settings, { invalid: "omit" })
+        : settings;
+
+    return { enabledRepos, settings: resolvedSettings } as ResolvedIntegrationConfig<
       NonNullable<IntegrationSettingsMap[K]["global"]["defaults"]>
     >;
+  }
+
+  private normalizeStoredGlobalSettings<K extends IntegrationId>(
+    integrationId: K,
+    settings: IntegrationSettingsMap[K]["global"]
+  ): IntegrationSettingsMap[K]["global"] {
+    if (integrationId !== "sandbox" || !settings.defaults) return settings;
+    return {
+      ...settings,
+      defaults: normalizeSandboxSettings(settings.defaults, { invalid: "omit" }),
+    } as IntegrationSettingsMap[K]["global"];
+  }
+
+  private normalizeStoredRepoSettings<K extends IntegrationId>(
+    integrationId: K,
+    settings: IntegrationSettingsMap[K]["repo"]
+  ): IntegrationSettingsMap[K]["repo"] {
+    if (integrationId !== "sandbox") return settings;
+    return normalizeSandboxSettings(settings, {
+      invalid: "omit",
+    }) as IntegrationSettingsMap[K]["repo"];
   }
 
   private validateAndNormalizeSettings<K extends IntegrationId>(
@@ -197,9 +227,10 @@ export class IntegrationSettingsStore {
     }
 
     if (integrationId === "sandbox") {
-      return this.validateSandboxSettings(
-        settings as SandboxSettings
-      ) as IntegrationSettingsMap[K]["repo"];
+      return normalizeSandboxSettings(settings, {
+        invalid: "throw",
+        createError: (message) => new IntegrationSettingsValidationError(message),
+      }) as IntegrationSettingsMap[K]["repo"];
     }
 
     if (integrationId === "slack") {
@@ -307,73 +338,6 @@ export class IntegrationSettingsStore {
   private validateCodeServerSettings(settings: CodeServerSettings): void {
     if (settings.enabled !== undefined && typeof settings.enabled !== "boolean") {
       throw new IntegrationSettingsValidationError("enabled must be a boolean");
-    }
-  }
-
-  private validateSandboxSettings(settings: SandboxSettings): SandboxSettings {
-    if (settings.terminalEnabled !== undefined && typeof settings.terminalEnabled !== "boolean") {
-      throw new IntegrationSettingsValidationError("terminalEnabled must be a boolean");
-    }
-
-    this.validatePositiveIntegerSetting(
-      settings.maxConcurrentChildSessions,
-      "maxConcurrentChildSessions"
-    );
-    this.validatePositiveIntegerSetting(settings.maxTotalChildSessions, "maxTotalChildSessions");
-    this.validateCpuCoresSetting(settings.cpuCores);
-    this.validateMemoryMibSetting(settings.memoryMib);
-    if (
-      settings.maxConcurrentChildSessions !== undefined &&
-      settings.maxTotalChildSessions !== undefined &&
-      settings.maxConcurrentChildSessions > settings.maxTotalChildSessions
-    ) {
-      throw new IntegrationSettingsValidationError(
-        "maxConcurrentChildSessions must be less than or equal to maxTotalChildSessions"
-      );
-    }
-
-    if (settings.tunnelPorts !== undefined) {
-      if (!Array.isArray(settings.tunnelPorts)) {
-        throw new IntegrationSettingsValidationError("tunnelPorts must be an array of numbers");
-      }
-      const dedupedPorts = [...new Set(settings.tunnelPorts)];
-      if (dedupedPorts.length > MAX_TUNNEL_PORTS) {
-        throw new IntegrationSettingsValidationError(
-          `tunnelPorts must have ${MAX_TUNNEL_PORTS} or fewer entries`
-        );
-      }
-      for (const port of dedupedPorts) {
-        if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) {
-          throw new IntegrationSettingsValidationError(
-            `Invalid port number: ${port}. Must be an integer between 1 and 65535`
-          );
-        }
-      }
-      return { ...settings, tunnelPorts: dedupedPorts };
-    }
-    return settings;
-  }
-
-  private validatePositiveIntegerSetting(value: unknown, name: string): void {
-    if (value === undefined) return;
-    if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
-      throw new IntegrationSettingsValidationError(`${name} must be a positive integer`);
-    }
-  }
-
-  // Resource reservations are only checked for positivity — the provider
-  // (e.g. Modal) enforces its own real CPU/memory limits.
-  private validateCpuCoresSetting(value: unknown): void {
-    if (value === undefined) return;
-    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-      throw new IntegrationSettingsValidationError("cpuCores must be a positive number");
-    }
-  }
-
-  private validateMemoryMibSetting(value: unknown): void {
-    if (value === undefined) return;
-    if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-      throw new IntegrationSettingsValidationError("memoryMib must be a positive integer");
     }
   }
 

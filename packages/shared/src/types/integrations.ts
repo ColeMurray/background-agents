@@ -54,7 +54,8 @@ export const DEFAULT_MAX_TOTAL_CHILD_SESSIONS = 15;
  * advisory and provider-dependent — Modal honors them; providers without
  * resource reservations (e.g. Daytona) ignore them. We only check they're
  * positive; the provider enforces its own real limits. When unset, the
- * provider's own default applies.
+ * provider's own default applies. At repo scope, `null` explicitly uses the
+ * provider default instead of inheriting a global resource default.
  */
 export interface SandboxSettings {
   /** Extra ports to expose via tunnels (e.g., dev server ports 3000, 5173). */
@@ -67,14 +68,14 @@ export interface SandboxSettings {
   maxTotalChildSessions?: number;
   /**
    * CPU cores to reserve for the sandbox (maps to Modal's `cpu`). Fractional
-   * values are allowed. Unset → provider default.
+   * values are allowed. Unset → inherit/default; null → provider default.
    */
-  cpuCores?: number;
+  cpuCores?: number | null;
   /**
    * Memory to reserve for the sandbox, in MiB (maps to Modal's `memory`).
-   * Unset → provider default.
+   * Unset → inherit/default; null → provider default.
    */
-  memoryMib?: number;
+  memoryMib?: number | null;
 }
 
 export type SlackMentionsPolicy = "allow" | "escape" | "strip";

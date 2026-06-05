@@ -12,7 +12,6 @@ Updated: 2026-01-15 to fix Sandbox.create API
 
 import asyncio
 import json
-import math
 import os
 import secrets
 import time
@@ -44,9 +43,8 @@ def _resource_kwargs(settings: dict[str, Any] | None) -> dict:
     """Map sandbox settings to Modal resource kwargs.
 
     `cpuCores` -> Modal `cpu` (cores, fractional allowed), `memoryMib` -> Modal
-    `memory` (MiB). Only set when explicitly configured and positive; absent or
-    invalid values are omitted so Modal applies its own default reservation.
-    Modal enforces its own real CPU/memory limits on the values passed here.
+    `memory` (MiB). The control plane owns normalization; this only maps
+    already-normalized settings into provider-specific argument names.
     """
     if not settings:
         return {}
@@ -54,16 +52,11 @@ def _resource_kwargs(settings: dict[str, Any] | None) -> dict:
     kwargs: dict = {}
 
     cpu_cores = settings.get("cpuCores")
-    if (
-        isinstance(cpu_cores, (int, float))
-        and not isinstance(cpu_cores, bool)
-        and math.isfinite(float(cpu_cores))
-        and cpu_cores > 0
-    ):
+    if cpu_cores is not None:
         kwargs["cpu"] = float(cpu_cores)
 
     memory_mib = settings.get("memoryMib")
-    if isinstance(memory_mib, int) and not isinstance(memory_mib, bool) and memory_mib > 0:
+    if memory_mib is not None:
         kwargs["memory"] = memory_mib
 
     return kwargs

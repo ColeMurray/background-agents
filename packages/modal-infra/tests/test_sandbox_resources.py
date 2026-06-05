@@ -25,20 +25,8 @@ class TestResourceKwargs:
     def test_allows_fractional_cpu(self):
         assert _resource_kwargs({"cpuCores": 0.5}) == {"cpu": 0.5}
 
-    def test_omits_non_positive_values(self):
-        assert _resource_kwargs({"cpuCores": 0, "memoryMib": 0}) == {}
-
-    def test_omits_boolean_values(self):
-        # bool is a subclass of int — must not be treated as a reservation.
-        assert _resource_kwargs({"cpuCores": True, "memoryMib": True}) == {}
-
-    def test_omits_non_integer_memory(self):
-        assert _resource_kwargs({"memoryMib": 256.5}) == {}
-
-    def test_omits_non_finite_cpu(self):
-        # Defensive: upstream rejects these, but the pass-through must too.
-        assert _resource_kwargs({"cpuCores": float("inf")}) == {}
-        assert _resource_kwargs({"cpuCores": float("nan")}) == {}
+    def test_omits_null_values(self):
+        assert _resource_kwargs({"cpuCores": None, "memoryMib": None}) == {}
 
     def test_independent_fields(self):
         assert _resource_kwargs({"memoryMib": 2048}) == {"memory": 2048}

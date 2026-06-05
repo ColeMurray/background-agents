@@ -761,6 +761,17 @@ describe("IntegrationSettingsStore", () => {
       expect(result).toEqual({ cpuCores: 0.5, memoryMib: 64 });
     });
 
+    it("preserves null repo resource overrides over inherited global defaults", async () => {
+      await store.setGlobal("sandbox", { defaults: { cpuCores: 2, memoryMib: 4096 } });
+      await store.setRepoSettings("sandbox", "acme/app", { cpuCores: null, memoryMib: null });
+
+      const repoSettings = await store.getRepoSettings("sandbox", "acme/app");
+      expect(repoSettings).toEqual({ cpuCores: null, memoryMib: null });
+
+      const resolved = await store.getResolvedConfig("sandbox", "acme/app");
+      expect(resolved.settings).toEqual({ cpuCores: null, memoryMib: null });
+    });
+
     it("rejects non-positive cpuCores", async () => {
       await expect(store.setGlobal("sandbox", { defaults: { cpuCores: 0 } })).rejects.toThrow(
         IntegrationSettingsValidationError
