@@ -1,13 +1,31 @@
 import type { SpawnContext } from "@open-inspect/shared";
 import type { SessionStatus } from "../../../types";
 import type { SessionRepository } from "../../repository";
-import type { SandboxRow, SessionRow } from "../../types";
+import type { ArtifactRow, SandboxRow, SessionRow } from "../../types";
+import {
+  RECENT_EVENT_FETCH_LIMIT,
+  buildChildSessionDetail,
+  collectFinalResponseEventRows,
+  parseChildSummaryOptions,
+  type ChildSummaryFinalResponseInput,
+  type ChildSummaryTrajectoryInput,
+} from "./child-session-summary";
 
 export interface ChildSessionsHandlerDeps {
-  repository: Pick<SessionRepository, "listParticipants" | "listArtifacts" | "listEvents">;
+  repository: Pick<
+    SessionRepository,
+    | "listParticipants"
+    | "listArtifacts"
+    | "listEventPage"
+    | "getLatestTerminalMessage"
+    | "getEventTimelinePage"
+  >;
   getSession: () => SessionRow | null;
   getSandbox: () => SandboxRow | null;
   getPublicSessionId: (session: SessionRow) => string;
+  parseArtifactMetadata: (
+    artifact: Pick<ArtifactRow, "id" | "metadata">
+  ) => Record<string, unknown> | null;
   broadcast: (message: {
     type: "child_session_update";
     childSessionId: string;
@@ -18,7 +36,7 @@ export interface ChildSessionsHandlerDeps {
 
 export interface ChildSessionsHandler {
   getSpawnContext: () => Response;
-  getChildSummary: () => Response;
+  getChildSummary: (url?: URL) => Response;
   childSessionUpdate: (request: Request) => Promise<Response>;
 }
 
@@ -58,44 +76,59 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
       return Response.json(context);
     },
 
-    getChildSummary(): Response {
+    getChildSummary(url?: URL): Response {
       const session = deps.getSession();
       if (!session) {
         return Response.json({ error: "Session not found" }, { status: 404 });
       }
 
+      const parsedOptions = parseChildSummaryOptions(url);
+      if (!parsedOptions.ok) {
+        return Response.json({ error: parsedOptions.error }, { status: 400 });
+      }
+
+      const options = parsedOptions.options;
       const sandbox = deps.getSandbox();
       const artifacts = deps.repository.listArtifacts();
-      const allEvents = deps.repository.listEvents({ limit: 50 });
+      const recentEventRows = deps.repository.listEventPage({
+        limit: RECENT_EVENT_FETCH_LIMIT,
+      }).events;
+      let finalResponse: ChildSummaryFinalResponseInput | undefined;
+      let trajectory: ChildSummaryTrajectoryInput | undefined;
 
-      // Filter out noisy event types and keep the most recent five.
-      const filteredTypes = new Set(["token", "heartbeat", "step_start", "step_finish"]);
-      const recentEvents = allEvents.filter((event) => !filteredTypes.has(event.type)).slice(0, 5);
+      if (options.includeFinalResponse) {
+        const terminalMessage = deps.repository.getLatestTerminalMessage();
+        const collectedEvents = terminalMessage
+          ? collectFinalResponseEventRows(deps.repository, terminalMessage.id)
+          : { eventRows: [], eventLimitReached: false };
+        finalResponse = { message: terminalMessage, ...collectedEvents };
+      }
 
-      return Response.json({
-        session: {
-          id: deps.getPublicSessionId(session),
-          title: session.title ?? "",
-          status: session.status,
-          repoOwner: session.repo_owner,
-          repoName: session.repo_name,
-          branchName: session.branch_name,
-          model: session.model,
-          createdAt: session.created_at,
-          updatedAt: session.updated_at,
-        },
-        sandbox: sandbox ? { status: sandbox.status } : null,
-        artifacts: artifacts.map((artifact) => ({
-          type: artifact.type,
-          url: artifact.url ?? "",
-          metadata: artifact.metadata ? JSON.parse(artifact.metadata) : null,
-        })),
-        recentEvents: recentEvents.map((event) => ({
-          type: event.type,
-          data: JSON.parse(event.data),
-          createdAt: event.created_at,
-        })),
-      });
+      if (options.includeTrajectory) {
+        const page = deps.repository.getEventTimelinePage({
+          limit: options.trajectoryLimit,
+          cursor: options.trajectoryCursor ?? undefined,
+        });
+        trajectory = {
+          eventRows: page.events,
+          hasMore: page.hasMore,
+          nextCursor: page.nextCursor,
+          limit: options.trajectoryLimit,
+        };
+      }
+
+      return Response.json(
+        buildChildSessionDetail({
+          session,
+          sandbox,
+          publicSessionId: deps.getPublicSessionId(session),
+          artifacts,
+          recentEventRows,
+          parseArtifactMetadata: deps.parseArtifactMetadata,
+          finalResponse,
+          trajectory,
+        })
+      );
     },
 
     async childSessionUpdate(request: Request): Promise<Response> {

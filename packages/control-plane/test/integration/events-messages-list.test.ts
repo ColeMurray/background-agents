@@ -1,7 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect } from "vitest";
+import { cleanD1Tables } from "./cleanup";
 import { initSession, seedEvents } from "./helpers";
 
 describe("GET /internal/events", () => {
+  beforeEach(cleanD1Tables);
+
   it("lists events with default pagination", async () => {
     const { stub } = await initSession();
     const baseTime = Date.now();
@@ -95,6 +98,64 @@ describe("GET /internal/events", () => {
     for (const event of page2.events) {
       expect(page1Ids.has(event.id)).toBe(false);
     }
+  });
+
+  it("cursor pagination includes events tied on the page boundary timestamp", async () => {
+    const { stub } = await initSession();
+    const createdAt = Date.now();
+
+    await seedEvents(
+      stub,
+      Array.from({ length: 5 }, (_, i) => ({
+        id: `evt-tie-${i}`,
+        type: "error",
+        data: JSON.stringify({ type: "error", message: `error-${i}` }),
+        createdAt,
+      }))
+    );
+
+    const res1 = await stub.fetch("http://internal/internal/events?type=error&limit=2");
+    const page1 = await res1.json<{
+      events: Array<{ id: string }>;
+      cursor: string;
+      hasMore: boolean;
+    }>();
+
+    expect(page1.events.map((event) => event.id)).toEqual(["evt-tie-4", "evt-tie-3"]);
+    expect(page1.hasMore).toBe(true);
+    expect(page1.cursor).toBe(`${createdAt}:evt-tie-3`);
+
+    const res2 = await stub.fetch(
+      `http://internal/internal/events?type=error&limit=2&cursor=${encodeURIComponent(page1.cursor)}`
+    );
+    const page2 = await res2.json<{
+      events: Array<{ id: string }>;
+      cursor: string;
+      hasMore: boolean;
+    }>();
+
+    expect(page2.events.map((event) => event.id)).toEqual(["evt-tie-2", "evt-tie-1"]);
+    expect(page2.hasMore).toBe(true);
+
+    const res3 = await stub.fetch(
+      `http://internal/internal/events?type=error&limit=2&cursor=${encodeURIComponent(page2.cursor)}`
+    );
+    const page3 = await res3.json<{
+      events: Array<{ id: string }>;
+      hasMore: boolean;
+    }>();
+
+    expect(page3.events.map((event) => event.id)).toEqual(["evt-tie-0"]);
+    expect(page3.hasMore).toBe(false);
+  });
+
+  it("rejects malformed cursors", async () => {
+    const { stub } = await initSession();
+
+    const res = await stub.fetch("http://internal/internal/events?cursor=bad");
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ error: "Invalid cursor" });
   });
 
   it("filters events by type", async () => {

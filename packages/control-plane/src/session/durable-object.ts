@@ -177,7 +177,7 @@ export class SessionDO extends DurableObject<Env> {
     openaiTokenRefresh: () => this.sandboxHandler.openaiTokenRefresh(),
     scmCredentials: () => this.sandboxHandler.scmCredentials(),
     spawnContext: () => this.childSessionsHandler.getSpawnContext(),
-    childSummary: () => this.childSessionsHandler.getChildSummary(),
+    childSummary: (_request, url) => this.childSessionsHandler.getChildSummary(url),
     cancel: () => this.sessionLifecycleHandler.cancel(),
     childSessionUpdate: (request) => this.childSessionsHandler.childSessionUpdate(request),
   });
@@ -361,6 +361,7 @@ export class SessionDO extends DurableObject<Env> {
         getSession: () => this.getSession(),
         getSandbox: () => this.getSandbox(),
         getPublicSessionId: (session) => this.getPublicSessionId(session),
+        parseArtifactMetadata: (artifact) => this.parseArtifactMetadata(artifact),
         broadcast: (message) => this.broadcast(message),
       });
     }
@@ -1370,7 +1371,11 @@ export class SessionDO extends DurableObject<Env> {
 
     const rawLimit = typeof data.limit === "number" ? data.limit : 200;
     const limit = Math.max(1, Math.min(rawLimit, 500));
-    const page = this.repository.getEventsHistoryPage(data.cursor.timestamp, data.cursor.id, limit);
+    const page = this.repository.getEventTimelinePage({
+      cursor: { kind: "timeline", createdAt: data.cursor.timestamp, id: data.cursor.id },
+      excludeTypes: ["heartbeat"],
+      limit,
+    });
 
     const items: SandboxEvent[] = [];
     for (const event of page.events) {
@@ -1381,14 +1386,13 @@ export class SessionDO extends DurableObject<Env> {
       }
     }
 
-    // Compute new cursor from oldest item in the page
-    const oldestEvent = page.events.length > 0 ? page.events[0] : null;
-
     this.safeSend(ws, {
       type: "history_page",
       items,
       hasMore: page.hasMore,
-      cursor: oldestEvent ? { timestamp: oldestEvent.created_at, id: oldestEvent.id } : null,
+      cursor: page.nextCursor
+        ? { timestamp: page.nextCursor.createdAt, id: page.nextCursor.id }
+        : null,
     } as ServerMessage);
   }
 

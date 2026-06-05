@@ -1,5 +1,6 @@
 import type { Logger } from "../../../logger";
 import type { EnqueuePromptRequest, MessageService } from "../../services/message.service";
+import { parseEventListCursor } from "../../event-cursor";
 
 /**
  * Valid event types for filtering.
@@ -58,7 +59,7 @@ export function createMessagesHandler(deps: MessagesHandlerDeps): MessagesHandle
     },
 
     listEvents(url: URL): Response {
-      const cursor = url.searchParams.get("cursor");
+      const cursorResult = parseEventListCursor(url.searchParams.get("cursor"));
       const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50"), 200);
       const type = url.searchParams.get("type");
       const messageId = url.searchParams.get("message_id");
@@ -67,7 +68,16 @@ export function createMessagesHandler(deps: MessagesHandlerDeps): MessagesHandle
         return Response.json({ error: `Invalid event type: ${type}` }, { status: 400 });
       }
 
-      const result = deps.messageService.listEvents({ cursor, limit, type, messageId });
+      if (!cursorResult.ok) {
+        return Response.json({ error: cursorResult.error }, { status: 400 });
+      }
+
+      const result = deps.messageService.listEvents({
+        cursor: cursorResult.cursor,
+        limit,
+        type,
+        messageId,
+      });
 
       return Response.json({
         events: result.events.map((event) => ({
