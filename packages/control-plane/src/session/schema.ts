@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS sandbox (
   modal_object_id TEXT,                             -- Legacy provider object ID (Modal object ID or Daytona handle)
   snapshot_id TEXT,
   snapshot_image_id TEXT,                           -- Modal Image ID for filesystem snapshot restoration
+  snapshot_image_profile TEXT,                      -- Sandbox image profile used to create snapshot_image_id
   auth_token TEXT,                                  -- Token for sandbox to authenticate back to control plane
   auth_token_hash TEXT,                             -- SHA-256 hash of sandbox auth token (preferred)
   status TEXT DEFAULT 'pending',                    -- 'pending', 'spawning', 'connecting', 'warming', 'syncing', 'ready', 'running', 'stale', 'snapshotting', 'stopped', 'failed'
@@ -382,6 +383,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 30,
     description: "Add total_cost to session",
     run: `ALTER TABLE session ADD COLUMN total_cost REAL NOT NULL DEFAULT 0`,
+  },
+  {
+    id: 31,
+    description: "Add snapshot_image_profile to sandbox",
+    run: `ALTER TABLE sandbox ADD COLUMN snapshot_image_profile TEXT`,
   },
 ];
 

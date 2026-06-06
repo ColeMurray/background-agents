@@ -1,8 +1,11 @@
+import { DEFAULT_SANDBOX_IMAGE_PROFILE, type SandboxImageProfile } from "@open-inspect/shared";
+
 export interface RepoImageBuild {
   id: string;
   repoOwner: string;
   repoName: string;
   baseBranch: string;
+  imageProfile?: SandboxImageProfile;
 }
 
 export interface RepoImage {
@@ -15,6 +18,7 @@ export interface RepoImage {
   status: "building" | "ready" | "failed";
   build_duration_seconds: number | null;
   error_message: string | null;
+  image_profile: SandboxImageProfile;
   created_at: number;
 }
 
@@ -25,14 +29,15 @@ export class RepoImageStore {
     const now = Date.now();
     await this.db
       .prepare(
-        `INSERT INTO repo_images (id, repo_owner, repo_name, base_branch, provider_image_id, status, base_sha, created_at)
-         VALUES (?, ?, ?, ?, '', 'building', '', ?)`
+        `INSERT INTO repo_images (id, repo_owner, repo_name, base_branch, image_profile, provider_image_id, status, base_sha, created_at)
+         VALUES (?, ?, ?, ?, ?, '', 'building', '', ?)`
       )
       .bind(
         build.id,
         build.repoOwner.toLowerCase(),
         build.repoName.toLowerCase(),
         build.baseBranch,
+        build.imageProfile ?? DEFAULT_SANDBOX_IMAGE_PROFILE,
         now
       )
       .run();
@@ -45,17 +50,29 @@ export class RepoImageStore {
     buildDurationSeconds: number
   ): Promise<{ replacedImageId: string | null }> {
     const build = await this.db
-      .prepare("SELECT repo_owner, repo_name, base_branch FROM repo_images WHERE id = ?")
+      .prepare(
+        "SELECT repo_owner, repo_name, base_branch, image_profile FROM repo_images WHERE id = ?"
+      )
       .bind(buildId)
-      .first<{ repo_owner: string; repo_name: string; base_branch: string }>();
+      .first<{
+        repo_owner: string;
+        repo_name: string;
+        base_branch: string;
+        image_profile?: SandboxImageProfile;
+      }>();
 
     if (!build) return { replacedImageId: null };
 
     const oldReady = await this.db
       .prepare(
-        "SELECT id, provider_image_id FROM repo_images WHERE repo_owner = ? AND repo_name = ? AND base_branch = ? AND status = 'ready'"
+        "SELECT id, provider_image_id FROM repo_images WHERE repo_owner = ? AND repo_name = ? AND base_branch = ? AND image_profile = ? AND status = 'ready'"
       )
-      .bind(build.repo_owner, build.repo_name, build.base_branch)
+      .bind(
+        build.repo_owner,
+        build.repo_name,
+        build.base_branch,
+        build.image_profile ?? DEFAULT_SANDBOX_IMAGE_PROFILE
+      )
       .first<{ id: string; provider_image_id: string }>();
 
     const statements: D1PreparedStatement[] = [
@@ -85,7 +102,8 @@ export class RepoImageStore {
   async getLatestReady(
     repoOwner: string,
     repoName: string,
-    baseBranch?: string
+    baseBranch?: string,
+    imageProfile: SandboxImageProfile = DEFAULT_SANDBOX_IMAGE_PROFILE
   ): Promise<RepoImage | null> {
     if (baseBranch) {
       return this.db
@@ -93,10 +111,11 @@ export class RepoImageStore {
           `SELECT ri.* FROM repo_images ri
            INNER JOIN repo_metadata rm ON ri.repo_owner = rm.repo_owner AND ri.repo_name = rm.repo_name
            WHERE ri.repo_owner = ? AND ri.repo_name = ? AND ri.base_branch = ? AND ri.status = 'ready'
+           AND ri.image_profile = ?
            AND rm.image_build_enabled = 1
            ORDER BY ri.created_at DESC LIMIT 1`
         )
-        .bind(repoOwner.toLowerCase(), repoName.toLowerCase(), baseBranch)
+        .bind(repoOwner.toLowerCase(), repoName.toLowerCase(), baseBranch, imageProfile)
         .first<RepoImage>();
     }
     return this.db
@@ -104,10 +123,11 @@ export class RepoImageStore {
         `SELECT ri.* FROM repo_images ri
          INNER JOIN repo_metadata rm ON ri.repo_owner = rm.repo_owner AND ri.repo_name = rm.repo_name
          WHERE ri.repo_owner = ? AND ri.repo_name = ? AND ri.status = 'ready'
+         AND ri.image_profile = ?
          AND rm.image_build_enabled = 1
          ORDER BY ri.created_at DESC LIMIT 1`
       )
-      .bind(repoOwner.toLowerCase(), repoName.toLowerCase())
+      .bind(repoOwner.toLowerCase(), repoName.toLowerCase(), imageProfile)
       .first<RepoImage>();
   }
 

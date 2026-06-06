@@ -5,29 +5,23 @@
  * enabling unit testing and future provider support.
  */
 
-import type { SandboxSettings } from "@open-inspect/shared";
+import type {
+  RequestedSandboxRuntime,
+  SandboxImageProfile,
+  SandboxProviderCapabilities,
+  SandboxRuntimeSettings,
+} from "@open-inspect/shared";
 import type { CorrelationContext } from "../logger";
 import type { McpServerConfig } from "@open-inspect/shared";
 
+// The provider capability descriptor lives in @open-inspect/shared so the
+// control plane and the web app read the same source of truth. Re-exported
+// here for the many call sites that import it alongside the provider config
+// types.
+export type { SandboxProviderCapabilities };
+
 /** Default sandbox lifetime in seconds (2 hours). */
 export const DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200;
-
-/**
- * Capabilities supported by a sandbox provider.
- * Providers can support different feature sets.
- */
-export interface SandboxProviderCapabilities {
-  /** Whether the provider supports filesystem snapshots */
-  supportsSnapshots: boolean;
-  /** Whether the provider supports restoring from snapshots */
-  supportsRestore: boolean;
-  /** Whether the provider supports pre-warming sandboxes */
-  supportsWarm: boolean;
-  /** Whether the provider can resume a previously stopped sandbox in place */
-  supportsPersistentResume?: boolean;
-  /** Whether the provider can stop a sandbox explicitly via API */
-  supportsExplicitStop?: boolean;
-}
 
 /**
  * Configuration for creating a new sandbox.
@@ -73,8 +67,21 @@ export interface CreateSandboxConfig {
   agentSlackNotifyEnabled?: boolean;
   /** MCP servers to inject into the agent session */
   mcpServers?: McpServerConfig[];
-  /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
-  sandboxSettings?: SandboxSettings;
+  /** Runtime sandbox settings resolved from integration settings */
+  sandboxSettings?: SandboxRuntimeSettings;
+  /**
+   * Provider-agnostic declarative runtime intent (e.g. Docker). The provider
+   * realizes it with its own mechanism; the manager does not pre-translate it.
+   */
+  requestedRuntime?: RequestedSandboxRuntime;
+  /**
+   * Resolved logical environment id (shared, provider-agnostic) for this spawn.
+   * Drives image selection and snapshot/prebuilt-image compatibility. Each
+   * provider maps it to a concrete image internally; the control plane never
+   * sees a provider image. Computed once by the lifecycle manager via
+   * resolveEnvironment(requestedRuntime, capabilities).
+   */
+  environment: SandboxImageProfile;
 }
 
 /**
@@ -135,8 +142,12 @@ export interface RestoreConfig {
   codeServerEnabled?: boolean;
   /** Resolved fresh on each restore — see CreateSandboxConfig. */
   agentSlackNotifyEnabled?: boolean;
-  /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
-  sandboxSettings?: SandboxSettings;
+  /** Runtime sandbox settings resolved from integration settings */
+  sandboxSettings?: SandboxRuntimeSettings;
+  /** Provider-agnostic declarative runtime intent (e.g. Docker). See CreateSandboxConfig. */
+  requestedRuntime?: RequestedSandboxRuntime;
+  /** Resolved logical environment id for this restore. See CreateSandboxConfig. */
+  environment: SandboxImageProfile;
 }
 
 /**
@@ -201,8 +212,8 @@ export interface ResumeConfig {
   timeoutSeconds?: number;
   /** Whether code-server should be exposed */
   codeServerEnabled?: boolean;
-  /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
-  sandboxSettings?: SandboxSettings;
+  /** Runtime sandbox settings resolved from integration settings */
+  sandboxSettings?: SandboxRuntimeSettings;
   /** Correlation context for downstream tracing */
   correlation?: CorrelationContext;
 }

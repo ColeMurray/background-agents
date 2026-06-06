@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { generateInternalToken } from "../../src/auth/internal";
+import { IntegrationSettingsStore } from "../../src/db/integration-settings";
 import { RepoImageStore } from "../../src/db/repo-images";
 import { RepoMetadataStore } from "../../src/db/repo-metadata";
 import { cleanD1Tables } from "./cleanup";
@@ -33,6 +34,7 @@ describe("D1 RepoImageStore", () => {
       base_branch: "main",
       provider_image_id: "",
       base_sha: "",
+      image_profile: "default",
     });
     expect(status[0].created_at).toBeGreaterThan(0);
   });
@@ -174,6 +176,34 @@ describe("D1 RepoImageStore", () => {
     const result = await store.getLatestReady("acme", "repo");
     expect(result).not.toBeNull();
     expect(result!.id).toBe("img-1");
+  });
+
+  it("getLatestReady filters by Docker capability", async () => {
+    await metadataStore.setImageBuildEnabled("acme", "repo", true);
+    await store.registerBuild({
+      id: "img-plain",
+      repoOwner: "acme",
+      repoName: "repo",
+      baseBranch: "main",
+    });
+    await store.markReady("img-plain", "modal-img-plain", "sha1", 30);
+
+    await store.registerBuild({
+      id: "img-docker",
+      repoOwner: "acme",
+      repoName: "repo",
+      baseBranch: "main",
+      imageProfile: "docker",
+    });
+    await store.markReady("img-docker", "modal-img-docker", "sha2", 35);
+
+    const plain = await store.getLatestReady("acme", "repo", "main", "default");
+    expect(plain).not.toBeNull();
+    expect(plain!.id).toBe("img-plain");
+
+    const docker = await store.getLatestReady("acme", "repo", "main", "docker");
+    expect(docker).not.toBeNull();
+    expect(docker!.id).toBe("img-docker");
   });
 
   it("getStatus returns builds ordered by created_at DESC", async () => {
@@ -420,11 +450,33 @@ describe("Repo image HTTP routes", () => {
 
     expect(response.status).toBe(200);
     const body = await response.json<{
-      repos: Array<{ repoOwner: string; repoName: string }>;
+      repos: Array<{ repoOwner: string; repoName: string; imageProfile: string }>;
     }>();
     expect(body.repos).toHaveLength(2);
     const names = body.repos.map((r) => r.repoName).sort();
     expect(names).toEqual(["repo-a", "repo-c"]);
+    expect(body.repos.every((r) => r.imageProfile === "default")).toBe(true);
+  });
+
+  it("GET /repo-images/enabled-repos includes resolved Docker setting", async () => {
+    const metadataStore = new RepoMetadataStore(env.DB);
+    await metadataStore.setImageBuildEnabled("acme", "repo-a", true);
+    await new IntegrationSettingsStore(env.DB).setRepoSettings("sandbox", "acme/repo-a", {
+      dockerEnabled: true,
+    });
+
+    const headers = await authHeaders();
+    delete (headers as Record<string, string | undefined>)["Content-Type"];
+
+    const response = await SELF.fetch("https://test.local/repo-images/enabled-repos", {
+      headers,
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json<{
+      repos: Array<{ repoOwner: string; repoName: string; imageProfile: string }>;
+    }>();
+    expect(body.repos).toEqual([{ repoOwner: "acme", repoName: "repo-a", imageProfile: "docker" }]);
   });
 
   it("PUT /repo-images/toggle/:owner/:name enables image build", async () => {

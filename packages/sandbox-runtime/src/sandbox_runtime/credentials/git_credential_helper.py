@@ -160,7 +160,7 @@ def _read_cached() -> dict[str, object] | None:
     cached = cast("dict[str, object]", raw_cached)
 
     expires_at_ms = cached.get("expires_at_epoch_ms")
-    if not isinstance(expires_at_ms, (int, float)):
+    if not isinstance(expires_at_ms, int | float):
         return None
 
     seconds_remaining = expires_at_ms / 1000 - time.time()
@@ -201,7 +201,7 @@ def _fetch_from_control_plane(endpoint: tuple[str, str, str]) -> dict[str, objec
     if not isinstance(data, dict) or not data.get("username") or not data.get("password"):
         raise RuntimeError("control plane response missing username/password")
     expires_at = data.get("expires_at_epoch_ms")
-    if not isinstance(expires_at, (int, float)) or expires_at <= 0:
+    if not isinstance(expires_at, int | float) or expires_at <= 0:
         # Fail loud rather than cache a credential that _read_cached would
         # immediately reject, which would silently refetch on every git op.
         raise RuntimeError("control plane response has invalid expires_at_epoch_ms")

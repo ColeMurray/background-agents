@@ -15,6 +15,7 @@ import type {
   EventType,
 } from "../types";
 import type { GitPushSpec } from "../source-control";
+import type { SandboxImageProfile } from "@open-inspect/shared";
 
 // Database row types (match SQLite schema)
 
@@ -97,6 +98,7 @@ export interface SandboxRow {
   modal_object_id: string | null; // Legacy column: provider object ID (Modal object ID or Daytona handle)
   snapshot_id: string | null;
   snapshot_image_id: string | null; // Modal Image ID for filesystem snapshot restoration
+  snapshot_image_profile: SandboxImageProfile | null; // Image profile used when snapshot_image_id was created
   auth_token: string | null;
   auth_token_hash: string | null; // SHA-256 hash of sandbox auth token
   status: SandboxStatus;

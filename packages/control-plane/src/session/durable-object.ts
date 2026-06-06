@@ -10,13 +10,17 @@
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
-import { resolveAppName, timingSafeEqual } from "@open-inspect/shared";
+import {
+  getProviderCapabilities,
+  parseSandboxBackendName,
+  resolveAppName,
+  timingSafeEqual,
+} from "@open-inspect/shared";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { buildModalSandboxDashboardUrl, createModalClient } from "../sandbox/client";
 import { createDaytonaRestClient } from "../sandbox/daytona-rest-client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
 import { createDaytonaProvider } from "../sandbox/providers/daytona-provider";
-import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import {
@@ -548,7 +552,7 @@ export class SessionDO extends DurableObject<Env> {
    * Create the lifecycle manager with all required adapters.
    */
   private createLifecycleManager(): SandboxLifecycleManager {
-    const sandboxBackend = resolveSandboxBackendName(this.env.SANDBOX_PROVIDER);
+    const sandboxBackend = parseSandboxBackendName(this.env.SANDBOX_PROVIDER);
 
     const provider =
       sandboxBackend === "daytona"
@@ -613,8 +617,8 @@ export class SessionDO extends DurableObject<Env> {
       updateSandboxForSpawn: (data) => this.repository.updateSandboxForSpawn(data),
       updateSandboxForResume: (data) => this.repository.updateSandboxForResume(data),
       updateSandboxModalObjectId: (id) => this.repository.updateSandboxModalObjectId(id),
-      updateSandboxSnapshotImageId: (sandboxId, imageId) =>
-        this.repository.updateSandboxSnapshotImageId(sandboxId, imageId),
+      updateSandboxSnapshotImageId: (sandboxId, imageId, imageProfile) =>
+        this.repository.updateSandboxSnapshotImageId(sandboxId, imageId, imageProfile),
       updateSandboxLastActivity: (timestamp) =>
         this.repository.updateSandboxLastActivity(timestamp),
       incrementCircuitBreakerFailure: (timestamp) =>
@@ -736,8 +740,8 @@ export class SessionDO extends DurableObject<Env> {
     if (this.env.DB && sandboxBackend === "modal") {
       const repoImageStore = new RepoImageStore(this.env.DB);
       repoImageLookup = {
-        getLatestReady: (repoOwner, repoName, baseBranch) =>
-          repoImageStore.getLatestReady(repoOwner, repoName, baseBranch),
+        getLatestReady: (repoOwner, repoName, baseBranch, imageProfile) =>
+          repoImageStore.getLatestReady(repoOwner, repoName, baseBranch, imageProfile),
       };
     }
 
@@ -1725,7 +1729,11 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   private getSandboxDashboardUrl(providerObjectId: string | null | undefined): string | null {
-    if (resolveSandboxBackendName(this.env.SANDBOX_PROVIDER) !== "modal") return null;
+    // Gated on a capability, not a provider-name comparison. The URL builder is
+    // still Modal-specific because Modal is the only backend exposing a console
+    // URL today; when a second provider gains one, make the builder
+    // provider-aware (or move it onto the provider) alongside flipping the flag.
+    if (!getProviderCapabilities(this.env.SANDBOX_PROVIDER).supportsDashboardUrl) return null;
     return buildModalSandboxDashboardUrl({
       workspace: this.env.MODAL_WORKSPACE,
       environment: this.env.MODAL_ENVIRONMENT,

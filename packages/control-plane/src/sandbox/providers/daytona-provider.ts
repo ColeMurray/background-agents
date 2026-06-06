@@ -5,7 +5,12 @@
  * code-server password derivation that previously lived in the Python shim.
  */
 
-import { computeHmacHex, MAX_TUNNEL_PORTS, type SandboxSettings } from "@open-inspect/shared";
+import {
+  computeHmacHex,
+  MAX_TUNNEL_PORTS,
+  PROVIDER_CAPABILITIES,
+  type SandboxRuntimeSettings,
+} from "@open-inspect/shared";
 import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
 import type { DaytonaRestClient, DaytonaCreateSandboxParams } from "../daytona-rest-client";
@@ -49,13 +54,7 @@ export interface DaytonaProviderConfig {
 export class DaytonaSandboxProvider implements SandboxProvider {
   readonly name = "daytona";
 
-  readonly capabilities: SandboxProviderCapabilities = {
-    supportsSnapshots: false,
-    supportsRestore: false,
-    supportsWarm: false,
-    supportsPersistentResume: true,
-    supportsExplicitStop: true,
-  };
+  readonly capabilities: SandboxProviderCapabilities = PROVIDER_CAPABILITIES.daytona;
 
   constructor(
     private readonly client: DaytonaRestClient,
@@ -71,6 +70,11 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       const envVars = await this.buildEnvVars(config);
       const labels = this.buildLabels(config);
 
+      // Daytona uses a single base snapshot, so it ignores config.environment.
+      // TODO: realize config.requestedRuntime?.docker here when Daytona Docker
+      // support lands (its own mechanism — a create flag or snapshot variant —
+      // not the Modal image_profile), and flip
+      // PROVIDER_CAPABILITIES.daytona.supportsDocker.
       const params: DaytonaCreateSandboxParams = {
         name: config.sandboxId,
         snapshot: this.client.config.baseSnapshot,
@@ -262,7 +266,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     logicalSandboxId: string,
     timeoutSeconds: number | undefined,
     codeServerEnabled: boolean | undefined,
-    sandboxSettings: SandboxSettings | undefined
+    sandboxSettings: SandboxRuntimeSettings | undefined
   ): Promise<{
     codeServerUrl?: string;
     codeServerPassword?: string;

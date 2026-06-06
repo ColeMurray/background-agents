@@ -212,6 +212,7 @@ Every session runs in an isolated Modal sandbox with a full development environm
   and UI verification
 - **Code-server:** Optional browser-based VS Code connected to the session workspace
 - **Web terminal:** ttyd-powered terminal accessible from the session UI
+- **Docker:** Optional Docker Engine and Docker Compose support for Modal-backed sandboxes
 - **Port tunneling:** Expose up to 10 dev server ports via encrypted tunnels. URLs are available
   in-sandbox at `/workspace/.tunnels.env` before `.openinspect/start.sh` runs
   ([details](docs/HOW_IT_WORKS.md#tunnel-urls-inside-the-sandbox))
@@ -249,6 +250,8 @@ docker compose up -d postgres redis
 - `setup.sh` failures are non-fatal for fresh sessions, but fatal in image build mode
 - `start.sh` runs for every non-build session startup (fresh, repo-image, snapshot-restore)
 - `start.sh` failures are strict: if present and it fails, session startup fails
+- When Docker is enabled, the Docker daemon starts before either hook runs; expose container ports
+  through sandbox tunnel ports when you need browser access
 - Default timeouts:
   - `SETUP_TIMEOUT_SECONDS` (default `300`)
   - `START_TIMEOUT_SECONDS` (default `120`)

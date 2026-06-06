@@ -275,12 +275,13 @@ describe("SessionRepository", () => {
   });
 
   describe("updateSandboxSnapshotImageId", () => {
-    it("updates snapshot image ID for specific sandbox", () => {
-      repo.updateSandboxSnapshotImageId("sb-1", "img-123");
+    it("updates snapshot image ID and profile for specific sandbox", () => {
+      repo.updateSandboxSnapshotImageId("sb-1", "img-123", "docker");
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("UPDATE sandbox SET snapshot_image_id");
-      expect(mock.calls[0].params).toEqual(["img-123", "sb-1"]);
+      expect(mock.calls[0].query).toContain("snapshot_image_profile");
+      expect(mock.calls[0].params).toEqual(["img-123", "docker", "sb-1"]);
     });
   });
 

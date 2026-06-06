@@ -143,6 +143,7 @@ development environment.
 - Package managers: npm, pnpm, pip, uv
 - agent-browser CLI + headless Chrome (for browser automation)
 - OpenCode (the coding agent)
+- Optional Docker Engine and Docker Compose for Modal-backed sandboxes
 
 Open-Inspect supports two backend patterns:
 
@@ -152,6 +153,10 @@ Open-Inspect supports two backend patterns:
 Modal is still the only backend with repo-image builds and live filesystem snapshot restore. Daytona
 uses persistent sandboxes instead: the control plane stops the sandbox on inactivity or stale
 heartbeat, then resumes that same sandbox later with the same logical sandbox ID and auth token.
+
+Docker support is Modal-only and controlled by the sandbox `dockerEnabled` setting. Docker-enabled
+sandboxes use Modal's default CPU and memory requests unless deployment operators set
+`MODAL_DOCKER_SANDBOX_CPU` or `MODAL_DOCKER_SANDBOX_MEMORY_MB`.
 
 ### Clients
 
@@ -192,10 +197,11 @@ When you create a session for a repo without an existing snapshot:
 1. **Sandbox created**: Modal spins up a new container from the base image
 2. **Git sync**: Clones your repository using brokered SCM credentials from the git credential
    helper
-3. **Setup script**: Runs `.openinspect/setup.sh` for provisioning (if present)
-4. **Start script**: Runs `.openinspect/start.sh` for runtime startup (if present)
-5. **Agent start**: OpenCode server starts and connects back to the control plane
-6. **Ready**: Sandbox accepts prompts
+3. **Docker start**: If enabled, starts `dockerd` before repository hooks run
+4. **Setup script**: Runs `.openinspect/setup.sh` for provisioning (if present)
+5. **Start script**: Runs `.openinspect/start.sh` for runtime startup (if present)
+6. **Agent start**: OpenCode server starts and connects back to the control plane
+7. **Ready**: Sandbox accepts prompts
 
 ### Restore (From Snapshot)
 
@@ -210,8 +216,9 @@ When restoring from a previous snapshot:
 
 1. **Restore snapshot**: Modal restores the filesystem from a saved image
 2. **Quick sync**: Pulls latest changes (usually just a few commits)
-3. **Start script**: Runs `.openinspect/start.sh` for runtime startup (if present)
-4. **Ready**: Sandbox is ready almost instantly
+3. **Docker start**: If enabled, clears stale Docker runtime state and starts `dockerd`
+4. **Start script**: Runs `.openinspect/start.sh` for runtime startup (if present)
+5. **Ready**: Sandbox is ready almost instantly
 
 Snapshots include installed dependencies, built artifacts, and workspace state. This is why
 follow-up prompts in an existing session are much faster than the first prompt.
@@ -221,11 +228,16 @@ follow-up prompts in an existing session are much faster than the first prompt.
 When starting from a pre-built repo image:
 
 1. **Incremental git sync**: Fast fetch + hard reset to latest branch head
-2. **Setup skipped**: `.openinspect/setup.sh` already ran when the image was built
-3. **Start script runs**: `.openinspect/start.sh` executes for per-session runtime startup
-4. **Ready**: Agent starts once runtime hook succeeds
+2. **Docker start**: If enabled, starts Docker before runtime hooks
+3. **Setup skipped**: `.openinspect/setup.sh` already ran when the image was built
+4. **Start script runs**: `.openinspect/start.sh` executes for per-session runtime startup
+5. **Ready**: Agent starts once runtime hook succeeds
 
 If `start.sh` exists and fails, startup fails fast instead of continuing with a broken runtime.
+
+When Docker is enabled, Open-Inspect uses `/opt/docker-data` as Docker's data root. On every boot it
+removes stale daemon runtime directories and sockets while preserving images, layers, volumes, and
+BuildKit cache so snapshots and repo images can still accelerate Docker-heavy projects.
 
 ### When Snapshots Are Taken
 

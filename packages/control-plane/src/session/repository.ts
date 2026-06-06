@@ -29,6 +29,7 @@ import {
   type EventListCursor,
   type EventTimelineCursor,
 } from "./event-cursor";
+import { isSandboxImageProfile, type SandboxImageProfile } from "@open-inspect/shared";
 
 type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
@@ -54,6 +55,7 @@ export interface SandboxCircuitBreakerState {
   created_at: number;
   modal_object_id: string | null;
   snapshot_image_id: string | null;
+  snapshot_image_profile: SandboxImageProfile | null;
   spawn_failure_count: number | null;
   last_spawn_failure: number | null;
 }
@@ -351,7 +353,7 @@ export class SessionRepository {
 
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerState | null {
     const result = this.sql.exec(
-      `SELECT status, created_at, modal_object_id, snapshot_image_id, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
+      `SELECT status, created_at, modal_object_id, snapshot_image_id, snapshot_image_profile, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
     );
     const rows = this.rows<SandboxCircuitBreakerState>(result);
     return rows[0] ?? null;
@@ -411,8 +413,23 @@ export class SessionRepository {
     );
   }
 
-  updateSandboxSnapshotImageId(sandboxId: string, imageId: string): void {
-    this.sql.exec(`UPDATE sandbox SET snapshot_image_id = ? WHERE id = ?`, imageId, sandboxId);
+  updateSandboxSnapshotImageId(
+    sandboxId: string,
+    imageId: string,
+    imageProfile: SandboxImageProfile
+  ): void {
+    // The DO `snapshot_image_profile` column is bare TEXT (no CHECK, unlike the
+    // D1 repo_images.image_profile column). Validate against the shared allow-set
+    // so an unexpected value can never corrupt snapshot-compatibility matching.
+    if (!isSandboxImageProfile(imageProfile)) {
+      throw new Error(`Invalid sandbox image profile for snapshot: ${String(imageProfile)}`);
+    }
+    this.sql.exec(
+      `UPDATE sandbox SET snapshot_image_id = ?, snapshot_image_profile = ? WHERE id = ?`,
+      imageId,
+      imageProfile,
+      sandboxId
+    );
   }
 
   updateSandboxHeartbeat(timestamp: number): void {

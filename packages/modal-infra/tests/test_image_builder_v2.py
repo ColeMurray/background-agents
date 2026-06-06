@@ -407,6 +407,32 @@ class TestBuildRepoImage:
         assert callback_payload["base_sha"] == "abc123"
 
     @pytest.mark.asyncio
+    async def test_passes_image_profile_to_build_sandbox(self):
+        handle, _snapshot_aio, _terminate_aio = self._build_handle()
+        manager = SimpleNamespace(create_build_sandbox=AsyncMock(return_value=handle))
+
+        with (
+            patch("src.scheduler.image_builder.validate_control_plane_url", return_value=True),
+            patch("src.scheduler.image_builder._generate_clone_token", return_value="gh-token"),
+            patch("src.sandbox.manager.SandboxManager", return_value=manager),
+            patch(
+                "src.scheduler.image_builder._callback_with_retry",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            await build_repo_image.local(
+                repo_owner="acme",
+                repo_name="repo",
+                callback_url="https://cp.test/repo-images/build-complete",
+                build_id="img-1",
+                image_profile="docker",
+            )
+
+        manager.create_build_sandbox.assert_awaited_once()
+        assert manager.create_build_sandbox.await_args.kwargs["image_profile"] == "docker"
+
+    @pytest.mark.asyncio
     async def test_terminates_and_reports_failure_when_snapshot_times_out(self):
         handle, snapshot_aio, terminate_aio = self._build_handle(
             snapshot_side_effect=TimeoutError("Timed out waiting for image to be created")

@@ -43,11 +43,7 @@ export {
   type DaytonaSandboxResponse,
   type DaytonaCreateSandboxParams,
 } from "./daytona-rest-client";
-export {
-  resolveSandboxBackendName,
-  isModalSandboxBackend,
-  type SandboxBackendName,
-} from "./provider-name";
+export { parseSandboxBackendName, type SandboxBackendName } from "@open-inspect/shared";
 
 // Lifecycle decisions
 export {

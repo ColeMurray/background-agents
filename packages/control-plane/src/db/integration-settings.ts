@@ -17,6 +17,17 @@ import {
 type SettingsLevel = "global" | "repo";
 
 const SLACK_MENTIONS_POLICIES = ["allow", "escape", "strip"] as const;
+const REPO_SETTINGS_BATCH_SIZE = 99;
+
+function mergeDefinedSettings(defaults: object, overrides: object): Record<string, unknown> {
+  const settings: Record<string, unknown> = { ...defaults };
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value !== undefined) {
+      settings[key] = value;
+    }
+  }
+  return settings;
+}
 
 export class IntegrationSettingsValidationError extends Error {
   constructor(message: string) {
@@ -105,6 +116,36 @@ export class IntegrationSettingsStore {
     return JSON.parse(row.settings) as IntegrationSettingsMap[K]["repo"];
   }
 
+  async getRepoSettingsBatch<K extends IntegrationId>(
+    integrationId: K,
+    repos: string[]
+  ): Promise<Map<string, IntegrationSettingsMap[K]["repo"]>> {
+    const normalizedRepos = [...new Set(repos.map((repo) => repo.toLowerCase()))];
+    const settingsByRepo = new Map<string, IntegrationSettingsMap[K]["repo"]>();
+    if (normalizedRepos.length === 0) return settingsByRepo;
+
+    for (let start = 0; start < normalizedRepos.length; start += REPO_SETTINGS_BATCH_SIZE) {
+      const chunk = normalizedRepos.slice(start, start + REPO_SETTINGS_BATCH_SIZE);
+      const placeholders = chunk.map(() => "?").join(", ");
+      const { results } = await this.db
+        .prepare(
+          `SELECT repo, settings FROM integration_repo_settings
+           WHERE integration_id = ? AND repo IN (${placeholders})`
+        )
+        .bind(integrationId, ...chunk)
+        .all<{ repo: string; settings: string }>();
+
+      for (const row of results) {
+        settingsByRepo.set(
+          row.repo.toLowerCase(),
+          JSON.parse(row.settings) as IntegrationSettingsMap[K]["repo"]
+        );
+      }
+    }
+
+    return settingsByRepo;
+  }
+
   async setRepoSettings<K extends IntegrationId>(
     integrationId: K,
     repo: string,
@@ -163,18 +204,47 @@ export class IntegrationSettingsStore {
 
     const defaults = globalSettings?.defaults ?? {};
     const overrides = repoSettings ?? {};
-
-    // Generic merge: repo overrides win, undefined keys don't clobber defaults
-    const settings: Record<string, unknown> = { ...defaults };
-    for (const [key, value] of Object.entries(overrides)) {
-      if (value !== undefined) {
-        settings[key] = value;
-      }
-    }
+    const settings = mergeDefinedSettings(defaults, overrides);
 
     return { enabledRepos, settings } as ResolvedIntegrationConfig<
       NonNullable<IntegrationSettingsMap[K]["global"]["defaults"]>
     >;
+  }
+
+  async getResolvedConfigs<K extends IntegrationId>(
+    integrationId: K,
+    repos: string[]
+  ): Promise<
+    Map<
+      string,
+      ResolvedIntegrationConfig<NonNullable<IntegrationSettingsMap[K]["global"]["defaults"]>>
+    >
+  > {
+    const normalizedRepos = [...new Set(repos.map((repo) => repo.toLowerCase()))];
+    const configs = new Map<
+      string,
+      ResolvedIntegrationConfig<NonNullable<IntegrationSettingsMap[K]["global"]["defaults"]>>
+    >();
+    if (normalizedRepos.length === 0) return configs;
+
+    const [globalSettings, repoSettings] = await Promise.all([
+      this.getGlobal(integrationId),
+      this.getRepoSettingsBatch(integrationId, normalizedRepos),
+    ]);
+
+    const enabledRepos =
+      globalSettings?.enabledRepos !== undefined ? globalSettings.enabledRepos : null;
+    const defaults = globalSettings?.defaults ?? {};
+
+    for (const repo of normalizedRepos) {
+      const overrides = repoSettings.get(repo) ?? {};
+      const settings = mergeDefinedSettings(defaults, overrides);
+      configs.set(repo, { enabledRepos, settings } as ResolvedIntegrationConfig<
+        NonNullable<IntegrationSettingsMap[K]["global"]["defaults"]>
+      >);
+    }
+
+    return configs;
   }
 
   private validateAndNormalizeSettings<K extends IntegrationId>(
@@ -313,6 +383,10 @@ export class IntegrationSettingsStore {
   private validateSandboxSettings(settings: SandboxSettings): SandboxSettings {
     if (settings.terminalEnabled !== undefined && typeof settings.terminalEnabled !== "boolean") {
       throw new IntegrationSettingsValidationError("terminalEnabled must be a boolean");
+    }
+
+    if (settings.dockerEnabled !== undefined && typeof settings.dockerEnabled !== "boolean") {
+      throw new IntegrationSettingsValidationError("dockerEnabled must be a boolean");
     }
 
     this.validatePositiveIntegerSetting(

@@ -4,50 +4,49 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from sandbox_runtime.constants import TTYD_PORT
+from sandbox_runtime.constants import CODE_SERVER_PORT, TTYD_PORT, TTYD_PROXY_PORT
 from src.sandbox.manager import (
-    CODE_SERVER_PORT,
-    TTYD_PROXY_PORT,
     SandboxConfig,
     SandboxManager,
 )
+from src.sandbox.settings import RuntimePortSettings, SandboxRuntimeSettings
+
+
+def _settings(raw: dict | None = None) -> SandboxRuntimeSettings:
+    return SandboxRuntimeSettings.from_raw(raw)
 
 
 class TestCollectExposedPortsTerminal:
-    """_collect_exposed_ports with terminal_enabled flag."""
+    """RuntimePortSettings with terminal_enabled flag."""
 
     def test_terminal_enabled_includes_proxy_port(self):
-        exposed, _extra = SandboxManager._collect_exposed_ports(
-            code_server_enabled=False, terminal_enabled=True, settings=None
+        ports = RuntimePortSettings.from_settings(
+            _settings({"terminalEnabled": True}), code_server_enabled=False
         )
-        assert TTYD_PROXY_PORT in exposed
+        assert TTYD_PROXY_PORT in ports.exposed_ports
         # ttyd raw port should NOT be exposed (only the proxy port)
-        assert TTYD_PORT not in exposed
+        assert TTYD_PORT not in ports.exposed_ports
 
     def test_terminal_disabled_excludes_proxy_port(self):
-        exposed, _extra = SandboxManager._collect_exposed_ports(
-            code_server_enabled=False, terminal_enabled=False, settings=None
-        )
-        assert TTYD_PROXY_PORT not in exposed
+        ports = RuntimePortSettings.from_settings(_settings(), code_server_enabled=False)
+        assert TTYD_PROXY_PORT not in ports.exposed_ports
 
     def test_terminal_and_code_server_both_enabled(self):
-        exposed, _extra = SandboxManager._collect_exposed_ports(
-            code_server_enabled=True, terminal_enabled=True, settings=None
+        ports = RuntimePortSettings.from_settings(
+            _settings({"terminalEnabled": True}), code_server_enabled=True
         )
-        assert CODE_SERVER_PORT in exposed
-        assert TTYD_PROXY_PORT in exposed
+        assert CODE_SERVER_PORT in ports.exposed_ports
+        assert TTYD_PROXY_PORT in ports.exposed_ports
 
     def test_terminal_port_deduped_from_tunnel_ports(self):
         """If user explicitly lists TTYD_PROXY_PORT in tunnelPorts, it should not duplicate."""
-        settings = {"tunnelPorts": [TTYD_PROXY_PORT, 3000]}
-        exposed, extra = SandboxManager._collect_exposed_ports(
-            code_server_enabled=False, terminal_enabled=True, settings=settings
-        )
-        assert exposed.count(TTYD_PROXY_PORT) == 1
-        assert 3000 in exposed
+        settings = _settings({"terminalEnabled": True, "tunnelPorts": [TTYD_PROXY_PORT, 3000]})
+        ports = RuntimePortSettings.from_settings(settings, code_server_enabled=False)
+        assert ports.exposed_ports.count(TTYD_PROXY_PORT) == 1
+        assert 3000 in ports.exposed_ports
         # TTYD_PROXY_PORT should not be in extra (reserved)
-        assert TTYD_PROXY_PORT not in extra
-        assert 3000 in extra
+        assert TTYD_PROXY_PORT not in ports.tunnel_ports
+        assert 3000 in ports.tunnel_ports
 
 
 class TestResolveTunnelsTerminal:
@@ -137,7 +136,7 @@ class TestCreateSandboxTerminal:
             control_plane_url="https://cp.example.com",
             sandbox_auth_token="token-123",
             code_server_enabled=False,
-            settings={"terminalEnabled": True},
+            settings=_settings({"terminalEnabled": True}),
         )
 
         handle = await manager.create_sandbox(config)
@@ -229,7 +228,7 @@ class TestRestoreSandboxTerminal:
             control_plane_url="https://cp.example.com",
             sandbox_auth_token="token-456",
             code_server_enabled=False,
-            settings={"terminalEnabled": True},
+            settings=_settings({"terminalEnabled": True}),
         )
 
         assert handle.ttyd_url == "https://ttyd-restored.example.com"

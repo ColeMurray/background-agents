@@ -1,23 +1,30 @@
 /**
  * Public sandbox backend helpers for the web app.
+ *
+ * Backend parsing and capability lookups are delegated to @open-inspect/shared
+ * so the web app and the control plane agree on a single source of truth.
  */
 
-export type PublicSandboxProvider = "modal" | "daytona";
+import {
+  getProviderCapabilities,
+  parseSandboxBackendName,
+  type SandboxBackendName,
+} from "@open-inspect/shared";
+
+export type PublicSandboxProvider = SandboxBackendName;
+
+function rawSandboxProvider(): string | undefined {
+  return process.env.NEXT_PUBLIC_SANDBOX_PROVIDER ?? process.env.SANDBOX_PROVIDER;
+}
 
 export function getPublicSandboxProvider(): PublicSandboxProvider {
-  const rawValue = process.env.NEXT_PUBLIC_SANDBOX_PROVIDER ?? process.env.SANDBOX_PROVIDER;
-  if (!rawValue || rawValue.trim() === "") {
-    return "modal";
-  }
-
-  const value = rawValue.trim().toLowerCase();
-  if (value === "modal" || value === "daytona") {
-    return value;
-  }
-
-  throw new Error(`Invalid sandbox provider: ${rawValue}`);
+  return parseSandboxBackendName(rawSandboxProvider());
 }
 
 export function supportsRepoImages(): boolean {
-  return getPublicSandboxProvider() === "modal";
+  return getProviderCapabilities(rawSandboxProvider()).supportsPrebuiltImages === true;
+}
+
+export function supportsSandboxDocker(): boolean {
+  return getProviderCapabilities(rawSandboxProvider()).supportsDocker === true;
 }

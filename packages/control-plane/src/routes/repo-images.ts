@@ -13,8 +13,9 @@ import { RepoMetadataStore } from "../db/repo-metadata";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { mergeSecrets } from "../db/secrets-validation";
+import { RepoImageBuildProfileResolver } from "../repo-images/build-profile-resolver";
 import { createModalClient } from "../sandbox/client";
-import { isModalSandboxBackend } from "../sandbox/provider-name";
+import { getProviderCapabilities } from "@open-inspect/shared";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
 import {
@@ -31,12 +32,12 @@ import {
 
 const logger = createLogger("router:repo-images");
 
-function requireModalRepoImages(env: Env): Response | null {
-  if (isModalSandboxBackend(env.SANDBOX_PROVIDER)) {
+function requirePrebuiltImageSupport(env: Env): Response | null {
+  if (getProviderCapabilities(env.SANDBOX_PROVIDER).supportsPrebuiltImages) {
     return null;
   }
 
-  return error("Repo images are only available when SANDBOX_PROVIDER=modal", 501);
+  return error("Repo images are not supported by the configured sandbox provider", 501);
 }
 
 /**
@@ -49,7 +50,7 @@ async function handleBuildComplete(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const providerError = requireModalRepoImages(env);
+  const providerError = requirePrebuiltImageSupport(env);
   if (providerError) return providerError;
 
   if (!env.DB) {
@@ -135,7 +136,7 @@ async function handleBuildFailed(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const providerError = requireModalRepoImages(env);
+  const providerError = requirePrebuiltImageSupport(env);
   if (providerError) return providerError;
 
   if (!env.DB) {
@@ -184,7 +185,7 @@ async function handleTriggerBuild(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const providerError = requireModalRepoImages(env);
+  const providerError = requirePrebuiltImageSupport(env);
   if (providerError) return providerError;
 
   if (!env.DB) {
@@ -202,16 +203,20 @@ async function handleTriggerBuild(
   const { owner, name } = params;
 
   const store = new RepoImageStore(env.DB);
+  const profileResolver = new RepoImageBuildProfileResolver(env.DB);
   const now = Date.now();
   const buildId = `img-${owner}-${name}-${now}`;
 
   try {
+    const buildProfile = await profileResolver.resolve({ repoOwner: owner, repoName: name });
+
     // Register the build in D1
     await store.registerBuild({
       id: buildId,
       repoOwner: owner,
       repoName: name,
       baseBranch: "main",
+      imageProfile: buildProfile.imageProfile,
     });
 
     // Construct callback URL
@@ -278,6 +283,7 @@ async function handleTriggerBuild(
         buildId,
         callbackUrl,
         userEnvVars,
+        imageProfile: buildProfile.imageProfile,
       },
       { trace_id: ctx.trace_id, request_id: ctx.request_id }
     );
@@ -286,6 +292,7 @@ async function handleTriggerBuild(
       build_id: buildId,
       repo_owner: owner,
       repo_name: name,
+      image_profile: buildProfile.imageProfile,
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
@@ -313,7 +320,7 @@ async function handleGetStatus(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const providerError = requireModalRepoImages(env);
+  const providerError = requirePrebuiltImageSupport(env);
   if (providerError) return providerError;
 
   if (!env.DB) {
@@ -355,7 +362,7 @@ async function handleMarkStale(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const providerError = requireModalRepoImages(env);
+  const providerError = requirePrebuiltImageSupport(env);
   if (providerError) return providerError;
 
   if (!env.DB) {
@@ -405,7 +412,7 @@ async function handleCleanup(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const providerError = requireModalRepoImages(env);
+  const providerError = requirePrebuiltImageSupport(env);
   if (providerError) return providerError;
 
   if (!env.DB) {
@@ -455,7 +462,7 @@ async function handleToggleImageBuild(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const providerError = requireModalRepoImages(env);
+  const providerError = requirePrebuiltImageSupport(env);
   if (providerError) return providerError;
 
   if (!env.DB) {
@@ -509,7 +516,7 @@ async function handleGetEnabledRepos(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const providerError = requireModalRepoImages(env);
+  const providerError = requirePrebuiltImageSupport(env);
   if (providerError) return providerError;
 
   if (!env.DB) {
@@ -517,10 +524,16 @@ async function handleGetEnabledRepos(
   }
 
   const metadataStore = new RepoMetadataStore(env.DB);
+  const profileResolver = new RepoImageBuildProfileResolver(env.DB);
 
   try {
     const repos = await metadataStore.getImageBuildEnabledRepos();
-    return json({ repos });
+    const buildProfiles = await profileResolver.resolveMany(repos);
+    const reposWithProfiles = buildProfiles.map(({ repo, imageProfile }) => ({
+      ...repo,
+      imageProfile,
+    }));
+    return json({ repos: reposWithProfiles });
   } catch (e) {
     logger.error("repo_image.enabled_repos_error", {
       error: e instanceof Error ? e.message : String(e),

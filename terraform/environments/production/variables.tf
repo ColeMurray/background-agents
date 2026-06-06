@@ -94,6 +94,28 @@ variable "modal_environment_web_suffix" {
   }
 }
 
+variable "modal_docker_sandbox_cpu" {
+  description = "Optional CPU cores requested for Docker-enabled Modal sandboxes. Leave null to use Modal's default."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.modal_docker_sandbox_cpu == null || var.modal_docker_sandbox_cpu > 0
+    error_message = "modal_docker_sandbox_cpu must be null or greater than 0."
+  }
+}
+
+variable "modal_docker_sandbox_memory_mb" {
+  description = "Optional memory in MB requested for Docker-enabled Modal sandboxes. Leave null to use Modal's default."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.modal_docker_sandbox_memory_mb == null || var.modal_docker_sandbox_memory_mb > 0
+    error_message = "modal_docker_sandbox_memory_mb must be null or greater than 0."
+  }
+}
+
 # =============================================================================
 # GitHub OAuth App Credentials
 # =============================================================================

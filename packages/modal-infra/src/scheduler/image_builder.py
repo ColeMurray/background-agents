@@ -39,6 +39,7 @@ from ..app import (
 )
 from ..auth import generate_internal_token
 from ..log_config import get_logger
+from ..sandbox.settings import DEFAULT_IMAGE_PROFILE, parse_sandbox_image_profile
 
 log = get_logger("image_builder")
 
@@ -48,7 +49,6 @@ CALLBACK_BACKOFF_BASE = 2  # seconds: 2, 4, 8
 
 # Build log errors are surfaced through callbacks; keep them concise.
 BUILD_FAILURE_MESSAGE_MAX_CHARS = 500
-
 _SETUP_FAILURE_EVENTS = {"setup.failed", "setup.timeout", "setup.error"}
 _SUPERVISOR_FAILURE_EVENTS = {"supervisor.error", "supervisor.fatal"}
 
@@ -247,6 +247,7 @@ async def build_repo_image(
     callback_url: str = "",
     build_id: str = "",
     user_env_vars: dict[str, str] | None = None,
+    image_profile: str = DEFAULT_IMAGE_PROFILE,
 ) -> None:
     """
     Async worker: create build sandbox, await exit, snapshot, callback.
@@ -261,12 +262,19 @@ async def build_repo_image(
         callback_url: URL to POST success result to
         build_id: Build identifier from the control plane
         user_env_vars: User-defined environment variables (repo secrets) injected into the build sandbox
+        image_profile: Resolved sandbox image profile for this build
     """
     from ..sandbox.manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS, SandboxManager
 
     # Validate callback URL against allowed hosts to prevent SSRF
     if callback_url and not validate_control_plane_url(callback_url):
         log.error("build.invalid_callback_url", url=callback_url, build_id=build_id)
+        return
+
+    try:
+        resolved_image_profile = parse_sandbox_image_profile(image_profile)
+    except ValueError as e:
+        log.error("build.invalid_image_profile", build_id=build_id, error=str(e))
         return
 
     start_time = time.time()
@@ -292,6 +300,7 @@ async def build_repo_image(
             default_branch=default_branch,
             clone_token=clone_token,
             user_env_vars=user_env_vars,
+            image_profile=resolved_image_profile,
         )
 
         # 3. Stream stdout until build completes (sandbox stays alive for snapshotting)
@@ -471,6 +480,7 @@ def _should_rebuild(
     repo_name: str,
     remote_sha: str,
     all_images: list[dict],
+    image_profile: str = DEFAULT_IMAGE_PROFILE,
 ) -> bool:
     """
     Determine if a repo needs a rebuild based on current image status.
@@ -486,6 +496,7 @@ def _should_rebuild(
         for img in all_images
         if img.get("repo_owner", "").lower() == owner_lower
         and img.get("repo_name", "").lower() == name_lower
+        and (img.get("image_profile") or DEFAULT_IMAGE_PROFILE) == image_profile
     ]
 
     # Check if there's already a build in progress
@@ -570,6 +581,18 @@ async def rebuild_repo_images():
         for repo in enabled_repos:
             repo_owner = repo.get("repoOwner", "")
             repo_name = repo.get("repoName", "")
+            try:
+                image_profile = parse_sandbox_image_profile(
+                    repo.get("imageProfile") or DEFAULT_IMAGE_PROFILE
+                )
+            except ValueError as e:
+                log.error(
+                    "scheduler.invalid_image_profile",
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    error=str(e),
+                )
+                continue
 
             if not repo_owner or not repo_name:
                 continue
@@ -578,16 +601,17 @@ async def rebuild_repo_images():
             if not remote_sha:
                 continue
 
-            if _should_rebuild(repo_owner, repo_name, remote_sha, all_images):
+            if _should_rebuild(repo_owner, repo_name, remote_sha, all_images, image_profile):
                 try:
                     await _api_post(
-                        f"{control_plane_url}/repo-images/trigger/{repo_owner}/{repo_name}",
+                        f"{control_plane_url}/repo-images/trigger/{repo_owner}/{repo_name}"
                     )
                     builds_triggered += 1
                     log.info(
                         "scheduler.build_triggered",
                         repo_owner=repo_owner,
                         repo_name=repo_name,
+                        image_profile=image_profile,
                     )
                 except Exception as e:
                     log.error(

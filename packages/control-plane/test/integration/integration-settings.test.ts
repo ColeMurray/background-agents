@@ -542,7 +542,7 @@ describe("Integration settings API", () => {
         headers,
         body: JSON.stringify({
           settings: {
-            defaults: { tunnelPorts: [3000] },
+            defaults: { tunnelPorts: [3000], dockerEnabled: true },
           },
         }),
       });
@@ -554,10 +554,11 @@ describe("Integration settings API", () => {
       expect(getRes.status).toBe(200);
       const body = await getRes.json<{
         settings: {
-          defaults: { tunnelPorts: number[] };
+          defaults: { tunnelPorts: number[]; dockerEnabled: boolean };
         };
       }>();
       expect(body.settings.defaults.tunnelPorts).toEqual([3000]);
+      expect(body.settings.defaults.dockerEnabled).toBe(true);
     });
 
     it("PUT /integration-settings/sandbox with invalid tunnelPorts returns 400", async () => {
@@ -573,6 +574,21 @@ describe("Integration settings API", () => {
       expect(response.status).toBe(400);
       const body = await response.json<{ error: string }>();
       expect(body.error).toContain("tunnelPorts must be an array");
+    });
+
+    it("PUT /integration-settings/sandbox with invalid dockerEnabled returns 400", async () => {
+      const headers = await authHeaders();
+      const response = await SELF.fetch(
+        "https://test.local/integration-settings/sandbox/repos/acme/widgets",
+        {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({ settings: { dockerEnabled: "true" } }),
+        }
+      );
+      expect(response.status).toBe(400);
+      const body = await response.json<{ error: string }>();
+      expect(body.error).toContain("dockerEnabled must be a boolean");
     });
 
     it("GET /integration-settings/sandbox/resolved returns default empty tunnelPorts when unconfigured", async () => {

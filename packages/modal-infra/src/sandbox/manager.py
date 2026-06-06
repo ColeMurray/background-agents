@@ -15,28 +15,31 @@ import json
 import os
 import secrets
 import time
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
 
 import modal
 
 from sandbox_runtime.constants import (
     CODE_SERVER_PORT,
-    EXPECTED_TUNNEL_PORTS_ENV_VAR,
     TTYD_PROXY_PORT,
     TUNNEL_ENV_FILE_PATH,
 )
 from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.types import SandboxStatus, SessionConfig
 
-from ..app import app, llm_secrets
-from ..images.base import base_image
+from ..app import llm_secrets
+from .launch_options import (
+    RuntimeLaunchOptions,
+    build_modal_create_kwargs,
+    select_base_image,
+    select_runtime_image,
+)
+from .settings import DockerDeployPolicy, SandboxImageProfile, SandboxRuntimeSettings
 
 log = get_logger("manager")
 
 DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200  # 2 hours
 SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS = 300
-MAX_TUNNEL_PORTS = 10
 
 
 @dataclass
@@ -46,7 +49,6 @@ class SandboxConfig:
     repo_owner: str
     repo_name: str
     sandbox_id: str | None = None  # Expected sandbox ID from control plane
-    snapshot_id: str | None = None
     session_config: SessionConfig | None = None
     control_plane_url: str = ""
     sandbox_auth_token: str = ""
@@ -59,9 +61,8 @@ class SandboxConfig:
     agent_slack_notify_enabled: bool = (
         False  # Whether to install the agent-initiated slack-notify tool
     )
-    settings: dict[str, Any] | None = (
-        None  # Sandbox settings (tunnelPorts, etc.) from control plane
-    )
+    settings: SandboxRuntimeSettings = field(default_factory=SandboxRuntimeSettings.default)
+    image_profile: SandboxImageProfile = "default"
 
 
 @dataclass
@@ -148,40 +149,6 @@ class SandboxManager:
             if attempt < retries - 1:
                 await asyncio.sleep(backoff * (attempt + 1))
         return resolved
-
-    @staticmethod
-    def _validate_ports(raw: list) -> list[int]:
-        """Validate and sanitize tunnel ports: must be int, 1-65535, max MAX_TUNNEL_PORTS."""
-        ports: list[int] = []
-        for p in raw:
-            if isinstance(p, int) and 1 <= p <= 65535:
-                ports.append(p)
-            if len(ports) >= MAX_TUNNEL_PORTS:
-                break
-        return ports
-
-    @staticmethod
-    def _collect_exposed_ports(
-        code_server_enabled: bool,
-        terminal_enabled: bool,
-        settings: dict[str, Any] | None,
-    ) -> tuple[list[int], list[int]]:
-        """Return (all_exposed_ports, extra_tunnel_ports) from settings and feature flags."""
-        reserved: set[int] = set()
-        exposed: list[int] = []
-        if code_server_enabled:
-            exposed.append(CODE_SERVER_PORT)
-            reserved.add(CODE_SERVER_PORT)
-        if terminal_enabled:
-            exposed.append(TTYD_PROXY_PORT)
-            reserved.add(TTYD_PROXY_PORT)
-
-        raw_ports = (settings or {}).get("tunnelPorts", [])
-        tunnel_ports = SandboxManager._validate_ports(raw_ports) if raw_ports else []
-        # Remove reserved ports from tunnel_ports to avoid duplicates
-        tunnel_ports = [p for p in tunnel_ports if p not in reserved]
-        exposed.extend(tunnel_ports)
-        return exposed, tunnel_ports
 
     @staticmethod
     async def _resolve_and_setup_tunnels(
@@ -302,8 +269,7 @@ class SandboxManager:
         """
         Create a new sandbox for a session.
 
-        If a snapshot_id is provided, restores from that snapshot.
-        Otherwise, creates from the latest image for the repo.
+        Creates from the latest compatible repo image when one is provided.
 
         Args:
             config: Sandbox configuration including repo info and session config
@@ -336,7 +302,7 @@ class SandboxManager:
             }
         )
 
-        # A boot from a pre-built image (session snapshot or repo image) may
+        # A boot from a pre-built repo image may
         # run an entrypoint built before the credential-helper migration: no
         # helper, and the old entrypoint expects VCS_CLONE_TOKEN in env to
         # rewrite origin. Pass the fresh token through for those (with the
@@ -345,7 +311,7 @@ class SandboxManager:
         # helper and need no token in env. Repo images are selected by SHA and
         # aren't rebuilt by a CACHE_BUSTER bump, so we can't assume they're
         # current.
-        boots_from_prebuilt_image = bool(config.snapshot_id or config.repo_image_id)
+        boots_from_prebuilt_image = bool(config.repo_image_id)
         self._inject_vcs_env_vars(
             env_vars,
             clone_token=config.clone_token if boots_from_prebuilt_image else None,
@@ -357,9 +323,13 @@ class SandboxManager:
             code_server_password = self._generate_code_server_password()
             env_vars["CODE_SERVER_PASSWORD"] = code_server_password
 
-        terminal_enabled = bool((config.settings or {}).get("terminalEnabled", False))
-        if terminal_enabled:
-            env_vars["TERMINAL_ENABLED"] = "true"
+        runtime_settings = config.settings
+        launch_options = RuntimeLaunchOptions.for_session(
+            runtime_settings,
+            config.code_server_enabled,
+            config.image_profile,
+            docker_policy=DockerDeployPolicy.from_env(),
+        )
 
         if config.agent_slack_notify_enabled:
             env_vars["AGENT_SLACK_NOTIFY_ENABLED"] = "true"
@@ -367,32 +337,21 @@ class SandboxManager:
         if config.session_config:
             env_vars["SESSION_CONFIG"] = config.session_config.model_dump_json()
 
-        # Determine image to use (priority: session snapshot > repo image > base image)
-        if config.snapshot_id:
-            image = modal.Image.from_registry(f"open-inspect-snapshot:{config.snapshot_id}")
-        elif config.repo_image_id:
-            image = modal.Image.from_id(config.repo_image_id)
+        image, image_source = select_runtime_image(
+            launch_options.image_profile,
+            repo_image_id=config.repo_image_id,
+        )
+        if config.repo_image_id:
             env_vars["FROM_REPO_IMAGE"] = "true"
             env_vars["REPO_IMAGE_SHA"] = config.repo_image_sha or ""
-        else:
-            image = base_image
 
-        exposed_ports, tunnel_ports = self._collect_exposed_ports(
-            config.code_server_enabled, terminal_enabled, config.settings
+        create_kwargs = build_modal_create_kwargs(
+            launch_options,
+            image=image,
+            secrets=[llm_secrets],
+            timeout_seconds=config.timeout_seconds,
+            env_vars=env_vars,
         )
-        if tunnel_ports:
-            env_vars[EXPECTED_TUNNEL_PORTS_ENV_VAR] = ",".join(str(p) for p in tunnel_ports)
-
-        create_kwargs: dict = {
-            "image": image,
-            "app": app,
-            "secrets": [llm_secrets],
-            "timeout": config.timeout_seconds,
-            "workdir": "/workspace",
-            "env": env_vars,
-        }
-        if exposed_ports:
-            create_kwargs["encrypted_ports"] = exposed_ports
 
         sandbox = await modal.Sandbox.create.aio(
             "python",
@@ -403,7 +362,11 @@ class SandboxManager:
 
         modal_object_id = sandbox.object_id
         code_server_url, ttyd_url, extra_tunnel_urls = await self._resolve_and_setup_tunnels(
-            sandbox, sandbox_id, config.code_server_enabled, terminal_enabled, tunnel_ports
+            sandbox,
+            sandbox_id,
+            config.code_server_enabled,
+            launch_options.terminal_enabled,
+            list(launch_options.tunnel_ports),
         )
 
         duration_ms = int((time.time() - start_time) * 1000)
@@ -415,6 +378,9 @@ class SandboxManager:
             repo_name=config.repo_name,
             duration_ms=duration_ms,
             outcome="success",
+            docker_enabled=launch_options.docker.enabled,
+            image_profile=launch_options.image_profile,
+            image_source=image_source,
         )
 
         return SandboxHandle(
@@ -422,7 +388,6 @@ class SandboxManager:
             modal_sandbox=sandbox,
             status=SandboxStatus.WARMING,
             created_at=time.time(),
-            snapshot_id=config.snapshot_id,
             modal_object_id=modal_object_id,
             code_server_url=code_server_url,
             code_server_password=code_server_password,
@@ -437,6 +402,7 @@ class SandboxManager:
         default_branch: str = "main",
         clone_token: str = "",
         user_env_vars: dict[str, str] | None = None,
+        image_profile: SandboxImageProfile = "default",
     ) -> SandboxHandle:
         """
         Create a sandbox specifically for image building.
@@ -445,7 +411,7 @@ class SandboxManager:
         - Sets IMAGE_BUILD_MODE=true (exits after setup, no OpenCode/bridge)
         - No SANDBOX_AUTH_TOKEN, CONTROL_PLANE_URL, or LLM secrets
         - Shorter timeout (30 min vs 2 hours)
-        - Always uses base_image (builds start from the universal base)
+        - Uses the Docker-capable base when the docker image profile is requested
 
         Note: MCP servers are not available during image builds (no session config).
         MCP packages are installed at first use via npx instead.
@@ -473,17 +439,23 @@ class SandboxManager:
         )
 
         self._inject_vcs_env_vars(env_vars, clone_token or None)
+        launch_options = RuntimeLaunchOptions.for_image_build(
+            image_profile,
+            docker_policy=DockerDeployPolicy.from_env(),
+        )
+        create_kwargs = build_modal_create_kwargs(
+            launch_options,
+            image=select_base_image(launch_options.image_profile),
+            secrets=[],
+            timeout_seconds=BUILD_TIMEOUT_SECONDS,
+            env_vars=env_vars,
+        )
 
         sandbox = await modal.Sandbox.create.aio(
             "python",
             "-m",
             "sandbox_runtime.entrypoint",
-            image=base_image,
-            app=app,
-            secrets=[],
-            timeout=BUILD_TIMEOUT_SECONDS,
-            workdir="/workspace",
-            env=env_vars,
+            **create_kwargs,
         )
 
         modal_object_id = sandbox.object_id
@@ -496,6 +468,9 @@ class SandboxManager:
             repo_name=repo_name,
             duration_ms=duration_ms,
             outcome="success",
+            docker_enabled=launch_options.docker.enabled,
+            image_profile=launch_options.image_profile,
+            image_source="base",
         )
 
         return SandboxHandle(
@@ -626,7 +601,8 @@ class SandboxManager:
         timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS,
         code_server_enabled: bool = False,
         agent_slack_notify_enabled: bool = False,
-        settings: dict[str, Any] | None = None,
+        settings: SandboxRuntimeSettings | None = None,
+        image_profile: SandboxImageProfile = "default",
     ) -> SandboxHandle:
         """
         Create a new sandbox from a filesystem snapshot Image.
@@ -699,29 +675,24 @@ class SandboxManager:
             code_server_password = self._generate_code_server_password()
             env_vars["CODE_SERVER_PASSWORD"] = code_server_password
 
-        terminal_enabled = bool((settings or {}).get("terminalEnabled", False))
-        if terminal_enabled:
-            env_vars["TERMINAL_ENABLED"] = "true"
+        runtime_settings = settings or SandboxRuntimeSettings.default()
+        launch_options = RuntimeLaunchOptions.for_session(
+            runtime_settings,
+            code_server_enabled,
+            image_profile,
+            docker_policy=DockerDeployPolicy.from_env(),
+        )
 
         if agent_slack_notify_enabled:
             env_vars["AGENT_SLACK_NOTIFY_ENABLED"] = "true"
 
-        exposed_ports, tunnel_ports = self._collect_exposed_ports(
-            code_server_enabled, terminal_enabled, settings
+        create_kwargs = build_modal_create_kwargs(
+            launch_options,
+            image=image,
+            secrets=[llm_secrets],
+            timeout_seconds=timeout_seconds,
+            env_vars=env_vars,
         )
-        if tunnel_ports:
-            env_vars[EXPECTED_TUNNEL_PORTS_ENV_VAR] = ",".join(str(p) for p in tunnel_ports)
-
-        create_kwargs: dict = {
-            "image": image,
-            "app": app,
-            "secrets": [llm_secrets],
-            "timeout": timeout_seconds,
-            "workdir": "/workspace",
-            "env": env_vars,
-        }
-        if exposed_ports:
-            create_kwargs["encrypted_ports"] = exposed_ports
 
         sandbox = await modal.Sandbox.create.aio(
             "python",
@@ -732,7 +703,11 @@ class SandboxManager:
 
         modal_object_id = sandbox.object_id
         code_server_url, ttyd_url, extra_tunnel_urls = await self._resolve_and_setup_tunnels(
-            sandbox, sandbox_id, code_server_enabled, terminal_enabled, tunnel_ports
+            sandbox,
+            sandbox_id,
+            code_server_enabled,
+            launch_options.terminal_enabled,
+            list(launch_options.tunnel_ports),
         )
 
         duration_ms = int((time.time() - start_time) * 1000)
@@ -745,6 +720,9 @@ class SandboxManager:
             repo_name=repo_name,
             duration_ms=duration_ms,
             outcome="success",
+            docker_enabled=launch_options.docker.enabled,
+            image_profile=launch_options.image_profile,
+            image_source="snapshot",
         )
 
         return SandboxHandle(

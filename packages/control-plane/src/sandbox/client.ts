@@ -5,7 +5,11 @@
  * All requests are authenticated using HMAC-signed tokens.
  */
 
-import { generateInternalToken, type SandboxSettings } from "@open-inspect/shared";
+import {
+  generateInternalToken,
+  type SandboxImageProfile,
+  type SandboxRuntimeSettings,
+} from "@open-inspect/shared";
 import type { McpServerConfig } from "@open-inspect/shared";
 import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";
@@ -54,7 +58,6 @@ export interface CreateSandboxRequest {
   repoName: string;
   controlPlaneUrl: string;
   sandboxAuthToken: string;
-  snapshotId?: string;
   opencodeSessionId?: string;
   provider?: string;
   model?: string;
@@ -66,7 +69,8 @@ export interface CreateSandboxRequest {
   codeServerEnabled?: boolean;
   agentSlackNotifyEnabled?: boolean;
   mcpServers?: McpServerConfig[];
-  sandboxSettings?: SandboxSettings;
+  sandboxSettings?: SandboxRuntimeSettings;
+  imageProfile: SandboxImageProfile;
 }
 
 export interface CreateSandboxResponse {
@@ -96,7 +100,8 @@ export interface RestoreSandboxRequest {
   codeServerEnabled?: boolean;
   agentSlackNotifyEnabled?: boolean;
   mcpServers?: McpServerConfig[];
-  sandboxSettings?: SandboxSettings;
+  sandboxSettings?: SandboxRuntimeSettings;
+  imageProfile: SandboxImageProfile;
 }
 
 export interface RestoreSandboxResponse {
@@ -140,6 +145,7 @@ export interface BuildRepoImageRequest {
   buildId: string;
   callbackUrl: string;
   userEnvVars?: Record<string, string>;
+  imageProfile: SandboxImageProfile;
 }
 
 export interface BuildRepoImageResponse {
@@ -249,7 +255,6 @@ export class ModalClient {
           repo_name: request.repoName,
           control_plane_url: request.controlPlaneUrl,
           sandbox_auth_token: request.sandboxAuthToken,
-          snapshot_id: request.snapshotId || null,
           opencode_session_id: request.opencodeSessionId || null,
           provider: request.provider || "anthropic",
           model: request.model || "claude-sonnet-4-6",
@@ -262,6 +267,7 @@ export class ModalClient {
           agent_slack_notify_enabled: request.agentSlackNotifyEnabled ?? false,
           mcp_servers: request.mcpServers || null,
           sandbox_settings: request.sandboxSettings ?? null,
+          image_profile: request.imageProfile,
         }),
       });
 
@@ -349,6 +355,7 @@ export class ModalClient {
           code_server_enabled: request.codeServerEnabled ?? false,
           agent_slack_notify_enabled: request.agentSlackNotifyEnabled ?? false,
           sandbox_settings: request.sandboxSettings ?? null,
+          image_profile: request.imageProfile,
         }),
       });
 
@@ -561,6 +568,7 @@ export class ModalClient {
           build_id: request.buildId,
           callback_url: request.callbackUrl,
           user_env_vars: request.userEnvVars,
+          image_profile: request.imageProfile,
         }),
       });
 

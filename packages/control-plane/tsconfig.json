@@ -16,8 +16,10 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true,
+    "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@open-inspect/shared": ["../shared/src/index.ts"]
     }
   },
   "include": ["src/**/*.ts"],

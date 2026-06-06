@@ -71,6 +71,7 @@ function createMockSandbox(
     modal_object_id: "modal-obj-123",
     snapshot_id: null,
     snapshot_image_id: null,
+    snapshot_image_profile: null,
     auth_token: "auth-token-123",
     auth_token_hash: "auth-token-hash-123",
     status: "ready",
@@ -137,9 +138,12 @@ function createMockStorage(
       calls.push(`updateSandboxModalObjectId:${id}`);
       if (sandbox) sandbox.modal_object_id = id;
     }),
-    updateSandboxSnapshotImageId: vi.fn((sandboxId: string, imageId: string) => {
-      calls.push(`updateSandboxSnapshotImageId:${imageId}`);
-      if (sandbox) sandbox.snapshot_image_id = imageId;
+    updateSandboxSnapshotImageId: vi.fn((sandboxId: string, imageId: string, imageProfile) => {
+      calls.push(`updateSandboxSnapshotImageId:${imageId}:${imageProfile}`);
+      if (sandbox) {
+        sandbox.snapshot_image_id = imageId;
+        sandbox.snapshot_image_profile = imageProfile;
+      }
     }),
     updateSandboxLastActivity: vi.fn((timestamp: number) => {
       calls.push("updateSandboxLastActivity");
@@ -268,6 +272,7 @@ function createMockProvider(
       supportsSnapshots: true,
       supportsRestore: true,
       supportsWarm: true,
+      supportsDocker: true,
       ...overrides.capabilities,
     },
     createSandbox:
@@ -527,6 +532,40 @@ describe("SandboxLifecycleManager", () => {
 
       expect(provider.restoreFromSnapshot).toHaveBeenCalled();
       expect(provider.createSandbox).not.toHaveBeenCalled();
+    });
+
+    it("spawns fresh when the saved snapshot profile does not match current settings", async () => {
+      const session = createMockSession({
+        sandbox_settings: '{"dockerEnabled":true}',
+      });
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "img-default",
+        snapshot_image_profile: "default",
+      });
+      const storage = createMockStorage(session, sandbox);
+      const provider = createMockProvider();
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sandboxSettings: {},
+          requestedRuntime: { docker: true },
+          environment: "docker",
+        })
+      );
     });
 
     it("schedules connecting timeout alarm after restore", async () => {
@@ -945,7 +984,7 @@ describe("SandboxLifecycleManager", () => {
       await manager.triggerSnapshot("test_reason");
 
       expect(provider.takeSnapshot).toHaveBeenCalled();
-      expect(storage.calls).toContain("updateSandboxSnapshotImageId:snapshot-img-123");
+      expect(storage.calls).toContain("updateSandboxSnapshotImageId:snapshot-img-123:default");
       expect(
         broadcaster.messages.some((m) => (m as { type: string }).type === "snapshot_saved")
       ).toBe(true);
@@ -1001,7 +1040,30 @@ describe("SandboxLifecycleManager", () => {
 
       await manager.triggerSnapshot("execution_complete");
 
-      expect(storage.calls).toContain("updateSandboxSnapshotImageId:custom-snapshot-id");
+      expect(storage.calls).toContain("updateSandboxSnapshotImageId:custom-snapshot-id:default");
+    });
+
+    it("stores the current image profile with the returned snapshot imageId", async () => {
+      const session = createMockSession({
+        sandbox_settings: '{"dockerEnabled":true}',
+      });
+      const sandbox = createMockSandbox({ status: "ready" });
+      const storage = createMockStorage(session, sandbox);
+
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.triggerSnapshot("execution_complete");
+
+      expect(storage.calls).toContain("updateSandboxSnapshotImageId:snapshot-img-123:docker");
+      expect(sandbox.snapshot_image_profile).toBe("docker");
     });
 
     it("handles snapshot errors gracefully", async () => {
@@ -1623,7 +1685,42 @@ describe("SandboxLifecycleManager", () => {
       expect(repoImageLookup.getLatestReady).toHaveBeenCalledWith(
         "testowner",
         "testrepo",
-        "feature/xyz"
+        "feature/xyz",
+        "default"
+      );
+    });
+
+    it("passes image profile to repo image lookup", async () => {
+      const session = createMockSession({
+        sandbox_settings: '{"dockerEnabled":true}',
+      });
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(session, sandbox);
+      const provider = createMockProvider();
+
+      const repoImageLookup: RepoImageLookup = {
+        getLatestReady: vi.fn(async () => null),
+      };
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig(),
+        {},
+        repoImageLookup
+      );
+
+      await manager.spawnSandbox();
+
+      expect(repoImageLookup.getLatestReady).toHaveBeenCalledWith(
+        "testowner",
+        "testrepo",
+        "main",
+        "docker"
       );
     });
 
@@ -1658,7 +1755,8 @@ describe("SandboxLifecycleManager", () => {
   describe("sandbox settings", () => {
     it("doSpawn() passes sandboxSettings from session to provider config", async () => {
       const session = createMockSession({
-        sandbox_settings: '{"tunnelPorts":[3000]}',
+        sandbox_settings:
+          '{"tunnelPorts":[3000],"terminalEnabled":true,"dockerEnabled":true,"maxConcurrentChildSessions":2}',
       });
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const storage = createMockStorage(session, sandbox);
@@ -1678,9 +1776,38 @@ describe("SandboxLifecycleManager", () => {
 
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
-          sandboxSettings: { tunnelPorts: [3000] },
+          sandboxSettings: { tunnelPorts: [3000], terminalEnabled: true },
+          requestedRuntime: { docker: true },
+          environment: "docker",
         })
       );
+    });
+
+    it("doSpawn() resolves environment to default when provider does not support Docker", async () => {
+      const session = createMockSession({
+        sandbox_settings: '{"dockerEnabled":true}',
+      });
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(session, sandbox);
+      const provider = createMockProvider({ capabilities: { supportsDocker: false } });
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      const createConfig = vi.mocked(provider.createSandbox).mock.calls[0][0];
+      // Intent still crosses the boundary; the environment is capability-gated.
+      expect(createConfig.requestedRuntime).toEqual({ docker: true });
+      expect(createConfig.environment).toBe("default");
+      expect(createConfig.sandboxSettings).toEqual({});
     });
 
     it("doSpawn() passes empty settings when sandbox_settings is null", async () => {
@@ -1704,6 +1831,7 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
           sandboxSettings: {},
+          environment: "default",
         })
       );
     });
@@ -1731,6 +1859,7 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
           sandboxSettings: { tunnelPorts: [3000] },
+          environment: "default",
         })
       );
     });
@@ -1828,6 +1957,7 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({
           sandboxSettings: {},
+          environment: "default",
         })
       );
     });

@@ -47,5 +47,10 @@ export default defineWorkersConfig(async () => {
         },
       },
     },
+    resolve: {
+      alias: {
+        "@open-inspect/shared": path.resolve(__dirname, "../shared/src/index.ts"),
+      },
+    },
   };
 });

@@ -29,14 +29,40 @@ from .constants import (
     TTYD_PROXY_PORT,
     TUNNEL_ENV_FILE_PATH,
 )
+from .docker_service import DEFAULT_DOCKER_DATA_ROOT, DockerService
 from .log_config import configure_logging, get_logger
+from .runtime_services import RuntimeServices
 
 configure_logging()
 
 
+DOCKER_DATA_ROOT_ENV_VAR = "DOCKER_DATA_ROOT"
+DOCKER_ENABLED_ENV_VAR = "OPENINSPECT_DOCKER_ENABLED"
+
 AGENT_TOOLS_GATED_ON_ENV: dict[str, str] = {
     "slack-notify.js": "AGENT_SLACK_NOTIFY_ENABLED",
 }
+
+
+def build_runtime_services(
+    log,
+    *,
+    docker_enabled: bool,
+    docker_data_root: Path,
+) -> RuntimeServices:
+    if not docker_enabled:
+        log.info("runtime_services.docker_disabled")
+        return RuntimeServices(log)
+
+    log.info(
+        "runtime_services.docker_enabled",
+        docker_data_root=str(docker_data_root),
+    )
+    return RuntimeServices(
+        log,
+        docker=DockerService(log, data_root=docker_data_root),
+    )
+
 
 # Wrapper installed at /usr/local/bin/gh (ahead of the real /usr/bin/gh in
 # PATH). The git credential helper can't authenticate the GitHub CLI — gh
@@ -129,6 +155,10 @@ class SandboxSupervisor:
         self.repo_owner = os.environ.get("REPO_OWNER", "")
         self.repo_name = os.environ.get("REPO_NAME", "")
         self.vcs_host = os.environ.get("VCS_HOST", "github.com")
+        self.docker_enabled = os.environ.get(DOCKER_ENABLED_ENV_VAR, "").lower() == "true"
+        self.docker_data_root = Path(
+            os.environ.get(DOCKER_DATA_ROOT_ENV_VAR, str(DEFAULT_DOCKER_DATA_ROOT))
+        )
         # Note: VCS credentials are no longer captured at sandbox start. Git
         # operations authenticate per-call via the system-wide credential
         # helper (`/usr/local/bin/oi-git-credentials`), which fetches fresh
@@ -150,6 +180,11 @@ class SandboxSupervisor:
             service="sandbox",
             sandbox_id=self.sandbox_id,
             session_id=session_id,
+        )
+        self.runtime_services = build_runtime_services(
+            self.log,
+            docker_enabled=self.docker_enabled,
+            docker_data_root=self.docker_data_root,
         )
 
     @property
@@ -998,6 +1033,11 @@ class SandboxSupervisor:
         ttyd_proxy_restart_count = 0
 
         while not self.shutdown_event.is_set():
+            if not await self.runtime_services.ensure_healthy(self._report_fatal_error):
+                self.log.error("runtime_services.unhealthy")
+                self.shutdown_event.set()
+                break
+
             # Check OpenCode process
             if self.opencode_process and self.opencode_process.returncode is not None:
                 exit_code = self.opencode_process.returncode
@@ -1445,14 +1485,17 @@ class SandboxSupervisor:
                     self.log.info("git.sync_complete", head_sha=head_sha)
             self.git_sync_complete.set()
 
-            # Phase 2: Run setup script only for fresh or build boots.
+            # Phase 2: Start Docker before repository hooks when requested.
+            await self.runtime_services.start_before_hooks()
+
+            # Phase 3: Run setup script only for fresh or build boots.
             setup_success: bool | None = None
             if self.boot_mode in ("fresh", "build"):
                 setup_success = await self.run_setup_script()
                 if image_build_mode and not setup_success:
                     raise RuntimeError("setup hook failed in build mode")
 
-            # Phase 3: Run runtime start hook for all non-build boots. Wait for
+            # Phase 4: Run runtime start hook for all non-build boots. Wait for
             # tunnel URLs first so dev servers booted by start.sh see fresh data.
             start_success: bool | None = None
             if self.boot_mode != "build":
@@ -1472,7 +1515,7 @@ class SandboxSupervisor:
                 await self.shutdown_event.wait()
                 return
 
-            # Phase 3.5: Start optional sidecars (best-effort, non-fatal)
+            # Phase 4.5: Start optional sidecars (best-effort, non-fatal)
             for sidecar_name, starter in (
                 ("code_server", self.start_code_server),
                 ("ttyd", self.start_ttyd),
@@ -1492,11 +1535,11 @@ class SandboxSupervisor:
                     except Exception as e:
                         self.log.warn("ttyd_proxy.start_failed", exc=e)
 
-            # Phase 4: Start OpenCode server (in repo directory)
+            # Phase 5: Start OpenCode server (in repo directory)
             await self.start_opencode()
             opencode_ready = True
 
-            # Phase 5: Start bridge (after OpenCode is ready)
+            # Phase 6: Start bridge (after OpenCode is ready)
             await self.start_bridge()
 
             # Emit sandbox.startup wide event
@@ -1516,7 +1559,7 @@ class SandboxSupervisor:
                 outcome="success",
             )
 
-            # Phase 6: Monitor processes
+            # Phase 7: Monitor processes
             await self.monitor_processes()
 
         except Exception as e:
@@ -1534,6 +1577,19 @@ class SandboxSupervisor:
     async def shutdown(self) -> None:
         """Graceful shutdown of all processes."""
         self.log.info("supervisor.shutdown_start")
+
+        try:
+            await asyncio.wait_for(
+                self.runtime_services.stop(),
+                timeout=self.SIDECAR_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            self.log.warn(
+                "runtime_services.stop_timeout",
+                timeout_seconds=self.SIDECAR_TIMEOUT_SECONDS,
+            )
+        except Exception as e:
+            self.log.warn("runtime_services.stop_error", exc=e)
 
         # Terminate bridge first
         if self.bridge_process and self.bridge_process.returncode is None:

@@ -1,9 +1,45 @@
 import json
+import re
+from pathlib import Path
 
 import pytest
 
 from sandbox_runtime.types import SessionConfig
 from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxConfig, SandboxManager
+from src.sandbox.settings import IMAGE_PROFILES, SandboxRuntimeSettings, parse_sandbox_image_profile
+
+
+def test_parse_sandbox_image_profile_accepts_known_profiles():
+    assert parse_sandbox_image_profile("default") == "default"
+    assert parse_sandbox_image_profile("docker") == "docker"
+    assert parse_sandbox_image_profile(None) == "default"
+
+
+def test_parse_sandbox_image_profile_rejects_unknown_profiles():
+    with pytest.raises(ValueError):
+        parse_sandbox_image_profile("bogus")
+
+
+def test_sandbox_image_profiles_match_shared_typescript_contract():
+    shared_types = (
+        Path(__file__).resolve().parents[2] / "shared" / "src" / "types" / "integrations.ts"
+    ).read_text()
+    match = re.search(r"export type SandboxImageProfile = ([^;]+);", shared_types)
+    assert match is not None
+
+    ts_profiles = set(re.findall(r'"([^"]+)"', match.group(1)))
+    assert ts_profiles == IMAGE_PROFILES
+
+
+def test_runtime_settings_ignore_non_boolean_feature_flags():
+    for raw in (
+        {"dockerEnabled": "false", "terminalEnabled": "true"},
+        {"dockerEnabled": 1, "terminalEnabled": 1},
+        {"dockerEnabled": {}, "terminalEnabled": []},
+    ):
+        settings = SandboxRuntimeSettings.from_raw(raw)
+
+        assert settings.terminal_enabled is False
 
 
 @pytest.mark.asyncio
@@ -39,6 +75,114 @@ async def test_user_env_vars_override_order(monkeypatch):
     env_vars = captured["env"]
     assert env_vars["CONTROL_PLANE_URL"] == "https://control-plane.example"
     assert env_vars["CUSTOM_SECRET"] == "value"
+
+
+@pytest.mark.asyncio
+async def test_create_sandbox_enables_docker_when_profile_is_docker(monkeypatch):
+    captured = {}
+
+    async def fake_create_aio(*args, **kwargs):
+        captured["env"] = kwargs.get("env")
+        captured["experimental_options"] = kwargs.get("experimental_options")
+        captured["cpu"] = kwargs.get("cpu")
+        captured["memory"] = kwargs.get("memory")
+
+        class FakeSandbox:
+            object_id = "obj-docker"
+            stdout = None
+
+        return FakeSandbox()
+
+    fake_create_aio.aio = fake_create_aio
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create_aio)
+
+    manager = SandboxManager()
+    await manager.create_sandbox(
+        SandboxConfig(
+            repo_owner="acme",
+            repo_name="repo",
+            control_plane_url="https://control-plane.example",
+            sandbox_auth_token="token-123",
+            image_profile="docker",
+        )
+    )
+
+    assert captured["env"]["OPENINSPECT_DOCKER_ENABLED"] == "true"
+    assert captured["env"]["DOCKER_DATA_ROOT"] == "/opt/docker-data"
+    assert "OPENINSPECT_SANDBOX_IMAGE_PROFILE" not in captured["env"]
+    assert captured["experimental_options"] == {"enable_docker": True}
+    assert captured["cpu"] is None
+    assert captured["memory"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_sandbox_does_not_enable_docker_when_setting_is_off(monkeypatch):
+    captured = {}
+
+    async def fake_create_aio(*args, **kwargs):
+        captured["env"] = kwargs.get("env")
+        captured["experimental_options"] = kwargs.get("experimental_options")
+        captured["cpu"] = kwargs.get("cpu")
+        captured["memory"] = kwargs.get("memory")
+
+        class FakeSandbox:
+            object_id = "obj-plain"
+            stdout = None
+
+        return FakeSandbox()
+
+    fake_create_aio.aio = fake_create_aio
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create_aio)
+
+    manager = SandboxManager()
+    await manager.create_sandbox(
+        SandboxConfig(
+            repo_owner="acme",
+            repo_name="repo",
+            control_plane_url="https://control-plane.example",
+            sandbox_auth_token="token-123",
+        )
+    )
+
+    assert "OPENINSPECT_DOCKER_ENABLED" not in captured["env"]
+    assert "OPENINSPECT_SANDBOX_IMAGE_PROFILE" not in captured["env"]
+    assert captured["experimental_options"] is None
+    assert captured["cpu"] is None
+    assert captured["memory"] is None
+
+
+@pytest.mark.asyncio
+async def test_docker_resources_are_configurable(monkeypatch):
+    captured = {}
+
+    async def fake_create_aio(*args, **kwargs):
+        captured["cpu"] = kwargs.get("cpu")
+        captured["memory"] = kwargs.get("memory")
+
+        class FakeSandbox:
+            object_id = "obj-docker-resources"
+            stdout = None
+
+        return FakeSandbox()
+
+    fake_create_aio.aio = fake_create_aio
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create_aio)
+    monkeypatch.setenv("MODAL_DOCKER_SANDBOX_CPU", "2.5")
+    monkeypatch.setenv("MODAL_DOCKER_SANDBOX_MEMORY_MB", "6144")
+
+    manager = SandboxManager()
+    await manager.create_sandbox(
+        SandboxConfig(
+            repo_owner="acme",
+            repo_name="repo",
+            control_plane_url="https://control-plane.example",
+            sandbox_auth_token="token-123",
+            image_profile="docker",
+        )
+    )
+
+    assert captured["cpu"] == 2.5
+    assert captured["memory"] == 6144
 
 
 @pytest.mark.asyncio
@@ -463,29 +607,6 @@ async def test_repo_image_boot_preserves_user_github_cli_token(monkeypatch, toke
     assert env.get("GITHUB_TOKEN") != "ghs_repo_image_token"
     assert env.get("GITHUB_APP_TOKEN") != "ghs_repo_image_token"
     assert "OI_GITHUB_TOKEN_IS_FALLBACK" not in env
-
-
-@pytest.mark.asyncio
-async def test_session_snapshot_boot_preserves_clone_token(monkeypatch):
-    """A session-snapshot boot has the same legacy-compat need as repo images."""
-    captured = {}
-
-    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_registry", lambda *a, **kw: object())
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
-    monkeypatch.delenv("SCM_PROVIDER", raising=False)
-
-    manager = SandboxManager()
-    config = SandboxConfig(
-        repo_owner="acme",
-        repo_name="repo",
-        clone_token="ghs_snapshot_token",
-        snapshot_id="snap-1",
-    )
-    await manager.create_sandbox(config)
-
-    env = captured["env"]
-    assert env["VCS_CLONE_TOKEN"] == "ghs_snapshot_token"
-    assert env["OI_GITHUB_TOKEN_IS_FALLBACK"] == "1"
 
 
 @pytest.mark.asyncio

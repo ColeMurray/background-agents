@@ -7,6 +7,7 @@
 
 import { ModalApiError } from "../client";
 import type { ModalClient } from "../client";
+import { PROVIDER_CAPABILITIES } from "@open-inspect/shared";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   SandboxProviderError,
@@ -43,13 +44,7 @@ import {
 export class ModalSandboxProvider implements SandboxProvider {
   readonly name = "modal";
 
-  readonly capabilities: SandboxProviderCapabilities = {
-    supportsSnapshots: true,
-    supportsRestore: true,
-    supportsWarm: true,
-    supportsPersistentResume: false,
-    supportsExplicitStop: false,
-  };
+  readonly capabilities: SandboxProviderCapabilities = PROVIDER_CAPABILITIES.modal;
 
   constructor(private readonly client: ModalClient) {}
 
@@ -78,6 +73,9 @@ export class ModalSandboxProvider implements SandboxProvider {
           agentSlackNotifyEnabled: config.agentSlackNotifyEnabled,
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
+          // Modal realizes the shared environment id as its image_profile. The
+          // Modal HTTP contract (image_profile) is intentionally unchanged.
+          imageProfile: config.environment,
         },
         config.correlation
       );
@@ -120,6 +118,7 @@ export class ModalSandboxProvider implements SandboxProvider {
           agentSlackNotifyEnabled: config.agentSlackNotifyEnabled,
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
+          imageProfile: config.environment,
         },
         config.correlation
       );
