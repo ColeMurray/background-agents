@@ -319,7 +319,7 @@ jobs:
           fi
 
           if [ -z "${VERCEL_TOKEN:-}" ] || [ -z "${VERCEL_PROJECT_ID:-}" ]; then
-            echo "VERCEL_SANDBOX_TOKEN and VERCEL_SANDBOX_PROJECT_ID are required when SANDBOX_PROVIDER=vercel"
+            echo "VERCEL_TOKEN and VERCEL_PROJECT_ID are required when SANDBOX_PROVIDER=vercel"
             exit 1
           fi
 
