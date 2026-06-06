@@ -159,7 +159,7 @@ export class VercelSandboxClient {
     request: VercelRunCommandRequest,
     correlation?: CorrelationContext
   ): Promise<VercelCommandResult> {
-    const text = await this.requestText(
+    return this.requestCommandStream(
       `/v2/sandboxes/sessions/${encodeURIComponent(request.sessionId)}/cmd`,
       {
         method: "POST",
@@ -176,8 +176,6 @@ export class VercelSandboxClient {
       correlation,
       "runCommandAndWait"
     );
-
-    return parseCommandNdjson(text);
   }
 
   async snapshotSession(
@@ -244,19 +242,8 @@ export class VercelSandboxClient {
     let outcome: "success" | "error" = "error";
 
     try {
-      const url = new URL(`${this.apiBaseUrl}${path}`);
-      if (this.config.teamId) {
-        url.searchParams.set("teamId", this.config.teamId);
-      }
-
-      const headers = new Headers(init.headers);
-      headers.set("Authorization", `Bearer ${this.config.token}`);
-      headers.set("Content-Type", headers.get("Content-Type") || "application/json");
-      headers.set("User-Agent", USER_AGENT);
-      if (correlation?.trace_id) headers.set("x-trace-id", correlation.trace_id);
-      if (correlation?.request_id) headers.set("x-request-id", correlation.request_id);
-      if (correlation?.session_id) headers.set("x-session-id", correlation.session_id);
-      if (correlation?.sandbox_id) headers.set("x-sandbox-id", correlation.sandbox_id);
+      const url = this.buildUrl(path);
+      const headers = this.buildHeaders(init, correlation);
 
       const response = await fetch(url.toString(), { ...init, headers });
       httpStatus = response.status;
@@ -283,29 +270,78 @@ export class VercelSandboxClient {
       });
     }
   }
+
+  private async requestCommandStream(
+    path: string,
+    init: RequestInit,
+    correlation: CorrelationContext | undefined,
+    endpoint: string
+  ): Promise<VercelCommandResult> {
+    const startTime = Date.now();
+    let httpStatus: number | undefined;
+    let outcome: "success" | "error" = "error";
+
+    try {
+      const url = this.buildUrl(path);
+      const headers = this.buildHeaders(init, correlation);
+      const response = await fetch(url.toString(), { ...init, headers });
+      httpStatus = response.status;
+
+      if (!response.ok) {
+        const text = await readResponseText(response);
+        throw new VercelSandboxApiError(
+          `Vercel Sandbox API error: ${response.status} ${text}`,
+          response.status,
+          text
+        );
+      }
+
+      const result = await parseCommandNdjsonStream(response);
+      outcome = "success";
+      return result;
+    } finally {
+      log.info("vercel_sandbox.request", {
+        event: "vercel_sandbox.request",
+        endpoint,
+        trace_id: correlation?.trace_id,
+        request_id: correlation?.request_id,
+        http_status: httpStatus,
+        duration_ms: Date.now() - startTime,
+        outcome,
+      });
+    }
+  }
+
+  private buildUrl(path: string): URL {
+    const url = new URL(`${this.apiBaseUrl}${path}`);
+    if (this.config.teamId) {
+      url.searchParams.set("teamId", this.config.teamId);
+    }
+    return url;
+  }
+
+  private buildHeaders(init: RequestInit, correlation?: CorrelationContext): Headers {
+    const headers = new Headers(init.headers);
+    headers.set("Authorization", `Bearer ${this.config.token}`);
+    headers.set("Content-Type", headers.get("Content-Type") || "application/json");
+    headers.set("User-Agent", USER_AGENT);
+    if (correlation?.trace_id) headers.set("x-trace-id", correlation.trace_id);
+    if (correlation?.request_id) headers.set("x-request-id", correlation.request_id);
+    if (correlation?.session_id) headers.set("x-session-id", correlation.session_id);
+    if (correlation?.sandbox_id) headers.set("x-sandbox-id", correlation.sandbox_id);
+    return headers;
+  }
 }
 
 function parseCommandNdjson(text: string): VercelCommandResult {
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
   let commandId = "";
   let exitCode: number | null = null;
 
-  for (const line of lines) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (!parsed || typeof parsed !== "object" || !("command" in parsed)) continue;
-    const command = (parsed as { command?: { id?: unknown; exitCode?: unknown } }).command;
+  for (const line of text.split(/\r?\n/)) {
+    const command = parseCommandLine(line);
     if (!command) continue;
-    if (typeof command.id === "string") commandId = command.id;
-    if (typeof command.exitCode === "number") exitCode = command.exitCode;
+    if (command.commandId) commandId = command.commandId;
+    if (command.exitCode !== undefined) exitCode = command.exitCode;
   }
 
   if (!commandId) {
@@ -317,6 +353,87 @@ function parseCommandNdjson(text: string): VercelCommandResult {
   }
 
   return { commandId, exitCode };
+}
+
+async function parseCommandNdjsonStream(response: Response): Promise<VercelCommandResult> {
+  if (!response.body) {
+    return parseCommandNdjson(await response.text());
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let responseExcerpt = "";
+  let commandId = "";
+  let exitCode: number | null = null;
+
+  const consumeLine = (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    if (responseExcerpt.length < 4096) {
+      responseExcerpt += `${trimmed}\n`;
+    }
+    const command = parseCommandLine(trimmed);
+    if (!command) return;
+    if (command.commandId) commandId = command.commandId;
+    if (command.exitCode !== undefined) exitCode = command.exitCode;
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? "";
+    for (const line of lines) consumeLine(line);
+  }
+
+  buffer += decoder.decode();
+  consumeLine(buffer);
+
+  if (!commandId) {
+    throw new VercelSandboxApiError(
+      "Vercel command stream did not include a command id",
+      200,
+      responseExcerpt
+    );
+  }
+
+  return { commandId, exitCode };
+}
+
+function parseCommandLine(line: string): { commandId?: string; exitCode?: number | null } | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || !("command" in parsed)) return null;
+  const command = (parsed as { command?: { id?: unknown; exitCode?: unknown } }).command;
+  if (!command) return null;
+  const result: { commandId?: string; exitCode?: number | null } = {};
+  if (typeof command.id === "string") result.commandId = command.id;
+  if (typeof command.exitCode === "number" || command.exitCode === null) {
+    result.exitCode = command.exitCode;
+  }
+  return result;
+}
+
+async function readResponseText(response: Response): Promise<string> {
+  if (!response.body) {
+    return response.text();
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
 }
 
 export function createVercelSandboxClient(config: VercelSandboxClientConfig): VercelSandboxClient {

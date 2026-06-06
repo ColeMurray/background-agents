@@ -22,7 +22,7 @@ vercel_sandbox_project_id = "prj_..."
 # vercel_sandbox_team_id  = "team_..." # optional for team projects
 ```
 
-For GitHub Actions based deployment, configure the matching repository secrets:
+For GitHub Actions-based deployment, configure the matching repository secrets:
 
 ```text
 SANDBOX_PROVIDER=vercel

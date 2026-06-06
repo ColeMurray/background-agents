@@ -9,6 +9,7 @@
  */
 
 import { RepoImageStore } from "../db/repo-images";
+import { verifyInternalToken } from "../auth/internal";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { RepoSecretsStore } from "../db/repo-secrets";
@@ -48,6 +49,35 @@ function getRepoImageBackend(env: Env): "modal" | "vercel" {
     throw new Error(`Repo images are not supported for SANDBOX_PROVIDER=${backend}`);
   }
   return backend;
+}
+
+async function requireBuildCallbackAuth(
+  request: Request,
+  env: Env,
+  ctx: RequestContext
+): Promise<Response | null> {
+  if (!env.INTERNAL_CALLBACK_SECRET) {
+    logger.error("repo_image.callback_auth_misconfigured", {
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Internal authentication not configured", 500);
+  }
+
+  const authorized = await verifyInternalToken(
+    request.headers.get("Authorization"),
+    env.INTERNAL_CALLBACK_SECRET
+  );
+
+  if (!authorized) {
+    logger.warn("repo_image.callback_auth_failed", {
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Unauthorized", 401);
+  }
+
+  return null;
 }
 
 function createConfiguredVercelProvider(env: Env) {
@@ -93,6 +123,9 @@ async function handleBuildComplete(
   if (!env.DB) {
     return error("Database not configured", 503);
   }
+
+  const authError = await requireBuildCallbackAuth(request, env, ctx);
+  if (authError) return authError;
 
   const body = await parseJsonBody<{
     build_id?: string;
@@ -186,6 +219,9 @@ async function handleBuildFailed(
     return error("Database not configured", 503);
   }
 
+  const authError = await requireBuildCallbackAuth(request, env, ctx);
+  if (authError) return authError;
+
   const body = await parseJsonBody<{ build_id?: string; error?: string }>(request);
   if (body instanceof Response) return body;
 
@@ -243,6 +279,7 @@ async function handleTriggerBuild(
   const { owner, name } = params;
 
   const store = new RepoImageStore(env.DB);
+  const backend = getRepoImageBackend(env);
   const now = Date.now();
   const buildId = `img-${owner}-${name}-${now}`;
 
@@ -252,6 +289,7 @@ async function handleTriggerBuild(
       id: buildId,
       repoOwner: owner,
       repoName: name,
+      provider: backend,
       baseBranch: "main",
     });
 
@@ -305,7 +343,6 @@ async function handleTriggerBuild(
       }
     }
 
-    const backend = getRepoImageBackend(env);
     if (backend === "modal") {
       if (!env.MODAL_API_SECRET || !env.MODAL_WORKSPACE) {
         return error("Modal configuration not available", 503);

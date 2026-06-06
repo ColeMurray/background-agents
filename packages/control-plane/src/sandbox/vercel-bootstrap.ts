@@ -15,6 +15,7 @@ export function buildVercelBootstrapScript(params: {
   runtimeRepoUrl: string;
   runtimeRepoRef: string;
 }): string {
+  const gitCredentialHelperCommand = `exec ${VERCEL_PYTHON_BIN} -m sandbox_runtime.credentials.git_credential_helper "$@"`;
   return `
 set -euo pipefail
 
@@ -70,7 +71,7 @@ sudo cp -a packages/sandbox-runtime/src/sandbox_runtime /app/sandbox_runtime
 sudo chmod -R a+rX /app/sandbox_runtime
 sudo ${VERCEL_PYTHON_BIN} -m pip install --break-system-packages -e packages/sandbox-runtime || sudo ${VERCEL_PYTHON_BIN} -m pip install -e packages/sandbox-runtime
 
-printf '%s\\n' '#!/bin/sh' 'exec ${VERCEL_PYTHON_BIN} -m sandbox_runtime.credentials.git_credential_helper "$@"' | sudo tee /usr/local/bin/oi-git-credentials >/dev/null
+printf '%s\\n' '#!/bin/sh' ${shellQuote(gitCredentialHelperCommand)} | sudo tee /usr/local/bin/oi-git-credentials >/dev/null
 sudo chmod 0755 /usr/local/bin/oi-git-credentials
 sudo git config --system credential.helper /usr/local/bin/oi-git-credentials || true
 sudo git config --system credential.useHttpPath true || true

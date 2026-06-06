@@ -12,6 +12,21 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function streamResponse(chunks: string[], status = 200): Response {
+  const encoder = new TextEncoder();
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        for (const chunk of chunks) {
+          controller.enqueue(encoder.encode(chunk));
+        }
+        controller.close();
+      },
+    }),
+    { status }
+  );
+}
+
 let fetchSpy: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
@@ -167,6 +182,27 @@ describe("VercelSandboxClient", () => {
       sudo: false,
       wait: true,
     });
+    expect(result).toEqual({ commandId: "cmd-1", exitCode: 0 });
+  });
+
+  it("streams waited command output across chunk boundaries", async () => {
+    fetchSpy.mockResolvedValue(
+      streamResponse([
+        `${JSON.stringify({ stream: { data: "installing" } })}\n${JSON.stringify({
+          command: { id: "cmd-1", exitCode: null },
+        }).slice(0, 20)}`,
+        `${JSON.stringify({ command: { id: "cmd-1", exitCode: null } }).slice(20)}\n`,
+        `${JSON.stringify({ stream: { data: "done" } })}\n`,
+        `${JSON.stringify({ command: { id: "cmd-1", exitCode: 0 } })}\n`,
+      ])
+    );
+
+    const result = await createClient().runCommandAndWait({
+      sessionId: "session-1",
+      command: "bash",
+      args: ["-lc", "true"],
+    });
+
     expect(result).toEqual({ commandId: "cmd-1", exitCode: 0 });
   });
 

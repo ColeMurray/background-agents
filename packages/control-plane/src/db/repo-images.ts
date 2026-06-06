@@ -1,7 +1,10 @@
+export type RepoImageProvider = "modal" | "vercel";
+
 export interface RepoImageBuild {
   id: string;
   repoOwner: string;
   repoName: string;
+  provider?: RepoImageProvider;
   baseBranch: string;
 }
 
@@ -9,6 +12,7 @@ export interface RepoImage {
   id: string;
   repo_owner: string;
   repo_name: string;
+  provider: RepoImageProvider;
   provider_image_id: string;
   base_sha: string;
   base_branch: string;
@@ -25,13 +29,14 @@ export class RepoImageStore {
     const now = Date.now();
     await this.db
       .prepare(
-        `INSERT INTO repo_images (id, repo_owner, repo_name, base_branch, provider_image_id, status, base_sha, created_at)
-         VALUES (?, ?, ?, ?, '', 'building', '', ?)`
+        `INSERT INTO repo_images (id, repo_owner, repo_name, provider, base_branch, provider_image_id, status, base_sha, created_at)
+         VALUES (?, ?, ?, ?, ?, '', 'building', '', ?)`
       )
       .bind(
         build.id,
         build.repoOwner.toLowerCase(),
         build.repoName.toLowerCase(),
+        build.provider ?? "modal",
         build.baseBranch,
         now
       )
@@ -45,17 +50,22 @@ export class RepoImageStore {
     buildDurationSeconds: number
   ): Promise<{ replacedImageId: string | null }> {
     const build = await this.db
-      .prepare("SELECT repo_owner, repo_name, base_branch FROM repo_images WHERE id = ?")
+      .prepare("SELECT repo_owner, repo_name, provider, base_branch FROM repo_images WHERE id = ?")
       .bind(buildId)
-      .first<{ repo_owner: string; repo_name: string; base_branch: string }>();
+      .first<{
+        repo_owner: string;
+        repo_name: string;
+        provider: RepoImageProvider;
+        base_branch: string;
+      }>();
 
     if (!build) return { replacedImageId: null };
 
     const oldReady = await this.db
       .prepare(
-        "SELECT id, provider_image_id FROM repo_images WHERE repo_owner = ? AND repo_name = ? AND base_branch = ? AND status = 'ready'"
+        "SELECT id, provider_image_id FROM repo_images WHERE repo_owner = ? AND repo_name = ? AND provider = ? AND base_branch = ? AND status = 'ready'"
       )
-      .bind(build.repo_owner, build.repo_name, build.base_branch)
+      .bind(build.repo_owner, build.repo_name, build.provider, build.base_branch)
       .first<{ id: string; provider_image_id: string }>();
 
     const statements: D1PreparedStatement[] = [
@@ -85,29 +95,31 @@ export class RepoImageStore {
   async getLatestReady(
     repoOwner: string,
     repoName: string,
-    baseBranch?: string
+    baseBranch?: string,
+    provider?: RepoImageProvider
   ): Promise<RepoImage | null> {
+    const filters = ["ri.repo_owner = ?", "ri.repo_name = ?"];
+    const args: string[] = [repoOwner.toLowerCase(), repoName.toLowerCase()];
+
     if (baseBranch) {
-      return this.db
-        .prepare(
-          `SELECT ri.* FROM repo_images ri
-           INNER JOIN repo_metadata rm ON ri.repo_owner = rm.repo_owner AND ri.repo_name = rm.repo_name
-           WHERE ri.repo_owner = ? AND ri.repo_name = ? AND ri.base_branch = ? AND ri.status = 'ready'
-           AND rm.image_build_enabled = 1
-           ORDER BY ri.created_at DESC LIMIT 1`
-        )
-        .bind(repoOwner.toLowerCase(), repoName.toLowerCase(), baseBranch)
-        .first<RepoImage>();
+      filters.push("ri.base_branch = ?");
+      args.push(baseBranch);
     }
+    if (provider) {
+      filters.push("ri.provider = ?");
+      args.push(provider);
+    }
+
+    filters.push("ri.status = 'ready'", "rm.image_build_enabled = 1");
+
     return this.db
       .prepare(
         `SELECT ri.* FROM repo_images ri
          INNER JOIN repo_metadata rm ON ri.repo_owner = rm.repo_owner AND ri.repo_name = rm.repo_name
-         WHERE ri.repo_owner = ? AND ri.repo_name = ? AND ri.status = 'ready'
-         AND rm.image_build_enabled = 1
+         WHERE ${filters.join(" AND ")}
          ORDER BY ri.created_at DESC LIMIT 1`
       )
-      .bind(repoOwner.toLowerCase(), repoName.toLowerCase())
+      .bind(...args)
       .first<RepoImage>();
   }
 

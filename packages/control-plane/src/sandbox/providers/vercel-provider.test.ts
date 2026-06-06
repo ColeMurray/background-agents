@@ -149,6 +149,7 @@ describe("VercelSandboxProvider", () => {
       expect.objectContaining({
         USER_SECRET: "value",
         SANDBOX_ID: "sandbox-456",
+        PATH: expect.stringContaining("/vercel/runtimes/node24/bin"),
         CONTROL_PLANE_URL: "https://control-plane.test",
         SANDBOX_AUTH_TOKEN: "auth-token",
         REPO_OWNER: "testowner",
@@ -257,6 +258,25 @@ describe("VercelSandboxProvider", () => {
     expect(bootstrapScript).toContain("sudo dnf install -y ffmpeg || true");
     expect(bootstrapScript).toContain("sudo ln -sf /usr/bin/python3.12 /usr/local/bin/python");
     expect(bootstrapScript).toContain("sudo /usr/bin/python3.12 -m ensurepip --upgrade");
+    expect(bootstrapScript).toContain(
+      'exec /usr/bin/python3.12 -m sandbox_runtime.credentials.git_credential_helper "$@"'
+    );
+    expect(bootstrapScript).not.toContain("exec ${VERCEL_PYTHON_BIN}");
+  });
+
+  it("uses the configured Vercel runtime when composing PATH", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, {
+      ...providerConfig,
+      runtime: "node22",
+    });
+
+    await provider.createSandbox(baseCreateConfig);
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    expect(createCall.runtime).toBe("node22");
+    expect(createCall.env?.PATH).toContain("/vercel/runtimes/node22/bin");
+    expect(createCall.env?.PATH).not.toContain("/vercel/runtimes/node24/bin");
   });
 
   it("restores from a session snapshot and sets restore mode env vars", async () => {
@@ -378,28 +398,52 @@ describe("VercelSandboxProvider", () => {
         USER_SECRET: "value",
         IMAGE_BUILD_MODE: "true",
         SESSION_CONFIG: JSON.stringify({ branch: "main" }),
-        OI_VERCEL_BUILD_ID: "build-123",
-        OI_VERCEL_CALLBACK_URL: "https://control-plane.test/repo-images/build-complete",
-        OI_INTERNAL_CALLBACK_SECRET: "callback-secret",
-        OI_VERCEL_TOKEN: "vercel-token",
-        OI_VERCEL_TEAM_ID: "team-123",
-        OI_VERCEL_API_BASE_URL: "https://vercel.test/api",
         VCS_CLONE_TOKEN: "clone-token",
         GITHUB_TOKEN: "clone-token",
         GITHUB_APP_TOKEN: "clone-token",
         OI_GITHUB_TOKEN_IS_FALLBACK: "1",
       })
     );
+    expect(createCall.env).not.toHaveProperty("OI_INTERNAL_CALLBACK_SECRET");
+    expect(createCall.env).not.toHaveProperty("OI_VERCEL_TOKEN");
+    expect(createCall.env).not.toHaveProperty("OI_VERCEL_CALLBACK_URL");
     expect(vi.mocked(client.startCommand)).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "vercel-session-1",
         command: "/usr/bin/python3.12",
         args: ["-c", expect.stringContaining("def snapshot_session")],
         cwd: "/workspace",
-        env: { OI_VERCEL_SESSION_ID: "vercel-session-1" },
+        env: {
+          OI_VERCEL_SESSION_ID: "vercel-session-1",
+          OI_VERCEL_BUILD_ID: "build-123",
+          OI_VERCEL_CALLBACK_URL: "https://control-plane.test/repo-images/build-complete",
+          OI_INTERNAL_CALLBACK_SECRET: "callback-secret",
+          OI_VERCEL_TOKEN: "vercel-token",
+          OI_VERCEL_TEAM_ID: "team-123",
+          OI_VERCEL_API_BASE_URL: "https://vercel.test/api",
+          OI_VERCEL_SNAPSHOT_EXPIRATION_MS: "0",
+        },
       })
     );
+    const coordinatorScript = vi.mocked(client.startCommand).mock.calls[0][0].args?.[1] ?? "";
+    expect(coordinatorScript).toContain("COORDINATOR_ONLY_ENV_KEYS");
+    expect(coordinatorScript).toContain("build_env.pop(key, None)");
     expect(result).toEqual({ buildId: "build-123", status: "building" });
+  });
+
+  it("fails sandbox launch when tunnel env writing exits non-zero", async () => {
+    const client = createMockClient({
+      runCommandAndWait: vi.fn(async () => ({ commandId: "cmd-1", exitCode: 1 })),
+    });
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await expect(
+      provider.createSandbox({
+        ...baseCreateConfig,
+        codeServerEnabled: true,
+        sandboxSettings: { tunnelPorts: [3000] },
+      })
+    ).rejects.toThrow("Failed to create Vercel sandbox");
   });
 
   it("requires an internal callback secret for repo image builds", async () => {

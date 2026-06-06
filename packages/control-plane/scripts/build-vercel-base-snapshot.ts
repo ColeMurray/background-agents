@@ -18,7 +18,11 @@ function requiredEnv(name: string): string {
 function getArgValue(name: string): string | undefined {
   const index = process.argv.indexOf(name);
   if (index === -1) return undefined;
-  return process.argv[index + 1];
+  const value = process.argv[index + 1];
+  if (!value || value.startsWith("-")) {
+    throw new Error(`${name} requires a non-empty value`);
+  }
+  return value;
 }
 
 async function main(): Promise<void> {

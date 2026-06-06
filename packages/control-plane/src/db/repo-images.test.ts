@@ -5,6 +5,7 @@ type RepoImageRow = {
   id: string;
   repo_owner: string;
   repo_name: string;
+  provider: string;
   provider_image_id: string;
   base_sha: string;
   base_branch: string;
@@ -16,17 +17,16 @@ type RepoImageRow = {
 
 const QUERY_PATTERNS = {
   INSERT_BUILD: /^INSERT INTO repo_images/,
-  SELECT_BY_ID: /^SELECT repo_owner, repo_name, base_branch FROM repo_images WHERE id = \?$/,
+  SELECT_BY_ID:
+    /^SELECT repo_owner, repo_name, provider, base_branch FROM repo_images WHERE id = \?$/,
   SELECT_READY_FOR_REPO:
-    /^SELECT id, provider_image_id FROM repo_images WHERE repo_owner = \? AND repo_name = \? AND base_branch = \? AND status = 'ready'$/,
+    /^SELECT id, provider_image_id FROM repo_images WHERE repo_owner = \? AND repo_name = \? AND provider = \? AND base_branch = \? AND status = 'ready'$/,
   UPDATE_READY:
     /^UPDATE repo_images SET status = 'ready', provider_image_id = \?, base_sha = \?, build_duration_seconds = \? WHERE id = \?$/,
   DELETE_BY_ID: /^DELETE FROM repo_images WHERE id = \?$/,
   UPDATE_FAILED: /^UPDATE repo_images SET status = 'failed', error_message = \? WHERE id = \?$/,
   SELECT_LATEST_READY:
-    /^SELECT ri\.\* FROM repo_images ri INNER JOIN repo_metadata rm ON ri\.repo_owner = rm\.repo_owner AND ri\.repo_name = rm\.repo_name WHERE ri\.repo_owner = \? AND ri\.repo_name = \? AND ri\.status = 'ready' AND rm\.image_build_enabled = 1 ORDER BY ri\.created_at DESC LIMIT 1$/,
-  SELECT_LATEST_READY_WITH_BRANCH:
-    /^SELECT ri\.\* FROM repo_images ri INNER JOIN repo_metadata rm ON ri\.repo_owner = rm\.repo_owner AND ri\.repo_name = rm\.repo_name WHERE ri\.repo_owner = \? AND ri\.repo_name = \? AND ri\.base_branch = \? AND ri\.status = 'ready' AND rm\.image_build_enabled = 1 ORDER BY ri\.created_at DESC LIMIT 1$/,
+    /^SELECT ri\.\* FROM repo_images ri INNER JOIN repo_metadata rm ON ri\.repo_owner = rm\.repo_owner AND ri\.repo_name = rm\.repo_name WHERE ri\.repo_owner = \? AND ri\.repo_name = \?.*ORDER BY ri\.created_at DESC LIMIT 1$/,
   SELECT_STATUS:
     /^SELECT \* FROM repo_images WHERE repo_owner = \? AND repo_name = \? ORDER BY created_at DESC LIMIT 10$/,
   SELECT_ALL_STATUS: /^SELECT \* FROM repo_images ORDER BY created_at DESC LIMIT 100$/,
@@ -65,16 +65,22 @@ class FakeD1Database {
       const [id] = args as [string];
       const row = this.rows.get(id);
       return row
-        ? { repo_owner: row.repo_owner, repo_name: row.repo_name, base_branch: row.base_branch }
+        ? {
+            repo_owner: row.repo_owner,
+            repo_name: row.repo_name,
+            provider: row.provider,
+            base_branch: row.base_branch,
+          }
         : null;
     }
 
     if (QUERY_PATTERNS.SELECT_READY_FOR_REPO.test(normalized)) {
-      const [owner, name, branch] = args as [string, string, string];
+      const [owner, name, provider, branch] = args as [string, string, string, string];
       for (const row of this.rows.values()) {
         if (
           row.repo_owner === owner &&
           row.repo_name === name &&
+          row.provider === provider &&
           row.base_branch === branch &&
           row.status === "ready"
         ) {
@@ -84,31 +90,26 @@ class FakeD1Database {
       return null;
     }
 
-    if (QUERY_PATTERNS.SELECT_LATEST_READY_WITH_BRANCH.test(normalized)) {
-      const [owner, name, branch] = args as [string, string, string];
+    if (QUERY_PATTERNS.SELECT_LATEST_READY.test(normalized)) {
+      const [owner, name, ...rest] = args as string[];
+      let branch: string | undefined;
+      let provider: string | undefined;
+      if (normalized.includes("ri.base_branch = ?")) {
+        branch = rest.shift();
+      }
+      if (normalized.includes("ri.provider = ?")) {
+        provider = rest.shift();
+      }
       if (!this.isImageBuildEnabled(owner, name)) return null;
       let latest: RepoImageRow | null = null;
       for (const row of this.rows.values()) {
         if (
           row.repo_owner === owner &&
           row.repo_name === name &&
-          row.base_branch === branch &&
+          (!branch || row.base_branch === branch) &&
+          (!provider || row.provider === provider) &&
           row.status === "ready"
         ) {
-          if (!latest || row.created_at > latest.created_at) {
-            latest = row;
-          }
-        }
-      }
-      return latest ? { ...latest } : null;
-    }
-
-    if (QUERY_PATTERNS.SELECT_LATEST_READY.test(normalized)) {
-      const [owner, name] = args as [string, string];
-      if (!this.isImageBuildEnabled(owner, name)) return null;
-      let latest: RepoImageRow | null = null;
-      for (const row of this.rows.values()) {
-        if (row.repo_owner === owner && row.repo_name === name && row.status === "ready") {
           if (!latest || row.created_at > latest.created_at) {
             latest = row;
           }
@@ -149,13 +150,21 @@ class FakeD1Database {
     const normalized = normalizeQuery(query);
 
     if (QUERY_PATTERNS.INSERT_BUILD.test(normalized)) {
-      // SQL: INSERT ... VALUES (?, ?, ?, ?, '', 'building', '', ?)
-      // Bound args: [id, owner, name, branch, createdAt]
-      const [id, owner, name, branch, createdAt] = args as [string, string, string, string, number];
+      // SQL: INSERT ... VALUES (?, ?, ?, ?, ?, '', 'building', '', ?)
+      // Bound args: [id, owner, name, provider, branch, createdAt]
+      const [id, owner, name, provider, branch, createdAt] = args as [
+        string,
+        string,
+        string,
+        string,
+        string,
+        number,
+      ];
       this.rows.set(id, {
         id,
         repo_owner: owner,
         repo_name: name,
+        provider,
         base_branch: branch,
         provider_image_id: "",
         status: "building",
@@ -294,8 +303,22 @@ describe("RepoImageStore", () => {
       expect(status[0].status).toBe("building");
       expect(status[0].repo_owner).toBe("acme");
       expect(status[0].repo_name).toBe("repo");
+      expect(status[0].provider).toBe("modal");
       expect(status[0].provider_image_id).toBe("");
       expect(status[0].base_sha).toBe("");
+    });
+
+    it("stores the requested provider", async () => {
+      await store.registerBuild({
+        id: "img-vercel",
+        repoOwner: "acme",
+        repoName: "repo",
+        provider: "vercel",
+        baseBranch: "main",
+      });
+
+      const status = await store.getStatus("acme", "repo");
+      expect(status[0].provider).toBe("vercel");
     });
 
     it("normalizes owner and name to lowercase", async () => {
@@ -378,6 +401,36 @@ describe("RepoImageStore", () => {
     it("returns null for unknown buildId", async () => {
       const result = await store.markReady("nonexistent", "img", "sha", 10);
       expect(result.replacedImageId).toBeNull();
+    });
+
+    it("only replaces a previous ready image for the same provider", async () => {
+      db.setImageBuildEnabled("acme", "repo", true);
+      await store.registerBuild({
+        id: "img-modal",
+        repoOwner: "acme",
+        repoName: "repo",
+        provider: "modal",
+        baseBranch: "main",
+      });
+      await store.markReady("img-modal", "modal-img", "sha-modal", 30);
+
+      vi.advanceTimersByTime(1000);
+
+      await store.registerBuild({
+        id: "img-vercel",
+        repoOwner: "acme",
+        repoName: "repo",
+        provider: "vercel",
+        baseBranch: "main",
+      });
+      const result = await store.markReady("img-vercel", "vercel-snapshot", "sha-vercel", 40);
+
+      expect(result.replacedImageId).toBeNull();
+
+      const modalReady = await store.getLatestReady("acme", "repo", "main", "modal");
+      const vercelReady = await store.getLatestReady("acme", "repo", "main", "vercel");
+      expect(modalReady!.provider_image_id).toBe("modal-img");
+      expect(vercelReady!.provider_image_id).toBe("vercel-snapshot");
     });
   });
 
@@ -514,6 +567,34 @@ describe("RepoImageStore", () => {
       // No image for this branch
       const staging = await store.getLatestReady("acme", "repo", "staging");
       expect(staging).toBeNull();
+    });
+
+    it("filters by provider when provided", async () => {
+      db.setImageBuildEnabled("acme", "repo", true);
+      await store.registerBuild({
+        id: "img-modal",
+        repoOwner: "acme",
+        repoName: "repo",
+        provider: "modal",
+        baseBranch: "main",
+      });
+      await store.markReady("img-modal", "modal-img", "sha-modal", 30);
+
+      vi.advanceTimersByTime(1000);
+
+      await store.registerBuild({
+        id: "img-vercel",
+        repoOwner: "acme",
+        repoName: "repo",
+        provider: "vercel",
+        baseBranch: "main",
+      });
+      await store.markReady("img-vercel", "vercel-snapshot", "sha-vercel", 40);
+
+      const modalImage = await store.getLatestReady("acme", "repo", undefined, "modal");
+      const vercelImage = await store.getLatestReady("acme", "repo", undefined, "vercel");
+      expect(modalImage!.provider_image_id).toBe("modal-img");
+      expect(vercelImage!.provider_image_id).toBe("vercel-snapshot");
     });
   });
 

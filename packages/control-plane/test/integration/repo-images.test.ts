@@ -31,6 +31,7 @@ describe("D1 RepoImageStore", () => {
       repo_name: "repo",
       status: "building",
       base_branch: "main",
+      provider: "modal",
       provider_image_id: "",
       base_sha: "",
     });
@@ -269,6 +270,33 @@ describe("D1 RepoImageStore", () => {
     expect(readyA!.provider_image_id).toBe("modal-a");
     expect(readyB!.provider_image_id).toBe("modal-b");
   });
+
+  it("getLatestReady filters images by provider", async () => {
+    await metadataStore.setImageBuildEnabled("acme", "repo", true);
+    await store.registerBuild({
+      id: "img-modal",
+      repoOwner: "acme",
+      repoName: "repo",
+      provider: "modal",
+      baseBranch: "main",
+    });
+    await store.markReady("img-modal", "modal-img", "sha-modal", 30);
+
+    await store.registerBuild({
+      id: "img-vercel",
+      repoOwner: "acme",
+      repoName: "repo",
+      provider: "vercel",
+      baseBranch: "main",
+    });
+    await store.markReady("img-vercel", "vercel-snapshot", "sha-vercel", 40);
+
+    const modalImage = await store.getLatestReady("acme", "repo", "main", "modal");
+    const vercelImage = await store.getLatestReady("acme", "repo", "main", "vercel");
+
+    expect(modalImage!.provider_image_id).toBe("modal-img");
+    expect(vercelImage!.provider_image_id).toBe("vercel-snapshot");
+  });
 });
 
 // ==================== HTTP Route Tests ====================
@@ -316,6 +344,28 @@ describe("Repo image HTTP routes", () => {
     const ready = await store.getLatestReady("acme", "repo");
     expect(ready).not.toBeNull();
     expect(ready!.provider_image_id).toBe("modal-img-xyz");
+  });
+
+  it("POST /repo-images/build-complete rejects missing callback auth", async () => {
+    await store.registerBuild({
+      id: "img-auth-required",
+      repoOwner: "acme",
+      repoName: "repo",
+      baseBranch: "main",
+    });
+
+    const response = await SELF.fetch("https://test.local/repo-images/build-complete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        build_id: "img-auth-required",
+        provider_image_id: "modal-img-auth",
+      }),
+    });
+
+    expect(response.status).toBe(401);
+    const status = await store.getStatus("acme", "repo");
+    expect(status[0].status).toBe("building");
   });
 
   it("POST /repo-images/build-failed marks build as failed", async () => {

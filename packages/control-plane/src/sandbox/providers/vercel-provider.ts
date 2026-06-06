@@ -42,6 +42,8 @@ const TUNNEL_ENV_FILE_PATH = "/workspace/.tunnels.env";
 const EXPECTED_TUNNEL_PORTS_ENV_VAR = "EXPECTED_TUNNEL_PORTS";
 const DEFAULT_SNAPSHOT_EXPIRATION_MS = 0;
 const BUILD_TIMEOUT_SECONDS = 1800;
+const VERCEL_BOOTSTRAP_TIMEOUT_MS = 20 * 60 * 1000;
+const VERCEL_TUNNEL_ENV_WRITE_TIMEOUT_MS = 30_000;
 
 export interface VercelProviderConfig {
   scmProvider: SourceControlProviderName;
@@ -260,9 +262,10 @@ export class VercelSandboxProvider implements SandboxProvider {
         await this.bootstrapRuntime(created.session.id, config.correlation);
       }
 
-      await this.launchBuildCoordinator(created.session.id, {
-        OI_VERCEL_SESSION_ID: created.session.id,
-      });
+      await this.launchBuildCoordinator(
+        created.session.id,
+        this.buildCoordinatorEnv(config, created.session.id)
+      );
 
       log.info("vercel.repo_image_build_triggered", {
         build_id: config.buildId,
@@ -309,7 +312,7 @@ export class VercelSandboxProvider implements SandboxProvider {
     Object.assign(envVars, {
       HOME: "/root",
       NODE_ENV: "development",
-      PATH: "/root/.bun/bin:/usr/local/bin:/usr/bin:/bin:/vercel/runtimes/node24/bin",
+      PATH: buildVercelRuntimePath(this.providerConfig.runtime),
       PYTHONPATH: "/app",
       PYTHONUNBUFFERED: "1",
       NODE_PATH: "/usr/lib/node_modules:/usr/local/lib/node_modules",
@@ -356,7 +359,7 @@ export class VercelSandboxProvider implements SandboxProvider {
     Object.assign(envVars, {
       HOME: "/root",
       NODE_ENV: "development",
-      PATH: "/root/.bun/bin:/usr/local/bin:/usr/bin:/bin:/vercel/runtimes/node24/bin",
+      PATH: buildVercelRuntimePath(this.providerConfig.runtime),
       PYTHONPATH: "/app",
       PYTHONUNBUFFERED: "1",
       NODE_PATH: "/usr/lib/node_modules:/usr/local/lib/node_modules",
@@ -365,15 +368,6 @@ export class VercelSandboxProvider implements SandboxProvider {
       REPO_NAME: config.repoName,
       IMAGE_BUILD_MODE: "true",
       SESSION_CONFIG: JSON.stringify({ branch: config.defaultBranch }),
-      OI_VERCEL_BUILD_ID: config.buildId,
-      OI_VERCEL_CALLBACK_URL: config.callbackUrl,
-      OI_INTERNAL_CALLBACK_SECRET: this.providerConfig.internalCallbackSecret ?? "",
-      OI_VERCEL_TOKEN: this.providerConfig.token,
-      OI_VERCEL_TEAM_ID: this.providerConfig.teamId ?? "",
-      OI_VERCEL_API_BASE_URL: this.providerConfig.apiBaseUrl ?? "https://vercel.com/api",
-      OI_VERCEL_SNAPSHOT_EXPIRATION_MS: String(
-        this.providerConfig.snapshotExpirationMs ?? DEFAULT_SNAPSHOT_EXPIRATION_MS
-      ),
     });
 
     this.injectScmEnvVars(envVars, config.cloneToken);
@@ -474,15 +468,18 @@ export class VercelSandboxProvider implements SandboxProvider {
       `Path(${JSON.stringify(TUNNEL_ENV_FILE_PATH)}).write_text(${JSON.stringify(content)})`,
     ].join("\n");
 
-    await this.client.runCommandAndWait(
+    const result = await this.client.runCommandAndWait(
       {
         sessionId,
         command: "sudo",
         args: ["-E", VERCEL_PYTHON_BIN, "-c", script],
-        timeoutMs: 30_000,
+        timeoutMs: VERCEL_TUNNEL_ENV_WRITE_TIMEOUT_MS,
       },
       correlation
     );
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to write Vercel tunnel env file (exit_code=${result.exitCode})`);
+    }
   }
 
   private async bootstrapRuntime(
@@ -498,7 +495,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         sessionId,
         command: "bash",
         args: ["-lc", script],
-        timeoutMs: 20 * 60 * 1000,
+        timeoutMs: VERCEL_BOOTSTRAP_TIMEOUT_MS,
       },
       correlation
     );
@@ -535,6 +532,24 @@ export class VercelSandboxProvider implements SandboxProvider {
       cwd: "/workspace",
       env,
     });
+  }
+
+  private buildCoordinatorEnv(
+    config: TriggerVercelRepoImageBuildConfig,
+    sessionId: string
+  ): Record<string, string> {
+    return {
+      OI_VERCEL_SESSION_ID: sessionId,
+      OI_VERCEL_BUILD_ID: config.buildId,
+      OI_VERCEL_CALLBACK_URL: config.callbackUrl,
+      OI_INTERNAL_CALLBACK_SECRET: this.providerConfig.internalCallbackSecret ?? "",
+      OI_VERCEL_TOKEN: this.providerConfig.token,
+      OI_VERCEL_TEAM_ID: this.providerConfig.teamId ?? "",
+      OI_VERCEL_API_BASE_URL: this.providerConfig.apiBaseUrl ?? "https://vercel.com/api",
+      OI_VERCEL_SNAPSHOT_EXPIRATION_MS: String(
+        this.providerConfig.snapshotExpirationMs ?? DEFAULT_SNAPSHOT_EXPIRATION_MS
+      ),
+    };
   }
 
   private async deriveCodeServerPassword(sandboxId: string): Promise<string> {
@@ -602,6 +617,11 @@ function routeToUrl(route: VercelSandboxRoute | undefined): string | undefined {
   return `https://${route.subdomain}.vercel.run`;
 }
 
+function buildVercelRuntimePath(runtime?: string): string {
+  const resolvedRuntime = runtime || DEFAULT_VERCEL_RUNTIME;
+  return `/root/.bun/bin:/usr/local/bin:/usr/bin:/bin:/vercel/runtimes/${resolvedRuntime}/bin`;
+}
+
 function buildCoordinatorScript(): string {
   return String.raw`
 import hashlib
@@ -617,11 +637,24 @@ import urllib.parse
 import urllib.request
 
 
-def callback(path_suffix, payload):
-    callback_url = os.environ["OI_VERCEL_CALLBACK_URL"]
+def read_coordinator_config():
+    return {
+        "build_id": os.environ.pop("OI_VERCEL_BUILD_ID"),
+        "callback_url": os.environ.pop("OI_VERCEL_CALLBACK_URL"),
+        "secret": os.environ.pop("OI_INTERNAL_CALLBACK_SECRET"),
+        "token": os.environ.pop("OI_VERCEL_TOKEN"),
+        "session_id": os.environ.pop("OI_VERCEL_SESSION_ID"),
+        "team_id": os.environ.pop("OI_VERCEL_TEAM_ID", ""),
+        "api_base": os.environ.pop("OI_VERCEL_API_BASE_URL", "https://vercel.com/api"),
+        "snapshot_expiration_ms": os.environ.pop("OI_VERCEL_SNAPSHOT_EXPIRATION_MS", "0"),
+    }
+
+
+def callback(config, path_suffix, payload):
+    callback_url = config["callback_url"]
     if path_suffix:
         callback_url = callback_url.replace("/build-complete", path_suffix)
-    secret = os.environ["OI_INTERNAL_CALLBACK_SECRET"]
+    secret = config["secret"]
     timestamp = str(int(time.time() * 1000))
     signature = hmac.new(secret.encode(), timestamp.encode(), hashlib.sha256).hexdigest()
     body = json.dumps(payload).encode()
@@ -638,12 +671,12 @@ def callback(path_suffix, payload):
         resp.read()
 
 
-def snapshot_session():
-    api_base = os.environ.get("OI_VERCEL_API_BASE_URL", "https://vercel.com/api").rstrip("/")
-    session_id = os.environ["OI_VERCEL_SESSION_ID"]
-    team_id = os.environ.get("OI_VERCEL_TEAM_ID", "")
-    token = os.environ["OI_VERCEL_TOKEN"]
-    expiration = int(os.environ.get("OI_VERCEL_SNAPSHOT_EXPIRATION_MS", "0"))
+def snapshot_session(config):
+    api_base = config["api_base"].rstrip("/")
+    session_id = config["session_id"]
+    team_id = config["team_id"]
+    token = config["token"]
+    expiration = int(config["snapshot_expiration_ms"])
     query = f"?teamId={urllib.parse.quote(team_id)}" if team_id else ""
     body = json.dumps({"expiration": expiration}).encode()
     req = urllib.request.Request(
@@ -659,6 +692,18 @@ def snapshot_session():
     with urllib.request.urlopen(req, timeout=600) as resp:
         data = json.loads(resp.read().decode() or "{}")
     return data["snapshot"]["id"]
+
+
+COORDINATOR_ONLY_ENV_KEYS = {
+    "OI_VERCEL_SESSION_ID",
+    "OI_VERCEL_BUILD_ID",
+    "OI_VERCEL_CALLBACK_URL",
+    "OI_INTERNAL_CALLBACK_SECRET",
+    "OI_VERCEL_TOKEN",
+    "OI_VERCEL_TEAM_ID",
+    "OI_VERCEL_API_BASE_URL",
+    "OI_VERCEL_SNAPSHOT_EXPIRATION_MS",
+}
 
 
 def read_head_sha():
@@ -678,16 +723,20 @@ def read_head_sha():
 
 def main():
     started = time.time()
-    build_id = os.environ["OI_VERCEL_BUILD_ID"]
+    config = read_coordinator_config()
+    build_id = config["build_id"]
     head_sha = ""
     last_error = ""
+    build_env = os.environ.copy()
+    for key in COORDINATOR_ONLY_ENV_KEYS:
+        build_env.pop(key, None)
     proc = subprocess.Popen(
         ["sudo", "-E", "/usr/bin/python3.12", "-m", "sandbox_runtime.entrypoint"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
-        env=os.environ.copy(),
+        env=build_env,
     )
     try:
         assert proc.stdout is not None
@@ -711,8 +760,8 @@ def main():
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait(timeout=10)
-                snapshot_id = snapshot_session()
-                callback("", {
+                snapshot_id = snapshot_session(config)
+                callback(config, "", {
                     "build_id": build_id,
                     "provider_image_id": snapshot_id,
                     "base_sha": head_sha,
@@ -720,13 +769,13 @@ def main():
                 })
                 return
         exit_code = proc.wait()
-        callback("/build-failed", {
+        callback(config, "/build-failed", {
             "build_id": build_id,
             "error": last_error or f"build entrypoint exited before completion (exit_code={exit_code})",
         })
     except Exception as exc:
         try:
-            callback("/build-failed", {"build_id": build_id, "error": str(exc)[-500:]})
+            callback(config, "/build-failed", {"build_id": build_id, "error": str(exc)[-500:]})
         finally:
             raise
 
