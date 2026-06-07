@@ -1,0 +1,30 @@
+# Copy to .dev.vars and fill in the blanks. Never commit .dev.vars.
+#
+# Generate missing values:
+#   openssl rand -base64 32
+
+# Shared with packages/web/.env.local (INTERNAL_CALLBACK_SECRET must match)
+INTERNAL_CALLBACK_SECRET=
+
+TOKEN_ENCRYPTION_KEY=
+REPO_SECRETS_ENCRYPTION_KEY=
+
+GITHUB_CLIENT_SECRET=
+
+# Islo sandbox compute (https://islo.dev)
+ISLO_API_KEY=
+# Defaults to open-inspect-runtime-local via wrangler.dev.jsonc.
+# Seed this snapshot with packages/islo-infra before running Islo-backed sessions.
+# ISLO_BASE_SNAPSHOT=open-inspect-runtime-local
+
+# GitHub App git access — install the app on your repos first
+GITHUB_APP_INSTALLATION_ID=
+# PKCS#8 private key from GitHub App settings (keep newlines inside quotes)
+GITHUB_APP_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----
+...
+-----END PRIVATE KEY-----"
+
+# Islo sandboxes run in the cloud and must reach the control plane over the internet.
+# `npm run dev` starts a trycloudflare.com tunnel and sets this automatically.
+# Only use http://127.0.0.1:8787 with `npm run dev:local` (Islo won't connect).
+WORKER_URL=

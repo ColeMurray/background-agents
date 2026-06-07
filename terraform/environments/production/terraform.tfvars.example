@@ -72,6 +72,13 @@ daytona_api_key = ""           # Requires Sandboxes (Read/Write) + Snapshots (Re
 daytona_base_snapshot = ""     # Name of the seeded Daytona snapshot
 # daytona_target = ""          # Optional Daytona target name
 
+# Islo API
+# Only required when sandbox_provider = "islo"
+# Snapshot builds are automated from packages/islo-infra when Islo is selected.
+islo_api_key = ""              # Requires sandbox and snapshot permissions
+islo_base_snapshot = ""        # Name of the seeded Islo snapshot
+# islo_base_url = ""           # Optional Islo API base URL
+
 # =============================================================================
 # GitHub App Credentials
 # =============================================================================

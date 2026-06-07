@@ -16,6 +16,7 @@ import { buildModalSandboxDashboardUrl, createModalClient } from "../sandbox/cli
 import { createDaytonaRestClient } from "../sandbox/daytona-rest-client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
 import { createDaytonaProvider } from "../sandbox/providers/daytona-provider";
+import { createIsloProvider } from "../sandbox/providers/islo-provider";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
@@ -162,6 +163,7 @@ export class SessionDO extends DurableObject<Env> {
     prompt: (request) => this.messagesHandler.enqueuePrompt(request),
     stop: () => this.messagesHandler.stop(),
     sandboxEvent: (request) => this.sandboxHandler.sandboxEvent(request),
+    sandboxError: (request) => this.sandboxHandler.sandboxError(request),
     createMediaArtifact: (request) => this.sandboxHandler.createMediaArtifact(request),
     listParticipants: () => this.participantsHandler.listParticipants(),
     addParticipant: (request) => this.sandboxHandler.addParticipant(request),
@@ -550,58 +552,84 @@ export class SessionDO extends DurableObject<Env> {
   private createLifecycleManager(): SandboxLifecycleManager {
     const sandboxBackend = resolveSandboxBackendName(this.env.SANDBOX_PROVIDER);
 
-    const provider =
-      sandboxBackend === "daytona"
-        ? (() => {
-            if (
-              !this.env.DAYTONA_API_URL ||
-              !this.env.DAYTONA_API_KEY ||
-              !this.env.DAYTONA_BASE_SNAPSHOT
-            ) {
-              throw new Error(
-                "DAYTONA_API_URL, DAYTONA_API_KEY, and DAYTONA_BASE_SNAPSHOT are required when SANDBOX_PROVIDER=daytona"
-              );
-            }
+    const provider = (() => {
+      const scmProvider = resolveScmProviderFromEnv(this.env.SCM_PROVIDER);
 
-            const daytonaClient = createDaytonaRestClient({
-              apiUrl: this.env.DAYTONA_API_URL,
-              apiKey: this.env.DAYTONA_API_KEY,
-              target: this.env.DAYTONA_TARGET,
-              baseSnapshot: this.env.DAYTONA_BASE_SNAPSHOT,
-              autoStopIntervalMinutes: parseInt(
-                this.env.DAYTONA_AUTO_STOP_INTERVAL_MINUTES || "120",
-                10
-              ),
-              autoArchiveIntervalMinutes: parseInt(
-                this.env.DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES || "10080",
-                10
-              ),
-            });
+      if (sandboxBackend === "islo") {
+        if (!this.env.ISLO_API_KEY || !this.env.ISLO_BASE_SNAPSHOT) {
+          throw new Error(
+            "ISLO_API_KEY and ISLO_BASE_SNAPSHOT are required when SANDBOX_PROVIDER=islo"
+          );
+        }
 
-            const scmProvider = resolveScmProviderFromEnv(this.env.SCM_PROVIDER);
+        return createIsloProvider({
+          apiKey: this.env.ISLO_API_KEY,
+          baseUrl: this.env.ISLO_BASE_URL,
+          baseSnapshot: this.env.ISLO_BASE_SNAPSHOT,
+          vcpus: parseOptionalInteger(this.env.ISLO_VCPUS, "ISLO_VCPUS"),
+          memoryMb: parseOptionalInteger(this.env.ISLO_MEMORY_MB, "ISLO_MEMORY_MB"),
+          diskGb: parseOptionalInteger(this.env.ISLO_DISK_GB, "ISLO_DISK_GB"),
+          workdir: this.env.ISLO_WORKDIR,
+          startCommand: parseOptionalCommand(this.env.ISLO_START_COMMAND),
+          startUser: this.env.ISLO_START_USER,
+          gatewayProfile: this.env.ISLO_GATEWAY_PROFILE,
+          shareTtlSeconds: parseOptionalInteger(
+            this.env.ISLO_SHARE_TTL_SECONDS,
+            "ISLO_SHARE_TTL_SECONDS"
+          ),
+          scmProvider,
+          codeServerPasswordSecret: this.env.ISLO_API_KEY,
+        });
+      }
 
-            return createDaytonaProvider(daytonaClient, {
-              scmProvider,
-              gitlabAccessToken: this.env.GITLAB_ACCESS_TOKEN,
-              // Reuses API key as HMAC secret for code-server password derivation
-              // (distinct message prefix prevents collision with auth use)
-              codeServerPasswordSecret: this.env.DAYTONA_API_KEY,
-            });
-          })()
-        : (() => {
-            if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {
-              throw new Error(
-                "MODAL_API_SECRET and MODAL_WORKSPACE are required when SANDBOX_PROVIDER=modal"
-              );
-            }
+      if (sandboxBackend === "daytona") {
+        if (
+          !this.env.DAYTONA_API_URL ||
+          !this.env.DAYTONA_API_KEY ||
+          !this.env.DAYTONA_BASE_SNAPSHOT
+        ) {
+          throw new Error(
+            "DAYTONA_API_URL, DAYTONA_API_KEY, and DAYTONA_BASE_SNAPSHOT are required when SANDBOX_PROVIDER=daytona"
+          );
+        }
 
-            const modalClient = createModalClient(
-              this.env.MODAL_API_SECRET,
-              this.env.MODAL_WORKSPACE,
-              this.env.MODAL_ENVIRONMENT_WEB_SUFFIX
-            );
-            return createModalProvider(modalClient);
-          })();
+        const daytonaClient = createDaytonaRestClient({
+          apiUrl: this.env.DAYTONA_API_URL,
+          apiKey: this.env.DAYTONA_API_KEY,
+          target: this.env.DAYTONA_TARGET,
+          baseSnapshot: this.env.DAYTONA_BASE_SNAPSHOT,
+          autoStopIntervalMinutes: parseInt(
+            this.env.DAYTONA_AUTO_STOP_INTERVAL_MINUTES || "120",
+            10
+          ),
+          autoArchiveIntervalMinutes: parseInt(
+            this.env.DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES || "10080",
+            10
+          ),
+        });
+
+        return createDaytonaProvider(daytonaClient, {
+          scmProvider,
+          gitlabAccessToken: this.env.GITLAB_ACCESS_TOKEN,
+          // Reuses API key as HMAC secret for code-server password derivation
+          // (distinct message prefix prevents collision with auth use)
+          codeServerPasswordSecret: this.env.DAYTONA_API_KEY,
+        });
+      }
+
+      if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {
+        throw new Error(
+          "MODAL_API_SECRET and MODAL_WORKSPACE are required when SANDBOX_PROVIDER=modal"
+        );
+      }
+
+      const modalClient = createModalClient(
+        this.env.MODAL_API_SECRET,
+        this.env.MODAL_WORKSPACE,
+        this.env.MODAL_ENVIRONMENT_WEB_SUFFIX
+      );
+      return createModalProvider(modalClient);
+    })();
 
     // Storage adapter
     const storage: SandboxStorage = {
@@ -1868,4 +1896,32 @@ export class SessionDO extends DurableObject<Env> {
       return null;
     }
   }
+}
+
+function parseOptionalInteger(value: string | undefined, name: string): number | undefined {
+  if (!value?.trim()) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function parseOptionalCommand(value: string | undefined): string[] | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+
+  if (trimmed.startsWith("[")) {
+    const parsed = JSON.parse(trimmed);
+    if (
+      Array.isArray(parsed) &&
+      parsed.length > 0 &&
+      parsed.every((part) => typeof part === "string" && part.length > 0)
+    ) {
+      return parsed;
+    }
+    throw new Error("ISLO_START_COMMAND JSON must be a non-empty string array");
+  }
+
+  return ["sh", "-lc", trimmed];
 }

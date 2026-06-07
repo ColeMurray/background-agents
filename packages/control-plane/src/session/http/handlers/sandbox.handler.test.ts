@@ -9,6 +9,8 @@ function createHandler() {
     createArtifact: vi.fn(),
     createEvent: vi.fn(),
     getProcessingMessage: vi.fn(),
+    updateSandboxStatus: vi.fn(),
+    updateSandboxSpawnError: vi.fn(),
   };
   const processSandboxEvent = vi.fn();
   const getSandbox = vi.fn<() => SandboxRow | null>();
@@ -77,6 +79,26 @@ describe("createSandboxHandler", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "ok" });
     expect(processSandboxEvent).toHaveBeenCalledWith(event);
+  });
+
+  it("records and broadcasts fatal sandbox errors", async () => {
+    const { handler, repository, broadcast, now } = createHandler();
+
+    const response = await handler.sandboxError(
+      new Request("http://internal/internal/sandbox-error", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ error: "OpenCode failed", fatal: true }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "ok" });
+    expect(now).toHaveBeenCalled();
+    expect(repository.updateSandboxSpawnError).toHaveBeenCalledWith("OpenCode failed", 1234);
+    expect(repository.updateSandboxStatus).toHaveBeenCalledWith("failed");
+    expect(broadcast).toHaveBeenCalledWith({ type: "sandbox_status", status: "failed" });
+    expect(broadcast).toHaveBeenCalledWith({ type: "sandbox_error", error: "OpenCode failed" });
   });
 
   it("adds participant with defaults and returns id", async () => {

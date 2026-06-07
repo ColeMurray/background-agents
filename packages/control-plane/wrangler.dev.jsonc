@@ -1,0 +1,51 @@
+// Local development config. Run: npm run dev (applies D1 migrations, then wrangler dev).
+// Secrets go in .dev.vars (copy from .dev.vars.example).
+{
+  "name": "open-inspect-control-plane-local",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-12-30",
+  "compatibility_flags": ["nodejs_compat"],
+  "dev": {
+    "host": "127.0.0.1",
+    "port": 8787,
+  },
+  "vars": {
+    "DEPLOYMENT_NAME": "local",
+    "APP_NAME": "Open-Inspect",
+    "SANDBOX_PROVIDER": "islo",
+    "WEB_APP_URL": "http://127.0.0.1:3000",
+    // WORKER_URL must be a public HTTPS URL reachable from Islo sandboxes (see .dev.vars).
+    "GITHUB_CLIENT_ID": "Iv23liIZFgQubILlsetX",
+    "GITHUB_APP_ID": "3949590",
+    "ISLO_BASE_SNAPSHOT": "open-inspect-runtime-local-v2",
+    "ISLO_VCPUS": "2",
+    "ISLO_MEMORY_MB": "4096",
+    "ISLO_DISK_GB": "10",
+    "LOG_LEVEL": "debug",
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "SESSION", "class_name": "SessionDO" },
+      { "name": "SCHEDULER", "class_name": "SchedulerDO" },
+    ],
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SessionDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["SchedulerDO"] },
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "open-inspect-local",
+      "database_id": "00000000-0000-0000-0000-000000000001",
+      "migrations_dir": "../../terraform/d1/migrations",
+    },
+  ],
+  "kv_namespaces": [{ "binding": "REPOS_CACHE", "id": "00000000000000000000000000000001" }],
+  "r2_buckets": [
+    {
+      "binding": "MEDIA_BUCKET",
+      "bucket_name": "open-inspect-media-local",
+    },
+  ],
+}

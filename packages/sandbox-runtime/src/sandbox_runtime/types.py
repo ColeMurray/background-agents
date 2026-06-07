@@ -1,9 +1,10 @@
 """Type definitions for sandbox operations."""
 
 from enum import StrEnum
-from typing import Any, TypedDict
+from typing import Any
 
 from pydantic import BaseModel
+from typing_extensions import TypedDict
 
 
 class SandboxStatus(StrEnum):

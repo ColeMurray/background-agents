@@ -15,6 +15,7 @@ def _make_supervisor() -> SandboxSupervisor:
             "SANDBOX_AUTH_TOKEN": "tok",
             "REPO_OWNER": "acme",
             "REPO_NAME": "app",
+            "SESSION_CONFIG": '{"session_id":"session-123"}',
         },
     ):
         return SandboxSupervisor()
@@ -176,3 +177,20 @@ class TestFatalErrorReporting:
         ]
         assert len(fatal_records) == 1
         assert fatal_records[0].error_message == "boom"
+
+    async def test_report_fatal_error_posts_to_session_error_endpoint(self):
+        sup = _make_supervisor()
+        client = MagicMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=None)
+        client.post = AsyncMock()
+
+        with patch("sandbox_runtime.entrypoint.httpx.AsyncClient", return_value=client):
+            await sup._report_fatal_error("opencode missing")
+
+        client.post.assert_awaited_once_with(
+            "https://cp.example.com/sessions/session-123/error",
+            json={"error": "opencode missing", "fatal": True},
+            headers={"Authorization": "Bearer tok"},
+            timeout=5.0,
+        )

@@ -40,6 +40,7 @@ Create accounts on these services before continuing:
 | ------------------------------------------------ | -------------------------------------------------------------- |
 | [Cloudflare](https://dash.cloudflare.com)        | Control plane hosting (+ web app if using Cloudflare platform) |
 | [Vercel](https://vercel.com) _(optional)_        | Web application hosting (only if `web_platform = "vercel"`)    |
+| [Islo](https://islo.dev)                         | Default sandbox infrastructure (`sandbox_provider = "islo"`)   |
 | [Modal](https://modal.com) _(optional)_          | Sandbox infrastructure when `sandbox_provider = "modal"`       |
 | [Daytona](https://app.daytona.io) _(optional)_   | Sandbox infrastructure when `sandbox_provider = "daytona"`     |
 | [GitHub](https://github.com/settings/developers) | OAuth + repository access                                      |
@@ -79,7 +80,7 @@ npm install
 # Build the shared package (required before Terraform deployment)
 npm run build -w @open-inspect/shared
 
-# Install Python dependencies for Modal deployment (includes sandbox-runtime)
+# Optional: install Python dependencies for Modal deployment
 cd packages/modal-infra && uv sync --frozen && cd -
 ```
 
@@ -142,6 +143,25 @@ Create an R2 API Token:
    - Go to **Settings** (Account Settings or Team Settings)
    - Look for **"Your ID"** or find it in the URL: `vercel.com/{YOUR_TEAM_ID}/...`
    - Even personal accounts have an ID (usually starts with `team_`)
+
+### Islo
+
+> Islo is the default sandbox provider.
+
+1. Create an [Islo](https://islo.dev) account.
+2. Create an API key for non-interactive use. The Islo docs describe API key auth via
+   `ISLO_API_KEY`.
+3. Set `islo_api_key` in `terraform.tfvars`.
+4. Set `islo_base_snapshot` in `terraform.tfvars`. Terraform builds this named snapshot from
+   `packages/islo-infra`, starting from the public Islo runner image and baking in
+   `packages/sandbox-runtime`.
+
+The control plane calls Islo directly from Cloudflare Workers. Islo provides the sandbox compute; no
+Modal deployment is required when `sandbox_provider = "islo"`.
+
+> **Important**: Like Daytona, the Islo provider injects secrets from Open-Inspect's encrypted
+> global/repo secrets store. If you plan to use Claude models, add `ANTHROPIC_API_KEY` as a **global
+> secret** in Settings > Secrets after deploying. See [Secrets Management](SECRETS.md).
 
 ### Modal
 
@@ -356,11 +376,23 @@ web_platform                = "vercel"
 # If using Cloudflare, do NOT set these — leave them out so the dummy defaults are used.
 vercel_api_token            = "your-vercel-token"
 vercel_team_id              = "team_xxxxx"       # Your Vercel ID (even personal accounts have one)
-modal_token_id              = "your-modal-token-id"
-modal_token_secret          = "your-modal-token-secret"
-modal_workspace             = "your-modal-workspace"
-modal_environment           = "your-modal-environment"
-modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digits, dashes; empty for https://workspace--... endpoints
+
+# Sandbox provider: "islo" (default), "modal", or "daytona"
+sandbox_provider = "islo"
+
+# Islo (default sandbox provider)
+islo_api_key       = "your-islo-api-key"
+islo_base_snapshot = "open-inspect-runtime"
+islo_vcpus         = 2
+islo_memory_mb     = 4096
+islo_disk_gb       = 10
+
+# Modal (only required when sandbox_provider = "modal")
+# modal_token_id               = "your-modal-token-id"
+# modal_token_secret           = "your-modal-token-secret"
+# modal_workspace              = "your-modal-workspace"
+# modal_environment            = "your-modal-environment"
+# modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digits, dashes; empty for https://workspace--... endpoints
 
 # Daytona (only required when sandbox_provider = "daytona")
 # daytona_api_url           = "https://app.daytona.io/api"
@@ -848,11 +880,11 @@ If the bot doesn't see the original message when tagged in a thread reply:
 5. For PR reviews, ensure auto-review is enabled for the repository and the PR is not a draft
 6. For comment actions, ensure the bot is @mentioned in a **PR** comment (not an issue)
 
-### "Model not found" errors (Daytona provider)
+### "Model not found" errors (Islo or Daytona provider)
 
-If sessions fail with "Model not found" when using `sandbox_provider = "daytona"`, the required LLM
-API key is likely missing. Unlike Modal (which injects keys automatically), Daytona requires you to
-add them as global secrets:
+If sessions fail with "Model not found" when using `sandbox_provider = "islo"` or
+`sandbox_provider = "daytona"`, the required LLM API key is likely missing. Unlike Modal (which
+injects keys automatically), Islo and Daytona require you to add them as global secrets:
 
 1. Go to **Settings > Secrets** in the web app
 2. Select **All Repositories (Global)** from the scope dropdown
