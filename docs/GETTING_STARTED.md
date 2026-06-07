@@ -19,7 +19,7 @@ Open-Inspect uses Terraform to automate deployment across three cloud providers:
 | -------------------------------------- | -------------------------------- | ----------------------------------------------------------------- |
 | **Cloudflare**                         | Control plane, session state     | Workers, KV namespaces, Durable Objects, D1 Database              |
 | **Vercel** _or_ **Cloudflare Workers** | Web application                  | Project + env vars (Vercel) _or_ Worker via OpenNext (Cloudflare) |
-| **Modal** _or_ **Daytona**             | Sandbox execution infrastructure | Modal app deployment _or_ control-plane config for Daytona API    |
+| **Islo** _or_ **Modal** _or_ **Daytona** | Sandbox execution infrastructure | Islo snapshot _or_ Modal app _or_ Daytona API config              |
 
 > **Web platform choice**: Set `web_platform` in your `terraform.tfvars` to `"vercel"` (default) or
 > `"cloudflare"`. The Cloudflare option deploys the Next.js app as a Cloudflare Worker using
@@ -40,6 +40,7 @@ Create accounts on these services before continuing:
 | ------------------------------------------------ | -------------------------------------------------------------- |
 | [Cloudflare](https://dash.cloudflare.com)        | Control plane hosting (+ web app if using Cloudflare platform) |
 | [Vercel](https://vercel.com) _(optional)_        | Web application hosting (only if `web_platform = "vercel"`)    |
+| [Islo](https://islo.dev) _(optional)_            | Sandbox infrastructure when `sandbox_provider = "islo"`        |
 | [Modal](https://modal.com) _(optional)_          | Sandbox infrastructure when `sandbox_provider = "modal"`       |
 | [Daytona](https://app.daytona.io) _(optional)_   | Sandbox infrastructure when `sandbox_provider = "daytona"`     |
 | [GitHub](https://github.com/settings/developers) | OAuth + repository access                                      |
@@ -142,6 +143,21 @@ Create an R2 API Token:
    - Go to **Settings** (Account Settings or Team Settings)
    - Look for **"Your ID"** or find it in the URL: `vercel.com/{YOUR_TEAM_ID}/...`
    - Even personal accounts have an ID (usually starts with `team_`)
+
+### Islo
+
+> Only required when `sandbox_provider = "islo"`.
+
+1. Create an [Islo](https://islo.dev) account.
+2. Create an API key for non-interactive use. The Islo docs describe API key auth via
+   `ISLO_API_KEY`.
+3. Set `islo_api_key` in `terraform.tfvars`.
+4. Set `islo_base_snapshot` in `terraform.tfvars`. Terraform builds this named snapshot from
+   `packages/islo-infra`, starting from the public Islo runner image and baking in
+   `packages/sandbox-runtime`.
+
+The control plane calls Islo directly from Cloudflare Workers. Islo provides the sandbox compute; no
+Modal deployment is required when `sandbox_provider = "islo"`.
 
 ### Modal
 
@@ -356,11 +372,20 @@ web_platform                = "vercel"
 # If using Cloudflare, do NOT set these — leave them out so the dummy defaults are used.
 vercel_api_token            = "your-vercel-token"
 vercel_team_id              = "team_xxxxx"       # Your Vercel ID (even personal accounts have one)
-modal_token_id              = "your-modal-token-id"
-modal_token_secret          = "your-modal-token-secret"
-modal_workspace             = "your-modal-workspace"
-modal_environment           = "your-modal-environment"
-modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digits, dashes; empty for https://workspace--... endpoints
+
+# Sandbox provider: "islo" (default), "modal", or "daytona"
+sandbox_provider = "islo"
+
+# Islo (only required when sandbox_provider = "islo")
+islo_api_key       = "your-islo-api-key"
+islo_base_snapshot = "open-inspect-runtime"
+
+# Modal (only required when sandbox_provider = "modal")
+# modal_token_id               = "your-modal-token-id"
+# modal_token_secret           = "your-modal-token-secret"
+# modal_workspace              = "your-modal-workspace"
+# modal_environment            = "your-modal-environment"
+# modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digits, dashes; empty for https://workspace--... endpoints
 
 # Daytona (only required when sandbox_provider = "daytona")
 # daytona_api_url           = "https://app.daytona.io/api"

@@ -2,17 +2,21 @@
  * Sandbox backend selection utilities.
  */
 
-export type SandboxBackendName = "modal" | "daytona";
+export type SandboxBackendName = "islo" | "modal" | "daytona";
 
 /**
  * Resolve the configured sandbox backend.
  *
- * Defaults to Modal to preserve existing deployments.
+ * Defaults to Islo for new deployments.
  */
 export function resolveSandboxBackendName(value: string | undefined): SandboxBackendName {
   const normalized = value?.trim().toLowerCase();
 
-  if (!normalized || normalized === "modal") {
+  if (!normalized || normalized === "islo") {
+    return "islo";
+  }
+
+  if (normalized === "modal") {
     return "modal";
   }
 

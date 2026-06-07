@@ -1,5 +1,6 @@
 locals {
   name_suffix         = var.deployment_name
+  use_islo_backend    = var.sandbox_provider == "islo"
   use_modal_backend   = var.sandbox_provider == "modal"
   use_daytona_backend = var.sandbox_provider == "daytona"
 

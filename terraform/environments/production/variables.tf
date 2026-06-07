@@ -316,6 +316,98 @@ variable "daytona_target" {
   default     = ""
 }
 
+variable "islo_api_key" {
+  description = "API key for Islo sandbox compute"
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "islo" || length(var.islo_api_key) > 0
+    error_message = "islo_api_key must be set when sandbox_provider = 'islo'."
+  }
+}
+
+variable "islo_base_url" {
+  description = "Optional Islo API base URL. Leave empty to use https://api.islo.dev."
+  type        = string
+  default     = ""
+}
+
+variable "islo_base_snapshot" {
+  description = "Named Islo snapshot used for fresh sandbox creation"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "islo" || length(var.islo_base_snapshot) > 0
+    error_message = "islo_base_snapshot must be set when sandbox_provider = 'islo'."
+  }
+}
+
+variable "islo_vcpus" {
+  description = "Number of vCPUs for Islo sandboxes"
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.islo_vcpus > 0 && floor(var.islo_vcpus) == var.islo_vcpus
+    error_message = "islo_vcpus must be a positive integer."
+  }
+}
+
+variable "islo_memory_mb" {
+  description = "Memory in MB for Islo sandboxes"
+  type        = number
+  default     = 4096
+
+  validation {
+    condition     = var.islo_memory_mb > 0 && floor(var.islo_memory_mb) == var.islo_memory_mb
+    error_message = "islo_memory_mb must be a positive integer."
+  }
+}
+
+variable "islo_disk_gb" {
+  description = "Disk size in GB for Islo sandboxes"
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.islo_disk_gb > 0 && floor(var.islo_disk_gb) == var.islo_disk_gb
+    error_message = "islo_disk_gb must be a positive integer."
+  }
+}
+
+variable "islo_workdir" {
+  description = "Working directory for Islo sandbox runtime commands"
+  type        = string
+  default     = "/workspace"
+}
+
+variable "islo_start_command" {
+  description = "Command to start the Open-Inspect runtime in Islo. Use a JSON string array or shell command."
+  type        = string
+  default     = ""
+}
+
+variable "islo_start_user" {
+  description = "Optional user to run the Islo runtime start command as"
+  type        = string
+  default     = ""
+}
+
+variable "islo_gateway_profile" {
+  description = "Optional Islo gateway profile name or ID"
+  type        = string
+  default     = ""
+}
+
+variable "islo_share_ttl_seconds" {
+  description = "Optional TTL in seconds for Islo share URLs"
+  type        = number
+  default     = 0
+}
+
 variable "nextauth_secret" {
   description = "NextAuth.js secret (generate with: openssl rand -base64 32)"
   type        = string
@@ -327,13 +419,13 @@ variable "nextauth_secret" {
 # =============================================================================
 
 variable "sandbox_provider" {
-  description = "Sandbox backend for session execution: 'modal' or 'daytona'"
+  description = "Sandbox backend for session execution: 'islo', 'modal', or 'daytona'"
   type        = string
-  default     = "modal"
+  default     = "islo"
 
   validation {
-    condition     = contains(["modal", "daytona"], var.sandbox_provider)
-    error_message = "sandbox_provider must be 'modal' or 'daytona'."
+    condition     = contains(["islo", "modal", "daytona"], var.sandbox_provider)
+    error_message = "sandbox_provider must be 'islo', 'modal', or 'daytona'."
   }
 }
 

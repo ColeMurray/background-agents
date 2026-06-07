@@ -72,6 +72,13 @@ daytona_api_key = ""           # Requires Sandboxes (Read/Write) + Snapshots (Re
 daytona_base_snapshot = ""     # Name of the seeded Daytona snapshot
 # daytona_target = ""          # Optional Daytona target name
 
+# Islo API
+# Only required when sandbox_provider = "islo"
+# Snapshot builds are automated from packages/islo-infra when Islo is selected.
+islo_api_key = ""              # Requires sandbox and snapshot permissions
+islo_base_snapshot = ""        # Name of the seeded Islo snapshot
+# islo_base_url = ""           # Optional Islo API base URL
+
 # =============================================================================
 # GitHub App Credentials
 # =============================================================================
@@ -187,9 +194,10 @@ nextauth_secret = ""
 # =============================================================================
 
 # Sandbox backend for session execution
+# - "islo": direct Islo API integration with named snapshot sandboxes (default)
 # - "modal": existing Modal-based sandboxes with filesystem snapshot restore
 # - "daytona": direct Daytona REST API integration with stop/start resume
-sandbox_provider = "modal"
+sandbox_provider = "islo"
 
 # Platform for the web app deployment
 # - "vercel": deploy the Next.js app to Vercel (requires vercel_api_token + vercel_team_id)

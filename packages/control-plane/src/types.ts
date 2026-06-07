@@ -61,6 +61,7 @@ export interface Env {
   MODAL_TOKEN_SECRET?: string;
   MODAL_API_SECRET?: string; // Shared secret for authenticating with Modal endpoints
   DAYTONA_API_KEY?: string; // Daytona REST API key (Bearer auth + HMAC derivation)
+  ISLO_API_KEY?: string; // Islo API key for sandbox compute
   INTERNAL_CALLBACK_SECRET?: string; // For signing callbacks to slack-bot
   SLACK_BOT_TOKEN?: string; // Slack bot token for agent-initiated chat.postMessage calls
 
@@ -80,7 +81,7 @@ export interface Env {
   WORKER_URL?: string; // Base URL for the worker (for callbacks)
   WEB_APP_URL?: string; // Base URL for the web app (for PR links)
   CF_ACCOUNT_ID?: string; // Cloudflare account ID
-  SANDBOX_PROVIDER?: string; // "modal" (default) or "daytona"
+  SANDBOX_PROVIDER?: string; // "islo" (default), "modal", or "daytona"
   MODAL_WORKSPACE?: string; // Modal workspace name
   MODAL_ENVIRONMENT?: string; // Modal environment name for dashboard URLs
   MODAL_ENVIRONMENT_WEB_SUFFIX?: string; // Modal environment web suffix for endpoint URLs
@@ -89,6 +90,16 @@ export interface Env {
   DAYTONA_AUTO_STOP_INTERVAL_MINUTES?: string; // Daytona idle stop interval in minutes
   DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES?: string; // Daytona archive interval in minutes
   DAYTONA_TARGET?: string; // Optional Daytona target name
+  ISLO_BASE_URL?: string; // Optional Islo API base URL
+  ISLO_BASE_SNAPSHOT?: string; // Named Islo snapshot used for fresh sandbox creation
+  ISLO_VCPUS?: string; // Islo sandbox vCPU count
+  ISLO_MEMORY_MB?: string; // Islo sandbox memory in MB
+  ISLO_DISK_GB?: string; // Islo sandbox disk size in GB
+  ISLO_WORKDIR?: string; // Islo sandbox workdir
+  ISLO_START_COMMAND?: string; // JSON array command or shell-like command string
+  ISLO_START_USER?: string; // Optional user for the runtime start exec
+  ISLO_GATEWAY_PROFILE?: string; // Optional Islo gateway profile name/ID
+  ISLO_SHARE_TTL_SECONDS?: string; // Optional Islo share TTL in seconds
 
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)

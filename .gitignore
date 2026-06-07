@@ -2,6 +2,7 @@
 node_modules/
 .pnpm-store/
 packages/*/package-lock.json
+!packages/islo-infra/package-lock.json
 
 # Python
 __pycache__/

@@ -2,16 +2,20 @@ import { describe, it, expect } from "vitest";
 import { resolveSandboxBackendName, isModalSandboxBackend } from "./provider-name";
 
 describe("resolveSandboxBackendName", () => {
-  it("defaults to modal when undefined", () => {
-    expect(resolveSandboxBackendName(undefined)).toBe("modal");
+  it("defaults to islo when undefined", () => {
+    expect(resolveSandboxBackendName(undefined)).toBe("islo");
   });
 
-  it("defaults to modal when empty string", () => {
-    expect(resolveSandboxBackendName("")).toBe("modal");
+  it("defaults to islo when empty string", () => {
+    expect(resolveSandboxBackendName("")).toBe("islo");
   });
 
-  it("defaults to modal when whitespace-only", () => {
-    expect(resolveSandboxBackendName("   ")).toBe("modal");
+  it("defaults to islo when whitespace-only", () => {
+    expect(resolveSandboxBackendName("   ")).toBe("islo");
+  });
+
+  it('returns "islo" for "islo"', () => {
+    expect(resolveSandboxBackendName("islo")).toBe("islo");
   });
 
   it('returns "modal" for "modal"', () => {
@@ -23,12 +27,14 @@ describe("resolveSandboxBackendName", () => {
   });
 
   it("is case-insensitive", () => {
+    expect(resolveSandboxBackendName("ISLO")).toBe("islo");
     expect(resolveSandboxBackendName("MODAL")).toBe("modal");
     expect(resolveSandboxBackendName("Daytona")).toBe("daytona");
     expect(resolveSandboxBackendName("DAYTONA")).toBe("daytona");
   });
 
   it("trims whitespace", () => {
+    expect(resolveSandboxBackendName("  islo  ")).toBe("islo");
     expect(resolveSandboxBackendName("  modal  ")).toBe("modal");
     expect(resolveSandboxBackendName("  daytona  ")).toBe("daytona");
   });
@@ -44,8 +50,12 @@ describe("isModalSandboxBackend", () => {
     expect(isModalSandboxBackend("modal")).toBe(true);
   });
 
-  it("returns true for undefined (default)", () => {
-    expect(isModalSandboxBackend(undefined)).toBe(true);
+  it("returns false for undefined (default)", () => {
+    expect(isModalSandboxBackend(undefined)).toBe(false);
+  });
+
+  it("returns false for islo", () => {
+    expect(isModalSandboxBackend("islo")).toBe(false);
   });
 
   it("returns false for daytona", () => {

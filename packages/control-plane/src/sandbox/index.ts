@@ -35,6 +35,12 @@ export {
 export { ModalSandboxProvider, createModalProvider } from "./providers/modal-provider";
 export { DaytonaSandboxProvider, createDaytonaProvider } from "./providers/daytona-provider";
 export {
+  IsloSandboxProvider,
+  createIsloProvider,
+  type IsloClientLike,
+  type IsloProviderConfig,
+} from "./providers/islo-provider";
+export {
   DaytonaRestClient,
   DaytonaNotFoundError,
   DaytonaApiError,
