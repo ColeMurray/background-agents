@@ -83,7 +83,12 @@ output "sandbox_provider" {
 
 output "vercel_base_snapshot_id" {
   description = "Vercel base runtime snapshot ID configured for sandbox creation"
-  value       = local.use_vercel_backend ? var.vercel_base_snapshot_id : null
+  value       = local.use_vercel_backend && var.vercel_base_snapshot_id != "" ? var.vercel_base_snapshot_id : null
+}
+
+output "vercel_base_snapshot_name" {
+  description = "Managed Vercel base runtime snapshot sandbox name"
+  value       = local.use_vercel_backend && var.vercel_base_snapshot_id == "" ? module.vercel_sandbox_infra[0].snapshot_name : null
 }
 
 output "web_app_project_id" {
@@ -114,7 +119,7 @@ output "verification_commands" {
     curl ${module.control_plane_worker.worker_url}/health
 
     # 2. Health check sandbox backend
-    ${local.use_modal_backend ? "curl ${module.modal_app[0].api_health_url}" : local.use_vercel_backend ? "# Vercel sandboxes use the Vercel Sandbox API directly. Base snapshot: ${var.vercel_base_snapshot_id != "" ? var.vercel_base_snapshot_id : "(none configured; fresh sandboxes bootstrap at start)"}" : "# Daytona sandboxes use the REST API directly — no health endpoint to check"}
+    ${local.use_modal_backend ? "curl ${module.modal_app[0].api_health_url}" : local.use_vercel_backend ? "# Vercel sandboxes use the Vercel Sandbox API directly. Base snapshot: ${var.vercel_base_snapshot_id != "" ? var.vercel_base_snapshot_id : module.vercel_sandbox_infra[0].snapshot_name}" : "# Daytona sandboxes use the REST API directly — no health endpoint to check"}
 
     # 3. Verify web app deployment
     curl ${local.web_app_url}

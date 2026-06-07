@@ -90,8 +90,14 @@ module "control_plane_worker" {
     local.use_vercel_backend && var.vercel_sandbox_team_id != "" ? [
       { name = "VERCEL_TEAM_ID", value = var.vercel_sandbox_team_id },
     ] : [],
+    local.use_vercel_backend && var.vercel_sandbox_api_base_url != "" ? [
+      { name = "VERCEL_SANDBOX_API_BASE_URL", value = var.vercel_sandbox_api_base_url },
+    ] : [],
     local.use_vercel_backend && var.vercel_base_snapshot_id != "" ? [
       { name = "VERCEL_BASE_SNAPSHOT_ID", value = var.vercel_base_snapshot_id },
+    ] : [],
+    local.use_vercel_backend && var.vercel_base_snapshot_id == "" ? [
+      { name = "VERCEL_BASE_SNAPSHOT_NAME", value = module.vercel_sandbox_infra[0].snapshot_name },
     ] : []
   )
 
@@ -146,5 +152,6 @@ module "control_plane_worker" {
     null_resource.d1_migrations,
     module.linear_bot_worker,
     module.daytona_infra,
+    module.vercel_sandbox_infra,
   ]
 }

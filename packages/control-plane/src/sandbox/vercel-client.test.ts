@@ -266,6 +266,37 @@ describe("VercelSandboxClient", () => {
     expect(fetchSpy.mock.calls[1][1]).toEqual(expect.objectContaining({ method: "DELETE" }));
   });
 
+  it("lists snapshots by sandbox name", async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse({
+        pagination: { count: 1, next: null },
+        snapshots: [
+          {
+            id: "snapshot-1",
+            sourceSessionId: "session-1",
+            status: "created",
+            region: "iad1",
+            sizeBytes: 1024,
+            createdAt: 456,
+            updatedAt: 789,
+          },
+        ],
+      })
+    );
+
+    const result = await createClient().listSnapshots({
+      name: "openinspect-base-abc123",
+      limit: 20,
+      sortOrder: "desc",
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://vercel.test/api/v2/sandboxes/snapshots?project=project-123&name=openinspect-base-abc123&limit=20&sortOrder=desc&teamId=team-456",
+      expect.objectContaining({ method: "GET" })
+    );
+    expect(result.snapshots[0]?.id).toBe("snapshot-1");
+  });
+
   it("stops a sandbox session with the expected endpoint", async () => {
     fetchSpy.mockResolvedValue(new Response(null, { status: 204 }));
 

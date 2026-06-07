@@ -49,6 +49,7 @@ async function main(): Promise<void> {
     runtime: env("VERCEL_RUNTIME") || undefined,
     runtimeArchive: runtimeArchive.archive,
     runtimeExtractDir: runtimeArchive.extractDir,
+    sandboxName: env("VERCEL_BASE_SNAPSHOT_NAME") || undefined,
     sourceVersion: env("GITHUB_SHA") || env("VERCEL_BASE_SNAPSHOT_SOURCE_VERSION") || undefined,
   });
 

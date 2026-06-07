@@ -22,7 +22,7 @@ vercel_sandbox_project_id = "prj_..."
 # vercel_sandbox_team_id  = "team_..." # optional for team projects
 
 # Snapshot/runtime settings
-# vercel_base_snapshot_id     = "snapshot_..." # required for local applies; CI generates this
+# vercel_base_snapshot_id     = "snapshot_..." # optional manual override; Terraform skips managed builds when set
 # vercel_sandbox_runtime        = "node24"
 # vercel_snapshot_expiration_ms = 0
 ```
@@ -43,8 +43,8 @@ VERCEL_SANDBOX_RUNTIME=node24
 VERCEL_SNAPSHOT_EXPIRATION_MS=0
 ```
 
-`VERCEL_SANDBOX_API_BASE_URL` is also honored by the CI base-snapshot builder for advanced testing
-against a non-default Sandbox API endpoint. Normal deployments should leave it unset.
+`VERCEL_SANDBOX_API_BASE_URL` is also honored by Terraform and the control plane for advanced
+testing against a non-default Sandbox API endpoint. Normal deployments should leave it unset.
 
 `VERCEL_SNAPSHOT_EXPIRATION_MS` applies to repo/session snapshots created at runtime. `0` means no
 expiration. The managed base-runtime snapshot is created without expiration, overriding Vercel's
@@ -52,30 +52,35 @@ default snapshot expiration for that deploy artifact.
 
 ## Managed Base Runtime Snapshot
 
-When the Terraform GitHub Actions apply job runs with `SANDBOX_PROVIDER=vercel`, it builds a fresh
-base-runtime snapshot before `terraform apply`:
+When Terraform runs with `sandbox_provider = "vercel"`, the Vercel sandbox infrastructure module
+builds a managed base-runtime snapshot from the local checkout:
 
-1. Create a temporary Vercel sandbox.
-2. Archive the checked-out `packages/sandbox-runtime` package from the GitHub Actions workspace.
-3. Upload that archive into the temporary sandbox.
+1. Hash `packages/sandbox-runtime` and the Vercel bootstrap/builder files from `var.project_root`.
+2. Create a temporary Vercel sandbox with a deterministic name derived from that hash.
+3. Archive the checked-out `packages/sandbox-runtime` package and upload it into the temporary
+   sandbox.
 4. Install the sandbox runtime, OpenCode, code-server, ttyd, browser tooling, and credential helper.
 5. Snapshot the prepared filesystem.
 6. Stop the temporary sandbox.
-7. Pass the generated snapshot ID into Terraform as `vercel_base_snapshot_id`.
+7. Pass the deterministic snapshot name to the control plane as `VERCEL_BASE_SNAPSHOT_NAME`.
 
-The deployed control plane receives that value as `VERCEL_BASE_SNAPSHOT_ID`. Fresh Vercel sessions
-start from this snapshot, so they do not need to reinstall the base runtime every time.
+The deployed control plane resolves `VERCEL_BASE_SNAPSHOT_NAME` to the newest created Vercel
+snapshot with that sandbox name, then starts fresh Vercel sessions from that snapshot. This keeps
+fresh sessions from reinstalling the base runtime every time while avoiding a GitHub Actions-only
+snapshot build path.
 
 `vercel_base_snapshot_id` still exists as a manual fallback for local Terraform applies or emergency
-pinning, but the normal CI path should generate it. Vercel fresh sessions require either a repo
-image snapshot or this managed base-runtime snapshot.
+pinning. When it is set, Terraform skips the managed base snapshot build and the control plane uses
+`VERCEL_BASE_SNAPSHOT_ID` directly. Vercel fresh sessions require either a repo image snapshot, a
+manual base snapshot ID, or this managed base-runtime snapshot name.
 
 ## Session Startup Sources
 
 Vercel sessions choose their source in this order:
 
 1. Repo image snapshot, when a repo-specific prebuild exists.
-2. Managed base-runtime snapshot from `VERCEL_BASE_SNAPSHOT_ID`.
+2. Manual base-runtime snapshot from `VERCEL_BASE_SNAPSHOT_ID`, when configured.
+3. Managed base-runtime snapshot resolved from `VERCEL_BASE_SNAPSHOT_NAME`.
 
 Repo image snapshots still take precedence over the base runtime snapshot because they contain both
 the base runtime and repository-specific setup work.

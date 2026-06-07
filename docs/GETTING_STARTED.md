@@ -197,16 +197,15 @@ The control plane calls the Daytona REST API directly — no shim service to dep
 
 The control plane calls the Vercel Sandbox API directly from Cloudflare Workers. No Modal-style shim
 service is deployed. Vercel supports filesystem snapshots and repo prebuilt images; if you have a
-reusable base snapshot, set `vercel_base_snapshot_id` to skip runtime bootstrapping on every fresh
-sandbox.
+reusable base snapshot, set `vercel_base_snapshot_id` to use it instead of Terraform's managed base
+snapshot build.
 
-When the Terraform GitHub Actions apply job runs with `SANDBOX_PROVIDER=vercel`, it builds a fresh
-immutable Vercel base-runtime snapshot before `terraform apply` and passes the generated snapshot ID
-into the Worker deployment. This keeps the Vercel base runtime aligned with the checked-out
-`packages/sandbox-runtime` source. The `vercel_base_snapshot_id` setting is still available for
-local Terraform runs or as a manual fallback. See
-[Vercel Sandbox Provider](VERCEL_SANDBOX_PROVIDER.md) for the full runtime, snapshot, and resource
-configuration model.
+When Terraform runs with `SANDBOX_PROVIDER=vercel`, it builds a managed immutable Vercel
+base-runtime snapshot from the checked-out `packages/sandbox-runtime` source and passes a
+deterministic snapshot name into the Worker deployment. The control plane resolves that name to the
+latest created Vercel snapshot at sandbox creation time. The `vercel_base_snapshot_id` setting is
+still available as a manual override. See [Vercel Sandbox Provider](VERCEL_SANDBOX_PROVIDER.md) for
+the full runtime, snapshot, and resource configuration model.
 
 > **Important**: Unlike Modal, the Vercel provider does not automatically inject LLM API keys into
 > sandboxes. If you plan to use Claude models, add `ANTHROPIC_API_KEY` as a **global secret** in
@@ -405,7 +404,7 @@ modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digi
 # vercel_sandbox_token      = "your-vercel-token"
 # vercel_sandbox_project_id = "prj_xxxxx"
 # vercel_sandbox_team_id    = "team_xxxxx" # Optional
-# vercel_base_snapshot_id   = "snapshot_xxxxx" # Required for local applies; CI usually generates this
+# vercel_base_snapshot_id   = "snapshot_xxxxx" # Optional manual override; skips managed snapshot builds
 # vercel_sandbox_runtime    = "node24"
 # vercel_snapshot_expiration_ms = 0
 
@@ -731,10 +730,10 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `VERCEL_SANDBOX_TOKEN`           | Vercel API token _(only if `sandbox_provider = "vercel"`)_                                  |
 | `VERCEL_SANDBOX_PROJECT_ID`      | Vercel project ID for sandbox sessions _(only if `sandbox_provider = "vercel"`)_            |
 | `VERCEL_SANDBOX_TEAM_ID`         | Optional Vercel team/account ID for sandbox sessions                                        |
-| `VERCEL_BASE_SNAPSHOT_ID`        | Optional manual Vercel base-runtime snapshot; Terraform CI generates one for Vercel applies |
+| `VERCEL_BASE_SNAPSHOT_ID`        | Optional manual Vercel base-runtime snapshot; skips Terraform-managed snapshot builds       |
 | `VERCEL_SANDBOX_RUNTIME`         | Optional Vercel Sandbox runtime (defaults to `node24`)                                      |
 | `VERCEL_SNAPSHOT_EXPIRATION_MS`  | Optional Vercel runtime snapshot expiration in milliseconds (`0` means no expiration)       |
-| `VERCEL_SANDBOX_API_BASE_URL`    | Optional advanced override used only by the Vercel base-snapshot CI builder                 |
+| `VERCEL_SANDBOX_API_BASE_URL`    | Optional advanced Vercel Sandbox API base URL override                                      |
 | `GH_OAUTH_CLIENT_ID`             | GitHub App OAuth client ID                                                                  |
 | `GH_OAUTH_CLIENT_SECRET`         | GitHub App OAuth client secret                                                              |
 | `GH_APP_ID`                      | GitHub App ID                                                                               |

@@ -227,6 +227,7 @@ jobs:
           TF_VAR_vercel_sandbox_token: ${{ secrets.VERCEL_SANDBOX_TOKEN }}
           TF_VAR_vercel_sandbox_project_id: ${{ secrets.VERCEL_SANDBOX_PROJECT_ID }}
           TF_VAR_vercel_sandbox_team_id: ${{ secrets.VERCEL_SANDBOX_TEAM_ID }}
+          TF_VAR_vercel_sandbox_api_base_url: ${{ secrets.VERCEL_SANDBOX_API_BASE_URL }}
           TF_VAR_vercel_base_snapshot_id: ${{ secrets.VERCEL_BASE_SNAPSHOT_ID }}
           TF_VAR_vercel_sandbox_runtime: "${{ secrets.VERCEL_SANDBOX_RUNTIME || 'node24' }}"
           TF_VAR_vercel_snapshot_expiration_ms: "${{ secrets.VERCEL_SNAPSHOT_EXPIRATION_MS || '0' }}"
@@ -307,43 +308,6 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Build Vercel base snapshot
-        id: vercel_base_snapshot
-        run: |
-          if [ "${SANDBOX_PROVIDER}" != "vercel" ]; then
-            echo "snapshot_id=${VERCEL_BASE_SNAPSHOT_ID:-}" >> "$GITHUB_OUTPUT"
-            echo "Skipping Vercel base snapshot build because SANDBOX_PROVIDER=${SANDBOX_PROVIDER}"
-            exit 0
-          fi
-
-          if [ -z "${VERCEL_TOKEN:-}" ] || [ -z "${VERCEL_PROJECT_ID:-}" ]; then
-            echo "VERCEL_TOKEN and VERCEL_PROJECT_ID are required when SANDBOX_PROVIDER=vercel"
-            exit 1
-          fi
-
-          npm run build:vercel-base-snapshot -w @open-inspect/control-plane
-
-          output_file="${RUNNER_TEMP}/vercel-base-snapshot-id"
-          node packages/control-plane/dist/vercel-base-snapshot.js --output "$output_file"
-          snapshot_id="$(tr -d '\r\n' < "$output_file")"
-
-          if [ -z "$snapshot_id" ]; then
-            echo "Vercel base snapshot builder did not write a snapshot ID"
-            exit 1
-          fi
-
-          echo "Built Vercel base snapshot: $snapshot_id"
-          echo "snapshot_id=$snapshot_id" >> "$GITHUB_OUTPUT"
-        env:
-          SANDBOX_PROVIDER: "${{ secrets.SANDBOX_PROVIDER || 'modal' }}"
-          VERCEL_BASE_SNAPSHOT_ID: ${{ secrets.VERCEL_BASE_SNAPSHOT_ID }}
-          VERCEL_TOKEN: ${{ secrets.VERCEL_SANDBOX_TOKEN }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_SANDBOX_PROJECT_ID }}
-          VERCEL_TEAM_ID: ${{ secrets.VERCEL_SANDBOX_TEAM_ID }}
-          VERCEL_RUNTIME: "${{ secrets.VERCEL_SANDBOX_RUNTIME || 'node24' }}"
-          VERCEL_RUNTIME_SOURCE_DIR: packages/sandbox-runtime
-          VERCEL_SANDBOX_API_BASE_URL: ${{ secrets.VERCEL_SANDBOX_API_BASE_URL }}
-
       - name: Terraform Init
         run: |
           terraform init \
@@ -403,7 +367,8 @@ jobs:
           TF_VAR_vercel_sandbox_token: ${{ secrets.VERCEL_SANDBOX_TOKEN }}
           TF_VAR_vercel_sandbox_project_id: ${{ secrets.VERCEL_SANDBOX_PROJECT_ID }}
           TF_VAR_vercel_sandbox_team_id: ${{ secrets.VERCEL_SANDBOX_TEAM_ID }}
-          TF_VAR_vercel_base_snapshot_id: ${{ steps.vercel_base_snapshot.outputs.snapshot_id || secrets.VERCEL_BASE_SNAPSHOT_ID }}
+          TF_VAR_vercel_sandbox_api_base_url: ${{ secrets.VERCEL_SANDBOX_API_BASE_URL }}
+          TF_VAR_vercel_base_snapshot_id: ${{ secrets.VERCEL_BASE_SNAPSHOT_ID }}
           TF_VAR_vercel_sandbox_runtime: "${{ secrets.VERCEL_SANDBOX_RUNTIME || 'node24' }}"
           TF_VAR_vercel_snapshot_expiration_ms: "${{ secrets.VERCEL_SNAPSHOT_EXPIRATION_MS || '0' }}"
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}

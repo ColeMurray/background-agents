@@ -3,8 +3,8 @@
  *
  * This creates a temporary Vercel Sandbox, applies the shared runtime
  * bootstrap, snapshots the resulting filesystem, and stops the temporary
- * session. The returned immutable snapshot ID can be passed to Terraform as
- * VERCEL_BASE_SNAPSHOT_ID for the control plane deployment.
+ * session. Terraform normally gives the temporary sandbox a deterministic
+ * name and the control plane resolves that name to the latest snapshot ID.
  */
 
 import { createLogger } from "../logger";
@@ -29,6 +29,7 @@ export interface BuildVercelBaseSnapshotConfig {
   runtimeArchive: Uint8Array;
   runtimeExtractDir?: string;
   sourceVersion?: string;
+  sandboxName?: string;
   namePrefix?: string;
   now?: number;
   correlation?: CorrelationContext;
@@ -46,11 +47,13 @@ export async function buildVercelBaseSnapshot(
 ): Promise<BuildVercelBaseSnapshotResult> {
   const runtimeExtractDir = config.runtimeExtractDir || VERCEL_LOCAL_RUNTIME_EXTRACT_DIR;
   const runtimeSourceRef = config.sourceVersion || "local-checkout";
-  const sandboxName = buildBaseSnapshotSandboxName({
-    prefix: config.namePrefix || DEFAULT_BASE_SNAPSHOT_NAME_PREFIX,
-    sourceVersion: config.sourceVersion,
-    now: config.now ?? Date.now(),
-  });
+  const sandboxName =
+    config.sandboxName ||
+    buildBaseSnapshotSandboxName({
+      prefix: config.namePrefix || DEFAULT_BASE_SNAPSHOT_NAME_PREFIX,
+      sourceVersion: config.sourceVersion,
+      now: config.now ?? Date.now(),
+    });
 
   const created = await client.createSandbox(
     {

@@ -78,7 +78,8 @@ daytona_base_snapshot = ""     # Name of the seeded Daytona snapshot
 vercel_sandbox_token      = ""
 vercel_sandbox_project_id = "" # e.g., "prj_xxxxxxxxxxxxxxxxxxxx"
 # vercel_sandbox_team_id  = "" # Optional team ID, e.g., "team_xxxxxxxxxxxxxxxxxxxx"
-# vercel_base_snapshot_id = "" # Required for local Vercel applies; GitHub Actions normally generates this
+# vercel_sandbox_api_base_url = "" # Optional API override for advanced testing
+# vercel_base_snapshot_id = "" # Optional manual override; skips Terraform-managed snapshot builds
 # vercel_sandbox_runtime  = "node24"
 # vercel_snapshot_expiration_ms = 0
 

@@ -610,6 +610,7 @@ export class SessionDO extends DurableObject<Env> {
           teamId: this.env.VERCEL_TEAM_ID,
           apiBaseUrl: this.env.VERCEL_SANDBOX_API_BASE_URL,
           baseSnapshotId: this.env.VERCEL_BASE_SNAPSHOT_ID,
+          baseSnapshotName: this.env.VERCEL_BASE_SNAPSHOT_NAME,
           runtime: this.env.VERCEL_RUNTIME,
           snapshotExpirationMs: parseInt(this.env.VERCEL_SNAPSHOT_EXPIRATION_MS || "0", 10),
           codeServerPasswordSecret: this.env.VERCEL_TOKEN,

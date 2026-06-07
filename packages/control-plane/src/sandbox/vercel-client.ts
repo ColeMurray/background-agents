@@ -75,9 +75,38 @@ export interface VercelWriteFileArchiveRequest {
   extractDir: string;
 }
 
+export interface VercelListSnapshotsRequest {
+  name?: string;
+  limit?: number;
+  cursor?: string;
+  sortOrder?: "asc" | "desc";
+}
+
 export interface VercelCommandResult {
   commandId: string;
   exitCode: number | null;
+}
+
+export interface VercelSnapshotMetadata {
+  id: string;
+  sourceSessionId: string;
+  status: "created" | "deleted" | "failed";
+  region: string;
+  sizeBytes: number;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt?: number;
+  lastUsedAt?: number;
+  creationMethod?: string;
+  parentId?: string;
+}
+
+export interface VercelListSnapshotsResponse {
+  pagination: {
+    count: number;
+    next: string | null;
+  };
+  snapshots: VercelSnapshotMetadata[];
 }
 
 export interface VercelSnapshotResponse {
@@ -217,6 +246,24 @@ export class VercelSandboxClient {
       { method: "POST", body },
       correlation,
       "snapshotSession"
+    );
+  }
+
+  async listSnapshots(
+    request: VercelListSnapshotsRequest = {},
+    correlation?: CorrelationContext
+  ): Promise<VercelListSnapshotsResponse> {
+    return this.request<VercelListSnapshotsResponse>(
+      buildQueryPath("/v2/sandboxes/snapshots", {
+        project: this.config.projectId,
+        name: request.name,
+        limit: request.limit,
+        cursor: request.cursor,
+        sortOrder: request.sortOrder,
+      }),
+      { method: "GET" },
+      correlation,
+      "listSnapshots"
     );
   }
 
@@ -463,4 +510,14 @@ async function readResponseText(response: Response): Promise<string> {
 
 export function createVercelSandboxClient(config: VercelSandboxClientConfig): VercelSandboxClient {
   return new VercelSandboxClient(config);
+}
+
+function buildQueryPath(path: string, query: Record<string, string | number | undefined>): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === "") continue;
+    params.set(key, String(value));
+  }
+  const queryString = params.toString();
+  return queryString ? `${path}?${queryString}` : path;
 }

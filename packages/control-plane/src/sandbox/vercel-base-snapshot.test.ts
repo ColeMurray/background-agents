@@ -61,12 +61,13 @@ describe("buildVercelBaseSnapshot", () => {
       runtime: "node24",
       runtimeArchive: new Uint8Array([1, 2, 3]),
       sourceVersion: "abcdef1234567890",
+      sandboxName: "openinspect-base-managed",
       now: 1780000000000,
     });
 
     expect(vi.mocked(client.createSandbox)).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: "openinspect-base-abcdef123456-1780000000000",
+        name: "openinspect-base-managed",
         runtime: "node24",
         timeoutMs: 30 * 60 * 1000,
         ports: [],
@@ -117,7 +118,7 @@ describe("buildVercelBaseSnapshot", () => {
     expect(vi.mocked(client.stopSession)).toHaveBeenCalledWith("session-1", undefined);
     expect(result).toEqual({
       snapshotId: "snap-base-1",
-      sandboxName: "openinspect-base-abcdef123456-1780000000000",
+      sandboxName: "openinspect-base-managed",
       sessionId: "session-1",
     });
   });

@@ -8,6 +8,7 @@ import { SandboxProviderError, type CreateSandboxConfig, type RestoreConfig } fr
 import type {
   VercelCreateSandboxRequest,
   VercelCreateSandboxResponse,
+  VercelListSnapshotsResponse,
   VercelRunCommandRequest,
   VercelSandboxClient,
   VercelSnapshotResponse,
@@ -49,6 +50,7 @@ function createMockClient(
       request: VercelRunCommandRequest
     ) => Promise<{ commandId: string; exitCode: number | null }>;
     snapshotSession: (sessionId: string) => Promise<VercelSnapshotResponse>;
+    listSnapshots: () => Promise<VercelListSnapshotsResponse>;
     stopSession: (sessionId: string) => Promise<void>;
     deleteSnapshot: (snapshotId: string) => Promise<void>;
   }> = {}
@@ -61,6 +63,22 @@ function createMockClient(
       async (): Promise<VercelSnapshotResponse> => ({
         snapshot: { id: "snapshot-1", status: "created", createdAt: 456 },
         session: createSessionResponse().session,
+      })
+    ),
+    listSnapshots: vi.fn(
+      async (): Promise<VercelListSnapshotsResponse> => ({
+        pagination: { count: 1, next: null },
+        snapshots: [
+          {
+            id: "base-snapshot-from-name",
+            sourceSessionId: "session-base",
+            status: "created",
+            region: "iad1",
+            sizeBytes: 1024,
+            createdAt: 456,
+            updatedAt: 789,
+          },
+        ],
       })
     ),
     deleteSnapshot: vi.fn(async () => {}),
@@ -193,6 +211,29 @@ describe("VercelSandboxProvider", () => {
     );
   });
 
+  it("resolves a configured base snapshot name before creating a fresh sandbox", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, {
+      ...providerConfig,
+      baseSnapshotId: undefined,
+      baseSnapshotName: "openinspect-base-local-runtime",
+    });
+
+    await provider.createSandbox(baseCreateConfig);
+
+    expect(vi.mocked(client.listSnapshots)).toHaveBeenCalledWith(
+      {
+        name: "openinspect-base-local-runtime",
+        limit: 20,
+        sortOrder: "desc",
+      },
+      undefined
+    );
+    expect(vi.mocked(client.createSandbox).mock.calls[0]?.[0].sourceSnapshotId).toBe(
+      "base-snapshot-from-name"
+    );
+  });
+
   it("uses a repo image snapshot and writes tunnel URLs for extra exposed ports", async () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, providerConfig);
@@ -240,7 +281,7 @@ describe("VercelSandboxProvider", () => {
     });
 
     await expect(provider.createSandbox(baseCreateConfig)).rejects.toMatchObject({
-      message: expect.stringContaining("VERCEL_BASE_SNAPSHOT_ID is required"),
+      message: expect.stringContaining("VERCEL_BASE_SNAPSHOT_ID or VERCEL_BASE_SNAPSHOT_NAME"),
     });
     expect(vi.mocked(client.createSandbox)).not.toHaveBeenCalled();
   });

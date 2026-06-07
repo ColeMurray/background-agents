@@ -41,6 +41,7 @@ const VERCEL_TUNNEL_ENV_WRITE_TIMEOUT_MS = 30_000;
 export interface VercelProviderConfig {
   scmProvider: SourceControlProviderName;
   baseSnapshotId?: string;
+  baseSnapshotName?: string;
   runtime?: string;
   snapshotExpirationMs?: number;
   codeServerPasswordSecret: string;
@@ -68,6 +69,7 @@ export interface TriggerVercelRepoImageBuildResult {
 
 export class VercelSandboxProvider implements SandboxProvider {
   readonly name = "vercel";
+  private baseSnapshotIdPromise?: Promise<string>;
 
   readonly capabilities: SandboxProviderCapabilities = {
     supportsSnapshots: true,
@@ -92,10 +94,11 @@ export class VercelSandboxProvider implements SandboxProvider {
         config.codeServerEnabled,
         config.sandboxSettings
       ).allExposedPorts;
-      const sourceSnapshotId = config.repoImageId || this.providerConfig.baseSnapshotId;
+      const sourceSnapshotId =
+        config.repoImageId || (await this.resolveBaseSnapshotId(config.correlation));
       if (!sourceSnapshotId) {
         throw new Error(
-          "VERCEL_BASE_SNAPSHOT_ID is required for fresh Vercel sandboxes when no repo image snapshot is available"
+          "VERCEL_BASE_SNAPSHOT_ID or VERCEL_BASE_SNAPSHOT_NAME is required for fresh Vercel sandboxes when no repo image snapshot is available"
         );
       }
 
@@ -231,8 +234,11 @@ export class VercelSandboxProvider implements SandboxProvider {
     }
 
     try {
-      if (!this.providerConfig.baseSnapshotId) {
-        throw new Error("VERCEL_BASE_SNAPSHOT_ID is required to build Vercel repo image snapshots");
+      const baseSnapshotId = await this.resolveBaseSnapshotId(config.correlation);
+      if (!baseSnapshotId) {
+        throw new Error(
+          "VERCEL_BASE_SNAPSHOT_ID or VERCEL_BASE_SNAPSHOT_NAME is required to build Vercel repo image snapshots"
+        );
       }
 
       const sandboxName = `build-${config.repoOwner}-${config.repoName}-${Date.now()}`;
@@ -249,7 +255,7 @@ export class VercelSandboxProvider implements SandboxProvider {
             openinspect_build_id: config.buildId,
             openinspect_repo: `${config.repoOwner}/${config.repoName}`,
           },
-          sourceSnapshotId: this.providerConfig.baseSnapshotId,
+          sourceSnapshotId: baseSnapshotId,
         },
         config.correlation
       );
@@ -472,6 +478,52 @@ export class VercelSandboxProvider implements SandboxProvider {
     if (result.exitCode !== 0) {
       throw new Error(`Failed to write Vercel tunnel env file (exit_code=${result.exitCode})`);
     }
+  }
+
+  private async resolveBaseSnapshotId(
+    correlation?: CreateSandboxConfig["correlation"]
+  ): Promise<string | undefined> {
+    if (this.providerConfig.baseSnapshotId) {
+      return this.providerConfig.baseSnapshotId;
+    }
+
+    const snapshotName = this.providerConfig.baseSnapshotName;
+    if (!snapshotName) {
+      return undefined;
+    }
+
+    this.baseSnapshotIdPromise ||= this.lookupBaseSnapshotIdByName(snapshotName, correlation);
+    try {
+      return await this.baseSnapshotIdPromise;
+    } catch (error) {
+      this.baseSnapshotIdPromise = undefined;
+      throw error;
+    }
+  }
+
+  private async lookupBaseSnapshotIdByName(
+    snapshotName: string,
+    correlation?: CreateSandboxConfig["correlation"]
+  ): Promise<string> {
+    const result = await this.client.listSnapshots(
+      {
+        name: snapshotName,
+        limit: 20,
+        sortOrder: "desc",
+      },
+      correlation
+    );
+    const snapshot = result.snapshots.find((candidate) => candidate.status === "created");
+    if (!snapshot) {
+      throw new Error(`No created Vercel base snapshot found for sandbox name ${snapshotName}`);
+    }
+
+    log.info("vercel.base_snapshot_resolved", {
+      snapshot_name: snapshotName,
+      snapshot_id: snapshot.id,
+      created_at: snapshot.createdAt,
+    });
+    return snapshot.id;
   }
 
   private async launchEntrypoint(

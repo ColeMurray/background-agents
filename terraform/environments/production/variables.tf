@@ -345,8 +345,14 @@ variable "vercel_sandbox_team_id" {
   default     = ""
 }
 
+variable "vercel_sandbox_api_base_url" {
+  description = "Optional Vercel Sandbox API base URL override"
+  type        = string
+  default     = ""
+}
+
 variable "vercel_base_snapshot_id" {
-  description = "Optional Vercel Sandbox snapshot ID containing the Open-Inspect base runtime"
+  description = "Optional manual Vercel Sandbox snapshot ID containing the Open-Inspect base runtime. When set, Terraform skips managed Vercel base snapshot builds."
   type        = string
   default     = ""
 }
