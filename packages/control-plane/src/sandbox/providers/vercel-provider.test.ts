@@ -8,9 +8,9 @@ import { SandboxProviderError, type CreateSandboxConfig, type RestoreConfig } fr
 import type {
   VercelCreateSandboxRequest,
   VercelCreateSandboxResponse,
-  VercelListSnapshotsResponse,
   VercelRunCommandRequest,
   VercelSandboxClient,
+  VercelSnapshotMetadata,
   VercelSnapshotResponse,
 } from "../vercel-client";
 
@@ -50,7 +50,7 @@ function createMockClient(
       request: VercelRunCommandRequest
     ) => Promise<{ commandId: string; exitCode: number | null }>;
     snapshotSession: (sessionId: string) => Promise<VercelSnapshotResponse>;
-    listSnapshots: () => Promise<VercelListSnapshotsResponse>;
+    listSnapshots: () => Promise<VercelSnapshotMetadata[]>;
     stopSession: (sessionId: string) => Promise<void>;
     deleteSnapshot: (snapshotId: string) => Promise<void>;
   }> = {}
@@ -66,20 +66,17 @@ function createMockClient(
       })
     ),
     listSnapshots: vi.fn(
-      async (): Promise<VercelListSnapshotsResponse> => ({
-        pagination: { count: 1, next: null },
-        snapshots: [
-          {
-            id: "base-snapshot-from-name",
-            sourceSessionId: "session-base",
-            status: "created",
-            region: "iad1",
-            sizeBytes: 1024,
-            createdAt: 456,
-            updatedAt: 789,
-          },
-        ],
-      })
+      async (): Promise<VercelSnapshotMetadata[]> => [
+        {
+          id: "base-snapshot-from-name",
+          sourceSessionId: "session-base",
+          status: "created",
+          region: "iad1",
+          sizeBytes: 1024,
+          createdAt: 456,
+          updatedAt: 789,
+        },
+      ]
     ),
     deleteSnapshot: vi.fn(async () => {}),
     stopSession: vi.fn(async () => {}),

@@ -269,7 +269,6 @@ describe("VercelSandboxClient", () => {
   it("lists snapshots by sandbox name", async () => {
     fetchSpy.mockResolvedValue(
       jsonResponse({
-        pagination: { count: 1, next: null },
         snapshots: [
           {
             id: "snapshot-1",
@@ -284,7 +283,7 @@ describe("VercelSandboxClient", () => {
       })
     );
 
-    const result = await createClient().listSnapshots({
+    const snapshots = await createClient().listSnapshots({
       name: "openinspect-base-abc123",
       limit: 20,
       sortOrder: "desc",
@@ -294,7 +293,7 @@ describe("VercelSandboxClient", () => {
       "https://vercel.test/api/v2/sandboxes/snapshots?project=project-123&name=openinspect-base-abc123&limit=20&sortOrder=desc&teamId=team-456",
       expect.objectContaining({ method: "GET" })
     );
-    expect(result.snapshots[0]?.id).toBe("snapshot-1");
+    expect(snapshots[0]?.id).toBe("snapshot-1");
   });
 
   it("stops a sandbox session with the expected endpoint", async () => {

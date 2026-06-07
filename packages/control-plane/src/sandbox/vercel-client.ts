@@ -78,7 +78,6 @@ export interface VercelWriteFileArchiveRequest {
 export interface VercelListSnapshotsRequest {
   name?: string;
   limit?: number;
-  cursor?: string;
   sortOrder?: "asc" | "desc";
 }
 
@@ -99,14 +98,6 @@ export interface VercelSnapshotMetadata {
   lastUsedAt?: number;
   creationMethod?: string;
   parentId?: string;
-}
-
-export interface VercelListSnapshotsResponse {
-  pagination: {
-    count: number;
-    next: string | null;
-  };
-  snapshots: VercelSnapshotMetadata[];
 }
 
 export interface VercelSnapshotResponse {
@@ -252,19 +243,19 @@ export class VercelSandboxClient {
   async listSnapshots(
     request: VercelListSnapshotsRequest = {},
     correlation?: CorrelationContext
-  ): Promise<VercelListSnapshotsResponse> {
-    return this.request<VercelListSnapshotsResponse>(
+  ): Promise<VercelSnapshotMetadata[]> {
+    const response = await this.request<{ snapshots: VercelSnapshotMetadata[] }>(
       buildQueryPath("/v2/sandboxes/snapshots", {
         project: this.config.projectId,
         name: request.name,
         limit: request.limit,
-        cursor: request.cursor,
         sortOrder: request.sortOrder,
       }),
       { method: "GET" },
       correlation,
       "listSnapshots"
     );
+    return response.snapshots;
   }
 
   async stopSession(sessionId: string, correlation?: CorrelationContext): Promise<void> {

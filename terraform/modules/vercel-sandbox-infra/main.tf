@@ -32,7 +32,6 @@ resource "null_resource" "vercel_base_snapshot" {
       VERCEL_SANDBOX_API_BASE_URL         = var.api_base_url
       VERCEL_BASE_SNAPSHOT_NAME           = local.snapshot_name
       VERCEL_BASE_SNAPSHOT_SOURCE_VERSION = var.source_hash
-      VERCEL_RUNTIME_SOURCE_DIR           = "packages/sandbox-runtime"
     }
   }
 }

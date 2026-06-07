@@ -505,7 +505,7 @@ export class VercelSandboxProvider implements SandboxProvider {
     snapshotName: string,
     correlation?: CreateSandboxConfig["correlation"]
   ): Promise<string> {
-    const result = await this.client.listSnapshots(
+    const snapshots = await this.client.listSnapshots(
       {
         name: snapshotName,
         limit: 20,
@@ -513,7 +513,7 @@ export class VercelSandboxProvider implements SandboxProvider {
       },
       correlation
     );
-    const snapshot = result.snapshots.find((candidate) => candidate.status === "created");
+    const snapshot = snapshots.find((candidate) => candidate.status === "created");
     if (!snapshot) {
       throw new Error(`No created Vercel base snapshot found for sandbox name ${snapshotName}`);
     }

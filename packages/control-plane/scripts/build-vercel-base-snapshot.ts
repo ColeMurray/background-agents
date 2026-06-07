@@ -50,7 +50,7 @@ async function main(): Promise<void> {
     runtimeArchive: runtimeArchive.archive,
     runtimeExtractDir: runtimeArchive.extractDir,
     sandboxName: env("VERCEL_BASE_SNAPSHOT_NAME") || undefined,
-    sourceVersion: env("GITHUB_SHA") || env("VERCEL_BASE_SNAPSHOT_SOURCE_VERSION") || undefined,
+    sourceVersion: env("VERCEL_BASE_SNAPSHOT_SOURCE_VERSION") || env("GITHUB_SHA") || undefined,
   });
 
   if (outputPath) {
