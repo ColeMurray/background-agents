@@ -338,7 +338,13 @@ describe("model utilities", () => {
 
       const opus47Config = getReasoningConfig("anthropic/claude-opus-4-7");
       expect(opus47Config).toEqual({
-        efforts: ["low", "medium", "high", "max"],
+        efforts: ["low", "medium", "high", "xhigh", "max"],
+        default: "high",
+      });
+
+      const opus48Config = getReasoningConfig("anthropic/claude-opus-4-8");
+      expect(opus48Config).toEqual({
+        efforts: ["low", "medium", "high", "xhigh", "max"],
         default: "high",
       });
     });
@@ -413,8 +419,16 @@ describe("model utilities", () => {
       expect(isValidReasoningEffort("anthropic/claude-opus-4-7", "low")).toBe(true);
       expect(isValidReasoningEffort("anthropic/claude-opus-4-7", "medium")).toBe(true);
       expect(isValidReasoningEffort("anthropic/claude-opus-4-7", "high")).toBe(true);
+      expect(isValidReasoningEffort("anthropic/claude-opus-4-7", "xhigh")).toBe(true);
       expect(isValidReasoningEffort("anthropic/claude-opus-4-7", "max")).toBe(true);
-      expect(isValidReasoningEffort("anthropic/claude-opus-4-7", "xhigh")).toBe(false);
+    });
+
+    it("supports adaptive effort levels for Opus 4.8", () => {
+      expect(isValidReasoningEffort("anthropic/claude-opus-4-8", "low")).toBe(true);
+      expect(isValidReasoningEffort("anthropic/claude-opus-4-8", "medium")).toBe(true);
+      expect(isValidReasoningEffort("anthropic/claude-opus-4-8", "high")).toBe(true);
+      expect(isValidReasoningEffort("anthropic/claude-opus-4-8", "xhigh")).toBe(true);
+      expect(isValidReasoningEffort("anthropic/claude-opus-4-8", "max")).toBe(true);
     });
 
     it("accepts bare Claude model names via normalization", () => {

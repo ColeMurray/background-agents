@@ -22,7 +22,7 @@ vi.mock("@open-inspect/shared", async () => {
   };
 });
 
-import app, { buildAppHomeIntroText } from "./index";
+import app from "./index";
 import { clearLocalCache } from "./classifier/repos";
 import { resetSlackSettingsCache } from "./integration-settings";
 
@@ -39,18 +39,6 @@ function slackSettingsResponse(allowPrivateChannels?: boolean): Response {
     { status: 200, headers: { "Content-Type": "application/json" } }
   );
 }
-
-describe("buildAppHomeIntroText", () => {
-  it("uses the configured app name", () => {
-    expect(buildAppHomeIntroText("Acme Bot")).toBe("Configure your Acme Bot preferences below.");
-  });
-
-  it("works with the default Open-Inspect name", () => {
-    expect(buildAppHomeIntroText("Open-Inspect")).toBe(
-      "Configure your Open-Inspect preferences below."
-    );
-  });
-});
 
 function createMockKV() {
   const store = new Map<string, string>();
@@ -324,6 +312,15 @@ function promptFetchBodies(fetchMock: { mock: { calls: readonly (readonly unknow
     .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
 }
 
+function sessionFetchBodies(fetchMock: { mock: { calls: readonly (readonly unknown[])[] } }) {
+  return fetchMock.mock.calls
+    .filter(([input]) => {
+      const url = typeof input === "string" ? input : String(input);
+      return url.endsWith("/sessions");
+    })
+    .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+}
+
 function slackEventRequest(event: Record<string, unknown>, eventId = crypto.randomUUID()): Request {
   return new Request("http://localhost/events", {
     method: "POST",
@@ -349,6 +346,52 @@ describe("POST /events", () => {
     resetSlackSettingsCache();
     mockVerifySlackSignature.mockResolvedValue(true);
     mockGetUserInfo.mockResolvedValue({ ok: true, user: undefined });
+  });
+
+  it("publishes App Home when the home tab is opened", async () => {
+    mockPublishView.mockResolvedValue({ ok: true });
+    const env = makeEnv();
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_home_opened",
+        tab: "home",
+        user: "U123",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+
+    await flushWaitUntil(ctx);
+
+    expect(mockPublishView).toHaveBeenCalledOnce();
+    const [token, userId, view] = mockPublishView.mock.calls[0];
+    expect(token).toBe("xoxb-test");
+    expect(userId).toBe("U123");
+    expect(view).toEqual(
+      expect.objectContaining({
+        type: "home",
+        blocks: expect.arrayContaining([
+          expect.objectContaining({
+            type: "section",
+            text: expect.objectContaining({
+              text: "Configure your Open-Inspect preferences below.",
+            }),
+          }),
+          expect.objectContaining({
+            type: "section",
+            text: expect.objectContaining({
+              text: expect.stringContaining("*Branch by repository*"),
+            }),
+          }),
+        ]),
+      })
+    );
   });
 
   it("sets Starting status for a new app mention before session creation", async () => {
@@ -392,6 +435,11 @@ describe("POST /events", () => {
 
     const postBodies = slackApiBodies(slackFetch, "chat.postMessage");
     expect(postBodies.some((body) => String(body.text).includes("Session started!"))).toBe(false);
+
+    const sessionBodies = sessionFetchBodies(
+      env.CONTROL_PLANE.fetch as unknown as { mock: { calls: readonly (readonly unknown[])[] } }
+    );
+    expect(sessionBodies[0]).not.toHaveProperty("title");
 
     const updateBodies = slackApiBodies(slackFetch, "chat.update");
     expect(updateBodies).toEqual(

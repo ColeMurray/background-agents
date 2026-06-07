@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { applyTitleUpdate, type SessionListResponse } from "./session-list";
+import {
+  applyTitleUpdate,
+  buildSessionsPageKey,
+  CURRENT_USER_CREATED_BY,
+  isArchivedSessionListKey,
+  isSessionListKey,
+  isUnarchivedSessionListKey,
+  type SessionListResponse,
+} from "./session-list";
 import type { Session } from "@open-inspect/shared";
 
 function session(id: string, overrides: Partial<Session> = {}): Session {
@@ -22,6 +30,62 @@ function session(id: string, overrides: Partial<Session> = {}): Session {
     ...overrides,
   };
 }
+
+describe("buildSessionsPageKey", () => {
+  it("adds the current-user creator filter", () => {
+    expect(
+      buildSessionsPageKey({ excludeStatus: "archived", createdBy: [CURRENT_USER_CREATED_BY] })
+    ).toBe("/api/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=me");
+  });
+
+  it("adds repeated creator filters", () => {
+    expect(
+      buildSessionsPageKey({
+        excludeStatus: "archived",
+        createdBy: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+      })
+    ).toBe(
+      "/api/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&createdBy=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    );
+  });
+});
+
+describe("isSessionListKey", () => {
+  it("matches all session list cache keys", () => {
+    expect(isSessionListKey("/api/sessions")).toBe(true);
+    expect(isSessionListKey("/api/sessions?limit=50&offset=0")).toBe(true);
+  });
+
+  it("ignores other cache keys", () => {
+    expect(isSessionListKey("/api/sessions/session-1")).toBe(false);
+    expect(isSessionListKey(["/api/sessions"])).toBe(false);
+  });
+});
+
+describe("isUnarchivedSessionListKey", () => {
+  it("matches active session list variants", () => {
+    expect(isUnarchivedSessionListKey("/api/sessions")).toBe(true);
+    expect(isUnarchivedSessionListKey("/api/sessions?excludeStatus=archived")).toBe(true);
+    expect(isUnarchivedSessionListKey("/api/sessions?status=active")).toBe(true);
+  });
+
+  it("ignores archived session lists", () => {
+    expect(isUnarchivedSessionListKey("/api/sessions?status=archived&limit=20")).toBe(false);
+  });
+});
+
+describe("isArchivedSessionListKey", () => {
+  it("matches archived session lists", () => {
+    expect(isArchivedSessionListKey("/api/sessions?status=archived")).toBe(true);
+    expect(isArchivedSessionListKey("/api/sessions?status=archived&limit=20")).toBe(true);
+  });
+
+  it("ignores unarchived session lists", () => {
+    expect(isArchivedSessionListKey("/api/sessions")).toBe(false);
+    expect(isArchivedSessionListKey("/api/sessions?excludeStatus=archived")).toBe(false);
+    expect(isArchivedSessionListKey("/api/sessions?status=active")).toBe(false);
+  });
+});
 
 describe("applyTitleUpdate", () => {
   it("replaces the title and updatedAt of the matching session", () => {

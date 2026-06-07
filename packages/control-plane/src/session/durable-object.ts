@@ -14,9 +14,11 @@ import { resolveAppName, timingSafeEqual } from "@open-inspect/shared";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { buildModalSandboxDashboardUrl, createModalClient } from "../sandbox/client";
 import { createDaytonaRestClient } from "../sandbox/daytona-rest-client";
+import { createVercelSandboxClient } from "../sandbox/vercel-client";
 import { createModalProvider } from "../sandbox/providers/modal-provider";
 import { createDaytonaProvider } from "../sandbox/providers/daytona-provider";
-import { resolveSandboxBackendName } from "../sandbox/provider-name";
+import { createVercelProvider } from "../sandbox/providers/vercel-provider";
+import { resolveSandboxBackendName, supportsRepoImageBackend } from "../sandbox/provider-name";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import {
@@ -177,7 +179,7 @@ export class SessionDO extends DurableObject<Env> {
     openaiTokenRefresh: () => this.sandboxHandler.openaiTokenRefresh(),
     scmCredentials: () => this.sandboxHandler.scmCredentials(),
     spawnContext: () => this.childSessionsHandler.getSpawnContext(),
-    childSummary: () => this.childSessionsHandler.getChildSummary(),
+    childSummary: (_request, url) => this.childSessionsHandler.getChildSummary(url),
     cancel: () => this.sessionLifecycleHandler.cancel(),
     childSessionUpdate: (request) => this.childSessionsHandler.childSessionUpdate(request),
   });
@@ -361,6 +363,7 @@ export class SessionDO extends DurableObject<Env> {
         getSession: () => this.getSession(),
         getSandbox: () => this.getSandbox(),
         getPublicSessionId: (session) => this.getPublicSessionId(session),
+        parseArtifactMetadata: (artifact) => this.parseArtifactMetadata(artifact),
         broadcast: (message) => this.broadcast(message),
       });
     }
@@ -549,57 +552,84 @@ export class SessionDO extends DurableObject<Env> {
   private createLifecycleManager(): SandboxLifecycleManager {
     const sandboxBackend = resolveSandboxBackendName(this.env.SANDBOX_PROVIDER);
 
-    const provider =
-      sandboxBackend === "daytona"
-        ? (() => {
-            if (
-              !this.env.DAYTONA_API_URL ||
-              !this.env.DAYTONA_API_KEY ||
-              !this.env.DAYTONA_BASE_SNAPSHOT
-            ) {
-              throw new Error(
-                "DAYTONA_API_URL, DAYTONA_API_KEY, and DAYTONA_BASE_SNAPSHOT are required when SANDBOX_PROVIDER=daytona"
-              );
-            }
+    const provider = (() => {
+      if (sandboxBackend === "daytona") {
+        if (
+          !this.env.DAYTONA_API_URL ||
+          !this.env.DAYTONA_API_KEY ||
+          !this.env.DAYTONA_BASE_SNAPSHOT
+        ) {
+          throw new Error(
+            "DAYTONA_API_URL, DAYTONA_API_KEY, and DAYTONA_BASE_SNAPSHOT are required when SANDBOX_PROVIDER=daytona"
+          );
+        }
 
-            const daytonaClient = createDaytonaRestClient({
-              apiUrl: this.env.DAYTONA_API_URL,
-              apiKey: this.env.DAYTONA_API_KEY,
-              target: this.env.DAYTONA_TARGET,
-              baseSnapshot: this.env.DAYTONA_BASE_SNAPSHOT,
-              autoStopIntervalMinutes: parseInt(
-                this.env.DAYTONA_AUTO_STOP_INTERVAL_MINUTES || "120",
-                10
-              ),
-              autoArchiveIntervalMinutes: parseInt(
-                this.env.DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES || "10080",
-                10
-              ),
-            });
+        const daytonaClient = createDaytonaRestClient({
+          apiUrl: this.env.DAYTONA_API_URL,
+          apiKey: this.env.DAYTONA_API_KEY,
+          target: this.env.DAYTONA_TARGET,
+          baseSnapshot: this.env.DAYTONA_BASE_SNAPSHOT,
+          autoStopIntervalMinutes: parseInt(
+            this.env.DAYTONA_AUTO_STOP_INTERVAL_MINUTES || "120",
+            10
+          ),
+          autoArchiveIntervalMinutes: parseInt(
+            this.env.DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES || "10080",
+            10
+          ),
+        });
 
-            const scmProvider = resolveScmProviderFromEnv(this.env.SCM_PROVIDER);
+        const scmProvider = resolveScmProviderFromEnv(this.env.SCM_PROVIDER);
 
-            return createDaytonaProvider(daytonaClient, {
-              scmProvider,
-              gitlabAccessToken: this.env.GITLAB_ACCESS_TOKEN,
-              // Reuses API key as HMAC secret for code-server password derivation
-              // (distinct message prefix prevents collision with auth use)
-              codeServerPasswordSecret: this.env.DAYTONA_API_KEY,
-            });
-          })()
-        : (() => {
-            if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {
-              throw new Error(
-                "MODAL_API_SECRET and MODAL_WORKSPACE are required when SANDBOX_PROVIDER=modal"
-              );
-            }
+        return createDaytonaProvider(daytonaClient, {
+          scmProvider,
+          gitlabAccessToken: this.env.GITLAB_ACCESS_TOKEN,
+          // Reuses API key as HMAC secret for code-server password derivation
+          // (distinct message prefix prevents collision with auth use)
+          codeServerPasswordSecret: this.env.DAYTONA_API_KEY,
+        });
+      }
 
-            const modalClient = createModalClient(
-              this.env.MODAL_API_SECRET,
-              this.env.MODAL_WORKSPACE
-            );
-            return createModalProvider(modalClient);
-          })();
+      if (sandboxBackend === "vercel") {
+        if (!this.env.VERCEL_TOKEN || !this.env.VERCEL_PROJECT_ID) {
+          throw new Error(
+            "VERCEL_TOKEN and VERCEL_PROJECT_ID are required when SANDBOX_PROVIDER=vercel"
+          );
+        }
+
+        const vercelClient = createVercelSandboxClient({
+          token: this.env.VERCEL_TOKEN,
+          projectId: this.env.VERCEL_PROJECT_ID,
+          teamId: this.env.VERCEL_TEAM_ID,
+          apiBaseUrl: this.env.VERCEL_SANDBOX_API_BASE_URL,
+        });
+
+        return createVercelProvider(vercelClient, {
+          scmProvider: resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
+          token: this.env.VERCEL_TOKEN,
+          teamId: this.env.VERCEL_TEAM_ID,
+          apiBaseUrl: this.env.VERCEL_SANDBOX_API_BASE_URL,
+          baseSnapshotId: this.env.VERCEL_BASE_SNAPSHOT_ID,
+          baseSnapshotName: this.env.VERCEL_BASE_SNAPSHOT_NAME,
+          runtime: this.env.VERCEL_RUNTIME,
+          snapshotExpirationMs: parseInt(this.env.VERCEL_SNAPSHOT_EXPIRATION_MS || "0", 10),
+          codeServerPasswordSecret: this.env.VERCEL_TOKEN,
+        });
+      }
+
+      if (!this.env.MODAL_API_SECRET || !this.env.MODAL_WORKSPACE) {
+        throw new Error(
+          "MODAL_API_SECRET and MODAL_WORKSPACE are required when SANDBOX_PROVIDER=modal"
+        );
+      }
+
+      const modalClient = createModalClient(
+        this.env.MODAL_API_SECRET,
+        this.env.MODAL_WORKSPACE,
+        this.env.MODAL_ENVIRONMENT_WEB_SUFFIX
+      );
+      return createModalProvider(modalClient);
+    })();
 
     // Storage adapter
     const storage: SandboxStorage = {
@@ -729,13 +759,14 @@ export class SessionDO extends DurableObject<Env> {
       sandboxDashboardUrlBuilder,
     };
 
-    // Create repo image lookup if D1 is available (Modal-only — Daytona doesn't use repo images)
+    // Create repo image lookup if D1 is available and the provider supports repo images.
     let repoImageLookup: RepoImageLookup | undefined;
-    if (this.env.DB && sandboxBackend === "modal") {
+    if (this.env.DB && supportsRepoImageBackend(sandboxBackend)) {
       const repoImageStore = new RepoImageStore(this.env.DB);
+      const repoImageProvider = sandboxBackend === "vercel" ? "vercel" : "modal";
       repoImageLookup = {
         getLatestReady: (repoOwner, repoName, baseBranch) =>
-          repoImageStore.getLatestReady(repoOwner, repoName, baseBranch),
+          repoImageStore.getLatestReady(repoOwner, repoName, repoImageProvider, baseBranch),
       };
     }
 
@@ -1369,7 +1400,11 @@ export class SessionDO extends DurableObject<Env> {
 
     const rawLimit = typeof data.limit === "number" ? data.limit : 200;
     const limit = Math.max(1, Math.min(rawLimit, 500));
-    const page = this.repository.getEventsHistoryPage(data.cursor.timestamp, data.cursor.id, limit);
+    const page = this.repository.getEventTimelinePage({
+      cursor: { kind: "timeline", createdAt: data.cursor.timestamp, id: data.cursor.id },
+      excludeTypes: ["heartbeat"],
+      limit,
+    });
 
     const items: SandboxEvent[] = [];
     for (const event of page.events) {
@@ -1380,14 +1415,13 @@ export class SessionDO extends DurableObject<Env> {
       }
     }
 
-    // Compute new cursor from oldest item in the page
-    const oldestEvent = page.events.length > 0 ? page.events[0] : null;
-
     this.safeSend(ws, {
       type: "history_page",
       items,
       hasMore: page.hasMore,
-      cursor: oldestEvent ? { timestamp: oldestEvent.created_at, id: oldestEvent.id } : null,
+      cursor: page.nextCursor
+        ? { timestamp: page.nextCursor.createdAt, id: page.nextCursor.id }
+        : null,
     } as ServerMessage);
   }
 
@@ -1723,6 +1757,7 @@ export class SessionDO extends DurableObject<Env> {
     if (resolveSandboxBackendName(this.env.SANDBOX_PROVIDER) !== "modal") return null;
     return buildModalSandboxDashboardUrl({
       workspace: this.env.MODAL_WORKSPACE,
+      environment: this.env.MODAL_ENVIRONMENT,
       providerObjectId,
     });
   }

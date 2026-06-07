@@ -1,7 +1,7 @@
 """Tests for entrypoint boot modes and git sync."""
 
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -186,6 +186,72 @@ class TestImageBuildMode:
         ]
         assert len(sync_calls) == 1
         assert sync_calls[0].kwargs["head_sha"] == "abc123def456"
+
+    @pytest.mark.asyncio
+    async def test_reports_success_callback_from_build_mode(self, build_env, tmp_path):
+        """Build mode should report completion itself when callback metadata is configured."""
+        supervisor = _make_supervisor(build_env)
+        supervisor.repo_path = tmp_path
+
+        supervisor.perform_git_sync = AsyncMock(return_value=True)
+        supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.shutdown = AsyncMock()
+        supervisor.shutdown_event.set()
+
+        callback = MagicMock()
+        callback.report_success = AsyncMock(return_value=True)
+        callback.report_failure = AsyncMock(return_value=True)
+
+        async def fake_subprocess(*args, **kwargs):
+            mock_proc = MagicMock()
+            mock_proc.communicate = AsyncMock(return_value=(b"abc123def456\n", b""))
+            mock_proc.returncode = 0
+            return mock_proc
+
+        with (
+            patch.dict(os.environ, build_env, clear=False),
+            patch(
+                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                side_effect=fake_subprocess,
+            ),
+            patch(
+                "sandbox_runtime.entrypoint.RepoImageBuildCallback.from_env",
+                return_value=callback,
+            ),
+        ):
+            await supervisor.run()
+
+        callback.report_success.assert_awaited_once_with(
+            base_sha="abc123def456",
+            build_duration_seconds=ANY,
+        )
+        callback.report_failure.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reports_failure_callback_from_build_mode(self, build_env):
+        """Build mode should report failures itself when callback metadata is configured."""
+        supervisor = _make_supervisor(build_env)
+
+        supervisor.perform_git_sync = AsyncMock(return_value=True)
+        supervisor.run_setup_script = AsyncMock(return_value=False)
+        supervisor.shutdown = AsyncMock()
+        supervisor._report_fatal_error = AsyncMock()
+
+        callback = MagicMock()
+        callback.report_success = AsyncMock(return_value=True)
+        callback.report_failure = AsyncMock(return_value=True)
+
+        with (
+            patch.dict(os.environ, build_env, clear=False),
+            patch(
+                "sandbox_runtime.entrypoint.RepoImageBuildCallback.from_env",
+                return_value=callback,
+            ),
+        ):
+            await supervisor.run()
+
+        callback.report_success.assert_not_called()
+        callback.report_failure.assert_awaited_once_with("setup hook failed in build mode")
 
 
 class TestFromRepoImage:

@@ -2,6 +2,8 @@ import { SELF, env, runInDurableObject } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
 import { hashToken } from "../../src/auth/crypto";
 
+const DEFAULT_WAIT_FOR_SANDBOX_STATUS_TIMEOUT_MS = 3000;
+
 /**
  * Create a fresh DO, call /internal/init, return the stub and id.
  */
@@ -46,6 +48,25 @@ export async function queryDO<T>(
   return runInDurableObject(stub, (instance: SessionDO) => {
     return instance.ctx.storage.sql.exec(sql, ...params).toArray() as T[];
   });
+}
+
+export async function waitForSandboxStatus(
+  stub: DurableObjectStub,
+  status: string,
+  timeoutMs = DEFAULT_WAIT_FOR_SANDBOX_STATUS_TIMEOUT_MS
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastStatus: string | undefined;
+  while (Date.now() < deadline) {
+    const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox");
+    lastStatus = rows[0]?.status;
+    if (lastStatus === status) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  throw new Error(
+    `Timed out after ${timeoutMs}ms waiting for sandbox status "${status}"; last status was "${lastStatus ?? "missing"}"`
+  );
 }
 
 /**

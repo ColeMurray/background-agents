@@ -62,13 +62,35 @@ variable "modal_token_secret" {
 }
 
 variable "modal_workspace" {
-  description = "Modal workspace name (used in endpoint URLs)"
+  description = "Modal workspace name"
   type        = string
   default     = ""
 
   validation {
     condition     = var.sandbox_provider != "modal" || length(var.modal_workspace) > 0
     error_message = "modal_workspace must be set when sandbox_provider = 'modal'."
+  }
+}
+
+variable "modal_environment" {
+  description = "Modal environment name used by the Modal CLI"
+  type        = string
+  default     = "main"
+
+  validation {
+    condition     = var.sandbox_provider != "modal" || (length(trimspace(var.modal_environment)) > 0 && can(regex("^[^:/\\\\]+$", var.modal_environment)))
+    error_message = "modal_environment must be set and must not contain colons, slashes, or backslashes when sandbox_provider = 'modal'."
+  }
+}
+
+variable "modal_environment_web_suffix" {
+  description = "Modal environment web suffix used in endpoint URLs. Use lowercase letters, digits, and dashes, or leave empty for the environment with no web suffix."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "modal" || can(regex("^$|^[a-z0-9-]+$", var.modal_environment_web_suffix))
+    error_message = "modal_environment_web_suffix must be empty or contain only lowercase letters, digits, and dashes when sandbox_provider = 'modal'."
   }
 }
 
@@ -294,6 +316,59 @@ variable "daytona_target" {
   default     = ""
 }
 
+variable "vercel_sandbox_token" {
+  description = "Vercel API token for the Vercel Sandbox API"
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "vercel" || length(var.vercel_sandbox_token) > 0
+    error_message = "vercel_sandbox_token must be set when sandbox_provider = 'vercel'."
+  }
+}
+
+variable "vercel_sandbox_project_id" {
+  description = "Vercel project ID used to scope Sandbox API calls"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "vercel" || length(var.vercel_sandbox_project_id) > 0
+    error_message = "vercel_sandbox_project_id must be set when sandbox_provider = 'vercel'."
+  }
+}
+
+variable "vercel_sandbox_team_id" {
+  description = "Optional Vercel team ID used to scope Sandbox API calls"
+  type        = string
+  default     = ""
+}
+
+variable "vercel_sandbox_api_base_url" {
+  description = "Optional Vercel Sandbox API base URL override"
+  type        = string
+  default     = ""
+}
+
+variable "vercel_base_snapshot_id" {
+  description = "Optional manual Vercel Sandbox snapshot ID containing the Open-Inspect base runtime. When set, Terraform skips managed Vercel base snapshot builds."
+  type        = string
+  default     = ""
+}
+
+variable "vercel_sandbox_runtime" {
+  description = "Vercel Sandbox runtime identifier"
+  type        = string
+  default     = "node24"
+}
+
+variable "vercel_snapshot_expiration_ms" {
+  description = "Vercel Sandbox snapshot expiration in milliseconds; 0 means no expiration"
+  type        = number
+  default     = 0
+}
+
 variable "nextauth_secret" {
   description = "NextAuth.js secret (generate with: openssl rand -base64 32)"
   type        = string
@@ -305,13 +380,13 @@ variable "nextauth_secret" {
 # =============================================================================
 
 variable "sandbox_provider" {
-  description = "Sandbox backend for session execution: 'modal' or 'daytona'"
+  description = "Sandbox backend for session execution: 'modal', 'daytona', or 'vercel'"
   type        = string
   default     = "modal"
 
   validation {
-    condition     = contains(["modal", "daytona"], var.sandbox_provider)
-    error_message = "sandbox_provider must be 'modal' or 'daytona'."
+    condition     = contains(["modal", "daytona", "vercel"], var.sandbox_provider)
+    error_message = "sandbox_provider must be 'modal', 'daytona', or 'vercel'."
   }
 }
 
@@ -344,7 +419,7 @@ variable "app_short_name" {
 }
 
 variable "app_icon_url" {
-  description = "Optional URL (absolute or root-relative) to a custom logo image for the command menu and browser favicon. Leave empty to use the built-in icon."
+  description = "Optional URL (absolute or root-relative) to a custom logo image for the command menu and browser favicon. Leave empty to use the built-in favicon and default in-app icon."
   type        = string
   default     = ""
 }

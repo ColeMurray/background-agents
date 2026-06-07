@@ -1,5 +1,20 @@
-import { describe, expect, it } from "vitest";
-import { buildModalSandboxDashboardUrl } from "./client";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  buildModalSandboxDashboardUrl,
+  buildModalWorkspaceSlug,
+  createModalClient,
+} from "./client";
+
+describe("buildModalWorkspaceSlug", () => {
+  it("uses the raw workspace when the Modal environment has no web suffix", () => {
+    expect(buildModalWorkspaceSlug("acme")).toBe("acme");
+    expect(buildModalWorkspaceSlug("acme", "")).toBe("acme");
+  });
+
+  it("appends the Modal environment web suffix for endpoint URLs", () => {
+    expect(buildModalWorkspaceSlug("acme", "prod-web")).toBe("acme-prod-web");
+  });
+});
 
 describe("buildModalSandboxDashboardUrl", () => {
   it("builds a Modal dashboard URL for a sandbox object", () => {
@@ -50,5 +65,27 @@ describe("buildModalSandboxDashboardUrl", () => {
         providerObjectId: null,
       })
     ).toBeNull();
+  });
+});
+
+describe("ModalClient", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("uses the Modal environment web suffix in endpoint URLs", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ success: true, data: { status: "ok", service: "modal" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await client.health();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://acme-prod-web--open-inspect-api-health.modal.run"
+    );
   });
 });

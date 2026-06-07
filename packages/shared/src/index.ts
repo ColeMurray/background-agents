@@ -12,4 +12,5 @@ export * from "./completion/extractor";
 export * from "./logger";
 export * from "./cache-store";
 export * from "./app-name";
+export * from "./user-id";
 export * from "./slack";

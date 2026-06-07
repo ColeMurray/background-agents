@@ -30,6 +30,7 @@ from .constants import (
     TUNNEL_ENV_FILE_PATH,
 )
 from .log_config import configure_logging, get_logger
+from .repo_image_callback import RepoImageBuildCallback
 
 configure_logging()
 
@@ -1406,6 +1407,9 @@ class SandboxSupervisor:
         elif from_repo_image:
             repo_image_sha = os.environ.get("REPO_IMAGE_SHA", "unknown")
             self.log.info("supervisor.from_repo_image", build_sha=repo_image_sha)
+        repo_image_callback = (
+            RepoImageBuildCallback.from_env(self.log) if image_build_mode else None
+        )
 
         # Clear stale tunnel file on every restore: a snapshot taken with
         # tunnels configured retains the previous session's URLs even if this
@@ -1420,6 +1424,7 @@ class SandboxSupervisor:
             loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self._handle_signal(s)))
 
         git_sync_success = False
+        head_sha = ""
         opencode_ready = False
         try:
             # Phase 0: Make sure the git credential helper is configured
@@ -1469,6 +1474,13 @@ class SandboxSupervisor:
             if image_build_mode:
                 duration_ms = int((time.time() - startup_start) * 1000)
                 self.log.info("image_build.complete", duration_ms=duration_ms)
+                if repo_image_callback:
+                    reported = await repo_image_callback.report_success(
+                        base_sha=head_sha,
+                        build_duration_seconds=time.time() - startup_start,
+                    )
+                    if not reported:
+                        raise RuntimeError("repo image build-complete callback failed")
                 await self.shutdown_event.wait()
                 return
 
@@ -1521,6 +1533,8 @@ class SandboxSupervisor:
 
         except Exception as e:
             self.log.error("supervisor.error", exc=e)
+            if image_build_mode and repo_image_callback:
+                await repo_image_callback.report_failure(str(e))
             await self._report_fatal_error(str(e))
 
         finally:

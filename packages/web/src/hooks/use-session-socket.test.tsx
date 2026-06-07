@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ServerMessage, SessionArtifact, SessionState } from "@open-inspect/shared";
 import type * as SwrModule from "swr";
+import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import { useSessionSocket } from "./use-session-socket";
 
 const { mutateMock } = vi.hoisted(() => ({
@@ -250,9 +251,7 @@ describe("useSessionSocket", () => {
       expect(result.current.sessionState?.title).toBe("Generated title");
     });
 
-    expect(mutateMock).toHaveBeenCalledWith(
-      "/api/sessions?limit=50&offset=0&excludeStatus=archived"
-    );
+    expect(mutateMock).toHaveBeenCalledWith(isUnarchivedSessionListKey);
   });
 
   it("hydrates video metadata from subscribed artifacts", async () => {

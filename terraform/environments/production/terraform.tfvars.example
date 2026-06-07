@@ -51,10 +51,16 @@ cloudflare_worker_subdomain = ""
 modal_token_id = ""
 modal_token_secret = ""
 
-# Modal workspace name (used in endpoint URLs)
+# Modal workspace, environment, and endpoint web suffix
 # Only required when sandbox_provider = "modal"
-# This is your Modal username/workspace (e.g., "myworkspace" in "https://myworkspace--app.modal.run")
-modal_workspace = ""
+# workspace: your Modal username (e.g., "myworkspace")
+# environment: Modal environment name used by the CLI
+# environment_web_suffix: Modal web suffix used in endpoint URLs:
+#   empty suffix:      https://myworkspace--app.modal.run
+#   "production":      https://myworkspace-production--app.modal.run
+modal_workspace               = ""
+modal_environment             = "main"
+modal_environment_web_suffix  = ""
 
 # Daytona REST API
 # Only required when sandbox_provider = "daytona"
@@ -65,6 +71,17 @@ daytona_api_url = ""           # e.g., "https://app.daytona.io/api"
 daytona_api_key = ""           # Requires Sandboxes (Read/Write) + Snapshots (Read/Write/Delete)
 daytona_base_snapshot = ""     # Name of the seeded Daytona snapshot
 # daytona_target = ""          # Optional Daytona target name
+
+# Vercel Sandbox API
+# Only required when sandbox_provider = "vercel"
+# Create a Vercel access token and use a project ID with Sandbox access.
+vercel_sandbox_token      = ""
+vercel_sandbox_project_id = "" # e.g., "prj_xxxxxxxxxxxxxxxxxxxx"
+# vercel_sandbox_team_id  = "" # Optional team ID, e.g., "team_xxxxxxxxxxxxxxxxxxxx"
+# vercel_sandbox_api_base_url = "" # Optional API override for advanced testing
+# vercel_base_snapshot_id = "" # Optional manual override; skips Terraform-managed snapshot builds
+# vercel_sandbox_runtime  = "node24"
+# vercel_snapshot_expiration_ms = 0
 
 # =============================================================================
 # GitHub App Credentials
@@ -183,6 +200,7 @@ nextauth_secret = ""
 # Sandbox backend for session execution
 # - "modal": existing Modal-based sandboxes with filesystem snapshot restore
 # - "daytona": direct Daytona REST API integration with stop/start resume
+# - "vercel": Vercel Sandbox API with filesystem snapshot restore
 sandbox_provider = "modal"
 
 # Platform for the web app deployment
@@ -210,8 +228,9 @@ project_root = "../../../"
 # app_short_name = "Inspect"
 
 # Optional URL (absolute or root-relative path) to a custom logo image for the
-# command menu and browser favicon. Leave empty to use the built-in icon.
-# Example: "/branding/logo.svg" (file under packages/web/public/) or
+# command menu and browser favicon. Leave empty to use the built-in favicon
+# and default in-app icon.
+# Example: "/branding/acme-logo.svg" (file under packages/web/public/) or
 #          "https://cdn.example.com/logo.svg".
 # app_icon_url = ""
 

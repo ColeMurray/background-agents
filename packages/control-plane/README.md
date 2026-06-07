@@ -185,7 +185,7 @@ Each session gets its own SQLite database with:
 - `messages`: Prompt queue and history
 - `events`: Agent events (tool calls, tokens)
 - `artifacts`: PRs, screenshots, previews
-- `sandbox`: Modal sandbox state
+- `sandbox`: selected backend sandbox state
 - `ws_client_mapping`: WebSocket ID to participant mapping (for hibernation recovery)
 
 See `src/session/schema.ts` for full schema.

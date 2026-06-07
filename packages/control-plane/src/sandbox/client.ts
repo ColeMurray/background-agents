@@ -16,16 +16,25 @@ const log = createLogger("modal-client");
 const MODAL_APP_NAME = "open-inspect";
 
 // Modal's default environment name; unrelated to the git branch named "main".
-const DEFAULT_MODAL_DASHBOARD_ENVIRONMENT = "main";
+const DEFAULT_MODAL_ENVIRONMENT = "main";
 
 /**
- * Construct the Modal base URL from workspace name.
- * Modal endpoint URLs follow the pattern: https://{workspace}--{app-name}
+ * Build the Modal endpoint workspace slug from the raw workspace and environment web suffix.
  */
-function getModalBaseUrl(workspace: string): string {
-  return `https://${workspace}--${MODAL_APP_NAME}`;
+export function buildModalWorkspaceSlug(workspace: string, environmentWebSuffix = ""): string {
+  return environmentWebSuffix === "" ? workspace : `${workspace}-${environmentWebSuffix}`;
 }
 
+/**
+ * Construct the Modal base URL from workspace and environment web suffix.
+ */
+function getModalBaseUrl(workspace: string, environmentWebSuffix?: string): string {
+  return `https://${buildModalWorkspaceSlug(workspace, environmentWebSuffix)}--${MODAL_APP_NAME}`;
+}
+
+/**
+ * Build a Modal dashboard link for a sandbox object.
+ */
 export function buildModalSandboxDashboardUrl(params: {
   workspace: string | undefined;
   environment?: string | undefined;
@@ -33,7 +42,7 @@ export function buildModalSandboxDashboardUrl(params: {
 }): string | null {
   if (!params.workspace || !params.providerObjectId) return null;
   const workspace = encodeURIComponent(params.workspace);
-  const environment = encodeURIComponent(params.environment || DEFAULT_MODAL_DASHBOARD_ENVIRONMENT);
+  const environment = encodeURIComponent(params.environment || DEFAULT_MODAL_ENVIRONMENT);
   const providerObjectId = encodeURIComponent(params.providerObjectId);
   return `https://modal.com/apps/${workspace}/${environment}/deployed/${MODAL_APP_NAME}?activeTab=sandboxes&sandboxId=${providerObjectId}`;
 }
@@ -182,7 +191,7 @@ export class ModalClient {
   private deleteProviderImageUrl: string;
   private secret: string;
 
-  constructor(secret: string, workspace: string) {
+  constructor(secret: string, workspace: string, environmentWebSuffix?: string) {
     if (!secret) {
       throw new Error("ModalClient requires MODAL_API_SECRET for authentication");
     }
@@ -190,7 +199,7 @@ export class ModalClient {
       throw new Error("ModalClient requires MODAL_WORKSPACE for URL construction");
     }
     this.secret = secret;
-    const baseUrl = getModalBaseUrl(workspace);
+    const baseUrl = getModalBaseUrl(workspace, environmentWebSuffix);
     this.createSandboxUrl = `${baseUrl}-api-create-sandbox.modal.run`;
     this.warmSandboxUrl = `${baseUrl}-api-warm-sandbox.modal.run`;
     this.healthUrl = `${baseUrl}-api-health.modal.run`;
@@ -657,16 +666,21 @@ export class ModalClient {
  * The caller is responsible for managing the client lifecycle.
  *
  * @param secret - The MODAL_API_SECRET for authentication
- * @param workspace - The Modal workspace name (used in endpoint URLs)
+ * @param workspace - The Modal workspace name
+ * @param environmentWebSuffix - The Modal environment web suffix used in endpoint URLs
  * @returns A new ModalClient instance
  * @throws Error if secret or workspace is not provided
  */
-export function createModalClient(secret: string, workspace: string): ModalClient {
+export function createModalClient(
+  secret: string,
+  workspace: string,
+  environmentWebSuffix?: string
+): ModalClient {
   if (!secret) {
     throw new Error("MODAL_API_SECRET is required to create ModalClient");
   }
   if (!workspace) {
     throw new Error("MODAL_WORKSPACE is required to create ModalClient");
   }
-  return new ModalClient(secret, workspace);
+  return new ModalClient(secret, workspace, environmentWebSuffix);
 }

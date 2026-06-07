@@ -8,6 +8,8 @@ import {
   buildControlPlanePath,
   SESSION_CONTROL_PLANE_QUERY_PARAMS,
 } from "@/lib/control-plane-query";
+import { resolveCurrentUserId } from "@/lib/current-user";
+import { CURRENT_USER_CREATED_BY } from "@/lib/session-list";
 
 export async function GET(request: NextRequest) {
   const routeStart = Date.now();
@@ -19,13 +21,31 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const path = buildControlPlanePath(
-    "/sessions",
-    request.nextUrl.searchParams,
-    SESSION_CONTROL_PLANE_QUERY_PARAMS
-  );
-
   try {
+    const searchParams = new URLSearchParams(request.nextUrl.searchParams);
+
+    const createdByValues = searchParams.getAll("createdBy");
+    if (createdByValues.includes(CURRENT_USER_CREATED_BY)) {
+      const resolved = await resolveCurrentUserId(session.user);
+      if (!resolved.ok) {
+        return NextResponse.json(resolved.body, { status: resolved.status });
+      }
+
+      searchParams.delete("createdBy");
+      for (const value of createdByValues) {
+        searchParams.append(
+          "createdBy",
+          value === CURRENT_USER_CREATED_BY ? resolved.userId : value
+        );
+      }
+    }
+
+    const path = buildControlPlanePath(
+      "/sessions",
+      searchParams,
+      SESSION_CONTROL_PLANE_QUERY_PARAMS
+    );
+
     const fetchStart = Date.now();
     const response = await controlPlaneFetch(path);
     const fetchMs = Date.now() - fetchStart;

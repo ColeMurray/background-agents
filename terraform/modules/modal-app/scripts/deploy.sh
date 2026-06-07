@@ -3,15 +3,12 @@
 # Required environment variables:
 #   MODAL_TOKEN_ID - Modal API token ID
 #   MODAL_TOKEN_SECRET - Modal API token secret
+#   MODAL_ENVIRONMENT - Modal environment to deploy into
 #   APP_NAME - Name of the app (for logging)
 #   DEPLOY_PATH - Path to the Modal app source
 #   DEPLOY_MODULE - Module to deploy (e.g., 'deploy' or 'src')
 
 set -euo pipefail
-
-echo "Deploying Modal app: ${APP_NAME}"
-echo "Deploy path: ${DEPLOY_PATH}"
-echo "Deploy module: ${DEPLOY_MODULE}"
 
 # Verify required environment variables
 if [[ -z "${MODAL_TOKEN_ID:-}" ]]; then
@@ -23,6 +20,31 @@ if [[ -z "${MODAL_TOKEN_SECRET:-}" ]]; then
     echo "Error: MODAL_TOKEN_SECRET environment variable is not set"
     exit 1
 fi
+
+if [[ -z "${MODAL_ENVIRONMENT:-}" ]]; then
+    echo "Error: MODAL_ENVIRONMENT environment variable is not set"
+    exit 1
+fi
+
+if [[ -z "${APP_NAME:-}" ]]; then
+    echo "Error: APP_NAME environment variable is not set"
+    exit 1
+fi
+
+if [[ -z "${DEPLOY_PATH:-}" ]]; then
+    echo "Error: DEPLOY_PATH environment variable is not set"
+    exit 1
+fi
+
+if [[ -z "${DEPLOY_MODULE:-}" ]]; then
+    echo "Error: DEPLOY_MODULE environment variable is not set"
+    exit 1
+fi
+
+echo "Deploying Modal app: ${APP_NAME}"
+echo "Modal environment: ${MODAL_ENVIRONMENT}"
+echo "Deploy path: ${DEPLOY_PATH}"
+echo "Deploy module: ${DEPLOY_MODULE}"
 
 # Change to the deployment directory
 cd "${DEPLOY_PATH}" || {

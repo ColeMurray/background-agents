@@ -619,6 +619,20 @@ export interface SpawnContext {
 }
 
 /** Returned by child DO's GET /internal/child-summary */
+export interface ChildSessionFinalResponse extends AgentResponse {
+  messageId: string;
+  completedAt: number | null;
+  eventCount: number;
+  eventLimitReached: boolean;
+}
+
+export interface ChildSessionTrajectory {
+  events: EventResponse[];
+  hasMore: boolean;
+  cursor?: string;
+  limit: number;
+}
+
 export interface ChildSessionDetail {
   session: {
     id: string;
@@ -634,6 +648,8 @@ export interface ChildSessionDetail {
   sandbox: { status: SandboxStatus } | null;
   artifacts: Array<{ type: string; url: string; metadata: unknown }>;
   recentEvents: Array<{ type: string; data: unknown; createdAt: number }>;
+  finalResponse?: ChildSessionFinalResponse | null;
+  trajectory?: ChildSessionTrajectory;
 }
 
 // ─── Analytics ───────────────────────────────────────────────────────────────

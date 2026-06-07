@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:test";
-import { initNamedSession, openClientWs, collectMessages, seedEvents, queryDO } from "./helpers";
+import {
+  initNamedSession,
+  openClientWs,
+  collectMessages,
+  seedEvents,
+  queryDO,
+  waitForSandboxStatus,
+} from "./helpers";
 
 describe("Client WebSocket (via SELF.fetch)", () => {
   it("upgrade returns 101 with webSocket", async () => {
@@ -62,6 +69,9 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     for (const [index, testCase] of cases.entries()) {
       const name = `ws-client-dashboard-url-${testCase.status}-${testCase.providerObjectId ? "with-id" : "without-id"}-${Date.now()}-${index}`;
       const { stub } = await initNamedSession(name);
+      // Wait for init's fire-and-forget warmSandbox to fail (no Modal in test env)
+      // before forcing each status, otherwise it can race and overwrite the row.
+      await waitForSandboxStatus(stub, "failed");
       await queryDO(
         stub,
         `UPDATE sandbox

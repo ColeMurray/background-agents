@@ -9,12 +9,14 @@ how to configure your deployment to use them.
 
 ## Supported Models
 
-| Model         | Description                    |
-| ------------- | ------------------------------ |
-| GPT 5.2       | Fast baseline model (400K ctx) |
-| GPT 5.4       | Latest flagship model          |
-| GPT 5.2 Codex | Optimized for code tasks       |
-| GPT 5.3 Codex | Latest codex variant           |
+| Model               | Description                    |
+| ------------------- | ------------------------------ |
+| GPT 5.2             | Fast baseline model (400K ctx) |
+| GPT 5.4             | Flagship model                 |
+| GPT 5.5             | Latest flagship model          |
+| GPT 5.2 Codex       | Optimized for code tasks       |
+| GPT 5.3 Codex       | Latest codex variant           |
+| GPT 5.3 Codex Spark | Lightweight Codex variant      |
 
 OpenAI models support reasoning effort levels: none, low, medium, high, and extra high (default:
 high for Codex models).
