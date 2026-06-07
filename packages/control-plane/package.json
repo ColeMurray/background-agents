@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "bash scripts/dev-with-tunnel.sh",
+    "dev:local": "npm run dev:setup && wrangler dev --config wrangler.dev.jsonc",
+    "dev:setup": "wrangler d1 migrations apply open-inspect-local --local --config wrangler.dev.jsonc",
     "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/index.js --platform=browser --target=es2022 --external:cloudflare:* --external:node:*",
     "build:vercel-base-snapshot": "esbuild scripts/build-vercel-base-snapshot.ts --bundle --format=esm --platform=node --target=node22 --outfile=dist/vercel-base-snapshot.js",
     "test": "vitest run",
@@ -15,6 +18,7 @@
   },
   "dependencies": {
     "@cloudflare/workers-types": "^4.20241230.0",
+    "@islo-labs/sdk": "^0.0.20",
     "@open-inspect/shared": "file:../shared",
     "zod": "^4.1.13"
   },

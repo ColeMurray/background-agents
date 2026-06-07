@@ -38,6 +38,12 @@ export {
   type OpenComputerProviderConfig,
 } from "./providers/opencomputer-provider";
 export {
+  IsloSandboxProvider,
+  createIsloProvider,
+  type IsloClientLike,
+  type IsloProviderConfig,
+} from "./providers/islo-provider";
+export {
   VercelSandboxProvider,
   createVercelProvider,
   type VercelProviderConfig,

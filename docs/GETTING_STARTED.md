@@ -19,7 +19,7 @@ Open-Inspect uses Terraform to automate deployment across multiple cloud provide
 | ------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | **Cloudflare**                                                      | Control plane, session state     | Workers, KV namespaces, Durable Objects, D1 Database                                                       |
 | **Vercel** _or_ **Cloudflare Workers**                              | Web application                  | Project + env vars (Vercel) _or_ Worker via OpenNext (Cloudflare)                                          |
-| **Modal**, **Daytona**, **Vercel Sandboxes**, _or_ **OpenComputer** | Sandbox execution infrastructure | Modal app deployment, Daytona API config, Vercel Sandbox API config, _or_ OpenComputer template/API config |
+| **Modal**, **Daytona**, **Vercel Sandboxes**, **OpenComputer**, _or_ **Islo** | Sandbox execution infrastructure | Modal app deployment, Daytona API config, Vercel Sandbox API config, OpenComputer template/API config, _or_ Islo snapshot build/metadata |
 
 > **Web platform choice**: Set `web_platform` in your `terraform.tfvars` to `"vercel"` (default) or
 > `"cloudflare"`. The Cloudflare option deploys the Next.js app as a Cloudflare Worker using
@@ -44,6 +44,7 @@ Create accounts on these services before continuing:
 | [Daytona](https://app.daytona.io) _(optional)_            | Sandbox infrastructure when `sandbox_provider = "daytona"`      |
 | [Vercel Sandboxes](https://vercel.com) _(optional)_       | Sandbox infrastructure when `sandbox_provider = "vercel"`       |
 | [OpenComputer](https://app.opencomputer.dev) _(optional)_ | Sandbox infrastructure when `sandbox_provider = "opencomputer"` |
+| [Islo](https://islo.dev) _(optional)_                     | Sandbox infrastructure when `sandbox_provider = "islo"`         |
 | [GitHub](https://github.com/settings/developers)          | OAuth + repository access                                       |
 | [Anthropic](https://console.anthropic.com)                | Claude API                                                      |
 | [Slack](https://api.slack.com/apps) _(optional)_          | Slack bot integration                                           |
@@ -225,6 +226,21 @@ for the full runtime, snapshot, and resource configuration model.
 
 For the full template build and runtime details, see
 [OpenComputer Sandbox Provider](OPENCOMPUTER_PROVIDER.md).
+
+### Islo
+
+> Only required when `sandbox_provider = "islo"`.
+
+1. Create an [Islo](https://islo.dev) account.
+2. Create an API key for non-interactive use. The Islo docs describe API key auth via
+   `ISLO_API_KEY`.
+3. Set `sandbox_provider = "islo"` in `terraform.tfvars`.
+4. Set `islo_api_key` and `islo_base_snapshot` in `terraform.tfvars`. Terraform builds this named
+   snapshot from `packages/islo-infra`, starting from the public Islo runner image and baking in
+   `packages/sandbox-runtime`.
+
+The control plane calls Islo directly from Cloudflare Workers. Islo provides the sandbox compute; no
+Modal deployment is required when `sandbox_provider = "islo"`.
 
 ### Anthropic
 
@@ -442,7 +458,7 @@ modal_workspace             = "your-modal-workspace"
 modal_environment           = "your-modal-environment"
 modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digits, dashes; empty for https://workspace--... endpoints
 
-# Sandbox provider: "modal" (default), "daytona", or "vercel"
+# Sandbox provider: "modal" (default), "daytona", "vercel", "opencomputer", or "islo"
 # sandbox_provider          = "modal"
 
 # Daytona (only required when sandbox_provider = "daytona")
@@ -457,6 +473,10 @@ modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digi
 # vercel_base_snapshot_id   = "snapshot_xxxxx" # Optional manual override; skips managed snapshot builds
 # vercel_sandbox_runtime    = "node24"
 # vercel_snapshot_expiration_ms = 0
+
+# Islo (only required when sandbox_provider = "islo")
+# islo_api_key       = "your-islo-api-key"
+# islo_base_snapshot = "open-inspect-runtime"
 
 # GitHub App (used for both OAuth and repository access)
 github_client_id     = "Iv1.abc123..."           # From GitHub App settings

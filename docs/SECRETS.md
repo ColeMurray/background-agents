@@ -67,11 +67,11 @@ The most common example:
 
 | Key                 | Description                                                                                                                                           |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ANTHROPIC_API_KEY` | Required for Claude models when using the **Daytona** or **Vercel** sandbox provider (Modal injects this automatically via its own secrets mechanism) |
+| `ANTHROPIC_API_KEY` | Required for Claude models when using the **Daytona**, **Vercel**, or **Islo** sandbox provider (Modal injects this automatically via its own secrets mechanism) |
 | `DEEPSEEK_API_KEY`  | Required for DeepSeek models with any sandbox provider                                                                                                |
 | `ZHIPU_API_KEY`     | Required for Z.AI Coding Plan GLM models with any sandbox provider                                                                                    |
 
-> **Daytona and Vercel sandbox users**: If you plan to use Claude models, you must add
+> **Daytona, Vercel, and Islo sandbox users**: If you plan to use Claude models, you must add
 > `ANTHROPIC_API_KEY` as a global secret after deploying. Without it, Claude sessions will fail with
 > "Model not found." See [Getting Started](GETTING_STARTED.md) for details.
 
@@ -168,7 +168,7 @@ from it, even after you rotate the secret. Two guidelines:
 
 | Key                          | Scope  | Purpose                                                      |
 | ---------------------------- | ------ | ------------------------------------------------------------ |
-| `ANTHROPIC_API_KEY`          | Global | Claude API access (required for Daytona or Vercel sandboxes) |
+| `ANTHROPIC_API_KEY`          | Global | Claude API access (required for Daytona, Vercel, or Islo sandboxes) |
 | `DEEPSEEK_API_KEY`           | Global | DeepSeek API access                                          |
 | `ZHIPU_API_KEY`              | Global | Z.AI Coding Plan GLM access                                  |
 | `OPENAI_OAUTH_REFRESH_TOKEN` | Repo   | OpenAI Codex access ([setup guide](OPENAI_MODELS.md))        |
@@ -184,8 +184,8 @@ from it, even after you rotate the secret. Two guidelines:
 ### "Model not found" errors
 
 If you see "Model not found" errors, add the API key for your selected model provider as a global
-secret in Settings. For Claude on Daytona or Vercel, add `ANTHROPIC_API_KEY`. For DeepSeek, add
-`DEEPSEEK_API_KEY`. For Z.AI Coding Plan, add `ZHIPU_API_KEY`.
+secret in Settings. For Claude on Daytona, Vercel, or Islo, add `ANTHROPIC_API_KEY`. For DeepSeek,
+add `DEEPSEEK_API_KEY`. For Z.AI Coding Plan, add `ZHIPU_API_KEY`.
 
 ### Secret not appearing in sandbox
 
