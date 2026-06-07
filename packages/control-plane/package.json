@@ -4,8 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev:local": "npm run dev:setup && wrangler dev --config wrangler.dev.jsonc",
-    "dev:setup": "wrangler d1 migrations apply open-inspect-local --local --config wrangler.dev.jsonc",
     "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/index.js --platform=browser --target=es2022 --external:cloudflare:* --external:node:*",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
