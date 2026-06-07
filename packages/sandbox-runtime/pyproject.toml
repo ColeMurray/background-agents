@@ -2,13 +2,12 @@
 name = "open-inspect-sandbox-runtime"
 version = "0.1.0"
 description = "Provider-agnostic sandbox runtime for Open-Inspect coding agent"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.27.0",
     "websockets>=13.0",
     "pydantic>=2.0",
     "PyJWT[crypto]>=2.9.0",
-    "typing_extensions>=4.12.0",
 ]
 
 [project.optional-dependencies]
@@ -30,7 +29,7 @@ packages = ["src/sandbox_runtime"]
 asyncio_mode = "auto"
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 100
 src = ["src", "tests"]
 
