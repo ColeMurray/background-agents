@@ -197,8 +197,8 @@ export interface McpServerLookup {
 // ==================== Repo Image Lookup ====================
 
 /**
- * Lookup interface for pre-built repo images.
- * Returns the latest ready image for a repo, if any.
+ * Provider-scoped lookup interface for pre-built repo images.
+ * The Durable Object binds this to the active sandbox backend before injection.
  */
 export interface RepoImageLookup {
   getLatestReady(

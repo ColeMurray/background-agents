@@ -295,6 +295,7 @@ describe("RepoImageStore", () => {
         id: "img-acme-repo-1000",
         repoOwner: "Acme",
         repoName: "Repo",
+        provider: "modal",
         baseBranch: "main",
       });
 
@@ -326,6 +327,7 @@ describe("RepoImageStore", () => {
         id: "img-1",
         repoOwner: "ACME",
         repoName: "MyRepo",
+        provider: "modal",
         baseBranch: "main",
       });
 
@@ -343,6 +345,7 @@ describe("RepoImageStore", () => {
         id: "img-1",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "main",
       });
 
@@ -350,7 +353,7 @@ describe("RepoImageStore", () => {
 
       expect(result.replacedImageId).toBeNull();
 
-      const ready = await store.getLatestReady("acme", "repo");
+      const ready = await store.getLatestReady("acme", "repo", "modal");
       expect(ready).not.toBeNull();
       expect(ready!.provider_image_id).toBe("modal-img-abc");
       expect(ready!.base_sha).toBe("sha123");
@@ -364,6 +367,7 @@ describe("RepoImageStore", () => {
         id: "img-old",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "main",
       });
       await store.markReady("img-old", "modal-img-old", "sha-old", 30);
@@ -374,13 +378,14 @@ describe("RepoImageStore", () => {
         id: "img-new",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "main",
       });
       const result = await store.markReady("img-new", "modal-img-new", "sha-new", 40);
 
       expect(result.replacedImageId).toBe("modal-img-old");
 
-      const ready = await store.getLatestReady("acme", "repo");
+      const ready = await store.getLatestReady("acme", "repo", "modal");
       expect(ready).not.toBeNull();
       expect(ready!.id).toBe("img-new");
       expect(ready!.provider_image_id).toBe("modal-img-new");
@@ -391,6 +396,7 @@ describe("RepoImageStore", () => {
         id: "img-1",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "main",
       });
 
@@ -427,8 +433,8 @@ describe("RepoImageStore", () => {
 
       expect(result.replacedImageId).toBeNull();
 
-      const modalReady = await store.getLatestReady("acme", "repo", "main", "modal");
-      const vercelReady = await store.getLatestReady("acme", "repo", "main", "vercel");
+      const modalReady = await store.getLatestReady("acme", "repo", "modal", "main");
+      const vercelReady = await store.getLatestReady("acme", "repo", "vercel", "main");
       expect(modalReady!.provider_image_id).toBe("modal-img");
       expect(vercelReady!.provider_image_id).toBe("vercel-snapshot");
     });
@@ -440,6 +446,7 @@ describe("RepoImageStore", () => {
         id: "img-1",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "main",
       });
 
@@ -454,7 +461,7 @@ describe("RepoImageStore", () => {
   describe("getLatestReady", () => {
     it("returns null when no ready images exist", async () => {
       db.setImageBuildEnabled("acme", "repo", true);
-      const result = await store.getLatestReady("acme", "repo");
+      const result = await store.getLatestReady("acme", "repo", "modal");
       expect(result).toBeNull();
     });
 
@@ -464,10 +471,11 @@ describe("RepoImageStore", () => {
         id: "img-1",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "main",
       });
 
-      const result = await store.getLatestReady("acme", "repo");
+      const result = await store.getLatestReady("acme", "repo", "modal");
       expect(result).toBeNull();
     });
 
@@ -477,11 +485,12 @@ describe("RepoImageStore", () => {
         id: "img-1",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "main",
       });
       await store.markReady("img-1", "modal-img-1", "sha1", 30);
 
-      const result = await store.getLatestReady("acme", "repo");
+      const result = await store.getLatestReady("acme", "repo", "modal");
       expect(result).not.toBeNull();
       expect(result!.id).toBe("img-1");
       expect(result!.provider_image_id).toBe("modal-img-1");
@@ -493,11 +502,12 @@ describe("RepoImageStore", () => {
         id: "img-1",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "main",
       });
       await store.markReady("img-1", "modal-img-1", "sha1", 30);
 
-      const result = await store.getLatestReady("acme", "repo");
+      const result = await store.getLatestReady("acme", "repo", "modal");
       expect(result).toBeNull();
     });
 
@@ -507,11 +517,12 @@ describe("RepoImageStore", () => {
         id: "img-1",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "main",
       });
       await store.markReady("img-1", "modal-img-1", "sha1", 30);
 
-      const result = await store.getLatestReady("acme", "repo");
+      const result = await store.getLatestReady("acme", "repo", "modal");
       expect(result).toBeNull();
     });
 
@@ -521,11 +532,12 @@ describe("RepoImageStore", () => {
         id: "img-1",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "main",
       });
       await store.markReady("img-1", "modal-img-1", "sha1", 30);
 
-      const result = await store.getLatestReady("ACME", "REPO");
+      const result = await store.getLatestReady("ACME", "REPO", "modal");
       expect(result).not.toBeNull();
     });
 
@@ -535,6 +547,7 @@ describe("RepoImageStore", () => {
         id: "img-main",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "main",
       });
       await store.markReady("img-main", "modal-img-main", "sha-main", 30);
@@ -545,31 +558,32 @@ describe("RepoImageStore", () => {
         id: "img-dev",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "develop",
       });
       await store.markReady("img-dev", "modal-img-dev", "sha-dev", 25);
 
       // Without branch filter: returns most recent (develop)
-      const anyBranch = await store.getLatestReady("acme", "repo");
+      const anyBranch = await store.getLatestReady("acme", "repo", "modal");
       expect(anyBranch).not.toBeNull();
       expect(anyBranch!.id).toBe("img-dev");
 
       // With branch filter: returns the matching branch only
-      const mainOnly = await store.getLatestReady("acme", "repo", "main");
+      const mainOnly = await store.getLatestReady("acme", "repo", "modal", "main");
       expect(mainOnly).not.toBeNull();
       expect(mainOnly!.id).toBe("img-main");
       expect(mainOnly!.base_branch).toBe("main");
 
-      const devOnly = await store.getLatestReady("acme", "repo", "develop");
+      const devOnly = await store.getLatestReady("acme", "repo", "modal", "develop");
       expect(devOnly).not.toBeNull();
       expect(devOnly!.id).toBe("img-dev");
 
       // No image for this branch
-      const staging = await store.getLatestReady("acme", "repo", "staging");
+      const staging = await store.getLatestReady("acme", "repo", "modal", "staging");
       expect(staging).toBeNull();
     });
 
-    it("filters by provider when provided", async () => {
+    it("filters by provider", async () => {
       db.setImageBuildEnabled("acme", "repo", true);
       await store.registerBuild({
         id: "img-modal",
@@ -591,10 +605,65 @@ describe("RepoImageStore", () => {
       });
       await store.markReady("img-vercel", "vercel-snapshot", "sha-vercel", 40);
 
-      const modalImage = await store.getLatestReady("acme", "repo", undefined, "modal");
-      const vercelImage = await store.getLatestReady("acme", "repo", undefined, "vercel");
+      const modalImage = await store.getLatestReady("acme", "repo", "modal");
+      const vercelImage = await store.getLatestReady("acme", "repo", "vercel");
       expect(modalImage!.provider_image_id).toBe("modal-img");
       expect(vercelImage!.provider_image_id).toBe("vercel-snapshot");
+    });
+
+    it("does not return a newer image from another provider", async () => {
+      db.setImageBuildEnabled("acme", "repo", true);
+      await store.registerBuild({
+        id: "img-vercel",
+        repoOwner: "acme",
+        repoName: "repo",
+        provider: "vercel",
+        baseBranch: "main",
+      });
+      await store.markReady("img-vercel", "vercel-snapshot", "sha-vercel", 40);
+
+      vi.advanceTimersByTime(1000);
+
+      await store.registerBuild({
+        id: "img-modal",
+        repoOwner: "acme",
+        repoName: "repo",
+        provider: "modal",
+        baseBranch: "main",
+      });
+      await store.markReady("img-modal", "modal-img", "sha-modal", 30);
+
+      const vercelImage = await store.getLatestReady("acme", "repo", "vercel");
+      expect(vercelImage!.provider_image_id).toBe("vercel-snapshot");
+    });
+  });
+
+  describe("getLatestReadyForAnyProvider", () => {
+    it("returns the latest ready image across providers explicitly", async () => {
+      db.setImageBuildEnabled("acme", "repo", true);
+      await store.registerBuild({
+        id: "img-vercel",
+        repoOwner: "acme",
+        repoName: "repo",
+        provider: "vercel",
+        baseBranch: "main",
+      });
+      await store.markReady("img-vercel", "vercel-snapshot", "sha-vercel", 40);
+
+      vi.advanceTimersByTime(1000);
+
+      await store.registerBuild({
+        id: "img-modal",
+        repoOwner: "acme",
+        repoName: "repo",
+        provider: "modal",
+        baseBranch: "main",
+      });
+      await store.markReady("img-modal", "modal-img", "sha-modal", 30);
+
+      const latest = await store.getLatestReadyForAnyProvider("acme", "repo");
+      expect(latest!.provider_image_id).toBe("modal-img");
+      expect(latest!.provider).toBe("modal");
     });
   });
 
@@ -606,6 +675,7 @@ describe("RepoImageStore", () => {
         id: "img-main",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "main",
       });
       await store.markReady("img-main", "modal-img-main", "sha-main", 30);
@@ -617,6 +687,7 @@ describe("RepoImageStore", () => {
         id: "img-dev",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "develop",
       });
       const result = await store.markReady("img-dev", "modal-img-dev", "sha-dev", 25);
@@ -625,7 +696,7 @@ describe("RepoImageStore", () => {
       expect(result.replacedImageId).toBeNull();
 
       // main image should still be intact
-      const mainImage = await store.getLatestReady("acme", "repo", "main");
+      const mainImage = await store.getLatestReady("acme", "repo", "modal", "main");
       expect(mainImage).not.toBeNull();
       expect(mainImage!.id).toBe("img-main");
     });
@@ -642,6 +713,7 @@ describe("RepoImageStore", () => {
         id: "img-1",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "main",
       });
 
@@ -651,6 +723,7 @@ describe("RepoImageStore", () => {
         id: "img-2",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "main",
       });
 
@@ -667,12 +740,14 @@ describe("RepoImageStore", () => {
         id: "img-1",
         repoOwner: "acme",
         repoName: "repo-a",
+        provider: "modal",
         baseBranch: "main",
       });
       await store.registerBuild({
         id: "img-2",
         repoOwner: "acme",
         repoName: "repo-b",
+        provider: "modal",
         baseBranch: "main",
       });
 
@@ -687,6 +762,7 @@ describe("RepoImageStore", () => {
         id: "img-old",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "main",
       });
 
@@ -705,6 +781,7 @@ describe("RepoImageStore", () => {
         id: "img-recent",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "main",
       });
 
@@ -722,6 +799,7 @@ describe("RepoImageStore", () => {
         id: "img-ready",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "main",
       });
       await store.markReady("img-ready", "modal-img", "sha1", 30);
@@ -739,6 +817,7 @@ describe("RepoImageStore", () => {
         id: "img-1",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "main",
       });
       await store.markFailed("img-1", "error");
@@ -757,6 +836,7 @@ describe("RepoImageStore", () => {
         id: "img-1",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "main",
       });
       await store.markFailed("img-1", "error");
@@ -772,6 +852,7 @@ describe("RepoImageStore", () => {
         id: "img-building",
         repoOwner: "acme",
         repoName: "repo",
+        provider: "modal",
         baseBranch: "main",
       });
 

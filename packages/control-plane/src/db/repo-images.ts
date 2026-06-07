@@ -4,7 +4,7 @@ export interface RepoImageBuild {
   id: string;
   repoOwner: string;
   repoName: string;
-  provider?: RepoImageProvider;
+  provider: RepoImageProvider;
   baseBranch: string;
 }
 
@@ -36,7 +36,7 @@ export class RepoImageStore {
         build.id,
         build.repoOwner.toLowerCase(),
         build.repoName.toLowerCase(),
-        build.provider ?? "modal",
+        build.provider,
         build.baseBranch,
         now
       )
@@ -95,9 +95,31 @@ export class RepoImageStore {
   async getLatestReady(
     repoOwner: string,
     repoName: string,
-    baseBranch?: string,
-    provider?: RepoImageProvider
+    provider: RepoImageProvider,
+    baseBranch?: string
   ): Promise<RepoImage | null> {
+    return this.getLatestReadyMatching({ repoOwner, repoName, provider, baseBranch });
+  }
+
+  async getLatestReadyForAnyProvider(
+    repoOwner: string,
+    repoName: string,
+    baseBranch?: string
+  ): Promise<RepoImage | null> {
+    return this.getLatestReadyMatching({ repoOwner, repoName, baseBranch });
+  }
+
+  private async getLatestReadyMatching({
+    repoOwner,
+    repoName,
+    provider,
+    baseBranch,
+  }: {
+    repoOwner: string;
+    repoName: string;
+    provider?: RepoImageProvider;
+    baseBranch?: string;
+  }): Promise<RepoImage | null> {
     const filters = ["ri.repo_owner = ?", "ri.repo_name = ?"];
     const args: string[] = [repoOwner.toLowerCase(), repoName.toLowerCase()];
 

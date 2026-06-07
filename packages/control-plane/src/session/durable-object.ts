@@ -767,7 +767,7 @@ export class SessionDO extends DurableObject<Env> {
       const repoImageProvider = sandboxBackend === "vercel" ? "vercel" : "modal";
       repoImageLookup = {
         getLatestReady: (repoOwner, repoName, baseBranch) =>
-          repoImageStore.getLatestReady(repoOwner, repoName, baseBranch, repoImageProvider),
+          repoImageStore.getLatestReady(repoOwner, repoName, repoImageProvider, baseBranch),
       };
     }
 
