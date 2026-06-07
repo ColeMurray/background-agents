@@ -10,13 +10,29 @@ data "external" "islo_source_hash" {
   program = ["bash", "-c", <<-EOF
     cd ${var.project_root}
     if command -v sha256sum &> /dev/null; then
-      hash=$(find packages/islo-infra/src packages/sandbox-runtime/src \
-        -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \) \
-        -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1)
+      hash=$(
+        {
+          sha256sum packages/islo-infra/package.json
+          sha256sum packages/islo-infra/package-lock.json
+          sha256sum packages/sandbox-runtime/pyproject.toml
+          sha256sum terraform/modules/islo-infra/scripts/build-snapshot.sh
+          find packages/islo-infra/src packages/sandbox-runtime/src \
+            -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \) \
+            -exec sha256sum {} \;
+        } | sort | sha256sum | cut -d' ' -f1
+      )
     else
-      hash=$(find packages/islo-infra/src packages/sandbox-runtime/src \
-        -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \) \
-        -exec shasum -a 256 {} \; | sort | shasum -a 256 | cut -d' ' -f1)
+      hash=$(
+        {
+          shasum -a 256 packages/islo-infra/package.json
+          shasum -a 256 packages/islo-infra/package-lock.json
+          shasum -a 256 packages/sandbox-runtime/pyproject.toml
+          shasum -a 256 terraform/modules/islo-infra/scripts/build-snapshot.sh
+          find packages/islo-infra/src packages/sandbox-runtime/src \
+            -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \) \
+            -exec shasum -a 256 {} \;
+        } | sort | shasum -a 256 | cut -d' ' -f1
+      )
     fi
     echo "{\"hash\": \"$hash\"}"
   EOF

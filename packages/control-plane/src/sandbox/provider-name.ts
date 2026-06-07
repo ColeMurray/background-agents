@@ -7,17 +7,17 @@ export type SandboxBackendName = "islo" | "modal" | "daytona";
 /**
  * Resolve the configured sandbox backend.
  *
- * Defaults to Islo for new deployments.
+ * Defaults to Modal to preserve existing deployments.
  */
 export function resolveSandboxBackendName(value: string | undefined): SandboxBackendName {
   const normalized = value?.trim().toLowerCase();
 
-  if (!normalized || normalized === "islo") {
-    return "islo";
+  if (!normalized || normalized === "modal") {
+    return "modal";
   }
 
-  if (normalized === "modal") {
-    return "modal";
+  if (normalized === "islo") {
+    return "islo";
   }
 
   if (normalized === "daytona") {

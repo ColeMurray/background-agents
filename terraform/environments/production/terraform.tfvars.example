@@ -195,6 +195,7 @@ nextauth_secret = ""
 
 # Sandbox backend for session execution
 # - "modal": existing Modal-based sandboxes with filesystem snapshot restore
+# - "islo": direct Islo API integration with named snapshot sandboxes
 # - "daytona": direct Daytona REST API integration with stop/start resume
 sandbox_provider = "modal"
 

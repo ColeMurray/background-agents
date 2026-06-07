@@ -80,7 +80,7 @@ npm install
 # Build the shared package (required before Terraform deployment)
 npm run build -w @open-inspect/shared
 
-# Optional: install Python dependencies for Modal deployment
+# Install Python dependencies for Modal deployment (includes sandbox-runtime)
 cd packages/modal-infra && uv sync --frozen && cd -
 ```
 
@@ -373,22 +373,15 @@ web_platform                = "vercel"
 vercel_api_token            = "your-vercel-token"
 vercel_team_id              = "team_xxxxx"       # Your Vercel ID (even personal accounts have one)
 
-# Sandbox provider: "islo" (default), "modal", or "daytona"
-sandbox_provider = "islo"
+modal_token_id              = "your-modal-token-id"
+modal_token_secret          = "your-modal-token-secret"
+modal_workspace             = "your-modal-workspace"
+modal_environment           = "your-modal-environment"
+modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digits, dashes; empty for https://workspace--... endpoints
 
 # Islo (only required when sandbox_provider = "islo")
-islo_api_key       = "your-islo-api-key"
-islo_base_snapshot = "open-inspect-runtime"
-islo_vcpus         = 2
-islo_memory_mb     = 4096
-islo_disk_gb       = 10
-
-# Modal (only required when sandbox_provider = "modal")
-# modal_token_id               = "your-modal-token-id"
-# modal_token_secret           = "your-modal-token-secret"
-# modal_workspace              = "your-modal-workspace"
-# modal_environment            = "your-modal-environment"
-# modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digits, dashes; empty for https://workspace--... endpoints
+# islo_api_key       = "your-islo-api-key"
+# islo_base_snapshot = "open-inspect-runtime"
 
 # Daytona (only required when sandbox_provider = "daytona")
 # daytona_api_url           = "https://app.daytona.io/api"
@@ -879,8 +872,8 @@ If the bot doesn't see the original message when tagged in a thread reply:
 ### "Model not found" errors (Daytona provider)
 
 If sessions fail with "Model not found" when using `sandbox_provider = "daytona"`, the required LLM
-API key is likely missing. Unlike Modal and Islo (which inject keys from `anthropic_api_key` in
-`terraform.tfvars`), Daytona requires you to add them as global secrets:
+API key is likely missing. Unlike Modal (which injects keys automatically), Daytona requires you to
+add them as global secrets:
 
 1. Go to **Settings > Secrets** in the web app
 2. Select **All Repositories (Global)** from the scope dropdown

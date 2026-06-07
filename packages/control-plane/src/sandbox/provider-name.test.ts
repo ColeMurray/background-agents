@@ -2,16 +2,16 @@ import { describe, it, expect } from "vitest";
 import { resolveSandboxBackendName, isModalSandboxBackend } from "./provider-name";
 
 describe("resolveSandboxBackendName", () => {
-  it("defaults to islo when undefined", () => {
-    expect(resolveSandboxBackendName(undefined)).toBe("islo");
+  it("defaults to modal when undefined", () => {
+    expect(resolveSandboxBackendName(undefined)).toBe("modal");
   });
 
-  it("defaults to islo when empty string", () => {
-    expect(resolveSandboxBackendName("")).toBe("islo");
+  it("defaults to modal when empty string", () => {
+    expect(resolveSandboxBackendName("")).toBe("modal");
   });
 
-  it("defaults to islo when whitespace-only", () => {
-    expect(resolveSandboxBackendName("   ")).toBe("islo");
+  it("defaults to modal when whitespace-only", () => {
+    expect(resolveSandboxBackendName("   ")).toBe("modal");
   });
 
   it('returns "islo" for "islo"', () => {
@@ -50,8 +50,8 @@ describe("isModalSandboxBackend", () => {
     expect(isModalSandboxBackend("modal")).toBe(true);
   });
 
-  it("returns false for undefined (default)", () => {
-    expect(isModalSandboxBackend(undefined)).toBe(false);
+  it("returns true for undefined (default)", () => {
+    expect(isModalSandboxBackend(undefined)).toBe(true);
   });
 
   it("returns false for islo", () => {

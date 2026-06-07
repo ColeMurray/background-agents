@@ -157,5 +157,6 @@ module "control_plane_worker" {
     null_resource.d1_migrations,
     module.linear_bot_worker,
     module.daytona_infra,
+    module.islo_infra,
   ]
 }

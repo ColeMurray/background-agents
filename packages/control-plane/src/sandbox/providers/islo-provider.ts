@@ -7,7 +7,7 @@
  */
 
 import { Islo, IsloApiError, type IsloApi } from "@islo-labs/sdk";
-import { computeHmacHex, MAX_TUNNEL_PORTS, type SandboxSettings } from "@open-inspect/shared";
+import { computeHmacHex, MAX_TUNNEL_PORTS } from "@open-inspect/shared";
 import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
 import {
@@ -43,6 +43,9 @@ const SHARE_CREATE_RETRY_TIMEOUT_MS = 15_000;
 const EXEC_POLL_INTERVAL_MS = 100;
 const EXEC_POLL_TIMEOUT_MS = 30_000;
 const RUNTIME_START_TIMEOUT_MS = 5_000;
+const RUNTIME_EXEC_TIMEOUT_SECONDS = 10;
+const EXEC_CREATE_REQUEST_TIMEOUT_SECONDS = 30;
+const EXEC_RESULT_REQUEST_TIMEOUT_SECONDS = 15;
 
 type IsloSandboxCreate = {
   name: string;
@@ -486,7 +489,7 @@ export class IsloSandboxProvider implements SandboxProvider {
         ],
         workdir,
         env,
-        timeout_secs: 10,
+        timeout_secs: RUNTIME_EXEC_TIMEOUT_SECONDS,
         ...(this.providerConfig.startUser ? { user: this.providerConfig.startUser } : {}),
       },
       RUNTIME_START_TIMEOUT_MS
@@ -498,16 +501,24 @@ export class IsloSandboxProvider implements SandboxProvider {
     body: IsloApi.ExecRequest,
     timeoutMs = EXEC_POLL_TIMEOUT_MS
   ): Promise<IsloApi.ExecResultResponse> {
+    const execCreateTimeoutSeconds = boundedRequestTimeoutSeconds(
+      timeoutMs,
+      EXEC_CREATE_REQUEST_TIMEOUT_SECONDS
+    );
     const exec = await this.client.sandboxes.execInSandbox(
       { sandbox_name: sandboxName, body },
-      { timeoutInSeconds: 30 }
+      { timeoutInSeconds: execCreateTimeoutSeconds }
     );
     const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {
+      const pollTimeoutSeconds = boundedRequestTimeoutSeconds(
+        deadline - Date.now(),
+        EXEC_RESULT_REQUEST_TIMEOUT_SECONDS
+      );
       const result = await this.client.sandboxes.getExecResult(
         { sandbox_name: sandboxName, exec_id: exec.exec_id },
-        { timeoutInSeconds: 15 }
+        { timeoutInSeconds: pollTimeoutSeconds }
       );
       if (result.status === "completed" || result.status === "failed") {
         if (result.status === "failed" || (result.exit_code != null && result.exit_code !== 0)) {
@@ -593,6 +604,10 @@ function parseTimestamp(value: string | null | undefined): number {
 
 function shellSingleQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function boundedRequestTimeoutSeconds(remainingMs: number, maxTimeoutSeconds: number): number {
+  return Math.max(1, Math.ceil(Math.min(remainingMs, maxTimeoutSeconds * 1000) / 1000));
 }
 
 function sleep(ms: number): Promise<void> {

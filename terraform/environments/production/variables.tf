@@ -349,18 +349,33 @@ variable "islo_vcpus" {
   description = "Number of vCPUs for Islo sandboxes"
   type        = number
   default     = 2
+
+  validation {
+    condition     = var.islo_vcpus > 0 && floor(var.islo_vcpus) == var.islo_vcpus
+    error_message = "islo_vcpus must be a positive integer."
+  }
 }
 
 variable "islo_memory_mb" {
   description = "Memory in MB for Islo sandboxes"
   type        = number
   default     = 4096
+
+  validation {
+    condition     = var.islo_memory_mb > 0 && floor(var.islo_memory_mb) == var.islo_memory_mb
+    error_message = "islo_memory_mb must be a positive integer."
+  }
 }
 
 variable "islo_disk_gb" {
   description = "Disk size in GB for Islo sandboxes"
   type        = number
   default     = 10
+
+  validation {
+    condition     = var.islo_disk_gb > 0 && floor(var.islo_disk_gb) == var.islo_disk_gb
+    error_message = "islo_disk_gb must be a positive integer."
+  }
 }
 
 variable "islo_workdir" {
@@ -406,7 +421,7 @@ variable "nextauth_secret" {
 variable "sandbox_provider" {
   description = "Sandbox backend for session execution: 'islo', 'modal', or 'daytona'"
   type        = string
-  default     = "islo"
+  default     = "modal"
 
   validation {
     condition     = contains(["islo", "modal", "daytona"], var.sandbox_provider)

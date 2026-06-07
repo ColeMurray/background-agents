@@ -19,7 +19,12 @@ cd "${DEPLOY_PATH}" || {
     exit 1
 }
 
-npm install --silent
+if [[ ! -f package-lock.json ]]; then
+    echo "Error: package-lock.json is required for reproducible Islo snapshot builds"
+    exit 1
+fi
+
+npm ci --silent
 npm run bootstrap -- --force
 
 echo "Islo snapshot ${ISLO_BASE_SNAPSHOT} built successfully"
