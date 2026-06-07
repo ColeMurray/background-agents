@@ -25,6 +25,5 @@ GITHUB_APP_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----
 -----END PRIVATE KEY-----"
 
 # Islo sandboxes run in the cloud and must reach the control plane over the internet.
-# `npm run dev` starts a trycloudflare.com tunnel and sets this automatically.
-# Only use http://127.0.0.1:8787 with `npm run dev:local` (Islo won't connect).
+# Point this at a public URL that forwards to your local wrangler dev server (e.g. localtunnel).
 WORKER_URL=

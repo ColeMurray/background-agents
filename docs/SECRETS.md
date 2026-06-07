@@ -36,10 +36,10 @@ The most common example:
 
 | Key                 | Description                                                                                                                                       |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ANTHROPIC_API_KEY` | Required for Claude models when using the **Islo** or **Daytona** sandbox providers (Modal injects this automatically via its own secrets system) |
+| `ANTHROPIC_API_KEY` | Required for Claude models when using the **Daytona** sandbox provider (Modal and Islo inject this automatically from `anthropic_api_key` in `terraform.tfvars`) |
 
-> **Islo and Daytona users**: If you plan to use Claude models, you must add `ANTHROPIC_API_KEY` as
-> a global secret after deploying. Without it, Claude sessions will fail with "Model not found." See
+> **Daytona users**: If you plan to use Claude models, you must add `ANTHROPIC_API_KEY` as a global
+> secret after deploying. Modal and Islo inject LLM API keys automatically during deployment. See
 > [Getting Started](GETTING_STARTED.md) for details.
 
 ### When to use repository secrets
@@ -112,7 +112,7 @@ If you try to save a reserved key, the UI will show a validation error.
 
 | Key                          | Scope  | Purpose                                                |
 | ---------------------------- | ------ | ------------------------------------------------------ |
-| `ANTHROPIC_API_KEY`          | Global | Claude API access (required for Islo/Daytona provider) |
+| `ANTHROPIC_API_KEY`          | Global | Claude API access (required for Daytona; auto-injected for Modal/Islo) |
 | `OPENAI_OAUTH_REFRESH_TOKEN` | Repo   | OpenAI Codex access ([setup guide](OPENAI_MODELS.md))  |
 | `OPENAI_OAUTH_ACCOUNT_ID`    | Repo   | OpenAI Codex access ([setup guide](OPENAI_MODELS.md))  |
 | `DATABASE_URL`               | Repo   | Database connection string                             |
@@ -123,11 +123,11 @@ If you try to save a reserved key, the UI will show a validation error.
 
 ## Troubleshooting
 
-### "Model not found" errors (Islo or Daytona provider)
+### "Model not found" errors (Daytona provider)
 
-If you're using `sandbox_provider = "islo"` or `sandbox_provider = "daytona"` with Claude models and
-see "Model not found" errors, add your `ANTHROPIC_API_KEY` as a global secret in Settings. Unlike
-Modal, these providers do not inject LLM API keys automatically.
+If you're using `sandbox_provider = "daytona"` with Claude models and see "Model not found" errors,
+add your `ANTHROPIC_API_KEY` as a global secret in Settings. Modal and Islo inject LLM API keys
+automatically from `anthropic_api_key` in `terraform.tfvars`.
 
 ### Secret not appearing in sandbox
 

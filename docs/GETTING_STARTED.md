@@ -19,7 +19,7 @@ Open-Inspect uses Terraform to automate deployment across three cloud providers:
 | -------------------------------------- | -------------------------------- | ----------------------------------------------------------------- |
 | **Cloudflare**                         | Control plane, session state     | Workers, KV namespaces, Durable Objects, D1 Database              |
 | **Vercel** _or_ **Cloudflare Workers** | Web application                  | Project + env vars (Vercel) _or_ Worker via OpenNext (Cloudflare) |
-| **Modal** _or_ **Daytona**             | Sandbox execution infrastructure | Modal app deployment _or_ control-plane config for Daytona API    |
+| **Islo** _or_ **Modal** _or_ **Daytona** | Sandbox execution infrastructure | Islo snapshot _or_ Modal app _or_ Daytona API config              |
 
 > **Web platform choice**: Set `web_platform` in your `terraform.tfvars` to `"vercel"` (default) or
 > `"cloudflare"`. The Cloudflare option deploys the Next.js app as a Cloudflare Worker using
@@ -40,7 +40,7 @@ Create accounts on these services before continuing:
 | ------------------------------------------------ | -------------------------------------------------------------- |
 | [Cloudflare](https://dash.cloudflare.com)        | Control plane hosting (+ web app if using Cloudflare platform) |
 | [Vercel](https://vercel.com) _(optional)_        | Web application hosting (only if `web_platform = "vercel"`)    |
-| [Islo](https://islo.dev)                         | Default sandbox infrastructure (`sandbox_provider = "islo"`)   |
+| [Islo](https://islo.dev) _(optional)_            | Sandbox infrastructure when `sandbox_provider = "islo"`        |
 | [Modal](https://modal.com) _(optional)_          | Sandbox infrastructure when `sandbox_provider = "modal"`       |
 | [Daytona](https://app.daytona.io) _(optional)_   | Sandbox infrastructure when `sandbox_provider = "daytona"`     |
 | [GitHub](https://github.com/settings/developers) | OAuth + repository access                                      |
@@ -146,7 +146,7 @@ Create an R2 API Token:
 
 ### Islo
 
-> Islo is the default sandbox provider.
+> Only required when `sandbox_provider = "islo"`.
 
 1. Create an [Islo](https://islo.dev) account.
 2. Create an API key for non-interactive use. The Islo docs describe API key auth via
@@ -158,10 +158,6 @@ Create an R2 API Token:
 
 The control plane calls Islo directly from Cloudflare Workers. Islo provides the sandbox compute; no
 Modal deployment is required when `sandbox_provider = "islo"`.
-
-> **Important**: Like Daytona, the Islo provider injects secrets from Open-Inspect's encrypted
-> global/repo secrets store. If you plan to use Claude models, add `ANTHROPIC_API_KEY` as a **global
-> secret** in Settings > Secrets after deploying. See [Secrets Management](SECRETS.md).
 
 ### Modal
 
@@ -380,7 +376,7 @@ vercel_team_id              = "team_xxxxx"       # Your Vercel ID (even personal
 # Sandbox provider: "islo" (default), "modal", or "daytona"
 sandbox_provider = "islo"
 
-# Islo (default sandbox provider)
+# Islo (only required when sandbox_provider = "islo")
 islo_api_key       = "your-islo-api-key"
 islo_base_snapshot = "open-inspect-runtime"
 islo_vcpus         = 2
@@ -880,11 +876,11 @@ If the bot doesn't see the original message when tagged in a thread reply:
 5. For PR reviews, ensure auto-review is enabled for the repository and the PR is not a draft
 6. For comment actions, ensure the bot is @mentioned in a **PR** comment (not an issue)
 
-### "Model not found" errors (Islo or Daytona provider)
+### "Model not found" errors (Daytona provider)
 
-If sessions fail with "Model not found" when using `sandbox_provider = "islo"` or
-`sandbox_provider = "daytona"`, the required LLM API key is likely missing. Unlike Modal (which
-injects keys automatically), Islo and Daytona require you to add them as global secrets:
+If sessions fail with "Model not found" when using `sandbox_provider = "daytona"`, the required LLM
+API key is likely missing. Unlike Modal and Islo (which inject keys from `anthropic_api_key` in
+`terraform.tfvars`), Daytona requires you to add them as global secrets:
 
 1. Go to **Settings > Secrets** in the web app
 2. Select **All Repositories (Global)** from the scope dropdown
