@@ -683,6 +683,7 @@ def callback(config, path_suffix, payload):
         headers={
             "Authorization": f"Bearer {timestamp}.{signature}",
             "Content-Type": "application/json",
+            "User-Agent": "open-inspect/vercel-build-coordinator",
         },
     )
     last_error = ""

@@ -445,6 +445,7 @@ describe("VercelSandboxProvider", () => {
     expect(coordinatorScript).toContain("COORDINATOR_ONLY_ENV_KEYS");
     expect(coordinatorScript).toContain("build_env.pop(key, None)");
     expect(coordinatorScript).toContain('"provider_session_id": config["session_id"]');
+    expect(coordinatorScript).toContain('"User-Agent": "open-inspect/vercel-build-coordinator"');
     expect(coordinatorScript).not.toContain("def snapshot_session");
     expect(coordinatorScript).not.toContain("OI_VERCEL_TOKEN");
     expect(result).toEqual({ buildId: "build-123", status: "building" });
