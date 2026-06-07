@@ -373,15 +373,19 @@ web_platform                = "vercel"
 vercel_api_token            = "your-vercel-token"
 vercel_team_id              = "team_xxxxx"       # Your Vercel ID (even personal accounts have one)
 
-modal_token_id              = "your-modal-token-id"
-modal_token_secret          = "your-modal-token-secret"
-modal_workspace             = "your-modal-workspace"
-modal_environment           = "your-modal-environment"
-modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digits, dashes; empty for https://workspace--... endpoints
+# Sandbox provider: "islo" (default), "modal", or "daytona"
+sandbox_provider = "islo"
 
 # Islo (only required when sandbox_provider = "islo")
-# islo_api_key       = "your-islo-api-key"
-# islo_base_snapshot = "open-inspect-runtime"
+islo_api_key       = "your-islo-api-key"
+islo_base_snapshot = "open-inspect-runtime"
+
+# Modal (only required when sandbox_provider = "modal")
+# modal_token_id               = "your-modal-token-id"
+# modal_token_secret           = "your-modal-token-secret"
+# modal_workspace              = "your-modal-workspace"
+# modal_environment            = "your-modal-environment"
+# modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digits, dashes; empty for https://workspace--... endpoints
 
 # Daytona (only required when sandbox_provider = "daytona")
 # daytona_api_url           = "https://app.daytona.io/api"

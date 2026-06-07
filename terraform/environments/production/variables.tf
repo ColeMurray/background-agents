@@ -421,7 +421,7 @@ variable "nextauth_secret" {
 variable "sandbox_provider" {
   description = "Sandbox backend for session execution: 'islo', 'modal', or 'daytona'"
   type        = string
-  default     = "modal"
+  default     = "islo"
 
   validation {
     condition     = contains(["islo", "modal", "daytona"], var.sandbox_provider)
