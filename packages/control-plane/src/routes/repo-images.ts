@@ -2,7 +2,7 @@
  * Repo image build routes.
  *
  * Handles:
- * - Build callbacks from Modal async builder (build-complete, build-failed)
+ * - Build callbacks from async repo image builders (build-complete, build-failed)
  * - Manual build triggers
  * - Image build status queries
  * - Maintenance operations (stale builds, cleanup)
@@ -129,6 +129,7 @@ async function handleBuildComplete(
   const body = await parseJsonBody<{
     build_id?: string;
     provider_image_id?: string;
+    provider_session_id?: string;
     base_sha?: string;
     build_duration_seconds?: number;
   }>(request);
@@ -136,11 +137,43 @@ async function handleBuildComplete(
 
   const buildId = body.build_id;
   const providerImageId = body.provider_image_id;
+  const providerSessionId = body.provider_session_id;
   const baseSha = body.base_sha;
   const buildDurationSeconds = body.build_duration_seconds;
 
-  if (!buildId || !providerImageId) {
-    return error("build_id and provider_image_id are required", 400);
+  if (!buildId) {
+    return error("build_id is required", 400);
+  }
+
+  if (!providerImageId) {
+    if (getRepoImageBackend(env) === "vercel" && providerSessionId) {
+      logger.info("repo_image.build_complete_received", {
+        build_id: buildId,
+        provider_session_id: providerSessionId,
+        base_sha: baseSha,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+
+      const completion = completeVercelBuildFromSession(env, {
+        buildId,
+        providerSessionId,
+        baseSha: baseSha || "",
+        buildDurationSeconds: buildDurationSeconds ?? 0,
+        requestId: ctx.request_id,
+        traceId: ctx.trace_id,
+      });
+
+      if (ctx.executionCtx) {
+        ctx.executionCtx.waitUntil(completion);
+      } else {
+        await completion;
+      }
+
+      return json({ ok: true, snapshotPending: true });
+    }
+
+    return error("provider_image_id is required", 400);
   }
 
   const store = new RepoImageStore(env.DB);
@@ -198,6 +231,115 @@ async function handleBuildComplete(
       trace_id: ctx.trace_id,
     });
     return error("Failed to mark build as ready", 500);
+  }
+}
+
+async function completeVercelBuildFromSession(
+  env: Env,
+  params: {
+    buildId: string;
+    providerSessionId: string;
+    baseSha: string;
+    buildDurationSeconds: number;
+    requestId: string;
+    traceId: string;
+  }
+): Promise<void> {
+  if (!env.DB) {
+    logger.error("repo_image.vercel_snapshot_error", {
+      build_id: params.buildId,
+      provider_session_id: params.providerSessionId,
+      error: "Database not configured",
+      request_id: params.requestId,
+      trace_id: params.traceId,
+    });
+    return;
+  }
+
+  const snapshotStart = Date.now();
+  const store = new RepoImageStore(env.DB);
+
+  try {
+    logger.info("repo_image.vercel_snapshot_start", {
+      build_id: params.buildId,
+      provider_session_id: params.providerSessionId,
+      request_id: params.requestId,
+      trace_id: params.traceId,
+    });
+
+    const snapshot = await createConfiguredVercelProvider(env).takeSnapshot({
+      providerObjectId: params.providerSessionId,
+      sessionId: params.buildId,
+      reason: "repo_image_build",
+      correlation: {
+        request_id: params.requestId,
+        trace_id: params.traceId,
+        sandbox_id: params.providerSessionId,
+      },
+    });
+
+    if (!snapshot.success || !snapshot.imageId) {
+      const message = snapshot.error || "Vercel snapshot did not return an image id";
+      await store.markFailed(params.buildId, message);
+      logger.error("repo_image.vercel_snapshot_failed", {
+        build_id: params.buildId,
+        provider_session_id: params.providerSessionId,
+        error: message,
+        duration_ms: Date.now() - snapshotStart,
+        request_id: params.requestId,
+        trace_id: params.traceId,
+      });
+      return;
+    }
+
+    const result = await store.markReady(
+      params.buildId,
+      snapshot.imageId,
+      params.baseSha,
+      params.buildDurationSeconds
+    );
+
+    logger.info("repo_image.build_complete", {
+      build_id: params.buildId,
+      provider_image_id: snapshot.imageId,
+      provider_session_id: params.providerSessionId,
+      base_sha: params.baseSha,
+      replaced_image_id: result.replacedImageId,
+      snapshot_duration_ms: Date.now() - snapshotStart,
+      request_id: params.requestId,
+      trace_id: params.traceId,
+    });
+
+    if (result.replacedImageId) {
+      try {
+        await createConfiguredVercelProvider(env).deleteProviderImage(result.replacedImageId);
+      } catch (e) {
+        logger.warn("repo_image.delete_old_failed", {
+          provider_image_id: result.replacedImageId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    try {
+      await store.markFailed(params.buildId, message);
+    } catch (markFailedError) {
+      logger.error("repo_image.mark_failed_after_snapshot_error", {
+        build_id: params.buildId,
+        error: markFailedError instanceof Error ? markFailedError.message : String(markFailedError),
+        request_id: params.requestId,
+        trace_id: params.traceId,
+      });
+    }
+    logger.error("repo_image.vercel_snapshot_error", {
+      build_id: params.buildId,
+      provider_session_id: params.providerSessionId,
+      error: message,
+      duration_ms: Date.now() - snapshotStart,
+      request_id: params.requestId,
+      trace_id: params.traceId,
+    });
   }
 }
 

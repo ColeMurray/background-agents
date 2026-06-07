@@ -430,23 +430,23 @@ describe("VercelSandboxProvider", () => {
       expect.objectContaining({
         sessionId: "vercel-session-1",
         command: "/usr/bin/python3.12",
-        args: ["-c", expect.stringContaining("def snapshot_session")],
+        args: ["-c", expect.stringContaining('"provider_session_id": config["session_id"]')],
         cwd: "/workspace",
         env: {
           OI_VERCEL_SESSION_ID: "vercel-session-1",
           OI_VERCEL_BUILD_ID: "build-123",
           OI_VERCEL_CALLBACK_URL: "https://control-plane.test/repo-images/build-complete",
           OI_INTERNAL_CALLBACK_SECRET: "callback-secret",
-          OI_VERCEL_TOKEN: "vercel-token",
-          OI_VERCEL_TEAM_ID: "team-123",
-          OI_VERCEL_API_BASE_URL: "https://vercel.test/api",
-          OI_VERCEL_SNAPSHOT_EXPIRATION_MS: "0",
         },
-      })
+      }),
+      undefined
     );
     const coordinatorScript = vi.mocked(client.startCommand).mock.calls[0][0].args?.[1] ?? "";
     expect(coordinatorScript).toContain("COORDINATOR_ONLY_ENV_KEYS");
     expect(coordinatorScript).toContain("build_env.pop(key, None)");
+    expect(coordinatorScript).toContain('"provider_session_id": config["session_id"]');
+    expect(coordinatorScript).not.toContain("def snapshot_session");
+    expect(coordinatorScript).not.toContain("OI_VERCEL_TOKEN");
     expect(result).toEqual({ buildId: "build-123", status: "building" });
   });
 

@@ -21,6 +21,7 @@ import {
   type StopResult,
 } from "../provider";
 import type {
+  VercelCommandResult,
   VercelCreateSandboxResponse,
   VercelSandboxClient,
   VercelSandboxRoute,
@@ -260,9 +261,10 @@ export class VercelSandboxProvider implements SandboxProvider {
         config.correlation
       );
 
-      await this.launchBuildCoordinator(
+      const command = await this.launchBuildCoordinator(
         created.session.id,
-        this.buildCoordinatorEnv(config, created.session.id)
+        this.buildCoordinatorEnv(config, created.session.id),
+        config.correlation
       );
 
       log.info("vercel.repo_image_build_triggered", {
@@ -270,6 +272,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         repo_owner: config.repoOwner,
         repo_name: config.repoName,
         session_id: created.session.id,
+        command_id: command.commandId,
         sandbox_name: sandboxName,
       });
 
@@ -545,15 +548,19 @@ export class VercelSandboxProvider implements SandboxProvider {
 
   private async launchBuildCoordinator(
     sessionId: string,
-    env: Record<string, string>
-  ): Promise<void> {
-    await this.client.startCommand({
-      sessionId,
-      command: VERCEL_PYTHON_BIN,
-      args: ["-c", buildCoordinatorScript()],
-      cwd: "/workspace",
-      env,
-    });
+    env: Record<string, string>,
+    correlation?: CreateSandboxConfig["correlation"]
+  ): Promise<VercelCommandResult> {
+    return this.client.startCommand(
+      {
+        sessionId,
+        command: VERCEL_PYTHON_BIN,
+        args: ["-c", buildCoordinatorScript()],
+        cwd: "/workspace",
+        env,
+      },
+      correlation
+    );
   }
 
   private buildCoordinatorEnv(
@@ -565,12 +572,6 @@ export class VercelSandboxProvider implements SandboxProvider {
       OI_VERCEL_BUILD_ID: config.buildId,
       OI_VERCEL_CALLBACK_URL: config.callbackUrl,
       OI_INTERNAL_CALLBACK_SECRET: this.providerConfig.internalCallbackSecret ?? "",
-      OI_VERCEL_TOKEN: this.providerConfig.token,
-      OI_VERCEL_TEAM_ID: this.providerConfig.teamId ?? "",
-      OI_VERCEL_API_BASE_URL: this.providerConfig.apiBaseUrl ?? "https://vercel.com/api",
-      OI_VERCEL_SNAPSHOT_EXPIRATION_MS: String(
-        this.providerConfig.snapshotExpirationMs ?? DEFAULT_SNAPSHOT_EXPIRATION_MS
-      ),
     };
   }
 
@@ -655,7 +656,6 @@ import subprocess
 import sys
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 
 
@@ -664,11 +664,7 @@ def read_coordinator_config():
         "build_id": os.environ.pop("OI_VERCEL_BUILD_ID"),
         "callback_url": os.environ.pop("OI_VERCEL_CALLBACK_URL"),
         "secret": os.environ.pop("OI_INTERNAL_CALLBACK_SECRET"),
-        "token": os.environ.pop("OI_VERCEL_TOKEN"),
         "session_id": os.environ.pop("OI_VERCEL_SESSION_ID"),
-        "team_id": os.environ.pop("OI_VERCEL_TEAM_ID", ""),
-        "api_base": os.environ.pop("OI_VERCEL_API_BASE_URL", "https://vercel.com/api"),
-        "snapshot_expiration_ms": os.environ.pop("OI_VERCEL_SNAPSHOT_EXPIRATION_MS", "0"),
     }
 
 
@@ -689,31 +685,35 @@ def callback(config, path_suffix, payload):
             "Content-Type": "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        resp.read()
-
-
-def snapshot_session(config):
-    api_base = config["api_base"].rstrip("/")
-    session_id = config["session_id"]
-    team_id = config["team_id"]
-    token = config["token"]
-    expiration = int(config["snapshot_expiration_ms"])
-    query = f"?teamId={urllib.parse.quote(team_id)}" if team_id else ""
-    body = json.dumps({"expiration": expiration}).encode()
-    req = urllib.request.Request(
-        f"{api_base}/v2/sandboxes/sessions/{urllib.parse.quote(session_id)}/snapshot{query}",
-        data=body,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "User-Agent": "open-inspect/vercel-build-coordinator",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=600) as resp:
-        data = json.loads(resp.read().decode() or "{}")
-    return data["snapshot"]["id"]
+    last_error = ""
+    for attempt in range(1, 4):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                resp.read()
+                print(json.dumps({
+                    "event": "callback.complete",
+                    "path_suffix": path_suffix,
+                    "attempt": attempt,
+                    "status": resp.status,
+                }), flush=True)
+                return
+        except urllib.error.HTTPError as exc:
+            try:
+                details = exc.read().decode(errors="replace")
+            except Exception:
+                details = ""
+            last_error = f"HTTP {exc.code}: {details[-500:]}"
+        except Exception as exc:
+            last_error = str(exc)
+        print(json.dumps({
+            "event": "callback.failed",
+            "path_suffix": path_suffix,
+            "attempt": attempt,
+            "error": last_error[-500:],
+        }), flush=True)
+        if attempt < 3:
+            time.sleep(attempt * 2)
+    raise RuntimeError(f"callback failed after retries: {last_error[-500:]}")
 
 
 COORDINATOR_ONLY_ENV_KEYS = {
@@ -721,10 +721,6 @@ COORDINATOR_ONLY_ENV_KEYS = {
     "OI_VERCEL_BUILD_ID",
     "OI_VERCEL_CALLBACK_URL",
     "OI_INTERNAL_CALLBACK_SECRET",
-    "OI_VERCEL_TOKEN",
-    "OI_VERCEL_TEAM_ID",
-    "OI_VERCEL_API_BASE_URL",
-    "OI_VERCEL_SNAPSHOT_EXPIRATION_MS",
 }
 
 
@@ -782,10 +778,9 @@ def main():
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait(timeout=10)
-                snapshot_id = snapshot_session(config)
                 callback(config, "", {
                     "build_id": build_id,
-                    "provider_image_id": snapshot_id,
+                    "provider_session_id": config["session_id"],
                     "base_sha": head_sha,
                     "build_duration_seconds": round(time.time() - started, 3),
                 })
