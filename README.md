@@ -95,7 +95,7 @@ built for internal use where all employees are trusted and have access to compan
                                  │
                                  ▼
 ┌────────────────────────────────────────────────────────────────────┐
-│                      Data Plane (Modal)                            │
+│                 Data Plane (Sandbox Backend)                       │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │                     Session Sandbox                          │  │
 │  │  ┌───────────┐  ┌───────────┐  ┌───────────┐                 │  │
@@ -110,15 +110,17 @@ built for internal use where all employees are trusted and have access to compan
 
 ## Packages
 
-| Package                                 | Description                                 |
-| --------------------------------------- | ------------------------------------------- |
-| [modal-infra](packages/modal-infra)     | Modal sandbox infrastructure                |
-| [control-plane](packages/control-plane) | Cloudflare Workers + Durable Objects        |
-| [web](packages/web)                     | Next.js web client                          |
-| [slack-bot](packages/slack-bot)         | Slack integration (sessions from messages)  |
-| [github-bot](packages/github-bot)       | GitHub integration (auto-review, @mention)  |
-| [linear-bot](packages/linear-bot)       | Linear integration (issue → coding session) |
-| [shared](packages/shared)               | Shared types and utilities                  |
+| Package                                     | Description                                 |
+| ------------------------------------------- | ------------------------------------------- |
+| [control-plane](packages/control-plane)     | Cloudflare Workers + Durable Objects        |
+| [web](packages/web)                         | Next.js web client                          |
+| [sandbox-runtime](packages/sandbox-runtime) | Shared in-sandbox agent runtime             |
+| [modal-infra](packages/modal-infra)         | Modal sandbox infrastructure                |
+| [daytona-infra](packages/daytona-infra)     | Daytona snapshot infrastructure             |
+| [slack-bot](packages/slack-bot)             | Slack integration (sessions from messages)  |
+| [github-bot](packages/github-bot)           | GitHub integration (auto-review, @mention)  |
+| [linear-bot](packages/linear-bot)           | Linear integration (issue → coding session) |
+| [shared](packages/shared)                   | Shared types and utilities                  |
 
 ## Getting Started
 
@@ -205,7 +207,7 @@ See **[docs/AUTOMATIONS.md](docs/AUTOMATIONS.md)** for setup instructions.
 
 ### Sandbox Environment
 
-Every session runs in an isolated Modal sandbox with a full development environment:
+Every session runs in an isolated sandbox backend with a full development environment:
 
 - **Pre-installed:** Node.js 22, Python 3.12, Bun, git, GitHub CLI, build-essential
 - **Browser automation:** agent-browser CLI with headless Chromium for screenshots, visual diffs,
@@ -266,6 +268,8 @@ Inspired by [Ramp's Inspect](https://builders.ramp.com/post/why-we-built-our-bac
 built with:
 
 - [Modal](https://modal.com) - Cloud sandbox infrastructure
+- [Daytona](https://www.daytona.io) - Cloud development sandboxes
+- [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) - Cloud sandbox infrastructure
 - [Cloudflare Workers](https://workers.cloudflare.com) - Edge computing
 - [OpenCode](https://opencode.ai) - Coding agent runtime
 - [Next.js](https://nextjs.org) - Web framework

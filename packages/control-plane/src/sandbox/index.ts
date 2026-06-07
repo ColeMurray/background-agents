@@ -35,6 +35,35 @@ export {
 export { ModalSandboxProvider, createModalProvider } from "./providers/modal-provider";
 export { DaytonaSandboxProvider, createDaytonaProvider } from "./providers/daytona-provider";
 export {
+  VercelSandboxProvider,
+  createVercelProvider,
+  type VercelProviderConfig,
+  type TriggerVercelRepoImageBuildConfig,
+  type TriggerVercelRepoImageBuildResult,
+} from "./providers/vercel-provider";
+export {
+  VercelSandboxClient,
+  VercelSandboxApiError,
+  createVercelSandboxClient,
+  type VercelSandboxClientConfig,
+  type VercelCreateSandboxRequest,
+  type VercelCreateSandboxResponse,
+  type VercelSandboxRoute,
+  type VercelSandboxSession,
+} from "./vercel-client";
+export {
+  buildVercelBaseSnapshot,
+  buildBaseSnapshotSandboxName,
+  type BuildVercelBaseSnapshotConfig,
+  type BuildVercelBaseSnapshotResult,
+} from "./vercel-base-snapshot";
+export {
+  DEFAULT_VERCEL_RUNTIME,
+  VERCEL_LOCAL_RUNTIME_EXTRACT_DIR,
+  VERCEL_PYTHON_BIN,
+  buildVercelBootstrapScript,
+} from "./vercel-bootstrap";
+export {
   DaytonaRestClient,
   DaytonaNotFoundError,
   DaytonaApiError,
@@ -46,6 +75,7 @@ export {
 export {
   resolveSandboxBackendName,
   isModalSandboxBackend,
+  supportsRepoImageBackend,
   type SandboxBackendName,
 } from "./provider-name";
 

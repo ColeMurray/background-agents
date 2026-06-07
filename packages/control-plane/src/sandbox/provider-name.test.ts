@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { resolveSandboxBackendName, isModalSandboxBackend } from "./provider-name";
+import {
+  resolveSandboxBackendName,
+  isModalSandboxBackend,
+  supportsRepoImageBackend,
+} from "./provider-name";
 
 describe("resolveSandboxBackendName", () => {
   it("defaults to modal when undefined", () => {
@@ -22,15 +26,21 @@ describe("resolveSandboxBackendName", () => {
     expect(resolveSandboxBackendName("daytona")).toBe("daytona");
   });
 
+  it('returns "vercel" for "vercel"', () => {
+    expect(resolveSandboxBackendName("vercel")).toBe("vercel");
+  });
+
   it("is case-insensitive", () => {
     expect(resolveSandboxBackendName("MODAL")).toBe("modal");
     expect(resolveSandboxBackendName("Daytona")).toBe("daytona");
     expect(resolveSandboxBackendName("DAYTONA")).toBe("daytona");
+    expect(resolveSandboxBackendName("VERCEL")).toBe("vercel");
   });
 
   it("trims whitespace", () => {
     expect(resolveSandboxBackendName("  modal  ")).toBe("modal");
     expect(resolveSandboxBackendName("  daytona  ")).toBe("daytona");
+    expect(resolveSandboxBackendName("  vercel  ")).toBe("vercel");
   });
 
   it("throws for unsupported provider", () => {
@@ -50,5 +60,21 @@ describe("isModalSandboxBackend", () => {
 
   it("returns false for daytona", () => {
     expect(isModalSandboxBackend("daytona")).toBe(false);
+  });
+
+  it("returns false for vercel", () => {
+    expect(isModalSandboxBackend("vercel")).toBe(false);
+  });
+});
+
+describe("supportsRepoImageBackend", () => {
+  it("returns true for modal and vercel", () => {
+    expect(supportsRepoImageBackend("modal")).toBe(true);
+    expect(supportsRepoImageBackend("vercel")).toBe(true);
+    expect(supportsRepoImageBackend(undefined)).toBe(true);
+  });
+
+  it("returns false for daytona", () => {
+    expect(supportsRepoImageBackend("daytona")).toBe(false);
   });
 });

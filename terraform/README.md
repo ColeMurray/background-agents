@@ -5,13 +5,14 @@ Terraform.
 
 ## Architecture Overview
 
-The infrastructure spans three cloud providers:
+The infrastructure spans multiple cloud providers:
 
-| Provider       | Resources                                            | Terraform Support                |
-| -------------- | ---------------------------------------------------- | -------------------------------- |
-| **Cloudflare** | Workers, KV Namespaces, Durable Objects, D1 Database | Native provider                  |
-| **Vercel**     | Next.js Web App                                      | Native provider                  |
-| **Modal**      | Sandbox Infrastructure                               | CLI wrapper (no provider exists) |
+| Provider       | Resources                                            | Terraform Support                   |
+| -------------- | ---------------------------------------------------- | ----------------------------------- |
+| **Cloudflare** | Workers, KV Namespaces, Durable Objects, D1 Database | Native provider                     |
+| **Vercel**     | Next.js Web App, optional sandbox sessions           | Native provider + Sandbox API calls |
+| **Modal**      | Optional sandbox infrastructure                      | CLI wrapper (no provider exists)    |
+| **Daytona**    | Optional sandbox snapshots                           | REST API wrapper                    |
 
 ## Directory Structure
 
@@ -22,6 +23,7 @@ terraform/
 ├── modules/                      # Reusable Terraform modules
 │   ├── cloudflare-kv/           # KV namespace management
 │   ├── cloudflare-worker/       # Worker deployment with bindings (KV, DO, D1)
+│   ├── daytona-infra/           # Daytona snapshot bootstrap wrapper
 │   ├── vercel-project/          # Vercel project + environment vars
 │   └── modal-app/               # Modal CLI wrapper
 │       └── scripts/             # Deployment scripts
@@ -33,6 +35,7 @@ terraform/
 │       ├── d1.tf                # D1 database + migrations
 │       ├── workers-*.tf         # Worker builds/deployments per service
 │       ├── web-*.tf             # Web app resources (Vercel/OpenNext)
+│       ├── daytona.tf           # Daytona snapshot resources
 │       ├── modal.tf             # Modal infrastructure
 │       ├── checks.tf            # Terraform check blocks
 │       ├── moved.tf             # State move declarations
@@ -80,6 +83,11 @@ brew install node@22
 
 1. **Create API Token** at [Vercel Account Settings](https://vercel.com/account/tokens)
 2. **Note your Team ID** (found in team settings URL)
+3. If using `sandbox_provider = "vercel"`, also note the Project ID for the Vercel project that will
+   own sandbox sessions.
+4. Terraform builds an immutable Vercel base-runtime snapshot from the local checkout and passes a
+   deterministic snapshot name into the control-plane Worker. `VERCEL_BASE_SNAPSHOT_ID` is only
+   needed as a manual override.
 
 ### 4. Modal Setup
 
@@ -167,12 +175,16 @@ DEPLOYMENT_NAME          # Unique name for your deployment (e.g., 'acme', 'johnd
 # Cloudflare
 CLOUDFLARE_API_TOKEN
 CLOUDFLARE_ACCOUNT_ID
+CLOUDFLARE_WORKER_SUBDOMAIN
 R2_ACCESS_KEY_ID
 R2_SECRET_ACCESS_KEY
+WEB_PLATFORM # Optional; defaults to vercel
 
-# Vercel
+# Vercel web app (only if WEB_PLATFORM=vercel)
 VERCEL_API_TOKEN
 VERCEL_TEAM_ID
+VERCEL_PROJECT_ID
+NEXTAUTH_URL # Used by the Vercel web deploy workflow
 
 # Modal
 MODAL_TOKEN_ID
@@ -180,6 +192,25 @@ MODAL_TOKEN_SECRET
 MODAL_WORKSPACE
 MODAL_ENVIRONMENT # Optional; defaults to main
 MODAL_ENVIRONMENT_WEB_SUFFIX # Optional; lowercase letters, digits, dashes; empty for workspace--... endpoints
+MODAL_API_SECRET
+
+# Sandbox provider
+SANDBOX_PROVIDER
+
+# Daytona (only if SANDBOX_PROVIDER=daytona)
+DAYTONA_API_URL
+DAYTONA_API_KEY
+DAYTONA_BASE_SNAPSHOT
+DAYTONA_TARGET # Optional
+
+# Vercel Sandboxes (only if SANDBOX_PROVIDER=vercel)
+VERCEL_SANDBOX_TOKEN
+VERCEL_SANDBOX_PROJECT_ID
+VERCEL_SANDBOX_TEAM_ID # Optional
+VERCEL_BASE_SNAPSHOT_ID # Optional manual fallback; skips Terraform-managed snapshot builds
+VERCEL_SANDBOX_RUNTIME # Optional; defaults to node24
+VERCEL_SNAPSHOT_EXPIRATION_MS # Optional; defaults to 0
+VERCEL_SANDBOX_API_BASE_URL # Optional advanced Vercel Sandbox API base URL override
 
 # GitHub OAuth App
 GH_OAUTH_CLIENT_ID
@@ -191,8 +222,20 @@ GH_APP_PRIVATE_KEY
 GH_APP_INSTALLATION_ID
 
 # Slack
+ENABLE_SLACK_BOT # Optional; defaults to true
 SLACK_BOT_TOKEN
 SLACK_SIGNING_SECRET
+
+# GitHub bot
+ENABLE_GITHUB_BOT # Optional; defaults to false
+GH_WEBHOOK_SECRET
+GH_BOT_USERNAME
+
+# Linear bot
+ENABLE_LINEAR_BOT # Optional; defaults to false
+LINEAR_CLIENT_ID
+LINEAR_CLIENT_SECRET
+LINEAR_WEBHOOK_SECRET
 
 # API Keys
 ANTHROPIC_API_KEY
@@ -202,6 +245,16 @@ TOKEN_ENCRYPTION_KEY
 REPO_SECRETS_ENCRYPTION_KEY
 INTERNAL_CALLBACK_SECRET
 NEXTAUTH_SECRET
+
+# Access control
+ALLOWED_USERS
+ALLOWED_EMAIL_DOMAINS
+ENABLE_DURABLE_OBJECT_BINDINGS # Optional; defaults to true
+
+# Branding
+APP_NAME # Optional; defaults to Open-Inspect
+APP_SHORT_NAME
+APP_ICON_URL
 ```
 
 ## Module Reference
@@ -332,15 +385,14 @@ module "modal" {
 Durable Object migrations are applied with deployments. This means you can't bind to a Durable
 Object in a Version if a deployment doesn't exist (i.e., migrations haven't been applied).
 
-**First-time deployment with Durable Objects:**
+**First-time deployment with Durable Objects and service bindings:**
 
-The first `terraform apply` may fail due to the chicken-and-egg problem. Workaround:
+Use the built-in two-phase flags instead of editing Terraform modules:
 
-1. Comment out the `durable_objects` binding block in the module
-2. Run `terraform apply` to create the worker and deployment
-3. Uncomment the `durable_objects` binding
-4. Comment out the `migrations` block
-5. Run `terraform apply` again
+1. Set `enable_durable_object_bindings = false` and `enable_service_bindings = false`.
+2. Run `terraform apply` to create the initial workers and migrations.
+3. Set both values back to `true`.
+4. Run `terraform apply` again to attach the Durable Object and service bindings.
 
 See
 [Cloudflare's documentation](https://developers.cloudflare.com/workers/platform/infrastructure-as-code/)
@@ -372,11 +424,12 @@ terraform output verification_commands
 # 1. Health check control plane
 curl https://open-inspect-control-plane-prod.<subdomain>.workers.dev/health
 
-# 2. Health check Modal
-# Prefer the exact URL from terraform output verification_commands.
+# 2. Sandbox backend health check
+# Modal exposes a health endpoint. Prefer the exact URL from terraform output verification_commands.
 # Manual form: https://<workspace>[-<modal_environment_web_suffix>]--open-inspect-api-health.modal.run
 MODAL_WORKSPACE_SLUG="<workspace>" # or "<workspace>-<modal_environment_web_suffix>"
 curl https://${MODAL_WORKSPACE_SLUG}--open-inspect-api-health.modal.run
+# Daytona and Vercel use their provider APIs directly, so there is no Open-Inspect shim health URL.
 
 # 3. Verify Vercel deployment (replace with your Vercel app URL)
 curl https://<your-vercel-app>.vercel.app

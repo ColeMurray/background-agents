@@ -7,7 +7,7 @@ import { supportsRepoImages } from "@/lib/sandbox-provider";
 export async function GET() {
   if (!supportsRepoImages()) {
     return NextResponse.json(
-      { error: "Repo images are only available when SANDBOX_PROVIDER=modal" },
+      { error: "Repo images are only available when SANDBOX_PROVIDER=modal or vercel" },
       { status: 501 }
     );
   }

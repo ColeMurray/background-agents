@@ -28,6 +28,8 @@ import {
   type ResumeResult,
   type SnapshotConfig,
   type SnapshotResult,
+  type StopConfig,
+  type StopResult,
 } from "../provider";
 import type { SandboxRow, SessionRow } from "../../session/types";
 import type { SandboxStatus } from "../../types";
@@ -180,6 +182,12 @@ function createMockStorage(
         sandbox.code_server_password = null;
       }
     }),
+    clearSandboxCodeServerUrl: vi.fn(() => {
+      calls.push("clearSandboxCodeServerUrl");
+      if (sandbox) {
+        sandbox.code_server_url = null;
+      }
+    }),
     updateSandboxTunnelUrls: vi.fn(async (urls: Record<string, string>) => {
       calls.push(`updateSandboxTunnelUrls`);
       if (sandbox) {
@@ -259,6 +267,7 @@ function createMockProvider(
     restoreFromSnapshot: (config: RestoreConfig) => Promise<RestoreResult>;
     resumeSandbox: (config: ResumeConfig) => Promise<ResumeResult>;
     takeSnapshot: (config: SnapshotConfig) => Promise<SnapshotResult>;
+    stopSandbox: (config: StopConfig) => Promise<StopResult>;
     capabilities: Partial<SandboxProvider["capabilities"]>;
   }> = {}
 ): SandboxProvider {
@@ -293,6 +302,9 @@ function createMockProvider(
   };
   if (overrides.resumeSandbox) {
     provider.resumeSandbox = overrides.resumeSandbox;
+  }
+  if (overrides.stopSandbox) {
+    provider.stopSandbox = overrides.stopSandbox;
   }
   return provider;
 }
@@ -1179,6 +1191,88 @@ describe("SandboxLifecycleManager", () => {
       await manager.handleAlarm();
 
       expect(provider.takeSnapshot).toHaveBeenCalled();
+    });
+
+    it("snapshots and explicitly stops non-resumable providers on inactivity timeout", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "ready",
+        last_heartbeat: now - 10000,
+        last_activity: now - 11 * 60 * 1000,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const wsManager = createMockWebSocketManager(false, 0);
+      const stopSandbox = vi.fn(async () => ({ success: true }));
+      const provider = createMockProvider({
+        capabilities: { supportsExplicitStop: true, supportsPersistentResume: false },
+        stopSandbox,
+      });
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        wsManager,
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.handleAlarm();
+
+      expect(provider.takeSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerObjectId: "modal-obj-123",
+          reason: "inactivity_timeout",
+        })
+      );
+      expect(stopSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerObjectId: "modal-obj-123",
+          reason: "inactivity_timeout",
+        })
+      );
+      expect(wsManager.sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
+      expect(storage.calls).toContain("clearSandboxCodeServer");
+    });
+
+    it("stops resumable provider-managed sandboxes without snapshotting", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "ready",
+        last_heartbeat: now - 10000,
+        last_activity: now - 11 * 60 * 1000,
+        code_server_url: "https://code.test",
+        code_server_password: "encrypted-password",
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const stopSandbox = vi.fn(async () => ({ success: true }));
+      const provider = createMockProvider({
+        capabilities: { supportsExplicitStop: true, supportsPersistentResume: true },
+        stopSandbox,
+      });
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false, 0),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.handleAlarm();
+
+      expect(provider.takeSnapshot).not.toHaveBeenCalled();
+      expect(stopSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerObjectId: "modal-obj-123",
+          reason: "inactivity_timeout",
+        })
+      );
+      expect(storage.calls).toContain("clearSandboxCodeServerUrl");
+      expect(storage.calls).not.toContain("clearSandboxCodeServer");
     });
 
     it("calls onSandboxTerminating callback on heartbeat stale", async () => {

@@ -61,6 +61,7 @@ export interface Env {
   MODAL_TOKEN_SECRET?: string;
   MODAL_API_SECRET?: string; // Shared secret for authenticating with Modal endpoints
   DAYTONA_API_KEY?: string; // Daytona REST API key (Bearer auth + HMAC derivation)
+  VERCEL_TOKEN?: string; // Vercel API access token for Sandbox API
   INTERNAL_CALLBACK_SECRET?: string; // For signing callbacks to slack-bot
   SLACK_BOT_TOKEN?: string; // Slack bot token for agent-initiated chat.postMessage calls
 
@@ -80,7 +81,7 @@ export interface Env {
   WORKER_URL?: string; // Base URL for the worker (for callbacks)
   WEB_APP_URL?: string; // Base URL for the web app (for PR links)
   CF_ACCOUNT_ID?: string; // Cloudflare account ID
-  SANDBOX_PROVIDER?: string; // "modal" (default) or "daytona"
+  SANDBOX_PROVIDER?: string; // "modal" (default), "daytona", or "vercel"
   MODAL_WORKSPACE?: string; // Modal workspace name
   MODAL_ENVIRONMENT?: string; // Modal environment name for dashboard URLs
   MODAL_ENVIRONMENT_WEB_SUFFIX?: string; // Modal environment web suffix for endpoint URLs
@@ -89,6 +90,13 @@ export interface Env {
   DAYTONA_AUTO_STOP_INTERVAL_MINUTES?: string; // Daytona idle stop interval in minutes
   DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES?: string; // Daytona archive interval in minutes
   DAYTONA_TARGET?: string; // Optional Daytona target name
+  VERCEL_PROJECT_ID?: string; // Vercel project ID used for Sandbox API scope
+  VERCEL_TEAM_ID?: string; // Optional Vercel team ID used for Sandbox API scope
+  VERCEL_BASE_SNAPSHOT_ID?: string; // Optional prebuilt base snapshot with sandbox runtime
+  VERCEL_BASE_SNAPSHOT_NAME?: string; // Optional managed base snapshot sandbox name
+  VERCEL_RUNTIME?: string; // Vercel sandbox runtime (default: node24)
+  VERCEL_SANDBOX_API_BASE_URL?: string; // Override for tests or non-default Vercel API base URL
+  VERCEL_SNAPSHOT_EXPIRATION_MS?: string; // Snapshot expiration in ms; 0 means no expiration
 
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)

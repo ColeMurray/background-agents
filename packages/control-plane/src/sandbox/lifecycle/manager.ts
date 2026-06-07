@@ -197,8 +197,8 @@ export interface McpServerLookup {
 // ==================== Repo Image Lookup ====================
 
 /**
- * Lookup interface for pre-built repo images.
- * Returns the latest ready image for a repo, if any.
+ * Provider-scoped lookup interface for pre-built repo images.
+ * The Durable Object binds this to the active sandbox backend before injection.
  */
 export interface RepoImageLookup {
   getLatestReady(
@@ -855,10 +855,17 @@ export class SandboxLifecycleManager {
   }
 
   /**
-   * Whether the active provider owns stop/resume of long-lived sandboxes.
+   * Whether the active provider can stop a sandbox via its API.
+   */
+  private canStopProviderSandbox(): boolean {
+    return !!this.provider.capabilities.supportsExplicitStop && !!this.provider.stopSandbox;
+  }
+
+  /**
+   * Whether stopping should preserve provider-owned state for in-place resume.
    */
   private usesProviderManagedStop(): boolean {
-    return !!this.provider.capabilities.supportsExplicitStop && !!this.provider.stopSandbox;
+    return this.canStopProviderSandbox() && !!this.provider.capabilities.supportsPersistentResume;
   }
 
   /**
@@ -949,7 +956,7 @@ export class SandboxLifecycleManager {
       await this.callbacks.onSandboxTerminating?.();
       this.storage.updateSandboxStatus("failed");
       this.clearSandboxAccessState();
-      if (this.usesProviderManagedStop()) {
+      if (this.canStopProviderSandbox()) {
         try {
           await this.stopProviderSandbox("connecting_timeout");
         } catch (error) {
@@ -995,12 +1002,23 @@ export class SandboxLifecycleManager {
           });
         }
       } else {
-        // Fire-and-forget snapshot so status broadcast isn't delayed.
-        this.triggerSnapshot("heartbeat_timeout").catch((e) =>
-          this.log.error("Heartbeat snapshot failed", {
-            error: e instanceof Error ? e : String(e),
-          })
-        );
+        if (this.canStopProviderSandbox()) {
+          await this.triggerSnapshot("heartbeat_timeout");
+          try {
+            await this.stopProviderSandbox("heartbeat_timeout");
+          } catch (error) {
+            this.log.warn("Provider stop failed after heartbeat timeout", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        } else {
+          // Fire-and-forget snapshot so status broadcast isn't delayed.
+          this.triggerSnapshot("heartbeat_timeout").catch((e) =>
+            this.log.error("Heartbeat snapshot failed", {
+              error: e instanceof Error ? e : String(e),
+            })
+          );
+        }
         this.wsManager.sendToSandbox({ type: "shutdown" });
       }
 
@@ -1047,6 +1065,15 @@ export class SandboxLifecycleManager {
         } else {
           await this.triggerSnapshot("inactivity_timeout");
           this.wsManager.sendToSandbox({ type: "shutdown" });
+          if (this.canStopProviderSandbox()) {
+            try {
+              await this.stopProviderSandbox("inactivity_timeout");
+            } catch (error) {
+              this.log.error("Provider stop failed after inactivity timeout", {
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
         }
 
         this.wsManager.closeSandboxWebSocket(1000, "Inactivity timeout");
