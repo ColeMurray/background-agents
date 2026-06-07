@@ -13,6 +13,7 @@ import {
 } from "@open-inspect/shared";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { Button } from "@/components/ui/button";
+import { APP_NAME } from "@/lib/site-config";
 import { RadioCard } from "@/components/ui/form-controls";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -100,10 +101,10 @@ export function SlackIntegrationSettings() {
 
       <Section
         title="Channel access"
-        description="Open-Inspect does not maintain its own channel allowlist."
+        description={`${APP_NAME} does not maintain its own channel allowlist.`}
       >
         <p className="text-sm text-muted-foreground">
-          To make a channel available to agents, invite the Open-Inspect Slack bot to a channel in
+          To make a channel available to agents, invite the {APP_NAME} Slack bot to a channel in
           Slack. The bot can post only to channels it&apos;s a member of; remove access by kicking
           the bot from the channel.
         </p>
