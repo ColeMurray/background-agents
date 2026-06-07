@@ -6,7 +6,9 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { IsloApiError, type IsloApi } from "@islo-labs/sdk";
 import { computeHmacHex } from "@open-inspect/shared";
 import { IsloSandboxProvider, type IsloClientLike, type IsloProviderConfig } from "./islo-provider";
-import { SandboxProviderError, type CreateSandboxConfig, type ResumeConfig } from "../provider";
+import { type CreateSandboxConfig, type ResumeConfig } from "../provider";
+
+const SHARE_DELAY_TIMEOUT_MS = 50;
 
 const defaultProviderConfig: IsloProviderConfig = {
   apiKey: "islo-api-key",
@@ -256,7 +258,7 @@ describe("IsloSandboxProvider", () => {
     const client = createMockClient({
       createShare: vi.fn(async (request) => {
         order.push("share-start");
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await new Promise((resolve) => setTimeout(resolve, SHARE_DELAY_TIMEOUT_MS));
         order.push("share-end");
         return {
           share_id: `share-${request.port}`,

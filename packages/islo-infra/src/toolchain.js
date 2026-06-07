@@ -4,7 +4,12 @@ import { fileURLToPath } from "node:url";
 
 export const DEFAULT_BASE_IMAGE = "ghcr.io/islo-labs/islo-runner:latest";
 export const OPENCODE_VERSION = "1.14.41";
+export const BUN_VERSION = "1.2.19";
+export const BUN_LINUX_X64_SHA256 =
+  "c3d3c14e9a5ec83ff67d0acfe76e4315ad06da9f34f59fc7b13813782caf1f66";
 export const CODE_SERVER_VERSION = "4.109.5";
+export const CODE_SERVER_AMD64_SHA256 =
+  "297c674d308436af5064514073f8bda3f1ad61095176c6b6f76b4f2a048fdb23";
 export const AGENT_BROWSER_VERSION = "0.21.2";
 export const TTYD_VERSION = "1.7.7";
 export const TTYD_AMD64_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55";
@@ -67,19 +72,25 @@ echo "deb [arch=amd64 signed-by=/usr/share/keyrings/githubcli-archive-keyring.gp
 apt-get update
 apt-get install -y --no-install-recommends gh
 
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \\
+  | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg
+echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" \\
+  > /etc/apt/sources.list.d/nodesource.list
+apt-get update
 apt-get install -y --no-install-recommends nodejs
 node --version
 npm --version
 
 npm install -g pnpm@latest
 pnpm --version
-curl -fsSL https://bun.sh/install | bash
-if [ -x /root/.bun/bin/bun ]; then
-  ln -sf /root/.bun/bin/bun /usr/local/bin/bun
-elif [ -x "$HOME/.bun/bin/bun" ]; then
-  ln -sf "$HOME/.bun/bin/bun" /usr/local/bin/bun
-fi
+curl -fsSL -o /tmp/bun-linux-x64.zip \\
+  "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-x64.zip"
+echo "${BUN_LINUX_X64_SHA256}  /tmp/bun-linux-x64.zip" | sha256sum -c -
+mkdir -p /root/.bun/bin
+unzip -o -j /tmp/bun-linux-x64.zip "bun-linux-x64/bun" -d /root/.bun/bin
+chmod +x /root/.bun/bin/bun
+ln -sf /root/.bun/bin/bun /usr/local/bin/bun
+rm /tmp/bun-linux-x64.zip
 bun --version
 
 ln -sf "$(command -v python3)" /usr/local/bin/python
@@ -105,6 +116,7 @@ npm install --ignore-scripts --no-audit --no-fund
 
 curl -fsSL -o /tmp/code-server.deb \\
   "https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server_${CODE_SERVER_VERSION}_amd64.deb"
+echo "${CODE_SERVER_AMD64_SHA256}  /tmp/code-server.deb" | sha256sum -c -
 dpkg -i /tmp/code-server.deb
 rm /tmp/code-server.deb
 code-server --version

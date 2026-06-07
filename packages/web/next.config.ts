@@ -5,7 +5,6 @@ const monorepoRoot = path.join(__dirname, "../..");
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  allowedDevOrigins: ["127.0.0.1", "localhost"],
   // Both must match the monorepo root for Turbopack to resolve workspace packages
   outputFileTracingRoot: monorepoRoot,
   turbopack: {
