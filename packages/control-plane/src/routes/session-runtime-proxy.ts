@@ -106,26 +106,6 @@ async function handleCreatePR(
   });
 }
 
-async function handleSandboxError(
-  request: Request,
-  _env: Env,
-  match: RegExpMatchArray,
-  ctx: SessionRouteContext
-): Promise<Response> {
-  const sessionId = getSessionId(match);
-  if (sessionId instanceof Response) return sessionId;
-
-  const body = await parseJsonBody<unknown>(request);
-  if (body instanceof Response) return body;
-  if (!isObjectBody(body)) return error("JSON body must be an object");
-
-  return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.sandboxError, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-}
-
 async function handleUpdateSessionTitle(
   request: Request,
   _env: Env,
@@ -246,11 +226,6 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     method: "POST",
     pattern: parsePattern("/sessions/:id/pr"),
     handler: handleCreatePR,
-  }),
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern("/sessions/:id/error"),
-    handler: handleSandboxError,
   }),
   simpleProxyRoute({
     method: "POST",

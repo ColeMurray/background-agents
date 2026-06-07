@@ -57,35 +57,6 @@ describe("session runtime proxy routes", () => {
     expect(new URL(requests[0].url).search).toBe("?limit=10");
   });
 
-  it("forwards sandbox error reports to the runtime", async () => {
-    const requests: Request[] = [];
-    const fetch = vi.fn(async (request: Request) => {
-      requests.push(request);
-      return Response.json({ status: "ok" });
-    });
-    const { handler, match } = getHandler("POST", "/sessions/session-1/error");
-
-    const response = await handler(
-      new Request("https://test.local/sessions/session-1/error", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ error: "OpenCode failed", fatal: true }),
-      }),
-      createEnv(fetch),
-      match,
-      createCtx()
-    );
-
-    await expect(response.json()).resolves.toEqual({ status: "ok" });
-    expect(fetch).toHaveBeenCalledOnce();
-    expect(requests[0].method).toBe("POST");
-    expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.sandboxError);
-    await expect(requests[0].json()).resolves.toEqual({
-      error: "OpenCode failed",
-      fatal: true,
-    });
-  });
-
   it("adapts title updates to the internal runtime contract", async () => {
     const requests: Request[] = [];
     const fetch = vi.fn(async (request: Request) => {

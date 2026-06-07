@@ -6,7 +6,6 @@ import type { ScmCredentialsResult } from "../../scm-credentials-service";
 import type { SessionRepository } from "../../repository";
 import type { SandboxRow, SessionRow } from "../../types";
 import { assertArtifactType } from "../../artifacts";
-import type { SandboxStatus } from "../../../types";
 
 interface AddParticipantRequest {
   userId: string;
@@ -19,12 +18,7 @@ interface AddParticipantRequest {
 export interface SandboxHandlerDeps {
   repository: Pick<
     SessionRepository,
-    | "createParticipant"
-    | "createArtifact"
-    | "createEvent"
-    | "getProcessingMessage"
-    | "updateSandboxStatus"
-    | "updateSandboxSpawnError"
+    "createParticipant" | "createArtifact" | "createEvent" | "getProcessingMessage"
   >;
   processSandboxEvent: (event: SandboxEvent) => Promise<void>;
   getSandbox: () => SandboxRow | null;
@@ -51,7 +45,6 @@ export interface SandboxHandler {
   createMediaArtifact: (request: Request) => Promise<Response>;
   addParticipant: (request: Request) => Promise<Response>;
   verifySandboxToken: (request: Request) => Promise<Response>;
-  sandboxError: (request: Request) => Promise<Response>;
   openaiTokenRefresh: () => Promise<Response>;
   scmCredentials: () => Promise<Response>;
 }
@@ -61,21 +54,6 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
     async sandboxEvent(request: Request): Promise<Response> {
       const event = (await request.json()) as SandboxEvent;
       await deps.processSandboxEvent(event);
-      return Response.json({ status: "ok" });
-    },
-
-    async sandboxError(request: Request): Promise<Response> {
-      const body = (await request.json()) as { error?: unknown; fatal?: unknown };
-      const message = typeof body.error === "string" ? body.error : "Sandbox reported an error";
-      const now = deps.now();
-
-      deps.repository.updateSandboxSpawnError(message, now);
-      if (body.fatal === true) {
-        deps.repository.updateSandboxStatus("failed" as SandboxStatus);
-        deps.broadcast({ type: "sandbox_status", status: "failed" });
-      }
-      deps.broadcast({ type: "sandbox_error", error: message });
-
       return Response.json({ status: "ok" });
     },
 

@@ -1147,15 +1147,11 @@ class SandboxSupervisor:
 
         if not self.control_plane_url:
             return
-        session_id = self.session_config.get("session_id", "")
-        if not session_id:
-            self.log.error("supervisor.report_error_skipped", reason="no_session_id")
-            return
 
         try:
             async with httpx.AsyncClient() as client:
                 await client.post(
-                    f"{self.control_plane_url}/sessions/{session_id}/error",
+                    f"{self.control_plane_url}/sandbox/{self.sandbox_id}/error",
                     json={"error": message, "fatal": True},
                     headers={"Authorization": f"Bearer {self.sandbox_token}"},
                     timeout=5.0,
