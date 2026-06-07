@@ -22,7 +22,7 @@
     "esbuild": "^0.25.1",
     "typescript": "^5.7.2",
     "@vitest/coverage-v8": "^3.2.0",
-    "vitest": "^3.2.0",
+    "vitest": "^4.1.0",
     "wrangler": "^4.0.0"
   }
 }
