@@ -88,4 +88,37 @@ describe("ModalClient", () => {
       "https://acme-prod-web--open-inspect-api-health.modal.run"
     );
   });
+
+  it("routes the restore session_config through buildSessionConfig (carries mcp_servers)", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ success: true, data: { sandbox_id: "sb-1" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await client.restoreSandbox({
+      snapshotImageId: "img-1",
+      sessionId: "session-123",
+      sandboxId: "sandbox-456",
+      sandboxAuthToken: "auth-token",
+      controlPlaneUrl: "https://control-plane.test",
+      repoOwner: "testowner",
+      repoName: "testrepo",
+      provider: "anthropic",
+      model: "anthropic/claude-sonnet-4-5",
+      mcpServers: [{ id: "mcp-1", name: "Tool", type: "local", enabled: true }],
+    });
+
+    const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
+    expect(body.session_config).toEqual({
+      session_id: "session-123",
+      repo_owner: "testowner",
+      repo_name: "testrepo",
+      provider: "anthropic",
+      model: "anthropic/claude-sonnet-4-5",
+      mcp_servers: [{ id: "mcp-1", name: "Tool", type: "local", enabled: true }],
+    });
+  });
 });

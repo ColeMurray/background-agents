@@ -9,6 +9,7 @@ import { generateInternalToken, type SandboxSettings } from "@open-inspect/share
 import type { McpServerConfig } from "@open-inspect/shared";
 import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";
+import { buildSessionConfig } from "./sandbox-env";
 
 const log = createLogger("modal-client");
 
@@ -332,15 +333,7 @@ export class ModalClient {
         headers,
         body: JSON.stringify({
           snapshot_image_id: request.snapshotImageId,
-          session_config: {
-            session_id: request.sessionId,
-            repo_owner: request.repoOwner,
-            repo_name: request.repoName,
-            provider: request.provider,
-            model: request.model,
-            branch: request.branch || null,
-            mcp_servers: request.mcpServers || null,
-          },
+          session_config: buildSessionConfig(request),
           sandbox_id: request.sandboxId,
           control_plane_url: request.controlPlaneUrl,
           sandbox_auth_token: request.sandboxAuthToken,
