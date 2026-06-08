@@ -7,7 +7,9 @@ const mockUserStore = {
 };
 
 vi.mock("./db/user-store", () => ({
-  UserStore: vi.fn().mockImplementation(() => mockUserStore),
+  UserStore: vi.fn().mockImplementation(function () {
+    return mockUserStore;
+  }),
 }));
 
 describe("provider identity router integration", () => {

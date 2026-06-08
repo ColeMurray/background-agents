@@ -16,7 +16,9 @@ vi.mock("../db/session-index", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
-    SessionIndexStore: vi.fn().mockImplementation(() => sessionStoreMock),
+    SessionIndexStore: vi.fn().mockImplementation(function () {
+      return sessionStoreMock;
+    }),
   };
 });
 
@@ -24,7 +26,9 @@ vi.mock("../db/integration-settings", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
-    IntegrationSettingsStore: vi.fn().mockImplementation(() => integrationStoreMock),
+    IntegrationSettingsStore: vi.fn().mockImplementation(function () {
+      return integrationStoreMock;
+    }),
   };
 });
 

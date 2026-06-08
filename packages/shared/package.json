@@ -21,7 +21,7 @@
   },
   "devDependencies": {
     "typescript": "^5.7.2",
-    "vitest": "^4.0.18"
+    "vitest": "^4.1.0"
   },
   "dependencies": {
     "@octokit/webhooks-types": "^7.6.1",

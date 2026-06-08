@@ -48,24 +48,30 @@ function createMockStore() {
 let mockStore: ReturnType<typeof createMockStore>;
 
 vi.mock("../db/automation-store", () => ({
-  AutomationStore: vi.fn().mockImplementation(() => mockStore),
+  AutomationStore: vi.fn().mockImplementation(function () {
+    return mockStore;
+  }),
   toAutomationRun: vi.fn((row: unknown) => row),
 }));
 
 const mockSessionStoreCreate = vi.fn().mockResolvedValue(undefined);
 const mockSessionStoreUpdateStatus = vi.fn().mockResolvedValue(undefined);
 vi.mock("../db/session-index", () => ({
-  SessionIndexStore: vi.fn().mockImplementation(() => ({
-    create: mockSessionStoreCreate,
-    updateStatus: mockSessionStoreUpdateStatus,
-  })),
+  SessionIndexStore: vi.fn().mockImplementation(function () {
+    return {
+      create: mockSessionStoreCreate,
+      updateStatus: mockSessionStoreUpdateStatus,
+    };
+  }),
 }));
 
 const mockUserStoreGetIdentity = vi.fn().mockResolvedValue(null);
 vi.mock("../db/user-store", () => ({
-  UserStore: vi.fn().mockImplementation(() => ({
-    getIdentity: mockUserStoreGetIdentity,
-  })),
+  UserStore: vi.fn().mockImplementation(function () {
+    return {
+      getIdentity: mockUserStoreGetIdentity,
+    };
+  }),
 }));
 
 vi.mock("../auth/crypto", () => ({

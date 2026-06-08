@@ -9,7 +9,9 @@ const mockSessionIndexStore = {
 };
 
 vi.mock("../db/session-index", () => ({
-  SessionIndexStore: vi.fn().mockImplementation(() => mockSessionIndexStore),
+  SessionIndexStore: vi.fn().mockImplementation(function () {
+    return mockSessionIndexStore;
+  }),
 }));
 
 function createCtx(): RequestContext {
