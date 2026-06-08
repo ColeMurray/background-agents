@@ -13,9 +13,9 @@ data "external" "vercel_source_hash" {
       packages/sandbox-runtime/pyproject.toml
       packages/sandbox-runtime/src
       packages/control-plane/scripts/build-vercel-base-snapshot.ts
-      packages/control-plane/src/sandbox/vercel-base-snapshot.ts
-      packages/control-plane/src/sandbox/vercel-bootstrap.ts
-      packages/control-plane/src/sandbox/vercel-client.ts
+      packages/control-plane/src/sandbox/providers/vercel/base-snapshot.ts
+      packages/control-plane/src/sandbox/providers/vercel/bootstrap.ts
+      packages/control-plane/src/sandbox/providers/vercel/client.ts
     )
     if command -v sha256sum &> /dev/null; then
       hash=$(find "$${paths[@]}" -type f \
