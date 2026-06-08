@@ -207,6 +207,42 @@ describe("VercelSandboxProvider", () => {
     );
   });
 
+  it("caps the default sandbox timeout at Vercel's 45 minute limit", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await provider.createSandbox(baseCreateConfig);
+
+    expect(vi.mocked(client.createSandbox).mock.calls[0][0].timeoutMs).toBe(45 * 60 * 1000);
+  });
+
+  it("keeps explicit Vercel sandbox timeouts below the provider limit", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await provider.createSandbox({ ...baseCreateConfig, timeoutSeconds: 30 * 60 });
+
+    expect(vi.mocked(client.createSandbox).mock.calls[0][0].timeoutMs).toBe(30 * 60 * 1000);
+  });
+
+  it("caps explicit Vercel sandbox timeouts above the provider limit", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await provider.createSandbox({ ...baseCreateConfig, timeoutSeconds: 60 * 60 });
+
+    expect(vi.mocked(client.createSandbox).mock.calls[0][0].timeoutMs).toBe(45 * 60 * 1000);
+  });
+
+  it("caps restore timeouts at Vercel's 45 minute limit", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await provider.restoreFromSnapshot(baseRestoreConfig);
+
+    expect(vi.mocked(client.createSandbox).mock.calls[0][0].timeoutMs).toBe(45 * 60 * 1000);
+  });
+
   it("resolves a configured base snapshot name before creating a fresh sandbox", async () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, {

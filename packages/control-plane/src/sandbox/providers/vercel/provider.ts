@@ -38,6 +38,7 @@ const TUNNEL_ENV_FILE_PATH = "/workspace/.tunnels.env";
 const EXPECTED_TUNNEL_PORTS_ENV_VAR = "EXPECTED_TUNNEL_PORTS";
 const DEFAULT_SNAPSHOT_EXPIRATION_MS = 0;
 const BUILD_TIMEOUT_SECONDS = 1800;
+const VERCEL_MAX_SANDBOX_TIMEOUT_MS = 45 * 60 * 1000;
 const VERCEL_TUNNEL_ENV_WRITE_TIMEOUT_MS = 30_000;
 const REPO_IMAGE_CALLBACK_ENV_KEYS = [
   "OI_REPO_IMAGE_PROVIDER_SESSION_ID",
@@ -49,6 +50,11 @@ const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS = [
   ...REPO_IMAGE_CALLBACK_ENV_KEYS,
   "OI_REPO_IMAGE_CALLBACK_SECRET",
 ] as const;
+
+function resolveVercelTimeoutMs(timeoutSeconds?: number): number {
+  const requestedMs = (timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS) * 1000;
+  return Math.min(requestedMs, VERCEL_MAX_SANDBOX_TIMEOUT_MS);
+}
 
 export interface VercelProviderConfig {
   scmProvider: SourceControlProviderName;
@@ -119,7 +125,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         {
           name: config.sandboxId,
           runtime: this.providerConfig.runtime || DEFAULT_VERCEL_RUNTIME,
-          timeoutMs: (config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS) * 1000,
+          timeoutMs: resolveVercelTimeoutMs(config.timeoutSeconds),
           ports,
           env,
           tags: this.buildTags(config),
@@ -165,7 +171,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         {
           name: config.sandboxId,
           runtime: this.providerConfig.runtime || DEFAULT_VERCEL_RUNTIME,
-          timeoutMs: (config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS) * 1000,
+          timeoutMs: resolveVercelTimeoutMs(config.timeoutSeconds),
           ports,
           env,
           tags: this.buildTags(config),
