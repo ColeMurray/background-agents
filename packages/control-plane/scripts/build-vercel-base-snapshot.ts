@@ -3,9 +3,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
-import { buildVercelBaseSnapshot } from "../src/sandbox/vercel-base-snapshot";
-import { VERCEL_LOCAL_RUNTIME_EXTRACT_DIR } from "../src/sandbox/vercel-bootstrap";
-import { createVercelSandboxClient } from "../src/sandbox/vercel-client";
+import { buildVercelBaseSnapshot } from "../src/sandbox/providers/vercel/base-snapshot";
+import { VERCEL_LOCAL_RUNTIME_EXTRACT_DIR } from "../src/sandbox/providers/vercel/bootstrap";
+import { createVercelSandboxClient } from "../src/sandbox/providers/vercel/client";
 
 function env(name: string, fallback = ""): string {
   return process.env[name] || fallback;

@@ -9,6 +9,7 @@ import {
 import type { SandboxEvent } from "@/types/session";
 import { formatSessionEventTime } from "@/lib/time";
 import { getSafeExternalUrl } from "@/lib/urls";
+import { APP_NAME } from "@/lib/site-config";
 import { ChevronRightIcon, ErrorIcon, LinkIcon, SlackIcon } from "@/components/ui/icons";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
@@ -26,7 +27,7 @@ const DENIAL_COPY: Record<SlackDenialReason, { headline: string; hint?: string }
   },
   channel_not_found_or_forbidden: {
     headline: "Channel not found or bot is not in the channel.",
-    hint: "Invite the Open-Inspect bot to the channel and try again.",
+    hint: `Invite the ${APP_NAME} bot to the channel and try again.`,
   },
   rate_limited: {
     headline: "Slack rate-limited the request.",

@@ -6,8 +6,8 @@
  * with fetch directly.
  */
 
-import { createLogger } from "../logger";
-import type { CorrelationContext } from "../logger";
+import { createLogger } from "../../../logger";
+import type { CorrelationContext } from "../../../logger";
 
 const log = createLogger("vercel-sandbox-client");
 

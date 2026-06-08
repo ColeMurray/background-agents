@@ -3,8 +3,8 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import { VercelSandboxProvider, type VercelProviderConfig } from "./vercel-provider";
-import type { CreateSandboxConfig, RestoreConfig } from "../provider";
+import { VercelSandboxProvider, type VercelProviderConfig } from "./provider";
+import type { CreateSandboxConfig, RestoreConfig } from "../../provider";
 import type {
   VercelCreateSandboxRequest,
   VercelCreateSandboxResponse,
@@ -12,7 +12,7 @@ import type {
   VercelSandboxClient,
   VercelSnapshotMetadata,
   VercelSnapshotResponse,
-} from "../vercel-client";
+} from "./client";
 
 function createSessionResponse(
   sessionId = "vercel-session-1",

@@ -200,6 +200,22 @@ describe("DaytonaSandboxProvider", () => {
       expect(sessionConfig.branch).toBe("feature/test");
     });
 
+    it("includes mcp_servers in SESSION_CONFIG when provided", async () => {
+      const client = createMockClient();
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
+
+      await provider.createSandbox({
+        ...baseCreateConfig,
+        mcpServers: [{ id: "mcp-1", name: "Tool", type: "local", enabled: true }],
+      });
+
+      const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env;
+      const sessionConfig = JSON.parse(envVars.SESSION_CONFIG);
+      expect(sessionConfig.mcp_servers).toEqual([
+        { id: "mcp-1", name: "Tool", type: "local", enabled: true },
+      ]);
+    });
+
     it("includes user env vars (repo secrets) with system vars taking precedence", async () => {
       const client = createMockClient();
       const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);

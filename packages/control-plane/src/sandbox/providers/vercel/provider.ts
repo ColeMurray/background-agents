@@ -3,9 +3,10 @@
  */
 
 import { computeHmacHex, MAX_TUNNEL_PORTS, type SandboxSettings } from "@open-inspect/shared";
-import { createLogger } from "../../logger";
-import type { CorrelationContext } from "../../logger";
-import type { SourceControlProviderName } from "../../source-control";
+import { createLogger } from "../../../logger";
+import type { CorrelationContext } from "../../../logger";
+import type { SourceControlProviderName } from "../../../source-control";
+import { buildSessionConfig } from "../../sandbox-env";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   SandboxProviderError,
@@ -19,15 +20,15 @@ import {
   type SnapshotResult,
   type StopConfig,
   type StopResult,
-} from "../provider";
+} from "../../provider";
 import type {
   VercelCommandResult,
   VercelCreateSandboxResponse,
   VercelSandboxClient,
   VercelSandboxRoute,
-} from "../vercel-client";
-import { VercelSandboxApiError } from "../vercel-client";
-import { DEFAULT_VERCEL_RUNTIME, VERCEL_PYTHON_BIN } from "../vercel-bootstrap";
+} from "./client";
+import { VercelSandboxApiError } from "./client";
+import { DEFAULT_VERCEL_RUNTIME, VERCEL_PYTHON_BIN } from "./bootstrap";
 
 const log = createLogger("vercel-provider");
 
@@ -308,15 +309,7 @@ export class VercelSandboxProvider implements SandboxProvider {
     }
   ): Promise<Record<string, string>> {
     const envVars: Record<string, string> = { ...(config.userEnvVars ?? {}) };
-    const sessionConfig: Record<string, unknown> = {
-      session_id: config.sessionId,
-      repo_owner: config.repoOwner,
-      repo_name: config.repoName,
-      provider: config.provider,
-      model: config.model,
-      mcp_servers: config.mcpServers,
-    };
-    if (config.branch) sessionConfig.branch = config.branch;
+    const sessionConfig = buildSessionConfig(config);
 
     Object.assign(envVars, {
       HOME: "/root",
