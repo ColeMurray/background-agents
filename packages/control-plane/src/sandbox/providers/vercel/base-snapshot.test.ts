@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildBaseSnapshotSandboxName, buildVercelBaseSnapshot } from "./vercel-base-snapshot";
+import { buildBaseSnapshotSandboxName, buildVercelBaseSnapshot } from "./base-snapshot";
 import type {
   VercelCreateSandboxResponse,
   VercelRunCommandRequest,
   VercelSandboxClient,
   VercelSnapshotResponse,
   VercelWriteFileArchiveRequest,
-} from "./vercel-client";
+} from "./client";
 
 function createSessionResponse(sessionId = "session-1"): VercelCreateSandboxResponse {
   return {

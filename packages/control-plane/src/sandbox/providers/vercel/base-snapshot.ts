@@ -7,15 +7,15 @@
  * name and the control plane resolves that name to the latest snapshot ID.
  */
 
-import { createLogger } from "../logger";
-import type { CorrelationContext } from "../logger";
+import { createLogger } from "../../../logger";
+import type { CorrelationContext } from "../../../logger";
 import {
   DEFAULT_VERCEL_RUNTIME,
   VERCEL_LOCAL_RUNTIME_EXTRACT_DIR,
   VERCEL_RUNTIME_WORKDIR,
   buildVercelBootstrapScript,
-} from "./vercel-bootstrap";
-import type { VercelSandboxClient } from "./vercel-client";
+} from "./bootstrap";
+import type { VercelSandboxClient } from "./client";
 
 const log = createLogger("vercel-base-snapshot");
 

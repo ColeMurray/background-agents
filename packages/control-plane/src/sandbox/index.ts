@@ -40,7 +40,7 @@ export {
   type VercelProviderConfig,
   type TriggerVercelRepoImageBuildConfig,
   type TriggerVercelRepoImageBuildResult,
-} from "./providers/vercel-provider";
+} from "./providers/vercel/provider";
 export {
   VercelSandboxClient,
   VercelSandboxApiError,
@@ -50,19 +50,19 @@ export {
   type VercelCreateSandboxResponse,
   type VercelSandboxRoute,
   type VercelSandboxSession,
-} from "./vercel-client";
+} from "./providers/vercel/client";
 export {
   buildVercelBaseSnapshot,
   buildBaseSnapshotSandboxName,
   type BuildVercelBaseSnapshotConfig,
   type BuildVercelBaseSnapshotResult,
-} from "./vercel-base-snapshot";
+} from "./providers/vercel/base-snapshot";
 export {
   DEFAULT_VERCEL_RUNTIME,
   VERCEL_LOCAL_RUNTIME_EXTRACT_DIR,
   VERCEL_PYTHON_BIN,
   buildVercelBootstrapScript,
-} from "./vercel-bootstrap";
+} from "./providers/vercel/bootstrap";
 export {
   DaytonaRestClient,
   DaytonaNotFoundError,

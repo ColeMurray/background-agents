@@ -5,7 +5,7 @@ import { repoImageRoutes } from "./repo-images";
 import type { RepoImageProvider } from "../db/repo-images";
 import type { Env } from "../types";
 import type { RequestContext, Route } from "./shared";
-import type * as VercelClientModule from "../sandbox/vercel-client";
+import type * as VercelClientModule from "../sandbox/providers/vercel/client";
 
 const vercelClient = vi.hoisted(() => ({
   snapshotSession: vi.fn(),
@@ -15,7 +15,7 @@ const vercelClient = vi.hoisted(() => ({
 
 const VERCEL_CALLBACK_TOKEN = "a".repeat(64);
 
-vi.mock("../sandbox/vercel-client", async (importOriginal) => {
+vi.mock("../sandbox/providers/vercel/client", async (importOriginal) => {
   const actual = await importOriginal<typeof VercelClientModule>();
   return {
     ...actual,

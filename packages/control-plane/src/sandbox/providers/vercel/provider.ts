@@ -3,9 +3,9 @@
  */
 
 import { computeHmacHex, MAX_TUNNEL_PORTS, type SandboxSettings } from "@open-inspect/shared";
-import { createLogger } from "../../logger";
-import type { CorrelationContext } from "../../logger";
-import type { SourceControlProviderName } from "../../source-control";
+import { createLogger } from "../../../logger";
+import type { CorrelationContext } from "../../../logger";
+import type { SourceControlProviderName } from "../../../source-control";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   SandboxProviderError,
@@ -19,15 +19,15 @@ import {
   type SnapshotResult,
   type StopConfig,
   type StopResult,
-} from "../provider";
+} from "../../provider";
 import type {
   VercelCommandResult,
   VercelCreateSandboxResponse,
   VercelSandboxClient,
   VercelSandboxRoute,
-} from "../vercel-client";
-import { VercelSandboxApiError } from "../vercel-client";
-import { DEFAULT_VERCEL_RUNTIME, VERCEL_PYTHON_BIN } from "../vercel-bootstrap";
+} from "./client";
+import { VercelSandboxApiError } from "./client";
+import { DEFAULT_VERCEL_RUNTIME, VERCEL_PYTHON_BIN } from "./bootstrap";
 
 const log = createLogger("vercel-provider");
 
