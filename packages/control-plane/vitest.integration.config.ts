@@ -11,12 +11,12 @@ function generateTestEncryptionKey(): string {
   return Buffer.from(key).toString("base64");
 }
 
-// vitest 4 / @cloudflare/vitest-pool-workers v0.16 moved the pool from
-// `test.poolOptions.workers` to the `cloudflareTest()` Vite plugin, configured
-// via the standard `defineConfig` from "vitest/config". The old `singleWorker`
-// and `isolatedStorage` options were removed: the pool now implements isolated
-// per-test storage natively (the SQLite -shm/-wal cleanup bug that forced
-// `isolatedStorage: false` — workers-sdk#5667 / #11031 — is fixed upstream).
+// vitest 4 / @cloudflare/vitest-pool-workers v0.16 replaced the
+// `defineWorkersConfig` + `test.poolOptions.workers` setup with the
+// `cloudflareTest()` Vite plugin, configured via `defineConfig` from
+// "vitest/config". The old `singleWorker`/`isolatedStorage` poolOptions are not
+// configured here; integration tests share one D1 instance and rely on explicit
+// `cleanD1Tables()` cleanup (see test/integration/cleanup.ts) for isolation.
 export default defineConfig({
   plugins: [
     cloudflareTest(async () => {

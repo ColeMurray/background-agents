@@ -89,10 +89,11 @@ All TypeScript packages use **Vitest**; Python uses **pytest** + pytest-asyncio.
 
 ### Control-plane integration tests
 
-These run inside a real `workerd` runtime with Miniflare, using `defineWorkersConfig`. Important:
+These run inside a real `workerd` runtime with Miniflare, using the `cloudflareTest()` plugin from
+`@cloudflare/vitest-pool-workers`. Important:
 
-- `isolatedStorage: false` due to a workers-sdk SQLite WAL cleanup bug — tests share storage
-- Use `cleanD1Tables()` or equivalent cleanup in `beforeEach` to avoid cross-test pollution
+- Integration tests share one D1 instance — use `cleanD1Tables()` or equivalent cleanup in
+  `beforeEach`/`afterEach` to avoid cross-test pollution
 - D1 migrations from `terraform/d1/migrations/` are applied automatically via
   `test/integration/apply-migrations.ts`
 - Helpers in `test/integration/helpers.ts`: `initSession()`, `queryDO()`, `seedEvents()`
