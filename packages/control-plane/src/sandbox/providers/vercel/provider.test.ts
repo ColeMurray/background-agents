@@ -116,6 +116,9 @@ const baseRestoreConfig: RestoreConfig = {
   model: "anthropic/claude-sonnet-4-5",
 };
 
+// Mirrors VERCEL_MAX_SANDBOX_TIMEOUT_MS in provider.ts — Vercel rejects timeouts above 45 minutes.
+const VERCEL_MAX_SANDBOX_TIMEOUT_MS = 45 * 60 * 1000;
+
 describe("VercelSandboxProvider", () => {
   it("reports Vercel capabilities", () => {
     const provider = new VercelSandboxProvider(createMockClient(), providerConfig);
@@ -213,7 +216,9 @@ describe("VercelSandboxProvider", () => {
 
     await provider.createSandbox(baseCreateConfig);
 
-    expect(vi.mocked(client.createSandbox).mock.calls[0][0].timeoutMs).toBe(45 * 60 * 1000);
+    expect(vi.mocked(client.createSandbox).mock.calls[0][0].timeoutMs).toBe(
+      VERCEL_MAX_SANDBOX_TIMEOUT_MS
+    );
   });
 
   it("keeps explicit Vercel sandbox timeouts below the provider limit", async () => {
@@ -231,7 +236,9 @@ describe("VercelSandboxProvider", () => {
 
     await provider.createSandbox({ ...baseCreateConfig, timeoutSeconds: 60 * 60 });
 
-    expect(vi.mocked(client.createSandbox).mock.calls[0][0].timeoutMs).toBe(45 * 60 * 1000);
+    expect(vi.mocked(client.createSandbox).mock.calls[0][0].timeoutMs).toBe(
+      VERCEL_MAX_SANDBOX_TIMEOUT_MS
+    );
   });
 
   it("caps restore timeouts at Vercel's 45 minute limit", async () => {
@@ -240,7 +247,9 @@ describe("VercelSandboxProvider", () => {
 
     await provider.restoreFromSnapshot(baseRestoreConfig);
 
-    expect(vi.mocked(client.createSandbox).mock.calls[0][0].timeoutMs).toBe(45 * 60 * 1000);
+    expect(vi.mocked(client.createSandbox).mock.calls[0][0].timeoutMs).toBe(
+      VERCEL_MAX_SANDBOX_TIMEOUT_MS
+    );
   });
 
   it("resolves a configured base snapshot name before creating a fresh sandbox", async () => {
