@@ -10,6 +10,7 @@ import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
 import type { DaytonaRestClient, DaytonaCreateSandboxParams } from "../daytona-rest-client";
 import { DaytonaApiError, DaytonaNotFoundError } from "../daytona-rest-client";
+import { buildSessionConfig } from "../sandbox-env";
 import {
   SandboxProviderError,
   type CreateSandboxConfig,
@@ -194,17 +195,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     // Start with user env vars (repo secrets), then overlay system vars
     const envVars: Record<string, string> = { ...(config.userEnvVars ?? {}) };
 
-    const sessionConfig: Record<string, unknown> = {
-      session_id: config.sessionId,
-      repo_owner: config.repoOwner,
-      repo_name: config.repoName,
-      provider: config.provider,
-      model: config.model,
-      mcp_servers: config.mcpServers,
-    };
-    if (config.branch) {
-      sessionConfig.branch = config.branch;
-    }
+    const sessionConfig = buildSessionConfig(config);
 
     Object.assign(envVars, {
       PYTHONUNBUFFERED: "1",

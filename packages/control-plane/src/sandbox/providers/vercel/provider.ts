@@ -6,6 +6,7 @@ import { computeHmacHex, MAX_TUNNEL_PORTS, type SandboxSettings } from "@open-in
 import { createLogger } from "../../../logger";
 import type { CorrelationContext } from "../../../logger";
 import type { SourceControlProviderName } from "../../../source-control";
+import { buildSessionConfig } from "../../sandbox-env";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   SandboxProviderError,
@@ -308,15 +309,7 @@ export class VercelSandboxProvider implements SandboxProvider {
     }
   ): Promise<Record<string, string>> {
     const envVars: Record<string, string> = { ...(config.userEnvVars ?? {}) };
-    const sessionConfig: Record<string, unknown> = {
-      session_id: config.sessionId,
-      repo_owner: config.repoOwner,
-      repo_name: config.repoName,
-      provider: config.provider,
-      model: config.model,
-      mcp_servers: config.mcpServers,
-    };
-    if (config.branch) sessionConfig.branch = config.branch;
+    const sessionConfig = buildSessionConfig(config);
 
     Object.assign(envVars, {
       HOME: "/root",
