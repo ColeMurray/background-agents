@@ -754,6 +754,20 @@ describe("IntegrationSettingsStore", () => {
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
 
+    it("normalizes cross-field violations that only appear after merge", async () => {
+      // Each blob is individually valid — neither write throws — because the
+      // invariant (concurrent <= total) spans two fields set in different scopes.
+      // The violation only materializes in the merged result, so getResolvedConfig's
+      // normalize pass is the only thing that catches it. This pins that pass.
+      await store.setGlobal("sandbox", { defaults: { maxConcurrentChildSessions: 3 } });
+      await store.setRepoSettings("sandbox", "acme/app", { maxTotalChildSessions: 2 });
+
+      const config = await store.getResolvedConfig("sandbox", "acme/app");
+      // Merge would be { maxConcurrentChildSessions: 3, maxTotalChildSessions: 2 };
+      // the resolve-time normalize drops the inverted concurrent limit.
+      expect(config.settings).toEqual({ maxTotalChildSessions: 2 });
+    });
+
     it("round-trips fractional cpuCores and small memoryMib", async () => {
       await store.setRepoSettings("sandbox", "acme/app", { cpuCores: 0.5, memoryMib: 64 });
 
