@@ -400,16 +400,6 @@ export class VercelSandboxProvider implements SandboxProvider {
 
     if (cloneToken) {
       envVars.VCS_CLONE_TOKEN = cloneToken;
-      if (this.providerConfig.scmProvider === "github") {
-        const hasUserGithubCliToken = Boolean(
-          envVars.GH_TOKEN || envVars.GITHUB_TOKEN || envVars.GITHUB_APP_TOKEN
-        );
-        if (!hasUserGithubCliToken) {
-          envVars.GITHUB_TOKEN = cloneToken;
-          envVars.GITHUB_APP_TOKEN = cloneToken;
-          envVars.OI_GITHUB_TOKEN_IS_FALLBACK = "1";
-        }
-      }
     }
   }
 

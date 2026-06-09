@@ -467,11 +467,11 @@ describe("VercelSandboxProvider", () => {
         IMAGE_BUILD_MODE: "true",
         SESSION_CONFIG: JSON.stringify({ branch: "main" }),
         VCS_CLONE_TOKEN: "clone-token",
-        GITHUB_TOKEN: "clone-token",
-        GITHUB_APP_TOKEN: "clone-token",
-        OI_GITHUB_TOKEN_IS_FALLBACK: "1",
       })
     );
+    expect(createCall.env).not.toHaveProperty("GITHUB_TOKEN");
+    expect(createCall.env).not.toHaveProperty("GITHUB_APP_TOKEN");
+    expect(createCall.env).not.toHaveProperty("OI_GITHUB_TOKEN_IS_FALLBACK");
     expect(createCall.env).not.toHaveProperty("OI_INTERNAL_CALLBACK_SECRET");
     expect(createCall.env).not.toHaveProperty("OI_VERCEL_TOKEN");
     expect(createCall.env).not.toHaveProperty("OI_VERCEL_CALLBACK_URL");
