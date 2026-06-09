@@ -133,7 +133,12 @@ function SandboxSettingsEditor({
       DEFAULT_MAX_TOTAL_CHILD_SESSIONS);
 
   const currentCpuCores = resourceDisplayValue(isGlobal, globalDefaults, repoSettings, "cpuCores");
-  const currentMemoryMib = resourceDisplayValue(isGlobal, globalDefaults, repoSettings, "memoryMib");
+  const currentMemoryMib = resourceDisplayValue(
+    isGlobal,
+    globalDefaults,
+    repoSettings,
+    "memoryMib"
+  );
 
   const [portRows, setPortRows] = useState<string[] | null>(null);
   const [terminalEnabled, setTerminalEnabled] = useState<boolean | null>(null);
@@ -240,7 +245,12 @@ function SandboxSettingsEditor({
       }
       const cpu = resourcePayloadValue(isGlobal, cpuCores, trimmedCpu, repoSettings?.cpuCores);
       if (cpu !== undefined) settingsPayload.cpuCores = cpu;
-      const memory = resourcePayloadValue(isGlobal, memoryMib, trimmedMemory, repoSettings?.memoryMib);
+      const memory = resourcePayloadValue(
+        isGlobal,
+        memoryMib,
+        trimmedMemory,
+        repoSettings?.memoryMib
+      );
       if (memory !== undefined) settingsPayload.memoryMib = memory;
       const body = isGlobal
         ? { settings: { defaults: settingsPayload, enabledRepos: existingEnabledRepos } }
