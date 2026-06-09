@@ -625,13 +625,26 @@ class AgentBridge:
 
             had_error = False
             error_message = None
+            emitted_output = False
             async for event in self._stream_opencode_response_sse(
                 message_id, content, model, reasoning_effort
             ):
                 if event.get("type") == "error":
                     had_error = True
                     error_message = event.get("error")
+                elif event.get("type") in ("token", "tool_call", "step_finish"):
+                    emitted_output = True
                 await self._send_event(event)
+
+            if not had_error and not emitted_output:
+                had_error = True
+                error_message = "OpenCode completed without emitting assistant output."
+                self.log.error(
+                    "prompt.no_output",
+                    message_id=message_id,
+                    model=model,
+                    reasoning_effort=reasoning_effort,
+                )
 
             if had_error:
                 outcome = "error"
@@ -942,6 +955,7 @@ class AgentBridge:
         cumulative_text: dict[str, str] = {}
         emitted_tool_states: set[str] = set()
         allowed_assistant_msg_ids: set[str] = set()
+        user_message_ids: set[str] = {opencode_message_id}
         pending_parts: dict[str, list[tuple[dict[str, Any], Any]]] = {}
         pending_parts_total = 0
         pending_drop_logged = False
@@ -1114,7 +1128,16 @@ class AgentBridge:
                                         role = info.get("role", "")
                                         finish = info.get("finish", "")
 
-                                        parent_matches = parent_id == opencode_message_id
+                                        if role == "user" and oc_msg_id:
+                                            if oc_msg_id not in user_message_ids:
+                                                self.log.info(
+                                                    "bridge.user_message_id_discovered",
+                                                    expected_id=opencode_message_id,
+                                                    actual_id=oc_msg_id,
+                                                )
+                                            user_message_ids.add(oc_msg_id)
+
+                                        parent_matches = parent_id in user_message_ids
                                         is_compaction_summary = info.get("summary") is True
 
                                         self.log.debug(
@@ -1212,6 +1235,7 @@ class AgentBridge:
                                             opencode_message_id,
                                             cumulative_text,
                                             allowed_assistant_msg_ids,
+                                            user_message_ids=user_message_ids,
                                             compaction_occurred=compaction_occurred,
                                         ):
                                             yield final_event
@@ -1236,6 +1260,7 @@ class AgentBridge:
                                             opencode_message_id,
                                             cumulative_text,
                                             allowed_assistant_msg_ids,
+                                            user_message_ids=user_message_ids,
                                             compaction_occurred=compaction_occurred,
                                         ):
                                             yield final_event
@@ -1294,6 +1319,7 @@ class AgentBridge:
                                 opencode_message_id,
                                 cumulative_text,
                                 allowed_assistant_msg_ids,
+                                user_message_ids=user_message_ids,
                                 compaction_occurred=compaction_occurred,
                             ):
                                 yield final_event
@@ -1317,6 +1343,7 @@ class AgentBridge:
                 opencode_message_id,
                 cumulative_text,
                 allowed_assistant_msg_ids,
+                user_message_ids=user_message_ids,
                 compaction_occurred=compaction_occurred,
             ):
                 yield final_event
@@ -1335,6 +1362,7 @@ class AgentBridge:
         opencode_message_id: str,
         cumulative_text: dict[str, str],
         tracked_msg_ids: set[str] | None = None,
+        user_message_ids: set[str] | None = None,
         compaction_occurred: bool = False,
     ) -> AsyncIterator[dict[str, Any]]:
         """Fetch final message state from API to ensure complete text.
@@ -1383,7 +1411,8 @@ class AgentBridge:
                 if role != "assistant":
                     continue
 
-                parent_matches = parent_id == opencode_message_id
+                valid_parent_ids = user_message_ids or {opencode_message_id}
+                parent_matches = parent_id in valid_parent_ids
                 in_tracked_set = tracked_msg_ids and msg_id in tracked_msg_ids
                 is_compaction_summary = info.get("summary") is True
 
