@@ -14,11 +14,15 @@ const {
 }));
 
 vi.mock("@anthropic-ai/sdk", () => ({
-  default: vi.fn().mockImplementation(() => ({
-    messages: {
-      create: mockMessagesCreate,
-    },
-  })),
+  // vitest 4 only treats `function`/`class` implementations as constructable;
+  // an arrow function here throws "is not a constructor" on `new Anthropic()`.
+  default: vi.fn().mockImplementation(function () {
+    return {
+      messages: {
+        create: mockMessagesCreate,
+      },
+    };
+  }),
 }));
 
 vi.mock("./repos", () => ({

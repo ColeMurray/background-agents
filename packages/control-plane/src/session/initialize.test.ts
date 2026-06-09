@@ -61,9 +61,9 @@ describe("initializeSession", () => {
 
     createMock = vi.fn().mockResolvedValue(undefined);
     updateStatusMock = vi.fn().mockResolvedValue(true);
-    vi.mocked(SessionIndexStore).mockImplementation(
-      () => ({ create: createMock, updateStatus: updateStatusMock }) as never
-    );
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { create: createMock, updateStatus: updateStatusMock } as never;
+    });
 
     stubFetchMock = vi.fn(async () => Response.json({ status: "created" }));
   });

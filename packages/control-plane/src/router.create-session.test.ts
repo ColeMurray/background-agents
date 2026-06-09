@@ -91,7 +91,9 @@ describe("handleCreateSession D1 ordering", () => {
 
   it("does not initialize the SessionDO when D1 session index creation fails", async () => {
     const create = vi.fn().mockRejectedValue(new Error("D1 unavailable"));
-    vi.mocked(SessionIndexStore).mockImplementation(() => ({ create }) as never);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { create } as never;
+    });
 
     const initFetch = vi.fn(async () => Response.json({ status: "created" }));
     const response = await createSessionRequest(createEnv(initFetch));
@@ -119,7 +121,9 @@ describe("handleCreateSession D1 ordering", () => {
 
   it("creates the D1 session index before initializing the SessionDO", async () => {
     const create = vi.fn().mockResolvedValue(undefined);
-    vi.mocked(SessionIndexStore).mockImplementation(() => ({ create }) as never);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { create } as never;
+    });
 
     const initFetch = vi.fn(async (request: Request) => {
       expect(new URL(request.url).pathname).toBe(SessionInternalPaths.init);

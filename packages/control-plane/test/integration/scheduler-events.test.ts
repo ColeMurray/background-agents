@@ -72,7 +72,7 @@ async function sendEvent(event: SentryAutomationEvent | WebhookAutomationEvent):
   try {
     return await stub.fetch("http://internal/internal/event", opts);
   } catch (e) {
-    // Retry once on DO invalidation (singleWorker + isolatedStorage:false race)
+    // Retry once on DO invalidation (shared-storage integration runs can race)
     if (e instanceof Error && e.message.includes("invalidating this Durable Object")) {
       const retryStub = env.SCHEDULER.get(env.SCHEDULER.idFromName("global-scheduler"));
       return retryStub.fetch("http://internal/internal/event", {

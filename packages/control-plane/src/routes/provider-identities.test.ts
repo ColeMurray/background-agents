@@ -8,7 +8,9 @@ const mockUserStore = {
 };
 
 vi.mock("../db/user-store", () => ({
-  UserStore: vi.fn().mockImplementation(() => mockUserStore),
+  UserStore: vi.fn().mockImplementation(function () {
+    return mockUserStore;
+  }),
 }));
 
 function createEnv(): Env {

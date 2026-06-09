@@ -72,7 +72,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
   it("returns 201 when child prompt enqueue succeeds", async () => {
     const store = makeStore("canonical-user-123");
-    vi.mocked(SessionIndexStore).mockImplementation(() => store as never);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
 
     const parentStub: DurableObjectStub = {
       fetch: vi.fn(async () => Response.json(spawnContext)),
@@ -112,7 +114,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
   it("returns 400 when child specifies an invalid model", async () => {
     const store = makeStore();
-    vi.mocked(SessionIndexStore).mockImplementation(() => store as never);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
 
     const parentStub: DurableObjectStub = {
       fetch: vi.fn(async () => Response.json(spawnContext)),
@@ -155,7 +159,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
   it("uses configured concurrent child session limit", async () => {
     const store = makeStore();
     store.countActiveChildren.mockResolvedValue(2);
-    vi.mocked(SessionIndexStore).mockImplementation(() => store as never);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
     integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({
       maxConcurrentChildSessions: 2,
       maxTotalChildSessions: 15,
@@ -192,7 +198,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const store = makeStore();
     store.countActiveChildren.mockResolvedValue(0);
     store.countTotalChildren.mockResolvedValue(4);
-    vi.mocked(SessionIndexStore).mockImplementation(() => store as never);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
     integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({
       maxConcurrentChildSessions: 5,
       maxTotalChildSessions: 4,
@@ -222,7 +230,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
   it("returns 400 when child specifies an empty-string model", async () => {
     const store = makeStore();
-    vi.mocked(SessionIndexStore).mockImplementation(() => store as never);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
 
     const parentStub: DurableObjectStub = {
       fetch: vi.fn(async () => Response.json(spawnContext)),
@@ -263,7 +273,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
   it("returns an error and marks child failed when prompt enqueue fails", async () => {
     const store = makeStore();
-    vi.mocked(SessionIndexStore).mockImplementation(() => store as never);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
 
     const parentStub: DurableObjectStub = {
       fetch: vi.fn(async () => Response.json(spawnContext)),
