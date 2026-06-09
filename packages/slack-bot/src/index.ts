@@ -13,7 +13,8 @@ import type {
   ThreadSession,
   SlackInteractionPayload,
 } from "./types";
-import { stripMentions, isDmDispatchable } from "./dm-utils";
+import { stripMentions, isPrivateMessageDispatchable } from "./dm-utils";
+import { getAllowPrivateChannels } from "./integration-settings";
 import {
   verifySlackSignature,
   postMessage,
@@ -632,6 +633,68 @@ app.post("/interactions", async (c) => {
 // Mount callbacks router for control-plane notifications
 app.route("/callbacks", callbacksRouter);
 
+/** Refusal posted when the bot is invoked from a private context with the toggle off. */
+const PRIVATE_CONTEXT_MESSAGE =
+  "Sorry, I can only be used in public channels — not in private channels or direct messages. " +
+  "Please mention me in a public channel.";
+
+/**
+ * Gate for the `allowPrivateChannels` setting. Returns `true` if the invocation must be
+ * REFUSED (and posts the polite refusal); `false` if the caller should proceed.
+ *
+ * Called as the first action of each entry point, before any status/ack is posted, so a
+ * denied private context produces no visible side effects. When the toggle is on (default)
+ * this returns immediately without any `conversations.info` call.
+ *
+ * `channelType` comes from the event for DMs/group DMs (`im`/`mpim`) — those are private
+ * with no API call. Otherwise (app mentions, interactions) privacy is read from
+ * `conversations.info`; `channelInfo` lets callers pass an already-fetched result to avoid
+ * a redundant call. Fail-closed: anything other than a confirmed public channel is denied.
+ */
+async function refuseIfPrivateContext(
+  env: Env,
+  channel: string,
+  threadTs: string | undefined,
+  channelType?: string,
+  channelInfo?: Awaited<ReturnType<typeof getChannelInfo>>,
+  traceId?: string
+): Promise<boolean> {
+  if (await getAllowPrivateChannels(env, traceId)) {
+    return false;
+  }
+
+  let isPrivate: boolean;
+  if (channelType === "im" || channelType === "mpim") {
+    isPrivate = true;
+  } else {
+    let info = channelInfo;
+    if (!info) {
+      try {
+        info = await getChannelInfo(env.SLACK_BOT_TOKEN, channel);
+      } catch {
+        // Lookup failed — fail closed (treat as private).
+        info = undefined;
+      }
+    }
+    // Fail-closed: public only if the lookup succeeded AND is_private is explicitly false.
+    isPrivate = !(info?.ok && info.channel?.is_private === false);
+  }
+
+  if (!isPrivate) {
+    return false;
+  }
+
+  await postMessage(env.SLACK_BOT_TOKEN, channel, PRIVATE_CONTEXT_MESSAGE, {
+    thread_ts: threadTs,
+  });
+  log.info("slack.private_context.denied", {
+    trace_id: traceId,
+    channel,
+    channel_type: channelType,
+  });
+  return true;
+}
+
 /**
  * Handle incoming Slack events.
  */
@@ -680,8 +743,8 @@ async function handleSlackEvent(
     return;
   }
 
-  // Handle direct messages (DMs) to the bot
-  if (isDmDispatchable(event)) {
+  // Handle direct messages (DMs) and group DMs (mpim) to the bot
+  if (isPrivateMessageDispatchable(event)) {
     await handleDirectMessage(
       {
         type: event.type,
@@ -993,17 +1056,14 @@ async function handleAppMention(
   const messageText = stripMentions(event.text);
   const threadKey = event.thread_ts || event.ts;
 
-  if (messageText) {
-    scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
-  }
-
-  // Get channel context
+  // Get channel context (also used for the private-context gate to avoid a second call).
   let channelName: string | undefined;
   let channelDescription: string | undefined;
+  let channelInfo: Awaited<ReturnType<typeof getChannelInfo>> | undefined;
 
   if (messageText) {
     try {
-      const channelInfo = await getChannelInfo(env.SLACK_BOT_TOKEN, event.channel);
+      channelInfo = await getChannelInfo(env.SLACK_BOT_TOKEN, event.channel);
       if (channelInfo.ok && channelInfo.channel) {
         channelName = channelInfo.channel.name;
         channelDescription = channelInfo.channel.topic?.value || channelInfo.channel.purpose?.value;
@@ -1011,6 +1071,24 @@ async function handleAppMention(
     } catch {
       // Channel info not available
     }
+  }
+
+  // Decline private channels (and group DMs) before posting any status, when configured.
+  if (
+    await refuseIfPrivateContext(
+      env,
+      event.channel,
+      event.thread_ts || event.ts,
+      undefined,
+      channelInfo,
+      traceId
+    )
+  ) {
+    return;
+  }
+
+  if (messageText) {
+    scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
   }
 
   await handleIncomingMessage({
@@ -1047,6 +1125,20 @@ async function handleDirectMessage(
 ): Promise<void> {
   log.info("slack.dm.received", { trace_id: traceId, user: event.user, channel: event.channel });
 
+  // DMs and group DMs are private contexts: decline before any side effect, when configured.
+  if (
+    await refuseIfPrivateContext(
+      env,
+      event.channel,
+      event.thread_ts || event.ts,
+      event.channel_type,
+      undefined,
+      traceId
+    )
+  ) {
+    return;
+  }
+
   // Strip any @mentions (users may type "@Bot <request>" in DMs)
   const messageText = stripMentions(event.text);
   const threadKey = event.thread_ts || event.ts;
@@ -1079,6 +1171,13 @@ async function handleRepoSelection(
   traceId: string | undefined,
   scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
+  // Interactions are a separate session-creation ingress; decline private contexts here too.
+  if (
+    await refuseIfPrivateContext(env, channel, threadTs || messageTs, undefined, undefined, traceId)
+  ) {
+    return;
+  }
+
   // Retrieve pending message from KV
   const pendingKey = `pending:${channel}:${threadTs || messageTs}`;
   const pendingData = await createKvCacheStore(env.SLACK_KV).get(pendingKey, "json");

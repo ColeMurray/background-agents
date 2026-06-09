@@ -178,6 +178,8 @@ export interface SlackChannelInfo {
   name: string;
   topic?: { value: string };
   purpose?: { value: string };
+  /** True for private channels and group DMs (mpim). Returned by conversations.info. */
+  is_private?: boolean;
 }
 
 export function getChannelInfo(
