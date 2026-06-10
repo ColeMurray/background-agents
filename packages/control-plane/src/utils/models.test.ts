@@ -347,6 +347,12 @@ describe("model utilities", () => {
         efforts: ["low", "medium", "high", "xhigh", "max"],
         default: "high",
       });
+
+      const fable5Config = getReasoningConfig("anthropic/claude-fable-5");
+      expect(fable5Config).toEqual({
+        efforts: ["low", "medium", "high", "xhigh", "max"],
+        default: "high",
+      });
     });
 
     it("returns config for bare Claude model names via normalization", () => {
@@ -429,6 +435,14 @@ describe("model utilities", () => {
       expect(isValidReasoningEffort("anthropic/claude-opus-4-8", "high")).toBe(true);
       expect(isValidReasoningEffort("anthropic/claude-opus-4-8", "xhigh")).toBe(true);
       expect(isValidReasoningEffort("anthropic/claude-opus-4-8", "max")).toBe(true);
+    });
+
+    it("supports adaptive effort levels for Fable 5", () => {
+      expect(isValidReasoningEffort("anthropic/claude-fable-5", "low")).toBe(true);
+      expect(isValidReasoningEffort("anthropic/claude-fable-5", "medium")).toBe(true);
+      expect(isValidReasoningEffort("anthropic/claude-fable-5", "high")).toBe(true);
+      expect(isValidReasoningEffort("anthropic/claude-fable-5", "xhigh")).toBe(true);
+      expect(isValidReasoningEffort("anthropic/claude-fable-5", "max")).toBe(true);
     });
 
     it("accepts bare Claude model names via normalization", () => {
