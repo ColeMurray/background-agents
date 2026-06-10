@@ -208,6 +208,48 @@ sandbox_provider = "modal"
 # - "cloudflare": deploy the web app to Cloudflare Workers via OpenNext (no Vercel credentials needed)
 web_platform = "vercel"
 
+# =============================================================================
+# Custom Domains (Cloudflare workers only)
+# =============================================================================
+# Optional. Hostname only, no scheme. Leave empty (or commented) to use the
+# default workers.dev URLs.
+#
+# Cloudflare-only feature:
+#   - web_app_domain only takes effect when web_platform = "cloudflare".
+#     Setting it while web_platform = "vercel" fails at plan time — Vercel
+#     manages its own domain bindings in the Vercel dashboard.
+#   - control_plane_domain always applies — the control plane is a Cloudflare
+#     Worker regardless of web platform.
+#
+# Sandbox backend interaction:
+#   - sandbox_provider = "modal": setting control_plane_domain automatically
+#     updates Modal's ALLOWED_CONTROL_PLANE_HOSTS so sandbox callbacks reach
+#     the new hostname.
+#   - sandbox_provider = "daytona": no extra wiring needed. The control
+#     plane calls Daytona's REST API, not the reverse, so there's no host
+#     allowlist to maintain.
+#
+# These variables do NOT bind the domain in Cloudflare. Before setting them:
+#   1. Have the zone admin add the zone to this Cloudflare account.
+#   2. Bind each hostname to the corresponding worker via a
+#      cloudflare_workers_custom_domain resource (or in the dashboard:
+#      Workers & Pages -> <worker> -> Settings -> Triggers -> Custom Domains).
+#   3. Wait for TLS to provision (usually <60s) and DNS to propagate.
+#
+# After setting these and running terraform apply:
+#   - NEXTAUTH_URL is rebuilt from web_app_domain.
+#   - NEXT_PUBLIC_WS_URL and CONTROL_PLANE_URL are rebuilt from control_plane_domain.
+#   - Update the GitHub App's OAuth callback URL to:
+#       https://<web_app_domain>/api/auth/callback/github
+#     (GitHub Apps support multiple callback URLs — keep the workers.dev one
+#     during cutover, then remove it once the custom domain is verified.)
+#
+# Example layout:
+#   web_app_domain       = "app.example.com"
+#   control_plane_domain = "api.app.example.com"
+# web_app_domain       = ""
+# control_plane_domain = ""
+
 # Unique deployment name (used in resource names and URLs)
 # IMPORTANT: This must be globally unique for Vercel URLs.
 # Use something unique like your GitHub username, company name, or a random suffix.
