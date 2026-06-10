@@ -74,7 +74,7 @@ class SandboxConfig:
     control_plane_url: str = ""
     sandbox_auth_token: str = ""
     timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS
-    clone_token: str | None = None  # VCS clone token for git operations
+    fallback_clone_token: str | None = None  # VCS token for legacy snapshot fallback paths
     user_env_vars: dict[str, str] | None = None  # User-provided env vars (repo secrets)
     repo_image_id: str | None = None  # Pre-built repo image ID from provider
     repo_image_sha: str | None = None  # Git SHA the repo image was built from
@@ -359,14 +359,10 @@ class SandboxManager:
             }
         )
 
-        # Session snapshot boots still receive the restore fallback token for
-        # legacy entrypoints. Fresh and repo-image boots rely on the in-sandbox
-        # credential helper and must not receive SCM tokens in env.
-        boots_from_snapshot = bool(config.snapshot_id)
         self._inject_vcs_env_vars(
             env_vars,
-            clone_token=config.clone_token if boots_from_snapshot else None,
-            include_github_cli_aliases=boots_from_snapshot,
+            clone_token=config.fallback_clone_token,
+            include_github_cli_aliases=bool(config.fallback_clone_token),
         )
 
         code_server_password: str | None = None

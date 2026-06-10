@@ -65,7 +65,7 @@ async def test_create_sandbox_does_not_resolve_clone_token_for_fresh_boot(monkey
 
     assert result["success"] is True
     assert calls == []
-    assert captured["config"].clone_token is None
+    assert captured["config"].fallback_clone_token is None
 
 
 @pytest.mark.asyncio
@@ -96,7 +96,7 @@ async def test_create_sandbox_does_not_resolve_clone_token_for_repo_image_boot(m
 
     assert result["success"] is True
     assert calls == []
-    assert captured["config"].clone_token is None
+    assert captured["config"].fallback_clone_token is None
 
 
 @pytest.mark.asyncio
@@ -127,4 +127,4 @@ async def test_create_sandbox_resolves_clone_token_for_snapshot_boot(monkeypatch
 
     assert result["success"] is True
     assert calls == [True]
-    assert captured["config"].clone_token == "ghs_snapshot"
+    assert captured["config"].fallback_clone_token == "ghs_snapshot"

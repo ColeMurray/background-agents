@@ -329,9 +329,8 @@ def _fake_sandbox_create(captured):
 
 
 # Note: fresh and repo-image sandboxes never receive SCM tokens in the
-# environment. Snapshot and image-build paths still receive VCS_CLONE_TOKEN as
-# a fallback because they may run without credential-broker access or legacy
-# snapshot code may require it. These tests pin that split contract.
+# environment. Callers only set fallback_clone_token for snapshot paths that
+# still need VCS_CLONE_TOKEN for legacy entrypoints.
 
 
 @pytest.mark.asyncio
@@ -345,7 +344,6 @@ async def test_vcs_env_vars_default_github(monkeypatch):
     config = SandboxConfig(
         repo_owner="acme",
         repo_name="repo",
-        clone_token="ghp_test123",
     )
     await manager.create_sandbox(config)
 
@@ -368,7 +366,6 @@ async def test_vcs_env_vars_gitlab(monkeypatch):
     config = SandboxConfig(
         repo_owner="acme",
         repo_name="repo",
-        clone_token="glpat_test123",
     )
     await manager.create_sandbox(config)
 
@@ -389,7 +386,6 @@ async def test_vcs_env_vars_bitbucket(monkeypatch):
     config = SandboxConfig(
         repo_owner="acme",
         repo_name="repo",
-        clone_token="bb_token_abc",
     )
     await manager.create_sandbox(config)
 
@@ -415,7 +411,6 @@ async def test_repo_image_boot_omits_fallback_tokens(monkeypatch):
     config = SandboxConfig(
         repo_owner="acme",
         repo_name="repo",
-        clone_token="ghs_repo_image_token",
         repo_image_id="repo-img-1",
     )
     await manager.create_sandbox(config)
@@ -446,7 +441,6 @@ async def test_repo_image_boot_preserves_user_github_cli_token(monkeypatch, toke
         SandboxConfig(
             repo_owner="acme",
             repo_name="repo",
-            clone_token="ghs_repo_image_token",
             repo_image_id="repo-img-1",
             user_env_vars={token_key: "user_token"},
         )
@@ -473,7 +467,7 @@ async def test_session_snapshot_boot_preserves_clone_token(monkeypatch):
     config = SandboxConfig(
         repo_owner="acme",
         repo_name="repo",
-        clone_token="ghs_snapshot_token",
+        fallback_clone_token="ghs_snapshot_token",
         snapshot_id="snap-1",
     )
     await manager.create_sandbox(config)
