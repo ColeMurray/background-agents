@@ -47,6 +47,7 @@ export interface VercelCreateSandboxRequest {
   name: string;
   runtime?: string;
   timeoutMs?: number;
+  resources?: { vcpus: number };
   ports?: number[];
   env?: Record<string, string>;
   tags?: Record<string, string>;
@@ -142,6 +143,7 @@ export class VercelSandboxClient {
           name: request.name,
           runtime: request.runtime,
           timeout: request.timeoutMs,
+          resources: request.resources,
           ports: request.ports ?? [],
           env: request.env,
           tags: request.tags,

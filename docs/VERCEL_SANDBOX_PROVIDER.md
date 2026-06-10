@@ -123,16 +123,18 @@ keep the current snapshot, and delete old snapshots manually if you need to recl
 
 ## CPU and Memory
 
-Open-Inspect does not currently send a Vercel `resources` setting when creating sandboxes. Vercel
-therefore applies its default sandbox size.
+Open-Inspect maps sandbox resource settings to Vercel's `resources.vcpus` setting when creating or
+restoring sandboxes. `cpuCores` is treated as the requested vCPU count. `memoryMib` is treated as a
+minimum memory request and converted using Vercel's documented `2 GB` per vCPU ratio. If both are
+set, Open-Inspect uses enough vCPUs to satisfy both requests.
 
 Vercel currently documents the unspecified default as `2 vCPU / 4 GB RAM`. Its pricing limits state
 that each vCPU includes `2 GB` of memory, with a maximum of `8` vCPUs and `16 GB` memory per
 sandbox. The `resources.vcpus` option can be used with `1`, `2`, `4`, or `8` vCPUs.
 
-If Open-Inspect needs to control this later, add a provider config value such as
-`VERCEL_SANDBOX_VCPUS`, thread it into the Vercel create-sandbox request as `resources.vcpus`, and
-let Vercel derive memory from that vCPU count.
+When a request falls between supported Vercel sizes, Open-Inspect rounds up to the next supported
+vCPU size. If resource fields are unset or explicitly `null`, no `resources` setting is sent and
+Vercel applies its provider default.
 
 References:
 

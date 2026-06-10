@@ -51,11 +51,11 @@ export const DEFAULT_MAX_TOTAL_CHILD_SESSIONS = 15;
 /**
  * Sandbox environment settings. Provider-agnostic: describes what the user
  * wants, not how it's done. Resource fields (`cpuCores`, `memoryMib`) are
- * advisory and provider-dependent — Modal honors them; providers without
- * resource reservations (e.g. Daytona) ignore them. We only check they're
- * positive; the provider enforces its own real limits. When unset, the
- * provider's own default applies. At repo scope, `null` explicitly uses the
- * provider default instead of inheriting a global resource default.
+ * advisory and provider-dependent — Modal maps them directly, Vercel maps
+ * them to vCPUs, and providers without resource reservations ignore them. We
+ * only check they're positive; the provider enforces its own real limits. When
+ * unset, the provider's own default applies. At repo scope, `null` explicitly
+ * uses the provider default instead of inheriting a global resource default.
  */
 export interface SandboxSettings {
   /** Extra ports to expose via tunnels (e.g., dev server ports 3000, 5173). */
@@ -67,13 +67,15 @@ export interface SandboxSettings {
   /** Maximum total agent-spawned child sessions per parent session. */
   maxTotalChildSessions?: number;
   /**
-   * CPU cores to reserve for the sandbox (maps to Modal's `cpu`). Fractional
-   * values are allowed. Unset → inherit/default; null → provider default.
+   * CPU cores to reserve for the sandbox. Fractional values are allowed, but
+   * providers may round to their supported resource shapes. Unset →
+   * inherit/default; null → provider default.
    */
   cpuCores?: number | null;
   /**
-   * Memory to reserve for the sandbox, in MiB (maps to Modal's `memory`).
-   * Unset → inherit/default; null → provider default.
+   * Memory to reserve for the sandbox, in MiB. Providers may map this to their
+   * closest supported resource shape. Unset → inherit/default; null → provider
+   * default.
    */
   memoryMib?: number | null;
 }
