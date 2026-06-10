@@ -288,6 +288,22 @@ describe("VercelSandboxProvider", () => {
     expect(vi.mocked(client.createSandbox).mock.calls[0][0].resources).toEqual({ vcpus: 2 });
   });
 
+  it("rejects Vercel resource requests above the maximum supported vCPU size", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await expect(
+      provider.createSandbox({
+        ...baseCreateConfig,
+        sandboxSettings: { memoryMib: 18432 },
+      })
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("support up to 8 vCPUs; requested 9"),
+    });
+
+    expect(vi.mocked(client.createSandbox)).not.toHaveBeenCalled();
+  });
+
   it("resolves a configured base snapshot name before creating a fresh sandbox", async () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, {

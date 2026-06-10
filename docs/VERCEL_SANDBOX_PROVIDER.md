@@ -133,8 +133,9 @@ that each vCPU includes `2 GB` of memory, with a maximum of `8` vCPUs and `16 GB
 sandbox. The `resources.vcpus` option can be used with `1`, `2`, `4`, or `8` vCPUs.
 
 When a request falls between supported Vercel sizes, Open-Inspect rounds up to the next supported
-vCPU size. If resource fields are unset or explicitly `null`, no `resources` setting is sent and
-Vercel applies its provider default.
+vCPU size. Requests above Vercel's maximum supported size fail locally with a clear provider error.
+If resource fields are unset or explicitly `null`, no `resources` setting is sent and Vercel applies
+its provider default.
 
 References:
 

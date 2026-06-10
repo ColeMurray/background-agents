@@ -35,6 +35,8 @@ export interface VercelSandboxSession {
   timeout: number;
 }
 
+export type VercelVcpus = 1 | 2 | 4 | 8;
+
 export interface VercelSandboxMetadata {
   name: string;
   currentSessionId: string;
@@ -47,7 +49,7 @@ export interface VercelCreateSandboxRequest {
   name: string;
   runtime?: string;
   timeoutMs?: number;
-  resources?: { vcpus: number };
+  resources?: { vcpus: VercelVcpus };
   ports?: number[];
   env?: Record<string, string>;
   tags?: Record<string, string>;
