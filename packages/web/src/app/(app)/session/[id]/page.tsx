@@ -37,10 +37,11 @@ import {
   type SessionListResponse,
 } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { DEFAULT_MODEL, getDefaultReasoningEffort, type ModelCategory } from "@open-inspect/shared";
+import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import { SidebarIcon, CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
+import type { ComboboxGroup } from "@/components/ui/combobox";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 // Event grouping types
@@ -298,6 +299,18 @@ function SessionPageContent() {
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const { enabledModels, enabledModelOptions } = useEnabledModels();
+  const modelItems = useMemo<ComboboxGroup[]>(
+    () =>
+      enabledModelOptions.map((group) => ({
+        category: group.category,
+        options: group.models.map((model) => ({
+          value: model.id,
+          label: model.name,
+          description: model.description,
+        })),
+      })),
+    [enabledModelOptions]
+  );
 
   const handleModelChange = useCallback((model: string) => {
     setSelectedModel(model);
@@ -384,7 +397,7 @@ function SessionPageContent() {
       renameSession={renameSession}
       loadingHistory={loadingHistory}
       loadOlderEvents={loadOlderEvents}
-      modelOptions={enabledModelOptions}
+      modelItems={modelItems}
       fallbackSessionInfo={fallbackSessionInfo}
       sessionId={sessionId}
       selectedMediaArtifactId={selectedMediaArtifactId}
@@ -422,7 +435,7 @@ function SessionContent({
   renameSession,
   loadingHistory,
   loadOlderEvents,
-  modelOptions,
+  modelItems,
   fallbackSessionInfo,
   sessionId,
   selectedMediaArtifactId,
@@ -456,7 +469,7 @@ function SessionContent({
   renameSession: (title: string) => Promise<boolean | undefined>;
   loadingHistory: boolean;
   loadOlderEvents: () => void;
-  modelOptions: ModelCategory[];
+  modelItems: ComboboxGroup[];
   fallbackSessionInfo: FallbackSessionInfo;
   sessionId: string;
   selectedMediaArtifactId: string | null;
@@ -977,23 +990,29 @@ function SessionContent({
       />
 
       <SessionPromptComposer
-        sessionId={sessionState?.id || ""}
-        sessionStatus={sessionState?.status || ""}
-        artifacts={artifacts}
-        prompt={prompt}
-        isProcessing={isProcessing}
-        selectedModel={selectedModel}
-        reasoningEffort={reasoningEffort}
-        inputRef={inputRef}
-        onSubmit={handleSubmit}
-        onInputChange={handleInputChange}
-        onKeyDown={handleKeyDown}
-        onModelChange={setSelectedModel}
-        onReasoningEffortChange={setReasoningEffort}
-        onStopExecution={stopExecution}
-        onArchive={handleArchive}
-        onUnarchive={handleUnarchive}
-        modelOptions={modelOptions}
+        session={{
+          id: sessionId,
+          status: sessionState?.status || "",
+          artifacts,
+          onArchive: handleArchive,
+          onUnarchive: handleUnarchive,
+        }}
+        prompt={{
+          value: prompt,
+          isProcessing,
+          inputRef,
+          onSubmit: handleSubmit,
+          onChange: handleInputChange,
+          onKeyDown: handleKeyDown,
+          onStopExecution: stopExecution,
+        }}
+        model={{
+          selectedModel,
+          reasoningEffort,
+          items: modelItems,
+          onModelChange: setSelectedModel,
+          onReasoningEffortChange: setReasoningEffort,
+        }}
       />
     </div>
   );
