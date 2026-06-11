@@ -20,14 +20,14 @@ import { ScreenshotArtifactCard } from "@/components/screenshot-artifact-card";
 import { MediaLightbox } from "@/components/media-lightbox";
 import { Button } from "@/components/ui/button";
 import { useSidebarContext } from "@/components/sidebar-layout";
+import { SessionPromptComposer } from "@/components/session-prompt-composer";
 import {
   SessionRightSidebar,
   SessionRightSidebarContent,
 } from "@/components/session-right-sidebar";
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { TerminalPanel } from "@/components/terminal-panel";
-import { ActionBar } from "@/components/action-bar";
-import { copyToClipboard, formatModelNameLower } from "@/lib/format";
+import { copyToClipboard } from "@/lib/format";
 import { archiveSession } from "@/lib/archive-session";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import {
@@ -39,18 +39,8 @@ import {
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { DEFAULT_MODEL, getDefaultReasoningEffort, type ModelCategory } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
-import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 import type { Artifact, SandboxEvent } from "@/types/session";
-import {
-  SidebarIcon,
-  ModelIcon,
-  CheckIcon,
-  SendIcon,
-  StopIcon,
-  CopyIcon,
-  ErrorIcon,
-} from "@/components/ui/icons";
-import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
+import { SidebarIcon, CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 // Event grouping types
@@ -986,111 +976,25 @@ function SessionContent({
         }}
       />
 
-      {/* Input */}
-      <footer className="border-t border-border-muted flex-shrink-0">
-        <form onSubmit={handleSubmit} className="max-w-4xl mx-auto p-4 pb-6">
-          {/* Action bar above input */}
-          <div className="mb-3">
-            <ActionBar
-              sessionId={sessionState?.id || ""}
-              sessionStatus={sessionState?.status || ""}
-              artifacts={artifacts}
-              onArchive={handleArchive}
-              onUnarchive={handleUnarchive}
-            />
-          </div>
-
-          {/* Input container */}
-          <div className="border border-border bg-input">
-            {/* Text input area with floating send button */}
-            <div className="relative">
-              <textarea
-                ref={inputRef}
-                value={prompt}
-                onChange={handleInputChange}
-                onKeyDown={handleKeyDown}
-                placeholder={isProcessing ? "Type your next message..." : "Ask or build anything"}
-                className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-foreground placeholder:text-secondary-foreground"
-                rows={3}
-              />
-              {/* Floating action buttons */}
-              <div className="absolute bottom-3 right-3 flex items-center gap-2">
-                {isProcessing && prompt.trim() && (
-                  <span className="text-xs text-warning">Waiting...</span>
-                )}
-                {isProcessing && (
-                  <button
-                    type="button"
-                    onClick={stopExecution}
-                    className="p-2 text-destructive hover:bg-destructive-muted transition"
-                    title="Stop"
-                  >
-                    <StopIcon className="w-5 h-5" />
-                  </button>
-                )}
-                <button
-                  type="submit"
-                  disabled={!prompt.trim() || isProcessing}
-                  className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
-                  title={
-                    isProcessing && prompt.trim()
-                      ? "Wait for execution to complete"
-                      : `Send (${SHORTCUT_LABELS.SEND_PROMPT})`
-                  }
-                  aria-label={
-                    isProcessing && prompt.trim()
-                      ? "Wait for execution to complete"
-                      : `Send (${SHORTCUT_LABELS.SEND_PROMPT})`
-                  }
-                >
-                  <SendIcon className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-
-            {/* Footer row with model selector, reasoning pills, and agent label */}
-            <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">
-              {/* Left side - Model selector + Reasoning pills */}
-              <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
-                <Combobox
-                  value={selectedModel}
-                  onChange={setSelectedModel}
-                  items={
-                    modelOptions.map((group) => ({
-                      category: group.category,
-                      options: group.models.map((model) => ({
-                        value: model.id,
-                        label: model.name,
-                        description: model.description,
-                      })),
-                    })) as ComboboxGroup[]
-                  }
-                  direction="up"
-                  dropdownWidth="w-56"
-                  disabled={isProcessing}
-                  triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
-                >
-                  <ModelIcon className="w-3.5 h-3.5" />
-                  <span className="truncate max-w-[9rem] sm:max-w-none">
-                    {formatModelNameLower(selectedModel)}
-                  </span>
-                </Combobox>
-
-                {/* Reasoning effort pills */}
-                <ReasoningEffortPills
-                  selectedModel={selectedModel}
-                  reasoningEffort={reasoningEffort}
-                  onSelect={setReasoningEffort}
-                  disabled={isProcessing}
-                />
-              </div>
-
-              {/* Right side - Agent label */}
-              <span className="hidden sm:inline text-sm text-muted-foreground">build agent</span>
-            </div>
-          </div>
-        </form>
-      </footer>
+      <SessionPromptComposer
+        sessionId={sessionState?.id || ""}
+        sessionStatus={sessionState?.status || ""}
+        artifacts={artifacts}
+        prompt={prompt}
+        isProcessing={isProcessing}
+        selectedModel={selectedModel}
+        reasoningEffort={reasoningEffort}
+        inputRef={inputRef}
+        onSubmit={handleSubmit}
+        onInputChange={handleInputChange}
+        onKeyDown={handleKeyDown}
+        onModelChange={setSelectedModel}
+        onReasoningEffortChange={setReasoningEffort}
+        onStopExecution={stopExecution}
+        onArchive={handleArchive}
+        onUnarchive={handleUnarchive}
+        modelOptions={modelOptions}
+      />
     </div>
   );
 }
