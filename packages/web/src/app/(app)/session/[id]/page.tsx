@@ -18,8 +18,7 @@ import { SafeMarkdown } from "@/components/safe-markdown";
 import { ToolCallGroup } from "@/components/tool-call-group";
 import { ScreenshotArtifactCard } from "@/components/screenshot-artifact-card";
 import { MediaLightbox } from "@/components/media-lightbox";
-import { Button } from "@/components/ui/button";
-import { useSidebarContext } from "@/components/sidebar-layout";
+import { SessionHeader } from "@/components/session-header";
 import {
   SessionRightSidebar,
   SessionRightSidebarContent,
@@ -42,7 +41,6 @@ import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import {
-  SidebarIcon,
   ModelIcon,
   CheckIcon,
   SendIcon,
@@ -147,26 +145,6 @@ function dedupeAndGroupEvents(events: SandboxEvent[]): EventGroup[] {
   }
 
   return groupEvents(filteredEvents.filter((event): event is SandboxEvent => event !== null));
-}
-
-function resolveSessionDisplayInfo(
-  sessionState: SessionState,
-  fallbackSessionInfo: FallbackSessionInfo
-): {
-  repoLabel: string;
-  title: string;
-} {
-  const resolvedRepoOwner = sessionState?.repoOwner ?? fallbackSessionInfo.repoOwner;
-  const resolvedRepoName = sessionState?.repoName ?? fallbackSessionInfo.repoName;
-  const repoLabel =
-    resolvedRepoOwner && resolvedRepoName
-      ? `${resolvedRepoOwner}/${resolvedRepoName}`
-      : "Loading session...";
-
-  return {
-    repoLabel,
-    title: sessionState?.title || fallbackSessionInfo.title || repoLabel,
-  };
 }
 
 export default function SessionPage() {
@@ -472,21 +450,10 @@ function SessionContent({
   selectedMediaArtifactId: string | null;
   setSelectedMediaArtifactId: (artifactId: string | null) => void;
 }) {
-  const { isOpen, toggle } = useSidebarContext();
   const isBelowLg = useMediaQuery("(max-width: 1023px)");
   const isPhone = useMediaQuery("(max-width: 767px)");
-  const resolvedRepoOwner = sessionState?.repoOwner ?? fallbackSessionInfo.repoOwner;
-  const resolvedRepoName = sessionState?.repoName ?? fallbackSessionInfo.repoName;
-  const fallbackRepoLabel =
-    resolvedRepoOwner && resolvedRepoName
-      ? `${resolvedRepoOwner}/${resolvedRepoName}`
-      : "Loading session...";
-  const baseResolvedTitle = sessionState?.title ?? fallbackSessionInfo.title ?? fallbackRepoLabel;
 
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
-  const [isRenaming, setIsRenaming] = useState(false);
-  const [title, setTitle] = useState(baseResolvedTitle);
-  const [optimisticTitle, setOptimisticTitle] = useState<string | null>(null);
   const [sheetDragY, setSheetDragY] = useState(0);
   const sheetDragYRef = useRef(0);
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
@@ -541,46 +508,6 @@ function SessionContent({
     });
   }, [resetSheetDragState]);
 
-  const handleStartRename = () => {
-    setTitle(resolvedTitle);
-    setIsRenaming(true);
-  };
-
-  const handleRenameSubmit = async () => {
-    if (!sessionState) {
-      setIsRenaming(false);
-      return;
-    }
-
-    const trimmed = title.trim();
-
-    if (!trimmed || trimmed === resolvedTitle) {
-      setIsRenaming(false);
-      return;
-    }
-
-    const previousTitle = resolvedTitle;
-    setIsRenaming(false);
-    setOptimisticTitle(trimmed);
-
-    const success = await renameSession(trimmed);
-    if (!success) {
-      setOptimisticTitle(null);
-      setTitle(previousTitle);
-      setIsRenaming(true);
-    }
-  };
-
-  const resolvedTitle =
-    optimisticTitle ?? sessionState?.title ?? fallbackSessionInfo.title ?? fallbackRepoLabel;
-
-  useEffect(() => {
-    if (!optimisticTitle) return;
-    if (sessionState?.title === optimisticTitle) {
-      setOptimisticTitle(null);
-    }
-  }, [optimisticTitle, sessionState?.title]);
-
   const handleSheetTouchStart = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
     const startY = event.touches[0]?.clientY;
     sheetTouchStartYRef.current = startY ?? null;
@@ -614,10 +541,6 @@ function SessionContent({
     setSheetDragY(0);
     sheetTouchStartYRef.current = null;
   }, [closeDetails]);
-
-  useEffect(() => {
-    if (!isRenaming) setTitle(sessionState?.title ?? "");
-  }, [sessionState?.title, isRenaming]);
 
   useEffect(() => {
     if (isBelowLg) return;
@@ -710,100 +633,21 @@ function SessionContent({
     [mediaArtifacts, selectedMediaArtifactId]
   );
 
-  const sessionDisplayInfo = useMemo(
-    () => resolveSessionDisplayInfo(sessionState, fallbackSessionInfo),
-    [fallbackSessionInfo, sessionState]
-  );
   const showTimelineSkeleton = events.length === 0 && (connecting || replaying);
 
   return (
     <div className="h-full flex flex-col">
-      {/* Header */}
-      <header className="border-b border-border-muted flex-shrink-0">
-        <div className="px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {!isOpen && (
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={toggle}
-                title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-                aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              >
-                <SidebarIcon className="w-4 h-4" />
-              </Button>
-            )}
-            <div>
-              {isRenaming ? (
-                <input
-                  autoFocus
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  onFocus={(e) => e.currentTarget.select()}
-                  onBlur={handleRenameSubmit}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      e.currentTarget.blur();
-                    }
-                    if (e.key === "Escape") {
-                      setIsRenaming(false);
-                    }
-                  }}
-                  className="text-sm bg-transparent text-foreground outline-none focus:ring-inset focus:ring-ring font-medium max-w-40 truncate"
-                />
-              ) : (
-                <h1
-                  className="text-sm font-medium text-foreground max-w-40 truncate cursor-text"
-                  onClick={handleStartRename}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      handleStartRename();
-                    }
-                  }}
-                  role="button"
-                  tabIndex={0}
-                  title="Click to rename"
-                >
-                  {resolvedTitle}
-                </h1>
-              )}
-              <p className="text-sm text-muted-foreground">{sessionDisplayInfo.repoLabel}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-4">
-            <button
-              ref={detailsButtonRef}
-              type="button"
-              onClick={toggleDetails}
-              className="lg:hidden px-3 py-1.5 text-sm text-muted-foreground border border-border-muted hover:text-foreground hover:bg-muted transition"
-              aria-label="Toggle session details"
-              aria-controls="session-details-dialog"
-              aria-expanded={isDetailsOpen}
-            >
-              Details
-            </button>
-            {/* Mobile: single combined status dot */}
-            <div className="md:hidden">
-              <CombinedStatusDot
-                connected={connected}
-                connecting={connecting}
-                sandboxStatus={sessionState?.sandboxStatus}
-              />
-            </div>
-            {/* Desktop: full status indicators */}
-            <div className="hidden md:contents">
-              <ConnectionStatus connected={connected} connecting={connecting} />
-              <SandboxStatus
-                status={sessionState?.sandboxStatus}
-                dashboardUrl={sessionState?.sandboxDashboardUrl}
-              />
-              <ParticipantsList participants={participants} />
-            </div>
-          </div>
-        </div>
-      </header>
+      <SessionHeader
+        sessionState={sessionState}
+        fallbackSessionInfo={fallbackSessionInfo}
+        connected={connected}
+        connecting={connecting}
+        participants={participants}
+        isDetailsOpen={isDetailsOpen}
+        detailsButtonRef={detailsButtonRef}
+        onToggleDetails={toggleDetails}
+        renameSession={renameSession}
+      />
 
       {/* Connection error banner */}
       {(authError || connectionError) && (
@@ -1095,113 +939,6 @@ function SessionContent({
   );
 }
 
-function ConnectionStatus({ connected, connecting }: { connected: boolean; connecting: boolean }) {
-  if (connecting) {
-    return (
-      <span className="flex items-center gap-1 text-xs text-warning">
-        <span className="w-2 h-2 rounded-full bg-warning animate-pulse" />
-        Connecting...
-      </span>
-    );
-  }
-
-  if (connected) {
-    return (
-      <span className="flex items-center gap-1 text-xs text-success">
-        <span className="w-2 h-2 rounded-full bg-success" />
-        Connected
-      </span>
-    );
-  }
-
-  return (
-    <span className="flex items-center gap-1 text-xs text-destructive">
-      <span className="w-2 h-2 rounded-full bg-destructive" />
-      Disconnected
-    </span>
-  );
-}
-
-function SandboxStatus({
-  status,
-  dashboardUrl,
-}: {
-  status?: string;
-  dashboardUrl?: string | null;
-}) {
-  if (!status) return null;
-
-  const colors: Record<string, string> = {
-    pending: "text-muted-foreground",
-    warming: "text-warning",
-    syncing: "text-accent",
-    ready: "text-success",
-    running: "text-accent",
-    stopped: "text-muted-foreground",
-    failed: "text-destructive",
-  };
-
-  const className = `text-xs ${colors[status] || colors.pending}`;
-  const label = `Sandbox: ${status}`;
-
-  if (dashboardUrl) {
-    return (
-      <a
-        href={dashboardUrl}
-        target="_blank"
-        rel="noreferrer noopener"
-        title="Open sandbox in provider dashboard"
-        className={`${className} hover:underline`}
-      >
-        {label}
-        <span aria-hidden="true" className="ml-0.5">
-          ↗
-        </span>
-      </a>
-    );
-  }
-
-  return <span className={className}>{label}</span>;
-}
-
-function CombinedStatusDot({
-  connected,
-  connecting,
-  sandboxStatus,
-}: {
-  connected: boolean;
-  connecting: boolean;
-  sandboxStatus?: string;
-}) {
-  let color: string;
-  let pulse = false;
-  let label: string;
-
-  if (!connected && !connecting) {
-    color = "bg-destructive";
-    label = "Disconnected";
-  } else if (connecting) {
-    color = "bg-warning";
-    pulse = true;
-    label = "Connecting...";
-  } else if (sandboxStatus === "failed") {
-    color = "bg-destructive";
-    label = `Connected \u00b7 Sandbox: ${sandboxStatus}`;
-  } else if (["pending", "warming", "syncing"].includes(sandboxStatus || "")) {
-    color = "bg-warning";
-    label = `Connected \u00b7 Sandbox: ${sandboxStatus}`;
-  } else {
-    color = "bg-success";
-    label = sandboxStatus ? `Connected \u00b7 Sandbox: ${sandboxStatus}` : "Connected";
-  }
-
-  return (
-    <span title={label} className="flex items-center">
-      <span className={`w-2.5 h-2.5 rounded-full ${color}${pulse ? " animate-pulse" : ""}`} />
-    </span>
-  );
-}
-
 function ThinkingIndicator() {
   return (
     <div className="bg-card p-4 flex items-center gap-2">
@@ -1227,36 +964,6 @@ function TimelineSkeleton() {
         <div className="h-3 w-32 bg-muted rounded" />
         <div className="h-3 w-3/4 bg-muted rounded" />
       </div>
-    </div>
-  );
-}
-
-function ParticipantsList({
-  participants,
-}: {
-  participants: { userId: string; name: string; status: string }[];
-}) {
-  if (participants.length === 0) return null;
-
-  // Deduplicate participants by userId (same user may have multiple connections)
-  const uniqueParticipants = Array.from(new Map(participants.map((p) => [p.userId, p])).values());
-
-  return (
-    <div className="flex -space-x-2">
-      {uniqueParticipants.slice(0, 3).map((p) => (
-        <div
-          key={p.userId}
-          className="w-8 h-8 rounded-full bg-card flex items-center justify-center text-xs font-medium text-foreground border-2 border-white"
-          title={p.name}
-        >
-          {p.name.charAt(0).toUpperCase()}
-        </div>
-      ))}
-      {uniqueParticipants.length > 3 && (
-        <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-xs font-medium text-foreground border-2 border-white">
-          +{uniqueParticipants.length - 3}
-        </div>
-      )}
     </div>
   );
 }
