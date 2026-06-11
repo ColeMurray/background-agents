@@ -8,6 +8,8 @@ import type * as SwrModule from "swr";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import { useSessionSocket } from "./use-session-socket";
 
+type SubscribedMessage = Extract<ServerMessage, { type: "subscribed" }>;
+
 const { mutateMock } = vi.hoisted(() => ({
   mutateMock: vi.fn(),
 }));
@@ -75,7 +77,7 @@ function createSessionState(overrides: Partial<SessionState> = {}): SessionState
   };
 }
 
-function createSubscribedMessage(artifacts: SessionArtifact[] = []): ServerMessage {
+function createSubscribedMessage(artifacts: SessionArtifact[] = []): SubscribedMessage {
   return {
     type: "subscribed",
     sessionId: "session-1",
@@ -252,6 +254,57 @@ describe("useSessionSocket", () => {
     });
 
     expect(mutateMock).toHaveBeenCalledWith(isUnarchivedSessionListKey);
+  });
+
+  it("hydrates replayed assistant text before completion when storage ordering is tied", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1"));
+
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    const subscribed = createSubscribedMessage();
+    subscribed.replay = {
+      events: [
+        {
+          type: "execution_complete",
+          messageId: "msg-1",
+          success: true,
+          sandboxId: "sb-1",
+          timestamp: 2,
+        },
+        {
+          type: "token",
+          content: "Final response",
+          messageId: "msg-1",
+          sandboxId: "sb-1",
+          timestamp: 1,
+        },
+      ],
+      hasMore: false,
+      cursor: null,
+    };
+
+    act(() => {
+      socket.open();
+      socket.receive(subscribed);
+    });
+
+    await waitFor(() => {
+      expect(result.current.events).toEqual([
+        expect.objectContaining({
+          type: "token",
+          content: "Final response",
+          messageId: "msg-1",
+        }),
+        expect.objectContaining({
+          type: "execution_complete",
+          messageId: "msg-1",
+          success: true,
+        }),
+      ]);
+    });
   });
 
   it("hydrates video metadata from subscribed artifacts", async () => {
