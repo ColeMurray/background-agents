@@ -90,8 +90,8 @@ export function SessionHeader({
   }, [optimisticTitle, sessionState?.title]);
 
   useEffect(() => {
-    if (!isRenaming) setTitle(sessionState?.title ?? "");
-  }, [sessionState?.title, isRenaming]);
+    if (!isRenaming) setTitle(sessionState?.title ?? fallbackSessionInfo.title ?? "");
+  }, [fallbackSessionInfo.title, sessionState?.title, isRenaming]);
 
   return (
     <header className="border-b border-border-muted flex-shrink-0">
@@ -225,10 +225,12 @@ export function SandboxStatus({
   const colors: Record<string, string> = {
     pending: "text-muted-foreground",
     warming: "text-warning",
+    spawning: "text-warning",
     syncing: "text-accent",
     ready: "text-success",
     running: "text-accent",
     stopped: "text-muted-foreground",
+    stale: "text-muted-foreground",
     failed: "text-destructive",
   };
 
@@ -278,7 +280,7 @@ export function CombinedStatusDot({
   } else if (sandboxStatus === "failed") {
     color = "bg-destructive";
     label = `Connected \u00b7 Sandbox: ${sandboxStatus}`;
-  } else if (["pending", "warming", "syncing"].includes(sandboxStatus || "")) {
+  } else if (["pending", "warming", "spawning", "syncing"].includes(sandboxStatus || "")) {
     color = "bg-warning";
     label = `Connected \u00b7 Sandbox: ${sandboxStatus}`;
   } else {
