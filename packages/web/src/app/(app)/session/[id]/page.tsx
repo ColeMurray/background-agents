@@ -20,10 +20,8 @@ import { ScreenshotArtifactCard } from "@/components/screenshot-artifact-card";
 import { MediaLightbox } from "@/components/media-lightbox";
 import { Button } from "@/components/ui/button";
 import { useSidebarContext } from "@/components/sidebar-layout";
-import {
-  SessionRightSidebar,
-  SessionRightSidebarContent,
-} from "@/components/session-right-sidebar";
+import { SessionRightSidebar } from "@/components/session-right-sidebar";
+import { SessionDetailsOverlay } from "@/components/session-details-overlay";
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { TerminalPanel } from "@/components/terminal-panel";
 import { ActionBar } from "@/components/action-bar";
@@ -885,94 +883,23 @@ function SessionContent({
       </main>
 
       {isBelowLg && (
-        <div
-          className={`fixed inset-0 z-50 lg:hidden ${isDetailsOpen ? "" : "pointer-events-none"}`}
-        >
-          <div
-            className={`absolute inset-0 bg-overlay transition-opacity duration-200 ${
-              isDetailsOpen ? "opacity-100" : "opacity-0"
-            }`}
-            onClick={closeDetails}
-          />
-
-          {isPhone ? (
-            <div
-              id="session-details-dialog"
-              role="dialog"
-              aria-modal="true"
-              aria-label="Session details"
-              className="absolute inset-x-0 bottom-0 max-h-[85vh] bg-background border-t border-border-muted shadow-xl flex flex-col"
-              style={{
-                transform: isDetailsOpen ? `translateY(${sheetDragY}px)` : "translateY(100%)",
-                transition: sheetDragY > 0 ? "none" : "transform 200ms ease-in-out",
-              }}
-            >
-              <div
-                className="px-4 pt-3 pb-2 border-b border-border-muted"
-                onTouchStart={handleSheetTouchStart}
-                onTouchMove={handleSheetTouchMove}
-                onTouchEnd={handleSheetTouchEnd}
-                onTouchCancel={handleSheetTouchEnd}
-              >
-                <div className="mx-auto mb-2 h-1.5 w-12 rounded-full bg-muted" />
-                <div className="flex items-center justify-between">
-                  <h2 className="text-sm font-medium text-foreground">Session details</h2>
-                  <button
-                    type="button"
-                    onClick={closeDetails}
-                    className="text-sm text-muted-foreground hover:text-foreground transition"
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-              <div className="overflow-y-auto">
-                <SessionRightSidebarContent
-                  sessionId={sessionId}
-                  sessionState={sessionState}
-                  participants={participants}
-                  events={events}
-                  artifacts={artifacts}
-                  terminalOpen={terminalOpen}
-                  onToggleTerminal={toggleTerminal}
-                  onOpenMedia={setSelectedMediaArtifactId}
-                />
-              </div>
-            </div>
-          ) : (
-            <div
-              id="session-details-dialog"
-              role="dialog"
-              aria-modal="true"
-              aria-label="Session details"
-              className="absolute inset-y-0 right-0 w-80 max-w-[85vw] bg-background border-l border-border-muted shadow-xl flex flex-col transition-transform duration-200 ease-in-out"
-              style={{ transform: isDetailsOpen ? "translateX(0)" : "translateX(100%)" }}
-            >
-              <div className="px-4 py-3 border-b border-border-muted flex items-center justify-between">
-                <h2 className="text-sm font-medium text-foreground">Session details</h2>
-                <button
-                  type="button"
-                  onClick={closeDetails}
-                  className="text-sm text-muted-foreground hover:text-foreground transition"
-                >
-                  Close
-                </button>
-              </div>
-              <div className="flex-1 overflow-y-auto">
-                <SessionRightSidebarContent
-                  sessionId={sessionId}
-                  sessionState={sessionState}
-                  participants={participants}
-                  events={events}
-                  artifacts={artifacts}
-                  terminalOpen={terminalOpen}
-                  onToggleTerminal={toggleTerminal}
-                  onOpenMedia={setSelectedMediaArtifactId}
-                />
-              </div>
-            </div>
-          )}
-        </div>
+        <SessionDetailsOverlay
+          isOpen={isDetailsOpen}
+          isPhone={isPhone}
+          sheetDragY={sheetDragY}
+          onClose={closeDetails}
+          onSheetTouchStart={handleSheetTouchStart}
+          onSheetTouchMove={handleSheetTouchMove}
+          onSheetTouchEnd={handleSheetTouchEnd}
+          sessionId={sessionId}
+          sessionState={sessionState}
+          participants={participants}
+          events={events}
+          artifacts={artifacts}
+          terminalOpen={terminalOpen}
+          onToggleTerminal={toggleTerminal}
+          onOpenMedia={setSelectedMediaArtifactId}
+        />
       )}
 
       <MediaLightbox
