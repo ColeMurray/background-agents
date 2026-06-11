@@ -4,22 +4,13 @@ import { useEffect, useState, type RefObject } from "react";
 import { useSidebarContext } from "@/components/sidebar-layout";
 import { Button } from "@/components/ui/button";
 import { SidebarIcon } from "@/components/ui/icons";
+import type { useSessionSocket } from "@/hooks/use-session-socket";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 
-type Participant = {
-  userId: string;
-  name: string;
-  status: string;
-};
+type SessionSocketState = ReturnType<typeof useSessionSocket>;
 
-type SessionHeaderProps = {
-  sessionState: {
-    title?: string | null;
-    repoOwner?: string | null;
-    repoName?: string | null;
-    sandboxStatus?: string;
-    sandboxDashboardUrl?: string | null;
-  } | null;
+export type SessionHeaderProps = {
+  sessionState: SessionSocketState["sessionState"];
   fallbackSessionInfo: {
     repoOwner: string | null;
     repoName: string | null;
@@ -27,7 +18,7 @@ type SessionHeaderProps = {
   };
   connected: boolean;
   connecting: boolean;
-  participants: Participant[];
+  participants: SessionSocketState["participants"];
   isDetailsOpen: boolean;
   detailsButtonRef: RefObject<HTMLButtonElement | null>;
   onToggleDetails: () => void;
@@ -302,7 +293,11 @@ export function CombinedStatusDot({
   );
 }
 
-export function ParticipantsList({ participants }: { participants: Participant[] }) {
+export function ParticipantsList({
+  participants,
+}: {
+  participants: SessionSocketState["participants"];
+}) {
   if (participants.length === 0) return null;
 
   const uniqueParticipants = Array.from(new Map(participants.map((p) => [p.userId, p])).values());
