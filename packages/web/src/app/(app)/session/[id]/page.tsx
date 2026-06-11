@@ -3,15 +3,7 @@
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { mutate } from "swr";
 import useSWRMutation from "swr/mutation";
-import {
-  Suspense,
-  useState,
-  useRef,
-  useEffect,
-  useLayoutEffect,
-  useCallback,
-  useMemo,
-} from "react";
+import { Suspense, useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSessionSocket } from "@/hooks/use-session-socket";
 import { SessionTimeline } from "@/components/session-timeline";
 import { MediaLightbox } from "@/components/media-lightbox";
@@ -202,7 +194,6 @@ function SessionPageContent() {
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
     getDefaultReasoningEffort(DEFAULT_MODEL)
   );
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -276,7 +267,6 @@ function SessionPageContent() {
       events={events}
       artifacts={artifacts}
       currentParticipantId={currentParticipantId}
-      messagesEndRef={messagesEndRef}
       prompt={prompt}
       isProcessing={isProcessing}
       selectedModel={selectedModel}
@@ -314,7 +304,6 @@ function SessionContent({
   events,
   artifacts,
   currentParticipantId,
-  messagesEndRef,
   prompt,
   isProcessing,
   selectedModel,
@@ -348,7 +337,6 @@ function SessionContent({
   events: ReturnType<typeof useSessionSocket>["events"];
   artifacts: ReturnType<typeof useSessionSocket>["artifacts"];
   currentParticipantId: string | null;
-  messagesEndRef: React.RefObject<HTMLDivElement | null>;
   prompt: string;
   isProcessing: boolean;
   selectedModel: string;
@@ -410,14 +398,6 @@ function SessionContent({
   const ttydUrl = sessionState?.ttydUrl;
   const ttydToken = sessionState?.ttydToken;
   const showTerminal = !!(ttydUrl && ttydToken && terminalOpen && !isBelowLg);
-
-  // Scroll pagination refs
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const topSentinelRef = useRef<HTMLDivElement>(null);
-  const hasScrolledRef = useRef(false);
-  const isPrependingRef = useRef(false);
-  const prevScrollHeightRef = useRef(0);
-  const isNearBottomRef = useRef(true);
 
   const resetSheetDragState = useCallback(() => {
     setSheetDragY(0);
@@ -547,55 +527,6 @@ function SessionContent({
       document.body.style.overflow = originalOverflow;
     };
   }, [isDetailsOpen]);
-
-  // Track user scroll
-  const handleScroll = useCallback(() => {
-    hasScrolledRef.current = true;
-    const el = scrollContainerRef.current;
-    if (el) {
-      isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
-    }
-  }, []);
-
-  // IntersectionObserver to trigger loading older events
-  useEffect(() => {
-    const sentinel = topSentinelRef.current;
-    const container = scrollContainerRef.current;
-    if (!sentinel || !container) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (
-          entry.isIntersecting &&
-          hasScrolledRef.current &&
-          container.scrollHeight > container.clientHeight
-        ) {
-          // Capture scroll height BEFORE triggering load
-          prevScrollHeightRef.current = container.scrollHeight;
-          isPrependingRef.current = true;
-          loadOlderEvents();
-        }
-      },
-      { root: container, threshold: 0.1 }
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [loadOlderEvents]);
-
-  // Maintain scroll position when older events are prepended
-  useLayoutEffect(() => {
-    if (isPrependingRef.current && scrollContainerRef.current) {
-      const el = scrollContainerRef.current;
-      el.scrollTop += el.scrollHeight - prevScrollHeightRef.current;
-      isPrependingRef.current = false;
-    }
-  }, [events]);
-
-  // Auto-scroll to bottom only when near bottom (not when prepending older history)
-  useEffect(() => {
-    if (isNearBottomRef.current && !isPrependingRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
-    }
-  }, [events, messagesEndRef]);
 
   const mediaArtifacts = useMemo(
     () =>
@@ -728,10 +659,7 @@ function SessionContent({
                 isProcessing={isProcessing}
                 loadingHistory={loadingHistory}
                 showSkeleton={showTimelineSkeleton}
-                scrollContainerRef={scrollContainerRef}
-                topSentinelRef={topSentinelRef}
-                messagesEndRef={messagesEndRef}
-                onScroll={handleScroll}
+                onLoadOlder={loadOlderEvents}
                 onOpenMedia={setSelectedMediaArtifactId}
               />
             </Panel>

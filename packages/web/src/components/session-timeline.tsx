@@ -1,6 +1,15 @@
 "use client";
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { SafeMarkdown } from "@/components/safe-markdown";
 import { ScreenshotArtifactCard } from "@/components/screenshot-artifact-card";
 import { ToolCallGroup } from "@/components/tool-call-group";
@@ -95,10 +104,7 @@ export function SessionTimeline({
   isProcessing,
   loadingHistory,
   showSkeleton,
-  scrollContainerRef,
-  topSentinelRef,
-  messagesEndRef,
-  onScroll,
+  onLoadOlder,
   onOpenMedia,
 }: {
   events: SandboxEvent[];
@@ -107,18 +113,68 @@ export function SessionTimeline({
   isProcessing: boolean;
   loadingHistory: boolean;
   showSkeleton: boolean;
-  scrollContainerRef: React.RefObject<HTMLDivElement | null>;
-  topSentinelRef: React.RefObject<HTMLDivElement | null>;
-  messagesEndRef: React.RefObject<HTMLDivElement | null>;
-  onScroll: () => void;
+  onLoadOlder: () => void;
   onOpenMedia: (artifactId: string) => void;
 }) {
   const groupedEvents = useMemo(() => dedupeAndGroupEvents(events), [events]);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const topSentinelRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const hasScrolledRef = useRef(false);
+  const isPrependingRef = useRef(false);
+  const prevScrollHeightRef = useRef(0);
+  const isNearBottomRef = useRef(true);
+
+  const handleScroll = useCallback(() => {
+    hasScrolledRef.current = true;
+    const el = scrollContainerRef.current;
+    if (el) {
+      isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+    }
+  }, []);
+
+  useEffect(() => {
+    const sentinel = topSentinelRef.current;
+    const container = scrollContainerRef.current;
+    if (!sentinel || !container) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (
+          entry.isIntersecting &&
+          hasScrolledRef.current &&
+          container.scrollHeight > container.clientHeight
+        ) {
+          prevScrollHeightRef.current = container.scrollHeight;
+          isPrependingRef.current = true;
+          onLoadOlder();
+        }
+      },
+      { root: container, threshold: 0.1 }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [onLoadOlder]);
+
+  useLayoutEffect(() => {
+    if (isPrependingRef.current && scrollContainerRef.current) {
+      const el = scrollContainerRef.current;
+      el.scrollTop += el.scrollHeight - prevScrollHeightRef.current;
+      isPrependingRef.current = false;
+    }
+  }, [events]);
+
+  useEffect(() => {
+    if (isNearBottomRef.current && !isPrependingRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+    }
+  }, [events]);
 
   return (
     <div
       ref={scrollContainerRef}
-      onScroll={onScroll}
+      onScroll={handleScroll}
       className="h-full overflow-y-auto overflow-x-hidden p-4"
     >
       <div className="max-w-3xl mx-auto space-y-2">
@@ -180,6 +236,251 @@ export function TimelineSkeleton() {
   );
 }
 
+type EventRendererProps = {
+  event: SandboxEvent;
+  sessionId: string;
+  currentParticipantId: string | null;
+  copied: boolean;
+  onCopyContent: (content: string) => void;
+  onOpenMedia: (artifactId: string) => void;
+};
+
+type MessageFrameProps = {
+  label: ReactNode;
+  time: string;
+  copied: boolean;
+  content: string;
+  className: string;
+  copyButtonClassName: string;
+  onCopyContent: (content: string) => void;
+  children: ReactNode;
+};
+
+function CopyButton({
+  copied,
+  className,
+  onClick,
+}: {
+  copied: boolean;
+  className: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={className}
+      title={copied ? "Copied" : "Copy markdown"}
+      aria-label={copied ? "Copied" : "Copy markdown"}
+    >
+      {copied ? <CheckIcon className="w-3.5 h-3.5" /> : <CopyIcon className="w-3.5 h-3.5" />}
+    </button>
+  );
+}
+
+function MessageFrame({
+  label,
+  time,
+  copied,
+  content,
+  className,
+  copyButtonClassName,
+  onCopyContent,
+  children,
+}: MessageFrameProps) {
+  return (
+    <div className={className}>
+      <div className="flex items-center justify-between mb-2">
+        {label}
+        <div className="flex items-center gap-1.5">
+          <CopyButton
+            copied={copied}
+            className={copyButtonClassName}
+            onClick={() => onCopyContent(content)}
+          />
+          <span className="text-xs text-secondary-foreground">{time}</span>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function StatusRow({
+  tone,
+  time,
+  children,
+}: {
+  tone: "muted" | "success" | "destructive";
+  time: string;
+  children: ReactNode;
+}) {
+  const dotClassName =
+    tone === "success" ? "bg-success" : tone === "destructive" ? "bg-destructive" : "bg-accent";
+  const textClassName =
+    tone === "success"
+      ? "text-success"
+      : tone === "destructive"
+        ? "text-destructive"
+        : "text-muted-foreground";
+
+  return (
+    <div className={`flex items-center gap-2 text-sm ${textClassName}`}>
+      <span className={`w-2 h-2 rounded-full ${dotClassName}`} />
+      {children}
+      <span className="text-xs text-secondary-foreground">{time}</span>
+    </div>
+  );
+}
+
+function UserMessageEvent({
+  event,
+  currentParticipantId,
+  copied,
+  onCopyContent,
+}: EventRendererProps) {
+  if (event.type !== "user_message" || !event.content) return null;
+
+  const isCurrentUser =
+    event.author?.participantId && currentParticipantId
+      ? event.author.participantId === currentParticipantId
+      : !event.author;
+  const authorName = isCurrentUser ? "You" : event.author?.name || "Unknown User";
+
+  return (
+    <MessageFrame
+      label={
+        <div className="flex items-center gap-2">
+          {!isCurrentUser && event.author?.avatar && (
+            <img src={event.author.avatar} alt={authorName} className="w-5 h-5 rounded-full" />
+          )}
+          <span className="text-xs text-accent">{authorName}</span>
+        </div>
+      }
+      time={formatEventTime(event)}
+      copied={copied}
+      content={event.content}
+      className="group bg-accent-muted p-4 ml-8"
+      copyButtonClassName="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted/60 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
+      onCopyContent={onCopyContent}
+    >
+      <pre className="whitespace-pre-wrap text-sm text-foreground">{event.content}</pre>
+    </MessageFrame>
+  );
+}
+
+function AssistantMessageEvent({ event, copied, onCopyContent }: EventRendererProps) {
+  if (event.type !== "token" || !event.content) return null;
+
+  return (
+    <MessageFrame
+      label={<span className="text-xs text-muted-foreground">Assistant</span>}
+      time={formatEventTime(event)}
+      copied={copied}
+      content={event.content}
+      className="group bg-card p-4"
+      copyButtonClassName="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
+      onCopyContent={onCopyContent}
+    >
+      <SafeMarkdown content={event.content} className="text-sm" />
+    </MessageFrame>
+  );
+}
+
+function ToolResultEvent({ event }: EventRendererProps) {
+  if (event.type !== "tool_result" || !event.error) return null;
+
+  return (
+    <div className="flex items-center gap-2 text-sm text-destructive py-1">
+      <ErrorIcon className="w-4 h-4" />
+      <span className="truncate">{event.error}</span>
+      <span className="text-xs text-secondary-foreground ml-auto">{formatEventTime(event)}</span>
+    </div>
+  );
+}
+
+function GitSyncEvent({ event }: EventRendererProps) {
+  if (event.type !== "git_sync") return null;
+
+  return (
+    <StatusRow tone="muted" time={formatEventTime(event)}>
+      Git sync: {event.status}
+    </StatusRow>
+  );
+}
+
+function ArtifactEvent({ event, sessionId, onOpenMedia }: EventRendererProps) {
+  if (
+    event.type !== "artifact" ||
+    (event.artifactType !== "screenshot" && event.artifactType !== "video") ||
+    !event.artifactId
+  ) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-2 border border-border-muted bg-card p-4">
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-muted-foreground">
+          {event.artifactType === "video" ? "Video" : "Screenshot"}
+        </span>
+        <span className="text-xs text-secondary-foreground">{formatEventTime(event)}</span>
+      </div>
+      <ScreenshotArtifactCard
+        sessionId={sessionId}
+        artifactId={event.artifactId}
+        artifactType={event.artifactType}
+        metadata={event.metadata as Artifact["metadata"] | undefined}
+        onOpen={onOpenMedia}
+      />
+    </div>
+  );
+}
+
+function ErrorEvent({ event }: EventRendererProps) {
+  if (event.type !== "error") return null;
+
+  return (
+    <StatusRow tone="destructive" time={formatEventTime(event)}>
+      Error{event.error ? `: ${event.error}` : ""}
+    </StatusRow>
+  );
+}
+
+function ExecutionCompleteEvent({ event }: EventRendererProps) {
+  if (event.type !== "execution_complete") return null;
+
+  if (event.success === false) {
+    return (
+      <StatusRow tone="destructive" time={formatEventTime(event)}>
+        Execution failed{event.error ? `: ${event.error}` : ""}
+      </StatusRow>
+    );
+  }
+
+  return (
+    <StatusRow tone="success" time={formatEventTime(event)}>
+      Execution complete
+    </StatusRow>
+  );
+}
+
+function formatEventTime(event: SandboxEvent): string {
+  return new Date(event.timestamp * 1000).toLocaleTimeString();
+}
+
+const eventRenderers: Partial<
+  Record<SandboxEvent["type"], (props: EventRendererProps) => ReactNode>
+> = {
+  user_message: UserMessageEvent,
+  token: AssistantMessageEvent,
+  tool_result: ToolResultEvent,
+  git_sync: GitSyncEvent,
+  artifact: ArtifactEvent,
+  error: ErrorEvent,
+  execution_complete: ExecutionCompleteEvent,
+};
+
 export const EventItem = memo(function EventItem({
   event,
   sessionId,
@@ -193,7 +494,6 @@ export const EventItem = memo(function EventItem({
 }) {
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const time = new Date(event.timestamp * 1000).toLocaleTimeString();
 
   useEffect(() => {
     return () => {
@@ -217,152 +517,15 @@ export const EventItem = memo(function EventItem({
     }, 1500);
   }, []);
 
-  switch (event.type) {
-    case "user_message": {
-      if (!event.content) return null;
-      const messageContent = event.content;
-      const isCurrentUser =
-        event.author?.participantId && currentParticipantId
-          ? event.author.participantId === currentParticipantId
-          : !event.author;
-      const authorName = isCurrentUser ? "You" : event.author?.name || "Unknown User";
+  const render = eventRenderers[event.type];
+  if (!render) return null;
 
-      return (
-        <div className="group bg-accent-muted p-4 ml-8">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              {!isCurrentUser && event.author?.avatar && (
-                <img src={event.author.avatar} alt={authorName} className="w-5 h-5 rounded-full" />
-              )}
-              <span className="text-xs text-accent">{authorName}</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => handleCopyContent(messageContent)}
-                className="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted/60 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
-                title={copied ? "Copied" : "Copy markdown"}
-                aria-label={copied ? "Copied" : "Copy markdown"}
-              >
-                {copied ? (
-                  <CheckIcon className="w-3.5 h-3.5" />
-                ) : (
-                  <CopyIcon className="w-3.5 h-3.5" />
-                )}
-              </button>
-              <span className="text-xs text-secondary-foreground">{time}</span>
-            </div>
-          </div>
-          <pre className="whitespace-pre-wrap text-sm text-foreground">{messageContent}</pre>
-        </div>
-      );
-    }
-
-    case "token": {
-      if (!event.content) return null;
-      const messageContent = event.content;
-      return (
-        <div className="group bg-card p-4">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-muted-foreground">Assistant</span>
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => handleCopyContent(messageContent)}
-                className="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
-                title={copied ? "Copied" : "Copy markdown"}
-                aria-label={copied ? "Copied" : "Copy markdown"}
-              >
-                {copied ? (
-                  <CheckIcon className="w-3.5 h-3.5" />
-                ) : (
-                  <CopyIcon className="w-3.5 h-3.5" />
-                )}
-              </button>
-              <span className="text-xs text-secondary-foreground">{time}</span>
-            </div>
-          </div>
-          <SafeMarkdown content={messageContent} className="text-sm" />
-        </div>
-      );
-    }
-
-    case "tool_call":
-      return null;
-
-    case "tool_result":
-      if (!event.error) return null;
-      return (
-        <div className="flex items-center gap-2 text-sm text-destructive py-1">
-          <ErrorIcon className="w-4 h-4" />
-          <span className="truncate">{event.error}</span>
-          <span className="text-xs text-secondary-foreground ml-auto">{time}</span>
-        </div>
-      );
-
-    case "git_sync":
-      return (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span className="w-2 h-2 rounded-full bg-accent" />
-          Git sync: {event.status}
-          <span className="text-xs">{time}</span>
-        </div>
-      );
-
-    case "artifact":
-      if (
-        (event.artifactType !== "screenshot" && event.artifactType !== "video") ||
-        !event.artifactId
-      ) {
-        return null;
-      }
-
-      return (
-        <div className="space-y-2 border border-border-muted bg-card p-4">
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-muted-foreground">
-              {event.artifactType === "video" ? "Video" : "Screenshot"}
-            </span>
-            <span className="text-xs text-secondary-foreground">{time}</span>
-          </div>
-          <ScreenshotArtifactCard
-            sessionId={sessionId}
-            artifactId={event.artifactId}
-            artifactType={event.artifactType}
-            metadata={event.metadata as Artifact["metadata"] | undefined}
-            onOpen={onOpenMedia}
-          />
-        </div>
-      );
-
-    case "error":
-      return (
-        <div className="flex items-center gap-2 text-sm text-destructive">
-          <span className="w-2 h-2 rounded-full bg-destructive" />
-          Error{event.error ? `: ${event.error}` : ""}
-          <span className="text-xs text-secondary-foreground">{time}</span>
-        </div>
-      );
-
-    case "execution_complete":
-      if (event.success === false) {
-        return (
-          <div className="flex items-center gap-2 text-sm text-destructive">
-            <span className="w-2 h-2 rounded-full bg-destructive" />
-            Execution failed{event.error ? `: ${event.error}` : ""}
-            <span className="text-xs text-secondary-foreground">{time}</span>
-          </div>
-        );
-      }
-      return (
-        <div className="flex items-center gap-2 text-sm text-success">
-          <span className="w-2 h-2 rounded-full bg-success" />
-          Execution complete
-          <span className="text-xs text-secondary-foreground">{time}</span>
-        </div>
-      );
-
-    default:
-      return null;
-  }
+  return render({
+    event,
+    sessionId,
+    currentParticipantId,
+    copied,
+    onCopyContent: handleCopyContent,
+    onOpenMedia,
+  });
 });
