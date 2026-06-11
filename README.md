@@ -173,12 +173,13 @@ Choose the AI model that fits your task, with per-session reasoning effort contr
 
 | Provider     | Models                                                               |
 | ------------ | -------------------------------------------------------------------- |
-| Anthropic    | Claude Haiku 4.5, Sonnet 4.5/4.6, Opus 4.5/4.6/4.7/4.8               |
+| Anthropic    | Claude Haiku 4.5, Sonnet 4.5/4.6, Opus 4.5/4.6/4.7/4.8, Fable 5      |
 | OpenAI       | GPT 5.2, GPT 5.4, GPT 5.5, GPT 5.2 Codex, 5.3 Codex, 5.3 Codex Spark |
 | OpenCode Zen | Kimi K2.5, MiniMax M2.5, GLM 5 (opt-in)                              |
 
 OpenAI models work with your existing ChatGPT subscription via OAuth — no separate API key needed.
-See **[docs/OPENAI_MODELS.md](docs/OPENAI_MODELS.md)** for setup instructions.
+See **[docs/AVAILABLE_MODELS.md](docs/AVAILABLE_MODELS.md)** for the full model list and
+**[docs/OPENAI_MODELS.md](docs/OPENAI_MODELS.md)** for OpenAI setup instructions.
 
 ### Client Integrations
 

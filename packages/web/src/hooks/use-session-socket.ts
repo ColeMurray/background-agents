@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { type MutableRefObject, useCallback, useEffect, useRef, useState } from "react";
 import { mutate } from "swr";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import type { Artifact, SandboxEvent } from "@/types/session";
@@ -40,6 +40,11 @@ interface Message {
 type SessionState = SharedSessionState;
 type Participant = ParticipantPresence;
 type WsMessage = ServerMessage;
+type AssistantTokenEvent = Extract<SandboxEvent, { type: "token" }>;
+type PendingAssistantText = Pick<
+  AssistantTokenEvent,
+  "content" | "messageId" | "sandboxId" | "timestamp"
+>;
 
 const CLEARED_SANDBOX_ACCESS_STATE = {
   codeServerUrl: undefined,
@@ -72,46 +77,62 @@ interface UseSessionSocketReturn {
 }
 
 /**
- * Collapse a batch of events by folding streaming token events into their
- * final form (only the last accumulated token before execution_complete is kept).
- * Mutates pendingTextRef to track in-flight tokens across calls.
+ * Token events contain cumulative text. Replay should show one final token per
+ * message, independent of tied storage ordering between token and completion.
  */
-function collapseTokenEvents(
-  events: SandboxEvent[],
-  pendingTextRef: React.MutableRefObject<{
-    content: string;
-    messageId: string;
-    sandboxId: string;
-    timestamp: number;
-  } | null>
-): SandboxEvent[] {
-  const result: SandboxEvent[] = [];
-  for (const evt of events) {
-    if (evt.type === "token" && evt.content && evt.messageId) {
-      pendingTextRef.current = {
-        content: evt.content,
-        messageId: evt.messageId,
-        sandboxId: evt.sandboxId,
-        timestamp: evt.timestamp,
-      };
-    } else if (evt.type === "execution_complete") {
-      if (pendingTextRef.current) {
-        const pending = pendingTextRef.current;
-        pendingTextRef.current = null;
-        result.push({
-          type: "token",
-          content: pending.content,
-          messageId: pending.messageId,
-          sandboxId: pending.sandboxId,
-          timestamp: pending.timestamp,
-        });
-      }
-      result.push(evt);
-    } else {
-      result.push(evt);
+function collapseReplayTokenEvents(events: SandboxEvent[]): SandboxEvent[] {
+  const tokenByMessageId = new Map<string, AssistantTokenEvent>();
+
+  for (const event of events) {
+    if (isRenderableTokenEvent(event)) {
+      tokenByMessageId.set(event.messageId, event);
     }
   }
+
+  if (tokenByMessageId.size === 0) {
+    return events;
+  }
+
+  const result: SandboxEvent[] = [];
+  const emittedTokenMessageIds = new Set<string>();
+
+  for (const evt of events) {
+    if (isRenderableTokenEvent(evt)) {
+      continue;
+    }
+
+    if (evt.type === "execution_complete") {
+      const token = tokenByMessageId.get(evt.messageId);
+      if (token && !emittedTokenMessageIds.has(evt.messageId)) {
+        result.push(token);
+        emittedTokenMessageIds.add(evt.messageId);
+      }
+    }
+
+    result.push(evt);
+  }
+
+  for (const [messageId, token] of tokenByMessageId) {
+    if (!emittedTokenMessageIds.has(messageId)) {
+      result.push(token);
+    }
+  }
+
   return result;
+}
+
+function isRenderableTokenEvent(event: SandboxEvent): event is AssistantTokenEvent {
+  return event.type === "token" && Boolean(event.content) && Boolean(event.messageId);
+}
+
+function takePendingTokenEvent(
+  pendingTextRef: MutableRefObject<PendingAssistantText | null>
+): AssistantTokenEvent | null {
+  const pending = pendingTextRef.current;
+  if (!pending) return null;
+
+  pendingTextRef.current = null;
+  return { type: "token", ...pending };
 }
 
 function parseWsMessage(raw: unknown): WsMessage | null {
@@ -212,12 +233,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   const wsTokenRef = useRef<string | null>(null);
   // Accumulates text during streaming, displayed only on completion to avoid duplicate display.
   // Stores only the latest token since token events contain the full accumulated text (not incremental).
-  const pendingTextRef = useRef<{
-    content: string;
-    messageId: string;
-    sandboxId: string;
-    timestamp: number;
-  } | null>(null);
+  const pendingTextRef = useRef<PendingAssistantText | null>(null);
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [replaying, setReplaying] = useState(true);
@@ -256,21 +272,8 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
       };
     } else if (event.type === "execution_complete") {
       // On completion: Add final text to events using the token's original timestamp
-      if (pendingTextRef.current) {
-        const pending = pendingTextRef.current;
-        pendingTextRef.current = null;
-        setEvents((prev) => [
-          ...prev,
-          {
-            type: "token",
-            content: pending.content,
-            messageId: pending.messageId,
-            sandboxId: pending.sandboxId,
-            timestamp: pending.timestamp,
-          },
-        ]);
-      }
-      setEvents((prev) => [...prev, event]);
+      const pending = takePendingTokenEvent(pendingTextRef);
+      setEvents((prev) => (pending ? [...prev, pending, event] : [...prev, event]));
     } else {
       // Other events (tool_call, user_message, git_sync, etc.) - add normally
       setEvents((prev) => [...prev, event]);
@@ -323,9 +326,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
 
           // Process batched replay events in a single state update
           setEvents(
-            data.replay
-              ? collapseTokenEvents(data.replay.events.map(toUiSandboxEvent), pendingTextRef)
-              : []
+            data.replay ? collapseReplayTokenEvents(data.replay.events.map(toUiSandboxEvent)) : []
           );
           setHasMoreHistory(data.replay?.hasMore ?? false);
           cursorRef.current = data.replay?.cursor ?? null;
@@ -708,19 +709,9 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
       return;
     }
     // Preserve partial content when stopping
-    if (pendingTextRef.current) {
-      const pending = pendingTextRef.current;
-      pendingTextRef.current = null;
-      setEvents((prev) => [
-        ...prev,
-        {
-          type: "token",
-          content: pending.content,
-          messageId: pending.messageId,
-          sandboxId: pending.sandboxId,
-          timestamp: pending.timestamp,
-        },
-      ]);
+    const pending = takePendingTokenEvent(pendingTextRef);
+    if (pending) {
+      setEvents((prev) => [...prev, pending]);
     }
     wsRef.current.send(JSON.stringify({ type: "stop" }));
   }, []);
