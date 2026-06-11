@@ -485,10 +485,7 @@ function SessionContent({
   const [isRenaming, setIsRenaming] = useState(false);
   const [title, setTitle] = useState(baseResolvedTitle);
   const [optimisticTitle, setOptimisticTitle] = useState<string | null>(null);
-  const [sheetDragY, setSheetDragY] = useState(0);
-  const sheetDragYRef = useRef(0);
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
-  const sheetTouchStartYRef = useRef<number | null>(null);
 
   // Terminal panel state
   const [terminalOpen, setTerminalOpen] = useState(() => {
@@ -518,26 +515,9 @@ function SessionContent({
   const prevScrollHeightRef = useRef(0);
   const isNearBottomRef = useRef(true);
 
-  const resetSheetDragState = useCallback(() => {
-    setSheetDragY(0);
-    sheetDragYRef.current = 0;
-  }, []);
-
-  const closeDetails = useCallback(() => {
-    setIsDetailsOpen(false);
-    resetSheetDragState();
-    detailsButtonRef.current?.focus();
-  }, [resetSheetDragState]);
-
   const toggleDetails = useCallback(() => {
-    setIsDetailsOpen((prev) => {
-      const next = !prev;
-      if (!next) {
-        resetSheetDragState();
-      }
-      return next;
-    });
-  }, [resetSheetDragState]);
+    setIsDetailsOpen((prev) => !prev);
+  }, []);
 
   const handleStartRename = () => {
     setTitle(resolvedTitle);
@@ -579,40 +559,6 @@ function SessionContent({
     }
   }, [optimisticTitle, sessionState?.title]);
 
-  const handleSheetTouchStart = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
-    const startY = event.touches[0]?.clientY;
-    sheetTouchStartYRef.current = startY ?? null;
-  }, []);
-
-  const handleSheetTouchMove = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
-    const startY = sheetTouchStartYRef.current;
-    const currentY = event.touches[0]?.clientY;
-
-    if (startY === null || currentY === undefined) return;
-
-    const delta = currentY - startY;
-    if (delta > 0) {
-      const nextDragY = Math.min(delta, 180);
-      sheetDragYRef.current = nextDragY;
-      setSheetDragY(nextDragY);
-    } else {
-      sheetDragYRef.current = 0;
-      setSheetDragY(0);
-    }
-  }, []);
-
-  const handleSheetTouchEnd = useCallback(() => {
-    if (sheetDragYRef.current > 100) {
-      closeDetails();
-      sheetTouchStartYRef.current = null;
-      return;
-    }
-
-    sheetDragYRef.current = 0;
-    setSheetDragY(0);
-    sheetTouchStartYRef.current = null;
-  }, [closeDetails]);
-
   useEffect(() => {
     if (!isRenaming) setTitle(sessionState?.title ?? "");
   }, [sessionState?.title, isRenaming]);
@@ -620,32 +566,7 @@ function SessionContent({
   useEffect(() => {
     if (isBelowLg) return;
     setIsDetailsOpen(false);
-    resetSheetDragState();
-  }, [isBelowLg, resetSheetDragState]);
-
-  useEffect(() => {
-    if (!isDetailsOpen) return;
-
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        closeDetails();
-      }
-    };
-
-    window.addEventListener("keydown", handleEscape);
-    return () => window.removeEventListener("keydown", handleEscape);
-  }, [closeDetails, isDetailsOpen]);
-
-  useEffect(() => {
-    if (!isDetailsOpen) return;
-
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-
-    return () => {
-      document.body.style.overflow = originalOverflow;
-    };
-  }, [isDetailsOpen]);
+  }, [isBelowLg]);
 
   // Track user scroll
   const handleScroll = useCallback(() => {
@@ -884,13 +805,10 @@ function SessionContent({
 
       {isBelowLg && (
         <SessionDetailsOverlay
-          isOpen={isDetailsOpen}
+          open={isDetailsOpen}
+          onOpenChange={setIsDetailsOpen}
           isPhone={isPhone}
-          sheetDragY={sheetDragY}
-          onClose={closeDetails}
-          onSheetTouchStart={handleSheetTouchStart}
-          onSheetTouchMove={handleSheetTouchMove}
-          onSheetTouchEnd={handleSheetTouchEnd}
+          returnFocusRef={detailsButtonRef}
           sessionId={sessionId}
           sessionState={sessionState}
           participants={participants}
