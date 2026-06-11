@@ -9,6 +9,9 @@ how to configure your deployment to use them.
 
 ## Supported Models
 
+For the full model list, including Claude Fable 5 and other Anthropic models, see
+[Available Models](AVAILABLE_MODELS.md).
+
 | Model               | Description                    |
 | ------------------- | ------------------------------ |
 | GPT 5.2             | Fast baseline model (400K ctx) |
