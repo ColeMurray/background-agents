@@ -65,12 +65,12 @@ async def test_create_sandbox_does_not_resolve_clone_token_for_fresh_boot(monkey
 
     assert result["success"] is True
     assert calls == []
-    assert captured["config"].clone_token is None
+    assert captured["config"].fallback_clone_token is None
 
 
 @pytest.mark.asyncio
-async def test_create_sandbox_resolves_clone_token_for_prebuilt_boot(monkeypatch):
-    """Repo images may run pre-migration entrypoints, so they still need a fallback token."""
+async def test_create_sandbox_does_not_resolve_clone_token_for_repo_image_boot(monkeypatch):
+    """Repo-image boots authenticate via brokered credentials only."""
     captured = {}
     calls = []
 
@@ -95,5 +95,36 @@ async def test_create_sandbox_resolves_clone_token_for_prebuilt_boot(monkeypatch
     )
 
     assert result["success"] is True
+    assert calls == []
+    assert captured["config"].fallback_clone_token is None
+
+
+@pytest.mark.asyncio
+async def test_create_sandbox_resolves_clone_token_for_snapshot_boot(monkeypatch):
+    """Session snapshot boots still receive a legacy fallback token."""
+    captured = {}
+    calls = []
+
+    _patch_auth(monkeypatch)
+    _patch_manager(monkeypatch, captured)
+
+    def resolve_clone_token() -> str:
+        calls.append(True)
+        return "ghs_snapshot"
+
+    monkeypatch.setattr(web_api, "_resolve_clone_token", resolve_clone_token)
+
+    result = await _call_create_sandbox(
+        {
+            "session_id": "sess-1",
+            "repo_owner": "acme",
+            "repo_name": "repo",
+            "control_plane_url": "https://control-plane.example",
+            "sandbox_auth_token": "sandbox-token",
+            "snapshot_id": "snap-1",
+        }
+    )
+
+    assert result["success"] is True
     assert calls == [True]
-    assert captured["config"].clone_token == "ghs_prebuilt"
+    assert captured["config"].fallback_clone_token == "ghs_snapshot"

@@ -74,7 +74,7 @@ class SandboxConfig:
     control_plane_url: str = ""
     sandbox_auth_token: str = ""
     timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS
-    clone_token: str | None = None  # VCS clone token for git operations
+    fallback_clone_token: str | None = None  # VCS token for legacy snapshot fallback paths
     user_env_vars: dict[str, str] | None = None  # User-provided env vars (repo secrets)
     repo_image_id: str | None = None  # Pre-built repo image ID from provider
     repo_image_sha: str | None = None  # Git SHA the repo image was built from
@@ -289,7 +289,7 @@ class SandboxManager:
         token when ``CONTROL_PLANE_URL`` / ``SANDBOX_AUTH_TOKEN`` are unset.
 
         ``include_github_cli_aliases`` adds fallback ``GITHUB_TOKEN`` /
-        ``GITHUB_APP_TOKEN`` for legacy snapshots/repo images that predate the
+        ``GITHUB_APP_TOKEN`` for legacy snapshots that predate the
         gh wrapper. These aliases are only injected when the user has not
         provided a GitHub CLI token. Fallback injection is marked with
         ``OI_GITHUB_TOKEN_IS_FALLBACK=1`` so helper-capable boots refresh past
@@ -359,20 +359,10 @@ class SandboxManager:
             }
         )
 
-        # A boot from a pre-built image (session snapshot or repo image) may
-        # run an entrypoint built before the credential-helper migration: no
-        # helper, and the old entrypoint expects VCS_CLONE_TOKEN in env to
-        # rewrite origin. Pass the fresh token through for those (with the
-        # gh-CLI aliases + fallback marker, so helper-capable images refresh
-        # past it). Fresh base-image boots rely on the in-sandbox credential
-        # helper and need no token in env. Repo images are selected by SHA and
-        # aren't rebuilt by a CACHE_BUSTER bump, so we can't assume they're
-        # current.
-        boots_from_prebuilt_image = bool(config.snapshot_id or config.repo_image_id)
         self._inject_vcs_env_vars(
             env_vars,
-            clone_token=config.clone_token if boots_from_prebuilt_image else None,
-            include_github_cli_aliases=boots_from_prebuilt_image,
+            clone_token=config.fallback_clone_token,
+            include_github_cli_aliases=bool(config.fallback_clone_token),
         )
 
         code_server_password: str | None = None
