@@ -104,13 +104,15 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
       name: string;
       path: string;
       path_with_namespace: string;
-      namespace: { path: string };
+      namespace: { full_path: string };
       default_branch: string;
       visibility: string;
     };
 
+    // full_path, not path: nested groups ("group/subgroup") need the
+    // entire namespace so owner/name lookups reconstruct the project path.
     return {
-      owner: data.namespace.path,
+      owner: data.namespace.full_path,
       name: data.path,
       fullName: data.path_with_namespace,
       defaultBranch: data.default_branch,
@@ -229,14 +231,14 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
 
       const data = (await response.json()) as {
         id: number;
-        namespace: { path: string };
+        namespace: { full_path: string };
         path: string;
         default_branch: string;
       };
 
       return {
         repoId: data.id,
-        repoOwner: data.namespace.path.toLowerCase(),
+        repoOwner: data.namespace.full_path.toLowerCase(),
         repoName: data.path.toLowerCase(),
         defaultBranch: data.default_branch,
       };
@@ -281,7 +283,7 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
         name: string;
         path: string;
         path_with_namespace: string;
-        namespace: { path: string };
+        namespace: { full_path: string };
         description: string | null;
         visibility: string;
         default_branch: string;
@@ -289,7 +291,7 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
 
       return data.map((project) => ({
         id: project.id,
-        owner: project.namespace.path,
+        owner: project.namespace.full_path,
         name: project.path,
         fullName: project.path_with_namespace,
         description: project.description,

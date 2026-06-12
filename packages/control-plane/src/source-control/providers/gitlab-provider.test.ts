@@ -37,7 +37,7 @@ describe("GitLabSourceControlProvider", () => {
           name: "My Web App", // display name — should NOT be used
           path: "web", // URL slug — should be used as name
           path_with_namespace: "acme/web",
-          namespace: { path: "acme" },
+          namespace: { path: "acme", full_path: "acme" },
           default_branch: "main",
           visibility: "private",
         })
@@ -59,6 +59,29 @@ describe("GitLabSourceControlProvider", () => {
       });
     });
 
+    it("returns the full namespace path as owner for nested-group projects", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse({
+          id: 43,
+          name: "Web App",
+          path: "web",
+          path_with_namespace: "acme/backend/web",
+          namespace: { path: "backend", full_path: "acme/backend" },
+          default_branch: "main",
+          visibility: "private",
+        })
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const repo = await provider.getRepository(
+        { authType: "pat", token: "user-token" },
+        { owner: "acme/backend", name: "web" }
+      );
+
+      expect(repo.owner).toBe("acme/backend");
+      expect(repo.fullName).toBe("acme/backend/web");
+    });
+
     it("marks public repos as not private", async () => {
       mockFetch.mockResolvedValueOnce(
         makeResponse({
@@ -66,7 +89,7 @@ describe("GitLabSourceControlProvider", () => {
           name: "OSS Project",
           path: "oss",
           path_with_namespace: "acme/oss",
-          namespace: { path: "acme" },
+          namespace: { path: "acme", full_path: "acme" },
           default_branch: "main",
           visibility: "public",
         })
@@ -342,7 +365,7 @@ describe("GitLabSourceControlProvider", () => {
       mockFetch.mockResolvedValueOnce(
         makeResponse({
           id: 99,
-          namespace: { path: "acme" },
+          namespace: { path: "acme", full_path: "acme" },
           path: "web",
           default_branch: "main",
         })
@@ -357,6 +380,23 @@ describe("GitLabSourceControlProvider", () => {
         repoName: "web",
         defaultBranch: "main",
       });
+    });
+
+    it("returns the full namespace path as repoOwner for nested-group projects", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse({
+          id: 100,
+          namespace: { path: "backend", full_path: "acme/backend" },
+          path: "web",
+          default_branch: "main",
+        })
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const result = await provider.checkRepositoryAccess({ owner: "acme/backend", name: "web" });
+
+      expect(result?.repoOwner).toBe("acme/backend");
+      expect(result?.repoName).toBe("web");
     });
 
     it("returns null for 404", async () => {
@@ -384,7 +424,7 @@ describe("GitLabSourceControlProvider", () => {
       mockFetch.mockResolvedValueOnce(
         makeResponse({
           id: 1,
-          namespace: { path: "ACME" },
+          namespace: { path: "ACME", full_path: "ACME" },
           path: "WEB",
           default_branch: "main",
         })
@@ -407,7 +447,7 @@ describe("GitLabSourceControlProvider", () => {
             name: "My Web App", // display name — should NOT be used
             path: "web", // URL slug — should be used as name
             path_with_namespace: "acme/web",
-            namespace: { path: "acme" },
+            namespace: { path: "acme", full_path: "acme" },
             description: "The web app",
             visibility: "private",
             default_branch: "main",
@@ -432,6 +472,29 @@ describe("GitLabSourceControlProvider", () => {
         private: true,
         defaultBranch: "main",
       });
+    });
+
+    it("returns the full namespace path as owner for nested-group projects", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse([
+          {
+            id: 2,
+            name: "Web App",
+            path: "web",
+            path_with_namespace: "acme/backend/web",
+            namespace: { path: "backend", full_path: "acme/backend" },
+            description: null,
+            visibility: "private",
+            default_branch: "main",
+          },
+        ])
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const repos = await provider.listRepositories();
+
+      expect(repos[0].owner).toBe("acme/backend");
+      expect(repos[0].fullName).toBe("acme/backend/web");
     });
 
     it("fetches from group endpoint when namespace is configured", async () => {
