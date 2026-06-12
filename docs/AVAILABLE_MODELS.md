@@ -2,7 +2,8 @@
 
 Open-Inspect exposes these models in the model picker and integration preferences. The default
 enabled set includes Anthropic and OpenAI models; OpenCode Zen models are available but must be
-enabled in **Settings > Models**.
+enabled in **Settings > Models**. DeepSeek models are also opt-in and require `DEEPSEEK_API_KEY` to
+be available in the sandbox environment.
 
 ## Anthropic
 
@@ -38,3 +39,12 @@ setup instructions.
 | `opencode/kimi-k2.5`    | Kimi K2.5    | Moonshot AI   | Not supported     | N/A            |
 | `opencode/minimax-m2.5` | MiniMax M2.5 | MiniMax       | Not supported     | N/A            |
 | `opencode/glm-5`        | GLM 5        | Z.ai 744B MoE | Not supported     | N/A            |
+
+## DeepSeek
+
+DeepSeek models require `DEEPSEEK_API_KEY` as a global or repository secret.
+
+| Model ID                     | Display name      | Description  | Reasoning efforts | Default effort |
+| ---------------------------- | ----------------- | ------------ | ----------------- | -------------- |
+| `deepseek/deepseek-v4-flash` | DeepSeek V4 Flash | Fast model   | Not supported     | N/A            |
+| `deepseek/deepseek-v4-pro`   | DeepSeek V4 Pro   | Most capable | Not supported     | N/A            |

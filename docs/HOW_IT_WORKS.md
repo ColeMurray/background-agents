@@ -476,14 +476,14 @@ already mint a fresh fallback token on restore.
 
 You can configure environment variables (API keys, credentials) at global or per-repository scope:
 
-- **Global secrets** apply to all repositories (e.g., `ANTHROPIC_API_KEY`)
+- **Global secrets** apply to all repositories (e.g., `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`)
 - **Repository secrets** apply to a single repo and override global secrets with the same key
 - Stored encrypted (AES-256-GCM) in D1 database
 - Injected into sandboxes at startup
 - Never exposed to clients (only key names are visible)
 
 > **Daytona and Vercel users**: LLM API keys (e.g., `ANTHROPIC_API_KEY` for Claude models) must be
-> added as global secrets. Modal injects these automatically via its own secrets mechanism.
+> added as global secrets. DeepSeek models require `DEEPSEEK_API_KEY` with any sandbox provider.
 
 See [Secrets Management](./SECRETS.md) for setup instructions.
 

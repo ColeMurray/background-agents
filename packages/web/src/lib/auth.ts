@@ -45,7 +45,7 @@ declare module "next-auth/jwt" {
 }
 
 export const authOptions: NextAuthOptions = {
-  debug: process.env.NODE_ENV === "development" || process.env.NEXTAUTH_DEBUG === "true",
+  debug: process.env.NEXTAUTH_DEBUG === "true",
   providers: [
     GitHubProvider<GithubProfile>({
       clientId: process.env.GITHUB_CLIENT_ID!,

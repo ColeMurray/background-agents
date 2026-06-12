@@ -27,6 +27,8 @@ export const VALID_MODELS = [
   "opencode/kimi-k2.5",
   "opencode/minimax-m2.5",
   "opencode/glm-5",
+  "deepseek/deepseek-v4-flash",
+  "deepseek/deepseek-v4-pro",
 ] as const;
 
 export type ValidModel = (typeof VALID_MODELS)[number];
@@ -161,6 +163,13 @@ export const MODEL_OPTIONS: ModelCategory[] = [
       { id: "opencode/kimi-k2.5", name: "Kimi K2.5", description: "Moonshot AI" },
       { id: "opencode/minimax-m2.5", name: "MiniMax M2.5", description: "MiniMax" },
       { id: "opencode/glm-5", name: "GLM 5", description: "Z.ai 744B MoE" },
+    ],
+  },
+  {
+    category: "DeepSeek",
+    models: [
+      { id: "deepseek/deepseek-v4-flash", name: "DeepSeek V4 Flash", description: "Fast model" },
+      { id: "deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro", description: "Most capable" },
     ],
   },
 ];
