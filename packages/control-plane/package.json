@@ -19,7 +19,7 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.16.13",
-    "esbuild": "^0.25.1",
+    "esbuild": "^0.28.1",
     "typescript": "^5.7.2",
     "@vitest/coverage-v8": "^4.1.0",
     "vitest": "^4.1.0",
