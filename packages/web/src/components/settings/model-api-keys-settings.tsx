@@ -306,7 +306,7 @@ export function ModelApiKeysSettings() {
                           size="sm"
                           aria-label={`Remove ${item.key}`}
                           onClick={() => handleDelete(item.key)}
-                          disabled={!hasDirectKey || deletingKey === item.key}
+                          disabled={saving || !hasDirectKey || deletingKey === item.key}
                         >
                           {deletingKey === item.key ? "Removing..." : "Remove"}
                         </Button>

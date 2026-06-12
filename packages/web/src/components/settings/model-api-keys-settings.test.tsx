@@ -10,6 +10,8 @@ import { ModelApiKeysSettings } from "./model-api-keys-settings";
 
 expect.extend(matchers);
 
+const DEDUPING_INTERVAL_MS = Number.POSITIVE_INFINITY;
+
 const { reposMock, toastMock } = vi.hoisted(() => ({
   reposMock: {
     repos: [
@@ -64,7 +66,7 @@ function renderWithSWR(fallback: Record<string, unknown> = {}) {
       value={{
         provider: () => new Map(),
         fallback,
-        dedupingInterval: Infinity,
+        dedupingInterval: DEDUPING_INTERVAL_MS,
         revalidateOnFocus: false,
         revalidateIfStale: false,
         revalidateOnReconnect: false,
@@ -130,8 +132,8 @@ describe("ModelApiKeysSettings", () => {
 
     await selectRepo();
 
-    expect(screen.getByText("Inherited")).toBeInTheDocument();
-    expect(screen.getByText("Set")).toBeInTheDocument();
+    expect(await screen.findByText("Inherited")).toBeInTheDocument();
+    expect(await screen.findByText("Set")).toBeInTheDocument();
   });
 
   it("saves repo overrides to the selected repository secrets endpoint", async () => {
