@@ -57,6 +57,7 @@ import type {
 } from "../types";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
+import { parseTunnelUrls } from "./tunnel-urls";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
 import { SessionPullRequestService } from "./pull-request-service";
 import { RepoSecretsStore } from "../db/repo-secrets";
@@ -1771,12 +1772,11 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   private safeParseTunnelUrls(raw: string): Record<string, string> | null {
-    try {
-      return JSON.parse(raw) as Record<string, string>;
-    } catch {
+    const urls = parseTunnelUrls(raw);
+    if (!urls) {
       this.log.warn("Invalid sandbox tunnel_urls JSON");
-      return null;
     }
+    return urls;
   }
 
   // Database helpers

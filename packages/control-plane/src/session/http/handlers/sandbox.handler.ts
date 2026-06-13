@@ -6,6 +6,7 @@ import type { ScmCredentialsResult } from "../../scm-credentials-service";
 import type { SessionRepository } from "../../repository";
 import type { SandboxRow, SessionRow } from "../../types";
 import { assertArtifactType } from "../../artifacts";
+import { parseTunnelUrls } from "../../tunnel-urls";
 
 interface AddParticipantRequest {
   userId: string;
@@ -206,10 +207,11 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
      *
      * Responses:
      * - `404` when no sandbox exists for the session.
-     * - `500` when the stored value is malformed JSON or not a JSON object, so
-     *   corrupted data is distinguishable from "no tunnels resolved yet" (an
-     *   empty map would let the in-sandbox setup silently write an empty
-     *   `.tunnels.env`).
+     * - `500` when the stored value is malformed — invalid JSON, not a plain
+     *   object, or holding a non-string value — so the in-sandbox setup hard-
+     *   fails on corrupt data instead of writing a garbage `.tunnels.env`. Note
+     *   a not-yet-resolved sandbox still returns `200` with an empty map, so the
+     *   client must tolerate an empty result and retry until ports appear.
      * - `200` with `{ tunnelUrls }` otherwise (empty map when none are stored).
      */
     async tunnelUrls(): Promise<Response> {
@@ -220,20 +222,12 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
 
       let urls: Record<string, string> = {};
       if (sandbox.tunnel_urls) {
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(sandbox.tunnel_urls);
-        } catch (err) {
-          deps.getLog().warn("Failed to parse stored tunnel_urls JSON", {
-            error: err instanceof Error ? err.message : String(err),
-          });
+        const parsed = parseTunnelUrls(sandbox.tunnel_urls);
+        if (!parsed) {
+          deps.getLog().warn("Invalid stored tunnel_urls");
           return Response.json({ error: "Invalid stored tunnel URLs" }, { status: 500 });
         }
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-          deps.getLog().warn("Stored tunnel_urls is not a JSON object");
-          return Response.json({ error: "Invalid stored tunnel URLs" }, { status: 500 });
-        }
-        urls = parsed as Record<string, string>;
+        urls = parsed;
       }
 
       return Response.json(
