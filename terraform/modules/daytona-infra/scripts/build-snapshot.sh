@@ -22,10 +22,13 @@ cd "${DEPLOY_PATH}" || {
 
 # Install Daytona SDK (the only runtime dependency for bootstrap).
 # Pin the version to avoid surprise breakage from SDK changes.
-pip install --user -q 'daytona==0.161.0'
+PYTHON_BIN="$(command -v python3 || command -v python)"
+VENV_DIR="${DEPLOY_PATH}/.venv"
+"${PYTHON_BIN}" -m venv "${VENV_DIR}"
+"${VENV_DIR}/bin/python" -m pip install -q 'daytona==0.161.0'
 
 # --force deletes the existing snapshot before rebuilding,
 # ensuring the create call succeeds even if the name is taken.
-python -m src.bootstrap --force
+"${VENV_DIR}/bin/python" -m src.bootstrap --force
 
 echo "Daytona snapshot ${DAYTONA_BASE_SNAPSHOT} built successfully"

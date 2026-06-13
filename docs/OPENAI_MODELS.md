@@ -13,13 +13,13 @@ how to configure your deployment to use them.
 | ------------------- | ------------------------------ |
 | GPT 5.2             | Fast baseline model (400K ctx) |
 | GPT 5.4             | Flagship model                 |
-| GPT 5.5             | Latest flagship model          |
+| GPT 5.5             | Recommended Codex model        |
 | GPT 5.2 Codex       | Optimized for code tasks       |
-| GPT 5.3 Codex       | Latest codex variant           |
+| GPT 5.3 Codex       | Legacy Codex model             |
 | GPT 5.3 Codex Spark | Lightweight Codex variant      |
 
-OpenAI models support reasoning effort levels: none, low, medium, high, and extra high (default:
-high for Codex models).
+OpenAI models support reasoning effort levels: none, low, medium, high, and extra high. For Codex,
+start with GPT 5.5.
 
 ---
 
@@ -64,10 +64,14 @@ models will automatically use your configured credentials.
 
 ## How It Works
 
+Open-Inspect does not invoke the Codex CLI with `codex exec`, and it does not call the Codex SDK
+directly. Sandboxes run `opencode serve`; the sandbox bridge posts prompts to OpenCode's local HTTP
+API and streams events back to the control plane.
+
 Your refresh token is stored securely in the control plane and is never exposed to sandboxes. When a
 sandbox needs to make an OpenAI API call, it requests a short-lived access token from the control
-plane, which handles token refresh and rotation automatically. Only the temporary access token is
-present inside the sandbox.
+plane, which handles token refresh and rotation automatically. The OpenCode plugin in the sandbox
+uses that temporary access token to call the ChatGPT Codex responses endpoint.
 
 Credentials are scoped per repository, so different repos can use different OpenAI accounts.
 

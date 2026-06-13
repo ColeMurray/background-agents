@@ -550,9 +550,6 @@ class SandboxSupervisor:
             return
 
         try:
-            auth_dir = Path.home() / ".local" / "share" / "opencode"
-            auth_dir.mkdir(parents=True, exist_ok=True)
-
             openai_entry = {
                 "type": "oauth",
                 "refresh": "managed-by-control-plane",
@@ -564,21 +561,49 @@ class SandboxSupervisor:
             if account_id:
                 openai_entry["accountId"] = account_id
 
-            auth_file = auth_dir / "auth.json"
-            tmp_file = auth_dir / ".auth.json.tmp"
-
-            # Write to a temp file created with 0o600 from the start, then
-            # atomically rename so the target is never world-readable.
-            fd = os.open(str(tmp_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            try:
-                os.write(fd, json.dumps({"openai": openai_entry}).encode())
-            finally:
-                os.close(fd)
-            tmp_file.replace(auth_file)
-
+            self._write_opencode_auth({"openai": openai_entry})
             self.log.info("openai_oauth.setup")
         except Exception as e:
             self.log.warn("openai_oauth.setup_error", exc=e)
+
+    def _setup_opencode_go_auth(self) -> None:
+        """Write OpenCode Go API credentials when configured."""
+        api_key = os.environ.get("OPENCODE_GO_API_KEY") or os.environ.get("OPENCODE_GO_KEY")
+        if not api_key:
+            return
+
+        try:
+            self._write_opencode_auth({"opencode-go": {"type": "api", "key": api_key}})
+            self.log.info("opencode_go.setup")
+        except Exception as e:
+            self.log.warn("opencode_go.setup_error", exc=e)
+
+    def _write_opencode_auth(self, entries: dict[str, dict]) -> None:
+        """Merge entries into OpenCode auth.json with secure file permissions."""
+        auth_dir = Path.home() / ".local" / "share" / "opencode"
+        auth_dir.mkdir(parents=True, exist_ok=True)
+
+        auth_file = auth_dir / "auth.json"
+        existing: dict[str, dict] = {}
+        if auth_file.exists():
+            try:
+                loaded = json.loads(auth_file.read_text())
+                if isinstance(loaded, dict):
+                    existing = loaded
+            except Exception:
+                existing = {}
+
+        existing.update(entries)
+        tmp_file = auth_dir / ".auth.json.tmp"
+
+        # Write to a temp file created with 0o600 from the start, then
+        # atomically rename so the target is never world-readable.
+        fd = os.open(str(tmp_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, json.dumps(existing).encode())
+        finally:
+            os.close(fd)
+        tmp_file.replace(auth_file)
 
     async def start_code_server(self) -> None:
         """Start code-server for browser-based VS Code editing."""
@@ -817,11 +842,12 @@ class SandboxSupervisor:
     async def start_opencode(self) -> None:
         """Start OpenCode server with configuration."""
         self._setup_openai_oauth()
+        self._setup_opencode_go_auth()
         self.log.info("opencode.start")
 
         # Build OpenCode config from session settings
-        provider = self.session_config.get("provider", "anthropic")
-        model = self.session_config.get("model", "claude-sonnet-4-6")
+        provider = self.session_config.get("provider", "openai")
+        model = self.session_config.get("model", "gpt-5.5")
         opencode_config: dict = {
             "model": f"{provider}/{model}",
             "permission": {"*": {"*": "allow"}},

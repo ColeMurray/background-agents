@@ -120,3 +120,82 @@ class TestOpenaiOauthSetup:
         auth_dir = tmp_path / ".local" / "share" / "opencode"
         tmp_file = auth_dir / ".auth.json.tmp"
         assert not tmp_file.exists()
+
+
+class TestOpenCodeGoAuthSetup:
+    """Cases for _setup_opencode_go_auth()."""
+
+    def test_writes_auth_json_when_api_key_present(self, tmp_path):
+        sup = _make_supervisor()
+
+        with (
+            patch.dict("os.environ", {"OPENCODE_GO_API_KEY": "ocg_secret"}, clear=False),
+            patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            sup._setup_opencode_go_auth()
+
+        data = json.loads(_auth_file(tmp_path).read_text())
+        assert data == {
+            "opencode-go": {
+                "type": "api",
+                "key": "ocg_secret",
+            }
+        }
+
+    def test_accepts_legacy_key_env_name(self, tmp_path):
+        sup = _make_supervisor()
+
+        with (
+            patch.dict("os.environ", {"OPENCODE_GO_KEY": "ocg_secret"}, clear=False),
+            patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            sup._setup_opencode_go_auth()
+
+        data = json.loads(_auth_file(tmp_path).read_text())
+        assert data["opencode-go"]["key"] == "ocg_secret"
+
+    def test_skips_when_no_api_key(self, tmp_path, monkeypatch):
+        sup = _make_supervisor()
+
+        monkeypatch.delenv("OPENCODE_GO_API_KEY", raising=False)
+        monkeypatch.delenv("OPENCODE_GO_KEY", raising=False)
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            sup._setup_opencode_go_auth()
+
+        assert not _auth_file(tmp_path).exists()
+
+    def test_merges_with_openai_oauth_entry(self, tmp_path):
+        sup = _make_supervisor()
+
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "OPENAI_OAUTH_REFRESH_TOKEN": "rt_abc123",
+                    "OPENAI_OAUTH_ACCOUNT_ID": "acct_xyz",
+                    "OPENCODE_GO_API_KEY": "ocg_secret",
+                },
+                clear=False,
+            ),
+            patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            sup._setup_openai_oauth()
+            sup._setup_opencode_go_auth()
+
+        data = json.loads(_auth_file(tmp_path).read_text())
+        assert data["openai"]["refresh"] == "managed-by-control-plane"
+        assert data["openai"]["accountId"] == "acct_xyz"
+        assert data["opencode-go"] == {"type": "api", "key": "ocg_secret"}
+
+    def test_sets_secure_permissions(self, tmp_path):
+        sup = _make_supervisor()
+
+        with (
+            patch.dict("os.environ", {"OPENCODE_GO_API_KEY": "ocg_secret"}, clear=False),
+            patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            sup._setup_opencode_go_auth()
+
+        mode = _auth_file(tmp_path).stat().st_mode & 0o777
+        assert mode == 0o600

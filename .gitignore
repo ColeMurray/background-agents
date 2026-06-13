@@ -17,7 +17,9 @@ venv/
 dist/
 build/
 .next/
+.open-next/
 out/
+packages/web/wrangler.production.toml
 
 # IDE
 .idea/
@@ -75,6 +77,7 @@ opencode-reference/
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
+tfplan*
 crash.log
 crash.*.log
 override.tf

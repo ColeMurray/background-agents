@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from daytona import CreateSnapshotParams, Daytona, Image
@@ -26,6 +27,9 @@ AGENT_BROWSER_VERSION = "0.21.2"
 # daytona-v2: install the SCM credential-helper shim and configure
 # git system-wide so per-request token brokerage matches the Modal base image.
 SANDBOX_VERSION = "daytona-v2-credential-helper"
+SANDBOX_ENTRYPOINT = ["/bin/sh", "-lc", "exec python3 -m sandbox_runtime.entrypoint"]
+SNAPSHOT_DELETE_TIMEOUT_SECONDS = 180
+SNAPSHOT_READY_TIMEOUT_SECONDS = 300
 
 
 def build_base_image(repo_root: Path) -> Image:
@@ -35,10 +39,14 @@ def build_base_image(repo_root: Path) -> Image:
     )
 
     return (
-        Image.base("python:3.12-slim-bookworm")
+        # Build on Daytona's stock sandbox image so custom snapshots stay
+        # compatible with the runner pool used for normal sandbox launches.
+        Image.base("daytonaio/sandbox:0.8.0")
+        .dockerfile_commands(["USER root"])
         .run_commands(
             "apt-get update",
-            "apt-get install -y git curl build-essential ca-certificates gnupg "
+            "apt-get install -y python3 python3-pip python-is-python3 "
+            "git curl build-essential ca-certificates gnupg "
             "openssh-client jq unzip libnss3 libnspr4 libatk1.0-0 "
             "libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 "
             "libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 "
@@ -102,14 +110,66 @@ def build_base_image(repo_root: Path) -> Image:
     )
 
 
+def _snapshot_state_name(snapshot: object) -> str:
+    state = getattr(snapshot, "state", "")
+    return str(getattr(state, "value", state)).lower()
+
+
+def _delete_snapshot_if_present(daytona: Daytona, name: str) -> None:
+    try:
+        snapshot = daytona.snapshot.get(name)
+    except Exception:
+        return
+
+    daytona.snapshot.delete(snapshot)
+    deadline = time.monotonic() + SNAPSHOT_DELETE_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        try:
+            daytona.snapshot.get(name)
+        except Exception:
+            return
+        print(f"Waiting for snapshot {name!r} deletion to complete...")
+        time.sleep(3)
+
+    raise TimeoutError(f"Timed out waiting for snapshot {name!r} deletion")
+
+
+def _wait_for_snapshot_active(daytona: Daytona, name: str) -> object:
+    deadline = time.monotonic() + SNAPSHOT_READY_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        snapshot = daytona.snapshot.get(name)
+        state = _snapshot_state_name(snapshot)
+        if state == "active":
+            return snapshot
+        if state in {"error", "failed"}:
+            reason = getattr(snapshot, "error_reason", None) or getattr(snapshot, "errorReason", "")
+            raise RuntimeError(f"Snapshot {name!r} failed: {reason}")
+        print(f"Waiting for snapshot {name!r} to become active ({state})...")
+        time.sleep(3)
+
+    raise TimeoutError(f"Timed out waiting for snapshot {name!r} to become active")
+
+
 def create_base_snapshot(daytona: Daytona, repo_root: Path, snapshot_name: str) -> None:
     """Create the named base snapshot from the current repo contents."""
     image = build_base_image(repo_root)
+    build_snapshot_name = f"{snapshot_name}-build"
+    _delete_snapshot_if_present(daytona, build_snapshot_name)
     daytona.snapshot.create(
         CreateSnapshotParams(
-            name=snapshot_name,
+            name=build_snapshot_name,
             image=image,
-            entrypoint=["python", "-m", "sandbox_runtime.entrypoint"],
+            entrypoint=SANDBOX_ENTRYPOINT,
         ),
         on_logs=lambda chunk: print(chunk, end="\n"),
     )
+    built_snapshot = _wait_for_snapshot_active(daytona, build_snapshot_name)
+
+    daytona.snapshot.create(
+        CreateSnapshotParams(
+            name=snapshot_name,
+            image=getattr(built_snapshot, "ref"),
+            entrypoint=SANDBOX_ENTRYPOINT,
+        )
+    )
+    _wait_for_snapshot_active(daytona, snapshot_name)

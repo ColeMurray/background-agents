@@ -13,6 +13,10 @@ import {
 
 describe("model utilities", () => {
   describe("DEFAULT_MODEL", () => {
+    it("uses GPT 5.5 by default", () => {
+      expect(DEFAULT_MODEL).toBe("openai/gpt-5.5");
+    });
+
     it("is a valid model", () => {
       expect(isValidModel(DEFAULT_MODEL)).toBe(true);
     });
@@ -42,6 +46,18 @@ describe("model utilities", () => {
       expect(isValidModel("openai/gpt-5.2-codex")).toBe(true);
       expect(isValidModel("openai/gpt-5.3-codex")).toBe(true);
       expect(isValidModel("openai/gpt-5.3-codex-spark")).toBe(true);
+    });
+
+    it("returns true for OpenCode Go models", () => {
+      expect(isValidModel("opencode-go/kimi-k2.7-code")).toBe(true);
+      expect(isValidModel("opencode-go/qwen3.7-max")).toBe(true);
+      expect(isValidModel("opencode-go/deepseek-v4-pro")).toBe(true);
+    });
+
+    it("returns true for free OpenCode models", () => {
+      expect(isValidModel("opencode/big-pickle")).toBe(true);
+      expect(isValidModel("opencode/deepseek-v4-flash-free")).toBe(true);
+      expect(isValidModel("opencode/north-mini-code-free")).toBe(true);
     });
 
     it("accepts bare GPT model names via normalization", () => {
@@ -130,6 +146,20 @@ describe("model utilities", () => {
       expect(extractProviderAndModel("openai/gpt-5.3-codex-spark")).toEqual({
         provider: "openai",
         model: "gpt-5.3-codex-spark",
+      });
+    });
+
+    it("extracts opencode-go provider from OpenCode Go models", () => {
+      expect(extractProviderAndModel("opencode-go/kimi-k2.7-code")).toEqual({
+        provider: "opencode-go",
+        model: "kimi-k2.7-code",
+      });
+    });
+
+    it("extracts opencode provider from free OpenCode models", () => {
+      expect(extractProviderAndModel("opencode/deepseek-v4-flash-free")).toEqual({
+        provider: "opencode",
+        model: "deepseek-v4-flash-free",
       });
     });
 
@@ -278,6 +308,14 @@ describe("model utilities", () => {
       expect(supportsReasoning("openai/gpt-5.2-codex")).toBe(true);
       expect(supportsReasoning("openai/gpt-5.3-codex")).toBe(true);
       expect(supportsReasoning("openai/gpt-5.3-codex-spark")).toBe(true);
+    });
+
+    it("returns false for OpenCode Go models without reasoning config", () => {
+      expect(supportsReasoning("opencode-go/kimi-k2.7-code")).toBe(false);
+    });
+
+    it("returns false for free OpenCode models without reasoning config", () => {
+      expect(supportsReasoning("opencode/big-pickle")).toBe(false);
     });
 
     it("returns false for invalid models", () => {
@@ -494,6 +532,16 @@ describe("model utilities", () => {
       expect(normalizeModelId("openai/gpt-5.2-codex")).toBe("openai/gpt-5.2-codex");
       expect(normalizeModelId("openai/gpt-5.3-codex")).toBe("openai/gpt-5.3-codex");
       expect(normalizeModelId("openai/gpt-5.3-codex-spark")).toBe("openai/gpt-5.3-codex-spark");
+    });
+
+    it("passes through OpenCode Go models unchanged", () => {
+      expect(normalizeModelId("opencode-go/kimi-k2.7-code")).toBe("opencode-go/kimi-k2.7-code");
+    });
+
+    it("passes through free OpenCode models unchanged", () => {
+      expect(normalizeModelId("opencode/north-mini-code-free")).toBe(
+        "opencode/north-mini-code-free"
+      );
     });
 
     it("adds openai/ prefix to bare GPT models", () => {

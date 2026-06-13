@@ -30,6 +30,20 @@ def _auth_file(tmp_path: Path) -> Path:
 class TestCodexAuthPluginSetup:
     """Cases for codex auth proxy plugin deployment."""
 
+    def test_plugin_allows_gpt_5_5(self):
+        """Pinned OpenCode builds should still expose the current recommended Codex model."""
+        plugin = (
+            Path(__file__).parents[1]
+            / "src"
+            / "sandbox_runtime"
+            / "plugins"
+            / "codex-auth-plugin.js"
+        )
+        source = plugin.read_text()
+
+        assert '"gpt-5.5"' in source
+        assert 'provider.models["gpt-5.5"]' in source
+
     def test_auth_json_uses_sentinel_token(self, tmp_path):
         """auth.json should contain the sentinel, not the real refresh token."""
         sup = _make_supervisor()

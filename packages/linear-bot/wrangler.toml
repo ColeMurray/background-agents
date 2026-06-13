@@ -20,7 +20,7 @@ id = ""  # Fill in after creating: wrangler kv namespace create LINEAR_KV
 DEPLOYMENT_NAME = "dev"
 CONTROL_PLANE_URL = "https://open-inspect-control-plane.YOUR-SUBDOMAIN.workers.dev"
 WEB_APP_URL = "https://open-inspect-dev.vercel.app"
-DEFAULT_MODEL = "claude-sonnet-4-20250514"
+DEFAULT_MODEL = "openai/gpt-5.5"
 LINEAR_CLIENT_ID = ""  # From Linear OAuth Application
 WORKER_URL = ""        # Your worker's public URL (e.g. https://open-inspect-linear-bot.YOUR-SUBDOMAIN.workers.dev)
 

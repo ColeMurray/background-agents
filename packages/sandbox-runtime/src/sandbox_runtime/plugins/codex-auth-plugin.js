@@ -121,7 +121,21 @@ export const CodexAuthProxy = async (input) => {
           }
         }
 
-        // Inject GPT 5.3 Codex models if missing
+        // Inject recommended Codex models when the pinned OpenCode provider
+        // metadata has not caught up yet.
+        if (!provider.models["gpt-5.5"]) {
+          provider.models["gpt-5.5"] = {
+            name: "GPT 5.5",
+            attachment: false,
+            reasoning: false,
+            temperature: false,
+            options: {},
+            variants: {},
+            limit: { context: 1000000, output: 1000000 },
+            cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+          };
+        }
+
         if (!provider.models["gpt-5.3-codex"]) {
           provider.models["gpt-5.3-codex"] = {
             name: "GPT 5.3 Codex",

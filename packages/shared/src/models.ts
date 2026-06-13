@@ -23,9 +23,27 @@ export const VALID_MODELS = [
   "openai/gpt-5.2-codex",
   "openai/gpt-5.3-codex",
   "openai/gpt-5.3-codex-spark",
+  "opencode/big-pickle",
+  "opencode/deepseek-v4-flash-free",
   "opencode/kimi-k2.5",
+  "opencode/mimo-v2.5-free",
   "opencode/minimax-m2.5",
   "opencode/glm-5",
+  "opencode/nemotron-3-ultra-free",
+  "opencode/north-mini-code-free",
+  "opencode-go/deepseek-v4-flash",
+  "opencode-go/deepseek-v4-pro",
+  "opencode-go/glm-5",
+  "opencode-go/glm-5.1",
+  "opencode-go/kimi-k2.6",
+  "opencode-go/kimi-k2.7-code",
+  "opencode-go/mimo-v2.5",
+  "opencode-go/mimo-v2.5-pro",
+  "opencode-go/minimax-m2.7",
+  "opencode-go/minimax-m3",
+  "opencode-go/qwen3.6-plus",
+  "opencode-go/qwen3.7-max",
+  "opencode-go/qwen3.7-plus",
 ] as const;
 
 export type ValidModel = (typeof VALID_MODELS)[number];
@@ -33,7 +51,7 @@ export type ValidModel = (typeof VALID_MODELS)[number];
 /**
  * Default model to use when none specified or invalid.
  */
-export const DEFAULT_MODEL: ValidModel = "anthropic/claude-sonnet-4-6";
+export const DEFAULT_MODEL: ValidModel = "openai/gpt-5.5";
 
 /**
  * Reasoning effort levels supported across providers.
@@ -135,9 +153,9 @@ export const MODEL_OPTIONS: ModelCategory[] = [
     models: [
       { id: "openai/gpt-5.2", name: "GPT 5.2", description: "400K context, fast" },
       { id: "openai/gpt-5.4", name: "GPT 5.4", description: "Flagship model" },
-      { id: "openai/gpt-5.5", name: "GPT 5.5", description: "Latest flagship model" },
+      { id: "openai/gpt-5.5", name: "GPT 5.5", description: "Recommended Codex model" },
       { id: "openai/gpt-5.2-codex", name: "GPT 5.2 Codex", description: "Optimized for code" },
-      { id: "openai/gpt-5.3-codex", name: "GPT 5.3 Codex", description: "Latest codex" },
+      { id: "openai/gpt-5.3-codex", name: "GPT 5.3 Codex", description: "Legacy Codex model" },
       {
         id: "openai/gpt-5.3-codex-spark",
         name: "GPT 5.3 Codex Spark",
@@ -146,11 +164,75 @@ export const MODEL_OPTIONS: ModelCategory[] = [
     ],
   },
   {
-    category: "OpenCode Zen",
+    category: "OpenCode Free",
+    models: [
+      { id: "opencode/big-pickle", name: "Big Pickle", description: "Free OpenCode model" },
+      {
+        id: "opencode/deepseek-v4-flash-free",
+        name: "DeepSeek V4 Flash Free",
+        description: "Free OpenCode model",
+      },
+      { id: "opencode/mimo-v2.5-free", name: "MiMo V2.5 Free", description: "Free OpenCode model" },
+      {
+        id: "opencode/nemotron-3-ultra-free",
+        name: "Nemotron 3 Ultra Free",
+        description: "Free OpenCode model",
+      },
+      {
+        id: "opencode/north-mini-code-free",
+        name: "North Mini Code Free",
+        description: "Free OpenCode model",
+      },
+    ],
+  },
+  {
+    category: "OpenCode Zen (Legacy)",
     models: [
       { id: "opencode/kimi-k2.5", name: "Kimi K2.5", description: "Moonshot AI" },
       { id: "opencode/minimax-m2.5", name: "MiniMax M2.5", description: "MiniMax" },
       { id: "opencode/glm-5", name: "GLM 5", description: "Z.ai 744B MoE" },
+    ],
+  },
+  {
+    category: "OpenCode Go",
+    models: [
+      {
+        id: "opencode-go/kimi-k2.7-code",
+        name: "Kimi K2.7 Code",
+        description: "Coding model via OpenCode Go",
+      },
+      { id: "opencode-go/qwen3.7-max", name: "Qwen3.7 Max", description: "Qwen via OpenCode Go" },
+      { id: "opencode-go/qwen3.7-plus", name: "Qwen3.7 Plus", description: "Qwen via OpenCode Go" },
+      { id: "opencode-go/qwen3.6-plus", name: "Qwen3.6 Plus", description: "Qwen via OpenCode Go" },
+      { id: "opencode-go/glm-5.1", name: "GLM 5.1", description: "Z.ai via OpenCode Go" },
+      { id: "opencode-go/glm-5", name: "GLM 5", description: "Z.ai via OpenCode Go" },
+      {
+        id: "opencode-go/deepseek-v4-pro",
+        name: "DeepSeek V4 Pro",
+        description: "DeepSeek via OpenCode Go",
+      },
+      {
+        id: "opencode-go/deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        description: "DeepSeek via OpenCode Go",
+      },
+      { id: "opencode-go/minimax-m3", name: "MiniMax M3", description: "MiniMax via OpenCode Go" },
+      {
+        id: "opencode-go/minimax-m2.7",
+        name: "MiniMax M2.7",
+        description: "MiniMax via OpenCode Go",
+      },
+      {
+        id: "opencode-go/mimo-v2.5-pro",
+        name: "MiMo V2.5 Pro",
+        description: "MiMo via OpenCode Go",
+      },
+      { id: "opencode-go/mimo-v2.5", name: "MiMo V2.5", description: "MiMo via OpenCode Go" },
+      {
+        id: "opencode-go/kimi-k2.6",
+        name: "Kimi K2.6",
+        description: "Moonshot AI via OpenCode Go",
+      },
     ],
   },
 ];
@@ -173,6 +255,12 @@ export const DEFAULT_ENABLED_MODELS: ValidModel[] = [
   "openai/gpt-5.2-codex",
   "openai/gpt-5.3-codex",
   "openai/gpt-5.3-codex-spark",
+  "opencode/big-pickle",
+  "opencode/deepseek-v4-flash-free",
+  "opencode/mimo-v2.5-free",
+  "opencode/nemotron-3-ultra-free",
+  "opencode/north-mini-code-free",
+  "opencode-go/kimi-k2.7-code",
 ];
 
 // === Normalization ===
