@@ -20,10 +20,10 @@ That's it — the next sandbox you launch will have the secret available as an e
 
 ## Global vs. Repository Secrets
 
-| Scope          | Applies to        | Use case                                                             |
-| -------------- | ----------------- | -------------------------------------------------------------------- |
-| **Global**     | All repositories  | API keys shared across projects (`DEEPSEEK_API_KEY`, `DATABASE_URL`) |
-| **Repository** | One specific repo | Repo-specific credentials (`STRIPE_SECRET_KEY`, `AWS_ACCESS_KEY_ID`) |
+| Scope          | Applies to        | Use case                                                              |
+| -------------- | ----------------- | --------------------------------------------------------------------- |
+| **Global**     | All repositories  | API keys shared across projects (`ANTHROPIC_API_KEY`, `DATABASE_URL`) |
+| **Repository** | One specific repo | Repo-specific credentials (`STRIPE_SECRET_KEY`, `AWS_ACCESS_KEY_ID`)  |
 
 **Precedence**: Repository secrets override global secrets with the same key. When viewing a
 repository's secrets, inherited global keys are shown in a read-only section with a "Global" badge.

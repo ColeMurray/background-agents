@@ -483,7 +483,10 @@ You can configure environment variables (API keys, credentials) at global or per
 - Never exposed to clients (only key names are visible)
 
 > **Daytona and Vercel users**: LLM API keys (e.g., `ANTHROPIC_API_KEY` for Claude models) must be
-> added as global secrets. DeepSeek models require `DEEPSEEK_API_KEY` with any sandbox provider.
+> added as global secrets. Modal injects these automatically via its own secrets mechanism.
+>
+> **DeepSeek (all providers)**: DeepSeek models require `DEEPSEEK_API_KEY` as a global secret with
+> any sandbox provider — unlike `ANTHROPIC_API_KEY`, Modal does not inject it automatically.
 
 See [Secrets Management](./SECRETS.md) for setup instructions.
 
