@@ -120,3 +120,16 @@ resource "null_resource" "web_app_cloudflare_deploy" {
     local_file.web_app_wrangler_production,
   ]
 }
+
+# Attach a custom domain to the web Worker (when configured).
+# Cloudflare provisions and manages the DNS record + edge cert for the hostname.
+resource "cloudflare_workers_custom_domain" "web_app" {
+  count = local.web_custom_domain_enabled ? 1 : 0
+
+  account_id = var.cloudflare_account_id
+  zone_id    = var.cloudflare_zone_id
+  hostname   = var.cloudflare_custom_domain
+  service    = "open-inspect-web-${local.name_suffix}"
+
+  depends_on = [null_resource.web_app_cloudflare_deploy]
+}

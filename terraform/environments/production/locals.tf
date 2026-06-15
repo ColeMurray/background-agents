@@ -14,8 +14,13 @@ locals {
   control_plane_url  = "https://${local.control_plane_host}"
   ws_url             = "wss://${local.control_plane_host}"
 
+  # Whether a custom domain is configured for the Cloudflare web Worker
+  web_custom_domain_enabled = var.web_platform == "cloudflare" && var.cloudflare_custom_domain != null && var.cloudflare_custom_domain != "" && var.cloudflare_zone_id != null && var.cloudflare_zone_id != ""
+
   # Web app URL depends on deployment platform
-  web_app_url = var.web_platform == "cloudflare" ? (
+  web_app_url = local.web_custom_domain_enabled ? (
+    "https://${var.cloudflare_custom_domain}"
+    ) : var.web_platform == "cloudflare" ? (
     "https://open-inspect-web-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev"
     ) : (
     "https://open-inspect-${local.name_suffix}.vercel.app"
