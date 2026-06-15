@@ -16,11 +16,25 @@ export interface GitHubEnrichment {
 export interface SessionIdentityFields {
   userId?: string;
   spawnSource?: SpawnSource;
+
+  // Provider-agnostic authentication identity — "who logged in". The web client
+  // populates this for every auth provider (GitHub or Google); it resolves the
+  // canonical D1 user. Kept separate from scm* (GitHub-only SCM credentials and
+  // git-commit attribution) so a pure-Google session carries auth* and no scm*.
+  authProvider?: "github" | "google";
+  authUserId?: string;
+  authEmail?: string;
+  authName?: string;
+  authAvatarUrl?: string;
+
+  // GitHub SCM credentials + git-commit attribution (GitHub-only, optional).
   scmUserId?: string;
   scmLogin?: string;
   scmName?: string;
   scmEmail?: string;
   scmAvatarUrl?: string;
+
+  // Slack / Linear bot actor identity.
   actorUserId?: string;
   actorDisplayName?: string;
   actorEmail?: string;
@@ -29,20 +43,39 @@ export interface SessionIdentityFields {
 
 /**
  * Derives a ProviderIdentity from spawnSource and the request body.
- * For GitHub-based callers (web + github-bot), reuses existing scm* fields.
- * For Slack/Linear bots, uses the actor* fields.
  *
- * Returns null when the caller hasn't supplied the required provider-specific
- * ID (scmUserId for GitHub, actorUserId for Slack/Linear). This is expected
- * during the phased rollout: Phase 2 wires this plumbing, Phase 4 updates
- * each bot to send identity fields. Until then, bot sessions get user_id = NULL.
+ * - Web users (spawnSource "user"): the provider-agnostic auth* block identifies
+ *   who logged in (GitHub or Google). Falls back to scm* so that in-flight
+ *   old-web payloads — which send only scm* and no auth* during the rollout
+ *   window — still resolve to a user_id.
+ * - github-bot: GitHub identity from scm* fields.
+ * - Slack / Linear bots: actor* fields.
+ *
+ * Returns null when the caller hasn't supplied the required provider-specific ID
+ * (authUserId/scmUserId for web users, scmUserId for github-bot, actorUserId for
+ * Slack/Linear). Such sessions get user_id = NULL.
  */
 export function resolveProviderIdentity(
   spawnSource: SpawnSource,
   body: SessionIdentityFields
 ): ProviderIdentity | null {
   switch (spawnSource) {
-    case "user":
+    case "user": {
+      // Web users (GitHub or Google). Identity comes from the auth* block,
+      // falling back to scm* for back-compat with old-web payloads that predate
+      // auth*. Returns null only when neither identifier is present.
+      const providerUserId = body.authUserId ?? body.scmUserId;
+      if (!providerUserId) return null;
+      return {
+        provider: body.authProvider ?? "github",
+        providerUserId,
+        providerLogin: body.scmLogin,
+        providerEmail: body.authEmail ?? body.scmEmail,
+        displayName: body.authName ?? (body.scmName || body.scmLogin),
+        avatarUrl: body.authAvatarUrl ?? body.scmAvatarUrl,
+      };
+    }
+
     case "github-bot":
       return body.scmUserId
         ? {

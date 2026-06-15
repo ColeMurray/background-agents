@@ -18,6 +18,7 @@ import {
 } from "@open-inspect/shared";
 import { AutomationStore, toAutomation, toAutomationRun } from "../db/automation-store";
 import { UserStore } from "../db/user-store";
+import { resolveProviderIdentity, type SessionIdentityFields } from "../session/identity";
 import { generateId } from "../auth/crypto";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
@@ -93,16 +94,7 @@ async function handleCreateAutomation(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const body = await parseJsonBody<
-    CreateAutomationRequest & {
-      userId?: string;
-      scmUserId?: string;
-      scmLogin?: string;
-      scmName?: string;
-      scmEmail?: string;
-      scmAvatarUrl?: string;
-    }
-  >(request);
+  const body = await parseJsonBody<CreateAutomationRequest & SessionIdentityFields>(request);
   if (body instanceof Response) return body;
 
   // Validate required fields
@@ -225,24 +217,24 @@ async function handleCreateAutomation(
     triggerAuthData = await encryptSentrySecret(sentrySecret, env.REPO_SECRETS_ENCRYPTION_KEY);
   }
 
-  // Resolve canonical user model ID (best-effort, same pattern as handleCreateSession)
+  // Resolve canonical user model ID (best-effort, same pattern as handleCreateSession).
+  // Automations are created by web users, so resolve through the provider-agnostic
+  // "user" path: this populates user_id for both GitHub (scm*) and Google (auth*)
+  // users at creation time. Without it a Google automation would store user_id = NULL,
+  // and the github-only scheduler fallback (createSessionForAutomation) could never
+  // recover the canonical user — losing attribution, enrichment, and tokens at fire time.
   let resolvedUserId: string | null = null;
-  if (body.scmUserId) {
+  const providerIdentity = resolveProviderIdentity("user", body);
+  if (providerIdentity) {
     try {
       const userStore = new UserStore(env.DB);
-      const resolvedUser = await userStore.resolveOrCreateUser({
-        provider: "github",
-        providerUserId: body.scmUserId,
-        providerLogin: body.scmLogin,
-        providerEmail: body.scmEmail,
-        displayName: body.scmName || body.scmLogin,
-        avatarUrl: body.scmAvatarUrl,
-      });
+      const resolvedUser = await userStore.resolveOrCreateUser(providerIdentity);
       resolvedUserId = resolvedUser.id;
     } catch (e) {
       logger.warn("Failed to resolve user identity for automation", {
         error: e instanceof Error ? e : String(e),
-        scmUserId: body.scmUserId,
+        provider: providerIdentity.provider,
+        providerUserId: providerIdentity.providerUserId,
       });
     }
   }

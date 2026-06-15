@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { getToken } from "next-auth/jwt";
 import { authOptions } from "@/lib/auth";
+import { buildAuthIdentity, buildScmCredentials } from "@/lib/build-auth-identity";
 import { controlPlaneFetch } from "@/lib/control-plane";
 import {
   buildControlPlanePath,
@@ -73,7 +74,6 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
 
     const jwt = await getToken({ req: request });
-    const accessToken = jwt?.accessToken as string | undefined;
 
     // Explicitly pick allowed fields from client body and derive identity
     // from the server-side NextAuth session (not client-supplied data)
@@ -88,15 +88,12 @@ export async function POST(request: NextRequest) {
       branch: body.branch,
       title: body.title,
       spawnSource: "user" as const,
-      scmToken: accessToken,
-      scmRefreshToken: jwt?.refreshToken as string | undefined,
-      scmTokenExpiresAt: jwt?.accessTokenExpiresAt as number | undefined,
-      scmUserId: user.id,
       userId,
-      scmLogin: user.login,
-      scmName: user.name,
-      scmEmail: user.email,
-      scmAvatarUrl: user.image,
+      // Provider-agnostic auth identity (GitHub or Google) resolves the
+      // canonical user; GitHub-only scm* carries SCM credentials + attribution
+      // and is empty for Google.
+      ...buildAuthIdentity(user),
+      ...buildScmCredentials(user, jwt),
     };
 
     const response = await controlPlaneFetch("/sessions", {

@@ -192,6 +192,8 @@ jobs:
           TF_VAR_modal_environment_web_suffix: ${{ secrets.MODAL_ENVIRONMENT_WEB_SUFFIX }}
           TF_VAR_github_client_id: ${{ secrets.GH_OAUTH_CLIENT_ID }}
           TF_VAR_github_client_secret: ${{ secrets.GH_OAUTH_CLIENT_SECRET }}
+          TF_VAR_google_client_id: ${{ secrets.GOOGLE_CLIENT_ID }}
+          TF_VAR_google_client_secret: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           TF_VAR_github_app_id: ${{ secrets.GH_APP_ID }}
           TF_VAR_github_app_private_key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           TF_VAR_github_app_installation_id: ${{ secrets.GH_APP_INSTALLATION_ID }}
@@ -206,6 +208,7 @@ jobs:
           TF_VAR_modal_api_secret: ${{ secrets.MODAL_API_SECRET }}
           TF_VAR_allowed_users: ${{ secrets.ALLOWED_USERS }}
           TF_VAR_allowed_email_domains: ${{ secrets.ALLOWED_EMAIL_DOMAINS }}
+          TF_VAR_allowed_emails: ${{ secrets.ALLOWED_EMAILS }}
           TF_VAR_deployment_name: ${{ secrets.DEPLOYMENT_NAME }}
           TF_VAR_enable_github_bot: "${{ secrets.ENABLE_GITHUB_BOT || 'false' }}"
           TF_VAR_github_webhook_secret: ${{ secrets.GH_WEBHOOK_SECRET }}
@@ -332,6 +335,8 @@ jobs:
           TF_VAR_modal_environment_web_suffix: ${{ secrets.MODAL_ENVIRONMENT_WEB_SUFFIX }}
           TF_VAR_github_client_id: ${{ secrets.GH_OAUTH_CLIENT_ID }}
           TF_VAR_github_client_secret: ${{ secrets.GH_OAUTH_CLIENT_SECRET }}
+          TF_VAR_google_client_id: ${{ secrets.GOOGLE_CLIENT_ID }}
+          TF_VAR_google_client_secret: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           TF_VAR_github_app_id: ${{ secrets.GH_APP_ID }}
           TF_VAR_github_app_private_key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           TF_VAR_github_app_installation_id: ${{ secrets.GH_APP_INSTALLATION_ID }}
@@ -346,6 +351,7 @@ jobs:
           TF_VAR_modal_api_secret: ${{ secrets.MODAL_API_SECRET }}
           TF_VAR_allowed_users: ${{ secrets.ALLOWED_USERS }}
           TF_VAR_allowed_email_domains: ${{ secrets.ALLOWED_EMAIL_DOMAINS }}
+          TF_VAR_allowed_emails: ${{ secrets.ALLOWED_EMAILS }}
           TF_VAR_deployment_name: ${{ secrets.DEPLOYMENT_NAME }}
           TF_VAR_enable_github_bot: "${{ secrets.ENABLE_GITHUB_BOT || 'false' }}"
           TF_VAR_github_webhook_secret: ${{ secrets.GH_WEBHOOK_SECRET }}

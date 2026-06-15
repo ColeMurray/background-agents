@@ -549,12 +549,12 @@ export class SchedulerDO extends DurableObject<Env> {
     const sessionId = generateId();
 
     // Resolve the canonical user_id for the session index.
-    // New automations (post-Phase 5) have user_id populated at creation time, so this
-    // lookup is skipped. Legacy automations have user_id = NULL but store the GitHub
-    // numeric user ID in created_by (set from NextAuth session.user.id in the web UI,
-    // which is the only automation creation path). We look up that GitHub ID in
-    // user_identities to find the canonical user. This fallback becomes dead code once
-    // the Phase 6 backfill populates user_id on all existing automation rows.
+    // Automations created through the web UI populate user_id at creation time
+    // (handleCreateAutomation resolves it for both GitHub and Google users), so this
+    // lookup is skipped for them. The fallback below only covers legacy rows with
+    // user_id = NULL: those predate Google login and store the GitHub numeric user ID
+    // in created_by (from NextAuth session.user.id), so a github-only identity lookup
+    // recovers the canonical user. It becomes dead code once legacy rows are backfilled.
     let userId = automation.user_id;
     if (!userId && automation.created_by && automation.created_by !== "anonymous") {
       try {

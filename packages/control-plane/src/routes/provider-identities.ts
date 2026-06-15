@@ -17,6 +17,14 @@ type UpsertProviderIdentityRequest = {
   avatarUrl?: unknown;
 };
 
+/** Providers that may be upserted through this internal route. */
+const ALLOWED_PROVIDERS = ["github", "slack", "linear", "google"] as const;
+type AllowedProvider = (typeof ALLOWED_PROVIDERS)[number];
+
+function isAllowedProvider(value: string | undefined): value is AllowedProvider {
+  return value !== undefined && (ALLOWED_PROVIDERS as readonly string[]).includes(value);
+}
+
 function optionalString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
@@ -48,13 +56,18 @@ export async function handleUpsertProviderIdentity(
     return error("Request body must be an object", 400);
   }
 
+  const provider = match.groups?.provider;
+  if (!isAllowedProvider(provider)) {
+    return error(`provider must be one of: ${ALLOWED_PROVIDERS.join(", ")}`, 400);
+  }
+
   const providerUserId = pathSegment(match.groups?.providerUserId);
   if (!providerUserId) {
     return error("providerUserId is required", 400);
   }
 
   const identity: ProviderIdentity = {
-    provider: "github",
+    provider,
     providerUserId,
     providerLogin: optionalString(body.providerLogin),
     providerEmail: optionalString(body.providerEmail),
@@ -73,7 +86,7 @@ export async function handleUpsertProviderIdentity(
 export const providerIdentityRoutes: Route[] = [
   {
     method: "PUT",
-    pattern: parsePattern("/provider-identities/github/:providerUserId"),
+    pattern: parsePattern("/provider-identities/:provider/:providerUserId"),
     handler: handleUpsertProviderIdentity,
   },
 ];

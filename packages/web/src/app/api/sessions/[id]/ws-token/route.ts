@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { getToken } from "next-auth/jwt";
 import { authOptions } from "@/lib/auth";
+import { buildScmCredentials } from "@/lib/build-auth-identity";
 import { controlPlaneFetch } from "@/lib/control-plane";
 
 /**
@@ -40,13 +41,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       method: "POST",
       body: JSON.stringify({
         userId,
-        scmUserId: user.id,
-        scmLogin: user.login,
-        scmName: user.name,
-        scmEmail: user.email,
-        scmToken: jwt?.accessToken as string | undefined,
-        scmTokenExpiresAt: jwt?.accessTokenExpiresAt as number | undefined,
-        scmRefreshToken: jwt?.refreshToken as string | undefined,
+        // GitHub-only SCM credentials + attribution; empty for Google, which
+        // keeps participant identity via userId and writes no SCM token.
+        ...buildScmCredentials(user, jwt),
       }),
     });
     const fetchMs = Date.now() - fetchStart;

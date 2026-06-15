@@ -136,6 +136,19 @@ github_webhook_secret = ""
 github_bot_username = ""
 
 # =============================================================================
+# Google OAuth Credentials (Optional)
+# =============================================================================
+# Enables "Sign in with Google" for non-developer users (PMs, support agents).
+# Create an OAuth 2.0 Client ID at: https://console.cloud.google.com/apis/credentials
+#   - Application type: Web application
+#   - Authorized redirect URI: {your-web-app-url}/api/auth/callback/google
+#   - Consent screen scopes: openid, email, profile (non-sensitive — no Google review)
+# Set BOTH values to enable Google login, or leave BOTH empty for GitHub-only.
+# Pair with allowed_emails / allowed_email_domains below to control who may sign in.
+google_client_id = ""
+google_client_secret = ""
+
+# =============================================================================
 # Slack App Credentials (Optional)
 # =============================================================================
 # From Slack App dashboard: https://api.slack.com/apps
@@ -290,15 +303,22 @@ enable_service_bindings = false
 # =============================================================================
 # Access Control
 # =============================================================================
+# Three provider-agnostic allowlists; a user is admitted if they match ANY of
+# them. Set at least one unless you intentionally opt into open access with
+# unsafe_allow_all_users = true.
+
 # Comma-separated list of GitHub usernames allowed to sign in
-# Set at least one access-control allowlist unless you intentionally opt into
-# open access with unsafe_allow_all_users = true.
 allowed_users = ""
 
-# Comma-separated list of email domains allowed to sign in
-# Example: "example.com,corp.io"
+# Comma-separated list of email domains allowed to sign in (matches any
+# provider's verified email). Example: "example.com,corp.io"
 allowed_email_domains = ""
 
+# Comma-separated list of exact email addresses allowed to sign in. Use this for
+# individual users on shared domains (e.g. one person@gmail.com) where a domain
+# allowlist would admit too many. Example: "pm@gmail.com,agent@gmail.com"
+allowed_emails = ""
+
 # Explicitly bypass the Terraform access-control safety check and allow any
-# authenticated GitHub user to sign in when both allowlists are empty.
+# authenticated user to sign in when all allowlists are empty.
 unsafe_allow_all_users = false

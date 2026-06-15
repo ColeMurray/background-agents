@@ -110,6 +110,33 @@ variable "github_client_secret" {
 }
 
 # =============================================================================
+# Google OAuth Credentials (Optional — enables "Sign in with Google")
+# =============================================================================
+# Set both google_client_id and google_client_secret to enable Google login for
+# non-developer users (PMs, support agents). Leave both empty for GitHub-only
+# deployments, which stay byte-unchanged. A Google session authenticates the user
+# but carries no SCM credentials; git operations continue to use the shared
+# GitHub App installation, and PRs fall back to the App bot.
+
+variable "google_client_id" {
+  description = "Google OAuth 2.0 client ID. Set together with google_client_secret to enable Google login; leave both empty to keep the deployment GitHub-only."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = (var.google_client_id == "") == (var.google_client_secret == "")
+    error_message = "google_client_id and google_client_secret must be set together (both non-empty) or both left empty. Setting only one silently disables Google login."
+  }
+}
+
+variable "google_client_secret" {
+  description = "Google OAuth 2.0 client secret. Required together with google_client_id."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+# =============================================================================
 # GitHub App Credentials (for Modal sandbox)
 # =============================================================================
 
@@ -479,21 +506,30 @@ variable "r2_media_bucket_name" {
 # =============================================================================
 # Access Control
 # =============================================================================
+# Three provider-agnostic allowlists gate sign-in; a user is admitted if they
+# match ANY configured allowlist. Leave all three empty only with
+# unsafe_allow_all_users = true.
 
 variable "allowed_users" {
-  description = "Comma-separated list of GitHub usernames allowed to sign in. Leave empty only when allowed_email_domains is set or unsafe_allow_all_users is true."
+  description = "Comma-separated list of GitHub usernames allowed to sign in. Leave empty only when another allowlist (allowed_email_domains, allowed_emails) is set or unsafe_allow_all_users is true."
   type        = string
   default     = ""
 }
 
 variable "allowed_email_domains" {
-  description = "Comma-separated list of email domains allowed to sign in (e.g., 'example.com,corp.io'). Leave empty only when allowed_users is set or unsafe_allow_all_users is true."
+  description = "Comma-separated list of email domains allowed to sign in (e.g., 'example.com,corp.io'). Matches any provider's verified email. Leave empty only when another allowlist (allowed_users, allowed_emails) is set or unsafe_allow_all_users is true."
+  type        = string
+  default     = ""
+}
+
+variable "allowed_emails" {
+  description = "Comma-separated list of exact email addresses allowed to sign in, matched case-insensitively against any provider's verified email. Use this for individual users on shared domains (e.g. one person@gmail.com) where allowed_email_domains would be too broad. Leave empty only when another allowlist is set or unsafe_allow_all_users is true."
   type        = string
   default     = ""
 }
 
 variable "unsafe_allow_all_users" {
-  description = "Bypass Terraform's access-control safety check and allow any authenticated GitHub user to sign in when both allowlists are empty. Set to true only for intentionally open deployments."
+  description = "Bypass Terraform's access-control safety check and allow any authenticated user to sign in when all allowlists are empty. Set to true only for intentionally open deployments."
   type        = bool
   default     = false
 }

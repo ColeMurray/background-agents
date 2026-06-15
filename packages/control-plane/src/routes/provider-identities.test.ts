@@ -73,7 +73,7 @@ describe("provider identity routes", () => {
     });
   });
 
-  describe("PUT /provider-identities/github/:providerUserId", () => {
+  describe("PUT /provider-identities/:provider/:providerUserId", () => {
     it("upserts a GitHub identity and returns its canonical user ID", async () => {
       const response = await callProviderIdentityRoute("/provider-identities/github/12345", {
         providerLogin: "ada",
@@ -96,11 +96,46 @@ describe("provider identity routes", () => {
       });
     });
 
-    it("does not match non-GitHub provider identity paths", () => {
+    it("matches every supported provider identity path and captures the provider", () => {
       const route = providerIdentityRoutes.find((candidate) => candidate.method === "PUT")!;
 
-      expect("/provider-identities/slack/U123".match(route.pattern)).toBeNull();
-      expect("/provider-identities/linear/abc".match(route.pattern)).toBeNull();
+      for (const [path, provider, providerUserId] of [
+        ["/provider-identities/github/12345", "github", "12345"],
+        ["/provider-identities/slack/U123", "slack", "U123"],
+        ["/provider-identities/linear/abc", "linear", "abc"],
+        ["/provider-identities/google/google-sub-1", "google", "google-sub-1"],
+      ] as const) {
+        const match = path.match(route.pattern);
+        expect(match?.groups).toMatchObject({ provider, providerUserId });
+      }
+    });
+
+    it("upserts a non-GitHub (Google) identity using the provider from the path", async () => {
+      const response = await callProviderIdentityRoute("/provider-identities/google/google-sub-1", {
+        providerEmail: "pm@corp.com",
+        displayName: "PM Person",
+        avatarUrl: "https://lh3.googleusercontent.com/pic",
+      });
+
+      expect(response.status).toBe(200);
+      expect(mockUserStore.resolveOrCreateUser).toHaveBeenCalledWith({
+        provider: "google",
+        providerUserId: "google-sub-1",
+        providerLogin: undefined,
+        providerEmail: "pm@corp.com",
+        displayName: "PM Person",
+        avatarUrl: "https://lh3.googleusercontent.com/pic",
+      });
+    });
+
+    it("rejects unsupported providers with 400 without resolving a user", async () => {
+      const response = await callProviderIdentityRoute("/provider-identities/gitlab/U123", {});
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "provider must be one of: github, slack, linear, google",
+      });
+      expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
     });
 
     it("rejects requests with no request body", async () => {

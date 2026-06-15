@@ -78,6 +78,14 @@ Edit `packages/web/.env.local`:
 GITHUB_CLIENT_ID=your_github_app_client_id
 GITHUB_CLIENT_SECRET=your_github_app_client_secret
 
+# Google OAuth (optional — enables "Sign in with Google"). Create a Web OAuth
+# client at https://console.cloud.google.com/apis/credentials with redirect URI
+# http://localhost:3000/api/auth/callback/google. Set NEXT_PUBLIC_GOOGLE_ENABLED=true
+# to reveal the button (inlined at build time — restart the dev server after changing).
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+NEXT_PUBLIC_GOOGLE_ENABLED=
+
 # NextAuth
 NEXTAUTH_URL=http://localhost:3000
 NEXTAUTH_SECRET=your_generated_secret
@@ -89,9 +97,11 @@ NEXT_PUBLIC_WS_URL=wss://open-inspect-control-plane-<name>.<subdomain>.workers.d
 # Must match control-plane INTERNAL_CALLBACK_SECRET
 INTERNAL_CALLBACK_SECRET=your_shared_secret
 
-# Optional access control
+# Optional access control (a user is admitted if they match ANY allowlist)
 ALLOWED_USERS=
 ALLOWED_EMAIL_DOMAINS=
+# Exact emails (any provider's verified email) — for users on shared domains
+ALLOWED_EMAILS=
 
 # Optional whitelabel branding (defaults shown). NEXT_PUBLIC_* vars are
 # inlined into the client bundle at build time — restart `npm run dev`
@@ -120,6 +130,10 @@ In GitHub App settings, include:
 `http://localhost:3000/api/auth/callback/github`
 
 If this does not match exactly, sign-in will fail.
+
+If you enabled Google login, also add this redirect URI to your Google OAuth client:
+
+`http://localhost:3000/api/auth/callback/google`
 
 ### 4. Run the app
 

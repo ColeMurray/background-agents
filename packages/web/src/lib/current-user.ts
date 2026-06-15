@@ -1,13 +1,12 @@
 import { isCanonicalUserId } from "@open-inspect/shared";
+import {
+  buildAuthIdentity,
+  type AuthIdentity,
+  type AuthIdentityUser,
+} from "@/lib/build-auth-identity";
 import { controlPlaneFetch } from "@/lib/control-plane";
 
-export type CurrentUserIdentityInput = {
-  id?: string | null;
-  login?: string | null;
-  name?: string | null;
-  email?: string | null;
-  image?: string | null;
-};
+export type CurrentUserIdentityInput = AuthIdentityUser;
 
 type CurrentUserResponse = {
   userId?: unknown;
@@ -36,15 +35,19 @@ export function clearCurrentUserIdCacheForTests() {
 export async function resolveCurrentUserId(
   user: CurrentUserIdentityInput | null | undefined
 ): Promise<ResolveCurrentUserResult> {
-  if (!user?.id) {
+  const identity = buildAuthIdentity(user);
+  const authUserId = identity.authUserId;
+  if (!authUserId) {
     return {
       ok: false,
       status: 409,
-      body: { error: "GitHub user ID is unavailable" },
+      body: { error: "User id unavailable" },
     };
   }
 
-  const cacheKey = user.id;
+  // Resolution is provider-scoped (the route path carries the provider), so the
+  // cache must be too — the same id under two providers must never alias.
+  const cacheKey = `${identity.authProvider}:${authUserId}`;
   const cached = currentUserIdCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return {
@@ -58,25 +61,30 @@ export async function resolveCurrentUserId(
     return pending;
   }
 
-  const resolution = resolveCurrentUserIdUncached({ ...user, id: cacheKey }).finally(() => {
-    pendingCurrentUserIdResolutions.delete(cacheKey);
-  });
+  const resolution = resolveCurrentUserIdUncached(identity, authUserId, user, cacheKey).finally(
+    () => {
+      pendingCurrentUserIdResolutions.delete(cacheKey);
+    }
+  );
   pendingCurrentUserIdResolutions.set(cacheKey, resolution);
   return resolution;
 }
 
 async function resolveCurrentUserIdUncached(
-  user: CurrentUserIdentityInput & { id: string }
+  identity: AuthIdentity,
+  authUserId: string,
+  user: CurrentUserIdentityInput | null | undefined,
+  cacheKey: string
 ): Promise<ResolveCurrentUserResult> {
   const response = await controlPlaneFetch(
-    `/provider-identities/github/${encodeURIComponent(user.id)}`,
+    `/provider-identities/${identity.authProvider}/${encodeURIComponent(authUserId)}`,
     {
       method: "PUT",
       body: JSON.stringify({
-        providerLogin: user.login,
-        providerEmail: user.email,
-        displayName: user.name || user.login,
-        avatarUrl: user.image,
+        providerLogin: user?.login ?? undefined,
+        providerEmail: identity.authEmail,
+        displayName: identity.authName || user?.login || undefined,
+        avatarUrl: identity.authAvatarUrl,
       }),
     }
   );
@@ -98,7 +106,7 @@ async function resolveCurrentUserIdUncached(
     };
   }
 
-  currentUserIdCache.set(user.id, {
+  currentUserIdCache.set(cacheKey, {
     userId: data.userId,
     expiresAt: Date.now() + CURRENT_USER_ID_CACHE_TTL_MS,
   });

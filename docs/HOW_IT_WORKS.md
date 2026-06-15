@@ -357,8 +357,12 @@ When you ask the agent to create a PR:
 
 1. Agent pushes the branch using brokered SCM credentials from the sandbox credential helper
 2. Control plane receives the branch name
-3. Control plane creates the PR using _your_ GitHub OAuth token
+3. Control plane creates the PR using _your_ GitHub OAuth token (GitHub logins)
 4. PR appears as created by you, not a bot
+
+If you signed in another way (e.g. Google) you have no GitHub OAuth token, so the control plane
+pushes the branch with the shared GitHub App credentials and returns a manual `pull/new` URL — the
+PR is attributed to the App bot rather than to you.
 
 This maintains proper code review workflows—you can't approve your own PRs.
 

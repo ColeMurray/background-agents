@@ -11,8 +11,8 @@ import { useIsMobile } from "@/hooks/use-media-query";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
 import { SIDEBAR_SESSIONS_KEY, type SessionListResponse } from "@/lib/session-list";
 import { Button } from "@/components/ui/button";
-import { GitHubIcon } from "@/components/ui/icons";
-import { APP_NAME } from "@/lib/site-config";
+import { GitHubIcon, GoogleIcon } from "@/components/ui/icons";
+import { APP_NAME, GOOGLE_LOGIN_ENABLED } from "@/lib/site-config";
 
 interface SidebarContextValue {
   isOpen: boolean;
@@ -94,10 +94,18 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
         <p className="text-muted-foreground max-w-md text-center">
           Background coding agent for your team. Ship faster with AI-powered code changes.
         </p>
-        <Button onClick={() => signIn("github")} className="gap-2 px-6 py-3">
-          <GitHubIcon className="w-5 h-5" />
-          Sign in with GitHub
-        </Button>
+        <div className="flex flex-col items-stretch gap-3">
+          <Button onClick={() => signIn("github")} className="gap-2 px-6 py-3">
+            <GitHubIcon className="w-5 h-5" />
+            Sign in with GitHub
+          </Button>
+          {GOOGLE_LOGIN_ENABLED && (
+            <Button onClick={() => signIn("google")} variant="outline" className="gap-2 px-6 py-3">
+              <GoogleIcon className="w-5 h-5" />
+              Sign in with Google
+            </Button>
+          )}
+        </div>
       </div>
     );
   }

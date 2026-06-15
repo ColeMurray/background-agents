@@ -234,6 +234,33 @@ describe("automation route handlers", () => {
       expect(mockStore.create).toHaveBeenCalledWith(expect.objectContaining({ user_id: null }));
     });
 
+    it("resolves user_id for a Google automation (auth* fields, no scmUserId)", async () => {
+      mockStore.create.mockResolvedValue(undefined);
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          ...validBody,
+          authProvider: "google",
+          authUserId: "google-sub-1",
+          authEmail: "pm@corp.com",
+          authName: "PM Person",
+        },
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockUserStore.resolveOrCreateUser).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "google",
+          providerUserId: "google-sub-1",
+          providerEmail: "pm@corp.com",
+        })
+      );
+      expect(mockStore.create).toHaveBeenCalledWith(
+        expect.objectContaining({ user_id: "resolved-user-1" })
+      );
+    });
+
     it("stores reasoning effort when valid for the selected model", async () => {
       mockStore.create.mockResolvedValue(undefined);
       mockStore.getById.mockResolvedValue({ ...sampleRow, reasoning_effort: "high" });

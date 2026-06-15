@@ -229,8 +229,9 @@ Daytona persistent resumes; Modal snapshot restores still mint a fresh fallback 
 restore.
 
 If a `create-pr` request is triggered by a participant without a user OAuth token (for example,
-Slack-created sessions), the sandbox can still push the branch with brokered GitHub App credentials
-and the control plane returns a manual GitHub `pull/new` URL instead of failing the request.
+Slack-created or Google-login sessions), the sandbox can still push the branch with brokered GitHub
+App credentials and the control plane returns a manual GitHub `pull/new` URL instead of failing the
+request.
 
 ### Why This Matters
 

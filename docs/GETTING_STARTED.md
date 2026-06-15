@@ -420,6 +420,13 @@ github_app_private_key     = <<-EOF
 -----END PRIVATE KEY-----
 EOF
 
+# Google OAuth (optional — enables "Sign in with Google" for non-developer
+# users). Create a Web OAuth client at https://console.cloud.google.com/apis/credentials
+# with redirect URI {your-web-app-url}/api/auth/callback/google. Set BOTH to
+# enable, or leave BOTH empty for GitHub-only. See "Enable Google Login" below.
+google_client_id     = ""
+google_client_secret = ""
+
 # Slack (set enable_slack_bot = false to disable Slack integration)
 enable_slack_bot     = false
 slack_bot_token      = ""
@@ -460,18 +467,44 @@ project_root    = "../../../"
 enable_durable_object_bindings = false
 enable_service_bindings        = false
 
-# Access Control (set at least one allowlist for production)
+# Access Control (set at least one allowlist for production). A user is admitted
+# if they match ANY allowlist below.
 allowed_users         = "your-github-username"  # Comma-separated GitHub usernames, or empty
 allowed_email_domains = ""                      # Comma-separated domains (e.g., "example.com,corp.io")
+allowed_emails        = ""                      # Exact addresses (e.g., "pm@gmail.com") — for users on shared domains
 
-# Explicitly opt into open access only if you want any authenticated GitHub user
-# to be able to sign in when both allowlists are empty.
+# Explicitly opt into open access only if you want any authenticated user to be
+# able to sign in when all allowlists are empty.
 unsafe_allow_all_users = false
 ```
 
-> **Note**: Review `allowed_users` and `allowed_email_domains` carefully - these control who can
-> sign in. Terraform now fails if both are empty unless you explicitly set
-> `unsafe_allow_all_users = true`.
+> **Note**: Review `allowed_users`, `allowed_email_domains`, and `allowed_emails` carefully — these
+> control who can sign in. Terraform fails if all three are empty unless you explicitly set
+> `unsafe_allow_all_users = true`. Use `allowed_emails` for individual users on shared domains (e.g.
+> a specific `person@gmail.com`) where `allowed_email_domains` would admit too many.
+
+### Enable Google Login (Optional)
+
+Google login lets non-developer users (PMs, support agents) sign in without a GitHub account. They
+get the same flat access as everyone else; git operations still use the shared GitHub App, and their
+PRs fall back to the App bot (no personal GitHub attribution unless the same verified email is also
+a linked GitHub identity).
+
+1. In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create an
+   **OAuth client ID** of type **Web application**.
+2. Add the authorized redirect URI `{your-web-app-url}/api/auth/callback/google` (e.g.
+   `https://open-inspect-yourname.vercel.app/api/auth/callback/google`). It must match the deployed
+   URL exactly.
+3. On the OAuth consent screen, request only the `openid`, `email`, and `profile` scopes — these are
+   non-sensitive, so Google requires no app-verification review.
+4. Set `google_client_id` and `google_client_secret` (both required together), and add at least one
+   allowed user to `allowed_emails` (exact addresses) or `allowed_email_domains`. Terraform derives
+   `NEXT_PUBLIC_GOOGLE_ENABLED` automatically when both credentials are present, which reveals the
+   "Sign in with Google" button.
+
+> **Security note**: Google sign-in is admitted only for **verified** emails that match an
+> allowlist. Because addresses on shared domains like `gmail.com` are generic, prefer
+> `allowed_emails` (exact match) over `allowed_email_domains` for those users.
 
 ---
 
@@ -736,6 +769,8 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `VERCEL_SANDBOX_API_BASE_URL`    | Optional advanced Vercel Sandbox API base URL override                                      |
 | `GH_OAUTH_CLIENT_ID`             | GitHub App OAuth client ID                                                                  |
 | `GH_OAUTH_CLIENT_SECRET`         | GitHub App OAuth client secret                                                              |
+| `GOOGLE_CLIENT_ID`               | Google OAuth client ID (only if Google login enabled; pair with `GOOGLE_CLIENT_SECRET`)     |
+| `GOOGLE_CLIENT_SECRET`           | Google OAuth client secret (only if Google login enabled)                                   |
 | `GH_APP_ID`                      | GitHub App ID                                                                               |
 | `GH_APP_PRIVATE_KEY`             | GitHub App private key (PKCS#8 format)                                                      |
 | `GH_APP_INSTALLATION_ID`         | GitHub App installation ID                                                                  |
@@ -755,6 +790,7 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `NEXTAUTH_SECRET`                | Generated NextAuth secret                                                                   |
 | `ALLOWED_USERS`                  | Comma-separated GitHub usernames (or empty for all users)                                   |
 | `ALLOWED_EMAIL_DOMAINS`          | Comma-separated email domains (or empty for all domains)                                    |
+| `ALLOWED_EMAILS`                 | Comma-separated exact email addresses (for individual users on shared domains)              |
 | `ENABLE_DURABLE_OBJECT_BINDINGS` | Optional Terraform CI flag for Durable Object phase 1 (defaults to `true`)                  |
 | `ENABLE_GITHUB_BOT`              | `true` to deploy GitHub bot worker (or empty to skip)                                       |
 | `GH_WEBHOOK_SECRET`              | GitHub webhook secret (required if GitHub bot enabled)                                      |

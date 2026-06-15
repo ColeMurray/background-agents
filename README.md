@@ -32,9 +32,10 @@ through the git credential helper on demand. This means:
   organization's repositories, and any user of the system can access any repo the App has access to
 - **No per-user repository access validation** - The system does not verify that a user has
   permission to access a specific repository before creating a session
-- **User OAuth tokens are used for PR creation** - PRs are created using the user's GitHub OAuth
-  token, ensuring proper attribution and that users can only create PRs on repos they have write
-  access to
+- **GitHub users' OAuth tokens are used for PR creation** - For GitHub logins, PRs are created using
+  the user's GitHub OAuth token, ensuring proper attribution and that they can only create PRs on
+  repos they have write access to. Users who sign in another way (e.g. Google) carry no SCM token,
+  so their PRs fall back to the shared GitHub App bot
 
 ### Token Architecture
 
