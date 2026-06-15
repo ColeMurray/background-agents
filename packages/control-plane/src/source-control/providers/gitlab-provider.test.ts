@@ -368,6 +368,23 @@ describe("GitLabSourceControlProvider", () => {
       expect(result).toBeNull();
     });
 
+    it("returns null for archived repositories", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse({
+          id: 99,
+          namespace: { path: "acme" },
+          path: "web",
+          default_branch: "main",
+          archived: true,
+        })
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const result = await provider.checkRepositoryAccess({ owner: "acme", name: "web" });
+
+      expect(result).toBeNull();
+    });
+
     it("throws on non-404 API errors", async () => {
       mockFetch.mockResolvedValueOnce(makeResponse("internal server error", 500));
 
@@ -411,6 +428,7 @@ describe("GitLabSourceControlProvider", () => {
             description: "The web app",
             visibility: "private",
             default_branch: "main",
+            archived: false,
           },
         ])
       );
@@ -430,8 +448,43 @@ describe("GitLabSourceControlProvider", () => {
         fullName: "acme/web",
         description: "The web app",
         private: true,
+        archived: false,
         defaultBranch: "main",
       });
+    });
+
+    it("excludes archived projects", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse([
+          {
+            id: 1,
+            name: "Active App",
+            path: "active",
+            path_with_namespace: "acme/active",
+            namespace: { path: "acme" },
+            description: null,
+            visibility: "private",
+            default_branch: "main",
+            archived: false,
+          },
+          {
+            id: 2,
+            name: "Archived App",
+            path: "archived",
+            path_with_namespace: "acme/archived",
+            namespace: { path: "acme" },
+            description: null,
+            visibility: "private",
+            default_branch: "main",
+            archived: true,
+          },
+        ])
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const repos = await provider.listRepositories();
+
+      expect(repos.map((repo) => repo.fullName)).toEqual(["acme/active"]);
     });
 
     it("fetches from group endpoint when namespace is configured", async () => {

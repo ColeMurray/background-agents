@@ -223,6 +223,9 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       if (!repo) {
         return null;
       }
+      if (repo.archived) {
+        return null;
+      }
       return {
         repoId: repo.id,
         repoOwner: config.owner.toLowerCase(),
@@ -254,7 +257,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         cacheStore: this.cacheStore,
         userAgent: this.userAgent,
       });
-      return result.repos;
+      return result.repos.filter((repo) => !repo.archived);
     } catch (error) {
       throw SourceControlProviderError.fromFetchError(
         `Failed to list repositories: ${error instanceof Error ? error.message : String(error)}`,

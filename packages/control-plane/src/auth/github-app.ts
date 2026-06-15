@@ -430,6 +430,7 @@ interface ListInstallationReposResponse {
     full_name: string;
     description: string | null;
     private: boolean;
+    archived: boolean;
     default_branch: string;
     language: string | null;
     topics?: string[];
@@ -494,6 +495,7 @@ export async function listInstallationRepositories(
       fullName: repo.full_name,
       description: repo.description,
       private: repo.private,
+      archived: repo.archived,
       defaultBranch: repo.default_branch,
       language: repo.language,
       topics: repo.topics,
@@ -592,6 +594,7 @@ export async function getInstallationRepository(
     full_name: string;
     description: string | null;
     private: boolean;
+    archived: boolean;
     default_branch: string;
     owner: { login: string };
   };
@@ -603,6 +606,7 @@ export async function getInstallationRepository(
     fullName: data.full_name,
     description: data.description,
     private: data.private,
+    archived: data.archived,
     defaultBranch: data.default_branch,
   };
 }

@@ -232,7 +232,12 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
         namespace: { path: string };
         path: string;
         default_branch: string;
+        archived: boolean;
       };
+
+      if (data.archived) {
+        return null;
+      }
 
       return {
         repoId: data.id,
@@ -285,17 +290,21 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
         description: string | null;
         visibility: string;
         default_branch: string;
+        archived: boolean;
       }>;
 
-      return data.map((project) => ({
-        id: project.id,
-        owner: project.namespace.path,
-        name: project.path,
-        fullName: project.path_with_namespace,
-        description: project.description,
-        private: project.visibility !== "public",
-        defaultBranch: project.default_branch,
-      }));
+      return data
+        .filter((project) => !project.archived)
+        .map((project) => ({
+          id: project.id,
+          owner: project.namespace.path,
+          name: project.path,
+          fullName: project.path_with_namespace,
+          description: project.description,
+          private: project.visibility !== "public",
+          archived: project.archived,
+          defaultBranch: project.default_branch,
+        }));
     } catch (error) {
       if (error instanceof SourceControlProviderError) {
         throw error;

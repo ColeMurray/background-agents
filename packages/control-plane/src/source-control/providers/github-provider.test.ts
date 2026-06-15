@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GitHubSourceControlProvider } from "./github-provider";
 import { SourceControlProviderError } from "../errors";
 
@@ -28,6 +28,10 @@ const fakeAppConfig = {
 };
 
 describe("GitHubSourceControlProvider", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   describe("checkRepositoryAccess", () => {
     it("throws permanent error with no httpStatus when appConfig is missing", async () => {
       const provider = new GitHubSourceControlProvider();
@@ -81,6 +85,24 @@ describe("GitHubSourceControlProvider", () => {
       expect((err as SourceControlProviderError).errorType).toBe("permanent");
       expect((err as SourceControlProviderError).httpStatus).toBe(401);
     });
+
+    it("returns null for archived repositories", async () => {
+      mockGetInstallationRepository.mockResolvedValueOnce({
+        id: 1,
+        owner: "acme",
+        name: "web",
+        fullName: "acme/web",
+        description: null,
+        private: true,
+        archived: true,
+        defaultBranch: "main",
+      });
+
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+      const result = await provider.checkRepositoryAccess({ owner: "acme", name: "web" });
+
+      expect(result).toBeNull();
+    });
   });
 
   describe("listRepositories", () => {
@@ -127,6 +149,39 @@ describe("GitHubSourceControlProvider", () => {
       expect(err).toBeInstanceOf(SourceControlProviderError);
       expect((err as SourceControlProviderError).errorType).toBe("permanent");
       expect((err as SourceControlProviderError).httpStatus).toBe(401);
+    });
+
+    it("excludes archived repositories", async () => {
+      mockListInstallationRepositories.mockResolvedValueOnce({
+        repos: [
+          {
+            id: 1,
+            owner: "acme",
+            name: "active",
+            fullName: "acme/active",
+            description: null,
+            private: true,
+            archived: false,
+            defaultBranch: "main",
+          },
+          {
+            id: 2,
+            owner: "acme",
+            name: "archived",
+            fullName: "acme/archived",
+            description: null,
+            private: true,
+            archived: true,
+            defaultBranch: "main",
+          },
+        ],
+        timing: { tokenGenerationMs: 0, pages: [], totalPages: 0, totalRepos: 2 },
+      });
+
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+      const repos = await provider.listRepositories();
+
+      expect(repos.map((repo) => repo.fullName)).toEqual(["acme/active"]);
     });
   });
 
