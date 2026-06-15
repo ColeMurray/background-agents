@@ -289,6 +289,38 @@ describe("resolveProviderIdentity", () => {
         resolveProviderIdentity("user", { spawnSource: "user", authProvider: "google" })
       ).toBeNull();
     });
+
+    it("fails closed on an unsupported authProvider rather than persisting it raw", () => {
+      expect(
+        resolveProviderIdentity("user", {
+          spawnSource: "user",
+          // Deliberately invalid discriminator from a malformed/crafted body.
+          authProvider: "evil" as unknown as "github" | "google",
+          authUserId: "x-1",
+          scmUserId: "1001",
+        })
+      ).toBeNull();
+    });
+
+    it("never pairs authProvider with a scm* fallback id (no mixed-source identity)", () => {
+      // authUserId absent: identity comes entirely from scm* (always github),
+      // never provider=authProvider paired with providerUserId=scmUserId.
+      expect(
+        resolveProviderIdentity("user", {
+          spawnSource: "user",
+          authProvider: "google",
+          scmUserId: "1001",
+          scmLogin: "ada",
+        })
+      ).toEqual({
+        provider: "github",
+        providerUserId: "1001",
+        providerLogin: "ada",
+        providerEmail: undefined,
+        displayName: "ada",
+        avatarUrl: undefined,
+      });
+    });
   });
 });
 

@@ -221,6 +221,37 @@ describe("applyJwtClaims", () => {
     expect(token.githubLogin).toBeUndefined();
   });
 
+  it("clears stale GitHub claims when a prior GitHub JWT is reused for a Google sign-in", () => {
+    const token = applyJwtClaims(
+      {
+        provider: "github",
+        providerUserId: "12345",
+        githubUserId: "12345",
+        githubLogin: "octocat",
+        accessToken: "gho_abc",
+        refreshToken: "ghr_def",
+        accessTokenExpiresAt: 1_700_000_000 * 1000,
+      } as JWT,
+      {
+        provider: "google",
+        type: "oauth",
+        providerAccountId: "google-sub-1",
+        access_token: "ya29.google-token",
+        refresh_token: "1//google-refresh",
+        expires_at: 1_700_000_000,
+      } as Account,
+      { sub: "google-sub-1", email: "pm@gmail.com", email_verified: true } as unknown as Profile
+    );
+
+    expect(token.provider).toBe("google");
+    expect(token.providerUserId).toBe("google-sub-1");
+    expect(token.accessToken).toBeUndefined();
+    expect(token.refreshToken).toBeUndefined();
+    expect(token.accessTokenExpiresAt).toBeUndefined();
+    expect(token.githubUserId).toBeUndefined();
+    expect(token.githubLogin).toBeUndefined();
+  });
+
   it("backfills provider/providerUserId for a legacy GitHub JWT with no account on the request", () => {
     const token = applyJwtClaims({ githubUserId: "999" } as JWT, null, undefined);
 

@@ -61,18 +61,31 @@ export function resolveProviderIdentity(
 ): ProviderIdentity | null {
   switch (spawnSource) {
     case "user": {
-      // Web users (GitHub or Google). Identity comes from the auth* block,
-      // falling back to scm* for back-compat with old-web payloads that predate
-      // auth*. Returns null only when neither identifier is present.
-      const providerUserId = body.authUserId ?? body.scmUserId;
-      if (!providerUserId) return null;
+      // Web users (GitHub or Google). Identity comes from the auth* block; we
+      // fall back to scm* only for old-web payloads that predate auth* (always
+      // GitHub). provider and providerUserId are taken from the SAME source so a
+      // malformed payload can't pair a Google id with provider "github", and the
+      // discriminator is allowlisted (fail closed) rather than persisted raw —
+      // mirroring the /provider-identities/:provider route guard.
+      if (body.authUserId) {
+        if (body.authProvider !== "github" && body.authProvider !== "google") return null;
+        return {
+          provider: body.authProvider,
+          providerUserId: body.authUserId,
+          providerLogin: body.scmLogin,
+          providerEmail: body.authEmail ?? body.scmEmail,
+          displayName: body.authName ?? (body.scmName || body.scmLogin),
+          avatarUrl: body.authAvatarUrl ?? body.scmAvatarUrl,
+        };
+      }
+      if (!body.scmUserId) return null;
       return {
-        provider: body.authProvider ?? "github",
-        providerUserId,
+        provider: "github",
+        providerUserId: body.scmUserId,
         providerLogin: body.scmLogin,
-        providerEmail: body.authEmail ?? body.scmEmail,
-        displayName: body.authName ?? (body.scmName || body.scmLogin),
-        avatarUrl: body.authAvatarUrl ?? body.scmAvatarUrl,
+        providerEmail: body.scmEmail,
+        displayName: body.scmName || body.scmLogin,
+        avatarUrl: body.scmAvatarUrl,
       };
     }
 

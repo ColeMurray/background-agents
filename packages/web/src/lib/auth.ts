@@ -103,6 +103,12 @@ export function buildSignInDecision(args: {
  * the session-create and ws-token routes forward `token.accessToken` as
  * `scmToken`, after which the control plane would use a Google token against
  * GitHub's API and refresh it at GitHub's OAuth endpoint (credential leak).
+ *
+ * On a non-GitHub sign-in we also CLEAR any GitHub SCM/identity claims carried
+ * over from a prior GitHub session on the same JWT (NextAuth passes the previous
+ * token into this callback), so a Google token can never hold stale GitHub
+ * credentials. Cross-provider GitHub attribution for a linked user is resolved
+ * server-side from D1, not from these cookie claims.
  */
 export function applyJwtClaims(
   token: JWT,
@@ -121,6 +127,14 @@ export function applyJwtClaims(
       token.refreshToken = account.refresh_token as string | undefined;
       // expires_at is in seconds, convert to milliseconds (only set if provided)
       token.accessTokenExpiresAt = account.expires_at ? account.expires_at * 1000 : undefined;
+    } else {
+      // Non-GitHub sign-in: drop any GitHub SCM/identity claims left on a token
+      // reused from a prior GitHub session, so a Google JWT carries no SCM state.
+      token.accessToken = undefined;
+      token.refreshToken = undefined;
+      token.accessTokenExpiresAt = undefined;
+      token.githubUserId = undefined;
+      token.githubLogin = undefined;
     }
   }
 
