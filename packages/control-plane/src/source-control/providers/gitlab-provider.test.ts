@@ -440,6 +440,10 @@ describe("GitLabSourceControlProvider", () => {
         expect.stringContaining("/projects?membership=true"),
         expect.any(Object)
       );
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining("archived=false"),
+        expect.any(Object)
+      );
       expect(repos).toHaveLength(1);
       expect(repos[0]).toEqual({
         id: 1,
@@ -498,6 +502,10 @@ describe("GitLabSourceControlProvider", () => {
 
       expect(mockFetch).toHaveBeenCalledWith(
         expect.stringContaining("/groups/my-group/projects"),
+        expect.any(Object)
+      );
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining("archived=false"),
         expect.any(Object)
       );
     });

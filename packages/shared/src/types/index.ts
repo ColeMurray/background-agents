@@ -419,7 +419,7 @@ export interface InstallationRepository {
   description: string | null;
   private: boolean;
   defaultBranch: string;
-  archived?: boolean;
+  archived: boolean;
   language?: string | null;
   topics?: string[];
 }

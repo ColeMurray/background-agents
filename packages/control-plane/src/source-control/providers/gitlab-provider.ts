@@ -265,8 +265,8 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
   async listRepositories(): Promise<InstallationRepository[]> {
     try {
       const url = this.namespace
-        ? `${GITLAB_API_BASE}/groups/${encodeURIComponent(this.namespace)}/projects?per_page=${PER_PAGE}&include_subgroups=true`
-        : `${GITLAB_API_BASE}/projects?membership=true&per_page=${PER_PAGE}`;
+        ? `${GITLAB_API_BASE}/groups/${encodeURIComponent(this.namespace)}/projects?per_page=${PER_PAGE}&include_subgroups=true&archived=false`
+        : `${GITLAB_API_BASE}/projects?membership=true&per_page=${PER_PAGE}&archived=false`;
 
       const response = await fetchWithTimeout(url, {
         headers: this.headers(this.accessToken),
