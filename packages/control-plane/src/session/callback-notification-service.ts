@@ -28,6 +28,7 @@ export interface CallbackServiceEnv {
   INTERNAL_CALLBACK_SECRET?: string;
   SLACK_BOT?: Fetcher;
   LINEAR_BOT?: Fetcher;
+  EMAIL_BOT?: Fetcher;
   SCHEDULER_CALLBACK?: Fetcher;
 }
 
@@ -89,6 +90,8 @@ export class CallbackNotificationService {
         return this.env.SCHEDULER_CALLBACK;
       case "linear":
         return this.env.LINEAR_BOT;
+      case "email":
+        return this.env.EMAIL_BOT;
       case "slack":
         return this.env.SLACK_BOT;
       default:

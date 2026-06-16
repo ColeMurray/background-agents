@@ -36,11 +36,13 @@ function createTestHarness(overrides?: { env?: Partial<CallbackServiceEnv> }) {
 
   const slackBot = createMockFetcher();
   const linearBot = createMockFetcher();
+  const emailBot = createMockFetcher();
 
   const env: CallbackServiceEnv = {
     INTERNAL_CALLBACK_SECRET: "test-secret",
     SLACK_BOT: slackBot,
     LINEAR_BOT: linearBot,
+    EMAIL_BOT: emailBot,
     ...overrides?.env,
   };
 
@@ -58,6 +60,7 @@ function createTestHarness(overrides?: { env?: Partial<CallbackServiceEnv> }) {
     env,
     slackBot,
     linearBot,
+    emailBot,
   };
 }
 
@@ -166,6 +169,36 @@ describe("CallbackNotificationService", () => {
       expect(harness.log.info).toHaveBeenCalledWith(
         "Callback succeeded",
         expect.objectContaining({ message_id: "msg-1", source: "slack" })
+      );
+    });
+
+    it("routes email callbacks to EMAIL_BOT", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({
+          source: "email",
+          inboxId: "inbox-1",
+          threadId: "thread-1",
+          messageId: "email-msg-1",
+          requestId: "req-1",
+          routeId: "spi",
+          replyTo: "lawrence_tan@spi.edu.sg",
+          repoFullName: "taskark/spi",
+          model: "claude-sonnet-4-6",
+        }),
+        source: "email",
+      });
+
+      vi.mocked(
+        (harness.emailBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
+      ).mockResolvedValue(new Response("ok", { status: 200 }));
+
+      await harness.service.notifyComplete("msg-1", true);
+
+      expect(
+        (harness.emailBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
+      ).toHaveBeenCalledWith(
+        "https://internal/callbacks/complete",
+        expect.objectContaining({ method: "POST" })
       );
     });
 

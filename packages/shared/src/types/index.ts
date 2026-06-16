@@ -24,7 +24,14 @@ export type SandboxStatus =
   | "failed";
 export type GitSyncStatus = "pending" | "in_progress" | "completed" | "failed";
 export type MessageStatus = "pending" | "processing" | "completed" | "failed";
-export type MessageSource = "web" | "slack" | "linear" | "extension" | "github" | "automation";
+export type MessageSource =
+  | "web"
+  | "slack"
+  | "linear"
+  | "extension"
+  | "github"
+  | "automation"
+  | "email";
 export type ArtifactType = "pr" | "screenshot" | "video" | "preview" | "branch";
 export type EventType =
   | "heartbeat"
@@ -47,7 +54,8 @@ export type SpawnSource =
   | "automation"
   | "github-bot"
   | "linear-bot"
-  | "slack-bot";
+  | "slack-bot"
+  | "email-bot";
 export type ConfidenceLevel = "high" | "medium" | "low";
 
 // Participant in a session
@@ -561,10 +569,25 @@ export interface AutomationCallbackContext {
   automationName: string;
 }
 
+export interface EmailCallbackContext {
+  source: "email";
+  inboxId: string;
+  threadId: string;
+  messageId: string;
+  requestId: string;
+  routeId: string;
+  replyTo: string;
+  subject?: string;
+  repoFullName: string;
+  model: string;
+  reasoningEffort?: string;
+}
+
 export type CallbackContext =
   | SlackCallbackContext
   | LinearCallbackContext
-  | AutomationCallbackContext;
+  | AutomationCallbackContext
+  | EmailCallbackContext;
 
 // API response types
 export interface CreateSessionRequest {

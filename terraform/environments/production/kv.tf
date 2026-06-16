@@ -32,3 +32,11 @@ module "linear_kv" {
   account_id     = var.cloudflare_account_id
   namespace_name = "open-inspect-linear-kv-${local.name_suffix}"
 }
+
+module "email_kv" {
+  count  = var.enable_email_bot ? 1 : 0
+  source = "../../modules/cloudflare-kv"
+
+  account_id     = var.cloudflare_account_id
+  namespace_name = "open-inspect-email-kv-${local.name_suffix}"
+}

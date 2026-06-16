@@ -260,6 +260,51 @@ variable "linear_api_key" {
 }
 
 # =============================================================================
+# AgentMail Email Bot Configuration
+# =============================================================================
+
+variable "enable_email_bot" {
+  description = "Enable the AgentMail email bot worker. Requires AgentMail API key, webhook secret, and route config."
+  type        = bool
+  default     = false
+
+  validation {
+    condition = var.enable_email_bot == false || (
+      length(var.agentmail_api_key) > 0 &&
+      length(var.agentmail_webhook_secret) > 0 &&
+      length(var.email_routes_json) > 0
+    )
+    error_message = "When enable_email_bot is true, agentmail_api_key, agentmail_webhook_secret, and email_routes_json must be non-empty."
+  }
+}
+
+variable "agentmail_api_key" {
+  description = "AgentMail API key used to reply to inbound email threads."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "agentmail_webhook_secret" {
+  description = "AgentMail Svix webhook signing secret for inbound message.received events."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "agentmail_api_base_url" {
+  description = "AgentMail API base URL."
+  type        = string
+  default     = "https://api.agentmail.to"
+}
+
+variable "email_routes_json" {
+  description = "JSON routing table mapping whitelisted senders/domains to repos and workflows."
+  type        = string
+  default     = "{\"routes\":[]}"
+}
+
+# =============================================================================
 # API Keys
 # =============================================================================
 

@@ -56,6 +56,12 @@ module "control_plane_worker" {
         binding_name = "LINEAR_BOT"
         service_name = "open-inspect-linear-bot-${local.name_suffix}"
       }
+    ] : [],
+    var.enable_email_bot ? [
+      {
+        binding_name = "EMAIL_BOT"
+        service_name = "open-inspect-email-bot-${local.name_suffix}"
+      }
     ] : []
   )
 
@@ -151,6 +157,7 @@ module "control_plane_worker" {
     module.session_index_kv,
     null_resource.d1_migrations,
     module.linear_bot_worker,
+    module.email_bot_worker,
     module.daytona_infra,
     module.vercel_sandbox_infra,
   ]
