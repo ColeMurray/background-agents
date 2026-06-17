@@ -566,7 +566,7 @@ async def api_build_repo_image(
 
         repo_owner = request.get("repo_owner")
         repo_name = request.get("repo_name")
-        default_branch = request.get("default_branch", "main")
+        default_branch = request.get("default_branch")
         build_id = request.get("build_id", "")
         callback_url = request.get("callback_url", "")
         user_env_vars = request.get("user_env_vars") or None
@@ -576,6 +576,9 @@ async def api_build_repo_image(
 
         if not build_id:
             raise HTTPException(status_code=400, detail="build_id is required")
+
+        if not default_branch:
+            raise HTTPException(status_code=400, detail="default_branch is required")
 
         # Spawn the async builder — returns immediately
         await build_repo_image.spawn.aio(

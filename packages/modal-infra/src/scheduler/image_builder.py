@@ -243,7 +243,7 @@ async def _stream_build_logs(
 async def build_repo_image(
     repo_owner: str,
     repo_name: str,
-    default_branch: str = "main",
+    default_branch: str,
     callback_url: str = "",
     build_id: str = "",
     user_env_vars: dict[str, str] | None = None,
@@ -418,14 +418,14 @@ async def _api_post(
 def _git_ls_remote_sha(
     repo_owner: str,
     repo_name: str,
-    branch: str,
+    ref: str,
     clone_token: str,
 ) -> str | None:
     """
-    Run git ls-remote to get the tip SHA for a branch.
+    Run git ls-remote to get the SHA a ref points to.
 
-    Pass branch="HEAD" to follow the remote's default branch without knowing its
-    name (ls-remote resolves HEAD to the default branch tip).
+    Pass "HEAD" to follow the remote's default branch, or "refs/heads/<name>"
+    for a specific branch.
 
     Returns the SHA string, or None on failure.
     """
@@ -433,8 +433,6 @@ def _git_ls_remote_sha(
         url = f"https://x-access-token:{clone_token}@github.com/{repo_owner}/{repo_name}.git"
     else:
         url = f"https://github.com/{repo_owner}/{repo_name}.git"
-
-    ref = "HEAD" if branch == "HEAD" else f"refs/heads/{branch}"
 
     try:
         result = subprocess.run(
@@ -451,7 +449,7 @@ def _git_ls_remote_sha(
                 "scheduler.ls_remote_failed",
                 repo_owner=repo_owner,
                 repo_name=repo_name,
-                branch=branch,
+                ref=ref,
                 stderr=stderr,
             )
             return None
