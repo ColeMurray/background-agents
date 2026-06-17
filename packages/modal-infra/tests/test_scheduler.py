@@ -72,6 +72,21 @@ class TestGitLsRemoteSha:
         args = mock_run.call_args[0][0]
         assert args[2] == "https://github.com/acme/repo.git"
 
+    def test_passes_head_ref_verbatim(self):
+        """branch="HEAD" polls HEAD directly, not refs/heads/HEAD."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "abc123\tHEAD\n"
+
+        with patch(
+            "src.scheduler.image_builder.subprocess.run", return_value=mock_result
+        ) as mock_run:
+            sha = _git_ls_remote_sha("acme", "repo", "HEAD", "token")
+
+        assert sha == "abc123"
+        args = mock_run.call_args[0][0]
+        assert args[3] == "HEAD"
+
 
 class TestShouldRebuild:
     """Test the _should_rebuild decision logic."""
@@ -236,6 +251,8 @@ class TestRebuildRepoImages:
                 return mock_cleanup
             return {}
 
+        mock_ls_remote = MagicMock(return_value="new-sha")
+
         with (
             patch.dict("os.environ", env, clear=False),
             patch(
@@ -250,7 +267,7 @@ class TestRebuildRepoImages:
             ) as mock_post,
             patch(
                 "src.scheduler.image_builder._git_ls_remote_sha",
-                return_value="new-sha",
+                side_effect=mock_ls_remote,
             ),
             patch(
                 "sandbox_runtime.auth.github_app.generate_installation_token",
@@ -265,6 +282,9 @@ class TestRebuildRepoImages:
         trigger_calls = [c for c in mock_post.call_args_list if "trigger" in str(c)]
         assert len(trigger_calls) == 1
         assert "acme/repo" in str(trigger_calls[0])
+
+        # Verify ls-remote followed HEAD (the default branch), not a hardcoded "main"
+        assert mock_ls_remote.call_args[0][:3] == ("acme", "repo", "HEAD")
 
     @pytest.mark.asyncio
     async def test_skips_build_when_sha_matches(self):

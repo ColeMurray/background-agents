@@ -31,7 +31,7 @@ import {
   parseJsonBody,
   extractRepoParams,
   createRouteSourceControlProvider,
-  resolveInstalledRepo,
+  resolveRepoOrError,
 } from "./shared";
 
 const logger = createLogger("router:repo-images");
@@ -612,6 +612,12 @@ async function handleTriggerBuild(
   if (params instanceof Response) return params;
   const { owner, name } = params;
 
+  // Resolve the repo to get its actual default branch — never assume "main".
+  // The same resolution yields repoId, reused below for repo-scoped secrets.
+  const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
+  if (resolved instanceof Response) return resolved;
+  const { repoId, defaultBranch } = resolved;
+
   const store = new RepoImageStore(env.DB);
   const backend = getRepoImageBackend(env);
   const now = Date.now();
@@ -629,7 +635,7 @@ async function handleTriggerBuild(
       repoOwner: owner,
       repoName: name,
       provider: backend,
-      baseBranch: "main",
+      baseBranch: defaultBranch,
       callbackTokenHash,
       callbackTokenExpiresAt: callbackToken ? now + VERCEL_CALLBACK_TOKEN_TTL_MS : undefined,
     });
@@ -654,12 +660,8 @@ async function handleTriggerBuild(
 
       let repoSecrets: Record<string, string> = {};
       try {
-        const provider = createRouteSourceControlProvider(env);
-        const resolved = await resolveInstalledRepo(provider, owner, name);
-        if (resolved) {
-          const repoStore = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
-          repoSecrets = await repoStore.getDecryptedSecrets(resolved.repoId);
-        }
+        const repoStore = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+        repoSecrets = await repoStore.getDecryptedSecrets(repoId);
       } catch (e) {
         logger.warn("repo_image.repo_secrets_failed", {
           error: e instanceof Error ? e.message : String(e),
@@ -698,7 +700,7 @@ async function handleTriggerBuild(
           {
             repoOwner: owner,
             repoName: name,
-            defaultBranch: "main",
+            defaultBranch,
             buildId,
             callbackUrl,
             userEnvVars,
@@ -727,7 +729,7 @@ async function handleTriggerBuild(
         await createConfiguredVercelProvider(env).triggerRepoImageBuild({
           repoOwner: owner,
           repoName: name,
-          defaultBranch: "main",
+          defaultBranch,
           buildId,
           callbackUrl,
           callbackToken,

@@ -422,7 +422,10 @@ def _git_ls_remote_sha(
     clone_token: str,
 ) -> str | None:
     """
-    Run git ls-remote to get the HEAD SHA for a branch.
+    Run git ls-remote to get the tip SHA for a branch.
+
+    Pass branch="HEAD" to follow the remote's default branch without knowing its
+    name (ls-remote resolves HEAD to the default branch tip).
 
     Returns the SHA string, or None on failure.
     """
@@ -431,9 +434,11 @@ def _git_ls_remote_sha(
     else:
         url = f"https://github.com/{repo_owner}/{repo_name}.git"
 
+    ref = "HEAD" if branch == "HEAD" else f"refs/heads/{branch}"
+
     try:
         result = subprocess.run(
-            ["git", "ls-remote", url, f"refs/heads/{branch}"],
+            ["git", "ls-remote", url, ref],
             capture_output=True,
             text=True,
             timeout=30,
@@ -574,7 +579,11 @@ async def rebuild_repo_images():
             if not repo_owner or not repo_name:
                 continue
 
-            remote_sha = _git_ls_remote_sha(repo_owner, repo_name, "main", clone_token)
+            # Detect changes on the repo's default branch via HEAD: ls-remote
+            # resolves HEAD to the default branch tip, so the scheduler never
+            # needs the branch name. The build path resolves the name when it
+            # tags the image (see handleTriggerBuild in repo-images.ts).
+            remote_sha = _git_ls_remote_sha(repo_owner, repo_name, "HEAD", clone_token)
             if not remote_sha:
                 continue
 
