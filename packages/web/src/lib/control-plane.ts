@@ -40,10 +40,10 @@ function getInternalSecret(): string {
  *
  * @returns Headers object with Content-Type and Authorization
  */
-async function getControlPlaneHeaders(): Promise<HeadersInit> {
+async function getControlPlaneHeaders(includeContentType = true): Promise<HeadersInit> {
   const secret = getInternalSecret();
   return {
-    "Content-Type": "application/json",
+    ...(includeContentType ? { "Content-Type": "application/json" } : {}),
     ...(await buildInternalAuthHeaders(secret)),
   };
 }
@@ -109,7 +109,8 @@ export async function controlPlaneFetch(
   options: RequestInit = {}
 ): Promise<Response> {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  const headers = await getControlPlaneHeaders();
+  const isFormDataBody = typeof FormData !== "undefined" && options.body instanceof FormData;
+  const headers = await getControlPlaneHeaders(!isFormDataBody);
   const fetchOptions: RequestInit = {
     ...options,
     headers: {

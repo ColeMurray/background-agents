@@ -22,6 +22,11 @@ import {
 } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared";
+import type { Attachment } from "@open-inspect/shared";
+import {
+  PROMPT_ATTACHMENT_LIMIT_PER_MESSAGE,
+  PROMPT_ATTACHMENT_MAX_BYTES,
+} from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import type { ComboboxGroup } from "@/components/ui/combobox";
 
@@ -162,6 +167,9 @@ function SessionPageContent() {
   );
 
   const [prompt, setPrompt] = useState("");
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [isUploadingAttachments, setIsUploadingAttachments] = useState(false);
   const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
@@ -210,13 +218,76 @@ function SessionPageContent() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!prompt.trim() || isProcessing) return;
+    if (!prompt.trim() || isProcessing || isUploadingAttachments) return;
 
-    sendPrompt(prompt, selectedModel, reasoningEffort);
+    sendPrompt(
+      prompt,
+      selectedModel,
+      reasoningEffort,
+      attachments.length > 0 ? attachments : undefined
+    );
     setPrompt("");
+    setAttachments([]);
+    setAttachmentError(null);
     // Revalidate sidebar so this session bubbles to the top
     mutate(isUnarchivedSessionListKey);
   };
+
+  const handleAttachmentFilesSelected = useCallback(
+    async (files: FileList | File[]) => {
+      const selectedFiles = Array.from(files);
+      if (selectedFiles.length === 0 || isProcessing) return;
+
+      if (attachments.length + selectedFiles.length > PROMPT_ATTACHMENT_LIMIT_PER_MESSAGE) {
+        setAttachmentError(
+          `Attach up to ${PROMPT_ATTACHMENT_LIMIT_PER_MESSAGE} files per message.`
+        );
+        return;
+      }
+
+      const oversized = selectedFiles.find((file) => file.size > PROMPT_ATTACHMENT_MAX_BYTES);
+      if (oversized) {
+        setAttachmentError(`${oversized.name} is too large for a prompt attachment.`);
+        return;
+      }
+
+      setAttachmentError(null);
+      setIsUploadingAttachments(true);
+
+      try {
+        const uploadedAttachments: Attachment[] = [];
+        for (const file of selectedFiles) {
+          const formData = new FormData();
+          formData.append("file", file);
+
+          const response = await fetch(`/api/sessions/${sessionId}/attachments`, {
+            method: "POST",
+            body: formData,
+          });
+          const data = (await response.json()) as { attachment?: Attachment; error?: string };
+          if (!response.ok || !data.attachment) {
+            throw new Error(data.error || `Failed to upload ${file.name}`);
+          }
+          uploadedAttachments.push(data.attachment);
+        }
+
+        setAttachments((current) =>
+          [...current, ...uploadedAttachments].slice(0, PROMPT_ATTACHMENT_LIMIT_PER_MESSAGE)
+        );
+      } catch (error) {
+        setAttachmentError(error instanceof Error ? error.message : "Failed to upload attachment");
+      } finally {
+        setIsUploadingAttachments(false);
+      }
+    },
+    [attachments.length, isProcessing, sessionId]
+  );
+
+  const handleRemoveAttachment = useCallback((attachmentId: string) => {
+    setAttachments((current) =>
+      current.filter((attachment) => (attachment.id ?? attachment.name) !== attachmentId)
+    );
+  }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
@@ -253,12 +324,17 @@ function SessionPageContent() {
       artifacts={artifacts}
       currentParticipantId={currentParticipantId}
       prompt={prompt}
+      attachments={attachments}
+      attachmentError={attachmentError}
+      isUploadingAttachments={isUploadingAttachments}
       isProcessing={isProcessing}
       selectedModel={selectedModel}
       reasoningEffort={reasoningEffort}
       inputRef={inputRef}
       handleSubmit={handleSubmit}
       handleInputChange={handleInputChange}
+      handleAttachmentFilesSelected={handleAttachmentFilesSelected}
+      handleRemoveAttachment={handleRemoveAttachment}
       handleKeyDown={handleKeyDown}
       setSelectedModel={handleModelChange}
       setReasoningEffort={setReasoningEffort}
@@ -290,12 +366,17 @@ function SessionContent({
   artifacts,
   currentParticipantId,
   prompt,
+  attachments,
+  attachmentError,
+  isUploadingAttachments,
   isProcessing,
   selectedModel,
   reasoningEffort,
   inputRef,
   handleSubmit,
   handleInputChange,
+  handleAttachmentFilesSelected,
+  handleRemoveAttachment,
   handleKeyDown,
   setSelectedModel,
   setReasoningEffort,
@@ -323,12 +404,17 @@ function SessionContent({
   artifacts: ReturnType<typeof useSessionSocket>["artifacts"];
   currentParticipantId: string | null;
   prompt: string;
+  attachments: Attachment[];
+  attachmentError: string | null;
+  isUploadingAttachments: boolean;
   isProcessing: boolean;
   selectedModel: string;
   reasoningEffort: string | undefined;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
   handleSubmit: (e: React.FormEvent) => void;
   handleInputChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
+  handleAttachmentFilesSelected: (files: FileList | File[]) => void;
+  handleRemoveAttachment: (attachmentId: string) => void;
   handleKeyDown: (e: React.KeyboardEvent) => void;
   setSelectedModel: (model: string) => void;
   setReasoningEffort: (value: string | undefined) => void;
@@ -500,9 +586,14 @@ function SessionContent({
         prompt={{
           value: prompt,
           isProcessing,
+          attachments,
+          attachmentError,
+          isUploadingAttachments,
           inputRef,
           onSubmit: handleSubmit,
           onChange: handleInputChange,
+          onAttachmentFilesSelected: handleAttachmentFilesSelected,
+          onRemoveAttachment: handleRemoveAttachment,
           onKeyDown: handleKeyDown,
           onStopExecution: stopExecution,
         }}

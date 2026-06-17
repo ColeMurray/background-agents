@@ -22,6 +22,7 @@ import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, ClassVar
+from urllib.parse import quote, urljoin, urlparse
 
 import httpx
 import websockets
@@ -138,6 +139,8 @@ class AgentBridge:
     GIT_PUSH_TIMEOUT_SECONDS = 300.0
     GIT_PUSH_TERMINATE_GRACE_SECONDS = 5.0
     PROMPT_MAX_DURATION = 5400.0
+    PROMPT_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024
+    PROMPT_ATTACHMENT_LIMIT_PER_MESSAGE = 10
     GIT_CONFIG_TIMEOUT_SECONDS = 10.0
     MAX_PENDING_PART_EVENTS = 2000
     MAX_EVENT_BUFFER_SIZE = 1000
@@ -599,6 +602,7 @@ class AgentBridge:
         content = cmd.get("content", "")
         model = cmd.get("model")
         reasoning_effort = cmd.get("reasoningEffort")
+        attachments = cmd.get("attachments")
         author_data = cmd.get("author", {})
         start_time = time.time()
         outcome = "success"
@@ -619,6 +623,10 @@ class AgentBridge:
                     email=scm_email or FALLBACK_GIT_USER.email,
                 )
             )
+
+            staged_attachments = await self._stage_prompt_attachments(message_id, attachments)
+            if staged_attachments:
+                content = self._append_attachment_manifest(content, staged_attachments)
 
             if not self.opencode_session_id:
                 await self._create_opencode_session()
@@ -666,6 +674,149 @@ class AgentBridge:
                 outcome=outcome,
                 duration_ms=duration_ms,
             )
+
+    async def _stage_prompt_attachments(
+        self, message_id: str, attachments: Any
+    ) -> list[dict[str, Any]]:
+        """Download prompt attachments into the workspace and return local file metadata."""
+        if not attachments:
+            return []
+        if not isinstance(attachments, list):
+            raise ValueError("attachments must be a list")
+        if len(attachments) > self.PROMPT_ATTACHMENT_LIMIT_PER_MESSAGE:
+            raise ValueError(
+                f"attachments must include {self.PROMPT_ATTACHMENT_LIMIT_PER_MESSAGE} files or fewer"
+            )
+        if not self.http_client:
+            raise RuntimeError("HTTP client not initialized")
+
+        attachment_dir = self.repo_path / ".open-inspect" / "attachments" / message_id
+        attachment_dir.mkdir(parents=True, exist_ok=True)
+
+        staged: list[dict[str, Any]] = []
+        used_names: set[str] = set()
+        for index, attachment in enumerate(attachments, start=1):
+            if not isinstance(attachment, dict):
+                raise ValueError("attachment entries must be objects")
+
+            filename = self._sanitize_attachment_filename(str(attachment.get("name") or ""))
+            if not filename:
+                raise ValueError("attachment filename is required")
+            filename = self._dedupe_attachment_filename(filename, used_names)
+            used_names.add(filename)
+
+            download_url, headers = self._resolve_attachment_download_request(attachment)
+            destination = attachment_dir / f"{index}-{filename}"
+
+            size_bytes = 0
+            async with self.http_client.stream(
+                "GET",
+                download_url,
+                headers=headers,
+                follow_redirects=True,
+                timeout=httpx.Timeout(
+                    self.HTTP_DEFAULT_TIMEOUT,
+                    connect=self.HTTP_CONNECT_TIMEOUT,
+                    read=None,
+                ),
+            ) as response:
+                response.raise_for_status()
+                with destination.open("wb") as handle:
+                    async for chunk in response.aiter_bytes():
+                        size_bytes += len(chunk)
+                        if size_bytes > self.PROMPT_ATTACHMENT_MAX_BYTES:
+                            destination.unlink(missing_ok=True)
+                            raise ValueError(f"attachment {filename} exceeds the size limit")
+                        handle.write(chunk)
+
+            staged.append(
+                {
+                    "name": filename,
+                    "path": str(destination),
+                    "mimeType": attachment.get("mimeType"),
+                    "sizeBytes": size_bytes,
+                }
+            )
+
+        self.log.info(
+            "prompt.attachments_staged",
+            message_id=message_id,
+            attachment_count=len(staged),
+        )
+        return staged
+
+    def _resolve_attachment_download_request(
+        self, attachment: dict[str, Any]
+    ) -> tuple[str, dict[str, str]]:
+        url = attachment.get("url")
+        if not isinstance(url, str) or not url:
+            attachment_id = attachment.get("id")
+            name = attachment.get("name")
+            if not isinstance(attachment_id, str) or not isinstance(name, str):
+                raise ValueError("attachment url or id/name is required")
+            url = f"/sessions/{self.session_id}/attachments/{attachment_id}?filename={quote(name)}"
+
+        headers: dict[str, str] = {}
+        if url.startswith("/"):
+            expected_prefix = f"/sessions/{self.session_id}/attachments/"
+            if not url.startswith(expected_prefix):
+                raise ValueError("attachment URL is not scoped to this session")
+            headers["Authorization"] = f"Bearer {self.auth_token}"
+            return urljoin(self.control_plane_url.rstrip("/") + "/", url), headers
+
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError("attachment URL must be HTTP(S)")
+
+        control_plane_origin = urlparse(self.control_plane_url)
+        if (
+            parsed.scheme == control_plane_origin.scheme
+            and parsed.netloc == control_plane_origin.netloc
+            and parsed.path.startswith(f"/sessions/{self.session_id}/attachments/")
+        ):
+            headers["Authorization"] = f"Bearer {self.auth_token}"
+
+        return url, headers
+
+    @staticmethod
+    def _sanitize_attachment_filename(name: str) -> str | None:
+        basename = Path(name).name.strip()
+        without_control_chars = re.sub(r"[\x00-\x1f\x7f]", "", basename)
+        sanitized = re.sub(r"[^A-Za-z0-9._ -]", "_", without_control_chars)
+        sanitized = re.sub(r"\s+", " ", sanitized).strip(". ").strip()
+        return sanitized[:160] or None
+
+    @staticmethod
+    def _dedupe_attachment_filename(filename: str, used_names: set[str]) -> str:
+        if filename not in used_names:
+            return filename
+        stem = Path(filename).stem
+        suffix = Path(filename).suffix
+        counter = 2
+        while True:
+            candidate = f"{stem}-{counter}{suffix}"
+            if candidate not in used_names:
+                return candidate
+            counter += 1
+
+    @staticmethod
+    def _append_attachment_manifest(content: str, staged_attachments: list[dict[str, Any]]) -> str:
+        lines = [
+            "",
+            "Attached files are available in the workspace:",
+            *[
+                (
+                    f"- {attachment['name']}: {attachment['path']}"
+                    + (
+                        f" ({attachment['mimeType']}, {attachment['sizeBytes']} bytes)"
+                        if attachment.get("mimeType")
+                        else f" ({attachment['sizeBytes']} bytes)"
+                    )
+                )
+                for attachment in staged_attachments
+            ],
+        ]
+        return f"{content.rstrip()}\n\n" + "\n".join(lines)
 
     async def _create_opencode_session(self) -> None:
         """Create a new OpenCode session."""

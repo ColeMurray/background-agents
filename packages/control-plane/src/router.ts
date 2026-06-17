@@ -64,6 +64,7 @@ const SANDBOX_AUTH_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/scm-credentials$/, // SCM credential broker for git credential helper
   /^\/sessions\/[^/]+\/tunnel-urls$/, // Tunnel URL fetch for sandboxes whose .tunnels.env write isn't visible from inside
   /^\/sessions\/[^/]+\/media$/, // Media upload from sandbox
+  /^\/sessions\/[^/]+\/attachments\/[^/]+$/, // Attachment download from sandbox
   /^\/sessions\/[^/]+\/children$/, // POST spawn, GET list
   /^\/sessions\/[^/]+\/children\/[^/]+$/, // GET child detail
   /^\/sessions\/[^/]+\/children\/[^/]+\/cancel$/, // POST cancel child
