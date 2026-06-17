@@ -74,7 +74,8 @@ export async function resolveInstalledRepo(
   repoOwner: string,
   repoName: string
 ): Promise<RepositoryAccessResult | null> {
-  return provider.checkRepositoryAccess({ owner: repoOwner, name: repoName });
+  const result = await provider.checkRepositoryAccess({ owner: repoOwner, name: repoName });
+  return result;
 }
 
 /**
