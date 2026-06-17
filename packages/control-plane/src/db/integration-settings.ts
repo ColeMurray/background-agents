@@ -9,6 +9,7 @@ import {
   type IntegrationId,
   type IntegrationSettingsMap,
   type GitHubBotSettings,
+  type GitHubPrSettings,
   type LinearBotSettings,
   type CodeServerSettings,
   type SlackGlobalSettings,
@@ -222,6 +223,10 @@ export class IntegrationSettingsStore {
       ) as IntegrationSettingsMap[K]["repo"];
     }
 
+    if (integrationId === "github-pr") {
+      this.validateGitHubPrSettings(settings as GitHubPrSettings);
+    }
+
     if (integrationId === "linear") {
       this.validateLinearSettings(settings as LinearBotSettings);
     }
@@ -296,6 +301,15 @@ export class IntegrationSettingsStore {
     }
 
     return settings;
+  }
+
+  private validateGitHubPrSettings(settings: GitHubPrSettings): void {
+    if (
+      settings.alwaysUseDraftMode !== undefined &&
+      typeof settings.alwaysUseDraftMode !== "boolean"
+    ) {
+      throw new IntegrationSettingsValidationError("alwaysUseDraftMode must be a boolean");
+    }
   }
 
   private validateLinearSettings(settings: LinearBotSettings): void {

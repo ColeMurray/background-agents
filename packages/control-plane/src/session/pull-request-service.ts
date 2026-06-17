@@ -21,6 +21,12 @@ export interface CreatePullRequestInput {
   promptingUserId: string;
   promptingAuth: SourceControlAuthContext | null;
   sessionUrl: string;
+  /**
+   * Whether to open the PR in draft mode. When undefined, the configured
+   * "always use draft mode" GitHub setting (global default + repo override)
+   * decides. An explicit value always wins over the setting.
+   */
+  draft?: boolean;
 }
 
 export type CreatePullRequestResult =
@@ -63,6 +69,13 @@ export interface PullRequestServiceDeps {
   broadcastArtifactCreated: (artifact: SessionArtifact) => void;
   /** Display name used in the PR body footer (e.g. "Created with [name](url)"). */
   appName: string;
+  /**
+   * Resolves the "always use draft mode" default (global default merged with
+   * repo override) for this session's repository. Used only when the create-PR
+   * request does not specify `draft` explicitly. Defaults to `false` when the
+   * setting store is unavailable.
+   */
+  resolveAlwaysDraftDefault: () => Promise<boolean>;
 }
 
 /**
@@ -188,12 +201,17 @@ export class SessionPullRequestService {
       const fullBody =
         input.body + `\n\n---\n*Created with [${this.deps.appName}](${input.sessionUrl})*`;
 
+      // An explicit `draft` on the request wins; otherwise fall back to the
+      // configured "always use draft mode" GitHub setting for this repo.
+      const draft = input.draft ?? (await this.deps.resolveAlwaysDraftDefault());
+
       const prResult = await this.deps.sourceControlProvider.createPullRequest(prAuth, {
         repository: repoInfo,
         title: input.title,
         body: fullBody,
         sourceBranch: sanitizedHeadBranch,
         targetBranch: baseBranch,
+        draft,
       });
 
       const artifactId = this.deps.generateId();

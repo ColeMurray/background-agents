@@ -26,6 +26,16 @@ export interface GitHubBotSettings {
   commentActionInstructions?: string;
 }
 
+/**
+ * GitHub pull request behavior settings. Distinct from the GitHub bot integration:
+ * these control how sessions create PRs, not PR-review/comment automation. Used at
+ * both global (defaults) and per-repo (overrides) levels.
+ */
+export interface GitHubPrSettings {
+  /** Open pull requests created by sessions in draft mode by default. */
+  alwaysUseDraftMode?: boolean;
+}
+
 /** Overridable behavior settings for the Linear bot. Used at both global (defaults) and per-repo (overrides) levels. */
 export interface LinearBotSettings {
   model?: string;
@@ -266,6 +276,7 @@ export function matchRoutingRules(message: string, rules: SlackRoutingRule[]): S
 /** Maps each integration ID to its global and per-repo settings types. */
 export interface IntegrationSettingsMap {
   github: IntegrationEntry<GitHubBotSettings>;
+  "github-pr": IntegrationEntry<GitHubPrSettings>;
   linear: IntegrationEntry<LinearBotSettings>;
   "code-server": IntegrationEntry<CodeServerSettings>;
   sandbox: IntegrationEntry<SandboxSettings>;
@@ -274,6 +285,7 @@ export interface IntegrationSettingsMap {
 
 /** Derived type for the GitHub bot global config. */
 export type GitHubGlobalConfig = IntegrationSettingsMap["github"]["global"];
+export type GitHubPrGlobalConfig = IntegrationSettingsMap["github-pr"]["global"];
 export type LinearGlobalConfig = IntegrationSettingsMap["linear"]["global"];
 export type CodeServerGlobalConfig = IntegrationSettingsMap["code-server"]["global"];
 export type SandboxGlobalConfig = IntegrationSettingsMap["sandbox"]["global"];
@@ -314,6 +326,11 @@ export const INTEGRATION_DEFINITIONS: {
     id: "github",
     name: "GitHub Bot",
     description: "Automated PR reviews and comment-triggered actions",
+  },
+  {
+    id: "github-pr",
+    name: "GitHub",
+    description: "Pull request defaults for coding sessions, like opening PRs as draft",
   },
   {
     id: "linear",

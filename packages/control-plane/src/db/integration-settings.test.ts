@@ -878,6 +878,40 @@ describe("IntegrationSettingsStore", () => {
     });
   });
 
+  describe("github-pr settings", () => {
+    it("round-trips global github-pr settings", async () => {
+      await store.setGlobal("github-pr", {
+        defaults: { alwaysUseDraftMode: true },
+      });
+
+      const result = await store.getGlobal("github-pr");
+      expect(result).toEqual({ defaults: { alwaysUseDraftMode: true } });
+    });
+
+    it("round-trips github-pr repo settings", async () => {
+      await store.setRepoSettings("github-pr", "acme/web", { alwaysUseDraftMode: true });
+
+      const result = await store.getRepoSettings("github-pr", "acme/web");
+      expect(result).toEqual({ alwaysUseDraftMode: true });
+    });
+
+    it("rejects non-boolean alwaysUseDraftMode", async () => {
+      await expect(
+        store.setGlobal("github-pr", {
+          defaults: { alwaysUseDraftMode: "yes" as unknown as boolean },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("lets a repo override flip the global draft default", async () => {
+      await store.setGlobal("github-pr", { defaults: { alwaysUseDraftMode: true } });
+      await store.setRepoSettings("github-pr", "acme/web", { alwaysUseDraftMode: false });
+
+      const config = await store.getResolvedConfig("github-pr", "acme/web");
+      expect(config.settings).toEqual({ alwaysUseDraftMode: false });
+    });
+  });
+
   describe("slack settings", () => {
     it("round-trips global slack settings", async () => {
       await store.setGlobal("slack", {

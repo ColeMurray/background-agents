@@ -8,6 +8,7 @@ import {
   isValidReasoningEffort,
   type CodeServerSettings,
   type GitHubBotSettings,
+  type GitHubPrSettings,
   type IntegrationId,
   type LinearBotSettings,
   type SandboxSettings,
@@ -314,6 +315,18 @@ async function handleGetResolvedConfig(
         allowedTriggerUsers: githubSettings.allowedTriggerUsers ?? null,
         codeReviewInstructions: githubSettings.codeReviewInstructions ?? null,
         commentActionInstructions: githubSettings.commentActionInstructions ?? null,
+      },
+    });
+  }
+
+  if (id === "github-pr") {
+    const githubPrSettings = settings as GitHubPrSettings;
+    return json({
+      integrationId: id,
+      repo,
+      config: {
+        alwaysUseDraftMode: githubPrSettings.alwaysUseDraftMode ?? false,
+        enabledRepos,
       },
     });
   }

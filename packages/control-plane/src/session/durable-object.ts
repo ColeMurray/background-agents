@@ -496,6 +496,7 @@ export class SessionDO extends DurableObject<Env> {
               });
             },
             appName: resolveAppName(this.env),
+            resolveAlwaysDraftDefault: () => this.resolveAlwaysDraftDefault(),
           });
 
           return pullRequestService.createPullRequest(input);
@@ -514,6 +515,30 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     return this._participantsHandler;
+  }
+
+  /**
+   * Resolves the "always use draft mode" GitHub setting (global default merged
+   * with the per-repo override) for this session's repository. Returns false
+   * when D1 is unavailable so PR creation never blocks on settings.
+   */
+  private async resolveAlwaysDraftDefault(): Promise<boolean> {
+    if (!this.env.DB) return false;
+    const session = this.getSession();
+    if (!session) return false;
+    try {
+      const settingsStore = new IntegrationSettingsStore(this.env.DB);
+      const { settings } = await settingsStore.getResolvedConfig(
+        "github-pr",
+        `${session.repo_owner}/${session.repo_name}`
+      );
+      return settings.alwaysUseDraftMode === true;
+    } catch (error) {
+      this.log.error("Failed to resolve always-draft setting", {
+        error: error instanceof Error ? error : String(error),
+      });
+      return false;
+    }
   }
 
   private get alarmHandler(): AlarmHandler {
