@@ -140,12 +140,19 @@ export default tool({
         'Target repository as "owner/name". Required when the session spans multiple ' +
           "repositories; may be omitted for single-repository sessions."
       ),
+    draft: z
+      .boolean()
+      .optional()
+      .describe(
+        "Open the pull request as a draft. Set to true to open a draft PR, or false for a ready-for-review PR. Note: this may be overridden by policy."
+      ),
   },
   async execute(args, context) {
     console.log(`[create-pull-request] execute() called with args:`, JSON.stringify(args));
     const title = args.title || "Changes from OpenCode session";
     const body = args.body || "Automated PR created via create-pull-request tool";
     const baseBranch = args.baseBranch; // undefined if not provided, server will use default
+    const draft = args.draft; // undefined if not provided, server falls back to repo setting
 
     // Resolve the target repository for multi-repo sessions.
     const repositories = getRepositories();
@@ -200,6 +207,7 @@ export default tool({
           headBranch: headBranch,
           repoOwner: repoOwner,
           repoName: repoName,
+          draft: draft,
           timestamp: Date.now(),
         }),
       });

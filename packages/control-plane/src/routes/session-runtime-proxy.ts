@@ -102,6 +102,10 @@ async function handleCreatePR(
     return error("repoName must be a string");
   }
 
+  if (body.draft !== undefined && typeof body.draft !== "boolean") {
+    return error("draft must be a boolean");
+  }
+
   return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.createPr, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -112,6 +116,7 @@ async function handleCreatePR(
       headBranch: body.headBranch,
       repoOwner: body.repoOwner,
       repoName: body.repoName,
+      draft: body.draft,
     }),
   });
 }

@@ -12,6 +12,7 @@ vi.mock("../../auth/github-app", () => ({
 }));
 
 import {
+  fetchWithTimeout,
   getCachedInstallationTokenWithExpiry,
   getInstallationRepository,
   listInstallationRepositories,
@@ -20,6 +21,26 @@ import {
 const mockGetInstallationRepository = vi.mocked(getInstallationRepository);
 const mockListInstallationRepositories = vi.mocked(listInstallationRepositories);
 const mockGetCachedInstallationTokenWithExpiry = vi.mocked(getCachedInstallationTokenWithExpiry);
+const mockFetchWithTimeout = vi.mocked(fetchWithTimeout);
+
+function makeResponse(body: unknown, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: () => Promise.resolve(body),
+    text: () => Promise.resolve(typeof body === "string" ? body : JSON.stringify(body)),
+  } as unknown as Response;
+}
+
+const fakeAuth = { authType: "app" as const, token: "ghs_test" };
+const fakeRepository = {
+  owner: "acme",
+  name: "web",
+  fullName: "acme/web",
+  defaultBranch: "main",
+  isPrivate: true,
+  providerRepoId: 1,
+};
 
 const fakeAppConfig = {
   appId: "123",
@@ -347,14 +368,86 @@ describe("GitHubSourceControlProvider", () => {
       expect((err as SourceControlProviderError).httpStatus).toBe(500);
     });
   });
+
+  describe("createPullRequest", () => {
+    const prResponseBody = {
+      number: 7,
+      html_url: "https://github.com/acme/web/pull/7",
+      url: "https://api.github.com/repos/acme/web/pulls/7",
+      state: "open",
+      draft: false,
+      merged: false,
+      head: { ref: "feature" },
+      base: { ref: "main" },
+    };
+
+    it("creates a non-draft PR by default and does not send the draft flag", async () => {
+      mockFetchWithTimeout.mockResolvedValueOnce(makeResponse(prResponseBody));
+
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+      const result = await provider.createPullRequest(fakeAuth, {
+        repository: fakeRepository,
+        title: "Add feature",
+        body: "Body",
+        sourceBranch: "feature",
+        targetBranch: "main",
+      });
+
+      expect(result.id).toBe(7);
+      expect(result.lifecycleState).toBe("open");
+      expect(result.isDraft).toBe(false);
+      expect(mockFetchWithTimeout).toHaveBeenCalledTimes(1);
+      const sentBody = JSON.parse(mockFetchWithTimeout.mock.calls[0][1]?.body as string);
+      expect(sentBody.draft).toBeUndefined();
+    });
+
+    it("forwards the draft flag when draft is requested", async () => {
+      mockFetchWithTimeout.mockResolvedValueOnce(makeResponse({ ...prResponseBody, draft: true }));
+
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+      const result = await provider.createPullRequest(fakeAuth, {
+        repository: fakeRepository,
+        title: "Add feature",
+        body: "Body",
+        sourceBranch: "feature",
+        targetBranch: "main",
+        draft: true,
+      });
+
+      expect(result.isDraft).toBe(true);
+      expect(mockFetchWithTimeout).toHaveBeenCalledTimes(1);
+      const sentBody = JSON.parse(mockFetchWithTimeout.mock.calls[0][1]?.body as string);
+      expect(sentBody.draft).toBe(true);
+    });
+
+    it("throws a SourceControlProviderError when PR creation fails", async () => {
+      mockFetchWithTimeout.mockResolvedValueOnce(
+        makeResponse("Validation failed: head branch does not exist", 422)
+      );
+
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+      const err = await provider
+        .createPullRequest(fakeAuth, {
+          repository: fakeRepository,
+          title: "Add feature",
+          body: "Body",
+          sourceBranch: "feature",
+          targetBranch: "main",
+          draft: true,
+        })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).httpStatus).toBe(422);
+    });
+  });
 });
 
 // ─── PR lifecycle tracking (getPullRequest + status derivation) ───────────────
 
-import { fetchWithTimeout, getCachedInstallationToken } from "../../auth/github-app";
+import { getCachedInstallationToken } from "../../auth/github-app";
 import { deriveGitHubPullRequestStatus } from "./github-provider";
 
-const mockFetchWithTimeout = vi.mocked(fetchWithTimeout);
 const mockGetCachedInstallationToken = vi.mocked(getCachedInstallationToken);
 
 function makeJsonResponse(body: unknown, status = 200): Response {

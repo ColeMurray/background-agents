@@ -11,6 +11,7 @@ import {
   IntegrationsIcon,
   AppearanceIcon,
   TerminalIcon,
+  GitPrIcon,
   ChevronRightIcon,
 } from "@/components/ui/icons";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
@@ -55,6 +56,11 @@ const NAV_ITEMS = [
     id: "sandbox",
     label: "Sandbox",
     icon: TerminalIcon,
+  },
+  {
+    id: "scm",
+    label: "SCM Settings",
+    icon: GitPrIcon,
   },
   {
     id: "integrations",

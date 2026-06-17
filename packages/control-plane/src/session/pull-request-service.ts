@@ -43,6 +43,11 @@ export interface CreatePullRequestInput {
   promptingUserId: string;
   promptingAuth: SourceControlAuthContext | null;
   sessionUrl: string;
+  /**
+   * Whether to open the PR in draft mode. When configured, the SCM setting
+   * "always use draft mode" overrides.
+   */
+  draft?: boolean;
 }
 
 export type CreatePullRequestResult =
@@ -125,6 +130,11 @@ export interface PullRequestServiceDeps {
    * deployment has no D1 binding; the write is best-effort either way.
    */
   sessionPullRequests?: Pick<SessionPullRequestStore, "upsert">;
+  /**
+   * Resolves the "always use draft mode" default (global default merged with
+   * repo override) for this session's repository.
+   */
+  resolveAlwaysDraftDefault: () => Promise<boolean>;
 }
 
 /**
@@ -278,12 +288,20 @@ export class SessionPullRequestService {
       const fullBody =
         input.body + `\n\n---\n*Created with [${this.deps.appName}](${input.sessionUrl})*`;
 
+      // The "always use draft mode" SCM setting is a hard policy: when enabled
+      // for this repo it forces every session-created PR to be a draft,
+      // regardless of the tool's `draft` argument. When disabled, an explicit
+      // `draft` from the request decides (defaulting to false).
+      const alwaysDraft = await this.deps.resolveAlwaysDraftDefault();
+      const draft = alwaysDraft || (input.draft ?? false);
+
       const prResult = await this.deps.sourceControlProvider.createPullRequest(prAuth, {
         repository: repoInfo,
         title: input.title,
         body: fullBody,
         sourceBranch: sanitizedHeadBranch,
         targetBranch: baseBranch,
+        draft,
       });
 
       const artifactId = this.deps.generateId();
