@@ -6,6 +6,7 @@ import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type {
   Attachment,
+  FileArtifactMetadata,
   ParticipantPresence,
   SandboxEvent as SharedSandboxEvent,
   ScreenshotArtifactMetadata,
@@ -157,6 +158,7 @@ function toUiSandboxEvent(event: SharedSandboxEvent): SandboxEvent {
 type PrState = NonNullable<NonNullable<Artifact["metadata"]>["prState"]>;
 const PR_STATES = new Set<string>(["open", "merged", "closed", "draft"]);
 type MediaMimeType = ScreenshotArtifactMetadata["mimeType"] | VideoArtifactMetadata["mimeType"];
+type FileMimeType = FileArtifactMetadata["mimeType"];
 const MEDIA_MIME_TYPES = new Set<MediaMimeType>([
   "image/png",
   "image/jpeg",
@@ -202,8 +204,9 @@ function toUiArtifact(artifact: SessionArtifact): Artifact {
           filename: typeof meta.filename === "string" ? meta.filename : undefined,
           objectKey: typeof meta.objectKey === "string" ? meta.objectKey : undefined,
           mimeType:
-            typeof meta.mimeType === "string" && isMediaMimeType(meta.mimeType)
-              ? meta.mimeType
+            typeof meta.mimeType === "string" &&
+            (artifact.type === "file" || isMediaMimeType(meta.mimeType))
+              ? (meta.mimeType as MediaMimeType | FileMimeType)
               : undefined,
           sizeBytes: typeof meta.sizeBytes === "number" ? meta.sizeBytes : undefined,
           viewport: narrowDimensions(meta.viewport),

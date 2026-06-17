@@ -315,6 +315,10 @@ export function getArtifactLabel(data: Record<string, unknown>): string {
     const metadata = data.metadata as Record<string, unknown> | undefined;
     return `Branch: ${metadata?.name ?? "branch"}`;
   }
+  if (type === "file") {
+    const metadata = data.metadata as Record<string, unknown> | undefined;
+    return `File: ${metadata?.filename ?? "download"}`;
+  }
   return type;
 }
 
@@ -332,6 +336,9 @@ export function getArtifactLabelFromArtifact(
   if (type === "branch") {
     const branchName = metadata?.head;
     return `Branch: ${branchName ?? "branch"}`;
+  }
+  if (type === "file") {
+    return `File: ${metadata?.filename ?? "download"}`;
   }
   return type;
 }
@@ -358,7 +365,8 @@ export function toArtifactType(value: unknown): ArtifactType | null {
     value === "screenshot" ||
     value === "video" ||
     value === "preview" ||
-    value === "branch"
+    value === "branch" ||
+    value === "file"
     ? value
     : null;
 }

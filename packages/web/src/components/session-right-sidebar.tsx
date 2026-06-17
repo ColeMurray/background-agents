@@ -7,6 +7,7 @@ import {
   MetadataSection,
   TasksSection,
   FilesChangedSection,
+  FileSection,
   MediaSection,
   CodeServerSection,
   TunnelUrlsSection,
@@ -47,6 +48,10 @@ export function SessionRightSidebarContent({
   const mediaArtifacts = useMemo(
     () =>
       artifacts.filter((artifact) => artifact.type === "screenshot" || artifact.type === "video"),
+    [artifacts]
+  );
+  const fileArtifacts = useMemo(
+    () => artifacts.filter((artifact) => artifact.type === "file"),
     [artifacts]
   );
   const terminalUrl = useMemo(
@@ -163,6 +168,13 @@ export function SessionRightSidebarContent({
             mediaArtifacts={mediaArtifacts}
             onOpenMedia={onOpenMedia}
           />
+        </CollapsibleSection>
+      )}
+
+      {/* Downloadable Files */}
+      {fileArtifacts.length > 0 && (
+        <CollapsibleSection title={`Files (${fileArtifacts.length})`} defaultOpen={true}>
+          <FileSection sessionId={sessionId} fileArtifacts={fileArtifacts} />
         </CollapsibleSection>
       )}
 

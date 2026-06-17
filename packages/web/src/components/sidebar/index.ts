@@ -4,6 +4,7 @@ export { ParticipantsSection } from "./participants-section";
 export { MetadataSection } from "./metadata-section";
 export { TasksSection } from "./tasks-section";
 export { FilesChangedSection } from "./files-changed-section";
+export { FileSection } from "./file-section";
 export { MediaSection } from "./media-section";
 export { CodeServerSection } from "./code-server-section";
 export { TunnelUrlsSection } from "./tunnel-urls-section";
