@@ -1,4 +1,8 @@
-import type { ScreenshotArtifactMetadata, VideoArtifactMetadata } from "@open-inspect/shared";
+import type {
+  FileArtifactMetadata,
+  ScreenshotArtifactMetadata,
+  VideoArtifactMetadata,
+} from "@open-inspect/shared";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
 import type { ObjectStorage } from "../storage/object-storage";
@@ -27,9 +31,9 @@ async function parseErrorMessage(response: Response, fallback: string): Promise<
 export async function persistMediaArtifact(input: {
   sessionId: string;
   artifactId: string;
-  artifactType: "screenshot" | "video";
+  artifactType: "screenshot" | "video" | "file";
   objectKey: string;
-  metadata: ScreenshotArtifactMetadata | VideoArtifactMetadata;
+  metadata: ScreenshotArtifactMetadata | VideoArtifactMetadata | FileArtifactMetadata;
   storage: ObjectStorage;
   ctx: SessionRouteContext;
   parseFallback: string;
@@ -78,7 +82,7 @@ export async function persistMediaArtifact(input: {
 
   if (createArtifactResponse.status >= 500) {
     logger.error("media.upload.create_artifact_failed", logData);
-    return error("Failed to persist media artifact", 500);
+    return error(parseFallback, 500);
   }
 
   logger.warn("media.upload.create_artifact_failed", logData);

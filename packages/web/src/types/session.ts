@@ -1,16 +1,12 @@
-import type {
-  SandboxEvent as SharedSandboxEvent,
-  ScreenshotArtifactMetadata,
-  VideoArtifactMetadata,
-} from "@open-inspect/shared";
+import type { SandboxEvent as SharedSandboxEvent } from "@open-inspect/shared";
 
 // Session-related type definitions
 
 export interface Artifact {
   id: string;
-  type: "pr" | "screenshot" | "video" | "preview" | "branch";
+  type: "pr" | "screenshot" | "video" | "preview" | "branch" | "file";
   url: string | null;
-  metadata?: (Partial<ScreenshotArtifactMetadata> | Partial<VideoArtifactMetadata>) & {
+  metadata?: {
     prNumber?: number;
     prState?: "open" | "merged" | "closed" | "draft";
     mode?: "manual_pr";
@@ -19,6 +15,21 @@ export interface Artifact {
     base?: string;
     provider?: string;
     filename?: string;
+    objectKey?: string;
+    mimeType?: string;
+    sizeBytes?: number;
+    viewport?: { width: number; height: number };
+    sourceUrl?: string;
+    endUrl?: string;
+    fullPage?: boolean;
+    annotated?: boolean;
+    caption?: string;
+    durationMs?: number;
+    recordingStartedAt?: number;
+    recordingEndedAt?: number;
+    dimensions?: { width: number; height: number };
+    truncated?: boolean;
+    hasAudio?: false;
     previewStatus?: "active" | "outdated" | "stopped";
   };
   createdAt: number;

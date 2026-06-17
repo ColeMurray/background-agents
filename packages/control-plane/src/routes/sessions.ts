@@ -3,6 +3,7 @@ import { sessionCreateRoutes } from "./session-create";
 import { sessionAttachmentRoutes } from "./session-attachments";
 import { sessionChildRoutes } from "./session-children";
 import { sessionChildSpawnRoutes } from "./session-child-spawn";
+import { sessionFileRoutes } from "./session-files";
 import { sessionIndexRoutes } from "./session-index";
 import { sessionMediaRoutes } from "./session-media";
 import { sessionPromptRoutes } from "./session-prompt";
@@ -12,6 +13,7 @@ import { sessionWsTokenRoutes } from "./session-ws-token";
 export const sessionRoutes: Route[] = [
   ...sessionCreateRoutes,
   ...sessionAttachmentRoutes,
+  ...sessionFileRoutes,
   ...sessionIndexRoutes,
   ...sessionRuntimeProxyRoutes,
   ...sessionWsTokenRoutes,

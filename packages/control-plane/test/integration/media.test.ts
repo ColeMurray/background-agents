@@ -231,6 +231,89 @@ describe("session media routes", () => {
     });
   });
 
+  it("uploads a generated file artifact and streams it for download", async () => {
+    const sessionName = `file-upload-${Date.now()}`;
+    const { stub } = await initNamedSession(sessionName);
+    await seedSandboxAuthHash(stub, {
+      authToken: "sandbox-file-token",
+      sandboxId: "sandbox-1",
+    });
+    await seedProcessingMessage(stub, "msg-file");
+    const bytes = new TextEncoder().encode("review packet bytes");
+
+    const formData = new FormData();
+    formData.append("file", new File([bytes], "../review_packet.zip", { type: "application/zip" }));
+    formData.append("caption", "Synthetic review packet");
+
+    const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/files`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer sandbox-file-token",
+      },
+      body: formData,
+    });
+
+    expect(response.status).toBe(201);
+    const body = await response.json<{
+      artifactId: string;
+      objectKey: string;
+      filename: string;
+    }>();
+    expect(body.artifactId).toBeTruthy();
+    expect(body.filename).toBe("review_packet.zip");
+    expect(body.objectKey).toBe(
+      `sessions/${sessionName}/files/${body.artifactId}/review_packet.zip`
+    );
+
+    const object = await env.MEDIA_BUCKET.get(body.objectKey);
+    expect(object).not.toBeNull();
+    expect(object?.httpMetadata?.contentType).toBe("application/zip");
+
+    const artifacts = await queryDO<{ id: string; type: string; url: string; metadata: string }>(
+      stub,
+      "SELECT id, type, url, metadata FROM artifacts WHERE id = ?",
+      body.artifactId
+    );
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0]).toMatchObject({
+      id: body.artifactId,
+      type: "file",
+      url: body.objectKey,
+    });
+    expect(JSON.parse(artifacts[0].metadata)).toEqual({
+      objectKey: body.objectKey,
+      filename: "review_packet.zip",
+      mimeType: "application/zip",
+      sizeBytes: bytes.byteLength,
+      caption: "Synthetic review packet",
+    });
+
+    const events = await queryDO<{ type: string; message_id: string; data: string }>(
+      stub,
+      "SELECT type, message_id, data FROM events WHERE type = 'artifact'"
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0].message_id).toBe("msg-file");
+    expect(JSON.parse(events[0].data)).toMatchObject({
+      type: "artifact",
+      artifactType: "file",
+      artifactId: body.artifactId,
+      messageId: "msg-file",
+      url: body.objectKey,
+    });
+
+    const downloadResponse = await SELF.fetch(
+      `https://test.local/sessions/${sessionName}/files/${body.artifactId}`,
+      { headers: await internalAuthHeaders() }
+    );
+    expect(downloadResponse.status).toBe(200);
+    expect(downloadResponse.headers.get("Content-Type")).toBe("application/zip");
+    expect(downloadResponse.headers.get("Content-Disposition")).toContain("review_packet.zip");
+    expect(Array.from(new Uint8Array(await downloadResponse.arrayBuffer()))).toEqual(
+      Array.from(bytes)
+    );
+  });
+
   it("uploads a video and persists it on the active prompt", async () => {
     const sessionName = `media-video-upload-${Date.now()}`;
     const { stub } = await initNamedSession(sessionName);

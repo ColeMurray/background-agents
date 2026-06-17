@@ -46,8 +46,8 @@ TTYD_VERSION = "1.7.7"
 TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 
 # Cache buster - change this to force Modal image rebuild
-# v51: SCM credential helper backed by control plane; remove embedded VCS tokens
-CACHE_BUSTER = "v51-scm-credential-helper"
+# v52: downloadable file artifact uploads from sandbox
+CACHE_BUSTER = "v52-output-file-artifacts"
 
 # Base image with all development tools
 base_image = (
