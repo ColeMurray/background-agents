@@ -19,9 +19,10 @@ resource "null_resource" "control_plane_build" {
 module "control_plane_worker" {
   source = "../../modules/cloudflare-worker"
 
-  account_id  = var.cloudflare_account_id
-  worker_name = "open-inspect-control-plane-${local.name_suffix}"
-  script_path = local.control_plane_script_path
+  account_id       = var.cloudflare_account_id
+  worker_name      = "open-inspect-control-plane-${local.name_suffix}"
+  worker_subdomain = var.cloudflare_worker_subdomain
+  script_path      = local.control_plane_script_path
 
   kv_namespaces = [
     {

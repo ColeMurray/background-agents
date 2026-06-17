@@ -22,9 +22,10 @@ module "slack_bot_worker" {
   count  = var.enable_slack_bot ? 1 : 0
   source = "../../modules/cloudflare-worker"
 
-  account_id  = var.cloudflare_account_id
-  worker_name = "open-inspect-slack-bot-${local.name_suffix}"
-  script_path = local.slack_bot_script_path
+  account_id       = var.cloudflare_account_id
+  worker_name      = "open-inspect-slack-bot-${local.name_suffix}"
+  worker_subdomain = var.cloudflare_worker_subdomain
+  script_path      = local.slack_bot_script_path
 
   kv_namespaces = [
     {
