@@ -96,9 +96,12 @@ export interface SessionMessage {
 export interface Attachment {
   type: "file" | "image" | "url";
   name: string;
+  id?: string;
   url?: string;
   content?: string;
   mimeType?: string;
+  sizeBytes?: number;
+  objectKey?: string;
 }
 
 // Agent event

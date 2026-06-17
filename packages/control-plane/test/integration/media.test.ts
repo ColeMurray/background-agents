@@ -69,6 +69,83 @@ async function uploadVideo(sessionName: string, token: string) {
 }
 
 describe("session media routes", () => {
+  it("uploads a prompt attachment with internal auth and stores it in R2", async () => {
+    const sessionName = `attachment-upload-${Date.now()}`;
+    const { stub } = await initNamedSession(sessionName);
+    await seedSandboxAuthHash(stub, {
+      authToken: "sandbox-attachment-token",
+      sandboxId: "sandbox-1",
+    });
+    const bytes = new TextEncoder().encode("quarter,revenue\nQ1,100\n");
+
+    const formData = new FormData();
+    formData.append("file", new File([bytes], "../report.csv", { type: "text/csv" }));
+
+    const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/attachments`, {
+      method: "POST",
+      headers: await internalAuthHeaders(),
+      body: formData,
+    });
+
+    expect(response.status).toBe(201);
+    const body = await response.json<{
+      attachment: {
+        id: string;
+        type: string;
+        name: string;
+        url: string;
+        mimeType: string;
+        sizeBytes: number;
+        objectKey: string;
+      };
+    }>();
+    expect(body.attachment).toMatchObject({
+      type: "file",
+      name: "report.csv",
+      mimeType: "text/csv",
+      sizeBytes: bytes.byteLength,
+    });
+    expect(body.attachment.objectKey).toBe(
+      `sessions/${sessionName}/attachments/${body.attachment.id}/report.csv`
+    );
+    expect(body.attachment.url).toBe(
+      `/sessions/${sessionName}/attachments/${body.attachment.id}?filename=report.csv`
+    );
+
+    const object = await env.MEDIA_BUCKET.get(body.attachment.objectKey);
+    expect(object).not.toBeNull();
+    expect(object?.httpMetadata?.contentType).toBe("text/csv");
+
+    const downloadResponse = await SELF.fetch(`https://test.local${body.attachment.url}`, {
+      headers: {
+        Authorization: "Bearer sandbox-attachment-token",
+      },
+    });
+    expect(downloadResponse.status).toBe(200);
+    expect(downloadResponse.headers.get("Content-Type")).toBe("text/csv");
+    expect(downloadResponse.headers.get("Content-Disposition")).toContain("report.csv");
+    expect(await downloadResponse.text()).toBe("quarter,revenue\nQ1,100\n");
+  });
+
+  it("rejects unsupported prompt attachment types", async () => {
+    const sessionName = `attachment-unsupported-${Date.now()}`;
+    await initNamedSession(sessionName);
+
+    const formData = new FormData();
+    formData.append("file", new File([new Uint8Array([1, 2, 3])], "payload.bin"));
+
+    const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/attachments`, {
+      method: "POST",
+      headers: await internalAuthHeaders(),
+      body: formData,
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Unsupported attachment file type",
+    });
+  });
+
   it("rejects uploads without authentication", async () => {
     const sessionName = `media-unauthorized-${Date.now()}`;
     await initNamedSession(sessionName);

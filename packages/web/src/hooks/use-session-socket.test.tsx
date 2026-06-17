@@ -178,6 +178,48 @@ describe("useSessionSocket", () => {
     });
   });
 
+  it("sends prompt attachments over the subscribed WebSocket", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1"));
+
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+    });
+
+    act(() => {
+      result.current.sendPrompt("Review this file", "gpt-5", "medium", [
+        {
+          id: "att-1",
+          type: "file",
+          name: "report.csv",
+          url: "/sessions/session-1/attachments/att-1?filename=report.csv",
+          mimeType: "text/csv",
+          sizeBytes: 12,
+          objectKey: "sessions/session-1/attachments/att-1/report.csv",
+        },
+      ]);
+    });
+
+    expect(socket.sentMessages.at(-1)).toMatchObject({
+      type: "prompt",
+      content: "Review this file",
+      model: "gpt-5",
+      reasoningEffort: "medium",
+      attachments: [
+        {
+          id: "att-1",
+          name: "report.csv",
+          mimeType: "text/csv",
+        },
+      ],
+    });
+  });
+
   it("hydrates screenshot metadata from subscribed artifacts", async () => {
     const { result } = renderHook(() => useSessionSocket("session-1"));
 

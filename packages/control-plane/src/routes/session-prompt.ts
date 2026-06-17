@@ -1,4 +1,4 @@
-import type { CallbackContext } from "@open-inspect/shared";
+import type { Attachment, CallbackContext } from "@open-inspect/shared";
 import { SessionIndexStore } from "../db/session-index";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
@@ -25,7 +25,7 @@ async function handleSessionPrompt(
     source?: string;
     model?: string;
     reasoningEffort?: string;
-    attachments?: Array<{ type: string; name: string; url?: string }>;
+    attachments?: Attachment[];
     callbackContext?: CallbackContext;
   };
 
