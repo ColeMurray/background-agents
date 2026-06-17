@@ -29,6 +29,7 @@ import { browserAuthRoutes } from "./routes/browser-auth";
 import { signInProviderRoutes } from "./routes/sign-in-providers";
 import { integrationSettingsRoutes } from "./routes/integration-settings";
 import { commitSigningRoutes } from "./routes/commit-signing";
+import { scmSettingsRoutes } from "./routes/scm-settings";
 import { modelPreferencesRoutes } from "./routes/model-preferences";
 import { reposRoutes } from "./routes/repos";
 import { secretsRoutes } from "./routes/secrets";
@@ -352,6 +353,9 @@ const routes: Route[] = [
 
   // Deployment-wide commit signing identity
   ...commitSigningRoutes,
+
+  // SCM (source-control) settings
+  ...scmSettingsRoutes,
 
   // Automations
   ...automationRoutes,

@@ -22,6 +22,7 @@ const createPrRequestSchema = z.object({
   headBranch: z.string().optional(),
   repoOwner: z.string().optional(),
   repoName: z.string().optional(),
+  draft: z.boolean().optional(),
 });
 
 type CreatePrRequest = z.infer<typeof createPrRequestSchema>;
