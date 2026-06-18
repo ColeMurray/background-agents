@@ -345,11 +345,18 @@ describe("SchedulerDO (integration)", () => {
       const body = await res.json<{ processed: number; skipped: number; failed: number }>();
       expect(body.skipped).toBeGreaterThanOrEqual(1);
 
-      // Verify a skipped run was created
+      // Assert on the automation this test owns rather than only the tick's
+      // global counters: auto-t3 must get exactly one skipped run with the
+      // concurrency reason, and its schedule must advance into the future so it
+      // isn't re-skipped on every later tick.
       const runs = await store.listRunsForAutomation("auto-t3", { limit: 10, offset: 0 });
-      const skippedRun = runs.runs.find((r) => r.status === "skipped");
-      expect(skippedRun).toBeDefined();
-      expect(skippedRun!.skip_reason).toBe("concurrent_run_active");
+      const skippedRuns = runs.runs.filter((r) => r.status === "skipped");
+      expect(skippedRuns).toHaveLength(1);
+      expect(skippedRuns[0]!.skip_reason).toBe("concurrent_run_active");
+
+      const advanced = await store.getById("auto-t3");
+      expect(advanced!.next_run_at).not.toBeNull();
+      expect(advanced!.next_run_at!).toBeGreaterThan(now);
     });
 
     it("processes overdue automations (creates run, advances schedule)", async () => {
@@ -369,19 +376,18 @@ describe("SchedulerDO (integration)", () => {
       expect(res.status).toBe(200);
 
       const body = await res.json<{ processed: number; skipped: number; failed: number }>();
-      // The automation will be picked up. Session creation in test env may succeed
-      // or fail — either way a run is created and schedule is advanced.
-      const totalHandled = body.processed + body.failed;
-      expect(totalHandled).toBeGreaterThanOrEqual(1);
+      expect(body.processed + body.failed).toBeGreaterThanOrEqual(1);
 
-      // Verify schedule was advanced (next_run_at should be in the future)
+      // Assert on auto-t4 specifically rather than the tick's global counters.
+      // Session creation may succeed or fail in the test env; either way the
+      // automation must get exactly one run and its schedule must advance into
+      // the future so it isn't reprocessed on the next tick.
+      const runs = await store.listRunsForAutomation("auto-t4", { limit: 10, offset: 0 });
+      expect(runs.runs).toHaveLength(1);
+
       const automation = await store.getById("auto-t4");
       expect(automation!.next_run_at).not.toBeNull();
       expect(automation!.next_run_at!).toBeGreaterThan(now);
-
-      // Verify a run was created
-      const runs = await store.listRunsForAutomation("auto-t4", { limit: 10, offset: 0 });
-      expect(runs.total).toBeGreaterThanOrEqual(1);
     });
 
     it("auto-pauses after recovery sweep detects 3rd consecutive failure", async () => {
