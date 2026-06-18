@@ -94,7 +94,7 @@ async function handleCreatePR(
     return error("headBranch must be a string");
   }
 
-  if (body.draft != null && typeof body.draft !== "boolean") {
+  if (body.draft !== undefined && typeof body.draft !== "boolean") {
     return error("draft must be a boolean");
   }
 

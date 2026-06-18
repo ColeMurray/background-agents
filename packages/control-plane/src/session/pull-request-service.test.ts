@@ -288,16 +288,15 @@ describe("SessionPullRequestService", () => {
     );
   });
 
-  it("lets an explicit draft=false override the always-draft default", async () => {
+  it("forces draft when always-draft is enabled, even if the request sets draft=false", async () => {
     harness = createTestHarness({ alwaysDraftDefault: true });
 
     await harness.service.createPullRequest(createInput({ draft: false }));
 
     expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ draft: false })
+      expect.objectContaining({ draft: true })
     );
-    expect(harness.deps.resolveAlwaysDraftDefault).not.toHaveBeenCalled();
   });
 
   it("creates PR with OAuth token and stores PR artifact", async () => {

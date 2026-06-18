@@ -88,7 +88,7 @@ export default tool({
       .boolean()
       .optional()
       .describe(
-        "Open the pull request as a draft. When omitted, the repository's configured default is used (the 'always use draft mode' GitHub setting). Set to true to force a draft PR, or false to force a ready-for-review PR."
+        "Open the pull request as a draft. Set to true to open a draft PR, or false for a ready-for-review PR. Note: this may be overridden by policy."
       ),
   },
   async execute(args, context) {

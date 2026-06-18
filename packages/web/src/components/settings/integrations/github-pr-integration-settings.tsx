@@ -77,7 +77,11 @@ export function GitHubPrIntegrationSettings() {
         title="Repository Overrides"
         description="Override the draft default for specific repositories."
       >
-        <RepoOverridesSection overrides={repoOverrides} availableRepos={availableRepos} />
+        <RepoOverridesSection
+          overrides={repoOverrides}
+          availableRepos={availableRepos}
+          globalDefault={settings?.defaults?.alwaysUseDraftMode ?? false}
+        />
       </Section>
     </div>
   );
@@ -215,9 +219,11 @@ function GlobalSettingsSection({
 function RepoOverridesSection({
   overrides,
   availableRepos,
+  globalDefault,
 }: {
   overrides: RepoSettingsEntry[];
   availableRepos: EnrichedRepository[];
+  globalDefault: boolean;
 }) {
   const [addingRepo, setAddingRepo] = useState("");
 
@@ -234,7 +240,9 @@ function RepoOverridesSection({
       const res = await fetch(`/api/integration-settings/github-pr/repos/${owner}/${name}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings: { alwaysUseDraftMode: true } }),
+        // Seed the new override from the current global default so adding one
+        // doesn't silently flip a repo to draft when the global is off.
+        body: JSON.stringify({ settings: { alwaysUseDraftMode: globalDefault } }),
       });
 
       if (res.ok) {

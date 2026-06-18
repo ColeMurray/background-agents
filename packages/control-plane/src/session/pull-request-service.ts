@@ -201,9 +201,12 @@ export class SessionPullRequestService {
       const fullBody =
         input.body + `\n\n---\n*Created with [${this.deps.appName}](${input.sessionUrl})*`;
 
-      // An explicit `draft` on the request wins; otherwise fall back to the
-      // configured "always use draft mode" GitHub setting for this repo.
-      const draft = input.draft ?? (await this.deps.resolveAlwaysDraftDefault());
+      // "Always use draft mode" is a hard policy: when enabled for this repo it
+      // forces every session-created PR to be a draft, regardless of the tool's
+      // `draft` argument. When disabled, an explicit `draft` from the request
+      // decides (defaulting to false).
+      const alwaysDraft = await this.deps.resolveAlwaysDraftDefault();
+      const draft = alwaysDraft || (input.draft ?? false);
 
       const prResult = await this.deps.sourceControlProvider.createPullRequest(prAuth, {
         repository: repoInfo,
