@@ -2,7 +2,8 @@
  * Vercel Sandbox provider implementation.
  */
 
-import { computeHmacHex, MAX_TUNNEL_PORTS, type SandboxSettings } from "@open-inspect/shared";
+import { computeHmacHex, type SandboxSettings } from "@open-inspect/shared";
+import { resolveServicePorts, resolveTunnelPorts } from "../port-resolution";
 import { createLogger } from "../../../logger";
 import type { CorrelationContext } from "../../../logger";
 import type { SourceControlProviderName } from "../../../source-control";
@@ -33,8 +34,6 @@ import { DEFAULT_VERCEL_RUNTIME, VERCEL_PYTHON_BIN } from "./bootstrap";
 
 const log = createLogger("vercel-provider");
 
-const CODE_SERVER_PORT = 8080;
-const TTYD_PROXY_PORT = 7680;
 const TUNNEL_ENV_FILE_PATH = "/workspace/.tunnels.env";
 const EXPECTED_TUNNEL_PORTS_ENV_VAR = "EXPECTED_TUNNEL_PORTS";
 const DEFAULT_SNAPSHOT_EXPIRATION_MS = 0;
@@ -345,11 +344,14 @@ export class VercelSandboxProvider implements SandboxProvider {
       envVars.FROM_REPO_IMAGE = "true";
       envVars.REPO_IMAGE_SHA = mode.repoImageSha ?? "";
     }
+    const { codeServerPort, terminalPort } = resolveServicePorts(config.sandboxSettings);
     if (config.codeServerEnabled) {
       envVars.CODE_SERVER_PASSWORD = await this.deriveCodeServerPassword(config.sandboxId);
+      envVars.CODE_SERVER_PORT = String(codeServerPort);
     }
     if (config.sandboxSettings?.terminalEnabled) {
       envVars.TERMINAL_ENABLED = "true";
+      envVars.TTYD_PROXY_PORT = String(terminalPort);
     }
     if (config.agentSlackNotifyEnabled) {
       envVars.AGENT_SLACK_NOTIFY_ENABLED = "true";
@@ -443,11 +445,12 @@ export class VercelSandboxProvider implements SandboxProvider {
       await this.writeTunnelEnvFile(created.session.id, tunnelUrls, correlation);
     }
 
+    const { codeServerPort, terminalPort } = resolveServicePorts(sandboxSettings);
     const codeServerUrl = codeServerEnabled
-      ? routeToUrl(routeByPort.get(CODE_SERVER_PORT))
+      ? routeToUrl(routeByPort.get(codeServerPort))
       : undefined;
     const ttydUrl = sandboxSettings?.terminalEnabled
-      ? routeToUrl(routeByPort.get(TTYD_PROXY_PORT))
+      ? routeToUrl(routeByPort.get(terminalPort))
       : undefined;
 
     return {
@@ -592,16 +595,17 @@ function collectExposedPorts(
   codeServerEnabled: boolean | undefined,
   sandboxSettings: SandboxSettings | undefined
 ): { allExposedPorts: number[]; extraTunnelPorts: number[] } {
+  const { codeServerPort, terminalPort } = resolveServicePorts(sandboxSettings);
   const reserved = new Set<number>();
   const exposed: number[] = [];
 
   if (codeServerEnabled) {
-    exposed.push(CODE_SERVER_PORT);
-    reserved.add(CODE_SERVER_PORT);
+    exposed.push(codeServerPort);
+    reserved.add(codeServerPort);
   }
   if (sandboxSettings?.terminalEnabled) {
-    exposed.push(TTYD_PROXY_PORT);
-    reserved.add(TTYD_PROXY_PORT);
+    exposed.push(terminalPort);
+    reserved.add(terminalPort);
   }
 
   const extraTunnelPorts = resolveTunnelPorts(sandboxSettings?.tunnelPorts).filter(
@@ -610,18 +614,6 @@ function collectExposedPorts(
   exposed.push(...extraTunnelPorts);
 
   return { allExposedPorts: exposed, extraTunnelPorts };
-}
-
-function resolveTunnelPorts(rawPorts: number[] | undefined): number[] {
-  if (!rawPorts) return [];
-  const ports: number[] = [];
-  for (const value of rawPorts) {
-    if (Number.isInteger(value) && value >= 1 && value <= 65535) {
-      ports.push(value);
-    }
-    if (ports.length >= MAX_TUNNEL_PORTS) break;
-  }
-  return ports;
 }
 
 function resolveVercelResources(

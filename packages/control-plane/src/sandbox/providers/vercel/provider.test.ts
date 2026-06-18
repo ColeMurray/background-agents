@@ -366,6 +366,33 @@ describe("VercelSandboxProvider", () => {
     });
   });
 
+  it("uses configured code-server / terminal ports for exposure and env", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await provider.createSandbox({
+      ...baseCreateConfig,
+      codeServerEnabled: true,
+      sandboxSettings: {
+        terminalEnabled: true,
+        codeServerPort: 8081,
+        terminalPort: 7000,
+        tunnelPorts: [8080],
+      },
+    });
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    // code-server on 8081, terminal on 7000, and the user's 8080 is now a free tunnel.
+    expect(createCall.ports).toEqual([8081, 7000, 8080]);
+    expect(createCall.env).toEqual(
+      expect.objectContaining({
+        CODE_SERVER_PORT: "8081",
+        TTYD_PROXY_PORT: "7000",
+        EXPECTED_TUNNEL_PORTS: "8080",
+      })
+    );
+  });
+
   it("requires a base snapshot when no repo image snapshot is available", async () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, {

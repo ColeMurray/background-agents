@@ -18,7 +18,11 @@ class TestCollectExposedPortsTerminal:
 
     def test_terminal_enabled_includes_proxy_port(self):
         exposed, _extra = SandboxManager._collect_exposed_ports(
-            code_server_enabled=False, terminal_enabled=True, settings=None
+            code_server_enabled=False,
+            terminal_enabled=True,
+            settings=None,
+            code_server_port=CODE_SERVER_PORT,
+            ttyd_proxy_port=TTYD_PROXY_PORT,
         )
         assert TTYD_PROXY_PORT in exposed
         # ttyd raw port should NOT be exposed (only the proxy port)
@@ -26,13 +30,21 @@ class TestCollectExposedPortsTerminal:
 
     def test_terminal_disabled_excludes_proxy_port(self):
         exposed, _extra = SandboxManager._collect_exposed_ports(
-            code_server_enabled=False, terminal_enabled=False, settings=None
+            code_server_enabled=False,
+            terminal_enabled=False,
+            settings=None,
+            code_server_port=CODE_SERVER_PORT,
+            ttyd_proxy_port=TTYD_PROXY_PORT,
         )
         assert TTYD_PROXY_PORT not in exposed
 
     def test_terminal_and_code_server_both_enabled(self):
         exposed, _extra = SandboxManager._collect_exposed_ports(
-            code_server_enabled=True, terminal_enabled=True, settings=None
+            code_server_enabled=True,
+            terminal_enabled=True,
+            settings=None,
+            code_server_port=CODE_SERVER_PORT,
+            ttyd_proxy_port=TTYD_PROXY_PORT,
         )
         assert CODE_SERVER_PORT in exposed
         assert TTYD_PROXY_PORT in exposed
@@ -41,7 +53,11 @@ class TestCollectExposedPortsTerminal:
         """If user explicitly lists TTYD_PROXY_PORT in tunnelPorts, it should not duplicate."""
         settings = {"tunnelPorts": [TTYD_PROXY_PORT, 3000]}
         exposed, extra = SandboxManager._collect_exposed_ports(
-            code_server_enabled=False, terminal_enabled=True, settings=settings
+            code_server_enabled=False,
+            terminal_enabled=True,
+            settings=settings,
+            code_server_port=CODE_SERVER_PORT,
+            ttyd_proxy_port=TTYD_PROXY_PORT,
         )
         assert exposed.count(TTYD_PROXY_PORT) == 1
         assert 3000 in exposed
@@ -62,7 +78,13 @@ class TestResolveTunnelsTerminal:
         sandbox.tunnels.return_value = {TTYD_PROXY_PORT: tunnel}
 
         cs_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
-            sandbox, "sb-123", code_server_enabled=False, terminal_enabled=True, extra_ports=[]
+            sandbox,
+            "sb-123",
+            code_server_enabled=False,
+            terminal_enabled=True,
+            extra_ports=[],
+            code_server_port=CODE_SERVER_PORT,
+            ttyd_proxy_port=TTYD_PROXY_PORT,
         )
         assert cs_url is None
         assert ttyd_url == "https://ttyd.example.com"
@@ -72,7 +94,13 @@ class TestResolveTunnelsTerminal:
     async def test_returns_none_when_terminal_disabled(self):
         sandbox = MagicMock()
         cs_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
-            sandbox, "sb-123", code_server_enabled=False, terminal_enabled=False, extra_ports=[]
+            sandbox,
+            "sb-123",
+            code_server_enabled=False,
+            terminal_enabled=False,
+            extra_ports=[],
+            code_server_port=CODE_SERVER_PORT,
+            ttyd_proxy_port=TTYD_PROXY_PORT,
         )
         assert cs_url is None
         assert ttyd_url is None
@@ -97,6 +125,8 @@ class TestResolveTunnelsTerminal:
             code_server_enabled=True,
             terminal_enabled=True,
             extra_ports=[],
+            code_server_port=CODE_SERVER_PORT,
+            ttyd_proxy_port=TTYD_PROXY_PORT,
         )
         assert cs_url == "https://cs.example.com"
         assert ttyd_url == "https://ttyd.example.com"
