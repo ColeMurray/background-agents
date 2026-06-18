@@ -1,172 +1,99 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ScmSettingsStore, ScmSettingsValidationError } from "./scm-settings";
+import { IntegrationSettingsStore } from "./integration-settings";
 
-type GlobalRow = { integration_id: string; settings: string };
-type RepoRow = { integration_id: string; repo: string; settings: string };
+// ScmSettingsStore is a thin wrapper over IntegrationSettingsStore pinned to the
+// "scm" key. We mock the underlying store so these tests cover only the wrapper's
+// responsibilities — key pinning, validation, and resolved-settings extraction —
+// without touching SQL (the storage behavior is covered by integration-settings.test.ts).
+const { delegate } = vi.hoisted(() => ({
+  delegate: {
+    getGlobal: vi.fn(),
+    setGlobal: vi.fn(),
+    deleteGlobal: vi.fn(),
+    getRepoSettings: vi.fn(),
+    setRepoSettings: vi.fn(),
+    deleteRepoSettings: vi.fn(),
+    listRepoSettings: vi.fn(),
+    getResolvedConfig: vi.fn(),
+  },
+}));
 
-function normalize(query: string): string {
-  return query.replace(/\s+/g, " ").trim();
-}
-
-const PATTERNS = {
-  SELECT_GLOBAL: /^SELECT settings FROM integration_settings WHERE integration_id = \?$/,
-  UPSERT_GLOBAL: /^INSERT INTO integration_settings/,
-  DELETE_GLOBAL: /^DELETE FROM integration_settings WHERE integration_id = \?$/,
-  SELECT_REPO:
-    /^SELECT settings FROM integration_repo_settings WHERE integration_id = \? AND repo = \?$/,
-  UPSERT_REPO: /^INSERT INTO integration_repo_settings/,
-  DELETE_REPO: /^DELETE FROM integration_repo_settings WHERE integration_id = \? AND repo = \?$/,
-  LIST_REPO: /^SELECT repo, settings FROM integration_repo_settings WHERE integration_id = \?$/,
-};
-
-class FakeD1Database {
-  globalRows = new Map<string, GlobalRow>();
-  repoRows = new Map<string, RepoRow>();
-
-  prepare(query: string) {
-    return new FakeStatement(this, query);
-  }
-
-  first(query: string, args: unknown[]) {
-    const q = normalize(query);
-    if (PATTERNS.SELECT_GLOBAL.test(q)) {
-      const [id] = args as [string];
-      const row = this.globalRows.get(id);
-      return row ? { settings: row.settings } : null;
-    }
-    if (PATTERNS.SELECT_REPO.test(q)) {
-      const [id, repo] = args as [string, string];
-      const row = this.repoRows.get(`${id}:${repo}`);
-      return row ? { settings: row.settings } : null;
-    }
-    throw new Error(`Unexpected first() query: ${query}`);
-  }
-
-  all(query: string, args: unknown[]) {
-    const q = normalize(query);
-    if (PATTERNS.LIST_REPO.test(q)) {
-      const [id] = args as [string];
-      return [...this.repoRows.values()]
-        .filter((r) => r.integration_id === id)
-        .map((r) => ({ repo: r.repo, settings: r.settings }));
-    }
-    throw new Error(`Unexpected all() query: ${query}`);
-  }
-
-  run(query: string, args: unknown[]) {
-    const q = normalize(query);
-    if (PATTERNS.UPSERT_GLOBAL.test(q)) {
-      const [id, settings] = args as [string, string];
-      this.globalRows.set(id, { integration_id: id, settings });
-      return { meta: { changes: 1 } };
-    }
-    if (PATTERNS.UPSERT_REPO.test(q)) {
-      const [id, repo, settings] = args as [string, string, string];
-      this.repoRows.set(`${id}:${repo}`, { integration_id: id, repo, settings });
-      return { meta: { changes: 1 } };
-    }
-    if (PATTERNS.DELETE_GLOBAL.test(q)) {
-      const [id] = args as [string];
-      this.globalRows.delete(id);
-      return { meta: { changes: 1 } };
-    }
-    if (PATTERNS.DELETE_REPO.test(q)) {
-      const [id, repo] = args as [string, string];
-      this.repoRows.delete(`${id}:${repo}`);
-      return { meta: { changes: 1 } };
-    }
-    throw new Error(`Unexpected run() query: ${query}`);
-  }
-}
-
-class FakeStatement {
-  private bound: unknown[] = [];
-  constructor(
-    private db: FakeD1Database,
-    private query: string
-  ) {}
-  bind(...args: unknown[]) {
-    this.bound = args;
-    return this;
-  }
-  async first<T>() {
-    return this.db.first(this.query, this.bound) as T | null;
-  }
-  async all<T>() {
-    return { results: this.db.all(this.query, this.bound) as T[] };
-  }
-  async run() {
-    return this.db.run(this.query, this.bound);
-  }
-}
+vi.mock("./integration-settings", () => ({
+  IntegrationSettingsStore: vi.fn(function () {
+    return delegate;
+  }),
+}));
 
 describe("ScmSettingsStore", () => {
-  let db: FakeD1Database;
   let store: ScmSettingsStore;
 
   beforeEach(() => {
-    db = new FakeD1Database();
-    store = new ScmSettingsStore(db as unknown as D1Database);
+    vi.clearAllMocks();
+    store = new ScmSettingsStore({} as unknown as D1Database);
   });
 
-  it("returns null when global settings are unconfigured", async () => {
-    expect(await store.getGlobal()).toBeNull();
+  it("delegates getGlobal to the 'scm' key", async () => {
+    delegate.getGlobal.mockResolvedValue({ defaults: { alwaysUseDraftMode: true } });
+    const result = await store.getGlobal();
+    expect(delegate.getGlobal).toHaveBeenCalledWith("scm");
+    expect(result).toEqual({ defaults: { alwaysUseDraftMode: true } });
   });
 
-  it("round-trips global settings", async () => {
+  it("delegates setGlobal to the 'scm' key", async () => {
     await store.setGlobal({ defaults: { alwaysUseDraftMode: true } });
-    expect(await store.getGlobal()).toEqual({ defaults: { alwaysUseDraftMode: true } });
+    expect(delegate.setGlobal).toHaveBeenCalledWith("scm", {
+      defaults: { alwaysUseDraftMode: true },
+    });
   });
 
-  it("round-trips per-repo settings (lowercasing the repo key)", async () => {
+  it("delegates per-repo reads, writes, lists, and deletes to the 'scm' key", async () => {
+    delegate.getRepoSettings.mockResolvedValue({ alwaysUseDraftMode: false });
+    delegate.listRepoSettings.mockResolvedValue([
+      { repo: "acme/web", settings: { alwaysUseDraftMode: true } },
+    ]);
+
     await store.setRepoSettings("Acme/Web", { alwaysUseDraftMode: true });
-    expect(await store.getRepoSettings("acme/web")).toEqual({ alwaysUseDraftMode: true });
+    const repoSettings = await store.getRepoSettings("acme/web");
+    const list = await store.listRepoSettings();
+    await store.deleteRepoSettings("acme/web");
+    await store.deleteGlobal();
+
+    expect(delegate.setRepoSettings).toHaveBeenCalledWith("scm", "Acme/Web", {
+      alwaysUseDraftMode: true,
+    });
+    expect(delegate.getRepoSettings).toHaveBeenCalledWith("scm", "acme/web");
+    expect(repoSettings).toEqual({ alwaysUseDraftMode: false });
+    expect(list).toHaveLength(1);
+    expect(delegate.deleteRepoSettings).toHaveBeenCalledWith("scm", "acme/web");
+    expect(delegate.deleteGlobal).toHaveBeenCalledWith("scm");
   });
 
-  it("rejects a non-boolean alwaysUseDraftMode", async () => {
+  it("rejects a non-boolean alwaysUseDraftMode and does not write", async () => {
     await expect(
       store.setGlobal({ defaults: { alwaysUseDraftMode: "yes" as unknown as boolean } })
     ).rejects.toThrow(ScmSettingsValidationError);
     await expect(
       store.setRepoSettings("acme/web", { alwaysUseDraftMode: 1 as unknown as boolean })
     ).rejects.toThrow(ScmSettingsValidationError);
+
+    expect(delegate.setGlobal).not.toHaveBeenCalled();
+    expect(delegate.setRepoSettings).not.toHaveBeenCalled();
   });
 
-  it("stores SCM settings under the 'scm' key, not as an integration", async () => {
-    await store.setGlobal({ defaults: { alwaysUseDraftMode: true } });
-    expect([...db.globalRows.keys()]).toEqual(["scm"]);
-  });
-
-  it("lists repo overrides", async () => {
-    await store.setRepoSettings("acme/web", { alwaysUseDraftMode: true });
-    await store.setRepoSettings("acme/api", { alwaysUseDraftMode: false });
-    const repos = await store.listRepoSettings();
-    expect(repos).toHaveLength(2);
-  });
-
-  it("deletes global and repo settings", async () => {
-    await store.setGlobal({ defaults: { alwaysUseDraftMode: true } });
-    await store.setRepoSettings("acme/web", { alwaysUseDraftMode: true });
-    await store.deleteGlobal();
-    await store.deleteRepoSettings("acme/web");
-    expect(await store.getGlobal()).toBeNull();
-    expect(await store.getRepoSettings("acme/web")).toBeNull();
-  });
-
-  describe("getResolvedSettings", () => {
-    it("falls back to the global default when no repo override exists", async () => {
-      await store.setGlobal({ defaults: { alwaysUseDraftMode: true } });
-      expect(await store.getResolvedSettings("acme/web")).toEqual({ alwaysUseDraftMode: true });
+  it("resolves a repo's effective settings from the underlying merged config", async () => {
+    delegate.getResolvedConfig.mockResolvedValue({
+      enabledRepos: null,
+      settings: { alwaysUseDraftMode: false },
     });
 
-    it("lets a repo override flip the global default", async () => {
-      await store.setGlobal({ defaults: { alwaysUseDraftMode: true } });
-      await store.setRepoSettings("acme/web", { alwaysUseDraftMode: false });
-      expect(await store.getResolvedSettings("acme/web")).toEqual({ alwaysUseDraftMode: false });
-    });
+    const resolved = await store.getResolvedSettings("acme/web");
 
-    it("returns an empty object when nothing is configured", async () => {
-      expect(await store.getResolvedSettings("acme/web")).toEqual({});
-    });
+    expect(delegate.getResolvedConfig).toHaveBeenCalledWith("scm", "acme/web");
+    expect(resolved).toEqual({ alwaysUseDraftMode: false });
+  });
+
+  it("constructs the underlying IntegrationSettingsStore", () => {
+    expect(IntegrationSettingsStore).toHaveBeenCalled();
   });
 });

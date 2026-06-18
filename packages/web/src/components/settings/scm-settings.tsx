@@ -65,11 +65,11 @@ export function ScmSettingsPage() {
 
   return (
     <div>
-      <h2 className="text-xl font-semibold text-foreground mb-1">SCM Settings</h2>
+      <h2 className="text-xl font-semibold text-foreground mb-1">
+        Source Code Management Settings
+      </h2>
       <p className="text-sm text-muted-foreground mb-6">
-        Defaults for pull and merge requests opened by coding sessions. These apply to both GitHub
-        and GitLab repositories, and are separate from the GitHub Bot settings (which control
-        automated PR reviews and comment actions).
+        Defaults for pull and merge requests opened by coding sessions.
       </p>
 
       <GlobalSettingsSection settings={settings} />

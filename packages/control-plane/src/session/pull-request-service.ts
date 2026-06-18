@@ -22,9 +22,8 @@ export interface CreatePullRequestInput {
   promptingAuth: SourceControlAuthContext | null;
   sessionUrl: string;
   /**
-   * Whether to open the PR in draft mode. When undefined, the configured
-   * "always use draft mode" GitHub setting (global default + repo override)
-   * decides. An explicit value always wins over the setting.
+   * Whether to open the PR in draft mode. When configured, the SCM setting
+   * "always use draft mode" overrides.
    */
   draft?: boolean;
 }
@@ -71,9 +70,7 @@ export interface PullRequestServiceDeps {
   appName: string;
   /**
    * Resolves the "always use draft mode" default (global default merged with
-   * repo override) for this session's repository. Used only when the create-PR
-   * request does not specify `draft` explicitly. Defaults to `false` when the
-   * setting store is unavailable.
+   * repo override) for this session's repository.
    */
   resolveAlwaysDraftDefault: () => Promise<boolean>;
 }

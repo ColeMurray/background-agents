@@ -28,12 +28,9 @@ export interface GitHubBotSettings {
 }
 
 /**
- * Source-control (SCM) behavior settings. This is a top-level setting, NOT an
- * integration — it has its own settings section and storage, separate from the
- * integration-settings framework. Provider-agnostic: applies to both GitHub and
- * GitLab. Controls how sessions create pull/merge requests (not the GitHub bot's
- * PR-review/comment automation). Used at both global (defaults) and per-repo
- * (overrides) levels.
+ * Source-control (SCM) behavior settings.
+ *
+ * Provider-agnostic: applies to both GitHub and GitLab.
  */
 export interface ScmSettings {
   /** Always open pull/merge requests created by sessions as drafts. */
@@ -279,8 +276,8 @@ export function matchRoutingRules(message: string, rules: SlackRoutingRule[]): S
 
 /**
  * Maps each settings-store key to its global and per-repo settings types. Keys
- * are the integration IDs plus `scm` — a top-level setting (not an integration)
- * that shares the same generic settings store for storage only.
+ * are the integration IDs plus top-level settings that share the
+ * same generic settings store for storage only.
  */
 export interface IntegrationSettingsMap {
   github: IntegrationEntry<GitHubBotSettings>;
@@ -296,7 +293,6 @@ export type GitHubGlobalConfig = IntegrationSettingsMap["github"]["global"];
 export type LinearGlobalConfig = IntegrationSettingsMap["linear"]["global"];
 export type CodeServerGlobalConfig = IntegrationSettingsMap["code-server"]["global"];
 export type SandboxGlobalConfig = IntegrationSettingsMap["sandbox"]["global"];
-/** Global SCM config (top-level setting, stored in the shared settings store). */
 export type ScmGlobalConfig = IntegrationSettingsMap["scm"]["global"];
 export type SlackGlobalConfig = IntegrationSettingsMap["slack"]["global"];
 
