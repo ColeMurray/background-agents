@@ -41,6 +41,7 @@ import {
 import { RepoImageStore } from "../db/repo-images";
 import { McpServerStore } from "../db/mcp-servers";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
+import { ScmSettingsStore } from "../db/scm-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { DEFAULT_EXECUTION_TIMEOUT_MS } from "../sandbox/lifecycle/decisions";
 import {
@@ -527,9 +528,8 @@ export class SessionDO extends DurableObject<Env> {
     const session = this.getSession();
     if (!session) return false;
     try {
-      const settingsStore = new IntegrationSettingsStore(this.env.DB);
-      const { settings } = await settingsStore.getResolvedConfig(
-        "scm",
+      const scmSettingsStore = new ScmSettingsStore(this.env.DB);
+      const settings = await scmSettingsStore.getResolvedSettings(
         `${session.repo_owner}/${session.repo_name}`
       );
       return settings.alwaysUseDraftMode === true;

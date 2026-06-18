@@ -8,7 +8,6 @@ import {
   isValidReasoningEffort,
   type CodeServerSettings,
   type GitHubBotSettings,
-  type ScmSettings,
   type IntegrationId,
   type LinearBotSettings,
   type SandboxSettings,
@@ -315,20 +314,6 @@ async function handleGetResolvedConfig(
         allowedTriggerUsers: githubSettings.allowedTriggerUsers ?? null,
         codeReviewInstructions: githubSettings.codeReviewInstructions ?? null,
         commentActionInstructions: githubSettings.commentActionInstructions ?? null,
-      },
-    });
-  }
-
-  if (id === "scm") {
-    // scm has no enable/disable-per-repo concept, so `enabledRepos` is omitted
-    // here. This branch exists for parity with the other integrations'
-    // resolved-config endpoints and as a hook for future runtime callers.
-    const scmSettings = settings as ScmSettings;
-    return json({
-      integrationId: id,
-      repo,
-      config: {
-        alwaysUseDraftMode: scmSettings.alwaysUseDraftMode ?? false,
       },
     });
   }

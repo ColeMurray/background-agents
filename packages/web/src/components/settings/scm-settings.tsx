@@ -28,8 +28,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-const GLOBAL_SETTINGS_KEY = "/api/integration-settings/scm";
-const REPO_SETTINGS_KEY = "/api/integration-settings/scm/repos";
+const GLOBAL_SETTINGS_KEY = "/api/scm-settings";
+const REPO_SETTINGS_KEY = "/api/scm-settings/repos";
 
 interface GlobalResponse {
   settings: ScmGlobalConfig | null;
@@ -235,7 +235,7 @@ function RepoOverridesSection({
     const [owner, name] = addingRepo.split("/");
 
     try {
-      const res = await fetch(`/api/integration-settings/scm/repos/${owner}/${name}`, {
+      const res = await fetch(`/api/scm-settings/repos/${owner}/${name}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         // Seed the new override from the current global default so adding one
@@ -305,7 +305,7 @@ function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
     const settings: ScmSettings = { alwaysUseDraftMode };
 
     try {
-      const res = await fetch(`/api/integration-settings/scm/repos/${owner}/${name}`, {
+      const res = await fetch(`/api/scm-settings/repos/${owner}/${name}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ settings }),
@@ -330,7 +330,7 @@ function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
     const [owner, name] = entry.repo.split("/");
 
     try {
-      const res = await fetch(`/api/integration-settings/scm/repos/${owner}/${name}`, {
+      const res = await fetch(`/api/scm-settings/repos/${owner}/${name}`, {
         method: "DELETE",
       });
 

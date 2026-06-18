@@ -2,6 +2,7 @@
 
 import { escapeRegExp } from "../regex";
 
+/** Third-party integrations, each surfaced as a card in the Integrations settings list. */
 export type IntegrationId = "github" | "linear" | "code-server" | "sandbox" | "slack";
 
 /** Enforces the common shape for all integration configurations. */
@@ -27,10 +28,12 @@ export interface GitHubBotSettings {
 }
 
 /**
- * Source-control (SCM) behavior settings. Provider-agnostic — applies to both
- * GitHub and GitLab. These control how sessions create pull/merge requests, not
- * the GitHub bot's PR-review/comment automation. Used at both global (defaults)
- * and per-repo (overrides) levels.
+ * Source-control (SCM) behavior settings. This is a top-level setting, NOT an
+ * integration — it has its own settings section and storage, separate from the
+ * integration-settings framework. Provider-agnostic: applies to both GitHub and
+ * GitLab. Controls how sessions create pull/merge requests (not the GitHub bot's
+ * PR-review/comment automation). Used at both global (defaults) and per-repo
+ * (overrides) levels.
  */
 export interface ScmSettings {
   /** Always open pull/merge requests created by sessions as drafts. */
@@ -274,22 +277,27 @@ export function matchRoutingRules(message: string, rules: SlackRoutingRule[]): S
   });
 }
 
-/** Maps each integration ID to its global and per-repo settings types. */
+/**
+ * Maps each settings-store key to its global and per-repo settings types. Keys
+ * are the integration IDs plus `scm` — a top-level setting (not an integration)
+ * that shares the same generic settings store for storage only.
+ */
 export interface IntegrationSettingsMap {
   github: IntegrationEntry<GitHubBotSettings>;
-  scm: IntegrationEntry<ScmSettings>;
   linear: IntegrationEntry<LinearBotSettings>;
   "code-server": IntegrationEntry<CodeServerSettings>;
   sandbox: IntegrationEntry<SandboxSettings>;
   slack: IntegrationEntry<SlackRepoSettings, SlackGlobalSettings>;
+  scm: IntegrationEntry<ScmSettings>;
 }
 
 /** Derived type for the GitHub bot global config. */
 export type GitHubGlobalConfig = IntegrationSettingsMap["github"]["global"];
-export type ScmGlobalConfig = IntegrationSettingsMap["scm"]["global"];
 export type LinearGlobalConfig = IntegrationSettingsMap["linear"]["global"];
 export type CodeServerGlobalConfig = IntegrationSettingsMap["code-server"]["global"];
 export type SandboxGlobalConfig = IntegrationSettingsMap["sandbox"]["global"];
+/** Global SCM config (top-level setting, stored in the shared settings store). */
+export type ScmGlobalConfig = IntegrationSettingsMap["scm"]["global"];
 export type SlackGlobalConfig = IntegrationSettingsMap["slack"]["global"];
 
 /** Full MCP server config with decrypted credentials. Internal use only. */

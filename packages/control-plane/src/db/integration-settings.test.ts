@@ -878,40 +878,6 @@ describe("IntegrationSettingsStore", () => {
     });
   });
 
-  describe("scm settings", () => {
-    it("round-trips global scm settings", async () => {
-      await store.setGlobal("scm", {
-        defaults: { alwaysUseDraftMode: true },
-      });
-
-      const result = await store.getGlobal("scm");
-      expect(result).toEqual({ defaults: { alwaysUseDraftMode: true } });
-    });
-
-    it("round-trips scm repo settings", async () => {
-      await store.setRepoSettings("scm", "acme/web", { alwaysUseDraftMode: true });
-
-      const result = await store.getRepoSettings("scm", "acme/web");
-      expect(result).toEqual({ alwaysUseDraftMode: true });
-    });
-
-    it("rejects non-boolean alwaysUseDraftMode", async () => {
-      await expect(
-        store.setGlobal("scm", {
-          defaults: { alwaysUseDraftMode: "yes" as unknown as boolean },
-        })
-      ).rejects.toThrow(IntegrationSettingsValidationError);
-    });
-
-    it("lets a repo override flip the global draft default", async () => {
-      await store.setGlobal("scm", { defaults: { alwaysUseDraftMode: true } });
-      await store.setRepoSettings("scm", "acme/web", { alwaysUseDraftMode: false });
-
-      const config = await store.getResolvedConfig("scm", "acme/web");
-      expect(config.settings).toEqual({ alwaysUseDraftMode: false });
-    });
-  });
-
   describe("slack settings", () => {
     it("round-trips global slack settings", async () => {
       await store.setGlobal("slack", {
