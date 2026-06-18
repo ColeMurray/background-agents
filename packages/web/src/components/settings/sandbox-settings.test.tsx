@@ -205,6 +205,88 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     });
   });
 
+  it("includes configured code-server and terminal ports in the save payload", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: { [SETTINGS_KEY]: globalSettings([], ["acme/app"]) },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    await user.type(screen.getByPlaceholderText("8080"), "8081");
+    await user.type(screen.getByPlaceholderText("7680"), "7000");
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        SETTINGS_KEY,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({
+            settings: {
+              defaults: {
+                tunnelPorts: [],
+                terminalEnabled: false,
+                codeServerPort: 8081,
+                terminalPort: 7000,
+                maxConcurrentChildSessions: DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
+                maxTotalChildSessions: DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+              },
+              enabledRepos: ["acme/app"],
+            },
+          }),
+        })
+      );
+    });
+  });
+
+  it("rejects a service port that duplicates a tunnel port", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({}), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: { [SETTINGS_KEY]: globalSettings([], ["acme/app"]) },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    await user.click(screen.getByText("Add port"));
+    await user.type(screen.getByPlaceholderText("e.g. 3000"), "3000");
+    await user.type(screen.getByPlaceholderText("8080"), "3000");
+    await user.click(screen.getByText("Save Settings"));
+
+    expect(screen.getByText(/must all be different/)).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      SETTINGS_KEY,
+      expect.objectContaining({ method: "PUT" })
+    );
+  });
+
   it("renders child session limits from settings", () => {
     renderWithSWR(
       globalSettings([], undefined, {

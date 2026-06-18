@@ -5,7 +5,8 @@
  * code-server password derivation that previously lived in the Python shim.
  */
 
-import { computeHmacHex, MAX_TUNNEL_PORTS, type SandboxSettings } from "@open-inspect/shared";
+import { computeHmacHex, type SandboxSettings } from "@open-inspect/shared";
+import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
 import type { DaytonaRestClient, DaytonaCreateSandboxParams } from "../daytona-rest-client";
@@ -29,7 +30,6 @@ const log = createLogger("daytona-provider");
 // Constants (ported from packages/daytona-infra/src/config.py)
 // ---------------------------------------------------------------------------
 
-const CODE_SERVER_PORT = 8080;
 const DEFAULT_PREVIEW_EXPIRY_SECONDS = 3900;
 
 // ---------------------------------------------------------------------------
@@ -209,6 +209,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
     if (config.codeServerEnabled) {
       envVars.CODE_SERVER_PASSWORD = await this.deriveCodeServerPassword(config.sandboxId);
+      envVars.CODE_SERVER_PORT = String(resolveServicePorts(config.sandboxSettings).codeServerPort);
     }
 
     if (config.agentSlackNotifyEnabled) {
@@ -261,6 +262,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     tunnelUrls?: Record<string, string>;
   }> {
     const expirySeconds = resolvePreviewExpirySeconds(timeoutSeconds);
+    const { codeServerPort } = resolveServicePorts(sandboxSettings);
     let tunnelPorts = resolveTunnelPorts(sandboxSettings?.tunnelPorts);
     let codeServerUrl: string | undefined;
     let codeServerPassword: string | undefined;
@@ -268,12 +270,12 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     if (codeServerEnabled) {
       const preview = await this.client.getSignedPreviewUrl(
         daytonaSandboxId,
-        CODE_SERVER_PORT,
+        codeServerPort,
         expirySeconds
       );
       codeServerUrl = preview.url;
       codeServerPassword = await this.deriveCodeServerPassword(logicalSandboxId);
-      tunnelPorts = tunnelPorts.filter((p) => p !== CODE_SERVER_PORT);
+      tunnelPorts = tunnelPorts.filter((p) => p !== codeServerPort);
     }
 
     let tunnelUrls: Record<string, string> | undefined;
@@ -329,18 +331,6 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 function resolvePreviewExpirySeconds(timeoutSeconds: number | undefined): number {
   if (!timeoutSeconds) return DEFAULT_PREVIEW_EXPIRY_SECONDS;
   return Math.min(86400, Math.max(900, timeoutSeconds + 300));
-}
-
-function resolveTunnelPorts(rawPorts: number[] | undefined): number[] {
-  if (!rawPorts) return [];
-  const ports: number[] = [];
-  for (const value of rawPorts) {
-    if (Number.isInteger(value) && value >= 1 && value <= 65535) {
-      ports.push(value);
-    }
-    if (ports.length >= MAX_TUNNEL_PORTS) break;
-  }
-  return ports;
 }
 
 // ---------------------------------------------------------------------------

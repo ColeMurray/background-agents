@@ -1,4 +1,9 @@
-import { MAX_TUNNEL_PORTS, type SandboxSettings } from "@open-inspect/shared";
+import {
+  findSandboxPortConflict,
+  MAX_TUNNEL_PORTS,
+  type ConfiguredSandboxPort,
+  type SandboxSettings,
+} from "@open-inspect/shared";
 
 export type InvalidSandboxSettingsBehavior = "throw" | "omit";
 
@@ -56,6 +61,12 @@ export function normalizeSandboxSettings(
     normalizeTunnelPorts(settings.tunnelPorts, reject, result);
   }
 
+  const codeServerPort = normalizePort(settings.codeServerPort, "codeServerPort", reject);
+  if (codeServerPort !== undefined) result.codeServerPort = codeServerPort;
+
+  const terminalPort = normalizePort(settings.terminalPort, "terminalPort", reject);
+  if (terminalPort !== undefined) result.terminalPort = terminalPort;
+
   let maxConcurrentChildSessions = normalizePositiveIntegerSetting(
     settings.maxConcurrentChildSessions,
     "maxConcurrentChildSessions",
@@ -111,7 +122,57 @@ export function normalizeSandboxSettings(
     }
   }
 
+  checkPortCollisions(result, reject);
+
   return result;
+}
+
+function isValidPort(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65535;
+}
+
+function normalizePort(
+  value: unknown,
+  name: string,
+  reject: (message: string) => false
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (!isValidPort(value)) {
+    reject(`${name} must be an integer between 1 and 65535`);
+    return undefined;
+  }
+  return value;
+}
+
+/**
+ * Reject reserved-port use and any port shared across code-server, terminal, and
+ * tunnel ports. Enablement-independent: every configured port must be unique so a
+ * port is never silently dropped at sandbox spawn. The conflict rule itself lives
+ * in `findSandboxPortConflict` (shared with the web settings UI).
+ */
+function checkPortCollisions(result: SandboxSettings, reject: (message: string) => false): void {
+  const ports: ConfiguredSandboxPort[] = [];
+  if (result.codeServerPort !== undefined) {
+    ports.push({ port: result.codeServerPort, label: "codeServerPort" });
+  }
+  if (result.terminalPort !== undefined) {
+    ports.push({ port: result.terminalPort, label: "terminalPort" });
+  }
+  for (const port of result.tunnelPorts ?? []) {
+    ports.push({ port, label: "tunnelPorts" });
+  }
+
+  const conflict = findSandboxPortConflict(ports);
+  if (!conflict) return;
+  if (conflict.kind === "reserved") {
+    reject(
+      `Port ${conflict.port} is reserved for the internal terminal (used by ${conflict.label})`
+    );
+  } else {
+    reject(
+      `Port ${conflict.port} is used more than once across code-server, terminal, and tunnel ports`
+    );
+  }
 }
 
 function normalizeTunnelPorts(
@@ -126,7 +187,7 @@ function normalizeTunnelPorts(
 
   const ports: number[] = [];
   for (const port of value) {
-    if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) {
+    if (!isValidPort(port)) {
       reject(`Invalid port number: ${port}. Must be an integer between 1 and 65535`);
       continue;
     }

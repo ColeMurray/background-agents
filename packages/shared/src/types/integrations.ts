@@ -42,6 +42,59 @@ export interface CodeServerSettings {
 /** Maximum number of tunnel ports a user can configure per sandbox. */
 export const MAX_TUNNEL_PORTS = 10;
 
+/**
+ * Default port code-server binds to inside the sandbox. Mirrors
+ * `CODE_SERVER_PORT` in `packages/sandbox-runtime/src/sandbox_runtime/constants.py`.
+ */
+export const DEFAULT_CODE_SERVER_PORT = 8080;
+
+/**
+ * Default port the web terminal (ttyd) proxy is exposed on. Mirrors
+ * `TTYD_PROXY_PORT` in `packages/sandbox-runtime/src/sandbox_runtime/constants.py`.
+ */
+export const DEFAULT_TERMINAL_PORT = 7680;
+
+/**
+ * Internal ttyd port (localhost-only, behind the proxy). Reserved: it is never
+ * exposed and cannot be chosen as a code-server, terminal, or tunnel port.
+ * Mirrors `TTYD_PORT` in `packages/sandbox-runtime/src/sandbox_runtime/constants.py`.
+ */
+export const INTERNAL_TTYD_PORT = 7681;
+
+/** A configured sandbox port plus where it came from, for conflict diagnostics. */
+export interface ConfiguredSandboxPort {
+  port: number;
+  /** Human-readable source, e.g. "codeServerPort" or "terminal port". */
+  label: string;
+}
+
+/** A port conflict: either the reserved internal port, or a duplicate. */
+export type SandboxPortConflict =
+  | { kind: "reserved"; port: number; label: string }
+  | { kind: "duplicate"; port: number; label: string };
+
+/**
+ * Find the first conflict across configured sandbox ports (code-server,
+ * terminal, and tunnel ports): a port equal to the reserved internal ttyd port
+ * ({@link INTERNAL_TTYD_PORT}), or a port used more than once. Returns null when
+ * every port is usable.
+ *
+ * Enablement-independent — every configured port must be unique so none is
+ * silently dropped at sandbox spawn. Shared by control-plane validation and the
+ * web settings UI so the rule lives in exactly one place.
+ */
+export function findSandboxPortConflict(
+  ports: ConfiguredSandboxPort[]
+): SandboxPortConflict | null {
+  const seen = new Set<number>();
+  for (const { port, label } of ports) {
+    if (port === INTERNAL_TTYD_PORT) return { kind: "reserved", port, label };
+    if (seen.has(port)) return { kind: "duplicate", port, label };
+    seen.add(port);
+  }
+  return null;
+}
+
 /** Default maximum active agent-spawned child sessions per parent session. */
 export const DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS = 5;
 
@@ -62,6 +115,18 @@ export interface SandboxSettings {
   tunnelPorts?: number[];
   /** Enable a browser-based terminal (ttyd) in sandbox sessions. */
   terminalEnabled?: boolean;
+  /**
+   * Port code-server binds to inside the sandbox (only used when code-server is
+   * enabled). Unset → DEFAULT_CODE_SERVER_PORT. Set this to free the default
+   * port for your own service on a tunnel.
+   */
+  codeServerPort?: number;
+  /**
+   * Port the web terminal (ttyd) proxy is exposed on (only used when
+   * `terminalEnabled`). Unset → DEFAULT_TERMINAL_PORT. Ignored by providers
+   * without terminal support.
+   */
+  terminalPort?: number;
   /** Maximum active agent-spawned child sessions per parent session. */
   maxConcurrentChildSessions?: number;
   /** Maximum total agent-spawned child sessions per parent session. */
