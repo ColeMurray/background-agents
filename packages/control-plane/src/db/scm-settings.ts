@@ -19,11 +19,21 @@ export class ScmSettingsValidationError extends Error {
   }
 }
 
-function validateScmSettings(settings: ScmSettings): void {
-  if (
-    settings.alwaysUseDraftMode !== undefined &&
-    typeof settings.alwaysUseDraftMode !== "boolean"
-  ) {
+const ALLOWED_SCM_SETTING_KEYS = new Set(["alwaysUseDraftMode"]);
+
+function validateScmSettings(settings: unknown): asserts settings is ScmSettings {
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+    throw new ScmSettingsValidationError("SCM settings must be an object");
+  }
+
+  for (const key of Object.keys(settings)) {
+    if (!ALLOWED_SCM_SETTING_KEYS.has(key)) {
+      throw new ScmSettingsValidationError(`Unknown SCM setting: ${key}`);
+    }
+  }
+
+  const { alwaysUseDraftMode } = settings as { alwaysUseDraftMode?: unknown };
+  if (alwaysUseDraftMode !== undefined && typeof alwaysUseDraftMode !== "boolean") {
     throw new ScmSettingsValidationError("alwaysUseDraftMode must be a boolean");
   }
 }
@@ -46,6 +56,17 @@ export class ScmSettingsStore {
   }
 
   async setGlobal(config: ScmGlobalConfig): Promise<void> {
+    if (!config || typeof config !== "object" || Array.isArray(config)) {
+      throw new ScmSettingsValidationError("SCM settings must be an object");
+    }
+    // `scm` has no enable/disable-per-repo concept, so only `defaults` is
+    // supported at the global level. Reject anything else (e.g. `enabledRepos`)
+    // rather than silently persisting config that downstream resolution ignores.
+    for (const key of Object.keys(config)) {
+      if (key !== "defaults") {
+        throw new ScmSettingsValidationError(`Unknown SCM global setting: ${key}`);
+      }
+    }
     if (config.defaults) {
       validateScmSettings(config.defaults);
     }

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ScmGlobalConfig, ScmSettings } from "@open-inspect/shared";
 import { ScmSettingsStore, ScmSettingsValidationError } from "./scm-settings";
 import { IntegrationSettingsStore } from "./integration-settings";
 
@@ -76,6 +77,23 @@ describe("ScmSettingsStore", () => {
     await expect(
       store.setRepoSettings("acme/web", { alwaysUseDraftMode: 1 as unknown as boolean })
     ).rejects.toThrow(ScmSettingsValidationError);
+
+    expect(delegate.setGlobal).not.toHaveBeenCalled();
+    expect(delegate.setRepoSettings).not.toHaveBeenCalled();
+  });
+
+  it("rejects unknown keys and unsupported global config and does not write", async () => {
+    await expect(
+      store.setRepoSettings("acme/web", { unexpected: true } as unknown as ScmSettings)
+    ).rejects.toThrow(ScmSettingsValidationError);
+    // `enabledRepos` (and any non-`defaults` global key) is not supported for scm.
+    await expect(
+      store.setGlobal({ enabledRepos: ["acme/web"] } as unknown as ScmGlobalConfig)
+    ).rejects.toThrow(ScmSettingsValidationError);
+    // Arrays are not valid settings objects.
+    await expect(store.setGlobal([] as unknown as ScmGlobalConfig)).rejects.toThrow(
+      ScmSettingsValidationError
+    );
 
     expect(delegate.setGlobal).not.toHaveBeenCalled();
     expect(delegate.setRepoSettings).not.toHaveBeenCalled();
