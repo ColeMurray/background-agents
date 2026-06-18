@@ -9,6 +9,7 @@ import {
   SELECT_REASONING_EFFORT_ACTION_ID,
 } from "./constants";
 import type { AppHomeBlock, AppHomeView, ModelOption, SlackSelectOption } from "./slack-types";
+import { plainTextOption } from "../slack-options";
 
 export interface AppHomeViewState {
   appName: string;
@@ -25,16 +26,6 @@ type ConfiguredRepoOverride = {
   branch: string;
 };
 
-const SELECT_OPTION_TEXT_LIMIT = 75;
-
-function truncateSelectOptionText(text: string): string {
-  if (text.length <= SELECT_OPTION_TEXT_LIMIT) {
-    return text;
-  }
-
-  return `${text.slice(0, SELECT_OPTION_TEXT_LIMIT - 1)}…`;
-}
-
 export function buildAppHomeIntroText(appName: string): string {
   return `Configure your ${appName} preferences below.`;
 }
@@ -47,10 +38,7 @@ export function buildRepoBranchSelectOptions(
     const repoBranch = repoBranchPreferences.get(repo.id);
     const label = repoBranch ? `${repo.fullName} → ${repoBranch}` : repo.fullName;
     return {
-      text: {
-        type: "plain_text" as const,
-        text: truncateSelectOptionText(label),
-      },
+      text: plainTextOption(label),
       value: repo.id,
     };
   });
@@ -58,7 +46,7 @@ export function buildRepoBranchSelectOptions(
 
 function toSelectOption(model: ModelOption): SlackSelectOption {
   return {
-    text: { type: "plain_text", text: truncateSelectOptionText(model.label) },
+    text: plainTextOption(model.label),
     value: model.value,
   };
 }

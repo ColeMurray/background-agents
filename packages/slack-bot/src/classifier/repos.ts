@@ -179,6 +179,19 @@ async function getFromCacheOrFallback(env: Env): Promise<RepoConfig[]> {
 }
 
 /**
+ * Filter repos by a free-text query against their full name (case-insensitive).
+ * Returns all repos when the query is empty — the canonical filter shared by the
+ * clarification picker and the App Home branch picker.
+ */
+export function filterReposByQuery(repos: RepoConfig[], query: string | undefined): RepoConfig[] {
+  const normalizedQuery = query?.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return repos;
+  }
+  return repos.filter((repo) => repo.fullName.toLowerCase().includes(normalizedQuery));
+}
+
+/**
  * Find a repository by owner and name.
  */
 export async function getRepoByFullName(

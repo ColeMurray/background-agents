@@ -5,7 +5,11 @@ export interface ModelOption {
   value: string;
 }
 
-export type SlackSelectOption = { text: SlackPlainText; value: string };
+export type SlackSelectOption = {
+  text: SlackPlainText;
+  description?: SlackPlainText;
+  value: string;
+};
 export type SlackPlainText = { type: "plain_text"; text: string };
 export type SlackMrkdwnText = { type: "mrkdwn"; text: string };
 export type SlackText = SlackPlainText | SlackMrkdwnText;

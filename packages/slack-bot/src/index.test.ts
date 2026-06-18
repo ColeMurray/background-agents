@@ -109,6 +109,41 @@ function makeCtx() {
   } as any;
 }
 
+/** Build N numbered repos (acme/repo-001 …) for picker/suggestion tests. */
+function buildNumberedRepos(count: number) {
+  return Array.from({ length: count }, (_, idx) => {
+    const number = String(idx + 1).padStart(3, "0");
+    return {
+      id: `acme/repo-${number}`,
+      owner: "acme",
+      name: `repo-${number}`,
+      fullName: `acme/repo-${number}`,
+      defaultBranch: "main",
+      private: true,
+    };
+  });
+}
+
+/** Point CONTROL_PLANE.fetch at a fixed repo list (other routes return enabledModels). */
+function mockReposFetch(env: Env, repos: unknown[]) {
+  (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+    async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/repos")) {
+        return new Response(JSON.stringify({ repos }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  );
+}
+
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolver) => {
@@ -1461,34 +1496,8 @@ describe("POST /interactions", () => {
     });
 
     const env = makeEnv();
-    const repos = Array.from({ length: 150 }, (_, idx) => {
-      const number = String(idx + 1).padStart(3, "0");
-      return {
-        id: `acme/repo-${number}`,
-        owner: "acme",
-        name: `repo-${number}`,
-        fullName: `acme/repo-${number}`,
-        defaultBranch: "main",
-        private: true,
-      };
-    });
-
-    (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-      async (input: RequestInfo | URL) => {
-        const url = typeof input === "string" ? input : input.toString();
-        if (url.includes("/repos")) {
-          return new Response(JSON.stringify({ repos }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-
-        return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-    );
+    const repos = buildNumberedRepos(150);
+    mockReposFetch(env, repos);
 
     const ctx = makeCtx();
     const response = await app.fetch(request, env, ctx);
@@ -1505,6 +1514,48 @@ describe("POST /interactions", () => {
         value: "acme/repo-150",
       },
     ]);
+  });
+
+  it("routes a quick-pick button click through repo selection", async () => {
+    const slackFetch = mockSlackFetch([]);
+    const env = makeEnv();
+    // No pending message stored, so repo selection reports it can't find the request —
+    // which proves the quick-pick button routed into the same handler as the picker.
+
+    const payload = {
+      type: "block_actions",
+      user: { id: "U123" },
+      channel: { id: "C123" },
+      message: { ts: "111.222" },
+      actions: [
+        {
+          action_id: "select_repo_quick_pick",
+          value: "acme/app",
+        },
+      ],
+    };
+    const request = new Request("http://localhost/interactions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "x-slack-signature": "v0=test",
+        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
+      },
+      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
+    });
+    const ctx = makeCtx();
+
+    const response = await app.fetch(request, env, ctx);
+    expect(response.status).toBe(200);
+
+    await flushWaitUntil(ctx);
+
+    const postBodies = slackApiBodies(slackFetch, "chat.postMessage");
+    expect(
+      postBodies.some((body) => String(body.text).includes("couldn't find your original request"))
+    ).toBe(true);
+
+    slackFetch.mockRestore();
   });
 
   it("returns all repos (beyond the old 5-item limit) for the repo clarification picker", async () => {
@@ -1526,34 +1577,8 @@ describe("POST /interactions", () => {
     });
 
     const env = makeEnv();
-    const repos = Array.from({ length: 150 }, (_, idx) => {
-      const number = String(idx + 1).padStart(3, "0");
-      return {
-        id: `acme/repo-${number}`,
-        owner: "acme",
-        name: `repo-${number}`,
-        fullName: `acme/repo-${number}`,
-        defaultBranch: "main",
-        private: true,
-      };
-    });
-
-    (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-      async (input: RequestInfo | URL) => {
-        const url = typeof input === "string" ? input : input.toString();
-        if (url.includes("/repos")) {
-          return new Response(JSON.stringify({ repos }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-
-        return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-    );
+    const repos = buildNumberedRepos(150);
+    mockReposFetch(env, repos);
 
     const ctx = makeCtx();
     const response = await app.fetch(request, env, ctx);
@@ -1593,34 +1618,8 @@ describe("POST /interactions", () => {
     });
 
     const env = makeEnv();
-    const repos = Array.from({ length: 150 }, (_, idx) => {
-      const number = String(idx + 1).padStart(3, "0");
-      return {
-        id: `acme/repo-${number}`,
-        owner: "acme",
-        name: `repo-${number}`,
-        fullName: `acme/repo-${number}`,
-        defaultBranch: "main",
-        private: true,
-      };
-    });
-
-    (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-      async (input: RequestInfo | URL) => {
-        const url = typeof input === "string" ? input : input.toString();
-        if (url.includes("/repos")) {
-          return new Response(JSON.stringify({ repos }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-
-        return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-    );
+    const repos = buildNumberedRepos(150);
+    mockReposFetch(env, repos);
 
     const ctx = makeCtx();
     const response = await app.fetch(request, env, ctx);

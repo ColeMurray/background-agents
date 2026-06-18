@@ -11,7 +11,7 @@ import {
   isBranchModalCallbackId,
   saveUserRepoBranchPreference,
 } from "../branch-preferences";
-import { getAvailableRepos } from "../classifier/repos";
+import { filterReposByQuery, getAvailableRepos } from "../classifier/repos";
 import { createLogger } from "../logger";
 import type { Env, SlackInteractionPayload } from "../types";
 import {
@@ -78,11 +78,7 @@ export async function getRepoBranchSuggestionOptions(
     getAvailableRepos(env, traceId),
     getUserRepoBranchPreferences(env, userId),
   ]);
-  const normalizedQuery = query?.trim().toLowerCase();
-
-  const filteredRepos = normalizedQuery
-    ? repos.filter((repo) => repo.fullName.toLowerCase().includes(normalizedQuery))
-    : repos;
+  const filteredRepos = filterReposByQuery(repos, query);
 
   return buildRepoBranchSelectOptions(filteredRepos, repoBranchPreferences).slice(
     0,
@@ -119,9 +115,18 @@ export async function handleAppHomeInteractionRoute(
       return null;
     }
 
-    const options = payload.user?.id
-      ? await getRepoBranchSuggestionOptions(env, payload.user.id, payload.value, traceId)
-      : [];
+    let options: SlackSelectOption[] = [];
+    try {
+      options = payload.user?.id
+        ? await getRepoBranchSuggestionOptions(env, payload.user.id, payload.value, traceId)
+        : [];
+    } catch (e) {
+      // A repo-lookup failure must not surface as a 500 on /interactions.
+      log.error("slack.repo_branch_suggestion_options", {
+        trace_id: traceId,
+        error: e instanceof Error ? e : new Error(String(e)),
+      });
+    }
 
     return {
       body: { options },
