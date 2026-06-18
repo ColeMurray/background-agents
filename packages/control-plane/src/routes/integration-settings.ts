@@ -8,7 +8,7 @@ import {
   isValidReasoningEffort,
   type CodeServerSettings,
   type GitHubBotSettings,
-  type GitHubPrSettings,
+  type ScmSettings,
   type IntegrationId,
   type LinearBotSettings,
   type SandboxSettings,
@@ -319,16 +319,16 @@ async function handleGetResolvedConfig(
     });
   }
 
-  if (id === "github-pr") {
-    // github-pr has no enable/disable-per-repo concept, so `enabledRepos` is
-    // omitted here. This branch exists for parity with the other integrations'
+  if (id === "scm") {
+    // scm has no enable/disable-per-repo concept, so `enabledRepos` is omitted
+    // here. This branch exists for parity with the other integrations'
     // resolved-config endpoints and as a hook for future runtime callers.
-    const githubPrSettings = settings as GitHubPrSettings;
+    const scmSettings = settings as ScmSettings;
     return json({
       integrationId: id,
       repo,
       config: {
-        alwaysUseDraftMode: githubPrSettings.alwaysUseDraftMode ?? false,
+        alwaysUseDraftMode: scmSettings.alwaysUseDraftMode ?? false,
       },
     });
   }

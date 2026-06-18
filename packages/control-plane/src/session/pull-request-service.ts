@@ -201,10 +201,10 @@ export class SessionPullRequestService {
       const fullBody =
         input.body + `\n\n---\n*Created with [${this.deps.appName}](${input.sessionUrl})*`;
 
-      // "Always use draft mode" is a hard policy: when enabled for this repo it
-      // forces every session-created PR to be a draft, regardless of the tool's
-      // `draft` argument. When disabled, an explicit `draft` from the request
-      // decides (defaulting to false).
+      // The "always use draft mode" SCM setting is a hard policy: when enabled
+      // for this repo it forces every session-created PR to be a draft,
+      // regardless of the tool's `draft` argument. When disabled, an explicit
+      // `draft` from the request decides (defaulting to false).
       const alwaysDraft = await this.deps.resolveAlwaysDraftDefault();
       const draft = alwaysDraft || (input.draft ?? false);
 

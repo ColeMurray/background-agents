@@ -5,10 +5,10 @@ import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import {
   type EnrichedRepository,
-  type GitHubPrSettings,
-  type GitHubPrGlobalConfig,
+  type ScmSettings,
+  type ScmGlobalConfig,
 } from "@open-inspect/shared";
-import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
+import { IntegrationSettingsSkeleton } from "./integrations/integration-settings-skeleton";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -28,16 +28,16 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-const GLOBAL_SETTINGS_KEY = "/api/integration-settings/github-pr";
-const REPO_SETTINGS_KEY = "/api/integration-settings/github-pr/repos";
+const GLOBAL_SETTINGS_KEY = "/api/integration-settings/scm";
+const REPO_SETTINGS_KEY = "/api/integration-settings/scm/repos";
 
 interface GlobalResponse {
-  settings: GitHubPrGlobalConfig | null;
+  settings: ScmGlobalConfig | null;
 }
 
 interface RepoSettingsEntry {
   repo: string;
-  settings: GitHubPrSettings;
+  settings: ScmSettings;
 }
 
 interface RepoListResponse {
@@ -48,7 +48,7 @@ interface ReposResponse {
   repos: EnrichedRepository[];
 }
 
-export function GitHubPrIntegrationSettings() {
+export function ScmSettingsPage() {
   const { data: globalData, isLoading: globalLoading } =
     useSWR<GlobalResponse>(GLOBAL_SETTINGS_KEY);
   const { data: repoSettingsData, isLoading: repoSettingsLoading } =
@@ -65,10 +65,11 @@ export function GitHubPrIntegrationSettings() {
 
   return (
     <div>
-      <h3 className="text-lg font-semibold text-foreground mb-1">GitHub</h3>
+      <h2 className="text-xl font-semibold text-foreground mb-1">SCM Settings</h2>
       <p className="text-sm text-muted-foreground mb-6">
-        Defaults for pull requests opened by coding sessions. These are separate from the GitHub Bot
-        settings, which control automated PR reviews and comment actions.
+        Defaults for pull and merge requests opened by coding sessions. These apply to both GitHub
+        and GitLab repositories, and are separate from the GitHub Bot settings (which control
+        automated PR reviews and comment actions).
       </p>
 
       <GlobalSettingsSection settings={settings} />
@@ -87,11 +88,7 @@ export function GitHubPrIntegrationSettings() {
   );
 }
 
-function GlobalSettingsSection({
-  settings,
-}: {
-  settings: GitHubPrGlobalConfig | null | undefined;
-}) {
+function GlobalSettingsSection({ settings }: { settings: ScmGlobalConfig | null | undefined }) {
   const [alwaysUseDraftMode, setAlwaysUseDraftMode] = useState(
     settings?.defaults?.alwaysUseDraftMode ?? false
   );
@@ -136,8 +133,8 @@ function GlobalSettingsSection({
   const handleSave = async () => {
     setSaving(true);
 
-    const defaults: GitHubPrSettings = { alwaysUseDraftMode };
-    const body: GitHubPrGlobalConfig = { defaults };
+    const defaults: ScmSettings = { alwaysUseDraftMode };
+    const body: ScmGlobalConfig = { defaults };
 
     try {
       const res = await fetch(GLOBAL_SETTINGS_KEY, {
@@ -164,14 +161,14 @@ function GlobalSettingsSection({
   return (
     <Section
       title="Defaults"
-      description="Apply to pull requests created by sessions across all repositories."
+      description="Apply to pull and merge requests created by sessions across all repositories."
     >
       <div className="mb-4">
         <label className="flex items-center justify-between px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
           <div>
             <span className="font-medium text-foreground">Always use draft mode</span>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Open new pull requests as drafts by default
+              Always open pull and merge requests as drafts
             </p>
           </div>
           <input
@@ -203,7 +200,8 @@ function GlobalSettingsSection({
           <AlertDialogHeader>
             <AlertDialogTitle>Reset to defaults</AlertDialogTitle>
             <AlertDialogDescription>
-              Reset the global pull request defaults? Per-repository overrides will not be affected.
+              Reset the global pull/merge request defaults? Per-repository overrides will not be
+              affected.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -237,7 +235,7 @@ function RepoOverridesSection({
     const [owner, name] = addingRepo.split("/");
 
     try {
-      const res = await fetch(`/api/integration-settings/github-pr/repos/${owner}/${name}`, {
+      const res = await fetch(`/api/integration-settings/scm/repos/${owner}/${name}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         // Seed the new override from the current global default so adding one
@@ -304,10 +302,10 @@ function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
     setSaving(true);
 
     const [owner, name] = entry.repo.split("/");
-    const settings: GitHubPrSettings = { alwaysUseDraftMode };
+    const settings: ScmSettings = { alwaysUseDraftMode };
 
     try {
-      const res = await fetch(`/api/integration-settings/github-pr/repos/${owner}/${name}`, {
+      const res = await fetch(`/api/integration-settings/scm/repos/${owner}/${name}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ settings }),
@@ -332,7 +330,7 @@ function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
     const [owner, name] = entry.repo.split("/");
 
     try {
-      const res = await fetch(`/api/integration-settings/github-pr/repos/${owner}/${name}`, {
+      const res = await fetch(`/api/integration-settings/scm/repos/${owner}/${name}`, {
         method: "DELETE",
       });
 

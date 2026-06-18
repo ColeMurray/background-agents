@@ -27,12 +27,13 @@ export interface GitHubBotSettings {
 }
 
 /**
- * GitHub pull request behavior settings. Distinct from the GitHub bot integration:
- * these control how sessions create PRs, not PR-review/comment automation. Used at
- * both global (defaults) and per-repo (overrides) levels.
+ * Source-control (SCM) behavior settings. Provider-agnostic — applies to both
+ * GitHub and GitLab. These control how sessions create pull/merge requests, not
+ * the GitHub bot's PR-review/comment automation. Used at both global (defaults)
+ * and per-repo (overrides) levels.
  */
-export interface GitHubPrSettings {
-  /** Open pull requests created by sessions in draft mode by default. */
+export interface ScmSettings {
+  /** Always open pull/merge requests created by sessions as drafts. */
   alwaysUseDraftMode?: boolean;
 }
 
@@ -276,7 +277,7 @@ export function matchRoutingRules(message: string, rules: SlackRoutingRule[]): S
 /** Maps each integration ID to its global and per-repo settings types. */
 export interface IntegrationSettingsMap {
   github: IntegrationEntry<GitHubBotSettings>;
-  "github-pr": IntegrationEntry<GitHubPrSettings>;
+  scm: IntegrationEntry<ScmSettings>;
   linear: IntegrationEntry<LinearBotSettings>;
   "code-server": IntegrationEntry<CodeServerSettings>;
   sandbox: IntegrationEntry<SandboxSettings>;
@@ -285,7 +286,7 @@ export interface IntegrationSettingsMap {
 
 /** Derived type for the GitHub bot global config. */
 export type GitHubGlobalConfig = IntegrationSettingsMap["github"]["global"];
-export type GitHubPrGlobalConfig = IntegrationSettingsMap["github-pr"]["global"];
+export type ScmGlobalConfig = IntegrationSettingsMap["scm"]["global"];
 export type LinearGlobalConfig = IntegrationSettingsMap["linear"]["global"];
 export type CodeServerGlobalConfig = IntegrationSettingsMap["code-server"]["global"];
 export type SandboxGlobalConfig = IntegrationSettingsMap["sandbox"]["global"];
@@ -326,11 +327,6 @@ export const INTEGRATION_DEFINITIONS: {
     id: "github",
     name: "GitHub Bot",
     description: "Automated PR reviews and comment-triggered actions",
-  },
-  {
-    id: "github-pr",
-    name: "GitHub",
-    description: "Pull request defaults for coding sessions, like opening PRs as draft",
   },
   {
     id: "linear",

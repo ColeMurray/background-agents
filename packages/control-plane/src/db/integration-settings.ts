@@ -1,7 +1,7 @@
 import {
   isValidModel,
   isValidReasoningEffort,
-  INTEGRATION_DEFINITIONS,
+  INTEGRATION_IDS,
   DEFAULT_MENTIONS_POLICY,
   MAX_SLACK_ROUTING_RULES,
   MAX_SLACK_ROUTING_KEYWORD_LENGTH,
@@ -9,7 +9,7 @@ import {
   type IntegrationId,
   type IntegrationSettingsMap,
   type GitHubBotSettings,
-  type GitHubPrSettings,
+  type ScmSettings,
   type LinearBotSettings,
   type CodeServerSettings,
   type SlackGlobalSettings,
@@ -29,7 +29,7 @@ export class IntegrationSettingsValidationError extends Error {
   }
 }
 
-const VALID_INTEGRATION_IDS = new Set<string>(INTEGRATION_DEFINITIONS.map((d) => d.id));
+const VALID_INTEGRATION_IDS = new Set<string>(INTEGRATION_IDS);
 
 export function isValidIntegrationId(id: string): id is IntegrationId {
   return VALID_INTEGRATION_IDS.has(id);
@@ -223,8 +223,8 @@ export class IntegrationSettingsStore {
       ) as IntegrationSettingsMap[K]["repo"];
     }
 
-    if (integrationId === "github-pr") {
-      this.validateGitHubPrSettings(settings as GitHubPrSettings);
+    if (integrationId === "scm") {
+      this.validateScmSettings(settings as ScmSettings);
     }
 
     if (integrationId === "linear") {
@@ -303,7 +303,7 @@ export class IntegrationSettingsStore {
     return settings;
   }
 
-  private validateGitHubPrSettings(settings: GitHubPrSettings): void {
+  private validateScmSettings(settings: ScmSettings): void {
     if (
       settings.alwaysUseDraftMode !== undefined &&
       typeof settings.alwaysUseDraftMode !== "boolean"

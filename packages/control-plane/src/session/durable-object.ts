@@ -518,7 +518,7 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
-   * Resolves the "always use draft mode" GitHub setting (global default merged
+   * Resolves the "always use draft mode" SCM setting (global default merged
    * with the per-repo override) for this session's repository. Returns false
    * when D1 is unavailable so PR creation never blocks on settings.
    */
@@ -529,7 +529,7 @@ export class SessionDO extends DurableObject<Env> {
     try {
       const settingsStore = new IntegrationSettingsStore(this.env.DB);
       const { settings } = await settingsStore.getResolvedConfig(
-        "github-pr",
+        "scm",
         `${session.repo_owner}/${session.repo_name}`
       );
       return settings.alwaysUseDraftMode === true;
