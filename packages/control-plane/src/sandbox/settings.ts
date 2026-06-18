@@ -149,29 +149,50 @@ function normalizePort(
  * tunnel ports. Enablement-independent: every configured port must be unique so a
  * port is never silently dropped at sandbox spawn. The conflict rule itself lives
  * in `findSandboxPortConflict` (shared with the web settings UI).
+ *
+ * In `invalid: "omit"` mode `reject` returns instead of throwing, so we actively
+ * drop the offending port and re-check until the result is collision-free. This
+ * matters at the merged global+repo boundary (`getResolvedConfig`), which
+ * normalizes in omit mode — a surviving collision would otherwise reach providers
+ * and be silently dropped again at spawn.
  */
 function checkPortCollisions(result: SandboxSettings, reject: (message: string) => false): void {
-  const ports: ConfiguredSandboxPort[] = [];
-  if (result.codeServerPort !== undefined) {
-    ports.push({ port: result.codeServerPort, label: "codeServerPort" });
-  }
-  if (result.terminalPort !== undefined) {
-    ports.push({ port: result.terminalPort, label: "terminalPort" });
-  }
-  for (const port of result.tunnelPorts ?? []) {
-    ports.push({ port, label: "tunnelPorts" });
-  }
+  for (;;) {
+    const ports: ConfiguredSandboxPort[] = [];
+    if (result.codeServerPort !== undefined) {
+      ports.push({ port: result.codeServerPort, label: "codeServerPort" });
+    }
+    if (result.terminalPort !== undefined) {
+      ports.push({ port: result.terminalPort, label: "terminalPort" });
+    }
+    for (const port of result.tunnelPorts ?? []) {
+      ports.push({ port, label: "tunnelPorts" });
+    }
 
-  const conflict = findSandboxPortConflict(ports);
-  if (!conflict) return;
-  if (conflict.kind === "reserved") {
+    const conflict = findSandboxPortConflict(ports);
+    if (!conflict) return;
+
     reject(
-      `Port ${conflict.port} is reserved for the internal terminal (used by ${conflict.label})`
+      conflict.kind === "reserved"
+        ? `Port ${conflict.port} is reserved for the internal terminal (used by ${conflict.label})`
+        : `Port ${conflict.port} is used more than once across code-server, terminal, and tunnel ports`
     );
-  } else {
-    reject(
-      `Port ${conflict.port} is used more than once across code-server, terminal, and tunnel ports`
-    );
+
+    // Reached only in omit mode (throw mode already threw). Drop the offending
+    // port and re-check; removing a port never creates a new conflict, so this
+    // terminates. Service ports listed first win; conflicting tunnels are dropped.
+    if (conflict.label === "codeServerPort") {
+      delete result.codeServerPort;
+    } else if (conflict.label === "terminalPort") {
+      delete result.terminalPort;
+    } else {
+      const remaining = (result.tunnelPorts ?? []).filter((p) => p !== conflict.port);
+      if (remaining.length > 0) {
+        result.tunnelPorts = remaining;
+      } else {
+        delete result.tunnelPorts;
+      }
+    }
   }
 }
 

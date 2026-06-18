@@ -91,4 +91,27 @@ describe("normalizeSandboxSettings", () => {
       tunnelPorts: [8080],
     });
   });
+
+  it("drops colliding ports in omit mode so the merged config stays conflict-free", () => {
+    // Mirrors getResolvedConfig: a global service port and a repo tunnel port can
+    // merge into a collision that must not survive omit-mode normalization (or it
+    // would be silently dropped again at sandbox spawn).
+    expect(
+      normalizeSandboxSettings(
+        { codeServerPort: 9000, tunnelPorts: [9000, 3000] },
+        { invalid: "omit" }
+      )
+    ).toEqual({
+      codeServerPort: 9000,
+      tunnelPorts: [3000],
+    });
+  });
+
+  it("drops the reserved internal terminal port from tunnels in omit mode", () => {
+    expect(
+      normalizeSandboxSettings({ tunnelPorts: [INTERNAL_TTYD_PORT, 3000] }, { invalid: "omit" })
+    ).toEqual({
+      tunnelPorts: [3000],
+    });
+  });
 });

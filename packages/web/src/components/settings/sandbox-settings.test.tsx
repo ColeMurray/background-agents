@@ -181,7 +181,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     );
 
     await user.click(screen.getByText("Add port"));
-    await user.type(screen.getByPlaceholderText("e.g. 3000"), "8080");
+    await user.type(screen.getByPlaceholderText("e.g. 3000"), "3000");
     await user.click(screen.getByText("Save Settings"));
 
     await waitFor(() => {
@@ -192,7 +192,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
           body: JSON.stringify({
             settings: {
               defaults: {
-                tunnelPorts: [8080],
+                tunnelPorts: [3000],
                 terminalEnabled: false,
                 maxConcurrentChildSessions: DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
                 maxTotalChildSessions: DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
@@ -285,6 +285,89 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
       SETTINGS_KEY,
       expect.objectContaining({ method: "PUT" })
     );
+  });
+
+  it("rejects a tunnel port that collides with a blank service port's default", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({}), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: { [SETTINGS_KEY]: globalSettings([], ["acme/app"]) },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    // Code-server port left blank → effective default 8080, so tunneling 8080 collides.
+    await user.click(screen.getByText("Add port"));
+    await user.type(screen.getByPlaceholderText("e.g. 3000"), "8080");
+    await user.click(screen.getByText("Save Settings"));
+
+    expect(screen.getByText(/must all be different/)).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      SETTINGS_KEY,
+      expect.objectContaining({ method: "PUT" })
+    );
+  });
+
+  it("allows tunneling a default port once its service port is moved", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: { [SETTINGS_KEY]: globalSettings([], ["acme/app"]) },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    // Move code-server off 8080, then 8080 is free to tunnel.
+    await user.type(screen.getByPlaceholderText("8080"), "8081");
+    await user.click(screen.getByText("Add port"));
+    await user.type(screen.getByPlaceholderText("e.g. 3000"), "8080");
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        SETTINGS_KEY,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({
+            settings: {
+              defaults: {
+                tunnelPorts: [8080],
+                terminalEnabled: false,
+                codeServerPort: 8081,
+                maxConcurrentChildSessions: DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
+                maxTotalChildSessions: DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+              },
+              enabledRepos: ["acme/app"],
+            },
+          }),
+        })
+      );
+    });
   });
 
   it("renders child session limits from settings", () => {

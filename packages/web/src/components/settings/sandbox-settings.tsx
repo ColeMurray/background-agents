@@ -249,16 +249,27 @@ function SandboxSettingsEditor({
       return;
     }
 
-    const configuredPorts: ConfiguredSandboxPort[] = ports.map((port) => ({
-      port,
-      label: "tunnel port",
-    }));
-    if (trimmedCodeServerPort !== "") {
-      configuredPorts.push({ port: Number(trimmedCodeServerPort), label: "code server port" });
-    }
-    if (trimmedTerminalPort !== "") {
-      configuredPorts.push({ port: Number(trimmedTerminalPort), label: "terminal port" });
-    }
+    // Validate against the EFFECTIVE service ports the runtime will bind: an
+    // explicit value, else (at repo scope) the inherited global default, else the
+    // shared default. A blank field still occupies its default port, so a tunnel
+    // on 8080/7680 must be caught here just like an explicit collision.
+    const effectiveCodeServerPort =
+      trimmedCodeServerPort !== ""
+        ? Number(trimmedCodeServerPort)
+        : isGlobal
+          ? DEFAULT_CODE_SERVER_PORT
+          : (globalDefaults?.codeServerPort ?? DEFAULT_CODE_SERVER_PORT);
+    const effectiveTerminalPort =
+      trimmedTerminalPort !== ""
+        ? Number(trimmedTerminalPort)
+        : isGlobal
+          ? DEFAULT_TERMINAL_PORT
+          : (globalDefaults?.terminalPort ?? DEFAULT_TERMINAL_PORT);
+    const configuredPorts: ConfiguredSandboxPort[] = [
+      ...ports.map((port) => ({ port, label: "tunnel port" })),
+      { port: effectiveCodeServerPort, label: "code server port" },
+      { port: effectiveTerminalPort, label: "terminal port" },
+    ];
     const portConflict = findSandboxPortConflict(configuredPorts);
     if (portConflict) {
       setError(
@@ -359,6 +370,8 @@ function SandboxSettingsEditor({
     repoSettings?.maxTotalChildSessions,
     repoSettings?.cpuCores,
     repoSettings?.memoryMib,
+    globalDefaults?.codeServerPort,
+    globalDefaults?.terminalPort,
   ]);
 
   const hasPortChanges =
