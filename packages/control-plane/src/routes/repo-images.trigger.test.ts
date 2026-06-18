@@ -1,24 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createRequestMetrics } from "../db/instrumented-d1";
+import { RepoImageStore } from "../db/repo-images";
 import { repoImageRoutes } from "./repo-images";
 import type { Env } from "../types";
 import type { RequestContext, Route } from "./shared";
 import type { RepositoryAccessResult } from "../source-control";
 import type * as SourceControlModule from "../source-control";
 import type * as SandboxClientModule from "../sandbox/client";
+import type * as VercelProviderModule from "../sandbox/providers/vercel/provider";
+import type * as VercelClientModule from "../sandbox/providers/vercel/client";
 
 // handleTriggerBuild resolves the repo's actual default branch (never assumes
-// "main") and threads it into the build record + the Modal build backend. These
-// tests pin that contract: the resolved branch must flow through, and a repo
-// that can't be resolved must fail the trigger instead of silently building the
-// wrong branch.
+// "main") and threads it into the build record + the build backend. The #757
+// regression hardcoded "main" in BOTH the Modal and Vercel branches, so these
+// tests pin the resolved branch reaching the persisted build and each backend,
+// and that a repo which can't be resolved fails instead of building "main".
 
 const scmProvider = vi.hoisted(() => ({
   checkRepositoryAccess: vi.fn(),
+  generateCredentialHelperAuth: vi.fn(),
 }));
 
 const modalClient = vi.hoisted(() => ({
   buildRepoImage: vi.fn(),
+}));
+
+const vercelProvider = vi.hoisted(() => ({
+  triggerRepoImageBuild: vi.fn(),
 }));
 
 vi.mock("../source-control", async (importOriginal) => {
@@ -37,10 +45,30 @@ vi.mock("../sandbox/client", async (importOriginal) => {
   };
 });
 
+vi.mock("../sandbox/providers/vercel/provider", async (importOriginal) => {
+  const actual = await importOriginal<typeof VercelProviderModule>();
+  return {
+    ...actual,
+    createVercelProvider: vi.fn(() => vercelProvider),
+  };
+});
+
+vi.mock("../sandbox/providers/vercel/client", async (importOriginal) => {
+  const actual = await importOriginal<typeof VercelClientModule>();
+  return {
+    ...actual,
+    createVercelSandboxClient: vi.fn(() => ({})),
+  };
+});
+
 const TRIGGER_PATH = "/repo-images/trigger/acme/repo";
 
 function triggerRoute(): Route {
-  const route = repoImageRoutes.find((candidate) => candidate.pattern.test(TRIGGER_PATH));
+  // Match on method as well as pattern so a same-pattern route of another
+  // method (or a reordering) can never resolve to the wrong handler.
+  const route = repoImageRoutes.find(
+    (candidate) => candidate.method === "POST" && candidate.pattern.test(TRIGGER_PATH)
+  );
   if (!route) throw new Error("trigger route not found");
   return route;
 }
@@ -62,29 +90,9 @@ function createContext(): RequestContext {
   };
 }
 
-interface RecordedRun {
-  sql: string;
-  args: unknown[];
-}
-
-function createRecordingDb(runs: RecordedRun[]): D1Database {
+function createModalEnv(): Env {
   return {
-    prepare: (sql: string) => ({
-      bind: (...args: unknown[]) => ({
-        run: async () => {
-          runs.push({ sql, args });
-          return { meta: { changes: 1 } };
-        },
-        first: async () => null,
-        all: async () => ({ results: [] }),
-      }),
-    }),
-  } as unknown as D1Database;
-}
-
-function createEnv(db: D1Database): Env {
-  return {
-    DB: db,
+    DB: {} as unknown as D1Database,
     SANDBOX_PROVIDER: "modal",
     WORKER_URL: "https://cp.test",
     MODAL_API_SECRET: "modal-secret",
@@ -92,32 +100,54 @@ function createEnv(db: D1Database): Env {
   } as Env;
 }
 
-async function callTrigger(runs: RecordedRun[]): Promise<Response> {
+function createVercelEnv(): Env {
+  return {
+    DB: {} as unknown as D1Database,
+    SANDBOX_PROVIDER: "vercel",
+    SCM_PROVIDER: "github",
+    WORKER_URL: "https://cp.test",
+    INTERNAL_CALLBACK_SECRET: "callback-secret",
+    VERCEL_TOKEN: "vercel-token",
+    VERCEL_PROJECT_ID: "project-123",
+  } as Env;
+}
+
+async function callTrigger(env: Env): Promise<Response> {
   return triggerRoute().handler(
     new Request(`https://test.local${TRIGGER_PATH}`, { method: "POST" }),
-    createEnv(createRecordingDb(runs)),
+    env,
     triggerMatch(),
     createContext()
   );
 }
 
+const RESOLVED_REPO: RepositoryAccessResult = {
+  repoId: 123,
+  repoOwner: "acme",
+  repoName: "repo",
+  defaultBranch: "develop",
+};
+
 describe("POST /repo-images/trigger/:owner/:name", () => {
+  // Spy the store boundary so the test asserts the typed registerBuild contract
+  // rather than the store's SQL text or bound-argument order.
+  const registerBuildSpy = vi.spyOn(RepoImageStore.prototype, "registerBuild");
+
   beforeEach(() => {
     vi.clearAllMocks();
+    registerBuildSpy.mockResolvedValue(undefined);
     modalClient.buildRepoImage.mockResolvedValue(undefined);
+    vercelProvider.triggerRepoImageBuild.mockResolvedValue(undefined);
+    scmProvider.generateCredentialHelperAuth.mockResolvedValue({
+      username: "x-access-token",
+      password: "clone-token",
+    });
   });
 
-  it("resolves the repository's default branch and threads it into the build", async () => {
-    const resolved: RepositoryAccessResult = {
-      repoId: 123,
-      repoOwner: "acme",
-      repoName: "repo",
-      defaultBranch: "develop",
-    };
-    scmProvider.checkRepositoryAccess.mockResolvedValue(resolved);
+  it("threads the resolved default branch into the Modal build backend", async () => {
+    scmProvider.checkRepositoryAccess.mockResolvedValue(RESOLVED_REPO);
 
-    const runs: RecordedRun[] = [];
-    const response = await callTrigger(runs);
+    const response = await callTrigger(createModalEnv());
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
@@ -131,7 +161,7 @@ describe("POST /repo-images/trigger/:owner/:name", () => {
       name: "repo",
     });
 
-    // The resolved branch — not "main" — reaches the Modal build backend...
+    // The resolved branch — not "main" — reaches the Modal backend...
     expect(modalClient.buildRepoImage).toHaveBeenCalledTimes(1);
     expect(modalClient.buildRepoImage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -142,32 +172,66 @@ describe("POST /repo-images/trigger/:owner/:name", () => {
       expect.any(Object)
     );
 
-    // ...and is persisted as the build's base_branch.
-    const insert = runs.find((run) => run.sql.includes("INSERT INTO repo_images"));
-    expect(insert).toBeDefined();
-    expect(insert?.args).toContain("develop");
-    expect(insert?.args).not.toContain("main");
+    // ...and is persisted as the build's base branch.
+    expect(registerBuildSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoOwner: "acme",
+        repoName: "repo",
+        provider: "modal",
+        baseBranch: "develop",
+      })
+    );
+  });
+
+  it("threads the resolved default branch into the Vercel build backend", async () => {
+    scmProvider.checkRepositoryAccess.mockResolvedValue(RESOLVED_REPO);
+
+    const response = await callTrigger(createVercelEnv());
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      buildId: expect.stringContaining("img-acme-repo-"),
+      status: "building",
+    });
+
+    // The resolved branch reaches the Vercel backend...
+    expect(vercelProvider.triggerRepoImageBuild).toHaveBeenCalledTimes(1);
+    expect(vercelProvider.triggerRepoImageBuild).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoOwner: "acme",
+        repoName: "repo",
+        defaultBranch: "develop",
+      })
+    );
+
+    // ...and is persisted as the build's base branch.
+    expect(registerBuildSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoOwner: "acme",
+        repoName: "repo",
+        provider: "vercel",
+        baseBranch: "develop",
+      })
+    );
   });
 
   it("returns 404 without building when the repository is not installed", async () => {
     scmProvider.checkRepositoryAccess.mockResolvedValue(null);
 
-    const runs: RecordedRun[] = [];
-    const response = await callTrigger(runs);
+    const response = await callTrigger(createModalEnv());
 
     expect(response.status).toBe(404);
     expect(modalClient.buildRepoImage).not.toHaveBeenCalled();
-    expect(runs.find((run) => run.sql.includes("INSERT INTO repo_images"))).toBeUndefined();
+    expect(registerBuildSpy).not.toHaveBeenCalled();
   });
 
   it("returns 500 without building when repository resolution fails", async () => {
     scmProvider.checkRepositoryAccess.mockRejectedValue(new Error("github unavailable"));
 
-    const runs: RecordedRun[] = [];
-    const response = await callTrigger(runs);
+    const response = await callTrigger(createModalEnv());
 
     expect(response.status).toBe(500);
     expect(modalClient.buildRepoImage).not.toHaveBeenCalled();
-    expect(runs.find((run) => run.sql.includes("INSERT INTO repo_images"))).toBeUndefined();
+    expect(registerBuildSpy).not.toHaveBeenCalled();
   });
 });
