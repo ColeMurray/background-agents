@@ -471,20 +471,63 @@ class SandboxSupervisor:
                     continue
                 shutil.copy(tool_file, tool_dest / tool_file.name)
 
-        # Copy pre-built deps (package.json, package-lock.json, node_modules)
-        # from the image staging directory.  This gives OpenCode a lockfile
-        # that matches the declared dependencies so Npm.install() finds
-        # everything in sync and skips arborist reify() entirely.
-        deps_cache = Path("/app/opencode-deps")
+        # Copy pre-built deps (package.json, package-lock.json, node_modules) from the image
+        # staging directory so OpenCode's Npm.install() finds the tree in sync and skips the
+        # arborist reify() that would otherwise block the first request.
+        self._stage_opencode_deps(Path("/app/opencode-deps"), opencode_dir)
+
+    @staticmethod
+    def _stage_opencode_deps(deps_cache: Path, dest_dir: Path) -> None:
+        """Copy the pre-staged OpenCode plugin deps into dest_dir.
+
+        Copies package.json, package-lock.json and node_modules from the image staging
+        directory (base.py's /app/opencode-deps) into dest_dir, per file and only when the
+        destination is absent. This gives OpenCode a lockfile that matches node_modules so
+        Npm.install() finds @opencode-ai/plugin in sync and skips the arborist reify() that
+        would otherwise block the first request.
+        """
         for name in ("package.json", "package-lock.json"):
             src = deps_cache / name
-            dest = opencode_dir / name
+            dest = dest_dir / name
             if src.exists() and not dest.exists():
                 shutil.copy2(src, dest)
         cached_modules = deps_cache / "node_modules"
-        local_modules = opencode_dir / "node_modules"
+        local_modules = dest_dir / "node_modules"
         if cached_modules.is_dir() and not local_modules.exists():
             shutil.copytree(cached_modules, local_modules, symlinks=True)
+
+    @staticmethod
+    def _resolve_opencode_global_config_dir() -> Path:
+        """Resolve OpenCode's global config directory the way OpenCode does.
+
+        OpenCode (via xdg-basedir) uses OPENCODE_CONFIG_DIR when set, otherwise
+        $XDG_CONFIG_HOME/opencode, otherwise ~/.config/opencode.
+        """
+        override = os.environ.get("OPENCODE_CONFIG_DIR")
+        if override:
+            return Path(override)
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        base = Path(xdg) if xdg else Path.home() / ".config"
+        return base / "opencode"
+
+    def _seed_global_opencode_deps(self) -> None:
+        """Pre-seed OpenCode's global config dir with the staged plugin tree.
+
+        On startup OpenCode bootstraps every directory in its config search path and forks
+        ``npm install @opencode-ai/plugin`` for each. The global config dir is created empty and
+        is never seeded by _install_tools (which only covers the repo's .opencode/), so with a
+        plugin configured the first POST /session blocks on an arborist reify() of that empty
+        directory. Seeding it here makes the reify a no-op for every session.
+        """
+        deps_cache = Path("/app/opencode-deps")
+        if not deps_cache.is_dir():
+            return
+        config_dir = self._resolve_opencode_global_config_dir()
+        if (config_dir / "node_modules").exists():
+            return  # already seeded, or a real global config — never clobber
+        config_dir.mkdir(parents=True, exist_ok=True)
+        self._stage_opencode_deps(deps_cache, config_dir)
+        self.log.info("opencode.global_deps_seeded", config_dir=str(config_dir))
 
     def _install_bin_scripts(self) -> None:
         """Install standalone CLI scripts into /usr/local/bin.
@@ -835,6 +878,13 @@ class SandboxSupervisor:
             workdir = self.repo_path
 
         self._install_tools(workdir)
+        # Seed OpenCode's global config dir too, so its cold-start `npm install` is a no-op and
+        # the first POST /session does not block on an arborist reify(). Best-effort: a failure
+        # here only degrades to the (slower) reify, so it must not crash startup.
+        try:
+            self._seed_global_opencode_deps()
+        except Exception as e:
+            self.log.warn("opencode.global_deps_seed_failed", exc=e)
         self._install_skills(workdir)
         self._install_bin_scripts()
 

@@ -385,3 +385,100 @@ class TestInstallSkills:
             sup._install_skills(workdir)
 
         assert not (workdir / ".opencode" / "skills").exists()
+
+
+def _make_opencode_deps_staging(tmp_path: Path) -> Path:
+    """Build a fake /app/opencode-deps staging tree (plugin-only, in sync)."""
+    deps_cache = tmp_path / "opencode-deps"
+    deps_cache.mkdir()
+    (deps_cache / "package.json").write_text('{"dependencies": {"@opencode-ai/plugin": "1.14.41"}}')
+    (deps_cache / "package-lock.json").write_text('{"lockfileVersion": 3}')
+    plugin = deps_cache / "node_modules" / "@opencode-ai" / "plugin"
+    plugin.mkdir(parents=True)
+    (plugin / "index.js").write_text("module.exports = {}")
+    return deps_cache
+
+
+class TestResolveGlobalConfigDir:
+    """Cases for _resolve_opencode_global_config_dir() — OpenCode's xdg-basedir resolution."""
+
+    def test_uses_opencode_config_dir_override(self, tmp_path, monkeypatch):
+        """OPENCODE_CONFIG_DIR wins over XDG_CONFIG_HOME and is used verbatim."""
+        monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(tmp_path / "custom"))
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        assert SandboxSupervisor._resolve_opencode_global_config_dir() == tmp_path / "custom"
+
+    def test_uses_xdg_config_home(self, tmp_path, monkeypatch):
+        """Without the override, $XDG_CONFIG_HOME/opencode is used."""
+        monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        assert (
+            SandboxSupervisor._resolve_opencode_global_config_dir() == tmp_path / "xdg" / "opencode"
+        )
+
+    def test_falls_back_to_home_config(self, tmp_path, monkeypatch):
+        """With neither set, ~/.config/opencode is used."""
+        monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        assert (
+            SandboxSupervisor._resolve_opencode_global_config_dir()
+            == tmp_path / "home" / ".config" / "opencode"
+        )
+
+
+class TestSeedGlobalOpencodeDeps:
+    """Cases for _seed_global_opencode_deps() — seeding OpenCode's global config dir."""
+
+    def test_seeds_empty_global_config_dir(self, tmp_path, monkeypatch):
+        """The staged plugin tree is copied into $XDG_CONFIG_HOME/opencode when it is empty."""
+        sup = _make_supervisor()
+        deps_cache = _make_opencode_deps_staging(tmp_path)
+        cfg = tmp_path / "xdg"
+        monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(cfg))
+
+        with _patch_paths(
+            legacy=tmp_path / "no-legacy", tools=tmp_path / "no-tools", deps_cache=deps_cache
+        ):
+            sup._seed_global_opencode_deps()
+
+        seeded = cfg / "opencode"
+        assert (seeded / "package.json").exists()
+        assert (seeded / "package-lock.json").exists()
+        assert (seeded / "node_modules" / "@opencode-ai" / "plugin").is_dir()
+
+    def test_does_not_clobber_populated_global_dir(self, tmp_path, monkeypatch):
+        """An existing global config dir that already has node_modules is left untouched."""
+        sup = _make_supervisor()
+        deps_cache = _make_opencode_deps_staging(tmp_path)
+        cfg = tmp_path / "xdg"
+        seeded = cfg / "opencode"
+        (seeded / "node_modules").mkdir(parents=True)
+        existing_pkg = seeded / "package.json"
+        existing_pkg.write_text('{"name": "existing"}')
+        monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(cfg))
+
+        with _patch_paths(
+            legacy=tmp_path / "no-legacy", tools=tmp_path / "no-tools", deps_cache=deps_cache
+        ):
+            sup._seed_global_opencode_deps()
+
+        assert existing_pkg.read_text() == '{"name": "existing"}'
+
+    def test_noop_when_staging_absent(self, tmp_path, monkeypatch):
+        """No global dir is created when the /app/opencode-deps staging is missing."""
+        sup = _make_supervisor()
+        cfg = tmp_path / "xdg"
+        monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(cfg))
+
+        with _patch_paths(
+            legacy=tmp_path / "no-legacy",
+            tools=tmp_path / "no-tools",
+            deps_cache=tmp_path / "missing",
+        ):
+            sup._seed_global_opencode_deps()
+
+        assert not (cfg / "opencode").exists()
