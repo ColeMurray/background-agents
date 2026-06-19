@@ -1,21 +1,8 @@
--- Fix the scheduler recovery-sweep indexes.
---
--- The recovery sweeps query a single status with a literal predicate:
---   getOrphanedStartingRuns: WHERE status = 'starting' AND created_at < ?
---   getTimedOutRunningRuns:  WHERE status = 'running'  AND started_at < ?
---
--- The previous index, idx_runs_active_status (status, created_at)
--- WHERE status IN ('starting','running'), was NEVER used by those queries:
--- SQLite (and therefore D1) cannot prove that `status = 'starting'` implies the
--- index's `status IN ('starting','running')` predicate, so each sweep fell back
--- to a full table SCAN of automation_runs. automation_runs is append-only, so as
--- run history grew the scan eventually exceeded D1's query time limit -> the
--- recovery sweep (and thus the whole scheduler tick) started timing out.
---
--- Bare-equality partial predicates match each query verbatim, so the planner
--- uses them. Because they are partial, each index only ever holds the small
--- active subset (rows in a terminal state are excluded), so they stay tiny and
--- fast regardless of how large the history grows.
+-- Replace idx_runs_active_status with per-status partial indexes for the recovery
+-- sweeps. Its `status IN ('starting','running')` predicate is never matched by the
+-- sweeps' `status = '...'` queries, so they full-scanned the append-only
+-- automation_runs table and timed out as history grew. Bare-equality partials
+-- match the queries and stay scoped to the small active subset.
 
 DROP INDEX IF EXISTS idx_runs_active_status;
 

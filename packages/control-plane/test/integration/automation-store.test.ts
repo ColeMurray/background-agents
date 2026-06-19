@@ -547,13 +547,9 @@ describe("AutomationStore (D1 integration)", () => {
       expect(timedOut).toHaveLength(0);
     });
 
-    // Regression guard for the D1 recovery-sweep timeout: these sweeps must be
-    // served by their per-status partial indexes (migration 0024), never a full
-    // SCAN of the append-only automation_runs table. A full scan would pass the
-    // behavioural tests above but time out once history grows. We EXPLAIN the
-    // exact production SQL (AutomationStore.*_SQL) so the guard tracks the real
-    // query shape: parameterizing `status`, dropping the index, or otherwise
-    // breaking partial-index matching flips the plan to a SCAN and fails here.
+    // The behavioural tests above pass with or without the index (a scan returns
+    // the same rows); these EXPLAIN the real production SQL to assert the partial
+    // index is actually used.
     it("orphan sweep is served by idx_runs_orphan_sweep, not a full scan", async () => {
       const plan = await env.DB.prepare(
         `EXPLAIN QUERY PLAN ${AutomationStore.ORPHANED_STARTING_RUNS_SQL}`

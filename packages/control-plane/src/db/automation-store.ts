@@ -447,17 +447,8 @@ export class AutomationStore {
   }
 
   // --- Recovery sweep queries ---
-  //
-  // These filter by a single status across all automations and are backed by the
-  // per-status partial indexes idx_runs_orphan_sweep / idx_runs_timeout_sweep
-  // (migration 0024). Keep `status` a string literal in the SQL: partial-index
-  // matching happens at plan time and is syntactic, so `status = ?` (a bound
-  // parameter) would not match the index predicate and would silently fall back
-  // to a full table scan of the append-only automation_runs table.
-  //
-  // The SQL is held in constants so the EXPLAIN-based planner regression tests
-  // assert against the exact production query text — there is no separate copy
-  // to drift out of sync.
+  // Backed by partial indexes (migration 0024); `status` must stay a literal, not
+  // a bound param, or the planner skips the index and full-scans automation_runs.
   static readonly ORPHANED_STARTING_RUNS_SQL =
     "SELECT * FROM automation_runs WHERE status = 'starting' AND created_at < ?";
   static readonly TIMED_OUT_RUNNING_RUNS_SQL =
