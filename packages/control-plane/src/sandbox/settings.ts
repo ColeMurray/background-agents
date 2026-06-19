@@ -122,6 +122,16 @@ export function normalizeSandboxSettings(
     }
   }
 
+  const buildTimeoutSeconds = normalizePositiveIntegerSetting(
+    settings.buildTimeoutSeconds,
+    "buildTimeoutSeconds",
+    reject
+  );
+  if (buildTimeoutSeconds !== undefined) {
+    // Stored as-is; the build trigger caps it at MAX via resolveBuildTimeoutSeconds.
+    result.buildTimeoutSeconds = buildTimeoutSeconds;
+  }
+
   checkPortCollisions(result, reject);
 
   return result;

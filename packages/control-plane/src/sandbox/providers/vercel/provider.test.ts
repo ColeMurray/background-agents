@@ -575,6 +575,42 @@ describe("VercelSandboxProvider", () => {
     expect(result).toEqual({ buildId: "build-123", status: "building" });
   });
 
+  it("honors an explicit build timeout below the Vercel limit for repo image builds", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await provider.triggerRepoImageBuild({
+      buildId: "build-123",
+      repoOwner: "testowner",
+      repoName: "testrepo",
+      defaultBranch: "main",
+      callbackUrl: "https://control-plane.test/repo-images/build-complete",
+      callbackToken: "callback-token",
+      buildTimeoutSeconds: 30 * 60,
+    });
+
+    expect(vi.mocked(client.createSandbox).mock.calls[0][0].timeoutMs).toBe(30 * 60 * 1000);
+  });
+
+  it("caps an over-limit build timeout at Vercel's 45 minute limit", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await provider.triggerRepoImageBuild({
+      buildId: "build-123",
+      repoOwner: "testowner",
+      repoName: "testrepo",
+      defaultBranch: "main",
+      callbackUrl: "https://control-plane.test/repo-images/build-complete",
+      callbackToken: "callback-token",
+      buildTimeoutSeconds: 60 * 60,
+    });
+
+    expect(vi.mocked(client.createSandbox).mock.calls[0][0].timeoutMs).toBe(
+      VERCEL_MAX_SANDBOX_TIMEOUT_MS
+    );
+  });
+
   it("fails sandbox launch when tunnel env writing exits non-zero", async () => {
     const client = createMockClient({
       runCommandAndWait: vi.fn(async () => ({ commandId: "cmd-1", exitCode: 1 })),

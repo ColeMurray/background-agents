@@ -2,7 +2,11 @@
  * Vercel Sandbox provider implementation.
  */
 
-import { computeHmacHex, type SandboxSettings } from "@open-inspect/shared";
+import {
+  computeHmacHex,
+  DEFAULT_BUILD_TIMEOUT_SECONDS,
+  type SandboxSettings,
+} from "@open-inspect/shared";
 import { resolveServicePorts, resolveTunnelPorts } from "../port-resolution";
 import { createLogger } from "../../../logger";
 import type { CorrelationContext } from "../../../logger";
@@ -37,7 +41,6 @@ const log = createLogger("vercel-provider");
 const TUNNEL_ENV_FILE_PATH = "/workspace/.tunnels.env";
 const EXPECTED_TUNNEL_PORTS_ENV_VAR = "EXPECTED_TUNNEL_PORTS";
 const DEFAULT_SNAPSHOT_EXPIRATION_MS = 0;
-const BUILD_TIMEOUT_SECONDS = 1800;
 const VERCEL_MAX_SANDBOX_TIMEOUT_MS = 45 * 60 * 1000;
 const VERCEL_MEMORY_MIB_PER_VCPU = 2048;
 const VERCEL_SUPPORTED_VCPUS: readonly VercelVcpus[] = [1, 2, 4, 8];
@@ -80,6 +83,12 @@ export interface TriggerVercelRepoImageBuildConfig {
   callbackToken: string;
   userEnvVars?: Record<string, string>;
   cloneToken?: string;
+  /**
+   * Build sandbox lifetime, in seconds (already capped at
+   * MAX_BUILD_TIMEOUT_SECONDS by the trigger). Further capped to Vercel's own
+   * limit. Omitted → DEFAULT_BUILD_TIMEOUT_SECONDS.
+   */
+  buildTimeoutSeconds?: number;
   onProviderSessionCreated?: (providerSessionId: string) => Promise<void>;
   correlation?: CorrelationContext;
 }
@@ -264,7 +273,9 @@ export class VercelSandboxProvider implements SandboxProvider {
         {
           name: sandboxName,
           runtime: this.providerConfig.runtime || DEFAULT_VERCEL_RUNTIME,
-          timeoutMs: BUILD_TIMEOUT_SECONDS * 1000,
+          timeoutMs: resolveVercelTimeoutMs(
+            config.buildTimeoutSeconds ?? DEFAULT_BUILD_TIMEOUT_SECONDS
+          ),
           env,
           tags: {
             openinspect_framework: "open-inspect",

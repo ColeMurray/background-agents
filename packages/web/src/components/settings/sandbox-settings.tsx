@@ -9,11 +9,13 @@ import { Input } from "@/components/ui/input";
 import useSWR from "swr";
 import type { ConfiguredSandboxPort, SandboxSettings } from "@open-inspect/shared";
 import {
+  DEFAULT_BUILD_TIMEOUT_SECONDS,
   DEFAULT_CODE_SERVER_PORT,
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
   DEFAULT_TERMINAL_PORT,
   findSandboxPortConflict,
+  MAX_BUILD_TIMEOUT_SECONDS,
   MAX_TUNNEL_PORTS,
 } from "@open-inspect/shared";
 
@@ -50,6 +52,12 @@ function isValidCpuCores(value: string): boolean {
 function isValidMemoryMib(value: string): boolean {
   if (!/^\d+$/.test(value)) return false;
   return Number(value) >= 1;
+}
+
+function isValidBuildTimeout(value: string): boolean {
+  if (!/^\d+$/.test(value)) return false;
+  const n = Number(value);
+  return n >= 1 && n <= MAX_BUILD_TIMEOUT_SECONDS;
 }
 
 const numOrUndef = (v: number | null | undefined): number | undefined =>
@@ -131,6 +139,10 @@ function SandboxSettingsEditor({
     ? (data as GlobalSettingsResponse)?.settings?.defaults?.terminalPort
     : (data as RepoSettingsResponse)?.settings?.terminalPort;
 
+  const currentBuildTimeoutSeconds: number | undefined = isGlobal
+    ? (data as GlobalSettingsResponse)?.settings?.defaults?.buildTimeoutSeconds
+    : (data as RepoSettingsResponse)?.settings?.buildTimeoutSeconds;
+
   const currentMaxConcurrentChildSessions: number = isGlobal
     ? (globalDefaults?.maxConcurrentChildSessions ?? DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS)
     : (repoSettings?.maxConcurrentChildSessions ??
@@ -155,6 +167,7 @@ function SandboxSettingsEditor({
   const [terminalEnabled, setTerminalEnabled] = useState<boolean | null>(null);
   const [codeServerPort, setCodeServerPort] = useState<string | null>(null);
   const [terminalPort, setTerminalPort] = useState<string | null>(null);
+  const [buildTimeoutSeconds, setBuildTimeoutSeconds] = useState<string | null>(null);
   const [maxConcurrentChildSessions, setMaxConcurrentChildSessions] = useState<string | null>(null);
   const [maxTotalChildSessions, setMaxTotalChildSessions] = useState<string | null>(null);
   const [cpuCores, setCpuCores] = useState<string | null>(null);
@@ -180,6 +193,9 @@ function SandboxSettingsEditor({
     codeServerPort ?? (currentCodeServerPort !== undefined ? String(currentCodeServerPort) : "");
   const resolvedTerminalPort =
     terminalPort ?? (currentTerminalPort !== undefined ? String(currentTerminalPort) : "");
+  const resolvedBuildTimeoutSeconds =
+    buildTimeoutSeconds ??
+    (currentBuildTimeoutSeconds !== undefined ? String(currentBuildTimeoutSeconds) : "");
 
   const handleAddRow = () => {
     if (rows.length >= MAX_TUNNEL_PORTS) return;
@@ -249,6 +265,14 @@ function SandboxSettingsEditor({
       return;
     }
 
+    const trimmedBuildTimeout = resolvedBuildTimeoutSeconds.trim();
+    if (trimmedBuildTimeout !== "" && !isValidBuildTimeout(trimmedBuildTimeout)) {
+      setError(
+        `Build timeout must be a whole number of seconds, at most ${MAX_BUILD_TIMEOUT_SECONDS}.`
+      );
+      return;
+    }
+
     // Validate against the EFFECTIVE service ports the runtime will bind: an
     // explicit value, else (at repo scope) the inherited global default, else the
     // shared default. A blank field still occupies its default port, so a tunnel
@@ -294,6 +318,9 @@ function SandboxSettingsEditor({
       }
       if (trimmedTerminalPort !== "") {
         settingsPayload.terminalPort = Number(trimmedTerminalPort);
+      }
+      if (trimmedBuildTimeout !== "") {
+        settingsPayload.buildTimeoutSeconds = Number(trimmedBuildTimeout);
       }
       if (
         isGlobal ||
@@ -342,6 +369,7 @@ function SandboxSettingsEditor({
       setMemoryMib(null);
       setCodeServerPort(null);
       setTerminalPort(null);
+      setBuildTimeoutSeconds(null);
       setSuccess(true);
       setTimeout(() => setSuccess(false), 2000);
     } catch (e) {
@@ -362,6 +390,7 @@ function SandboxSettingsEditor({
     resolvedMemoryMib,
     resolvedCodeServerPort,
     resolvedTerminalPort,
+    resolvedBuildTimeoutSeconds,
     cpuCores,
     memoryMib,
     maxConcurrentChildSessions,
@@ -396,6 +425,10 @@ function SandboxSettingsEditor({
     codeServerPort !== null && codeServerPort.trim() !== currentCodeServerPortString;
   const hasTerminalPortChange =
     terminalPort !== null && terminalPort.trim() !== currentTerminalPortString;
+  const currentBuildTimeoutSecondsString =
+    currentBuildTimeoutSeconds !== undefined ? String(currentBuildTimeoutSeconds) : "";
+  const hasBuildTimeoutChange =
+    buildTimeoutSeconds !== null && buildTimeoutSeconds.trim() !== currentBuildTimeoutSecondsString;
   const hasChanges =
     hasPortChanges ||
     hasTerminalChange ||
@@ -404,7 +437,8 @@ function SandboxSettingsEditor({
     hasCpuChange ||
     hasMemoryChange ||
     hasCodeServerPortChange ||
-    hasTerminalPortChange;
+    hasTerminalPortChange ||
+    hasBuildTimeoutChange;
 
   if (isLoading || isLoadingGlobal) {
     return <p className="text-sm text-muted-foreground">Loading...</p>;
@@ -609,6 +643,35 @@ function SandboxSettingsEditor({
               placeholder="provider default"
             />
           </div>
+        </div>
+      </div>
+
+      <div>
+        <label
+          htmlFor="sandbox-build-timeout"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
+          Repo Image Build Timeout
+        </label>
+        <p className="text-xs text-muted-foreground mb-2">
+          How long a pre-built repo image may take to build (clone + setup), in seconds. Raise it
+          for large repos with slow setup. Leave blank for the default (
+          {DEFAULT_BUILD_TIMEOUT_SECONDS}s). Builds only — sessions are unaffected.
+        </p>
+        <div className="max-w-sm">
+          <Input
+            id="sandbox-build-timeout"
+            type="number"
+            min={1}
+            max={MAX_BUILD_TIMEOUT_SECONDS}
+            inputMode="numeric"
+            value={resolvedBuildTimeoutSeconds}
+            onChange={(e) => setBuildTimeoutSeconds(e.target.value)}
+            placeholder={String(DEFAULT_BUILD_TIMEOUT_SECONDS)}
+          />
+          <p className="text-xs text-muted-foreground mt-1">
+            Maximum: {MAX_BUILD_TIMEOUT_SECONDS} seconds.
+          </p>
         </div>
       </div>
 

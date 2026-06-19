@@ -121,4 +121,51 @@ describe("ModalClient", () => {
       mcp_servers: [{ id: "mcp-1", name: "Tool", type: "local", enabled: true }],
     });
   });
+
+  it("threads the build timeout into the repo image build request body", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ success: true, data: { build_id: "img-1", status: "building" } }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await client.buildRepoImage({
+      repoOwner: "acme",
+      repoName: "repo",
+      defaultBranch: "main",
+      buildId: "img-1",
+      callbackUrl: "https://cp.test/repo-images/build-complete",
+      buildTimeoutSeconds: 2400,
+    });
+
+    const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
+    expect(body.build_timeout_seconds).toBe(2400);
+  });
+
+  it("sends a null build timeout when unset so Modal applies its default", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ success: true, data: { build_id: "img-1", status: "building" } }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await client.buildRepoImage({
+      repoOwner: "acme",
+      repoName: "repo",
+      defaultBranch: "main",
+      buildId: "img-1",
+      callbackUrl: "https://cp.test/repo-images/build-complete",
+    });
+
+    const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
+    expect(body.build_timeout_seconds).toBeNull();
+  });
 });

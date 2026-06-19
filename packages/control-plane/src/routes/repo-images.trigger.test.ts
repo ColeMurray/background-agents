@@ -9,6 +9,7 @@ import type * as SourceControlModule from "../source-control";
 import type * as SandboxClientModule from "../sandbox/client";
 import type * as VercelProviderModule from "../sandbox/providers/vercel/provider";
 import type * as VercelClientModule from "../sandbox/providers/vercel/client";
+import type * as IntegrationSettingsResolutionModule from "../session/integration-settings-resolution";
 
 // handleTriggerBuild resolves the repo's actual default branch (never assumes
 // "main") and threads it into the build record + the build backend. The #757
@@ -27,6 +28,10 @@ const modalClient = vi.hoisted(() => ({
 
 const vercelProvider = vi.hoisted(() => ({
   triggerRepoImageBuild: vi.fn(),
+}));
+
+const integrationSettings = vi.hoisted(() => ({
+  resolveSandboxSettings: vi.fn(),
 }));
 
 vi.mock("../source-control", async (importOriginal) => {
@@ -58,6 +63,14 @@ vi.mock("../sandbox/providers/vercel/client", async (importOriginal) => {
   return {
     ...actual,
     createVercelSandboxClient: vi.fn(() => ({})),
+  };
+});
+
+vi.mock("../session/integration-settings-resolution", async (importOriginal) => {
+  const actual = await importOriginal<typeof IntegrationSettingsResolutionModule>();
+  return {
+    ...actual,
+    resolveSandboxSettings: integrationSettings.resolveSandboxSettings,
   };
 });
 
@@ -138,6 +151,7 @@ describe("POST /repo-images/trigger/:owner/:name", () => {
     registerBuildSpy.mockResolvedValue(undefined);
     modalClient.buildRepoImage.mockResolvedValue(undefined);
     vercelProvider.triggerRepoImageBuild.mockResolvedValue(undefined);
+    integrationSettings.resolveSandboxSettings.mockResolvedValue({});
     scmProvider.generateCredentialHelperAuth.mockResolvedValue({
       username: "x-access-token",
       password: "clone-token",
@@ -168,6 +182,7 @@ describe("POST /repo-images/trigger/:owner/:name", () => {
         repoOwner: "acme",
         repoName: "repo",
         defaultBranch: "develop",
+        buildTimeoutSeconds: 1800,
       }),
       expect.any(Object)
     );
@@ -212,6 +227,36 @@ describe("POST /repo-images/trigger/:owner/:name", () => {
         provider: "vercel",
         baseBranch: "develop",
       })
+    );
+  });
+
+  it("resolves and clamps the configured build timeout into the Modal backend", async () => {
+    scmProvider.checkRepositoryAccess.mockResolvedValue(RESOLVED_REPO);
+    integrationSettings.resolveSandboxSettings.mockResolvedValue({ buildTimeoutSeconds: 5000 });
+
+    const response = await callTrigger(createModalEnv());
+
+    expect(response.status).toBe(200);
+    expect(integrationSettings.resolveSandboxSettings).toHaveBeenCalledWith(
+      expect.anything(),
+      "acme",
+      "repo"
+    );
+    expect(modalClient.buildRepoImage).toHaveBeenCalledWith(
+      expect.objectContaining({ buildTimeoutSeconds: 3600 }),
+      expect.any(Object)
+    );
+  });
+
+  it("threads the resolved build timeout into the Vercel backend", async () => {
+    scmProvider.checkRepositoryAccess.mockResolvedValue(RESOLVED_REPO);
+    integrationSettings.resolveSandboxSettings.mockResolvedValue({ buildTimeoutSeconds: 2400 });
+
+    const response = await callTrigger(createVercelEnv());
+
+    expect(response.status).toBe(200);
+    expect(vercelProvider.triggerRepoImageBuild).toHaveBeenCalledWith(
+      expect.objectContaining({ buildTimeoutSeconds: 2400 })
     );
   });
 

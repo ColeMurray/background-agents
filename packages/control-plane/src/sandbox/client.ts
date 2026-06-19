@@ -141,6 +141,12 @@ export interface BuildRepoImageRequest {
   buildId: string;
   callbackUrl: string;
   userEnvVars?: Record<string, string>;
+  /**
+   * Build sandbox lifetime, in seconds. Already capped at
+   * MAX_BUILD_TIMEOUT_SECONDS by the trigger.
+   * Omitted → Modal applies DEFAULT_BUILD_TIMEOUT_SECONDS.
+   */
+  buildTimeoutSeconds?: number;
 }
 
 export interface BuildRepoImageResponse {
@@ -554,6 +560,7 @@ export class ModalClient {
           build_id: request.buildId,
           callback_url: request.callbackUrl,
           user_env_vars: request.userEnvVars,
+          build_timeout_seconds: request.buildTimeoutSeconds ?? null,
         }),
       });
 

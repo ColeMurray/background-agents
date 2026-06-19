@@ -39,6 +39,11 @@ from ..app import (
 )
 from ..auth import generate_internal_token
 from ..log_config import get_logger
+from ..sandbox.manager import (
+    DEFAULT_BUILD_TIMEOUT_SECONDS,
+    MAX_BUILD_TIMEOUT_SECONDS,
+    build_function_timeout_seconds,
+)
 
 log = get_logger("image_builder")
 
@@ -238,7 +243,7 @@ async def _stream_build_logs(
 @app.function(
     image=function_image,
     secrets=[internal_api_secret, github_app_secrets],
-    timeout=1800,  # 30 minutes
+    timeout=build_function_timeout_seconds(DEFAULT_BUILD_TIMEOUT_SECONDS),
 )
 async def build_repo_image(
     repo_owner: str,
@@ -247,6 +252,7 @@ async def build_repo_image(
     callback_url: str = "",
     build_id: str = "",
     user_env_vars: dict[str, str] | None = None,
+    build_timeout_seconds: int | None = None,
 ) -> None:
     """
     Async worker: create build sandbox, await exit, snapshot, callback.
@@ -261,8 +267,13 @@ async def build_repo_image(
         callback_url: URL to POST success result to
         build_id: Build identifier from the control plane
         user_env_vars: User-defined environment variables (repo secrets) injected into the build sandbox
+        build_timeout_seconds: Build sandbox lifetime (already clamped by the control
+            plane). None → DEFAULT_BUILD_TIMEOUT_SECONDS. The caller sizes this
+            function's own timeout above it via build_function_timeout_seconds().
     """
     from ..sandbox.manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS, SandboxManager
+
+    sandbox_timeout_seconds = build_timeout_seconds or DEFAULT_BUILD_TIMEOUT_SECONDS
 
     # Validate callback URL against allowed hosts to prevent SSRF
     if callback_url and not validate_control_plane_url(callback_url):
@@ -292,6 +303,7 @@ async def build_repo_image(
             default_branch=default_branch,
             clone_token=clone_token,
             user_env_vars=user_env_vars,
+            timeout_seconds=sandbox_timeout_seconds,
         )
 
         # 3. Stream stdout until build completes (sandbox stays alive for snapshotting)
@@ -369,8 +381,8 @@ async def build_repo_image(
 # Scheduler: cron-based rebuild logic
 # ---------------------------------------------------------------------------
 
-# Stale build threshold: builds older than this are marked failed
-STALE_BUILD_THRESHOLD_SECONDS = 2100  # 35 minutes
+# Sized at the longest possible build's worker timeout so a long-but-live build isn't reaped.
+STALE_BUILD_THRESHOLD_SECONDS = build_function_timeout_seconds(MAX_BUILD_TIMEOUT_SECONDS)
 
 # Cleanup threshold: failed builds older than this are deleted
 FAILED_BUILD_CLEANUP_SECONDS = 86400  # 24 hours

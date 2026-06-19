@@ -38,7 +38,26 @@ log = get_logger("manager")
 
 DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200  # 2 hours
 SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS = 300
+# Mirrors DEFAULT_BUILD_TIMEOUT_SECONDS in shared (packages/shared/src/types/integrations.ts).
+DEFAULT_BUILD_TIMEOUT_SECONDS = 1800
+# Mirrors MAX_BUILD_TIMEOUT_SECONDS in shared.
+MAX_BUILD_TIMEOUT_SECONDS = 3600
+BUILD_FUNCTION_TIMEOUT_MARGIN_SECONDS = 300
 MAX_TUNNEL_PORTS = 10
+
+
+def build_function_timeout_seconds(build_timeout_seconds: int) -> int:
+    """Modal function timeout for the build worker (build_repo_image).
+
+    The worker idles until the build sandbox finishes, then snapshots it
+    (SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS) and reports back, so its timeout must
+    exceed the sandbox lifetime plus the snapshot budget plus a margin.
+    """
+    return (
+        build_timeout_seconds
+        + SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
+        + BUILD_FUNCTION_TIMEOUT_MARGIN_SECONDS
+    )
 
 
 def _resource_kwargs(settings: dict[str, Any] | None) -> dict:
@@ -505,6 +524,7 @@ class SandboxManager:
         default_branch: str = "main",
         clone_token: str = "",
         user_env_vars: dict[str, str] | None = None,
+        timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
     ) -> SandboxHandle:
         """
         Create a sandbox specifically for image building.
@@ -512,14 +532,13 @@ class SandboxManager:
         Like create_sandbox() but:
         - Sets IMAGE_BUILD_MODE=true (exits after setup, no OpenCode/bridge)
         - No SANDBOX_AUTH_TOKEN, CONTROL_PLANE_URL, or LLM secrets
-        - Shorter timeout (30 min vs 2 hours)
+        - Configurable, shorter lifetime (defaults to DEFAULT_BUILD_TIMEOUT_SECONDS
+          vs the 2-hour session default)
         - Always uses base_image (builds start from the universal base)
 
         Note: MCP servers are not available during image builds (no session config).
         MCP packages are installed at first use via npx instead.
         """
-        BUILD_TIMEOUT_SECONDS = 1800
-
         start_time = time.time()
         sandbox_id = f"build-{repo_owner}-{repo_name}-{int(time.time() * 1000)}"
 
@@ -549,7 +568,7 @@ class SandboxManager:
             image=base_image,
             app=app,
             secrets=[],
-            timeout=BUILD_TIMEOUT_SECONDS,
+            timeout=timeout_seconds,
             workdir="/workspace",
             env=env_vars,
         )

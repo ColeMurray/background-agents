@@ -8,8 +8,9 @@
  * - Maintenance operations (stale builds, cleanup)
  */
 
-import { computeHmacHex } from "@open-inspect/shared";
+import { computeHmacHex, resolveBuildTimeoutSeconds } from "@open-inspect/shared";
 import { RepoImageStore } from "../db/repo-images";
+import { resolveSandboxSettings } from "../session/integration-settings-resolution";
 import { verifyInternalToken } from "../auth/internal";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import { GlobalSecretsStore } from "../db/global-secrets";
@@ -643,6 +644,9 @@ async function handleTriggerBuild(
     // Construct callback URL
     const callbackUrl = `${env.WORKER_URL}/repo-images/build-complete`;
 
+    const sandboxSettings = await resolveSandboxSettings(env.DB, owner, name);
+    const buildTimeoutSeconds = resolveBuildTimeoutSeconds(sandboxSettings);
+
     // Best-effort: fetch user secrets for the build sandbox
     let userEnvVars: Record<string, string> | undefined;
     if (env.REPO_SECRETS_ENCRYPTION_KEY) {
@@ -704,6 +708,7 @@ async function handleTriggerBuild(
             buildId,
             callbackUrl,
             userEnvVars,
+            buildTimeoutSeconds,
           },
           { trace_id: ctx.trace_id, request_id: ctx.request_id }
         );
@@ -735,6 +740,7 @@ async function handleTriggerBuild(
           callbackToken,
           userEnvVars,
           cloneToken,
+          buildTimeoutSeconds,
           onProviderSessionCreated: async (providerSessionId) => {
             const bound = await store.bindProviderSession(buildId, "vercel", providerSessionId);
             if (!bound) {
@@ -849,7 +855,9 @@ async function handleMarkStale(
     body = {};
   }
 
-  const maxAgeSeconds = body.max_age_seconds ?? 2100; // 35 minutes default
+  // Body-less fallback only; the scheduler always sends max_age_seconds explicitly.
+  // Mirrors STALE_BUILD_THRESHOLD_SECONDS in the Modal scheduler (image_builder.py).
+  const maxAgeSeconds = body.max_age_seconds ?? 4200;
   const maxAgeMs = maxAgeSeconds * 1000;
 
   const store = new RepoImageStore(env.DB);

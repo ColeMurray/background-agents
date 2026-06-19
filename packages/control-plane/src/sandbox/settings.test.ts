@@ -51,6 +51,30 @@ describe("normalizeSandboxSettings", () => {
     });
   });
 
+  it("accepts a valid buildTimeoutSeconds", () => {
+    expect(normalizeSandboxSettings({ buildTimeoutSeconds: 2400 })).toEqual({
+      buildTimeoutSeconds: 2400,
+    });
+  });
+
+  it("throws for a non-positive or non-integer buildTimeoutSeconds", () => {
+    expect(() => normalizeSandboxSettings({ buildTimeoutSeconds: 0 })).toThrow(
+      SandboxSettingsValidationError
+    );
+    expect(() => normalizeSandboxSettings({ buildTimeoutSeconds: 12.5 })).toThrow(
+      SandboxSettingsValidationError
+    );
+  });
+
+  it("omits an invalid buildTimeoutSeconds in omit mode while keeping valid fields", () => {
+    expect(
+      normalizeSandboxSettings(
+        { buildTimeoutSeconds: -5, terminalEnabled: true },
+        { invalid: "omit" }
+      )
+    ).toEqual({ terminalEnabled: true });
+  });
+
   it("accepts valid codeServerPort and terminalPort", () => {
     expect(normalizeSandboxSettings({ codeServerPort: 8081, terminalPort: 7000 })).toEqual({
       codeServerPort: 8081,
