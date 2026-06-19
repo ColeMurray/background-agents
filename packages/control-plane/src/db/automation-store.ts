@@ -454,14 +454,19 @@ export class AutomationStore {
   // matching happens at plan time and is syntactic, so `status = ?` (a bound
   // parameter) would not match the index predicate and would silently fall back
   // to a full table scan of the append-only automation_runs table.
+  //
+  // The SQL is held in constants so the EXPLAIN-based planner regression tests
+  // assert against the exact production query text — there is no separate copy
+  // to drift out of sync.
+  static readonly ORPHANED_STARTING_RUNS_SQL =
+    "SELECT * FROM automation_runs WHERE status = 'starting' AND created_at < ?";
+  static readonly TIMED_OUT_RUNNING_RUNS_SQL =
+    "SELECT * FROM automation_runs WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ?";
 
   async getOrphanedStartingRuns(thresholdMs: number): Promise<AutomationRunRow[]> {
     const cutoff = Date.now() - thresholdMs;
     const result = await this.db
-      .prepare(
-        `SELECT * FROM automation_runs
-         WHERE status = 'starting' AND created_at < ?`
-      )
+      .prepare(AutomationStore.ORPHANED_STARTING_RUNS_SQL)
       .bind(cutoff)
       .all<AutomationRunRow>();
     return result.results || [];
@@ -470,10 +475,7 @@ export class AutomationStore {
   async getTimedOutRunningRuns(executionTimeoutMs: number): Promise<AutomationRunRow[]> {
     const cutoff = Date.now() - executionTimeoutMs;
     const result = await this.db
-      .prepare(
-        `SELECT * FROM automation_runs
-         WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ?`
-      )
+      .prepare(AutomationStore.TIMED_OUT_RUNNING_RUNS_SQL)
       .bind(cutoff)
       .all<AutomationRunRow>();
     return result.results || [];
