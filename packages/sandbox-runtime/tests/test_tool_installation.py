@@ -467,6 +467,27 @@ class TestSeedGlobalOpencodeDeps:
 
         assert existing_pkg.read_text() == '{"name": "existing"}'
 
+    def test_skips_when_manifest_present_without_node_modules(self, tmp_path, monkeypatch):
+        """A global dir with a user package.json but no node_modules is left untouched —
+        seeding our node_modules against a foreign manifest would be an out-of-sync tree."""
+        sup = _make_supervisor()
+        deps_cache = _make_opencode_deps_staging(tmp_path)
+        cfg = tmp_path / "xdg"
+        seeded = cfg / "opencode"
+        seeded.mkdir(parents=True)
+        existing_pkg = seeded / "package.json"
+        existing_pkg.write_text('{"name": "user-global"}')
+        monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(cfg))
+
+        with _patch_paths(
+            legacy=tmp_path / "no-legacy", tools=tmp_path / "no-tools", deps_cache=deps_cache
+        ):
+            sup._seed_global_opencode_deps()
+
+        assert existing_pkg.read_text() == '{"name": "user-global"}'
+        assert not (seeded / "node_modules").exists()
+
     def test_noop_when_staging_absent(self, tmp_path, monkeypatch):
         """No global dir is created when the /app/opencode-deps staging is missing."""
         sup = _make_supervisor()

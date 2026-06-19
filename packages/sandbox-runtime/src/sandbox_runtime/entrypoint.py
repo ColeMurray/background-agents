@@ -523,11 +523,26 @@ class SandboxSupervisor:
         if not deps_cache.is_dir():
             return
         config_dir = self._resolve_opencode_global_config_dir()
-        if (config_dir / "node_modules").exists():
-            return  # already seeded, or a real global config — never clobber
+        # Only seed a pristine dir — never mix our modules into a user's manifest.
+        if (config_dir / "node_modules").exists() or (config_dir / "package.json").exists():
+            self.log.debug("opencode.global_deps_skip", config_dir=str(config_dir))
+            return
         config_dir.mkdir(parents=True, exist_ok=True)
         self._stage_opencode_deps(deps_cache, config_dir)
         self.log.info("opencode.global_deps_seeded", config_dir=str(config_dir))
+
+    def _prepare_opencode_filesystem(self, workdir: Path) -> None:
+        """Stage OpenCode's filesystem assets (tools, deps, skills, bin) before launch.
+
+        The global seed is best-effort (degrades to a slower reify); the rest fail fast.
+        """
+        self._install_tools(workdir)
+        try:
+            self._seed_global_opencode_deps()
+        except Exception as e:
+            self.log.warn("opencode.global_deps_seed_failed", exc=e)
+        self._install_skills(workdir)
+        self._install_bin_scripts()
 
     def _install_bin_scripts(self) -> None:
         """Install standalone CLI scripts into /usr/local/bin.
@@ -877,16 +892,7 @@ class SandboxSupervisor:
         if self.repo_path.exists() and (self.repo_path / ".git").exists():
             workdir = self.repo_path
 
-        self._install_tools(workdir)
-        # Seed OpenCode's global config dir too, so its cold-start `npm install` is a no-op and
-        # the first POST /session does not block on an arborist reify(). Best-effort: a failure
-        # here only degrades to the (slower) reify, so it must not crash startup.
-        try:
-            self._seed_global_opencode_deps()
-        except Exception as e:
-            self.log.warn("opencode.global_deps_seed_failed", exc=e)
-        self._install_skills(workdir)
-        self._install_bin_scripts()
+        self._prepare_opencode_filesystem(workdir)
 
         # Deploy codex auth proxy plugin if OpenAI OAuth is configured
         opencode_dir = workdir / ".opencode"
