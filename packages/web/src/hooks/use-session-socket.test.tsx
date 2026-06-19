@@ -64,6 +64,7 @@ class FakeWebSocket {
 function createSessionState(overrides: Partial<SessionState> = {}): SessionState {
   return {
     id: "session-1",
+    workspaceId: "default",
     title: "Session 1",
     repoOwner: "acme",
     repoName: "web-app",

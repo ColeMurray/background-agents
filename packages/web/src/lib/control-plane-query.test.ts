@@ -11,7 +11,7 @@ describe("buildControlPlanePath", () => {
   });
 
   it("omits query strings when no allowed parameters are present", () => {
-    const searchParams = new URLSearchParams("repoOwner=open-inspect&trace=1");
+    const searchParams = new URLSearchParams("trace=1");
 
     expect(buildControlPlanePath("/automations", searchParams)).toBe("/automations");
   });

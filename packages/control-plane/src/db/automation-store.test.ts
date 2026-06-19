@@ -80,6 +80,7 @@ const now = Date.now();
 const sampleRow: AutomationRow = {
   id: "auto_test1",
   name: "Daily sync",
+  workspace_id: "default",
   repo_owner: "acme",
   repo_name: "web-app",
   base_branch: "main",
@@ -124,6 +125,7 @@ describe("toAutomation", () => {
   it("converts row to camelCase Automation", () => {
     const automation = toAutomation(sampleRow);
     expect(automation.id).toBe("auto_test1");
+    expect(automation.workspaceId).toBe("default");
     expect(automation.repoOwner).toBe("acme");
     expect(automation.repoName).toBe("web-app");
     expect(automation.baseBranch).toBe("main");
@@ -173,6 +175,7 @@ describe("AutomationStore", () => {
       expect(statements[0].sql).toContain("INSERT INTO automations");
       expect(statements[0].params[0]).toBe("auto_test1");
       expect(statements[0].params[1]).toBe("Daily sync");
+      expect(statements[0].params[2]).toBe("default");
     });
   });
 
@@ -201,6 +204,15 @@ describe("AutomationStore", () => {
       const result = await store.list();
       expect(result.total).toBe(1);
       expect(result.automations).toHaveLength(1);
+    });
+
+    it("filters by workspace", async () => {
+      const { db, statements } = createFakeD1({ allResults: [] });
+      const store = new AutomationStore(db);
+      await store.list({ workspaceId: "spi" });
+
+      expect(statements[0].sql).toContain("COALESCE(workspace_id, ?)");
+      expect(statements[0].params).toContain("spi");
     });
   });
 

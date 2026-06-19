@@ -1,6 +1,6 @@
 import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
-import type { SandboxSettings } from "@open-inspect/shared";
+import { DEFAULT_WORKSPACE_ID, type SandboxSettings } from "@open-inspect/shared";
 import type { SandboxStatus, SessionStatus, SpawnSource } from "../../../types";
 import type { SessionRepository } from "../../repository";
 import { getValidModelOrDefault, isValidModel } from "../../../utils/models";
@@ -19,6 +19,7 @@ const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "archived", "canc
  */
 interface InitRequest {
   sessionName: string;
+  workspaceId?: string;
   repoOwner: string;
   repoName: string;
   repoId?: number;
@@ -132,6 +133,7 @@ export function createSessionLifecycleHandler(
         id: sessionId,
         sessionName,
         title: body.title ?? null,
+        workspaceId: body.workspaceId ?? DEFAULT_WORKSPACE_ID,
         repoOwner: body.repoOwner,
         repoName: body.repoName,
         repoId: body.repoId ?? null,
@@ -188,6 +190,7 @@ export function createSessionLifecycleHandler(
       return Response.json({
         id: deps.getPublicSessionId(session),
         title: session.title,
+        workspaceId: session.workspace_id ?? DEFAULT_WORKSPACE_ID,
         repoOwner: session.repo_owner,
         repoName: session.repo_name,
         baseBranch: session.base_branch,

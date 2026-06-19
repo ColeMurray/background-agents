@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
+  DEFAULT_WORKSPACE_ID,
   DEFAULT_MODEL,
   getReasoningConfig,
   isValidCron,
@@ -14,6 +15,7 @@ import {
 } from "@open-inspect/shared";
 import { useRepos } from "@/hooks/use-repos";
 import { useBranches } from "@/hooks/use-branches";
+import { useWorkspaces } from "@/hooks/use-workspaces";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { formatModelNameLower } from "@/lib/format";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
@@ -80,6 +82,7 @@ function FieldDescription({
 
 export interface AutomationFormValues {
   name: string;
+  workspaceId: string;
   repoOwner: string;
   repoName: string;
   baseBranch: string;
@@ -102,7 +105,11 @@ interface AutomationFormProps {
 }
 
 export function AutomationForm({ mode, initialValues, onSubmit, submitting }: AutomationFormProps) {
-  const { repos, loading: loadingRepos } = useRepos();
+  const { workspaces, defaultWorkspaceId, loading: loadingWorkspaces } = useWorkspaces();
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(
+    initialValues?.workspaceId ?? defaultWorkspaceId ?? DEFAULT_WORKSPACE_ID
+  );
+  const { repos, loading: loadingRepos } = useRepos(selectedWorkspaceId);
   const { enabledModelOptions } = useEnabledModels();
 
   const [name, setName] = useState(initialValues?.name ?? "");
@@ -113,7 +120,11 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   );
   const repoOwner = selectedRepo.split("/")[0] ?? "";
   const repoName = selectedRepo.split("/")[1] ?? "";
-  const { branches, loading: loadingBranches } = useBranches(repoOwner, repoName);
+  const { branches, loading: loadingBranches } = useBranches(
+    repoOwner,
+    repoName,
+    selectedWorkspaceId
+  );
   const [baseBranch, setBaseBranch] = useState(initialValues?.baseBranch ?? "");
   const [model, setModel] = useState(initialValues?.model ?? DEFAULT_MODEL);
   const [reasoningEffort, setReasoningEffort] = useState(initialValues?.reasoningEffort ?? "");
@@ -131,6 +142,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     initialValues?.triggerConfig?.conditions ?? []
   );
   const [sentryClientSecret, setSentryClientSecret] = useState("");
+  const lastWorkspaceIdRef = useRef(selectedWorkspaceId);
 
   const isSchedule = triggerType === "schedule";
   const isScheduleValid = !isSchedule || isValidCron(scheduleCron);
@@ -146,6 +158,21 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const eventTypePlaceholder = triggerMetadata?.eventTypePlaceholder || "Select event type...";
 
   // Reset eventType when it becomes invalid for the current trigger type
+  useEffect(() => {
+    if (mode === "edit") return;
+    if (workspaces.length === 0) return;
+    if (workspaces.some((workspace) => workspace.id === selectedWorkspaceId)) return;
+    setSelectedWorkspaceId(defaultWorkspaceId);
+  }, [defaultWorkspaceId, mode, selectedWorkspaceId, workspaces]);
+
+  useEffect(() => {
+    if (mode === "edit") return;
+    if (lastWorkspaceIdRef.current === selectedWorkspaceId) return;
+    lastWorkspaceIdRef.current = selectedWorkspaceId;
+    setSelectedRepo("");
+    setBaseBranch("");
+  }, [mode, selectedWorkspaceId]);
+
   useEffect(() => {
     if (!eventType) return;
     const stillValid = eventTypes.some((et) => et.eventType === eventType);
@@ -178,6 +205,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
     const values: AutomationFormValues = {
       name: name.trim(),
+      workspaceId: selectedWorkspaceId,
       repoOwner,
       repoName,
       baseBranch,
@@ -204,6 +232,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     }
 
     if (mode === "edit") {
+      delete (values as Partial<AutomationFormValues>).workspaceId;
       delete (values as Partial<AutomationFormValues>).repoOwner;
       delete (values as Partial<AutomationFormValues>).repoName;
     }
@@ -216,6 +245,8 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const displayRepoName = selectedRepoObj
     ? selectedRepoObj.name
     : selectedRepo || "Select repository";
+  const selectedWorkspaceObj = workspaces.find((workspace) => workspace.id === selectedWorkspaceId);
+  const displayWorkspaceName = selectedWorkspaceObj?.name ?? "Workspace";
   const reasoningConfig = getReasoningConfig(model);
 
   return (
@@ -261,6 +292,39 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
           maxLength={200}
           required
         />
+      </div>
+
+      {/* Workspace */}
+      <div>
+        <label className="block text-sm font-medium text-foreground mb-1.5">Workspace</label>
+        <Combobox
+          value={selectedWorkspaceId}
+          onChange={setSelectedWorkspaceId}
+          items={workspaces.map((workspace) => ({
+            value: workspace.id,
+            label: workspace.name,
+            description: workspace.key,
+          }))}
+          searchable
+          searchPlaceholder="Search workspaces..."
+          filterFn={(option, query) =>
+            option.label.toLowerCase().includes(query) ||
+            (option.description?.toLowerCase().includes(query) ?? false) ||
+            String(option.value).toLowerCase().includes(query)
+          }
+          dropdownWidth="w-72"
+          disabled={loadingWorkspaces || mode === "edit" || workspaces.length <= 1}
+          triggerClassName="flex w-full items-center gap-1.5 px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/20 transition"
+        >
+          <span className="truncate flex-1 text-left">
+            {loadingWorkspaces ? "Loading..." : displayWorkspaceName}
+          </span>
+          <ChevronDownIcon className="w-3 h-3 text-muted-foreground" />
+        </Combobox>
+        <FieldDescription>
+          Workspace controls which company context and repositories this automation can use.
+          {mode === "edit" ? " The workspace cannot be changed after creation." : ""}
+        </FieldDescription>
       </div>
 
       {/* Repository */}

@@ -3,6 +3,7 @@
  */
 
 import { RepoMetadataStore } from "../db/repo-metadata";
+import { WorkspaceStore } from "../db/workspaces";
 import type { Env } from "../types";
 import { createKvCacheStore } from "@open-inspect/shared";
 import type {
@@ -24,9 +25,22 @@ import {
 
 const logger = createLogger("router:repos");
 
-const REPOS_CACHE_KEY = "repos:list:v2";
+const REPOS_CACHE_KEY_PREFIX = "repos:list:v2";
 const REPOS_CACHE_FRESH_MS = 5 * 60 * 1000; // Serve without revalidation for 5 minutes
 const REPOS_CACHE_KV_TTL_SECONDS = 3600; // Keep stale data in KV for 1 hour
+
+function getReposCacheKey(workspaceId: string): string {
+  return `${REPOS_CACHE_KEY_PREFIX}:${workspaceId}`;
+}
+
+async function invalidateReposCache(env: Env): Promise<void> {
+  let cursor: string | undefined;
+  do {
+    const page = await env.REPOS_CACHE.list({ prefix: `${REPOS_CACHE_KEY_PREFIX}:`, cursor });
+    await Promise.all(page.keys.map((key) => env.REPOS_CACHE.delete(key.name)));
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+}
 
 /**
  * Cached repos list structure stored in KV.
@@ -42,9 +56,15 @@ interface CachedReposList {
  * Fetch repos via the source control provider, enrich with D1 metadata, and write to KV cache.
  * Runs either in the foreground (cache miss) or background (stale-while-revalidate).
  */
-async function refreshReposCache(env: Env, traceId?: string): Promise<void> {
+async function refreshReposCache(
+  env: Env,
+  workspaceId: string | null | undefined,
+  traceId?: string
+): Promise<void> {
   const provider = createRouteSourceControlProvider(env);
   const cacheStore = createKvCacheStore(env.REPOS_CACHE);
+  const workspaceStore = new WorkspaceStore(env.DB);
+  const providerName = env.SCM_PROVIDER ?? "github";
 
   let repos: InstallationRepository[];
   try {
@@ -87,18 +107,25 @@ async function refreshReposCache(env: Env, traceId?: string): Promise<void> {
     const metadata = metadataMap.get(key);
     return metadata ? { ...repo, metadata } : repo;
   });
+  const filtered = await workspaceStore.filterInstalledRepositories(
+    workspaceId,
+    providerName,
+    enrichedRepos
+  );
+  const cacheKey = getReposCacheKey(filtered.workspace.id);
 
   const cachedAt = new Date().toISOString();
   const freshUntil = Date.now() + REPOS_CACHE_FRESH_MS;
   try {
     await cacheStore.put(
-      REPOS_CACHE_KEY,
-      JSON.stringify({ repos: enrichedRepos, cachedAt, freshUntil }),
+      cacheKey,
+      JSON.stringify({ repos: filtered.repos, cachedAt, freshUntil }),
       { expirationTtl: REPOS_CACHE_KV_TTL_SECONDS }
     );
     logger.info("Repos cache refreshed", {
       trace_id: traceId,
-      repo_count: enrichedRepos.length,
+      workspace_id: filtered.workspace.id,
+      repo_count: filtered.repos.length,
     });
   } catch (e) {
     logger.warn("Failed to write repos cache", {
@@ -125,13 +152,19 @@ async function handleListRepos(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
+  const url = new URL(request.url);
+  const workspaceId = url.searchParams.get("workspaceId");
+  const workspaceStore = new WorkspaceStore(env.DB);
+  const workspace = await workspaceStore.resolveWorkspace(workspaceId);
+  if (!workspace) return error("Workspace not found", 404);
+  const cacheKey = getReposCacheKey(workspace.id);
   const cacheStore = createKvCacheStore(env.REPOS_CACHE);
 
   // Read from KV cache
   let cached: CachedReposList | null = null;
   try {
     cached = await ctx.metrics.time("kv_read", () =>
-      cacheStore.get<CachedReposList>(REPOS_CACHE_KEY, "json")
+      cacheStore.get<CachedReposList>(cacheKey, "json")
     );
   } catch (e) {
     logger.warn("Failed to read repos cache", { error: e instanceof Error ? e : String(e) });
@@ -146,7 +179,7 @@ async function handleListRepos(
         trace_id: ctx.trace_id,
         cached_at: cached.cachedAt,
       });
-      ctx.executionCtx.waitUntil(refreshReposCache(env, ctx.trace_id));
+      ctx.executionCtx.waitUntil(refreshReposCache(env, workspace.id, ctx.trace_id));
     }
 
     return json({
@@ -158,6 +191,7 @@ async function handleListRepos(
 
   // No cache at all — must fetch synchronously
   const provider = createRouteSourceControlProvider(env);
+  const providerName = env.SCM_PROVIDER ?? "github";
 
   let repos: InstallationRepository[];
   try {
@@ -195,23 +229,26 @@ async function handleListRepos(
     const metadata = metadataMap.get(key);
     return metadata ? { ...repo, metadata } : repo;
   });
+  const filtered = await workspaceStore.filterInstalledRepositories(
+    workspace.id,
+    providerName,
+    enrichedRepos
+  );
 
   const cachedAt = new Date().toISOString();
   const freshUntil = Date.now() + REPOS_CACHE_FRESH_MS;
   try {
     await ctx.metrics.time("kv_write", () =>
-      cacheStore.put(
-        REPOS_CACHE_KEY,
-        JSON.stringify({ repos: enrichedRepos, cachedAt, freshUntil }),
-        { expirationTtl: REPOS_CACHE_KV_TTL_SECONDS }
-      )
+      cacheStore.put(cacheKey, JSON.stringify({ repos: filtered.repos, cachedAt, freshUntil }), {
+        expirationTtl: REPOS_CACHE_KV_TTL_SECONDS,
+      })
     );
   } catch (e) {
     logger.warn("Failed to cache repos list", { error: e instanceof Error ? e : String(e) });
   }
 
   return json({
-    repos: enrichedRepos,
+    repos: filtered.repos,
     cached: false,
     cachedAt,
   });
@@ -250,8 +287,8 @@ async function handleUpdateRepoMetadata(
   try {
     await metadataStore.upsert(owner, name, metadata);
 
-    // Invalidate the KV repos cache so next fetch includes updated metadata
-    await createKvCacheStore(env.REPOS_CACHE).delete(REPOS_CACHE_KEY);
+    // Invalidate all workspace-scoped repo caches so next fetch includes updated metadata.
+    await invalidateReposCache(env);
 
     // Return normalized repo identifier
     const normalizedRepo = `${owner.toLowerCase()}/${name.toLowerCase()}`;
@@ -301,7 +338,7 @@ async function handleGetRepoMetadata(
  * List branches for a specific repository.
  */
 async function handleListBranches(
-  _request: Request,
+  request: Request,
   env: Env,
   match: RegExpMatchArray,
   _ctx: RequestContext
@@ -309,6 +346,16 @@ async function handleListBranches(
   const params = extractRepoParams(match);
   if (params instanceof Response) return params;
   const { owner, name } = params;
+  const url = new URL(request.url);
+  const workspaceAccess = await new WorkspaceStore(env.DB).validateRepositoryAccess({
+    workspaceId: url.searchParams.get("workspaceId"),
+    provider: env.SCM_PROVIDER ?? "github",
+    repoOwner: owner,
+    repoName: name,
+  });
+  if (!workspaceAccess.ok) {
+    return error(workspaceAccess.message, workspaceAccess.status);
+  }
 
   try {
     const provider = createRouteSourceControlProvider(env);

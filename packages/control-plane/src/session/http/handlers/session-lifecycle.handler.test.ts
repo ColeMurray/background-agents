@@ -200,6 +200,7 @@ describe("createSessionLifecycleHandler", () => {
     expect(await response.json()).toEqual({ sessionId: "session-do-id", status: "created" });
     expect(repository.upsertSession).toHaveBeenCalledWith({
       id: "session-do-id",
+      workspaceId: "default",
       sessionName: "session-public-id",
       title: "Session title",
       repoOwner: "acme",
@@ -326,6 +327,7 @@ describe("createSessionLifecycleHandler", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       id: "public-session-1",
+      workspaceId: "default",
       title: "Session title",
       repoOwner: "acme",
       repoName: "repo",

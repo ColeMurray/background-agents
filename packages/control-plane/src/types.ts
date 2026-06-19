@@ -121,6 +121,7 @@ export interface ClientInfo {
 
 export interface SessionResponse {
   id: string;
+  workspaceId: string;
   title: string | null;
   repoOwner: string;
   repoName: string;

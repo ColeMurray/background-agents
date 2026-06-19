@@ -15,10 +15,13 @@ interface ReposResponse {
   repos: Repo[];
 }
 
-export function useRepos() {
+export function useRepos(workspaceId?: string) {
   const { data: session } = useSession();
 
-  const { data, isLoading } = useSWR<ReposResponse>(session ? "/api/repos" : null);
+  const path = workspaceId
+    ? `/api/repos?workspaceId=${encodeURIComponent(workspaceId)}`
+    : "/api/repos";
+  const { data, isLoading } = useSWR<ReposResponse>(session ? path : null);
 
   return {
     repos: data?.repos ?? [],

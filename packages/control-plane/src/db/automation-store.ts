@@ -6,12 +6,14 @@
  */
 
 import type { Automation, AutomationRun, AutomationRunStatus } from "@open-inspect/shared";
+import { DEFAULT_WORKSPACE_ID } from "@open-inspect/shared";
 
 // ─── Internal row types ──────────────────────────────────────────────────────
 
 export interface AutomationRow {
   id: string;
   name: string;
+  workspace_id?: string | null;
   repo_owner: string;
   repo_name: string;
   base_branch: string;
@@ -61,6 +63,7 @@ export function toAutomation(row: AutomationRow): Automation {
   return {
     id: row.id,
     name: row.name,
+    workspaceId: row.workspace_id ?? DEFAULT_WORKSPACE_ID,
     repoOwner: row.repo_owner,
     repoName: row.repo_name,
     baseBranch: row.base_branch,
@@ -113,15 +116,16 @@ export class AutomationStore {
     await this.db
       .prepare(
         `INSERT INTO automations
-         (id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
+         (id, name, workspace_id, repo_owner, repo_name, base_branch, repo_id, instructions,
           trigger_type, schedule_cron, schedule_tz, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, user_id, created_at, updated_at, deleted_at,
           event_type, trigger_config, trigger_auth_data)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
         row.name,
+        row.workspace_id ?? DEFAULT_WORKSPACE_ID,
         row.repo_owner,
         row.repo_name,
         row.base_branch,
@@ -155,10 +159,15 @@ export class AutomationStore {
   }
 
   async list(
-    options: { repoOwner?: string; repoName?: string } = {}
+    options: { workspaceId?: string; repoOwner?: string; repoName?: string } = {}
   ): Promise<{ automations: AutomationRow[]; total: number }> {
     const conditions: string[] = ["deleted_at IS NULL"];
     const params: unknown[] = [];
+
+    if (options.workspaceId) {
+      conditions.push("COALESCE(workspace_id, ?) = ?");
+      params.push(DEFAULT_WORKSPACE_ID, options.workspaceId);
+    }
 
     if (options.repoOwner) {
       conditions.push("repo_owner = ?");

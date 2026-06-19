@@ -2,6 +2,7 @@ import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/sh
 import { encryptTokenPair, generateId } from "../auth/crypto";
 import { DEFAULT_TOKEN_LIFETIME_MS, UserScmTokenStore } from "../db/user-scm-tokens";
 import { UserStore } from "../db/user-store";
+import { WorkspaceStore } from "../db/workspaces";
 import { createLogger } from "../logger";
 import { parseCreateSessionInput } from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
@@ -53,6 +54,17 @@ async function handleCreateSession(
   if (resolved instanceof Response) return resolved;
 
   const { repoId, defaultBranch } = resolved;
+  const provider = env.SCM_PROVIDER ?? "github";
+  const workspaceAccess = await new WorkspaceStore(env.DB).validateRepositoryAccess({
+    workspaceId: body.workspaceId,
+    provider,
+    repoOwner,
+    repoName,
+  });
+  if (!workspaceAccess.ok) {
+    return error(workspaceAccess.message, workspaceAccess.status);
+  }
+  const workspaceId = workspaceAccess.workspaceId!;
 
   const participantUserId = deriveParticipantUserId(body);
 
@@ -146,6 +158,7 @@ async function handleCreateSession(
 
   const input: SessionInitInput = {
     sessionId,
+    workspaceId,
     repoOwner,
     repoName,
     repoId,

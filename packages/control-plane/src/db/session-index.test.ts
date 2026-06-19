@@ -4,6 +4,7 @@ import type { SessionEntry } from "./session-index";
 
 type SessionRow = {
   id: string;
+  workspace_id: string | null;
   title: string | null;
   repo_owner: string;
   repo_name: string;
@@ -124,6 +125,7 @@ class FakeD1Database {
     if (QUERY_PATTERNS.INSERT_SESSION.test(normalized)) {
       const [
         id,
+        workspaceId,
         title,
         repoOwner,
         repoName,
@@ -141,6 +143,7 @@ class FakeD1Database {
         createdAt,
         updatedAt,
       ] = args as [
+        string,
         string,
         string | null,
         string,
@@ -163,6 +166,7 @@ class FakeD1Database {
       if (!this.rows.has(id)) {
         this.rows.set(id, {
           id,
+          workspace_id: workspaceId,
           title,
           repo_owner: repoOwner,
           repo_name: repoName,
@@ -299,6 +303,12 @@ class FakeD1Database {
         rows = rows.filter((r) => r.repo_name === nameVal);
       }
 
+      if (conditions.includes("COALESCE(workspace_id, ?) = ?")) {
+        const defaultWorkspaceId = args[argIdx++] as string;
+        const workspaceId = args[argIdx++] as string;
+        rows = rows.filter((r) => (r.workspace_id ?? defaultWorkspaceId) === workspaceId);
+      }
+
       const userIdMatch = conditions.match(/user_id IN \(([^)]+)\)/);
       if (userIdMatch) {
         const userIdCount = userIdMatch[1].split(",").length;
@@ -371,6 +381,7 @@ describe("SessionIndexStore", () => {
       const result = await store.get("test-id");
       expect(result).toEqual({
         ...session,
+        workspaceId: "default",
         // Defaults applied for missing optional fields
         parentSessionId: null,
         spawnSource: "user",
@@ -434,6 +445,14 @@ describe("SessionIndexStore", () => {
       const result = await store.get("test-id");
       expect(result?.userId).toBeNull();
     });
+
+    it("stores workspaceId when provided", async () => {
+      const session = makeSession({ workspaceId: "spi" });
+      await store.create(session);
+
+      const result = await store.get("test-id");
+      expect(result?.workspaceId).toBe("spi");
+    });
   });
 
   describe("get", () => {
@@ -480,6 +499,17 @@ describe("SessionIndexStore", () => {
       const result = await store.list({ excludeStatus: "archived" });
       expect(result.sessions).toHaveLength(2);
       expect(result.sessions.map((s) => s.id)).toEqual(["c", "a"]);
+      expect(result.total).toBe(2);
+    });
+
+    it("filters by workspaceId", async () => {
+      await store.create(makeSession({ id: "spi-new", workspaceId: "spi", updatedAt: 3000 }));
+      await store.create(makeSession({ id: "como", workspaceId: "como", updatedAt: 2000 }));
+      await store.create(makeSession({ id: "spi-old", workspaceId: "spi", updatedAt: 1000 }));
+
+      const result = await store.list({ workspaceId: "spi" });
+
+      expect(result.sessions.map((s) => s.id)).toEqual(["spi-new", "spi-old"]);
       expect(result.total).toBe(2);
     });
 

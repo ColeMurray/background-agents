@@ -91,11 +91,18 @@ describe("RepoClassifier", () => {
     });
 
     const classifier = new RepoClassifier(TEST_ENV);
-    const result = await classifier.classify("please fix prod slack alerts", undefined, "trace-1");
+    const result = await classifier.classify(
+      "please fix prod slack alerts",
+      undefined,
+      "trace-1",
+      "spi"
+    );
 
     expect(result.repo?.fullName).toBe("acme/prod");
     expect(result.confidence).toBe("high");
     expect(result.needsClarification).toBe(false);
+    expect(mockGetAvailableRepos).toHaveBeenCalledWith(TEST_ENV, "trace-1", "spi");
+    expect(mockBuildRepoDescriptions).toHaveBeenCalledWith(TEST_ENV, "trace-1", "spi");
     expect(mockMessagesCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         temperature: 0,

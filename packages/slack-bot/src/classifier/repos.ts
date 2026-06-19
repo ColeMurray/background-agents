@@ -30,6 +30,7 @@ const LOCAL_CACHE_TTL_MS = 60 * 1000;
  * Local in-memory cache for repos.
  */
 let localCache: {
+  workspaceId: string;
   repos: RepoConfig[];
   timestamp: number;
 } | null = null;
@@ -68,9 +69,17 @@ function toRepoConfig(repo: ControlPlaneRepo): RepoConfig {
  * @param env - Cloudflare Worker environment
  * @returns Array of RepoConfig objects
  */
-export async function getAvailableRepos(env: Env, traceId?: string): Promise<RepoConfig[]> {
+export async function getAvailableRepos(
+  env: Env,
+  traceId?: string,
+  workspaceId = "default"
+): Promise<RepoConfig[]> {
   // Check local cache first
-  if (localCache && Date.now() - localCache.timestamp < LOCAL_CACHE_TTL_MS) {
+  if (
+    localCache &&
+    localCache.workspaceId === workspaceId &&
+    Date.now() - localCache.timestamp < LOCAL_CACHE_TTL_MS
+  ) {
     return localCache.repos;
   }
 
@@ -86,11 +95,14 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
     };
 
     if (env.CONTROL_PLANE) {
-      response = await env.CONTROL_PLANE.fetch("https://internal/repos", {
-        headers,
-      });
+      response = await env.CONTROL_PLANE.fetch(
+        `https://internal/repos?workspaceId=${encodeURIComponent(workspaceId)}`,
+        {
+          headers,
+        }
+      );
     } else {
-      const url = `${env.CONTROL_PLANE_URL}/repos`;
+      const url = `${env.CONTROL_PLANE_URL}/repos?workspaceId=${encodeURIComponent(workspaceId)}`;
       response = await fetch(url, {
         headers: {
           ...headers,
@@ -106,7 +118,7 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
         http_status: response.status,
         duration_ms: Date.now() - startTime,
       });
-      return getFromCacheOrFallback(env);
+      return getFromCacheOrFallback(env, workspaceId);
     }
 
     const data = (await response.json()) as ControlPlaneReposResponse;
@@ -114,15 +126,20 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
 
     // Update local cache
     localCache = {
+      workspaceId,
       repos,
       timestamp: Date.now(),
     };
 
     // Also store in KV for persistence across worker restarts
     try {
-      await createKvCacheStore(env.SLACK_KV).put("repos:cache", JSON.stringify(repos), {
-        expirationTtl: 300, // 5 minutes
-      });
+      await createKvCacheStore(env.SLACK_KV).put(
+        `repos:cache:${workspaceId}`,
+        JSON.stringify(repos),
+        {
+          expirationTtl: 300, // 5 minutes
+        }
+      );
     } catch (e) {
       log.warn("kv.put", {
         trace_id: traceId,
@@ -146,16 +163,16 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
       error: e instanceof Error ? e : new Error(String(e)),
       duration_ms: Date.now() - startTime,
     });
-    return getFromCacheOrFallback(env);
+    return getFromCacheOrFallback(env, workspaceId);
   }
 }
 
 /**
  * Get repos from KV cache or return fallback.
  */
-async function getFromCacheOrFallback(env: Env): Promise<RepoConfig[]> {
+async function getFromCacheOrFallback(env: Env, workspaceId = "default"): Promise<RepoConfig[]> {
   try {
-    const cached = await createKvCacheStore(env.SLACK_KV).get("repos:cache", "json");
+    const cached = await createKvCacheStore(env.SLACK_KV).get(`repos:cache:${workspaceId}`, "json");
     if (cached && Array.isArray(cached)) {
       log.info("control_plane.fetch_repos", { source: "kv_cache" });
       return cached as RepoConfig[];
@@ -184,9 +201,10 @@ async function getFromCacheOrFallback(env: Env): Promise<RepoConfig[]> {
 export async function getRepoByFullName(
   env: Env,
   fullName: string,
-  traceId?: string
+  traceId?: string,
+  workspaceId?: string
 ): Promise<RepoConfig | undefined> {
-  const repos = await getAvailableRepos(env, traceId);
+  const repos = await getAvailableRepos(env, traceId, workspaceId);
   return repos.find((r) => r.fullName.toLowerCase() === fullName.toLowerCase());
 }
 
@@ -196,9 +214,10 @@ export async function getRepoByFullName(
 export async function getRepoById(
   env: Env,
   id: string,
-  traceId?: string
+  traceId?: string,
+  workspaceId?: string
 ): Promise<RepoConfig | undefined> {
-  const repos = await getAvailableRepos(env, traceId);
+  const repos = await getAvailableRepos(env, traceId, workspaceId);
   return repos.find((r) => r.id.toLowerCase() === id.toLowerCase());
 }
 
@@ -208,9 +227,10 @@ export async function getRepoById(
 export async function getReposByChannel(
   env: Env,
   channelId: string,
-  traceId?: string
+  traceId?: string,
+  workspaceId?: string
 ): Promise<RepoConfig[]> {
-  const repos = await getAvailableRepos(env, traceId);
+  const repos = await getAvailableRepos(env, traceId, workspaceId);
   return repos.filter((r) => r.channelAssociations?.includes(channelId));
 }
 
@@ -218,8 +238,12 @@ export async function getReposByChannel(
  * Build a description string for all available repos.
  * Used in the classification prompt.
  */
-export async function buildRepoDescriptions(env: Env, traceId?: string): Promise<string> {
-  const repos = await getAvailableRepos(env, traceId);
+export async function buildRepoDescriptions(
+  env: Env,
+  traceId?: string,
+  workspaceId?: string
+): Promise<string> {
+  const repos = await getAvailableRepos(env, traceId, workspaceId);
 
   if (repos.length === 0) {
     return "No repositories are currently available.";

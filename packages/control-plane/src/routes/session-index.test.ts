@@ -69,6 +69,7 @@ describe("session index routes", () => {
     expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
       status: undefined,
       excludeStatus: undefined,
+      workspaceId: undefined,
       createdByUserIds: [],
       limit: 50,
       offset: 0,
@@ -82,6 +83,7 @@ describe("session index routes", () => {
     expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
       status: undefined,
       excludeStatus: undefined,
+      workspaceId: undefined,
       createdByUserIds: [],
       limit: 100,
       offset: 0,
@@ -97,7 +99,22 @@ describe("session index routes", () => {
     expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
       status: undefined,
       excludeStatus: undefined,
+      workspaceId: undefined,
       createdByUserIds: ["0123456789abcdef0123456789abcdef"],
+      limit: 50,
+      offset: 0,
+    });
+  });
+
+  it("passes workspace filters through to the store", async () => {
+    const response = await listSessions("?workspaceId=spi");
+
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
+      status: undefined,
+      excludeStatus: undefined,
+      workspaceId: "spi",
+      createdByUserIds: [],
       limit: 50,
       offset: 0,
     });

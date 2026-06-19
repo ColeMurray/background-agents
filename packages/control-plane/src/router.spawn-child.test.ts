@@ -19,6 +19,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
   const parentId = "parent-session-1";
 
   const spawnContext = {
+    workspaceId: "workspace-1",
     repoOwner: "acme",
     repoName: "web-app",
     repoId: 12345,
@@ -108,6 +109,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
     const childEntry = store.create.mock.calls[0]?.[0];
     expect(childEntry?.id).toBe(payload.sessionId);
+    expect(childEntry?.workspaceId).toBe("workspace-1");
     expect(childEntry?.userId).toBe("canonical-user-123");
     expect(store.updateStatus).not.toHaveBeenCalled();
   });

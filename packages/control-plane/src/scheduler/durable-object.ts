@@ -10,6 +10,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import {
+  DEFAULT_WORKSPACE_ID,
   nextCronOccurrence,
   matchesConditions,
   conditionRegistry,
@@ -577,6 +578,7 @@ export class SchedulerDO extends DurableObject<Env> {
       this.env,
       {
         sessionId,
+        workspaceId: automation.workspace_id ?? DEFAULT_WORKSPACE_ID,
         repoOwner: automation.repo_owner,
         repoName: automation.repo_name,
         repoId: automation.repo_id,

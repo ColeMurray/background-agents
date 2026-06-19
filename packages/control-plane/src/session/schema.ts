@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS session (
   id TEXT PRIMARY KEY,                              -- Same as DO ID
   session_name TEXT,                                -- External session name for WebSocket routing
   title TEXT,                                       -- Session/PR title
+  workspace_id TEXT NOT NULL DEFAULT 'default',     -- TaskArk workspace isolation boundary
   repo_owner TEXT NOT NULL,                         -- e.g., "acme-corp"
   repo_name TEXT NOT NULL,                          -- e.g., "web-app"
   repo_id INTEGER,                                  -- GitHub repository ID (stable)
@@ -382,6 +383,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 30,
     description: "Add total_cost to session",
     run: `ALTER TABLE session ADD COLUMN total_cost REAL NOT NULL DEFAULT 0`,
+  },
+  {
+    id: 31,
+    description: "Add workspace_id to session",
+    run: `ALTER TABLE session ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'`,
   },
 ];
 

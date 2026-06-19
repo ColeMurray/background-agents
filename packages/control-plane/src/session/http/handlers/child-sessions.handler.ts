@@ -1,4 +1,4 @@
-import type { SpawnContext } from "@open-inspect/shared";
+import { DEFAULT_WORKSPACE_ID, type SpawnContext } from "@open-inspect/shared";
 import type { SessionStatus } from "../../../types";
 import type { SessionRepository } from "../../repository";
 import type { ArtifactRow, SandboxRow, SessionRow } from "../../types";
@@ -55,6 +55,7 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
       }
 
       const context: SpawnContext = {
+        workspaceId: session.workspace_id ?? DEFAULT_WORKSPACE_ID,
         repoOwner: session.repo_owner,
         repoName: session.repo_name,
         repoId: session.repo_id,

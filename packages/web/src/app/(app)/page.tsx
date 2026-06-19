@@ -13,14 +13,17 @@ import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import { APP_NAME } from "@/lib/site-config";
 import {
+  DEFAULT_WORKSPACE_ID,
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
   isValidReasoningEffort,
+  type Workspace,
   type ModelCategory,
 } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { useRepos, type Repo } from "@/hooks/use-repos";
 import { useBranches } from "@/hooks/use-branches";
+import { useWorkspaces } from "@/hooks/use-workspaces";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 import {
   SidebarIcon,
@@ -33,13 +36,16 @@ import {
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 
 const LAST_SELECTED_REPO_STORAGE_KEY = "open-inspect-last-selected-repo";
+const LAST_SELECTED_WORKSPACE_STORAGE_KEY = "open-inspect-last-selected-workspace";
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
 
 export default function Home() {
   const { data: session } = useSession();
   const router = useRouter();
-  const { repos, loading: loadingRepos } = useRepos();
+  const { workspaces, defaultWorkspaceId, loading: loadingWorkspaces } = useWorkspaces();
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>(DEFAULT_WORKSPACE_ID);
+  const { repos, loading: loadingRepos } = useRepos(selectedWorkspaceId);
   const [selectedRepo, setSelectedRepo] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
@@ -53,17 +59,38 @@ export default function Home() {
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const sessionCreationPromise = useRef<Promise<string | null> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const pendingConfigRef = useRef<{ repo: string; model: string; branch: string } | null>(null);
+  const pendingConfigRef = useRef<{
+    workspaceId: string;
+    repo: string;
+    model: string;
+    branch: string;
+  } | null>(null);
   const [hasHydratedModelPreferences, setHasHydratedModelPreferences] = useState(false);
   const { enabledModels, enabledModelOptions } = useEnabledModels();
   const selectedRepoOwner = selectedRepo.split("/")[0] ?? "";
   const selectedRepoName = selectedRepo.split("/")[1] ?? "";
-  const { branches, loading: loadingBranches } = useBranches(selectedRepoOwner, selectedRepoName);
+  const { branches, loading: loadingBranches } = useBranches(
+    selectedRepoOwner,
+    selectedRepoName,
+    selectedWorkspaceId
+  );
+
+  useEffect(() => {
+    if (workspaces.length === 0) return;
+    const storedWorkspaceId = localStorage.getItem(LAST_SELECTED_WORKSPACE_STORAGE_KEY);
+    const resolvedWorkspaceId =
+      storedWorkspaceId && workspaces.some((workspace) => workspace.id === storedWorkspaceId)
+        ? storedWorkspaceId
+        : defaultWorkspaceId;
+    setSelectedWorkspaceId(resolvedWorkspaceId);
+  }, [defaultWorkspaceId, workspaces]);
 
   // Auto-select repo when repos load
   useEffect(() => {
     if (repos.length > 0 && !selectedRepo) {
-      const lastSelectedRepo = localStorage.getItem(LAST_SELECTED_REPO_STORAGE_KEY);
+      const lastSelectedRepo = localStorage.getItem(
+        `${LAST_SELECTED_REPO_STORAGE_KEY}:${selectedWorkspaceId}`
+      );
       const hasLastSelectedRepo = repos.some((repo) => repo.fullName === lastSelectedRepo);
       const defaultRepo =
         (hasLastSelectedRepo ? lastSelectedRepo : repos[0].fullName) ?? repos[0].fullName;
@@ -71,12 +98,22 @@ export default function Home() {
       const repo = repos.find((r) => r.fullName === defaultRepo);
       if (repo) setSelectedBranch(repo.defaultBranch);
     }
-  }, [repos, selectedRepo]);
+  }, [repos, selectedRepo, selectedWorkspaceId]);
+
+  useEffect(() => {
+    setSelectedRepo("");
+    setSelectedBranch("");
+  }, [selectedWorkspaceId]);
 
   useEffect(() => {
     if (!selectedRepo) return;
-    localStorage.setItem(LAST_SELECTED_REPO_STORAGE_KEY, selectedRepo);
-  }, [selectedRepo]);
+    localStorage.setItem(`${LAST_SELECTED_REPO_STORAGE_KEY}:${selectedWorkspaceId}`, selectedRepo);
+  }, [selectedRepo, selectedWorkspaceId]);
+
+  useEffect(() => {
+    if (!selectedWorkspaceId) return;
+    localStorage.setItem(LAST_SELECTED_WORKSPACE_STORAGE_KEY, selectedWorkspaceId);
+  }, [selectedWorkspaceId]);
 
   useEffect(() => {
     if (enabledModels.length === 0 || hasHydratedModelPreferences) return;
@@ -120,7 +157,7 @@ export default function Home() {
     setIsCreatingSession(false);
     sessionCreationPromise.current = null;
     pendingConfigRef.current = null;
-  }, [selectedRepo, selectedModel, selectedBranch]);
+  }, [selectedWorkspaceId, selectedRepo, selectedModel, selectedBranch]);
 
   const createSessionForWarming = useCallback(async () => {
     if (pendingSessionId) return pendingSessionId;
@@ -129,7 +166,12 @@ export default function Home() {
 
     setIsCreatingSession(true);
     const [owner, name] = selectedRepo.split("/");
-    const currentConfig = { repo: selectedRepo, model: selectedModel, branch: selectedBranch };
+    const currentConfig = {
+      workspaceId: selectedWorkspaceId,
+      repo: selectedRepo,
+      model: selectedModel,
+      branch: selectedBranch,
+    };
     pendingConfigRef.current = currentConfig;
 
     const abortController = new AbortController();
@@ -141,6 +183,7 @@ export default function Home() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            workspaceId: selectedWorkspaceId,
             repoOwner: owner,
             repoName: name,
             model: selectedModel,
@@ -154,6 +197,7 @@ export default function Home() {
           const data = await res.json();
           if (
             pendingConfigRef.current?.repo === currentConfig.repo &&
+            pendingConfigRef.current?.workspaceId === currentConfig.workspaceId &&
             pendingConfigRef.current?.model === currentConfig.model &&
             pendingConfigRef.current?.branch === currentConfig.branch
           ) {
@@ -180,7 +224,14 @@ export default function Home() {
 
     sessionCreationPromise.current = promise;
     return promise;
-  }, [selectedRepo, selectedModel, reasoningEffort, selectedBranch, pendingSessionId]);
+  }, [
+    selectedWorkspaceId,
+    selectedRepo,
+    selectedModel,
+    reasoningEffort,
+    selectedBranch,
+    pendingSessionId,
+  ]);
 
   // Reset selections when model preferences change (only after hydration)
   useEffect(() => {
@@ -270,6 +321,10 @@ export default function Home() {
   return (
     <HomeContent
       isAuthenticated={!!session}
+      workspaces={workspaces}
+      loadingWorkspaces={loadingWorkspaces}
+      selectedWorkspaceId={selectedWorkspaceId}
+      setSelectedWorkspaceId={setSelectedWorkspaceId}
       repos={repos}
       loadingRepos={loadingRepos}
       selectedRepo={selectedRepo}
@@ -295,6 +350,10 @@ export default function Home() {
 
 function HomeContent({
   isAuthenticated,
+  workspaces,
+  loadingWorkspaces,
+  selectedWorkspaceId,
+  setSelectedWorkspaceId,
   repos,
   loadingRepos,
   selectedRepo,
@@ -316,6 +375,10 @@ function HomeContent({
   modelOptions,
 }: {
   isAuthenticated: boolean;
+  workspaces: Workspace[];
+  loadingWorkspaces: boolean;
+  selectedWorkspaceId: string;
+  setSelectedWorkspaceId: (value: string) => void;
   repos: Repo[];
   loadingRepos: boolean;
   selectedRepo: string;
@@ -350,6 +413,8 @@ function HomeContent({
 
   const selectedRepoObj = repos.find((r) => r.fullName === selectedRepo);
   const displayRepoName = selectedRepoObj ? selectedRepoObj.name : "Select repo";
+  const selectedWorkspaceObj = workspaces.find((workspace) => workspace.id === selectedWorkspaceId);
+  const displayWorkspaceName = selectedWorkspaceObj?.name ?? "Workspace";
 
   return (
     <div className="h-full flex flex-col">
@@ -427,6 +492,33 @@ function HomeContent({
                 <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">
                   {/* Left side - Repo selector + Model selector */}
                   <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
+                    {/* Workspace selector */}
+                    <Combobox
+                      value={selectedWorkspaceId}
+                      onChange={(value) => setSelectedWorkspaceId(value)}
+                      items={workspaces.map((workspace) => ({
+                        value: workspace.id,
+                        label: workspace.name,
+                        description: workspace.key,
+                      }))}
+                      searchable
+                      searchPlaceholder="Search workspaces..."
+                      filterFn={(option, query) =>
+                        option.label.toLowerCase().includes(query) ||
+                        (option.description?.toLowerCase().includes(query) ?? false) ||
+                        String(option.value).toLowerCase().includes(query)
+                      }
+                      direction="up"
+                      dropdownWidth="w-64"
+                      disabled={creating || loadingWorkspaces || workspaces.length <= 1}
+                      triggerClassName="flex max-w-full items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
+                    >
+                      <span className="truncate max-w-[10rem] sm:max-w-none">
+                        {loadingWorkspaces ? "Loading..." : displayWorkspaceName}
+                      </span>
+                      <ChevronDownIcon className="w-3 h-3" />
+                    </Combobox>
+
                     {/* Repo selector */}
                     <Combobox
                       value={selectedRepo}

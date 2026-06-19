@@ -50,6 +50,34 @@ export type SpawnSource =
   | "slack-bot";
 export type ConfidenceLevel = "high" | "medium" | "low";
 
+export const DEFAULT_WORKSPACE_ID = "default";
+
+export interface Workspace {
+  id: string;
+  key: string;
+  name: string;
+  status: "active" | "archived";
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface WorkspaceRepository {
+  workspaceId: string;
+  provider: string;
+  repoId: number | null;
+  repoOwner: string;
+  repoName: string;
+  role: "execution" | "context";
+  active: boolean;
+  defaultBranch: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ListWorkspacesResponse {
+  workspaces: Workspace[];
+}
+
 // Participant in a session
 export interface SessionParticipant {
   id: string;
@@ -63,6 +91,7 @@ export interface SessionParticipant {
 // Session state
 export interface Session {
   id: string;
+  workspaceId: string;
   title: string | null;
   repoOwner: string;
   repoName: string;
@@ -395,6 +424,7 @@ export type ServerMessage =
 // Session state sent to clients
 export interface SessionState {
   id: string;
+  workspaceId: string;
   title: string | null;
   repoOwner: string;
   repoName: string;
@@ -449,6 +479,7 @@ export interface RepoMetadata {
 }
 
 export interface EnrichedRepository extends InstallationRepository {
+  workspaceId?: string;
   metadata?: RepoMetadata;
 }
 
@@ -553,6 +584,7 @@ export interface SlackCallbackContext {
   source: "slack";
   channel: string;
   threadTs: string;
+  workspaceId?: string;
   repoFullName: string;
   model: string;
   reasoningEffort?: string;
@@ -585,6 +617,7 @@ export type CallbackContext =
 
 // API response types
 export interface CreateSessionRequest {
+  workspaceId?: string;
   repoOwner: string;
   repoName: string;
   title?: string;
@@ -618,6 +651,7 @@ export interface SpawnChildSessionRequest {
 
 /** Returned by parent DO's GET /internal/spawn-context */
 export interface SpawnContext {
+  workspaceId: string;
   repoOwner: string;
   repoName: string;
   repoId: number | null;
@@ -654,6 +688,7 @@ export interface ChildSessionTrajectory {
 export interface ChildSessionDetail {
   session: {
     id: string;
+    workspaceId: string;
     title: string;
     status: SessionStatus;
     repoOwner: string;
@@ -740,6 +775,7 @@ import type { TriggerConfig } from "../triggers/conditions";
 export interface Automation {
   id: string;
   name: string;
+  workspaceId: string;
   repoOwner: string;
   repoName: string;
   baseBranch: string;
@@ -763,6 +799,7 @@ export interface Automation {
 
 export interface CreateAutomationRequest {
   name: string;
+  workspaceId?: string;
   repoOwner: string;
   repoName: string;
   baseBranch?: string;

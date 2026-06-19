@@ -22,6 +22,7 @@ export interface SessionRow {
   id: string;
   session_name: string | null; // External session name for WebSocket routing
   title: string | null;
+  workspace_id?: string | null;
   repo_owner: string;
   repo_name: string;
   repo_id: number | null;

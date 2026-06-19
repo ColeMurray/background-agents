@@ -10,6 +10,7 @@ vi.mock("../db/session-index", () => ({
 describe("initializeSession", () => {
   const baseInput: SessionInitInput = {
     sessionId: "session-123",
+    workspaceId: "workspace-1",
     repoOwner: "acme",
     repoName: "web-app",
     repoId: 42,
@@ -119,6 +120,7 @@ describe("initializeSession", () => {
 
     const d1Entry = createMock.mock.calls[0][0];
     expect(d1Entry.id).toBe("session-123");
+    expect(d1Entry.workspaceId).toBe("workspace-1");
     expect(d1Entry.title).toBe("Test session");
     expect(d1Entry.repoOwner).toBe("acme");
     expect(d1Entry.repoName).toBe("web-app");
@@ -164,6 +166,7 @@ describe("initializeSession", () => {
 
     const body = (await request.json()) as Record<string, unknown>;
     expect(body.sessionName).toBe("session-123");
+    expect(body.workspaceId).toBe("workspace-1");
     expect(body.repoOwner).toBe("acme");
     expect(body.repoName).toBe("web-app");
     expect(body.repoId).toBe(42);

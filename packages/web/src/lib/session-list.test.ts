@@ -13,6 +13,7 @@ import type { Session } from "@open-inspect/shared";
 function session(id: string, overrides: Partial<Session> = {}): Session {
   return {
     id,
+    workspaceId: "default",
     title: id.toUpperCase(),
     repoOwner: "open-inspect",
     repoName: "background-agents",

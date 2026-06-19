@@ -109,6 +109,7 @@ describe("SessionRepository", () => {
         "sess-1",
         "test-session",
         "Test Title",
+        "default",
         "owner",
         "repo",
         null,

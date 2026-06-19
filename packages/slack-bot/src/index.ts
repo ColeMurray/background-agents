@@ -15,6 +15,7 @@ import type {
 } from "./types";
 import { stripMentions, isDmDispatchable } from "./dm-utils";
 import {
+  DEFAULT_WORKSPACE_ID,
   verifySlackSignature,
   postMessage,
   updateMessage,
@@ -48,6 +49,10 @@ type BackgroundTaskScheduler = (promise: Promise<void>) => void;
  */
 const SELECT_REPO_ACTION_ID = "select_repo";
 
+function resolveSlackWorkspaceId(env: Env): string {
+  return env.DEFAULT_WORKSPACE_ID?.trim() || DEFAULT_WORKSPACE_ID;
+}
+
 /**
  * Repo options for the clarification picker's external_select. Slack queries
  * this endpoint as the user types; we filter on the repo's full name and cap
@@ -56,7 +61,7 @@ const SELECT_REPO_ACTION_ID = "select_repo";
  * the remaining repos — so users are no longer limited to a fixed handful.
  */
 async function getRepoClarificationOptions(env: Env, query: string | undefined, traceId?: string) {
-  const repos = await getAvailableRepos(env, traceId);
+  const repos = await getAvailableRepos(env, traceId, resolveSlackWorkspaceId(env));
   const normalizedQuery = query?.trim().toLowerCase();
   const filtered = normalizedQuery
     ? repos.filter((repo) => repo.fullName.toLowerCase().includes(normalizedQuery))
@@ -84,6 +89,7 @@ async function getAuthHeaders(env: Env, traceId?: string): Promise<Record<string
  */
 async function createSession(
   env: Env,
+  workspaceId: string,
   repo: RepoConfig,
   model: string,
   reasoningEffort: string | undefined,
@@ -98,6 +104,7 @@ async function createSession(
     trace_id: traceId,
     repo_owner: repo.owner,
     repo_name: repo.name,
+    workspace_id: workspaceId,
     model,
     reasoning_effort: reasoningEffort,
     branch,
@@ -109,6 +116,7 @@ async function createSession(
       method: "POST",
       headers,
       body: JSON.stringify({
+        workspaceId,
         repoOwner: repo.owner,
         repoName: repo.name,
         model,
@@ -291,12 +299,14 @@ async function clearThreadSession(env: Env, channel: string, threadTs: string): 
  */
 function buildThreadSession(
   sessionId: string,
+  workspaceId: string,
   repo: RepoConfig,
   model: string,
   reasoningEffort?: string
 ): ThreadSession {
   return {
     sessionId,
+    workspaceId,
     repoId: repo.id,
     repoFullName: repo.fullName,
     model,
@@ -390,6 +400,7 @@ function buildWorkingMessageBlocks(
  */
 async function startSessionAndSendPrompt(
   env: Env,
+  workspaceId: string,
   repo: RepoConfig,
   channel: string,
   threadTs: string,
@@ -427,6 +438,7 @@ async function startSessionAndSendPrompt(
   // Create session via control plane with user's preferred model, reasoning effort, and branch
   const session = await createSession(
     env,
+    workspaceId,
     repo,
     model,
     reasoningEffort,
@@ -451,7 +463,7 @@ async function startSessionAndSendPrompt(
     env,
     channel,
     threadTs,
-    buildThreadSession(session.sessionId, repo, model, reasoningEffort)
+    buildThreadSession(session.sessionId, workspaceId, repo, model, reasoningEffort)
   );
 
   // Build callback context for follow-up notification
@@ -459,6 +471,7 @@ async function startSessionAndSendPrompt(
     source: "slack",
     channel,
     threadTs,
+    workspaceId,
     repoFullName: repo.fullName,
     model,
     reasoningEffort,
@@ -800,6 +813,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     traceId,
     scheduleBackground,
   } = params;
+  const workspaceId = resolveSlackWorkspaceId(env);
 
   if (!messageText) {
     await postMessage(
@@ -843,6 +857,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         source: "slack",
         channel,
         threadTs,
+        workspaceId: existingSession.workspaceId ?? workspaceId,
         repoFullName: existingSession.repoFullName,
         model: existingSession.model,
         reasoningEffort: existingSession.reasoningEffort,
@@ -899,13 +914,14 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       threadTs,
       previousMessages,
     },
-    traceId
+    traceId,
+    workspaceId
   );
 
   // Post initial response
   if (result.needsClarification || !result.repo) {
     // Need to clarify which repo
-    const repos = await getAvailableRepos(env, traceId);
+    const repos = await getAvailableRepos(env, traceId, workspaceId);
 
     if (repos.length === 0) {
       await postMessage(
@@ -923,6 +939,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       pendingKey,
       JSON.stringify({
         message: messageText,
+        workspaceId,
         userId: user,
         previousMessages,
         channelName,
@@ -989,6 +1006,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   // Create session and send prompt using shared logic
   const sessionResult = await startSessionAndSendPrompt(
     env,
+    workspaceId,
     repo,
     channel,
     threadKey,
@@ -1139,22 +1157,25 @@ async function handleRepoSelection(
 
   const {
     message: messageText,
+    workspaceId: pendingWorkspaceId,
     userId,
     previousMessages,
     channelName,
     channelDescription,
   } = pendingData as {
     message: string;
+    workspaceId?: string;
     userId: string;
     previousMessages?: string[];
     channelName?: string;
     channelDescription?: string;
   };
+  const workspaceId = pendingWorkspaceId ?? resolveSlackWorkspaceId(env);
 
   const threadKey = threadTs || messageTs;
 
   // Find the repo config
-  const repos = await getAvailableRepos(env, traceId);
+  const repos = await getAvailableRepos(env, traceId, workspaceId);
   const repo = repos.find((r) => r.id === repoId);
 
   if (!repo) {
@@ -1185,6 +1206,7 @@ async function handleRepoSelection(
   // Create session and send prompt using shared logic
   const sessionResult = await startSessionAndSendPrompt(
     env,
+    workspaceId,
     repo,
     channel,
     threadKey,

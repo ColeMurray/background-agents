@@ -18,6 +18,7 @@ import {
 } from "@open-inspect/shared";
 import { AutomationStore, toAutomation, toAutomationRun } from "../db/automation-store";
 import { UserStore } from "../db/user-store";
+import { WorkspaceStore } from "../db/workspaces";
 import { resolveProviderIdentity, type SessionIdentityFields } from "../session/identity";
 import { generateId } from "../auth/crypto";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
@@ -76,11 +77,12 @@ async function handleListAutomations(
   _ctx: RequestContext
 ): Promise<Response> {
   const url = new URL(request.url);
+  const workspaceId = url.searchParams.get("workspaceId") ?? undefined;
   const repoOwner = url.searchParams.get("repoOwner") ?? undefined;
   const repoName = url.searchParams.get("repoName") ?? undefined;
 
   const store = new AutomationStore(env.DB);
-  const result = await store.list({ repoOwner, repoName });
+  const result = await store.list({ workspaceId, repoOwner, repoName });
 
   return json({
     automations: result.automations.map(toAutomation),
@@ -190,6 +192,16 @@ async function handleCreateAutomation(
   if (resolved instanceof Response) return resolved;
 
   const { repoId, defaultBranch } = resolved;
+  const workspaceAccess = await new WorkspaceStore(env.DB).validateRepositoryAccess({
+    workspaceId: body.workspaceId,
+    provider: env.SCM_PROVIDER ?? "github",
+    repoOwner,
+    repoName,
+  });
+  if (!workspaceAccess.ok) {
+    return error(workspaceAccess.message, workspaceAccess.status);
+  }
+  const workspaceId = workspaceAccess.workspaceId!;
   const baseBranch = body.baseBranch || defaultBranch;
 
   // Compute next run (only for schedule triggers)
@@ -243,6 +255,7 @@ async function handleCreateAutomation(
   await store.create({
     id,
     name: body.name.trim(),
+    workspace_id: workspaceId,
     repo_owner: repoOwner,
     repo_name: repoName,
     base_branch: baseBranch,

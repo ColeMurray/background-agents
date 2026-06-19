@@ -1,6 +1,6 @@
 import type { Env } from "../types";
 import type { RequestContext } from "../routes/shared";
-import type { SpawnSource, SandboxSettings } from "@open-inspect/shared";
+import { DEFAULT_WORKSPACE_ID, type SpawnSource, type SandboxSettings } from "@open-inspect/shared";
 import { SessionIndexStore } from "../db/session-index";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
 import { createLogger } from "../logger";
@@ -13,6 +13,7 @@ const logger = createLogger("session-init");
  */
 export interface SessionInitInput {
   sessionId: string;
+  workspaceId?: string;
 
   // Repository
   repoOwner: string;
@@ -65,11 +66,13 @@ export async function initializeSession(
   ctx: RequestContext
 ): Promise<{ sessionId: string; status: string }> {
   const now = Date.now();
+  const workspaceId = input.workspaceId ?? DEFAULT_WORKSPACE_ID;
 
   // Step 1: D1 index (must succeed before DO init starts sandbox warming)
   const sessionStore = new SessionIndexStore(env.DB);
   await sessionStore.create({
     id: input.sessionId,
+    workspaceId,
     title: input.title || null,
     repoOwner: input.repoOwner,
     repoName: input.repoName,
@@ -106,6 +109,7 @@ export async function initializeSession(
         headers,
         body: JSON.stringify({
           sessionName: input.sessionId,
+          workspaceId,
           repoOwner: input.repoOwner,
           repoName: input.repoName,
           repoId: input.repoId,

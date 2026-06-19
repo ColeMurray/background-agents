@@ -81,6 +81,7 @@ export async function POST(request: NextRequest) {
     const userId = user.id || user.email || "anonymous";
 
     const sessionBody = {
+      workspaceId: body.workspaceId,
       repoOwner: body.repoOwner,
       repoName: body.repoName,
       model: body.model,

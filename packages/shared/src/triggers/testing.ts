@@ -14,6 +14,7 @@ import type { TriggerCondition } from "./conditions";
 import { matchesConditions } from "./conditions";
 import { conditionRegistry } from "./registry";
 import type { Automation } from "../types";
+import { DEFAULT_WORKSPACE_ID } from "../types";
 
 type EventForSource<S extends AutomationEventSource> = Extract<AutomationEvent, { source: S }>;
 
@@ -98,6 +99,7 @@ export function makeTriggerAutomation(overrides?: Partial<Automation>): Automati
   return {
     id: "auto-test",
     name: "Test Automation",
+    workspaceId: DEFAULT_WORKSPACE_ID,
     repoOwner: "test-owner",
     repoName: "test-repo",
     baseBranch: "main",

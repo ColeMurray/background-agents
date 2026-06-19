@@ -18,6 +18,7 @@ export interface Env {
   WEB_APP_URL: string;
   DEFAULT_MODEL: string;
   CLASSIFICATION_MODEL: string;
+  DEFAULT_WORKSPACE_ID?: string;
   APP_NAME?: string;
 
   // Secrets
@@ -139,6 +140,7 @@ export type SlackBotCallbackContext = SlackCallbackContext;
  */
 export interface ThreadSession {
   sessionId: string;
+  workspaceId?: string;
   repoId: string;
   repoFullName: string;
   model: string;

@@ -113,6 +113,7 @@ async function handleSpawnChild(
 
   const input: SessionInitInput = {
     sessionId: childId,
+    workspaceId: spawnContext.workspaceId,
     repoOwner: spawnContext.repoOwner,
     repoName: spawnContext.repoName,
     repoId: spawnContext.repoId,

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { controlPlaneFetch } from "@/lib/control-plane";
@@ -10,7 +11,7 @@ interface ControlPlaneReposResponse {
   cachedAt: string;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -19,7 +20,9 @@ export async function GET() {
   try {
     // Fetch repositories from control plane using GitHub App installation token.
     // This ensures we only show repos the App has access to, not all repos the user can see.
-    const response = await controlPlaneFetch("/repos");
+    const workspaceId = request.nextUrl.searchParams.get("workspaceId");
+    const path = workspaceId ? `/repos?workspaceId=${encodeURIComponent(workspaceId)}` : "/repos";
+    const response = await controlPlaneFetch(path);
 
     if (!response.ok) {
       const error = await response.text();

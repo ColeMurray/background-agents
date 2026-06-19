@@ -52,9 +52,10 @@ async function buildClassificationPrompt(
   env: Env,
   message: string,
   context?: ThreadContext,
-  traceId?: string
+  traceId?: string,
+  workspaceId?: string
 ): Promise<string> {
-  const repoDescriptions = await buildRepoDescriptions(env, traceId);
+  const repoDescriptions = await buildRepoDescriptions(env, traceId, workspaceId);
 
   let contextSection = "";
 
@@ -191,10 +192,11 @@ export class RepoClassifier {
   async classify(
     message: string,
     context?: ThreadContext,
-    traceId?: string
+    traceId?: string,
+    workspaceId?: string
   ): Promise<ClassificationResult> {
     // Fetch available repos dynamically
-    const repos = await getAvailableRepos(this.env, traceId);
+    const repos = await getAvailableRepos(this.env, traceId, workspaceId);
 
     // If no repos available, return immediately
     if (repos.length === 0) {
@@ -218,7 +220,12 @@ export class RepoClassifier {
 
     // Check for channel-specific repos first
     if (context?.channelId) {
-      const channelRepos = await getReposByChannel(this.env, context.channelId, traceId);
+      const channelRepos = await getReposByChannel(
+        this.env,
+        context.channelId,
+        traceId,
+        workspaceId
+      );
       if (channelRepos.length === 1) {
         return {
           repo: channelRepos[0],
@@ -231,7 +238,13 @@ export class RepoClassifier {
 
     // Use LLM for classification
     try {
-      const prompt = await buildClassificationPrompt(this.env, message, context, traceId);
+      const prompt = await buildClassificationPrompt(
+        this.env,
+        message,
+        context,
+        traceId,
+        workspaceId
+      );
 
       const response = await this.client.messages.create({
         model: this.env.CLASSIFICATION_MODEL || "claude-haiku-4-5",

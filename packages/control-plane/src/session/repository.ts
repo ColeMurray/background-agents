@@ -5,6 +5,7 @@
  * to enable unit testing via mock injection and reduce coupling.
  */
 
+import { DEFAULT_WORKSPACE_ID } from "@open-inspect/shared";
 import type {
   SessionRow,
   ParticipantRow,
@@ -65,6 +66,7 @@ export interface UpsertSessionData {
   id: string;
   sessionName: string;
   title: string | null;
+  workspaceId?: string;
   repoOwner: string;
   repoName: string;
   repoId?: number | null;
@@ -256,11 +258,12 @@ export class SessionRepository {
 
   upsertSession(data: UpsertSessionData): void {
     this.sql.exec(
-      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, sandbox_settings, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO session (id, session_name, title, workspace_id, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, sandbox_settings, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.sessionName,
       data.title,
+      data.workspaceId ?? DEFAULT_WORKSPACE_ID,
       data.repoOwner,
       data.repoName,
       data.repoId ?? null,

@@ -1,4 +1,5 @@
 import {
+  DEFAULT_WORKSPACE_ID,
   buildAgentResponseFromEvents,
   getArtifactLabelFromArtifact,
   type ArtifactInfo,
@@ -158,6 +159,7 @@ export function buildChildSessionDetail(input: BuildChildSessionDetailInput): Ch
   const detail: ChildSessionDetail = {
     session: {
       id: input.publicSessionId,
+      workspaceId: input.session.workspace_id ?? DEFAULT_WORKSPACE_ID,
       title: input.session.title ?? "",
       status: input.session.status,
       repoOwner: input.session.repo_owner,

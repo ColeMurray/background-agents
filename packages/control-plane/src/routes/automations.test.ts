@@ -26,12 +26,22 @@ const mockStore = {
   getRunById: vi.fn(),
 };
 
+const mockWorkspaceStore = {
+  validateRepositoryAccess: vi.fn(),
+};
+
 vi.mock("../db/automation-store", () => ({
   AutomationStore: vi.fn().mockImplementation(function () {
     return mockStore;
   }),
   toAutomation: vi.fn((row: unknown) => row),
   toAutomationRun: vi.fn((row: unknown) => row),
+}));
+
+vi.mock("../db/workspaces", () => ({
+  WorkspaceStore: vi.fn().mockImplementation(function () {
+    return mockWorkspaceStore;
+  }),
 }));
 
 const mockUserStore = {
@@ -128,6 +138,7 @@ const now = Date.now();
 const sampleRow = {
   id: "auto-1",
   name: "Daily sync",
+  workspace_id: "default",
   repo_owner: "acme",
   repo_name: "web-app",
   base_branch: "main",
@@ -152,6 +163,12 @@ const sampleRow = {
 describe("automation route handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockWorkspaceStore.validateRepositoryAccess.mockResolvedValue({
+      ok: true,
+      status: 200,
+      message: "OK",
+      workspaceId: "default",
+    });
   });
 
   describe("GET /automations (list)", () => {
@@ -173,10 +190,11 @@ describe("automation route handlers", () => {
       mockStore.list.mockResolvedValue({ automations: [], total: 0 });
 
       await callRoute("GET", "/automations", {
-        query: { repoOwner: "acme", repoName: "web-app" },
+        query: { workspaceId: "spi", repoOwner: "acme", repoName: "web-app" },
       });
 
       expect(mockStore.list).toHaveBeenCalledWith({
+        workspaceId: "spi",
         repoOwner: "acme",
         repoName: "web-app",
       });
@@ -194,12 +212,48 @@ describe("automation route handlers", () => {
     };
 
     it("creates automation with valid input", async () => {
+      mockWorkspaceStore.validateRepositoryAccess.mockResolvedValue({
+        ok: true,
+        status: 200,
+        message: "OK",
+        workspaceId: "spi",
+      });
       mockStore.create.mockResolvedValue(undefined);
-      mockStore.getById.mockResolvedValue(sampleRow);
+      mockStore.getById.mockResolvedValue({ ...sampleRow, workspace_id: "spi" });
 
-      const res = await callRoute("POST", "/automations", { body: validBody });
+      const res = await callRoute("POST", "/automations", {
+        body: { ...validBody, workspaceId: "spi" },
+      });
       expect(res.status).toBe(201);
-      expect(mockStore.create).toHaveBeenCalledTimes(1);
+      expect(mockWorkspaceStore.validateRepositoryAccess).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceId: "spi",
+          repoOwner: "acme",
+          repoName: "web-app",
+        })
+      );
+      expect(mockStore.create).toHaveBeenCalledWith(
+        expect.objectContaining({ workspace_id: "spi" })
+      );
+    });
+
+    it("rejects repo not assigned to workspace", async () => {
+      mockWorkspaceStore.validateRepositoryAccess.mockResolvedValue({
+        ok: false,
+        status: 403,
+        message: "Repository is not assigned to this workspace",
+        workspaceId: "spi",
+      });
+
+      const res = await callRoute("POST", "/automations", {
+        body: { ...validBody, workspaceId: "spi" },
+      });
+
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toEqual({
+        error: "Repository is not assigned to this workspace",
+      });
+      expect(mockStore.create).not.toHaveBeenCalled();
     });
 
     it("resolves user_id when scmUserId is provided", async () => {

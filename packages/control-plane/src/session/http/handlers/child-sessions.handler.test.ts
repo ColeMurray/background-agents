@@ -194,6 +194,7 @@ describe("createChildSessionsHandler", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
+      workspaceId: "default",
       repoOwner: "acme",
       repoName: "repo",
       repoId: 123,
@@ -272,6 +273,7 @@ describe("createChildSessionsHandler", () => {
     expect(await response.json()).toEqual({
       session: {
         id: "public-session-1",
+        workspaceId: "default",
         title: "Session Title",
         status: "active",
         repoOwner: "acme",

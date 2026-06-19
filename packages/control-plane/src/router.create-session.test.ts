@@ -5,8 +5,18 @@ import { handleRequest } from "./router";
 import { resolveRepoOrError } from "./routes/shared";
 import { SessionInternalPaths } from "./session/contracts";
 
+const workspaceStoreMock = vi.hoisted(() => ({
+  validateRepositoryAccess: vi.fn(),
+}));
+
 vi.mock("./db/session-index", () => ({
   SessionIndexStore: vi.fn(),
+}));
+
+vi.mock("./db/workspaces", () => ({
+  WorkspaceStore: vi.fn().mockImplementation(function () {
+    return workspaceStoreMock;
+  }),
 }));
 
 vi.mock("./routes/shared", async (importOriginal) => {
@@ -26,6 +36,12 @@ describe("handleCreateSession D1 ordering", () => {
       repoId: 12345,
       defaultBranch: "main",
     } as never);
+    workspaceStoreMock.validateRepositoryAccess.mockResolvedValue({
+      ok: true,
+      status: 200,
+      message: "OK",
+      workspaceId: "default",
+    });
   });
 
   async function createSessionRequest(env: Record<string, unknown>): Promise<Response> {
@@ -136,5 +152,25 @@ describe("handleCreateSession D1 ordering", () => {
     expect(create).toHaveBeenCalledOnce();
     expect(initFetch).toHaveBeenCalledOnce();
     expect(create.mock.invocationCallOrder[0]).toBeLessThan(initFetch.mock.invocationCallOrder[0]);
+  });
+
+  it("rejects a repo that is not assigned to the requested workspace", async () => {
+    workspaceStoreMock.validateRepositoryAccess.mockResolvedValue({
+      ok: false,
+      status: 403,
+      message: "Repository is not assigned to this workspace",
+    });
+    const create = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { create } as never;
+    });
+
+    const response = await createSessionRequest(createEnv(vi.fn()));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Repository is not assigned to this workspace",
+    });
+    expect(create).not.toHaveBeenCalled();
   });
 });

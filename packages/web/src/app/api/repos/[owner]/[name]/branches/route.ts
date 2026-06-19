@@ -16,8 +16,10 @@ export async function GET(
   const { owner, name } = await params;
 
   try {
+    const workspaceId = _request.nextUrl.searchParams.get("workspaceId");
+    const query = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : "";
     const response = await controlPlaneFetch(
-      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/branches`
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/branches${query}`
     );
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });

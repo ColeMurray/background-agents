@@ -59,6 +59,7 @@ async function handleListSessions(
   const offset = parsePaginationOffset(url.searchParams.get("offset"));
   const statusParam = url.searchParams.get("status");
   const excludeStatusParam = url.searchParams.get("excludeStatus");
+  const workspaceId = url.searchParams.get("workspaceId") ?? undefined;
   const status = parseSessionStatus(statusParam);
   const excludeStatus = parseSessionStatus(excludeStatusParam);
   const createdByUserIds = parseCreatedByFilters(url.searchParams);
@@ -76,7 +77,14 @@ async function handleListSessions(
   }
 
   const store = new SessionIndexStore(env.DB);
-  const result = await store.list({ status, excludeStatus, createdByUserIds, limit, offset });
+  const result = await store.list({
+    status,
+    excludeStatus,
+    workspaceId,
+    createdByUserIds,
+    limit,
+    offset,
+  });
 
   return json({
     sessions: result.sessions,

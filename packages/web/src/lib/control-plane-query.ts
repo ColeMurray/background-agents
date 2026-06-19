@@ -1,4 +1,11 @@
-export const DEFAULT_CONTROL_PLANE_QUERY_PARAMS = ["status", "limit", "offset"] as const;
+export const DEFAULT_CONTROL_PLANE_QUERY_PARAMS = [
+  "status",
+  "limit",
+  "offset",
+  "workspaceId",
+  "repoOwner",
+  "repoName",
+] as const;
 
 export const SESSION_CONTROL_PLANE_QUERY_PARAMS = [
   ...DEFAULT_CONTROL_PLANE_QUERY_PARAMS,

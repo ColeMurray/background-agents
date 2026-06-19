@@ -5,12 +5,14 @@ interface BranchesResponse {
   branches: { name: string }[];
 }
 
-export function useBranches(repoOwner: string, repoName: string) {
+export function useBranches(repoOwner: string, repoName: string, workspaceId?: string) {
   const { data: session } = useSession();
 
   const key =
     session && repoOwner && repoName
-      ? `/api/repos/${encodeURIComponent(repoOwner)}/${encodeURIComponent(repoName)}/branches`
+      ? `/api/repos/${encodeURIComponent(repoOwner)}/${encodeURIComponent(repoName)}/branches${
+          workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ""
+        }`
       : null;
 
   const { data, isLoading } = useSWR<BranchesResponse>(key);

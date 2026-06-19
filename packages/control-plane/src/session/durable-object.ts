@@ -10,7 +10,12 @@
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
-import { resolveAppName, timingSafeEqual, type Attachment } from "@open-inspect/shared";
+import {
+  DEFAULT_WORKSPACE_ID,
+  resolveAppName,
+  timingSafeEqual,
+  type Attachment,
+} from "@open-inspect/shared";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { buildModalSandboxDashboardUrl, createModalClient } from "../sandbox/client";
 import { createDaytonaRestClient } from "../sandbox/daytona-rest-client";
@@ -1732,6 +1737,7 @@ export class SessionDO extends DurableObject<Env> {
 
     return {
       id: this.getPublicSessionId(session),
+      workspaceId: session?.workspace_id ?? DEFAULT_WORKSPACE_ID,
       title: session?.title ?? null,
       repoOwner: session?.repo_owner ?? "",
       repoName: session?.repo_name ?? "",

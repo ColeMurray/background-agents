@@ -1,7 +1,8 @@
-import type { SessionStatus, SpawnSource } from "@open-inspect/shared";
+import { DEFAULT_WORKSPACE_ID, type SessionStatus, type SpawnSource } from "@open-inspect/shared";
 
 export interface SessionEntry {
   id: string;
+  workspaceId?: string;
   title: string | null;
   repoOwner: string;
   repoName: string;
@@ -26,6 +27,7 @@ export interface SessionEntry {
 
 interface SessionRow {
   id: string;
+  workspace_id: string | null;
   title: string | null;
   repo_owner: string;
   repo_name: string;
@@ -53,6 +55,7 @@ export interface ListSessionsOptions {
   excludeStatus?: SessionStatus;
   repoOwner?: string;
   repoName?: string;
+  workspaceId?: string;
   createdByUserIds?: readonly string[];
   limit?: number;
   offset?: number;
@@ -67,6 +70,7 @@ export interface ListSessionsResult {
 function toEntry(row: SessionRow): SessionEntry {
   return {
     id: row.id,
+    workspaceId: row.workspace_id ?? DEFAULT_WORKSPACE_ID,
     title: row.title,
     repoOwner: row.repo_owner,
     repoName: row.repo_name,
@@ -96,11 +100,12 @@ export class SessionIndexStore {
   async create(session: SessionEntry): Promise<void> {
     await this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR IGNORE INTO sessions (id, workspace_id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         session.id,
+        session.workspaceId ?? DEFAULT_WORKSPACE_ID,
         session.title,
         session.repoOwner.toLowerCase(),
         session.repoName.toLowerCase(),
@@ -136,6 +141,7 @@ export class SessionIndexStore {
       excludeStatus,
       repoOwner,
       repoName,
+      workspaceId,
       createdByUserIds,
       limit = 50,
       offset = 0,
@@ -162,6 +168,11 @@ export class SessionIndexStore {
     if (repoName) {
       conditions.push("repo_name = ?");
       params.push(repoName.toLowerCase());
+    }
+
+    if (workspaceId) {
+      conditions.push("COALESCE(workspace_id, ?) = ?");
+      params.push(DEFAULT_WORKSPACE_ID, workspaceId);
     }
 
     if (createdByUserIds?.length) {

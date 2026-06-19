@@ -177,6 +177,7 @@ const now = Date.now();
 const sampleAutomation = {
   id: "auto-1",
   name: "Daily sync",
+  workspace_id: "default",
   repo_owner: "acme",
   repo_name: "web-app",
   base_branch: "main",
@@ -270,6 +271,27 @@ describe("SchedulerDO", () => {
       expect(res.status).toBe(200);
       const initBody = await getInitBody(fetchMock);
       expect(initBody.reasoningEffort).toBe("high");
+    });
+
+    it("preserves automation workspace in created sessions", async () => {
+      const automation = { ...sampleAutomation, workspace_id: "spi" };
+      mockStore.getOverdueAutomations.mockResolvedValue([automation]);
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ workspaceId: "spi" })
+      );
+      const initBody = await getInitBody(fetchMock);
+      expect(initBody.workspaceId).toBe("spi");
     });
 
     it("passes resolved code-server and sandbox settings into automation sessions", async () => {
