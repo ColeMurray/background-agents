@@ -546,6 +546,33 @@ describe("AutomationStore (D1 integration)", () => {
       const timedOut = await store.getTimedOutRunningRuns(90 * 60 * 1000);
       expect(timedOut).toHaveLength(0);
     });
+
+    // Regression guard for the D1 recovery-sweep timeout: these sweeps must be
+    // served by their per-status partial indexes (migration 0024), never a full
+    // SCAN of the append-only automation_runs table. A full scan would pass the
+    // behavioural tests above but time out once history grows. The WHERE clauses
+    // mirror getOrphanedStartingRuns / getTimedOutRunningRuns verbatim — keep
+    // them in sync (in particular, status must stay a literal, not a bound param,
+    // or the planner will not match the partial index).
+    it("orphan sweep is served by idx_runs_orphan_sweep, not a full scan", async () => {
+      const plan = await env.DB.prepare(
+        "EXPLAIN QUERY PLAN SELECT * FROM automation_runs WHERE status = 'starting' AND created_at < ?"
+      )
+        .bind(Date.now())
+        .all<{ detail: string }>();
+      const detail = plan.results.map((r) => r.detail).join("\n");
+      expect(detail).toContain("USING INDEX idx_runs_orphan_sweep");
+    });
+
+    it("timeout sweep is served by idx_runs_timeout_sweep, not a full scan", async () => {
+      const plan = await env.DB.prepare(
+        "EXPLAIN QUERY PLAN SELECT * FROM automation_runs WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ?"
+      )
+        .bind(Date.now())
+        .all<{ detail: string }>();
+      const detail = plan.results.map((r) => r.detail).join("\n");
+      expect(detail).toContain("USING INDEX idx_runs_timeout_sweep");
+    });
   });
 
   // ─── Failure tracking ──────────────────────────────────────────────────────

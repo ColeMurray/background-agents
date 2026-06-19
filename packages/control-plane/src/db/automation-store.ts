@@ -447,6 +447,13 @@ export class AutomationStore {
   }
 
   // --- Recovery sweep queries ---
+  //
+  // These filter by a single status across all automations and are backed by the
+  // per-status partial indexes idx_runs_orphan_sweep / idx_runs_timeout_sweep
+  // (migration 0024). Keep `status` a string literal in the SQL: partial-index
+  // matching happens at plan time and is syntactic, so `status = ?` (a bound
+  // parameter) would not match the index predicate and would silently fall back
+  // to a full table scan of the append-only automation_runs table.
 
   async getOrphanedStartingRuns(thresholdMs: number): Promise<AutomationRunRow[]> {
     const cutoff = Date.now() - thresholdMs;
