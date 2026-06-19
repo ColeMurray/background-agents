@@ -5,6 +5,8 @@ import { mutate } from "swr";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type {
+  Attachment,
+  FileArtifactMetadata,
   ParticipantPresence,
   SandboxEvent as SharedSandboxEvent,
   ScreenshotArtifactMetadata,
@@ -69,7 +71,12 @@ interface UseSessionSocketReturn {
   isProcessing: boolean;
   hasMoreHistory: boolean;
   loadingHistory: boolean;
-  sendPrompt: (content: string, model?: string, reasoningEffort?: string) => void;
+  sendPrompt: (
+    content: string,
+    model?: string,
+    reasoningEffort?: string,
+    attachments?: Attachment[]
+  ) => void;
   stopExecution: () => void;
   sendTyping: () => void;
   reconnect: () => void;
@@ -151,6 +158,7 @@ function toUiSandboxEvent(event: SharedSandboxEvent): SandboxEvent {
 type PrState = NonNullable<NonNullable<Artifact["metadata"]>["prState"]>;
 const PR_STATES = new Set<string>(["open", "merged", "closed", "draft"]);
 type MediaMimeType = ScreenshotArtifactMetadata["mimeType"] | VideoArtifactMetadata["mimeType"];
+type FileMimeType = FileArtifactMetadata["mimeType"];
 const MEDIA_MIME_TYPES = new Set<MediaMimeType>([
   "image/png",
   "image/jpeg",
@@ -196,8 +204,9 @@ function toUiArtifact(artifact: SessionArtifact): Artifact {
           filename: typeof meta.filename === "string" ? meta.filename : undefined,
           objectKey: typeof meta.objectKey === "string" ? meta.objectKey : undefined,
           mimeType:
-            typeof meta.mimeType === "string" && isMediaMimeType(meta.mimeType)
-              ? meta.mimeType
+            typeof meta.mimeType === "string" &&
+            (artifact.type === "file" || isMediaMimeType(meta.mimeType))
+              ? (meta.mimeType as MediaMimeType | FileMimeType)
               : undefined,
           sizeBytes: typeof meta.sizeBytes === "number" ? meta.sizeBytes : undefined,
           viewport: narrowDimensions(meta.viewport),
@@ -664,45 +673,50 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
     };
   }, [sessionId, handleMessage, fetchWsToken]);
 
-  const sendPrompt = useCallback((content: string, model?: string, reasoningEffort?: string) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      console.error("WebSocket not connected");
-      return;
-    }
+  const sendPrompt = useCallback(
+    (content: string, model?: string, reasoningEffort?: string, attachments?: Attachment[]) => {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        console.error("WebSocket not connected");
+        return;
+      }
 
-    if (!subscribedRef.current) {
-      console.error("Not subscribed yet, waiting...");
-      // Retry after a short delay
-      setTimeout(
-        () => sendPrompt(content, model, reasoningEffort),
-        PROMPT_SUBSCRIPTION_RETRY_DELAY_MS
-      );
-      return;
-    }
+      if (!subscribedRef.current) {
+        console.error("Not subscribed yet, waiting...");
+        // Retry after a short delay
+        setTimeout(
+          () => sendPrompt(content, model, reasoningEffort, attachments),
+          PROMPT_SUBSCRIPTION_RETRY_DELAY_MS
+        );
+        return;
+      }
 
-    console.log("Sending prompt", {
-      contentLength: content.length,
-      model,
-      reasoningEffort,
-    });
-
-    // Optimistically set isProcessing for immediate feedback
-    // Server will confirm with processing_status message
-    setSessionState((prev) => (prev ? { ...prev, isProcessing: true } : null));
-
-    // Note: user_message event is NOT inserted optimistically here.
-    // The server writes a user_message event to the events table and broadcasts it
-    // to all clients (including the sender), which handles both display and multiplayer.
-
-    wsRef.current.send(
-      JSON.stringify({
-        type: "prompt",
-        content,
-        model, // Include model for per-message model switching
+      console.log("Sending prompt", {
+        contentLength: content.length,
+        model,
         reasoningEffort,
-      })
-    );
-  }, []);
+        attachmentsCount: attachments?.length ?? 0,
+      });
+
+      // Optimistically set isProcessing for immediate feedback
+      // Server will confirm with processing_status message
+      setSessionState((prev) => (prev ? { ...prev, isProcessing: true } : null));
+
+      // Note: user_message event is NOT inserted optimistically here.
+      // The server writes a user_message event to the events table and broadcasts it
+      // to all clients (including the sender), which handles both display and multiplayer.
+
+      wsRef.current.send(
+        JSON.stringify({
+          type: "prompt",
+          content,
+          model, // Include model for per-message model switching
+          reasoningEffort,
+          attachments,
+        })
+      );
+    },
+    []
+  );
 
   const stopExecution = useCallback(() => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {

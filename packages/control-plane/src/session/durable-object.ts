@@ -10,7 +10,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
-import { resolveAppName, timingSafeEqual } from "@open-inspect/shared";
+import { resolveAppName, timingSafeEqual, type Attachment } from "@open-inspect/shared";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { buildModalSandboxDashboardUrl, createModalClient } from "../sandbox/client";
 import { createDaytonaRestClient } from "../sandbox/daytona-rest-client";
@@ -1351,7 +1351,7 @@ export class SessionDO extends DurableObject<Env> {
       content: string;
       model?: string;
       reasoningEffort?: string;
-      attachments?: Array<{ type: string; name: string; url?: string; content?: string }>;
+      attachments?: Attachment[];
     }
   ): Promise<void> {
     await this.messageQueue.handlePromptMessage(ws, data);

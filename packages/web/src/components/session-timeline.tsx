@@ -11,6 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { SafeMarkdown } from "@/components/safe-markdown";
+import { FileArtifactCard } from "@/components/file-artifact-card";
 import { ScreenshotArtifactCard } from "@/components/screenshot-artifact-card";
 import { ToolCallGroup } from "@/components/tool-call-group";
 import { copyToClipboard } from "@/lib/format";
@@ -410,11 +411,31 @@ function GitSyncEvent({ event }: EventRendererProps) {
 }
 
 function ArtifactEvent({ event, sessionId, onOpenMedia }: EventRendererProps) {
-  if (
-    event.type !== "artifact" ||
-    (event.artifactType !== "screenshot" && event.artifactType !== "video") ||
-    !event.artifactId
-  ) {
+  if (event.type !== "artifact" || !event.artifactId) {
+    return null;
+  }
+
+  if (event.artifactType === "file") {
+    const artifact: Artifact = {
+      id: event.artifactId,
+      type: "file",
+      url: event.url,
+      metadata: event.metadata as Artifact["metadata"],
+      createdAt: event.timestamp * 1000,
+    };
+
+    return (
+      <div className="space-y-2 py-2">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-muted-foreground">File</span>
+          <span className="text-xs text-secondary-foreground">{formatEventTime(event)}</span>
+        </div>
+        <FileArtifactCard sessionId={sessionId} artifact={artifact} />
+      </div>
+    );
+  }
+
+  if (event.artifactType !== "screenshot" && event.artifactType !== "video") {
     return null;
   }
 

@@ -8,6 +8,7 @@ import {
   isValidModel,
 } from "../utils/models";
 import type {
+  Attachment,
   ClientInfo,
   Env,
   MessageSource,
@@ -28,7 +29,7 @@ interface PromptMessageData {
   content: string;
   model?: string;
   reasoningEffort?: string;
-  attachments?: Array<{ type: string; name: string; url?: string; content?: string }>;
+  attachments?: Attachment[];
 }
 
 interface MessageQueueDeps {

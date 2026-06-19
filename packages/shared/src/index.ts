@@ -14,3 +14,4 @@ export * from "./cache-store";
 export * from "./app-name";
 export * from "./user-id";
 export * from "./slack";
+export * from "./attachments";

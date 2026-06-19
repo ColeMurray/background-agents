@@ -12,10 +12,28 @@ describe("completion artifact type narrowing", () => {
     expect(toArtifactType("video")).toBe("video");
   });
 
+  it("recognizes downloadable file artifacts", () => {
+    expect(toArtifactType("file")).toBe("file");
+  });
+
   it("omits video artifacts from completion artifact summaries like screenshots", () => {
     expect(toEventArtifactInfo({ artifactType: "video", url: "sessions/s1/media/a1.mp4" })).toBe(
       null
     );
+  });
+
+  it("includes file artifacts in completion artifact summaries", () => {
+    expect(
+      toEventArtifactInfo({
+        artifactType: "file",
+        url: "sessions/s1/files/a1/review_packet.zip",
+        metadata: { filename: "review_packet.zip" },
+      })
+    ).toEqual({
+      type: "file",
+      url: "sessions/s1/files/a1/review_packet.zip",
+      label: "File: review_packet.zip",
+    });
   });
 });
 
