@@ -96,16 +96,16 @@ describe("createMessagesHandler", () => {
     expect(messageService.listEvents).not.toHaveBeenCalled();
   });
 
-  it("maps listEvents response", async () => {
+  it("returns listEvents response from service", async () => {
     const { handler, messageService } = createHandler();
     vi.mocked(messageService.listEvents).mockReturnValue({
       events: [
         {
           id: "e1",
           type: "token",
-          data: '{"x":1}',
-          message_id: "m1",
-          created_at: 1000,
+          data: { x: 1 },
+          messageId: "m1",
+          createdAt: 1000,
         },
       ],
       cursor: "1000",

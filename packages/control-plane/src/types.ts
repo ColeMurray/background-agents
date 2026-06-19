@@ -4,7 +4,6 @@
 
 import type {
   ArtifactType,
-  EventType,
   MessageSource,
   MessageStatus,
   ParticipantRole,
@@ -17,8 +16,10 @@ export type {
   ClientMessage,
   CreateSessionRequest,
   CreateSessionResponse,
+  EventResponse,
   EventType,
   GitSyncStatus,
+  ListEventsResponse,
   MessageSource,
   MessageStatus,
   ParticipantRole,
@@ -149,20 +150,6 @@ export interface MessageResponse {
   createdAt: number;
   startedAt: number | null;
   completedAt: number | null;
-}
-
-export interface EventResponse {
-  id: string;
-  type: EventType;
-  data: Record<string, unknown>;
-  messageId: string | null;
-  createdAt: number;
-}
-
-export interface ListEventsResponse {
-  events: EventResponse[];
-  cursor?: string;
-  hasMore: boolean;
 }
 
 export interface ArtifactResponse {

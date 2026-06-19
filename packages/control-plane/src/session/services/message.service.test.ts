@@ -81,6 +81,13 @@ describe("MessageService", () => {
     expect(result.hasMore).toBe(true);
     expect(result.cursor).toBe("2000:e2");
     expect(result.events).toHaveLength(2);
+    expect(result.events[0]).toEqual({
+      id: "e3",
+      type: "token",
+      data: {},
+      messageId: "m1",
+      createdAt: 3000,
+    });
     expect(repository.listEventPage).toHaveBeenCalledWith({
       cursor: null,
       limit: 2,

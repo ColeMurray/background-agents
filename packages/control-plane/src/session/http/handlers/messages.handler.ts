@@ -79,17 +79,7 @@ export function createMessagesHandler(deps: MessagesHandlerDeps): MessagesHandle
         messageId,
       });
 
-      return Response.json({
-        events: result.events.map((event) => ({
-          id: event.id,
-          type: event.type,
-          data: JSON.parse(event.data),
-          messageId: event.message_id,
-          createdAt: event.created_at,
-        })),
-        cursor: result.cursor,
-        hasMore: result.hasMore,
-      });
+      return Response.json(result);
     },
 
     listArtifacts(url: URL): Response {
