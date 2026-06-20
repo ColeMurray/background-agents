@@ -29,8 +29,8 @@ import type {
   AppHomeInteractionResponseBody,
   BackgroundTaskScheduler,
   SlackBlockAction,
-  SlackSelectOption,
 } from "./slack-types";
+import type { SlackSelectOption } from "../slack-blocks";
 import { buildRepoBranchSelectOptions } from "./view";
 import { getResolvedUserPreferences, updateUserPreferences } from "../user-preferences";
 

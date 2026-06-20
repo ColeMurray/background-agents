@@ -16,7 +16,7 @@ import type {
   SlackButtonElement,
   SlackSectionBlock,
   SlackSelectOption,
-} from "./app-home/slack-types";
+} from "./slack-blocks";
 import type { Env, RepoConfig } from "./types";
 
 /**

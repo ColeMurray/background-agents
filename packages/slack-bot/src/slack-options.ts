@@ -1,4 +1,4 @@
-import type { SlackPlainText } from "./app-home/slack-types";
+import type { SlackPlainText } from "./slack-blocks";
 
 /** Slack caps a select option's plain_text label/description at 75 characters. */
 export const SELECT_OPTION_TEXT_LIMIT = 75;
