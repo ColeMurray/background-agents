@@ -3,6 +3,7 @@ import type { RepoConfig } from "./types";
 import { filterReposByQuery } from "./classifier/repos";
 import {
   MAX_REPO_QUICK_PICKS,
+  SELECT_REPO_ACTION_ID,
   SELECT_REPO_QUICK_PICK_ACTION_ID,
   buildRepoClarificationBlocks,
   buildRepoQuickPickButtons,
@@ -74,6 +75,16 @@ describe("buildRepoQuickPickButtons", () => {
     expect(button.text.text).toHaveLength(75);
     expect(button.text.text.endsWith("…")).toBe(true);
   });
+
+  it("falls back to fullName for picks that share a display name", () => {
+    const buttons = buildRepoQuickPickButtons([
+      repo("acme/web", "web"),
+      repo("other/web", "web"),
+      repo("acme/api", "api"),
+    ]);
+
+    expect(buttons.map((button) => button.text.text)).toEqual(["acme/web", "other/web", "api"]);
+  });
 });
 
 describe("buildRepoClarificationBlocks", () => {
@@ -87,7 +98,11 @@ describe("buildRepoClarificationBlocks", () => {
       {
         type: "section",
         text: { text: "Which repository should I work with?" },
-        accessory: { type: "external_select", action_id: "select_repo", min_query_length: 0 },
+        accessory: {
+          type: "external_select",
+          action_id: SELECT_REPO_ACTION_ID,
+          min_query_length: 0,
+        },
       },
     ]);
   });
@@ -112,7 +127,7 @@ describe("buildRepoClarificationBlocks", () => {
       {
         type: "section",
         text: { text: "Or search for another repository:" },
-        accessory: { type: "external_select", action_id: "select_repo" },
+        accessory: { type: "external_select", action_id: SELECT_REPO_ACTION_ID },
       },
     ]);
   });

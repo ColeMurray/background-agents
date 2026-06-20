@@ -11,7 +11,12 @@
 import { getAvailableRepos, filterReposByQuery } from "./classifier/repos";
 import { MAX_REPO_SUGGESTION_OPTIONS } from "./app-home/constants";
 import { plainTextOption } from "./slack-options";
-import type { SlackButtonElement, SlackSelectOption } from "./app-home/slack-types";
+import type {
+  SlackActionsBlock,
+  SlackButtonElement,
+  SlackSectionBlock,
+  SlackSelectOption,
+} from "./app-home/slack-types";
 import type { Env, RepoConfig } from "./types";
 
 /**
@@ -64,12 +69,30 @@ export async function getRepoClarificationOptions(
  * selection handler as the picker.
  */
 export function buildRepoQuickPickButtons(alternatives: RepoConfig[]): SlackButtonElement[] {
-  return alternatives.slice(0, MAX_REPO_QUICK_PICKS).map((repo) => ({
+  const picks = alternatives.slice(0, MAX_REPO_QUICK_PICKS);
+  const ambiguousNames = duplicateDisplayNames(picks);
+
+  return picks.map((repo) => ({
     type: "button",
     action_id: SELECT_REPO_QUICK_PICK_ACTION_ID,
-    text: plainTextOption(repo.displayName),
+    // Two repos can share a displayName (e.g. the same repo name under different
+    // owners); fall back to the unambiguous fullName for the colliding picks.
+    text: plainTextOption(ambiguousNames.has(repo.displayName) ? repo.fullName : repo.displayName),
     value: repo.id,
   }));
+}
+
+/** Display names that appear more than once across the given repos. */
+function duplicateDisplayNames(repos: RepoConfig[]): Set<string> {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const repo of repos) {
+    if (seen.has(repo.displayName)) {
+      duplicates.add(repo.displayName);
+    }
+    seen.add(repo.displayName);
+  }
+  return duplicates;
 }
 
 /**
@@ -80,10 +103,10 @@ export function buildRepoQuickPickButtons(alternatives: RepoConfig[]): SlackButt
 export function buildRepoClarificationBlocks(
   reasoning: string,
   alternatives: RepoConfig[] | undefined
-) {
+): Array<SlackSectionBlock | SlackActionsBlock> {
   const quickPicks = alternatives?.length ? buildRepoQuickPickButtons(alternatives) : [];
 
-  return [
+  const blocks: Array<SlackSectionBlock | SlackActionsBlock> = [
     {
       type: "section",
       text: {
@@ -91,25 +114,29 @@ export function buildRepoClarificationBlocks(
         text: `I couldn't determine which repository you're referring to.\n\n_${reasoning}_`,
       },
     },
-    ...(quickPicks.length > 0
-      ? [{ type: "actions", block_id: "repo_quick_picks", elements: quickPicks }]
-      : []),
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text:
-          quickPicks.length > 0
-            ? "Or search for another repository:"
-            : "Which repository should I work with?",
-      },
-      accessory: {
-        type: "external_select",
-        placeholder: { type: "plain_text", text: "Select a repository" },
-        // 0 so the list appears on open; typing filters across all repos.
-        min_query_length: 0,
-        action_id: SELECT_REPO_ACTION_ID,
-      },
-    },
   ];
+
+  if (quickPicks.length > 0) {
+    blocks.push({ type: "actions", block_id: "repo_quick_picks", elements: quickPicks });
+  }
+
+  blocks.push({
+    type: "section",
+    text: {
+      type: "mrkdwn",
+      text:
+        quickPicks.length > 0
+          ? "Or search for another repository:"
+          : "Which repository should I work with?",
+    },
+    accessory: {
+      type: "external_select",
+      placeholder: { type: "plain_text", text: "Select a repository" },
+      // 0 so the list appears on open; typing filters across all repos.
+      min_query_length: 0,
+      action_id: SELECT_REPO_ACTION_ID,
+    },
+  });
+
+  return blocks;
 }
