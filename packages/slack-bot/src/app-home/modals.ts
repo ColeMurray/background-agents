@@ -8,7 +8,8 @@ import {
 import { createLogger } from "../logger";
 import type { Env, RepoConfig } from "../types";
 import { encodeBranchModalMetadata, encodeRepoBranchModalMetadata } from "./metadata";
-import type { AppHomeModalBlock, SlackInputBlock } from "./slack-types";
+import type { AppHomeModalBlock } from "./slack-types";
+import type { SlackInputBlock } from "../slack-blocks";
 
 const log = createLogger("app-home");
 

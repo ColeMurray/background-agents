@@ -1,84 +1,18 @@
 import type { SlackInteractionPayload } from "../types";
+import type {
+  SlackActionsBlock,
+  SlackContextBlock,
+  SlackDividerBlock,
+  SlackHeaderBlock,
+  SlackInputBlock,
+  SlackSectionBlock,
+  SlackSelectOption,
+} from "../slack-blocks";
 
 export interface ModelOption {
   label: string;
   value: string;
 }
-
-export type SlackSelectOption = {
-  text: SlackPlainText;
-  description?: SlackPlainText;
-  value: string;
-};
-export type SlackPlainText = { type: "plain_text"; text: string };
-export type SlackMrkdwnText = { type: "mrkdwn"; text: string };
-export type SlackText = SlackPlainText | SlackMrkdwnText;
-
-export type SlackConfirmation = {
-  title: SlackPlainText;
-  text: SlackText;
-  confirm: SlackPlainText;
-  deny: SlackPlainText;
-};
-
-export type SlackButtonElement = {
-  type: "button";
-  action_id: string;
-  text: SlackPlainText;
-  value?: string;
-  style?: "danger";
-  confirm?: SlackConfirmation;
-};
-
-export type SlackStaticSelectElement = {
-  type: "static_select";
-  action_id: string;
-  initial_option?: SlackSelectOption;
-  placeholder?: SlackPlainText;
-  options: SlackSelectOption[];
-};
-
-export type SlackExternalSelectElement = {
-  type: "external_select";
-  action_id: string;
-  placeholder: SlackPlainText;
-  min_query_length: number;
-};
-
-export type SlackPlainTextInputElement = {
-  type: "plain_text_input";
-  action_id: string;
-  initial_value: string;
-  placeholder: SlackPlainText;
-};
-
-export type SlackBlockElement =
-  | SlackButtonElement
-  | SlackStaticSelectElement
-  | SlackExternalSelectElement;
-export type SlackHeaderBlock = { type: "header"; text: SlackPlainText };
-export type SlackSectionBlock = {
-  type: "section";
-  text: SlackText;
-  // A section accessory may be a button or a select (the repo clarification
-  // picker uses an external_select), not only a button.
-  accessory?: SlackBlockElement;
-};
-export type SlackActionsBlock = {
-  type: "actions";
-  block_id?: string;
-  elements: SlackBlockElement[];
-};
-export type SlackContextBlock = { type: "context"; elements: SlackText[] };
-export type SlackInputBlock = {
-  type: "input";
-  block_id: string;
-  optional?: boolean;
-  label: SlackPlainText;
-  element: SlackPlainTextInputElement;
-  hint?: SlackPlainText;
-};
-export type SlackDividerBlock = { type: "divider" };
 
 export type AppHomeBlock =
   | SlackHeaderBlock

@@ -8,7 +8,8 @@ import {
   SELECT_MODEL_ACTION_ID,
   SELECT_REASONING_EFFORT_ACTION_ID,
 } from "./constants";
-import type { AppHomeBlock, AppHomeView, ModelOption, SlackSelectOption } from "./slack-types";
+import type { AppHomeBlock, AppHomeView, ModelOption } from "./slack-types";
+import type { SlackSelectOption } from "../slack-blocks";
 import { plainTextOption } from "../slack-options";
 
 export interface AppHomeViewState {
