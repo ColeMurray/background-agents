@@ -26,10 +26,10 @@ function generateTestEncryptionKey(): string {
 // `defineWorkersConfig` + `test.poolOptions.workers` setup with the
 // `cloudflareTest()` Vite plugin, configured via `defineConfig` from
 // "vitest/config". The old `singleWorker`/`isolatedStorage` poolOptions are not
-// configured here; integration tests share one D1 instance and rely on explicit
-// `cleanD1Tables()` cleanup (see test/integration/cleanup.ts) for isolation.
-// That cleanup-based isolation only holds when files run one at a time — see
-// `fileParallelism: false` below.
+// configured here; pool-workers isolates D1 storage per test FILE, so files run
+// in parallel without cross-file interference. Within a file, tests share one D1
+// instance and rely on explicit `cleanD1Tables()` cleanup (see
+// test/integration/cleanup.ts) for isolation.
 export default defineConfig({
   resolve: {
     alias: {
@@ -64,13 +64,5 @@ export default defineConfig({
   test: {
     include: ["test/integration/**/*.test.ts"],
     setupFiles: ["test/integration/apply-migrations.ts"],
-    // Run integration files serially. They share a single D1 instance, so
-    // running them in parallel lets one file's beforeEach `cleanD1Tables()`
-    // DELETE rows another file just seeded. The scheduler tick scans automations
-    // globally (getOverdueAutomations + an unconditional DELETE in cleanup), so
-    // concurrent files made its tick tests flaky (an overdue automation could
-    // vanish mid-tick). Serial execution is what makes cleanup-based isolation
-    // actually hold.
-    fileParallelism: false,
   },
 });
