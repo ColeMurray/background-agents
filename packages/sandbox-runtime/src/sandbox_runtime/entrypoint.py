@@ -474,7 +474,13 @@ class SandboxSupervisor:
         # Copy pre-built deps (package.json, package-lock.json, node_modules) from the image
         # staging directory so OpenCode's Npm.install() finds the tree in sync and skips the
         # arborist reify() that would otherwise block the first request.
+        staged_at = time.monotonic()
         self._stage_opencode_deps(Path("/app/opencode-deps"), opencode_dir)
+        self.log.info(
+            "opencode.repo_deps_staged",
+            dir=str(opencode_dir),
+            duration_ms=round((time.monotonic() - staged_at) * 1000),
+        )
 
     @staticmethod
     def _stage_opencode_deps(deps_cache: Path, dest_dir: Path) -> None:
@@ -511,25 +517,39 @@ class SandboxSupervisor:
         return base / "opencode"
 
     def _seed_global_opencode_deps(self) -> None:
-        """Pre-seed OpenCode's global config dir with the staged plugin tree.
+        """Fallback seed of OpenCode's global config dir with the staged plugin tree.
 
-        On startup OpenCode bootstraps every directory in its config search path and forks
+        OpenCode bootstraps every directory in its config search path and forks
         ``npm install @opencode-ai/plugin`` for each. The global config dir is created empty and
         is never seeded by _install_tools (which only covers the repo's .opencode/), so with a
-        plugin configured the first POST /session blocks on an arborist reify() of that empty
-        directory. Seeding it here makes the reify a no-op for every session.
+        plugin configured the first POST /session would block on an arborist reify() of it.
+
+        The image bakes this tree into the global dir at build time (base.py), so this is
+        normally a no-op (we skip when node_modules already exists); it stays as a fallback for
+        environments where the baked dir is absent (e.g. a different HOME).
         """
         deps_cache = Path("/app/opencode-deps")
         if not deps_cache.is_dir():
             return
         config_dir = self._resolve_opencode_global_config_dir()
-        # Only seed a pristine dir — never mix our modules into a user's manifest.
-        if (config_dir / "node_modules").exists() or (config_dir / "package.json").exists():
-            self.log.debug("opencode.global_deps_skip", config_dir=str(config_dir))
+        # Only seed a pristine dir — never mix our modules into a user's manifest. The image
+        # bakes this tree in (base.py), so node_modules is normally already present and we skip.
+        nm_exists = (config_dir / "node_modules").exists()
+        if nm_exists or (config_dir / "package.json").exists():
+            self.log.info(
+                "opencode.global_deps_skip",
+                config_dir=str(config_dir),
+                reason="already_present" if nm_exists else "foreign_manifest",
+            )
             return
+        seeded_at = time.monotonic()
         config_dir.mkdir(parents=True, exist_ok=True)
         self._stage_opencode_deps(deps_cache, config_dir)
-        self.log.info("opencode.global_deps_seeded", config_dir=str(config_dir))
+        self.log.info(
+            "opencode.global_deps_seeded",
+            config_dir=str(config_dir),
+            duration_ms=round((time.monotonic() - seeded_at) * 1000),
+        )
 
     def _prepare_opencode_filesystem(self, workdir: Path) -> None:
         """Stage OpenCode's filesystem assets (tools, deps, skills, bin) before launch.

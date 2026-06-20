@@ -47,7 +47,7 @@ TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 
 # Cache buster - change this to force Modal image rebuild
 # v51: SCM credential helper backed by control plane; remove embedded VCS tokens
-CACHE_BUSTER = "v51-scm-credential-helper"
+CACHE_BUSTER = "v52-bake-opencode-global-deps"
 
 # Base image with all development tools
 base_image = (
@@ -132,6 +132,13 @@ base_image = (
     # OpenCode's Npm.install() finds package-lock.json in sync and skips
     # the slow arborist reify() call (2-22s) that would otherwise block
     # the first prompt and exceed the bridge's HTTP timeout.
+    #
+    # Also bake the same tree into OpenCode's GLOBAL config dir. OpenCode installs
+    # @opencode-ai/plugin into every config directory it discovers — including the
+    # global one (HOME=/root, so ~/.config/opencode), which it creates empty on
+    # startup — so without this the runtime _seed_global_opencode_deps() pays a
+    # multi-second node_modules copy on every boot. Baking it makes that seed a
+    # no-op (it skips when node_modules already exists). See #767 / #790.
     .run_commands(
         "mkdir -p /app/opencode-deps",
         # Pin staged plugin to OPENCODE_VERSION so the pre-staged tree copied
@@ -140,6 +147,9 @@ base_image = (
         f'"dependencies":{{"@opencode-ai/plugin":"{OPENCODE_VERSION}"}}}}\''
         " > /app/opencode-deps/package.json",
         "cd /app/opencode-deps && npm install --ignore-scripts --no-audit --no-fund",
+        # Bake the in-sync tree into the global config dir so the runtime seed is a no-op.
+        "mkdir -p /root/.config/opencode",
+        "cp -a /app/opencode-deps/. /root/.config/opencode/",
     )
     # Install code-server for browser-based VS Code editing (direct .deb from GitHub releases)
     .run_commands(
