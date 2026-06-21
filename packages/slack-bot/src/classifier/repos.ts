@@ -33,6 +33,12 @@ const FALLBACK_REPOS: RepoConfig[] = [];
 const LOCAL_CACHE_TTL_MS = 60 * 1000;
 
 /**
+ * Expiration for the shared KV caches (repos + routing rules), in seconds —
+ * the unit Cloudflare KV's `expirationTtl` expects.
+ */
+const KV_CACHE_TTL_SECONDS = 300;
+
+/**
  * Local in-memory cache for repos.
  */
 let localCache: {
@@ -134,7 +140,7 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
     // Also store in KV for persistence across worker restarts
     try {
       await createKvCacheStore(env.SLACK_KV).put("repos:cache", JSON.stringify(repos), {
-        expirationTtl: 300, // 5 minutes
+        expirationTtl: KV_CACHE_TTL_SECONDS,
       });
     } catch (e) {
       log.warn("kv.put", {
@@ -228,7 +234,7 @@ export async function getRoutingRules(env: Env, traceId?: string): Promise<Slack
 
     try {
       await createKvCacheStore(env.SLACK_KV).put(ROUTING_RULES_CACHE_KEY, JSON.stringify(rules), {
-        expirationTtl: 300, // 5 minutes
+        expirationTtl: KV_CACHE_TTL_SECONDS,
       });
     } catch (e) {
       log.warn("kv.put", {
@@ -258,7 +264,9 @@ async function getRoutingRulesFromCache(env: Env): Promise<SlackRoutingRule[]> {
   try {
     const cached = await createKvCacheStore(env.SLACK_KV).get(ROUTING_RULES_CACHE_KEY, "json");
     if (cached && Array.isArray(cached)) {
-      return cached as SlackRoutingRule[];
+      // Normalize on read so the KV-fallback path returns the same canonical
+      // shape as the fresh control-plane path (one uniform contract).
+      return normalizeRoutingRules(cached as SlackRoutingRule[]);
     }
   } catch (e) {
     log.warn("kv.get", {

@@ -5,6 +5,7 @@ import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import {
   DEFAULT_MENTIONS_POLICY,
+  MAX_SLACK_ROUTING_RULES,
   normalizeRoutingRules,
   type EnrichedRepository,
   type SlackGlobalConfig,
@@ -535,10 +536,17 @@ function RoutingRulesSection({
       toast.error("Every routing rule needs a keyword and a target repository.");
       return;
     }
+    if (trimmed.length > MAX_SLACK_ROUTING_RULES) {
+      toast.error(
+        `You can define at most ${MAX_SLACK_ROUTING_RULES} routing rules (you have ${trimmed.length}). Remove ${trimmed.length - MAX_SLACK_ROUTING_RULES} to save.`
+      );
+      return;
+    }
 
     setSaving(true);
-    // normalizeRoutingRules lowercases, de-dupes, and caps — the same shape the
-    // control plane stores, so the UI and storage stay in sync.
+    // normalizeRoutingRules lowercases and de-dupes to match the stored shape;
+    // its cap is a no-op here since over-limit drafts are rejected above, and
+    // the control plane remains the canonical validator.
     const normalized = normalizeRoutingRules(trimmed);
     const body: SlackGlobalConfig = {
       defaults: mergedGlobalDefaults(settings, {

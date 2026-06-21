@@ -74,4 +74,20 @@ describe("getRoutingRules", () => {
     const env = makeEnv(new Error("control plane unreachable"));
     expect(await getRoutingRules(env)).toEqual([]);
   });
+
+  it("normalizes rules read from the KV cache on the fail-open path", async () => {
+    const env = {
+      SLACK_KV: {
+        get: vi.fn().mockResolvedValue([{ keyword: " FrontEnd ", target: "Acme/Web" }]),
+        put: vi.fn().mockResolvedValue(undefined),
+      },
+      CONTROL_PLANE: {
+        fetch: vi.fn().mockResolvedValue(new Response("error", { status: 500 })),
+      },
+    } as unknown as Env;
+
+    expect(await getRoutingRules(env, "trace")).toEqual([
+      { keyword: "frontend", target: "acme/web" },
+    ]);
+  });
 });

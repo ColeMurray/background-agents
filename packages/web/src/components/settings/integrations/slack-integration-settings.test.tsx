@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
+import { MAX_SLACK_ROUTING_RULES } from "@open-inspect/shared";
 import type {
   SlackGlobalConfig,
   SlackRepoSettings,
@@ -479,6 +480,39 @@ describe("SlackIntegrationSettings", () => {
       await user.click(within(section).getByRole("button", { name: /save routing rules/i }));
 
       expect(toastError).toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("blocks save and shows an error when more than the maximum rules are defined", async () => {
+      const user = userEvent.setup();
+      const tooMany = Array.from({ length: MAX_SLACK_ROUTING_RULES + 1 }, (_, i) => ({
+        keyword: `rule-${i}`,
+        target: "acme/web",
+      }));
+      setupSWR({
+        global: {
+          defaults: {
+            agentNotificationsEnabled: true,
+            mentionsPolicy: "allow",
+            routingRules: tooMany,
+          },
+        },
+        availableRepos: [repo("acme/web")],
+      });
+      render(<SlackIntegrationSettings />);
+
+      const section = routingSection();
+      // Save is disabled until the form is dirty; edit a keyword (keeping it
+      // valid) so the only remaining problem is the over-limit count.
+      await user.type(
+        within(section).getAllByRole("textbox", { name: /routing keyword/i })[0],
+        "x"
+      );
+      await user.click(within(section).getByRole("button", { name: /save routing rules/i }));
+
+      expect(toastError).toHaveBeenCalledWith(
+        expect.stringContaining(String(MAX_SLACK_ROUTING_RULES))
+      );
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
