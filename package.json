@@ -34,7 +34,7 @@
     "wrangler": "^4.103.0"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "overrides": {
     "minimatch": "^10.2.5",
