@@ -1,6 +1,10 @@
 import type { Logger } from "../../../logger";
-import { sandboxEventSchema, type SessionArtifact } from "@open-inspect/shared";
-import { z } from "zod";
+import {
+  createMediaArtifactRequestSchema,
+  sandboxEventSchema,
+  type CreateMediaArtifactRequest,
+  type SessionArtifact,
+} from "@open-inspect/shared";
 import type { ParticipantRole, SandboxEvent, ServerMessage } from "../../../types";
 import type { OpenAITokenRefreshResult } from "../../openai-token-refresh-service";
 import type { ScmCredentialsResult } from "../../scm-credentials-service";
@@ -34,20 +38,6 @@ export interface SandboxHandlerDeps {
   now: () => number;
   getLog: () => Logger;
 }
-
-interface CreateMediaArtifactRequest {
-  artifactId: string;
-  artifactType: string;
-  objectKey: string;
-  metadata?: Record<string, unknown>;
-}
-
-const createMediaArtifactRequestSchema = z.object({
-  artifactId: z.string(),
-  artifactType: z.string(),
-  objectKey: z.string(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-});
 
 export interface SandboxHandler {
   sandboxEvent: (request: Request) => Promise<Response>;

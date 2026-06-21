@@ -53,6 +53,14 @@ export type SpawnSource =
 export type ConfidenceLevel = "high" | "medium" | "low";
 
 const gitSyncStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
+const spawnSourceSchema = z.enum([
+  "user",
+  "agent",
+  "automation",
+  "github-bot",
+  "linear-bot",
+  "slack-bot",
+]);
 
 const recordSchema = z.record(z.string(), z.unknown());
 
@@ -577,6 +585,39 @@ export const createSessionRequestSchema = z.object({
 });
 
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
+
+export const createSessionInputSchema = createSessionRequestSchema.extend({
+  userId: z.string().optional(),
+  spawnSource: spawnSourceSchema.optional(),
+  authProvider: z.enum(["github", "google"]).optional(),
+  authUserId: z.string().optional(),
+  authEmail: z.string().optional(),
+  authName: z.string().optional(),
+  authAvatarUrl: z.string().optional(),
+  scmUserId: z.string().optional(),
+  scmLogin: z.string().optional(),
+  scmName: z.string().optional(),
+  scmEmail: z.string().optional(),
+  scmAvatarUrl: z.string().optional(),
+  actorUserId: z.string().optional(),
+  actorDisplayName: z.string().optional(),
+  actorEmail: z.string().optional(),
+  actorAvatarUrl: z.string().optional(),
+  scmToken: z.string().optional(),
+  scmRefreshToken: z.string().optional(),
+  scmTokenExpiresAt: z.number().optional(),
+});
+
+export type CreateSessionInput = z.infer<typeof createSessionInputSchema>;
+
+export const createMediaArtifactRequestSchema = z.object({
+  artifactId: z.string(),
+  artifactType: z.string(),
+  objectKey: z.string(),
+  metadata: recordSchema.optional(),
+});
+
+export type CreateMediaArtifactRequest = z.infer<typeof createMediaArtifactRequestSchema>;
 
 export interface CreateSessionResponse {
   sessionId: string;
