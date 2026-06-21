@@ -43,7 +43,7 @@ export function formatRelativeTime(timestamp: number): string {
  * Group sessions by activity status.
  * Sessions older than 7 days are considered "inactive".
  */
-export function isInactiveSession(updatedAt: number): boolean {
-  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+export function isInactiveSession(updatedAt: number, now: number): boolean {
+  const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
   return updatedAt < sevenDaysAgo;
 }

@@ -246,10 +246,11 @@ export function SessionSidebar({ onNewSession, onToggle, onSessionSelect }: Sess
 
     const active: SessionItem[] = [];
     const inactive: SessionItem[] = [];
+    const now = Date.now();
 
     for (const session of topLevel) {
       const timestamp = session.updatedAt || session.createdAt;
-      if (isInactiveSession(timestamp)) {
+      if (isInactiveSession(timestamp, now)) {
         inactive.push(session);
       } else {
         active.push(session);
