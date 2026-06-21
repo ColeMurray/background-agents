@@ -161,7 +161,24 @@ describe("SlackIntegrationSettings", () => {
     expect(body.settings.defaults).toEqual({
       agentNotificationsEnabled: true,
       mentionsPolicy: "allow",
+      allowPrivateChannels: true,
     });
+  });
+
+  it("toggling the private-channels switch off sends allowPrivateChannels: false", async () => {
+    const user = userEvent.setup();
+    setupSWR({ global: null });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<SlackIntegrationSettings />);
+
+    await user.click(screen.getByRole("switch", { name: /private channels/i }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body as string) as { settings: SlackGlobalConfig };
+    expect(body.settings.defaults?.allowPrivateChannels).toBe(false);
   });
 
   it("changing mentions policy radio sends the new value on save", async () => {

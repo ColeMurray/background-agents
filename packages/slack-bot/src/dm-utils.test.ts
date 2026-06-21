@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stripMentions, isDmDispatchable } from "./dm-utils";
+import { stripMentions, isPrivateMessageDispatchable } from "./dm-utils";
 
 describe("stripMentions", () => {
   it("removes a single mention", () => {
@@ -29,7 +29,7 @@ describe("stripMentions", () => {
   });
 });
 
-describe("isDmDispatchable", () => {
+describe("isPrivateMessageDispatchable", () => {
   const baseEvent = {
     type: "message",
     channel_type: "im",
@@ -39,31 +39,35 @@ describe("isDmDispatchable", () => {
     user: "U12345",
   };
 
-  it("returns true for a valid DM event", () => {
-    expect(isDmDispatchable(baseEvent)).toBe(true);
+  it("returns true for a valid DM (im) event", () => {
+    expect(isPrivateMessageDispatchable(baseEvent)).toBe(true);
+  });
+
+  it("returns true for a valid group DM (mpim) event", () => {
+    expect(isPrivateMessageDispatchable({ ...baseEvent, channel_type: "mpim" })).toBe(true);
   });
 
   it("returns false when subtype is present (e.g. bot_message)", () => {
-    expect(isDmDispatchable({ ...baseEvent, subtype: "bot_message" })).toBe(false);
+    expect(isPrivateMessageDispatchable({ ...baseEvent, subtype: "bot_message" })).toBe(false);
   });
 
   it("returns false when subtype is message_changed", () => {
-    expect(isDmDispatchable({ ...baseEvent, subtype: "message_changed" })).toBe(false);
+    expect(isPrivateMessageDispatchable({ ...baseEvent, subtype: "message_changed" })).toBe(false);
   });
 
-  it("returns false for non-im channel type", () => {
-    expect(isDmDispatchable({ ...baseEvent, channel_type: "channel" })).toBe(false);
+  it("returns false for a public channel event", () => {
+    expect(isPrivateMessageDispatchable({ ...baseEvent, channel_type: "channel" })).toBe(false);
   });
 
   it("returns false when text is missing", () => {
-    expect(isDmDispatchable({ ...baseEvent, text: undefined })).toBe(false);
+    expect(isPrivateMessageDispatchable({ ...baseEvent, text: undefined })).toBe(false);
   });
 
   it("returns false when user is missing", () => {
-    expect(isDmDispatchable({ ...baseEvent, user: undefined })).toBe(false);
+    expect(isPrivateMessageDispatchable({ ...baseEvent, user: undefined })).toBe(false);
   });
 
   it("returns false for non-message event type", () => {
-    expect(isDmDispatchable({ ...baseEvent, type: "app_mention" })).toBe(false);
+    expect(isPrivateMessageDispatchable({ ...baseEvent, type: "app_mention" })).toBe(false);
   });
 });

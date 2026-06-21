@@ -24,6 +24,21 @@ vi.mock("@open-inspect/shared", async () => {
 
 import app from "./index";
 import { clearLocalCache } from "./classifier/repos";
+import { resetSlackSettingsCache } from "./integration-settings";
+
+/**
+ * Build the control-plane response for GET /integration-settings/slack.
+ * `undefined` → no stored settings (default: private contexts allowed).
+ */
+function slackSettingsResponse(allowPrivateChannels?: boolean): Response {
+  return new Response(
+    JSON.stringify({
+      integrationId: "slack",
+      settings: allowPrivateChannels === undefined ? null : { defaults: { allowPrivateChannels } },
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } }
+  );
+}
 
 function createMockKV() {
   const store = new Map<string, string>();
@@ -56,12 +71,15 @@ function createMockKV() {
   };
 }
 
-function makeEnv(): Env {
+function makeEnv(opts: { allowPrivateChannels?: boolean } = {}): Env {
   return {
     SLACK_KV: createMockKV() as unknown as KVNamespace,
     CONTROL_PLANE: {
       fetch: vi.fn(async (input: RequestInfo | URL) => {
         const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/integration-settings/slack")) {
+          return slackSettingsResponse(opts.allowPrivateChannels);
+        }
         if (url.includes("/repos")) {
           return new Response(
             JSON.stringify({
@@ -156,11 +174,14 @@ async function flushWaitUntil(ctx: ReturnType<typeof makeCtx>, callIndex = 0): P
   await ctx.waitUntil.mock.calls[callIndex]?.[0];
 }
 
-function makeSessionEnv(order: string[] = []): Env {
-  const env = makeEnv();
+function makeSessionEnv(order: string[] = [], opts: { allowPrivateChannels?: boolean } = {}): Env {
+  const env = makeEnv(opts);
   (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
     async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/integration-settings/slack")) {
+        return slackSettingsResponse(opts.allowPrivateChannels);
+      }
       if (url.includes("/repos")) {
         order.push("repos");
         return new Response(
@@ -210,7 +231,12 @@ function makeSessionEnv(order: string[] = []): Env {
 
 function mockSlackFetch(
   order: string[] = [],
-  options: { statusResponse?: Response | Promise<Response>; threadMessages?: unknown[] } = {}
+  options: {
+    statusResponse?: Response | Promise<Response>;
+    threadMessages?: unknown[];
+    channelIsPrivate?: boolean;
+    channelInfoResponse?: Response;
+  } = {}
 ) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = typeof input === "string" ? input : input.toString();
@@ -227,10 +253,19 @@ function mockSlackFetch(
 
     if (url.includes("conversations.info")) {
       order.push("channelInfo");
+      if (options.channelInfoResponse) {
+        return options.channelInfoResponse;
+      }
       return new Response(
         JSON.stringify({
           ok: true,
-          channel: { id: "C123", name: "eng", topic: { value: "" }, purpose: { value: "" } },
+          channel: {
+            id: "C123",
+            name: "eng",
+            topic: { value: "" },
+            purpose: { value: "" },
+            is_private: options.channelIsPrivate ?? false,
+          },
         }),
         { status: 200, headers: { "Content-Type": "application/json" } }
       );
@@ -343,6 +378,7 @@ describe("POST /events", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearLocalCache();
+    resetSlackSettingsCache();
     mockVerifySlackSignature.mockResolvedValue(true);
     mockGetUserInfo.mockResolvedValue({ ok: true, user: undefined });
   });
@@ -425,7 +461,11 @@ describe("POST /events", () => {
       loading_messages: ["Starting..."],
     });
     expect(startingStatusBodies(slackFetch)).toHaveLength(3);
-    expect(order.indexOf("status")).toBeLessThan(order.indexOf("channelInfo"));
+    // Channel info is fetched first (it feeds the private-context gate), then the
+    // Starting status is scheduled — still well before the slow session creation.
+    // Guard against vacuous pass: a missing "channelInfo" would make indexOf return -1.
+    expect(order).toContain("channelInfo");
+    expect(order.indexOf("channelInfo")).toBeLessThan(order.indexOf("status"));
     expect(order.indexOf("status")).toBeLessThan(order.indexOf("session"));
 
     const postBodies = slackApiBodies(slackFetch, "chat.postMessage");
@@ -642,6 +682,7 @@ describe("POST /interactions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearLocalCache();
+    resetSlackSettingsCache();
     mockVerifySlackSignature.mockResolvedValue(true);
     mockOpenView.mockResolvedValue({ ok: true });
     mockGetUserInfo.mockResolvedValue({ ok: true, user: undefined });
@@ -1636,5 +1677,238 @@ describe("POST /interactions", () => {
         value: "acme/repo-150",
       },
     ]);
+  });
+});
+
+describe("private-context gate (allowPrivateChannels)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearLocalCache();
+    resetSlackSettingsCache();
+    mockVerifySlackSignature.mockResolvedValue(true);
+    mockGetUserInfo.mockResolvedValue({ ok: true, user: undefined });
+  });
+
+  function refusalPosted(slackFetch: ReturnType<typeof mockSlackFetch>): boolean {
+    return slackApiBodies(slackFetch, "chat.postMessage").some((body) =>
+      String(body.text).includes("public channels")
+    );
+  }
+
+  it("toggle OFF: declines an app mention in a private channel (no session, no status)", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order, { channelIsPrivate: true });
+    const env = makeSessionEnv(order, { allowPrivateChannels: false });
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> fix the auth tests",
+        user: "U123",
+        channel: "C123",
+        ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+    await flushWaitUntil(ctx, 1);
+
+    expect(refusalPosted(slackFetch)).toBe(true);
+    expect(order).not.toContain("session");
+    expect(order).not.toContain("prompt");
+    expect(startingStatusBodies(slackFetch)).toHaveLength(0);
+
+    slackFetch.mockRestore();
+  });
+
+  it("toggle OFF: allows an app mention in a public channel", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order, { channelIsPrivate: false });
+    const env = makeSessionEnv(order, { allowPrivateChannels: false });
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> fix the auth tests",
+        user: "U123",
+        channel: "C123",
+        ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+    await flushWaitUntil(ctx, 1);
+
+    expect(refusalPosted(slackFetch)).toBe(false);
+    expect(order).toContain("session");
+    expect(order).toContain("prompt");
+
+    slackFetch.mockRestore();
+  });
+
+  it("toggle OFF: declines a direct message (im) without a conversations.info call", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order);
+    const env = makeSessionEnv(order, { allowPrivateChannels: false });
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "message",
+        text: "fix the auth tests",
+        user: "U123",
+        channel: "D123",
+        ts: "444.555",
+        channel_type: "im",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(refusalPosted(slackFetch)).toBe(true);
+    expect(order).not.toContain("session");
+    expect(order).not.toContain("channelInfo");
+    expect(startingStatusBodies(slackFetch)).toHaveLength(0);
+
+    slackFetch.mockRestore();
+  });
+
+  it("toggle OFF: declines a group DM (mpim)", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order);
+    const env = makeSessionEnv(order, { allowPrivateChannels: false });
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "message",
+        text: "fix the auth tests",
+        user: "U123",
+        channel: "G123",
+        ts: "444.555",
+        channel_type: "mpim",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(refusalPosted(slackFetch)).toBe(true);
+    expect(order).not.toContain("session");
+
+    slackFetch.mockRestore();
+  });
+
+  it("toggle OFF: fail-closed when conversations.info fails", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order, {
+      channelInfoResponse: new Response(JSON.stringify({ ok: false, error: "not_in_channel" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    });
+    const env = makeSessionEnv(order, { allowPrivateChannels: false });
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> fix the auth tests",
+        user: "U123",
+        channel: "C123",
+        ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+    await flushWaitUntil(ctx, 1);
+
+    expect(refusalPosted(slackFetch)).toBe(true);
+    expect(order).not.toContain("session");
+
+    slackFetch.mockRestore();
+  });
+
+  it("toggle ON: allows a private channel (regression — default behavior unchanged)", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order, { channelIsPrivate: true });
+    const env = makeSessionEnv(order, { allowPrivateChannels: true });
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> fix the auth tests",
+        user: "U123",
+        channel: "C123",
+        ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+    await flushWaitUntil(ctx, 1);
+
+    expect(refusalPosted(slackFetch)).toBe(false);
+    expect(order).toContain("session");
+
+    slackFetch.mockRestore();
+  });
+
+  it("toggle OFF: declines a repo-selection interaction in a private channel (back-door C1)", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order, { channelIsPrivate: true });
+    const env = makeSessionEnv(order, { allowPrivateChannels: false });
+    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+      "pending:C123:111.222",
+      JSON.stringify({ message: "Please handle this", userId: "U123" })
+    );
+
+    const payload = {
+      type: "block_actions",
+      user: { id: "U123" },
+      channel: { id: "C123" },
+      message: { ts: "111.222" },
+      actions: [{ action_id: "select_repo", selected_option: { value: "acme/app" } }],
+    };
+    const request = new Request("http://localhost/interactions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "x-slack-signature": "v0=test",
+        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
+      },
+      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
+    });
+    const ctx = makeCtx();
+
+    const response = await app.fetch(request, env, ctx);
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+    await flushWaitUntil(ctx, 1);
+
+    expect(refusalPosted(slackFetch)).toBe(true);
+    expect(order).not.toContain("session");
+    expect(order).not.toContain("prompt");
+
+    slackFetch.mockRestore();
   });
 });
