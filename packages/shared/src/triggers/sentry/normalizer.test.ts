@@ -134,4 +134,36 @@ describe("normalizeSentryEvent", () => {
     expect(normalizeSentryEvent({ action: "unknown" })).toBeNull();
     expect(normalizeSentryEvent({})).toBeNull();
   });
+
+  it("returns null for an issue alert missing consumed issue fields", () => {
+    const malformed = {
+      action: "triggered",
+      data: {
+        event: { metadata: { filename: "src/handlers/auth.ts" } },
+        // issue is missing id/level/status/lastSeen/project — all consumed downstream
+        issue: { shortId: "BACKEND-ABC" },
+        triggered_rule: "New issue alert",
+      },
+      actor: { type: "application", id: 1, name: "Sentry" },
+    };
+    expect(normalizeSentryEvent(malformed)).toBeNull();
+  });
+
+  it("returns null for a metric alert missing trigger-key fields", () => {
+    const malformed = {
+      action: "critical",
+      data: {
+        metric_alert: {
+          id: 456,
+          title: "Error rate > 5%",
+          current_trigger: { label: "critical" },
+          // alert_rule and date_started are missing — both feed the trigger key
+        },
+        description_text: "Error rate exceeded 5%",
+        description_title: "Metric Alert",
+        web_url: "https://sentry.io/alerts/456/",
+      },
+    };
+    expect(normalizeSentryEvent(malformed)).toBeNull();
+  });
 });

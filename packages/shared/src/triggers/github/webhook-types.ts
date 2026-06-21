@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import type { WebhookEventMap } from "@octokit/webhooks-types";
 
 type GitHubWebhookEvent = Extract<keyof WebhookEventMap, string>;
@@ -69,37 +71,99 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
   },
 ] as const satisfies readonly GitHubEventCatalogEntry[];
 
-export type SupportedGitHubEventCatalogEntry = (typeof GITHUB_WEBHOOK_EVENT_CATALOG)[number];
-export type SupportedGitHubEventName = SupportedGitHubEventCatalogEntry["event"];
-export type SupportedGitHubActionForEvent<E extends SupportedGitHubEventName> = Extract<
-  SupportedGitHubEventCatalogEntry,
-  { event: E }
->["action"];
+// ─── Webhook payload schemas ──────────────────────────────────────────────────
+//
+// Each schema is the single source of truth for one supported event: it produces
+// the static payload type via `z.infer` AND validates the raw webhook body at
+// runtime via `safeParse` (see normalizer.ts). Only the fields consumed by the
+// normalizer (trigger/concurrency keys, meta) and the context renderer are
+// modeled; `z.object` strips unknown keys. Every field beyond the identity key
+// is optional, so the inferred types stay loose enough for the defensive,
+// optional-chained reads in normalizer.ts and context.ts.
 
-type PayloadForCatalogEntry<T extends SupportedGitHubEventCatalogEntry> = Extract<
-  WebhookEventMap[T["event"]],
-  { action: T["action"] }
->;
+const userSchema = z.object({
+  login: z.string().optional(),
+});
 
-export type PullRequestPayload = Extract<
-  WebhookEventMap["pull_request"],
-  { action: SupportedGitHubActionForEvent<"pull_request"> }
->;
-export type IssueCommentPayload = Extract<
-  WebhookEventMap["issue_comment"],
-  { action: SupportedGitHubActionForEvent<"issue_comment"> }
->;
-export type PullRequestReviewCommentPayload = Extract<
-  WebhookEventMap["pull_request_review_comment"],
-  { action: SupportedGitHubActionForEvent<"pull_request_review_comment"> }
->;
-export type CheckSuitePayload = Extract<
-  WebhookEventMap["check_suite"],
-  { action: SupportedGitHubActionForEvent<"check_suite"> }
->;
-export type IssuesPayload = Extract<
-  WebhookEventMap["issues"],
-  { action: SupportedGitHubActionForEvent<"issues"> }
->;
+const repositorySchema = z.object({
+  name: z.string().optional(),
+  owner: userSchema.optional(),
+});
 
-export type SupportedGitHubPayload = PayloadForCatalogEntry<SupportedGitHubEventCatalogEntry>;
+const labelArraySchema = z.array(z.object({ name: z.string().optional() }));
+
+const baseEventSchema = z.object({
+  action: z.string(),
+  repository: repositorySchema.optional(),
+  sender: userSchema.optional(),
+});
+
+const pullRequestObjectSchema = z.object({
+  number: z.number(),
+  title: z.string().optional(),
+  body: z.string().optional(),
+  merged: z.boolean().optional(),
+  user: userSchema.optional(),
+  labels: labelArraySchema.optional(),
+  head: z.object({ ref: z.string().optional(), sha: z.string().optional() }).optional(),
+  base: z.object({ ref: z.string().optional() }).optional(),
+});
+
+const commentSchema = z.object({
+  id: z.number(),
+  body: z.string().optional(),
+  path: z.string().optional(),
+  diff_hunk: z.string().optional(),
+  user: userSchema.optional(),
+});
+
+const issueObjectSchema = z.object({
+  number: z.number(),
+  title: z.string().optional(),
+  body: z.string().optional(),
+  user: userSchema.optional(),
+  pull_request: z.unknown().optional(),
+  labels: labelArraySchema.optional(),
+});
+
+const checkSuiteObjectSchema = z.object({
+  id: z.number(),
+  conclusion: z.string().nullable().optional(),
+  head_branch: z.string().nullable().optional(),
+  head_sha: z.string().optional(),
+  pull_requests: z.array(z.object({ number: z.number() })).optional(),
+});
+
+// GitHub always includes the event's primary object (a pull_request event always
+// carries `pull_request`, an issue_comment always carries `issue` + `comment`,
+// etc.), so each is required — a payload missing it is malformed and fails the
+// parse rather than being papered over with a downstream null-check.
+export const pullRequestEventSchema = baseEventSchema.extend({
+  pull_request: pullRequestObjectSchema,
+});
+
+export const issueCommentEventSchema = baseEventSchema.extend({
+  issue: issueObjectSchema,
+  comment: commentSchema,
+});
+
+export const pullRequestReviewCommentEventSchema = baseEventSchema.extend({
+  pull_request: pullRequestObjectSchema,
+  comment: commentSchema,
+});
+
+export const checkSuiteEventSchema = baseEventSchema.extend({
+  check_suite: checkSuiteObjectSchema,
+});
+
+export const issuesEventSchema = baseEventSchema.extend({
+  issue: issueObjectSchema,
+});
+
+/** Fields shared by every supported event — all the context-free accessors need. */
+export type GitHubEventBase = z.infer<typeof baseEventSchema>;
+export type PullRequestPayload = z.infer<typeof pullRequestEventSchema>;
+export type IssueCommentPayload = z.infer<typeof issueCommentEventSchema>;
+export type PullRequestReviewCommentPayload = z.infer<typeof pullRequestReviewCommentEventSchema>;
+export type CheckSuitePayload = z.infer<typeof checkSuiteEventSchema>;
+export type IssuesPayload = z.infer<typeof issuesEventSchema>;

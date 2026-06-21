@@ -386,5 +386,31 @@ describe("normalizeGitHubEvent", () => {
       };
       expect(normalizeGitHubEvent("issues", payload)).toBeNull();
     });
+
+    it("returns null for pull_request with a non-array labels field", () => {
+      const payload = {
+        action: "opened",
+        repository: repo,
+        sender,
+        pull_request: { ...basePR, labels: "not-an-array" },
+      };
+      expect(normalizeGitHubEvent("pull_request", payload)).toBeNull();
+    });
+
+    it("returns null for check_suite with a non-numeric pull request number", () => {
+      const payload = {
+        action: "completed",
+        repository: repo,
+        sender,
+        check_suite: {
+          id: 77777,
+          head_branch: "main",
+          head_sha: "abc123",
+          conclusion: "success",
+          pull_requests: [{ number: "42" }],
+        },
+      };
+      expect(normalizeGitHubEvent("check_suite", payload)).toBeNull();
+    });
   });
 });
