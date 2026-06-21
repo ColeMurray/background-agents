@@ -1,16 +1,23 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ReactNode } from "react";
-import { AutomationForm } from "./automation-form";
+import { DEFAULT_MODEL } from "@open-inspect/shared";
+import { AutomationForm, type AutomationFormValues } from "./automation-form";
 import { CronPicker } from "./cron-picker";
 
 expect.extend(matchers);
 
 afterEach(cleanup);
+
+// Mutable per-test enabled set; the hoisted use-enabled-models mock closes over it.
+let enabledModelsValue: string[] = ["openai/gpt-5.4"];
+beforeEach(() => {
+  enabledModelsValue = ["openai/gpt-5.4"];
+});
 
 vi.mock("@/hooks/use-repos", () => ({
   useRepos: () => ({
@@ -38,12 +45,14 @@ vi.mock("@/hooks/use-branches", () => ({
 
 vi.mock("@/hooks/use-enabled-models", () => ({
   useEnabledModels: () => ({
+    enabledModels: enabledModelsValue,
     enabledModelOptions: [
       {
         category: "OpenAI",
         models: [{ id: "openai/gpt-5.4", name: "GPT-5.4", description: "Test model" }],
       },
     ],
+    loading: false,
   }),
 }));
 
@@ -200,5 +209,62 @@ describe("instructions character counter", () => {
     const counter = screen.getByText(/15,000 \/ 15,000/);
     expect(counter).toHaveClass("text-destructive");
     expect(counter).toHaveTextContent("Maximum length reached.");
+  });
+});
+
+describe("model normalization", () => {
+  const baseInitialValues = {
+    name: "Daily review",
+    repoOwner: "open-inspect",
+    repoName: "background-agents",
+    baseBranch: "main",
+    scheduleCron: "0 9 * * *",
+    scheduleTz: "UTC",
+    instructions: "Review the repo.",
+    triggerType: "schedule" as const,
+  };
+
+  const submitForm = (initialValues: Partial<AutomationFormValues>) => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...baseInitialValues, ...initialValues }}
+      />
+    );
+    fireEvent.submit(container.querySelector("form")!);
+    return onSubmit;
+  };
+
+  it("coerces a disabled initial model to an enabled one before submit", () => {
+    const onSubmit = submitForm({ model: "anthropic/claude-opus-4-8" });
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0].model).toBe("openai/gpt-5.4");
+  });
+
+  it("leaves an enabled initial model untouched", () => {
+    const onSubmit = submitForm({ model: "openai/gpt-5.4" });
+    expect(onSubmit.mock.calls[0][0].model).toBe("openai/gpt-5.4");
+  });
+
+  it("prefers the enabled default when the initial model is disabled", () => {
+    enabledModelsValue = [DEFAULT_MODEL, "openai/gpt-5.4"];
+    const onSubmit = submitForm({ model: "anthropic/claude-opus-4-8" });
+    expect(onSubmit.mock.calls[0][0].model).toBe(DEFAULT_MODEL);
+  });
+
+  it("drops a reasoning effort the coerced model does not support", () => {
+    // gpt-5.4 supports none/low/medium/high/xhigh but not "max".
+    const onSubmit = submitForm({ model: "anthropic/claude-opus-4-8", reasoningEffort: "max" });
+    expect(onSubmit.mock.calls[0][0].model).toBe("openai/gpt-5.4");
+    expect(onSubmit.mock.calls[0][0].reasoningEffort).toBeNull();
+  });
+
+  it("keeps a reasoning effort the coerced model supports", () => {
+    const onSubmit = submitForm({ model: "anthropic/claude-opus-4-8", reasoningEffort: "high" });
+    expect(onSubmit.mock.calls[0][0].model).toBe("openai/gpt-5.4");
+    expect(onSubmit.mock.calls[0][0].reasoningEffort).toBe("high");
   });
 });

@@ -6,12 +6,7 @@
  * repo-required-at-creation invariant is untouched.
  */
 
-import {
-  DEFAULT_MODEL,
-  getValidModelOrDefault,
-  isValidReasoningEffort,
-  type AutomationTriggerType,
-} from "@open-inspect/shared";
+import type { AutomationTriggerType } from "@open-inspect/shared";
 import type { AutomationFormValues } from "@/components/automations/automation-form";
 
 export type TemplateCategory =
@@ -271,47 +266,4 @@ export function getTemplatesForCategory(category: TemplateCategory): AutomationT
 
 export function getVisibleCategories(): Array<{ id: TemplateCategory; label: string }> {
   return TEMPLATE_CATEGORIES.filter((c) => getTemplatesForCategory(c.id).length > 0);
-}
-
-/**
- * Build the `initialValues` passed to the create form from a template's
- * pre-fill, resolving the suggested model against the user's enabled models.
- *
- * The model selector has no built-in fallback, so an unenabled suggested model
- * would render a broken/unselected control and be submitted verbatim. This
- * coerces the model to one that is actually enabled (preferring the suggestion,
- * then the system default, then the first enabled model) and drops a suggested
- * reasoning effort that the resolved model does not support.
- */
-export function resolveTemplateInitialValues(
-  prefill: Partial<AutomationFormValues>,
-  enabledModels: string[]
-): Partial<AutomationFormValues> {
-  const { model, reasoningEffort, ...rest } = prefill;
-  const result: Partial<AutomationFormValues> = { ...rest };
-
-  // The model the form will actually use. When no model is suggested, the form
-  // falls back to DEFAULT_MODEL, so reasoning is validated against that.
-  let effectiveModel: string = DEFAULT_MODEL;
-
-  if (model) {
-    const enabled = new Set(enabledModels);
-    // getValidModelOrDefault already guarantees a valid model id; the branches
-    // below only resolve the *enabled* dimension (prefer the suggestion, then
-    // the system default, then the first enabled model).
-    const coerced = getValidModelOrDefault(model);
-    const chosen = enabled.has(coerced)
-      ? coerced
-      : enabled.has(DEFAULT_MODEL)
-        ? DEFAULT_MODEL
-        : (enabledModels[0] ?? DEFAULT_MODEL);
-    result.model = chosen;
-    effectiveModel = chosen;
-  }
-
-  if (reasoningEffort && isValidReasoningEffort(effectiveModel, reasoningEffort)) {
-    result.reasoningEffort = reasoningEffort;
-  }
-
-  return result;
 }

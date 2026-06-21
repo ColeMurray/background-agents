@@ -16,6 +16,7 @@ import { useRepos } from "@/hooks/use-repos";
 import { useBranches } from "@/hooks/use-branches";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { formatModelNameLower } from "@/lib/format";
+import { resolveEnabledModel } from "@/lib/model-selection";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -103,7 +104,7 @@ interface AutomationFormProps {
 
 export function AutomationForm({ mode, initialValues, onSubmit, submitting }: AutomationFormProps) {
   const { repos, loading: loadingRepos } = useRepos();
-  const { enabledModelOptions } = useEnabledModels();
+  const { enabledModels, enabledModelOptions, loading: loadingModels } = useEnabledModels();
 
   const [name, setName] = useState(initialValues?.name ?? "");
   const [selectedRepo, setSelectedRepo] = useState(
@@ -157,6 +158,21 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       setEventTypeError("");
     }
   }, [showEventTypeSelector, eventType]);
+
+  // Once the user's enabled models load, coerce the selected model to one they
+  // can actually pick. The selector only lists enabled models, so a disabled
+  // default (blank create), a disabled saved model (edit), or a disabled
+  // template suggestion would otherwise show an unselected control and submit
+  // verbatim. Mirrors the reasoning reset the selector's onChange performs.
+  useEffect(() => {
+    if (loadingModels) return;
+    const resolved = resolveEnabledModel(model, enabledModels);
+    if (resolved === model) return;
+    setModel(resolved);
+    setReasoningEffort((current) =>
+      current && !isValidReasoningEffort(resolved, current) ? "" : current
+    );
+  }, [loadingModels, enabledModels, model]);
 
   const handleRepoChange = useCallback(
     (repoFullName: string) => {

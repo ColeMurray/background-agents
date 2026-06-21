@@ -8,8 +8,7 @@ import {
   type AutomationFormValues,
 } from "@/components/automations/automation-form";
 import { WebhookConfig } from "@/components/automations/webhook-config";
-import { useEnabledModels } from "@/hooks/use-enabled-models";
-import { getTemplateById, resolveTemplateInitialValues } from "@/lib/automation-templates";
+import { getTemplateById } from "@/lib/automation-templates";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { SidebarIcon, BackIcon } from "@/components/ui/icons";
@@ -20,7 +19,6 @@ function NewAutomationContent() {
   const { isOpen, toggle } = useSidebarContext();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { enabledModels, loading: loadingModels } = useEnabledModels();
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -32,16 +30,10 @@ function NewAutomationContent() {
   } | null>(null);
 
   // A template id (from the gallery) pre-fills the form. Repository is never
-  // pre-filled, so the repo-required-at-creation invariant is untouched.
+  // pre-filled, so the repo-required-at-creation invariant is untouched. The
+  // form coerces a template's suggested model against the user's enabled set.
   const template = getTemplateById(searchParams.get("template") ?? "");
-
-  // The model selector has no built-in fallback, so a suggested model must be
-  // resolved against the user's enabled set before the form mounts (it reads
-  // initialValues once). Only block on the enabled list when one is suggested.
-  const needsModelResolution = Boolean(template?.prefill.model);
-  const initialValues: Partial<AutomationFormValues> | undefined = template
-    ? resolveTemplateInitialValues(template.prefill, enabledModels)
-    : undefined;
+  const initialValues: Partial<AutomationFormValues> | undefined = template?.prefill;
 
   const handleSubmit = async (values: AutomationFormValues) => {
     setSubmitting(true);
@@ -178,18 +170,12 @@ function NewAutomationContent() {
             </div>
           )}
 
-          {needsModelResolution && loadingModels ? (
-            <div className="flex justify-center py-12">
-              <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
-            </div>
-          ) : (
-            <AutomationForm
-              mode="create"
-              initialValues={initialValues}
-              onSubmit={handleSubmit}
-              submitting={submitting}
-            />
-          )}
+          <AutomationForm
+            mode="create"
+            initialValues={initialValues}
+            onSubmit={handleSubmit}
+            submitting={submitting}
+          />
         </div>
       </div>
     </div>
