@@ -27,7 +27,6 @@ const TRIGGER_LABELS: Record<string, string> = {
   github_event: "GitHub event",
   sentry: "Sentry",
   webhook: "Webhook",
-  linear_event: "Linear",
 };
 
 const OUTPUT_LABELS: Record<AutomationTemplate["primaryOutput"], string> = {
@@ -35,7 +34,7 @@ const OUTPUT_LABELS: Record<AutomationTemplate["primaryOutput"], string> = {
   slack: "Slack",
 };
 
-function TriggerIcon({ type }: { type?: AutomationTriggerType }) {
+function TriggerIcon({ type }: { type: AutomationTriggerType }) {
   switch (type) {
     case "github_event":
       return <GitHubIcon className={ICON_CLASS} />;
@@ -58,7 +57,7 @@ function OutputIcon({ output }: { output: AutomationTemplate["primaryOutput"] })
 }
 
 function TemplateCard({ template }: { template: AutomationTemplate }) {
-  const triggerLabel = TRIGGER_LABELS[template.prefill.triggerType ?? "schedule"] ?? "Schedule";
+  const triggerLabel = TRIGGER_LABELS[template.prefill.triggerType] ?? "Schedule";
   const outputLabel = OUTPUT_LABELS[template.primaryOutput];
 
   return (

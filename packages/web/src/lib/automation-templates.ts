@@ -10,6 +10,7 @@ import {
   DEFAULT_MODEL,
   getValidModelOrDefault,
   isValidReasoningEffort,
+  type AutomationTriggerType,
 } from "@open-inspect/shared";
 import type { AutomationFormValues } from "@/components/automations/automation-form";
 
@@ -19,6 +20,22 @@ export type TemplateCategory =
   | "security"
   | "incidents"
   | "data-research";
+
+/**
+ * The create-form fields a template pre-fills. Repository fields and
+ * `scheduleTz` are statically excluded (repo is always the user's choice; the
+ * form's timezone default applies), and `name`/`triggerType`/`instructions` are
+ * required so every template is complete by construction — making these
+ * invariants compile-time rather than test-only.
+ */
+export type AutomationTemplatePrefill = Omit<
+  Partial<AutomationFormValues>,
+  "repoOwner" | "repoName" | "baseBranch" | "scheduleTz"
+> & {
+  name: string;
+  triggerType: AutomationTriggerType;
+  instructions: string;
+};
 
 export interface AutomationTemplate {
   /** Stable slug used in `?template=<id>`. */
@@ -33,12 +50,7 @@ export interface AutomationTemplate {
    * GitHub event delivery). Informational only — the gallery performs no checks.
    */
   setupNote?: string;
-  /**
-   * Values pre-filled into the create form. Never includes
-   * `repoOwner`/`repoName`/`baseBranch` (repo is always chosen by the user) and
-   * omits `scheduleTz` so the form's default (the user's timezone) applies.
-   */
-  prefill: Partial<AutomationFormValues>;
+  prefill: AutomationTemplatePrefill;
 }
 
 /** Curated category order. */

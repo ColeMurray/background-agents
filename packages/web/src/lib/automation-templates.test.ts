@@ -28,7 +28,6 @@ const INSTRUCTIONS_MAX_LENGTH = 15000;
 const MIN_INTERVAL_MINUTES = 15;
 
 const CATEGORY_IDS = new Set(TEMPLATE_CATEGORIES.map((c) => c.id));
-const REPO_FIELDS = ["repoOwner", "repoName", "baseBranch"] as const;
 
 // Maps each trigger type to the set of event types its source actually supports.
 const eventTypesByTrigger = new Map<string, Set<string>>(
@@ -50,24 +49,14 @@ describe("automation templates catalog", () => {
   });
 
   describe.each(automationTemplates.map((t) => [t.id, t] as const))("template %s", (_id, t) => {
-    it("never prefills repository fields (AC-4)", () => {
-      for (const field of REPO_FIELDS) {
-        expect(t.prefill[field]).toBeUndefined();
-      }
-    });
-
-    it("omits scheduleTz so the user's timezone default applies", () => {
-      expect(t.prefill.scheduleTz).toBeUndefined();
-    });
-
     it("has non-empty title, description, and instructions", () => {
       expect(t.title.trim().length).toBeGreaterThan(0);
       expect(t.description.trim().length).toBeGreaterThan(0);
-      expect((t.prefill.instructions ?? "").trim().length).toBeGreaterThan(0);
+      expect(t.prefill.instructions.trim().length).toBeGreaterThan(0);
     });
 
     it("keeps instructions within the 15,000 character cap", () => {
-      expect((t.prefill.instructions ?? "").length).toBeLessThanOrEqual(INSTRUCTIONS_MAX_LENGTH);
+      expect(t.prefill.instructions.length).toBeLessThanOrEqual(INSTRUCTIONS_MAX_LENGTH);
     });
 
     it("declares only known categories", () => {
@@ -122,7 +111,7 @@ describe("automation templates catalog", () => {
 
     if (t.primaryOutput === "slack") {
       it("names a Slack channel in its instructions and carries a setup note", () => {
-        expect(t.prefill.instructions ?? "").toMatch(/#[a-z0-9-]+/i);
+        expect(t.prefill.instructions).toMatch(/#[a-z0-9-]+/i);
         expect(t.setupNote).toBeTruthy();
       });
     }
