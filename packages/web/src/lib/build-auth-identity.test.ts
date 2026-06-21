@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAuthIdentity,
   buildScmCredentials,
+  isAuthProvider,
   resolveAuthProvider,
   type AuthIdentityUser,
 } from "./build-auth-identity";
@@ -39,6 +40,20 @@ describe("resolveAuthProvider", () => {
     expect(resolveAuthProvider({ id: "12345" })).toBe("github");
     expect(resolveAuthProvider(null)).toBe("github");
     expect(resolveAuthProvider(undefined)).toBe("github");
+  });
+});
+
+describe("isAuthProvider", () => {
+  it("accepts supported providers", () => {
+    expect(isAuthProvider("github")).toBe(true);
+    expect(isAuthProvider("google")).toBe(true);
+  });
+
+  it("rejects unknown or missing providers", () => {
+    expect(isAuthProvider("gitlab")).toBe(false);
+    expect(isAuthProvider("")).toBe(false);
+    expect(isAuthProvider(undefined)).toBe(false);
+    expect(isAuthProvider(null)).toBe(false);
   });
 });
 

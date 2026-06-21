@@ -17,6 +17,15 @@
 
 export type AuthProvider = "github" | "google";
 
+/**
+ * Validated narrowing for the auth-provider discriminator. Returns true only for
+ * a provider this app explicitly supports, so an unrecognized value fails closed
+ * at the boundary instead of being cast onto the union.
+ */
+export function isAuthProvider(value: string | null | undefined): value is AuthProvider {
+  return value === "github" || value === "google";
+}
+
 export interface AuthIdentityUser {
   id?: string | null;
   login?: string | null;

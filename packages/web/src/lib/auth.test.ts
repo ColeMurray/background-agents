@@ -231,6 +231,24 @@ describe("authOptions signIn", () => {
       } as never)
     ).resolves.toBe(false);
   });
+
+  it("denies a sign-in from an unrecognized provider", async () => {
+    const { authOptions } = await importAuthModule({
+      ALLOWED_EMAIL_DOMAINS: "company.com",
+    });
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchImpl);
+
+    await expect(
+      getSignIn(authOptions)({
+        account: { provider: "gitlab", access_token: "glpat-x" },
+        profile: { login: "stranger", email_verified: true },
+        user: { email: "stranger@company.com" },
+      } as never)
+    ).resolves.toBe(false);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });
 
 describe("getVerifiedPrimaryGitHubEmail", () => {
@@ -382,6 +400,22 @@ describe("getStaticSignInReason", () => {
       ).toBe("username_allowlist");
     });
   });
+
+  describe("unrecognized provider", () => {
+    it("denies an unknown provider even when its email matches an allowlist", () => {
+      // Previously a non-google provider fell through to the GitHub branch and
+      // could be admitted by email/domain; an unrecognized provider now fails
+      // closed instead.
+      expect(
+        getStaticSignInReason({
+          provider: "gitlab",
+          profile: { email_verified: true } as unknown as Profile,
+          email: "user@company.com",
+          config: cfg({ allowedDomains: ["company.com"] }),
+        })
+      ).toBeNull();
+    });
+  });
 });
 
 describe("applyJwtClaims", () => {
@@ -476,6 +510,30 @@ describe("applyJwtClaims", () => {
 
     expect(token.provider).toBeUndefined();
     expect(token.providerUserId).toBeUndefined();
+  });
+
+  it("stores no provider and clears GitHub claims for an unrecognized provider", () => {
+    // Defensive: such a session is already denied at signIn, but if a JWT for an
+    // unrecognized provider were ever produced it must carry no SCM/GitHub state.
+    const token = applyJwtClaims(
+      {
+        accessToken: "gho_old",
+        githubUserId: "12345",
+        githubLogin: "octocat",
+      } as JWT,
+      {
+        provider: "gitlab",
+        type: "oauth",
+        providerAccountId: "gl-1",
+        access_token: "glpat-xyz",
+      } as unknown as Account,
+      undefined
+    );
+
+    expect(token.provider).toBeUndefined();
+    expect(token.accessToken).toBeUndefined();
+    expect(token.githubUserId).toBeUndefined();
+    expect(token.githubLogin).toBeUndefined();
   });
 });
 

@@ -15,6 +15,7 @@ import {
   checkGitHubOrganizationAccess,
   type GitHubOrganizationAccessResult,
 } from "./github-org-membership";
+import { type AuthProvider, isAuthProvider } from "./build-auth-identity";
 
 export async function getVerifiedPrimaryGitHubEmail(
   accessToken: string | undefined
@@ -41,7 +42,7 @@ declare module "next-auth" {
     user: {
       id?: string; // Canonical provider user id: GitHub numeric id or Google sub
       login?: string; // GitHub username (GitHub-only)
-      provider?: "github" | "google"; // Which provider authenticated this session
+      provider?: AuthProvider; // Which provider authenticated this session
       name?: string | null;
       email?: string | null;
       image?: string | null;
@@ -56,7 +57,7 @@ declare module "next-auth/jwt" {
     accessTokenExpiresAt?: number; // Unix timestamp in milliseconds
     githubUserId?: string;
     githubLogin?: string;
-    provider?: "github" | "google";
+    provider?: AuthProvider;
     providerUserId?: string; // GitHub numeric id or Google sub
   }
 }
@@ -72,18 +73,32 @@ export function buildGitHubOAuthScope(
 }
 
 /**
+ * Normalize Google's `email_verified` claim. Google has returned it as boolean
+ * `true` or the string "true" (case-insensitive) depending on the flow; anything
+ * else is treated as unverified and fails closed.
+ */
+function isVerifiedGoogleEmail(profile: Profile | undefined): boolean {
+  const googleProfile = profile as { email_verified?: boolean | string } | undefined;
+  return (
+    googleProfile?.email_verified === true ||
+    String(googleProfile?.email_verified).toLowerCase() === "true"
+  );
+}
+
+/**
  * Resolve the static (synchronous) allow reason for a sign-in attempt, or null
  * when the static allowlists don't admit it. Pure and exported so the policy is
  * unit-testable — NextAuth's inline signIn callback otherwise can't be reached.
  *
+ * Providers are handled explicitly; an unrecognized provider is denied
+ * (default-closed) rather than treated as GitHub.
+ *
  * - GitHub: the email was already resolved to the verified primary in the
  *   provider's userinfo override, so only the allowlist gate applies.
- * - Google: the email MUST be verified before any allowlist match. All
- *   email-based admission (the email allowlist here, and cross-provider account
- *   linking downstream) trusts this flag, so it is the single most
- *   security-sensitive check in the sign-in path. `email_verified` is normalized
- *   defensively — boolean `true` or a case-insensitive "true" string — because
- *   Google has returned the string form in some flows. Anything else fails closed.
+ * - Google: the email MUST be verified (see isVerifiedGoogleEmail) before any
+ *   allowlist match. All email-based admission (the email allowlist here, and
+ *   cross-provider account linking downstream) trusts this, so it is the single
+ *   most security-sensitive check in the sign-in path.
  *
  * GitHub organization membership is intentionally NOT resolved here: it needs an
  * async call to GitHub's API, so the signIn callback applies it as a fallback
@@ -97,23 +112,32 @@ export function getStaticSignInReason(args: {
 }): AccessAllowReason | null {
   const { provider, profile, email, config } = args;
 
-  if (provider === "google") {
-    const googleProfile = profile as { email_verified?: boolean | string } | undefined;
-    const emailVerified =
-      googleProfile?.email_verified === true ||
-      String(googleProfile?.email_verified).toLowerCase() === "true";
-    if (!emailVerified) {
-      return null;
+  switch (provider) {
+    case "google": {
+      // The email must be verified before any email-based allowlist match.
+      if (!isVerifiedGoogleEmail(profile)) {
+        return null;
+      }
+      return getAccessAllowReason(config, { email: email ?? undefined });
     }
-    return getAccessAllowReason(config, { email: email ?? undefined });
+    case "github":
+    case undefined: {
+      // GitHub, including legacy sessions minted before the provider field
+      // existed (treated as GitHub, matching resolveAuthProvider). The email was
+      // already resolved to the verified primary in the provider's userinfo
+      // override, so only the allowlist gate applies.
+      const githubProfile = profile as { login?: string } | undefined;
+      return getAccessAllowReason(config, {
+        githubUsername: githubProfile?.login,
+        email: email ?? undefined,
+      });
+    }
+    default:
+      // Any other provider is denied rather than treated as GitHub, so admitting
+      // a new provider is a deliberate case here and never relies on an email
+      // this app has not verified for that provider.
+      return null;
   }
-
-  // GitHub (default).
-  const githubProfile = profile as { login?: string } | undefined;
-  return getAccessAllowReason(config, {
-    githubUsername: githubProfile?.login,
-    email: email ?? undefined,
-  });
 }
 
 /**
@@ -137,13 +161,14 @@ export function applyJwtClaims(
   profile: Profile | undefined
 ): JWT {
   if (account) {
-    // The cast is not validated: it relies on only "github" and "google" being
-    // registered providers below. A new provider must widen this union (and the
-    // SCM gate) rather than silently storing an untyped value.
-    token.provider = account.provider as "github" | "google";
+    // Validate the provider against the supported set instead of casting: an
+    // unrecognized provider stores `undefined` and falls to the SCM-clearing
+    // branch below rather than retaining an untyped value.
+    const provider = isAuthProvider(account.provider) ? account.provider : undefined;
+    token.provider = provider;
     token.providerUserId = account.providerAccountId;
 
-    if (account.provider === "github") {
+    if (provider === "github") {
       token.accessToken = account.access_token;
       token.refreshToken = account.refresh_token as string | undefined;
       // expires_at is in seconds, convert to milliseconds (only set if provided)
