@@ -3,6 +3,9 @@ import {
   isValidReasoningEffort,
   INTEGRATION_DEFINITIONS,
   DEFAULT_MENTIONS_POLICY,
+  MAX_SLACK_ROUTING_RULES,
+  MAX_SLACK_ROUTING_KEYWORD_LENGTH,
+  normalizeRoutingRules,
   type IntegrationId,
   type IntegrationSettingsMap,
   type GitHubBotSettings,
@@ -10,6 +13,7 @@ import {
   type CodeServerSettings,
   type SlackGlobalSettings,
   type SlackMentionsPolicy,
+  type SlackRoutingRule,
 } from "@open-inspect/shared";
 import { normalizeSandboxSettings } from "../sandbox/settings";
 
@@ -347,7 +351,7 @@ export class IntegrationSettingsStore {
   ): SlackGlobalSettings {
     const allowedKeys =
       level === "global"
-        ? new Set(["agentNotificationsEnabled", "mentionsPolicy"])
+        ? new Set(["agentNotificationsEnabled", "mentionsPolicy", "routingRules"])
         : new Set(["agentNotificationsEnabled"]);
 
     for (const key of Object.keys(settings)) {
@@ -372,7 +376,48 @@ export class IntegrationSettingsStore {
       );
     }
 
+    // Routing rules are workspace-wide (the allowedKeys gate above already
+    // rejects them at the per-repo level). Validate structure here; normalize
+    // for storage. Target existence is not checked (the repo list isn't
+    // available at this layer) — the bot skips stale targets at match time.
+    if (settings.routingRules !== undefined) {
+      return { ...settings, routingRules: this.validateRoutingRules(settings.routingRules) };
+    }
+
     return settings;
+  }
+
+  private validateRoutingRules(rules: unknown): SlackRoutingRule[] {
+    if (!Array.isArray(rules)) {
+      throw new IntegrationSettingsValidationError("routingRules must be an array");
+    }
+    if (rules.length > MAX_SLACK_ROUTING_RULES) {
+      throw new IntegrationSettingsValidationError(
+        `routingRules cannot exceed ${MAX_SLACK_ROUTING_RULES} entries`
+      );
+    }
+    for (const rule of rules) {
+      if (typeof rule !== "object" || rule === null) {
+        throw new IntegrationSettingsValidationError("each routing rule must be an object");
+      }
+      const { keyword, target } = rule as { keyword?: unknown; target?: unknown };
+      if (typeof keyword !== "string" || keyword.trim() === "") {
+        throw new IntegrationSettingsValidationError(
+          "routing rule keyword must be a non-empty string"
+        );
+      }
+      if (keyword.trim().length > MAX_SLACK_ROUTING_KEYWORD_LENGTH) {
+        throw new IntegrationSettingsValidationError(
+          `routing rule keyword must be ${MAX_SLACK_ROUTING_KEYWORD_LENGTH} characters or fewer`
+        );
+      }
+      if (typeof target !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(target.trim())) {
+        throw new IntegrationSettingsValidationError(
+          "routing rule target must be a repository in owner/name form"
+        );
+      }
+    }
+    return normalizeRoutingRules(rules as SlackRoutingRule[]);
   }
 }
 

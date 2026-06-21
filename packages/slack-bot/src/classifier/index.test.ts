@@ -6,11 +6,13 @@ const {
   mockGetAvailableRepos,
   mockBuildRepoDescriptions,
   mockGetReposByChannel,
+  mockGetRoutingRules,
 } = vi.hoisted(() => ({
   mockMessagesCreate: vi.fn(),
   mockGetAvailableRepos: vi.fn(),
   mockBuildRepoDescriptions: vi.fn(),
   mockGetReposByChannel: vi.fn(),
+  mockGetRoutingRules: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/sdk", () => ({
@@ -29,6 +31,7 @@ vi.mock("./repos", () => ({
   getAvailableRepos: mockGetAvailableRepos,
   buildRepoDescriptions: mockBuildRepoDescriptions,
   getReposByChannel: mockGetReposByChannel,
+  getRoutingRules: mockGetRoutingRules,
 }));
 
 import { RepoClassifier } from "./index";
@@ -70,6 +73,7 @@ describe("RepoClassifier", () => {
     vi.clearAllMocks();
     mockGetAvailableRepos.mockResolvedValue(TEST_REPOS);
     mockGetReposByChannel.mockResolvedValue([]);
+    mockGetRoutingRules.mockResolvedValue([]);
     mockBuildRepoDescriptions.mockResolvedValue("- acme/prod\n- acme/web");
   });
 
@@ -153,5 +157,111 @@ describe("RepoClassifier", () => {
     expect(result.needsClarification).toBe(true);
     expect(result.reasoning).toContain("structured model output");
     expect(result.alternatives).toBeUndefined();
+  });
+
+  describe("routing rules", () => {
+    it("routes deterministically when a keyword matches, without calling the LLM", async () => {
+      mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/web" }]);
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("please fix the frontend nav bug", undefined, "t");
+
+      expect(result.repo?.fullName).toBe("acme/web");
+      expect(result.confidence).toBe("high");
+      expect(result.needsClarification).toBe(false);
+      expect(result.reasoning).toContain("routing rule");
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
+    });
+
+    it("asks for clarification when rules point at multiple distinct repos", async () => {
+      mockGetRoutingRules.mockResolvedValue([
+        { keyword: "frontend", target: "acme/web" },
+        { keyword: "prod", target: "acme/prod" },
+      ]);
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("fix the frontend on prod");
+
+      expect(result.repo).toBeNull();
+      expect(result.needsClarification).toBe(true);
+      expect(result.alternatives?.map((r) => r.fullName).sort()).toEqual(["acme/prod", "acme/web"]);
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
+    });
+
+    it("routes once when multiple keywords map to the same repo", async () => {
+      mockGetRoutingRules.mockResolvedValue([
+        { keyword: "frontend", target: "acme/web" },
+        { keyword: "ui", target: "acme/web" },
+      ]);
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("frontend ui cleanup");
+
+      expect(result.repo?.fullName).toBe("acme/web");
+      expect(result.needsClarification).toBe(false);
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
+    });
+
+    it("skips a rule whose target is not accessible and falls through to the LLM", async () => {
+      mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/ghost" }]);
+      mockMessagesCreate.mockResolvedValue({
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_x",
+            name: "classify_repository",
+            input: {
+              repoId: "acme/web",
+              confidence: "high",
+              reasoning: "Mentions frontend.",
+              alternatives: [],
+            },
+          },
+        ],
+      });
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("frontend issue");
+
+      expect(result.repo?.fullName).toBe("acme/web");
+      expect(mockMessagesCreate).toHaveBeenCalledOnce();
+    });
+
+    it("falls through to the LLM when no rule keyword is present", async () => {
+      mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/web" }]);
+      mockMessagesCreate.mockResolvedValue({
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_y",
+            name: "classify_repository",
+            input: {
+              repoId: "acme/prod",
+              confidence: "high",
+              reasoning: "Mentions prod.",
+              alternatives: [],
+            },
+          },
+        ],
+      });
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("update the deployment config");
+
+      expect(result.repo?.fullName).toBe("acme/prod");
+      expect(mockMessagesCreate).toHaveBeenCalledOnce();
+    });
+
+    it("takes precedence over a channel association", async () => {
+      // Channel maps to acme/prod, but an explicit keyword maps to acme/web.
+      mockGetReposByChannel.mockResolvedValue([TEST_REPOS[0]]); // acme/prod
+      mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/web" }]);
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("frontend tweak", { channelId: "C123" });
+
+      expect(result.repo?.fullName).toBe("acme/web");
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
+    });
   });
 });
