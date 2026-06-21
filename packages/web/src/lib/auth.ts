@@ -161,12 +161,13 @@ export function applyJwtClaims(
   profile: Profile | undefined
 ): JWT {
   if (account) {
-    // Validate the provider against the supported set instead of casting: an
-    // unrecognized provider stores `undefined` and falls to the SCM-clearing
-    // branch below rather than retaining an untyped value.
+    // Validate the provider against the supported set instead of casting. Only a
+    // validated provider contributes an identity: an unrecognized provider stores
+    // no provider/providerUserId and falls to the claim-clearing branch below, so
+    // it can't surface as a legacy GitHub session via resolveAuthProvider.
     const provider = isAuthProvider(account.provider) ? account.provider : undefined;
     token.provider = provider;
-    token.providerUserId = account.providerAccountId;
+    token.providerUserId = provider ? account.providerAccountId : undefined;
 
     if (provider === "github") {
       token.accessToken = account.access_token;
@@ -317,10 +318,13 @@ export const authOptions: NextAuthOptions = {
 
       // GitHub organization membership fallback. Org membership is a GitHub
       // concept and the async check calls GitHub's API with the OAuth token, so
-      // it never runs for Google sign-ins or when no orgs are configured (fail
-      // closed).
+      // it runs only for GitHub sign-ins (including legacy sessions with no
+      // provider) when at least one org is configured. Any other provider —
+      // Google or unrecognized — fails closed here without contacting GitHub, so
+      // a non-GitHub OAuth token is never sent to GitHub's API.
       const allowedOrganizations = config.allowedOrganizations ?? [];
-      if (provider === "google" || allowedOrganizations.length === 0) {
+      const isGitHubProvider = provider === "github" || provider === undefined;
+      if (!isGitHubProvider || allowedOrganizations.length === 0) {
         logSignInDecision(githubProfile?.login, "deny", "no_matching_policy");
         return false;
       }

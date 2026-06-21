@@ -249,6 +249,25 @@ describe("authOptions signIn", () => {
     ).resolves.toBe(false);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  it("does not run the GitHub org fallback for an unrecognized provider", async () => {
+    const { authOptions } = await importAuthModule({
+      ALLOWED_GITHUB_ORGS: "acme",
+    });
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchImpl);
+
+    await expect(
+      getSignIn(authOptions)({
+        account: { provider: "gitlab", access_token: "glpat-x" },
+        profile: { login: "stranger" },
+        user: { email: "stranger@example.com" },
+      } as never)
+    ).resolves.toBe(false);
+    // The org fallback is GitHub-only, so a non-GitHub token never reaches GitHub.
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });
 
 describe("getVerifiedPrimaryGitHubEmail", () => {
@@ -531,6 +550,7 @@ describe("applyJwtClaims", () => {
     );
 
     expect(token.provider).toBeUndefined();
+    expect(token.providerUserId).toBeUndefined();
     expect(token.accessToken).toBeUndefined();
     expect(token.githubUserId).toBeUndefined();
     expect(token.githubLogin).toBeUndefined();
