@@ -180,6 +180,26 @@ export function SlackIcon({ className }: IconProps) {
   );
 }
 
+export function SentryIcon({ className }: IconProps) {
+  return (
+    <svg
+      className={className}
+      data-testid="sentry-icon"
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 24 24"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12 4.5 4.6 17.4a1.4 1.4 0 0 0 1.2 2.1H9" />
+      <path d="M12 4.5 19.4 17.4a1.4 1.4 0 0 1-1.2 2.1h-3.6" />
+      <path d="M8.8 19.5a5.5 5.5 0 0 0-2.6-4.6" />
+      <path d="M14.6 19.5A10.5 10.5 0 0 0 9.2 10.3" />
+    </svg>
+  );
+}
+
 export function ArchiveIcon({ className }: IconProps) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">

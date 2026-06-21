@@ -67,8 +67,16 @@ export function AutomationsList({
       <div className="border border-border-muted rounded-md bg-card p-8 text-center">
         <p className="text-muted-foreground">No automations yet.</p>
         <p className="text-sm text-muted-foreground mt-1">
-          Create one to run tasks on a schedule or in response to events.
+          Start from a template, or create one to run tasks on a schedule or in response to events.
         </p>
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+          <Button size="sm" asChild>
+            <Link href="/automations/templates">Start from a template</Link>
+          </Button>
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/automations/new">Create Automation</Link>
+          </Button>
+        </div>
       </div>
     );
   }
