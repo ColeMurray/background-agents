@@ -403,10 +403,12 @@ describe("SlackIntegrationSettings", () => {
       const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as {
         settings: SlackGlobalConfig;
       };
+      // The UI sends the keyword as-typed (trimmed); the control plane is the
+      // sole normalizer that lowercases on write.
       expect(body.settings.defaults).toEqual({
         agentNotificationsEnabled: true,
         mentionsPolicy: "allow",
-        routingRules: [{ keyword: "frontend", target: "acme/web" }],
+        routingRules: [{ keyword: "Frontend", target: "acme/web" }],
       });
     });
 

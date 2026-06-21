@@ -6,7 +6,6 @@ import { toast } from "sonner";
 import {
   DEFAULT_MENTIONS_POLICY,
   MAX_SLACK_ROUTING_RULES,
-  normalizeRoutingRules,
   type EnrichedRepository,
   type SlackGlobalConfig,
   type SlackGlobalSettings,
@@ -544,13 +543,12 @@ function RoutingRulesSection({
     }
 
     setSaving(true);
-    // normalizeRoutingRules lowercases and de-dupes to match the stored shape;
-    // its cap is a no-op here since over-limit drafts are rejected above, and
-    // the control plane remains the canonical validator.
-    const normalized = normalizeRoutingRules(trimmed);
+    // Send the validated draft as-is and let the control-plane validator be the
+    // single canonical normalizer (lowercase/de-dupe) on write. The UI's job is
+    // to validate and present, not to own the stored shape.
     const body: SlackGlobalConfig = {
       defaults: mergedGlobalDefaults(settings, {
-        routingRules: normalized.length > 0 ? normalized : undefined,
+        routingRules: trimmed.length > 0 ? trimmed : undefined,
       }),
     };
 
